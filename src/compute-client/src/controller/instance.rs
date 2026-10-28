@@ -39,6 +39,8 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
+use mz_storage_types::freshness::recorder::RecorderConfig;
+use mz_storage_types::freshness::{FreshnessTree, TickerLookup};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use thiserror::Error;
@@ -68,6 +70,10 @@ use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError as ProtocolPeekError,
     PeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
 };
+
+mod freshness;
+
+use freshness::FreshnessRecording;
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -115,6 +121,14 @@ impl From<CollectionMissing> for ReadPolicyError {
     }
 }
 
+/// A log collection of an instance: its variant, ID, shared state and freshness tree.
+pub(super) type ArrangedLog = (
+    LogVariant,
+    GlobalId,
+    SharedCollectionState,
+    Option<FreshnessTree>,
+);
+
 /// A command sent to an [`Instance`] task.
 pub(super) type Command = Box<dyn FnOnce(&mut Instance) + Send>;
 
@@ -128,6 +142,8 @@ pub(super) struct Instance {
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
     storage_collections: StorageCollections,
+    /// Resolves the current tickers of ingestions in freshness trees.
+    ticker_lookup: Arc<dyn TickerLookup + Send + Sync>,
     /// Whether instance initialization has been completed.
     initialized: bool,
     /// Whether this instance is in read-only mode.
@@ -204,6 +220,10 @@ pub(super) struct Instance {
     wallclock_lag: WallclockLagFn<Timestamp>,
     /// The last time wallclock lag introspection was recorded.
     wallclock_lag_last_recorded: DateTime<Utc>,
+    /// The configuration of freshness histogram recording, `None` while recording is off.
+    ///
+    /// Refreshed by maintenance, which also drops all recording state while it is `None`.
+    freshness_config: Option<RecorderConfig>,
 
     /// Sender for updates to collection read holds.
     ///
@@ -286,6 +306,7 @@ impl Instance {
         initial_as_of: Option<Antichain<Timestamp>>,
         refresh_schedule: Option<RefreshSchedule>,
         target_replica: Option<ReplicaId>,
+        freshness_tree: Option<FreshnessTree>,
     ) {
         // Add global collection state.
         let dependency_ids: Vec<GlobalId> = compute_dependencies
@@ -312,6 +333,10 @@ impl Instance {
             introspection,
         );
         state.target_replica = target_replica;
+        state.freshness_tree = freshness_tree;
+        let freshness_created_ms = self.freshness_created_ms(id);
+        state.freshness =
+            freshness_created_ms.map(|ms| FreshnessRecording::created(as_of.clone(), ms));
         // If the collection is write-only, clear its read policy to reflect that.
         if write_only {
             state.read_policy = None;
@@ -326,8 +351,27 @@ impl Instance {
             if target_replica.is_some_and(|id| id != replica.id) {
                 continue;
             }
-            replica.add_collection(id, as_of.clone(), replica_input_read_holds.clone());
+            let freshness =
+                freshness_created_ms.map(|ms| FreshnessRecording::created(as_of.clone(), ms));
+            replica.add_collection(
+                id,
+                as_of.clone(),
+                replica_input_read_holds.clone(),
+                freshness,
+            );
         }
+    }
+
+    /// The creation time in ms at which the freshness recording of a collection or replica
+    /// collection installed now starts, `None` if it starts at its first observed frontier or is
+    /// not recorded.
+    fn freshness_created_ms(&self, id: GlobalId) -> Option<u64> {
+        // Collections installed before initialization completes existed before a restart. Under
+        // the `hole` restart policy, their arrivals before the first observed frontier are not
+        // recorded.
+        let start_at_creation =
+            self.freshness_config.is_some() && self.initialized && !id.is_transient();
+        start_at_creation.then(|| (self.now)())
     }
 
     fn remove_collection(&mut self, id: GlobalId) {
@@ -409,7 +453,10 @@ impl Instance {
                 break;
             }
 
-            replica.add_collection(*collection_id, as_of, input_read_holds);
+            let freshness = self
+                .freshness_created_ms(*collection_id)
+                .map(|ms| FreshnessRecording::created(as_of.clone(), ms));
+            replica.add_collection(*collection_id, as_of, input_read_holds, freshness);
         }
 
         self.replicas.insert(id, replica);
@@ -548,10 +595,7 @@ impl Instance {
 
         let now_ms = (self.now)();
         let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
-        let histogram_labels = match &self.workload_class {
-            Some(wc) => [("workload_class", wc.clone())].into(),
-            None => BTreeMap::new(),
-        };
+        let histogram_labels = self.histogram_labels();
 
         // For collections that sink into storage, we need to ask the storage controller to know
         // whether they're currently readable.
@@ -619,6 +663,14 @@ impl Instance {
 
         // Record lags to persist, if it's time.
         self.maybe_record_wallclock_lag();
+    }
+
+    /// The labels of wallclock lag and freshness histogram rows.
+    fn histogram_labels(&self) -> BTreeMap<&'static str, String> {
+        match &self.workload_class {
+            Some(wc) => [("workload_class", wc.clone())].into(),
+            None => BTreeMap::new(),
+        }
     }
 
     /// Produce new wallclock lag introspection updates, provided enough time has passed since the
@@ -872,6 +924,7 @@ impl Instance {
         let Self {
             build_info: _,
             storage_collections: _,
+            ticker_lookup: _,
             peek_stash_persist_location: _,
             initialized,
             read_only,
@@ -891,6 +944,7 @@ impl Instance {
             now: _,
             wallclock_lag: _,
             wallclock_lag_last_recorded,
+            freshness_config,
             read_hold_tx: _,
             replica_tx: _,
             replica_rx: _,
@@ -914,6 +968,7 @@ impl Instance {
             .collect();
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
         let wallclock_lag_last_recorded = format!("{wallclock_lag_last_recorded:?}");
+        let freshness_config = format!("{freshness_config:?}");
 
         Ok(serde_json::json!({
             "initialized": initialized,
@@ -925,6 +980,7 @@ impl Instance {
             "subscribes": subscribes,
             "copy_tos": copy_tos,
             "wallclock_lag_last_recorded": wallclock_lag_last_recorded,
+            "freshness_config": freshness_config,
         }))
     }
 
@@ -942,7 +998,7 @@ impl Instance {
         build_info: &'static BuildInfo,
         storage: StorageCollections,
         peek_stash_persist_location: PersistLocation,
-        arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState)>,
+        arranged_logs: Vec<ArrangedLog>,
         metrics: InstanceMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<Timestamp>,
@@ -955,13 +1011,14 @@ impl Instance {
     ) -> Self {
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
-        for (log, id, shared) in arranged_logs {
-            let collection = CollectionState::new_log_collection(
+        for (log, id, shared, freshness_tree) in arranged_logs {
+            let mut collection = CollectionState::new_log_collection(
                 id,
                 shared,
                 Arc::clone(&read_hold_tx),
                 introspection_tx.clone(),
             );
+            collection.freshness_tree = freshness_tree;
             collections.insert(id, collection);
             log_sources.insert(log, id);
         }
@@ -973,10 +1030,15 @@ impl Instance {
         let (replica_tx, replica_rx) = instrumented_unbounded_channel(send_count, recv_count);
 
         let now_dt = mz_ore::now::to_datetime(now());
+        let ticker_lookup = storage.ticker_lookup();
+        let freshness_config = (!read_only)
+            .then(|| freshness::recorder_config(&dyncfg))
+            .flatten();
 
         Self {
             build_info,
             storage_collections: storage,
+            ticker_lookup,
             peek_stash_persist_location,
             initialized: false,
             read_only,
@@ -996,6 +1058,7 @@ impl Instance {
             now,
             wallclock_lag,
             wallclock_lag_last_recorded: now_dt,
+            freshness_config,
             read_hold_tx,
             replica_tx,
             replica_rx,
@@ -1389,10 +1452,17 @@ impl Instance {
     ///
     /// Panics if the specified replica does not exist.
     fn rehydrate_replica(&mut self, id: ReplicaId) {
-        let replica = &self.replicas[&id];
+        let replica = self.replicas.get_mut(&id).expect("replica must exist");
         let config = replica.config.clone();
         let epoch = replica.epoch + 1;
         let dyncfg_override = replica.dyncfg_override.clone();
+        // The rehydrated replica reports frontiers from the as-of again, so keeping the
+        // recordings, with their high-water marks, keeps it from counting arrivals twice.
+        let freshness: BTreeMap<_, _> = replica
+            .collections
+            .iter_mut()
+            .filter_map(|(id, c)| Some((*id, c.freshness.take()?)))
+            .collect();
 
         self.remove_replica(id).expect("replica must exist");
         let result = self.add_replica(id, config, Some(epoch), dyncfg_override);
@@ -1400,6 +1470,14 @@ impl Instance {
         match result {
             Ok(()) => (),
             Err(ReplicaExists(_)) => unreachable!("replica was removed"),
+        }
+
+        if let Some(replica) = self.replicas.get_mut(&id) {
+            for (collection_id, recording) in freshness {
+                if let Some(collection) = replica.collections.get_mut(&collection_id) {
+                    collection.freshness = Some(recording);
+                }
+            }
         }
     }
 
@@ -1426,6 +1504,7 @@ impl Instance {
         import_read_holds: Vec<ReadHold>,
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState>,
         target_replica: Option<ReplicaId>,
+        freshness_tree: Option<FreshnessTree>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
@@ -1504,6 +1583,7 @@ impl Instance {
                 dataflow.initial_storage_as_of.clone(),
                 dataflow.refresh_schedule.clone(),
                 target_replica,
+                freshness_tree.clone(),
             );
 
             // If the export is a storage sink, we can advance its write frontier to the write
@@ -1742,6 +1822,9 @@ impl Instance {
 
             // Mark the collection as dropped to allow it to be removed from the controller state.
             collection.dropped = true;
+            // The frontiers of a dropped collection become empty, which must not close its open
+            // periods as if the collection were complete.
+            collection.freshness = None;
 
             // Drop the implied and warmup read holds to announce that clients are not
             // interested in the collection anymore.
@@ -1754,6 +1837,12 @@ impl Instance {
             // If the collection is a copy to, stop tracking it. This ensures that the controller
             // ceases to produce `CopyToResponse`s` for this copy to.
             self.copy_tos.remove(id);
+
+            for replica in self.replicas.values_mut() {
+                if let Some(collection) = replica.collections.get_mut(id) {
+                    collection.freshness = None;
+                }
+            }
         }
 
         Ok(())
@@ -1946,6 +2035,89 @@ impl Instance {
             id,
             upper: new_frontier,
         });
+
+        self.record_freshness(id, None);
+    }
+
+    /// Records the freshness of the global write frontier of a collection, or of a replica's if
+    /// `replica_id` is set, after it advanced.
+    fn record_freshness(&mut self, id: GlobalId, replica_id: Option<ReplicaId>) {
+        let Some(config) = self.freshness_config else {
+            return;
+        };
+        // Like the wallclock lag histogram, skip slow-path select indexes and subscribes.
+        if id.is_transient() {
+            return;
+        }
+        let Some(collection) = self.collections.get_mut(&id).filter(|c| !c.dropped) else {
+            return;
+        };
+        // Resolved at every observation, so a changed tick interval takes effect at once.
+        let Some(tree) = collection
+            .freshness_tree
+            .as_ref()
+            .and_then(|tree| tree.resolve(&*self.ticker_lookup))
+        else {
+            return;
+        };
+        let now_ms = (self.now)();
+        let (recording, frontier) = match replica_id {
+            None => {
+                let frontier = collection.write_frontier();
+                (&mut collection.freshness, frontier)
+            }
+            Some(replica_id) => {
+                let Some(collection) = self
+                    .replicas
+                    .get_mut(&replica_id)
+                    .and_then(|r| r.collections.get_mut(&id))
+                else {
+                    return;
+                };
+                (&mut collection.freshness, collection.write_frontier.clone())
+            }
+        };
+        let rows = recording
+            .get_or_insert_with(FreshnessRecording::at_first_observation)
+            .observe(&tree, &frontier, now_ms, &config);
+        if rows.is_empty() {
+            return;
+        }
+
+        let updates = freshness::pack_rows(rows, id, replica_id, &self.histogram_labels());
+        let type_ = match replica_id {
+            None => IntrospectionType::WallclockFreshnessHistogram,
+            Some(_) => IntrospectionType::ReplicaWallclockFreshnessHistogram,
+        };
+        self.deliver_introspection_updates(type_, updates);
+    }
+
+    /// Reloads the freshness recording configuration and drops all recording state if recording
+    /// is off, so that it starts over at the next observed frontiers once it is turned on.
+    fn refresh_freshness_config(&mut self) {
+        self.freshness_config = (!self.read_only)
+            .then(|| freshness::recorder_config(&self.dyncfg))
+            .flatten();
+        if self.freshness_config.is_some() {
+            return;
+        }
+        for collection in self.collections.values_mut() {
+            collection.freshness = None;
+        }
+        for replica in self.replicas.values_mut() {
+            for collection in replica.collections.values_mut() {
+                collection.freshness = None;
+            }
+        }
+    }
+
+    /// Sets the freshness tree of all log collections.
+    pub fn set_log_freshness_tree(&mut self, tree: FreshnessTree) {
+        for id in self.log_sources.values() {
+            if let Some(collection) = self.collections.get_mut(id) {
+                collection.freshness_tree = Some(tree.clone());
+            }
+        }
     }
 
     /// Apply a collection read hold change.
@@ -2104,8 +2276,11 @@ impl Instance {
             replica_collection.update_output_frontier(new_frontier.clone());
         }
         if let Some(new_frontier) = frontiers.write_frontier {
-            replica_collection.update_write_frontier(new_frontier.clone());
+            let advanced = replica_collection.update_write_frontier(new_frontier.clone());
             self.maybe_update_global_write_frontier(id, new_frontier);
+            if advanced {
+                self.record_freshness(id, Some(replica_id));
+            }
         }
     }
 
@@ -2502,6 +2677,7 @@ impl Instance {
         self.update_frontier_introspection();
         self.refresh_state_metrics();
         self.refresh_wallclock_lag();
+        self.refresh_freshness_config();
     }
 }
 
@@ -2583,6 +2759,11 @@ struct CollectionState {
             Diff,
         >,
     >,
+
+    /// How the collection's frontier follows arrival time. `None` if it has no time dependence.
+    freshness_tree: Option<FreshnessTree>,
+    /// Freshness recording of the global write frontier, `None` until recording starts.
+    freshness: Option<FreshnessRecording>,
 }
 
 impl CollectionState {
@@ -2639,6 +2820,8 @@ impl CollectionState {
             compute_dependencies,
             introspection,
             wallclock_lag_histogram_stash,
+            freshness_tree: None,
+            freshness: None,
         }
     }
 
@@ -3162,6 +3345,7 @@ impl ReplicaState {
         id: GlobalId,
         as_of: Antichain<Timestamp>,
         input_read_holds: Vec<ReadHold>,
+        freshness: Option<FreshnessRecording>,
     ) {
         let metrics = self.metrics.for_collection(id);
         let introspection = ReplicaCollectionIntrospection::new(
@@ -3172,6 +3356,7 @@ impl ReplicaState {
         );
         let mut state =
             ReplicaCollectionState::new(metrics, as_of, introspection, input_read_holds);
+        state.freshness = freshness;
 
         // In an effort to keep the produced wallclock lag introspection data small and
         // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
@@ -3281,6 +3466,8 @@ struct ReplicaCollectionState {
     ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
     wallclock_lag_max: Option<WallclockLag>,
+    /// Freshness recording of the replica write frontier, `None` until recording starts.
+    freshness: Option<FreshnessRecording>,
 }
 
 impl ReplicaCollectionState {
@@ -3299,6 +3486,7 @@ impl ReplicaCollectionState {
             introspection,
             input_read_holds,
             wallclock_lag_max: Some(WallclockLag::MIN),
+            freshness: None,
         }
     }
 
@@ -3322,19 +3510,20 @@ impl ReplicaCollectionState {
         self.as_of.is_empty() || PartialOrder::less_than(&self.as_of, &self.output_frontier)
     }
 
-    /// Updates the replica write frontier of this collection.
-    fn update_write_frontier(&mut self, new_frontier: Antichain<Timestamp>) {
+    /// Updates the replica write frontier of this collection. Returns whether it advanced.
+    fn update_write_frontier(&mut self, new_frontier: Antichain<Timestamp>) -> bool {
         if PartialOrder::less_than(&new_frontier, &self.write_frontier) {
             soft_panic_or_log!(
                 "replica collection write frontier regression (old={:?}, new={new_frontier:?})",
                 self.write_frontier,
             );
-            return;
+            return false;
         } else if new_frontier == self.write_frontier {
-            return;
+            return false;
         }
 
         self.write_frontier = new_frontier;
+        true
     }
 
     /// Updates the replica input frontier of this collection.
