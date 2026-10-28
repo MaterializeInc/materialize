@@ -6247,6 +6247,7 @@ version = "0.3.1"
 dependencies = [
  "assert_cmd",
  "axum",
+ "base64 0.23.1",
  "clap",
  "csv",
  "dirs",
@@ -6262,6 +6263,7 @@ dependencies = [
  "mz-sql-parser",
  "open",
  "openssl-probe",
+ "rand 0.10.3",
  "reqwest 0.13.5",
  "rpassword",
  "security-framework",
@@ -6269,6 +6271,7 @@ dependencies = [
  "serde",
  "serde-aux",
  "serde_json",
+ "sha2 0.11.1",
  "tabled",
  "tempfile",
  "termcolor",
