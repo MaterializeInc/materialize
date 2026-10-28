@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::ops::ControlFlow;
@@ -14,7 +15,7 @@ use std::rc::Rc;
 use std::str::{self};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime};
@@ -64,8 +65,8 @@ use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
-use tokio::sync::{Notify, OnceCell, mpsc};
-use tracing::{error, info, trace};
+use tokio::sync::{Notify, mpsc};
+use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
@@ -115,7 +116,7 @@ pub struct KafkaSourceReader {
     /// Source global ID
     id: GlobalId,
     /// Kafka consumer for this source, created once this worker is responsible for a partition.
-    consumer: Rc<OnceCell<Arc<ReaderConsumer>>>,
+    consumer: Rc<RefCell<Option<Arc<ReaderConsumer>>>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: Vec<PartitionConsumer>,
     /// Worker ID
@@ -155,7 +156,7 @@ pub struct KafkaResumeUpperProcessor {
     config: RawSourceCreationConfig,
     topic_name: String,
     /// Shared with [`KafkaSourceReader::consumer`].
-    consumer: Rc<OnceCell<Arc<ReaderConsumer>>>,
+    consumer: Rc<RefCell<Option<Arc<ReaderConsumer>>>>,
     /// The offsets this worker last committed upstream. Only a successful commit updates it, so a
     /// failed commit is retried on the next resume upper.
     committed_offsets: Vec<(PartitionId, MzOffset)>,
@@ -353,7 +354,7 @@ fn render_reader<'scope>(
                 health_output: health_output.clone(),
                 health_cap: health_cap.clone(),
             };
-            let consumer: Rc<OnceCell<Arc<ReaderConsumer>>> = Rc::default();
+            let consumer: Rc<RefCell<Option<Arc<ReaderConsumer>>>> = Rc::default();
 
             // Start offsets is a map from partition to the next offset to read from.
             let mut start_offsets: BTreeMap<_, u64> = start_offsets
@@ -538,6 +539,7 @@ fn render_reader<'scope>(
             tokio::pin!(resume_uppers_process_loop);
 
             let mut metadata_update: Option<MetadataUpdate> = None;
+            let mut rebuild_consumer = false;
             let mut snapshot_total = None;
 
             let max_wait_time =
@@ -558,8 +560,15 @@ fn render_reader<'scope>(
                                 updates.append(&mut data);
                             }
                         }
+                        // A rebuild request must survive a later update in the same batch.
+                        rebuild_consumer |= updates
+                            .iter()
+                            .any(|(_, update)| matches!(update, MetadataUpdate::RebuildConsumer));
                         metadata_update = updates
                             .into_iter()
+                            .filter(|(_, update)| {
+                                !matches!(update, MetadataUpdate::RebuildConsumer)
+                            })
                             .max_by_key(|(ts, _)| *ts)
                             .map(|(_, update)| update);
                     }
@@ -570,7 +579,20 @@ fn render_reader<'scope>(
                     _ = resume_uppers_process_loop.as_mut() => {},
                 }
 
+                if std::mem::take(&mut rebuild_consumer) && consumer.borrow().is_some() {
+                    match consumer_setup.create().await {
+                        Ok(new_consumer) => reader.rebuild_consumer(new_consumer),
+                        Err(e) => {
+                            consumer_setup.report_creation_failure(&e);
+                            // See `get_or_create`: wedge until the `SuspendAndRestart` arrives.
+                            std::future::pending::<()>().await;
+                            unreachable!("pending future never returns");
+                        }
+                    }
+                }
                 match metadata_update.take() {
+                    // Handled above, before the latest update is applied.
+                    Some(MetadataUpdate::RebuildConsumer) => {}
                     Some(MetadataUpdate::Partitions(partitions)) => {
                         let max_pid = partitions.keys().last().cloned();
                         let lower = max_pid
@@ -590,9 +612,7 @@ fn render_reader<'scope>(
                                     .get_or_create(&consumer, &mut reader.start_offsets, &data_cap)
                                     .await
                                 {
-                                    ControlFlow::Continue(kafka_consumer) => {
-                                        Arc::clone(kafka_consumer)
-                                    }
+                                    ControlFlow::Continue(kafka_consumer) => kafka_consumer,
                                     ControlFlow::Break(()) => return,
                                 };
                                 reader.ensure_partition(&kafka_consumer, pid);
@@ -732,7 +752,7 @@ fn render_reader<'scope>(
                 // Additionally, assigning topics and splitting them off into separate queues is
                 // not atomic, so we expect to see at least some messages to show up when polling
                 // the consumer directly.
-                let polled_consumer = reader.consumer.get().map(Arc::clone);
+                let polled_consumer = reader.consumer.borrow().clone();
                 while let Some(result) = polled_consumer
                     .as_ref()
                     .and_then(|consumer| consumer.poll(Duration::from_secs(0)))
@@ -892,7 +912,7 @@ fn render_reader<'scope>(
                 assert!(reader.partition_consumers.is_empty());
                 reader.partition_consumers = consumers;
 
-                let positions = match reader.consumer.get() {
+                let positions = match reader.consumer.borrow().as_ref() {
                     Some(consumer) => consumer.position().unwrap(),
                     None => TopicPartitionList::new(),
                 };
@@ -994,10 +1014,10 @@ impl KafkaResumeUpperProcessor {
             return Ok(());
         }
         // Without a consumer the offsets stay uncommitted, and a later upper retries them.
-        let Some(consumer) = self.consumer.get() else {
+        let Some(consumer) = self.consumer.borrow().clone() else {
             return Ok(());
         };
-        self.commit(consumer, &offsets).await?;
+        self.commit(&consumer, &offsets).await?;
         self.committed_offsets = offsets;
         Ok(())
     }
@@ -1007,13 +1027,13 @@ impl KafkaResumeUpperProcessor {
     /// `offsets.retention.minutes` after that partition's last commit, current or not.
     async fn refresh(&self) -> Result<(), anyhow::Error> {
         // Offsets are only ever committed through a consumer.
-        let Some(consumer) = self.consumer.get() else {
+        let Some(consumer) = self.consumer.borrow().clone() else {
             return Ok(());
         };
         if self.committed_offsets.is_empty() {
             return Ok(());
         }
-        self.commit(consumer, &self.committed_offsets).await
+        self.commit(&consumer, &self.committed_offsets).await
     }
 
     async fn commit(
@@ -1052,6 +1072,30 @@ impl KafkaResumeUpperProcessor {
 }
 
 impl KafkaSourceReader {
+    /// Replaces the consumer with `consumer`, re-attaching every partition this worker reads at
+    /// the offset after the last one it processed. Messages still queued in the old consumer were
+    /// never counted in `last_offsets`, so the new consumer fetches them again.
+    fn rebuild_consumer(&mut self, consumer: Arc<ReaderConsumer>) {
+        let pids: Vec<PartitionId> = self.partition_consumers.iter().map(|pc| pc.pid).collect();
+        info!(
+            source_id = %self.id,
+            worker_id = self.worker_id,
+            "rebuilding kafka consumer for partitions {pids:?}"
+        );
+        self.partition_consumers.clear();
+        *self.consumer.borrow_mut() = Some(Arc::clone(&consumer));
+        for pid in pids {
+            // Every output reads a partition in lockstep, so any output's last offset will do.
+            let last_offset = self
+                .last_offsets
+                .values()
+                .map(|offsets| offsets[&pid])
+                .min()
+                .expect("a partition queue implies an output");
+            self.create_partition_queue(&consumer, pid, Offset::Offset(last_offset + 1));
+        }
+    }
+
     /// Ensures that a partition queue for `pid` exists.
     fn ensure_partition(&mut self, consumer: &Arc<ReaderConsumer>, pid: PartitionId) {
         if self.last_offsets.is_empty() {
@@ -1459,16 +1503,16 @@ impl ReaderConsumerSetup {
     /// responsible partitions without a start offset. Returns `Break` after emitting a definite
     /// error when a start offset has been compacted away, after which the reader must stop. Never
     /// returns if the consumer cannot be created.
-    async fn get_or_create<'a>(
+    async fn get_or_create(
         &self,
-        slot: &'a OnceCell<Arc<ReaderConsumer>>,
+        slot: &RefCell<Option<Arc<ReaderConsumer>>>,
         start_offsets: &mut BTreeMap<PartitionId, u64>,
         data_cap: &Capability<KafkaTimestamp>,
-    ) -> ControlFlow<(), &'a Arc<ReaderConsumer>> {
-        if let Some(consumer) = slot.get() {
-            return ControlFlow::Continue(consumer);
+    ) -> ControlFlow<(), Arc<ReaderConsumer>> {
+        if let Some(consumer) = slot.borrow().as_ref() {
+            return ControlFlow::Continue(Arc::clone(consumer));
         }
-        let consumer = match slot.get_or_try_init(|| self.create()).await {
+        let consumer = match self.create().await {
             Ok(consumer) => consumer,
             Err(e) => {
                 self.report_creation_failure(&e);
@@ -1479,9 +1523,10 @@ impl ReaderConsumerSetup {
                 unreachable!("pending future never returns");
             }
         };
+        *slot.borrow_mut() = Some(Arc::clone(&consumer));
         if mz_storage_types::dyncfgs::KAFKA_LOW_WATERMARK_CHECK.get(self.config.config.config_set())
         {
-            self.check_low_watermarks(consumer, start_offsets, data_cap)
+            self.check_low_watermarks(&consumer, start_offsets, data_cap)
                 .await?;
         }
         ControlFlow::Continue(consumer)
@@ -1834,6 +1879,9 @@ enum MetadataUpdate {
     ///
     /// Definite errors cannot be recovered from. They poison the source until the end of time.
     DefiniteError(SourceError),
+    /// The metadata consumer was rebuilt after its fetches failed for
+    /// `kafka_metadata_failure_timeout`. Readers rebuild their consumers too.
+    RebuildConsumer,
 }
 
 impl MetadataUpdate {
@@ -1859,7 +1907,7 @@ impl MetadataUpdate {
                 Some(frontier)
             }
             Self::DefiniteError(_) => Some(Antichain::new()),
-            Self::TransientError(_) => None,
+            Self::TransientError(_) | Self::RebuildConsumer => None,
         }
     }
 }
@@ -1925,54 +1973,57 @@ fn render_metadata_fetcher<'scope>(
             ..
         } = connection;
 
-        let consumer: Result<BaseConsumer<_>, _> = connection
-            .create_with_context(
-                &config.config,
-                MzClientContext::default(),
-                &btreemap! {
-                    // Use the user-configured topic metadata refresh
-                    // interval.
-                    "topic.metadata.refresh.interval.ms" =>
-                        topic_metadata_refresh_interval
-                        .as_millis()
-                        .to_string(),
-                    // Allow Kafka monitoring tools to identify this
-                    // consumer.
-                    "client.id" => format!("{client_id}-metadata"),
-                },
-                InTask::Yes,
-            )
-            .await;
-
-        let consumer = match consumer {
-            Ok(consumer) => consumer,
-            Err(e) => {
-                let msg = format!(
-                    "failed creating kafka metadata consumer: {}",
-                    e.display_with_causes()
-                );
-                let status_update = HealthStatusUpdate::halting(msg, None);
-                let status = match e {
-                    ContextCreationError::Ssh(_) => HealthStatus::ssh(status_update),
-                    _ => HealthStatus::kafka(status_update),
-                };
-                let error = MetadataUpdate::TransientError(status);
-                let timestamp = (config.now_fn)().into();
-                metadata_output.give(&metadata_cap, (timestamp, error));
-
-                // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
-                // Returning would incorrectly present to the remap operator as progress to the
-                // empty frontier which would be incorrectly recorded to the remap shard.
-                std::future::pending::<()>().await;
-                unreachable!("pending future never returns");
+        let options = btreemap! {
+            // Use the user-configured topic metadata refresh
+            // interval.
+            "topic.metadata.refresh.interval.ms" =>
+                topic_metadata_refresh_interval
+                .as_millis()
+                .to_string(),
+            // Allow Kafka monitoring tools to identify this
+            // consumer.
+            "client.id" => format!("{client_id}-metadata"),
+        };
+        let create_consumer = || async {
+            let consumer: Result<BaseConsumer<_>, _> = connection
+                .create_with_context(
+                    &config.config,
+                    MzClientContext::default(),
+                    &options,
+                    InTask::Yes,
+                )
+                .await;
+            match consumer {
+                Ok(consumer) => consumer,
+                Err(e) => {
+                    let msg = format!(
+                        "failed creating kafka metadata consumer: {}",
+                        e.display_with_causes()
+                    );
+                    let status_update = HealthStatusUpdate::halting(msg, None);
+                    let status = match e {
+                        ContextCreationError::Ssh(_) => HealthStatus::ssh(status_update),
+                        _ => HealthStatus::kafka(status_update),
+                    };
+                    let error = MetadataUpdate::TransientError(status);
+                    let timestamp = (config.now_fn)().into();
+                    metadata_output.give(&metadata_cap, (timestamp, error));
+                    // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
+                    // Returning would incorrectly present to the remap operator as progress to
+                    // the empty frontier which would be incorrectly recorded to the remap shard.
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never returns");
+                }
             }
         };
 
+        let consumer = create_consumer().await;
         let (tx, mut rx) = mpsc::unbounded_channel();
-        spawn_metadata_thread(config, consumer, topic, tx);
+        spawn_metadata_thread(config.clone(), consumer, topic.clone(), tx);
 
         let mut prev_upstream_frontier = resume_upper;
-
+        // Start of the current run of consecutive metadata fetch failures.
+        let mut failing_since: Option<Instant> = None;
         while let Some((timestamp, mut update)) = rx.recv().await {
             if prev_upstream_frontier.is_empty() {
                 return;
@@ -2007,7 +2058,38 @@ fn render_metadata_fetcher<'scope>(
                 probe_output.give(&probe_cap, probe);
             }
 
+            let rebuild = match &update {
+                MetadataUpdate::Partitions(_) => {
+                    failing_since = None;
+                    false
+                }
+                MetadataUpdate::TransientError(_) => {
+                    let since = *failing_since.get_or_insert_with(Instant::now);
+                    let timeout = mz_storage_types::dyncfgs::KAFKA_METADATA_FAILURE_TIMEOUT
+                        .get(config.config.config_set());
+                    since.elapsed() >= timeout
+                }
+                MetadataUpdate::DefiniteError(_) | MetadataUpdate::RebuildConsumer => false,
+            };
             metadata_output.give(&metadata_cap, (timestamp, update));
+            if rebuild {
+                // The consumer runs with `metadata.recovery.strategy=none`, so once every broker
+                // it learned has gone away it never resolves the bootstrap servers again. A new
+                // consumer bootstraps from them afresh. Dropping the receiver ends the old thread
+                // after its current fetch, which also drops the old consumer.
+                warn!(
+                    source_id = %config.id,
+                    "kafka metadata fetches have failed for {}s, rebuilding consumers",
+                    failing_since.map_or(0, |since| since.elapsed().as_secs())
+                );
+                drop(rx);
+                let consumer = create_consumer().await;
+                let (tx, new_rx) = mpsc::unbounded_channel();
+                spawn_metadata_thread(config.clone(), consumer, topic.clone(), tx);
+                rx = new_rx;
+                failing_since = None;
+                metadata_output.give(&metadata_cap, (timestamp, MetadataUpdate::RebuildConsumer));
+            }
         }
     });
 

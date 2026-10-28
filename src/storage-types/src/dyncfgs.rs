@@ -194,6 +194,18 @@ pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// How long a Kafka source's metadata fetches may fail in a row before it rebuilds its
+/// consumers. librdkafka runs with `metadata.recovery.strategy=none`, so a consumer whose learned
+/// brokers have all gone away never resolves the bootstrap servers again. New consumers bootstrap
+/// from them afresh. Sinks need no equivalent: a sink opens a transaction on every input frontier
+/// advance, so an outage fails that transaction and restarts the sink with a new producer.
+pub const KAFKA_METADATA_FAILURE_TIMEOUT: Config<Duration> = Config::new(
+    "kafka_metadata_failure_timeout",
+    Duration::from_secs(300),
+    "How long a Kafka source's metadata fetches may fail in a row before it rebuilds its consumers.",
+    ParameterScope::Replica,
+);
+
 /// Sets message.max.bytes in librdkafka for Kafka sink producers.
 /// Maximum Kafka protocol request message size. Producer-side, this controls
 /// the maximum size of a single message (including framing) that the client
@@ -610,6 +622,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_RETRY_BACKOFF_MAX)
         .add(&KAFKA_RECONNECT_BACKOFF)
         .add(&KAFKA_RECONNECT_BACKOFF_MAX)
+        .add(&KAFKA_METADATA_FAILURE_TIMEOUT)
         .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
