@@ -244,6 +244,18 @@ yarn test:e2e:scalability scalability/page-load -g "cold load: sinks list"
 yarn test:e2e:scalability scalability/page-load -g "cold load: object explorer"
 ```
 
+**`viewers.spec.ts`** — Viewers held open for a cost measurement
+
+Holds `VIEWERS` viewers on one page (`VIEWER_URL`, default cluster detail),
+each in its own browser context, until `VIEWERS_STOP_FILE` exists or
+`VIEWERS_MAX_HOLD_MS` passes. Skipped when `VIEWERS` is unset. The
+workload-replay `console-scalability` workflow drives it with `--viewers` to
+measure mz_catalog_server cost per viewer.
+
+```shell
+VIEWERS=10 VIEWERS_MAX_HOLD_MS=120000 yarn playwright test scalability/viewers --project=scalability
+```
+
 #### Running tests per page
 
 Each page has a set of tests that can be run together. Use `--workers=1`
