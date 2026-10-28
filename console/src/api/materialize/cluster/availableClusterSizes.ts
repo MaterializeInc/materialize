@@ -10,7 +10,13 @@
 import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
+import { extractEnvironmentVersion } from "~/api/buildQueryKeySchema";
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
+import { semverParseGte } from "~/api/materialize/versioning";
+
+// TODO: set to the first release that includes the `disabled` column, and
+// drop the gate once every environment is on it.
+export const DISABLED_REPLICA_SIZES_MIN_VERSION = "26.50.0-dev";
 
 export const buildAllowedClusterReplicaSizesQuery = () => {
   return sql<{
@@ -18,13 +24,19 @@ export const buildAllowedClusterReplicaSizesQuery = () => {
   }>`SHOW allowed_cluster_replica_sizes`;
 };
 
-export const buildAvailableClusterReplicaSizesQuery = () => {
+export const buildAvailableClusterReplicaSizesQuery = (
+  environmentVersion?: string,
+) => {
+  const hasDisabledColumn =
+    environmentVersion !== undefined &&
+    semverParseGte(environmentVersion, DISABLED_REPLICA_SIZES_MIN_VERSION);
   return (
     queryBuilder
       .selectFrom("mz_cluster_replica_sizes")
       .select("size")
       // We don't want to show the mz_probe size in the UI
       .where("size", "not like", "mz_%")
+      .$if(hasDisabledColumn, (qb) => qb.where("disabled", "=", false))
       // Group sizes by family (legacy cc, t-shirt, M.1, D.1, ...) so related
       // sizes stay contiguous, then sort by cost within each family.
       .orderBy(
@@ -49,7 +61,9 @@ export default async function fetchAvailableClusterSizes({
 }) {
   const compiledQueries = [
     buildAllowedClusterReplicaSizesQuery().compile(queryBuilder),
-    buildAvailableClusterReplicaSizesQuery().compile(),
+    buildAvailableClusterReplicaSizesQuery(
+      extractEnvironmentVersion(queryKey),
+    ).compile(),
   ] as const;
 
   let sizes: string[] | null = null;
