@@ -399,6 +399,53 @@ ORDER BY columns.position
 a  2
 b  NULL
 
+# A table column without a default, or with a bare DEFAULT NULL, reads as the
+# string NULL, which clients compare against (SQL-839). The
+# PostgreSQL-compatible views map it to no default.
+statement ok
+CREATE TABLE no_default (a int, b int DEFAULT 5, c int DEFAULT NULL)
+
+query TTT
+SELECT columns.name, columns.default, columns.default IS NULL
+FROM mz_catalog.mz_columns columns
+JOIN mz_catalog.mz_tables tables ON columns.id = tables.id
+WHERE tables.name = 'no_default'
+ORDER BY columns.position
+----
+a  NULL  false
+b  5  false
+c  NULL  false
+
+query TT
+SELECT attr.attname, attr.atthasdef
+FROM pg_catalog.pg_attribute attr
+JOIN pg_catalog.pg_class cls ON cls.oid = attr.attrelid
+WHERE cls.relname = 'no_default' AND attr.attnum > 0
+ORDER BY attr.attnum
+----
+a  false
+b  true
+c  false
+
+query IT
+SELECT def.adnum, def.adsrc
+FROM pg_catalog.pg_attrdef def
+JOIN pg_catalog.pg_class cls ON cls.oid = def.adrelid
+WHERE cls.relname = 'no_default'
+ORDER BY def.adnum
+----
+2  5
+
+query TT
+SELECT column_name, column_default
+FROM information_schema.columns
+WHERE table_name = 'no_default'
+ORDER BY ordinal_position
+----
+a  NULL
+b  5
+c  NULL
+
 # --- Views and materialized views take the planned column names and types ----
 
 statement ok
