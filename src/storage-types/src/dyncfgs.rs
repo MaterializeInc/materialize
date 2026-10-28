@@ -194,13 +194,14 @@ pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Sets metadata.recovery.rebootstrap.trigger.ms in librdkafka for sources and sinks.
-/// Defaults to the librdkafka default of 5 minutes.
-/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
-pub const KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER: Config<Duration> = Config::new(
-    "kafka_metadata_recovery_rebootstrap_trigger",
+/// How long a Kafka source's metadata fetches may fail in a row before the source rebuilds its
+/// consumers. librdkafka runs with `metadata.recovery.strategy=none`, so a consumer whose learned
+/// brokers have all gone away never resolves the bootstrap servers again. New consumers bootstrap
+/// from them afresh.
+pub const KAFKA_SOURCE_CONSUMER_REBUILD_TIMEOUT: Config<Duration> = Config::new(
+    "kafka_source_consumer_rebuild_timeout",
     Duration::from_secs(300),
-    "Sets metadata.recovery.rebootstrap.trigger.ms in librdkafka for sources and sinks.",
+    "How long a Kafka source's metadata fetches may fail in a row before it rebuilds its consumers.",
     ParameterScope::Replica,
 );
 
@@ -620,7 +621,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_RETRY_BACKOFF_MAX)
         .add(&KAFKA_RECONNECT_BACKOFF)
         .add(&KAFKA_RECONNECT_BACKOFF_MAX)
-        .add(&KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER)
+        .add(&KAFKA_SOURCE_CONSUMER_REBUILD_TIMEOUT)
         .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)

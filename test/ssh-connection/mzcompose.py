@@ -11,6 +11,8 @@
 Test sources with SSH connections using an SSH bastion host.
 """
 
+import time
+
 from prettytable import PrettyTable
 
 from materialize import MZ_ROOT, buildkite
@@ -331,10 +333,16 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
         c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
 
 
+def materialized_log_count(c: Composition, needle: str) -> int:
+    """Number of Materialize log lines containing `needle` so far."""
+    return c.invoke("logs", "materialized", capture=True).stdout.count(needle)
+
+
 def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> None:
-    """Kafka sources behind an SSH tunnel recover after the broker itself
-    restarts. Losing every broker makes librdkafka re-bootstrap, which drops
-    its broker list and resolves each bootstrap address again through the
+    """Kafka sources behind an SSH tunnel back off while the broker is down,
+    rebuild their consumers once it has been down for
+    kafka_source_consumer_rebuild_timeout, and recover after it restarts.
+    Every reconnect and every rebuild resolves the broker through the
     tunnel-rewriting resolver."""
     c.down()
     with c.override(SshBastionHost(max_startups="2")):
@@ -361,10 +369,10 @@ def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> Non
             f"echo '{public_key}' > /etc/authorized_keys/mz && chmod 644 /etc/authorized_keys/mz",
         )
 
-        # Re-bootstrap after one second without metadata instead of the
-        # five-minute librdkafka default, so the outage below exercises it.
+        # Rebuild consumers after ten seconds without metadata instead of the
+        # five-minute default, so the outage below exercises it.
         c.sql(
-            "ALTER SYSTEM SET kafka_metadata_recovery_rebootstrap_trigger = '1s'",
+            "ALTER SYSTEM SET kafka_source_consumer_rebuild_timeout = '10s'",
             user="mz_system",
             port=6877,
         )
@@ -372,6 +380,31 @@ def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> Non
         c.run_testdrive_files("--no-reset", "kafka-source.td")
         c.kill(broker)
         c.run_testdrive_files("--no-reset", "kafka-source-after-broker-failure.td")
+
+        # The bastion accepts each tunnelled connection and closes it when it
+        # cannot reach the broker, so every reconnect attempt reaches the
+        # resolver. Four sources with two clients each, backing off from
+        # kafka_reconnect_backoff to kafka_reconnect_backoff_max, plus one
+        # rebuild per source every ten seconds, resolve well under a hundred
+        # times in 30s. librdkafka 2.16.0 with
+        # metadata.recovery.strategy=rebootstrap drops the backoff and resolves
+        # about twenty times a second per client.
+        resolves_before = materialized_log_count(c, "resolve_broker_addr called")
+        rebuilds_before = materialized_log_count(c, "rebuilding kafka consumer")
+        time.sleep(30)
+        resolves = (
+            materialized_log_count(c, "resolve_broker_addr called") - resolves_before
+        )
+        rebuilds = (
+            materialized_log_count(c, "rebuilding kafka consumer") - rebuilds_before
+        )
+        print(
+            f"--- {resolves} broker resolutions and {rebuilds} consumer rebuilds in 30s"
+        )
+        assert (
+            resolves < 400
+        ), f"{resolves} broker resolutions in 30s, reconnects are not backing off"
+        assert rebuilds > 0, "no consumer rebuild while the broker was down"
 
         c.up(*[d for d in dependencies if d != "materialized"])
         c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
