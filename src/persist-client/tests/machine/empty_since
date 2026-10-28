@@ -201,7 +201,7 @@ perform-maintenance
 ----
 v24 ok
 v24 ok
-v25 ok
+v26 ok
 
 perform-maintenance
 ----
@@ -215,10 +215,16 @@ consensus-scan from_seqno=v0
 ----
 seqno=v24 batches= rollups=v0
 seqno=v25 batches= rollups=v0,v24
+seqno=v26 batches= rollups=v24
 
 blob-scan-batches
 ----
 <empty>
+
+# Only the kept rollup is left, in both state and blob.
+blob-scan-rollups
+----
+v24
 
 ####### TOMBSTONE (SINCE AND UPPER ARE BOTH EMPTY)
 
@@ -239,7 +245,7 @@ error: Upper(Antichain { elements: [] })
 
 expire-writer writer_id=w11111111-1111-1111-1111-111111111111
 ----
-v25 ok
+v26 ok
 
 # Perhaps counter-intuitively, we can "register" a new writer. This doesn't
 # actually register and produce a new SeqNo, but there's (intentionally) no
@@ -251,7 +257,7 @@ error: Upper(Antichain { elements: [] })
 
 expire-writer writer_id=w44444444-4444-4444-4444-444444444444
 ----
-v25 ok
+v26 ok
 
 # Similarly, downgrade_since, as well as all the other reader operations, works
 # for an existing reader. As an odd side effect, CaDS works even when the token
@@ -260,45 +266,45 @@ v25 ok
 # NB: Critically, none of these create a new seqno.
 downgrade-since since=4 reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v25 []
+v26 []
 
 expire-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v25 ok
+v26 ok
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=4 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v25 0 []
+v26 0 []
 
 compare-and-downgrade-since expect_opaque=1 opaque=1 since=5 reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v25 1 []
+v26 1 []
 
 expire-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v25 ok
+v26 ok
 
 # And ditto we can "register" both reader types and do the same ops.
 register-leased-reader reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v25 []
+v26 []
 
 downgrade-since since=4 reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v25 []
+v26 []
 
 expire-leased-reader reader_id=r55555555-5555-5555-5555-555555555555
 ----
-v25 ok
+v26 ok
 
 register-critical-reader reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v25 []
+v26 []
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=4 reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v25 0 []
+v26 0 []
 
 expire-critical-reader reader_id=c55555555-5555-5555-5555-555555555555
 ----
-v25 ok
+v26 ok
