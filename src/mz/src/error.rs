@@ -103,6 +103,10 @@ pub enum Error {
     /// It is a simpler alternative for parsing errors.
     #[error("Invalid app-password.")]
     InvalidAppPassword,
+    /// Error returned by the OAuth authorization or token endpoint during a
+    /// browser login.
+    #[error("Login failed: {0}")]
+    OAuthError(String),
     /// Error that raises when the region is enabled
     /// but not ready yet.
     #[error("The region is not ready yet.")]

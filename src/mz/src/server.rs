@@ -87,6 +87,65 @@ pub async fn server(
     tx: UnboundedSender<Result<AppPassword, Error>>,
 ) -> (impl Future<Output = Result<(), std::io::Error>>, u16) {
     let app = Router::new().route("/", get(|body| request(body, tx)));
+    serve(app).await
+}
+
+/// The query string of an OAuth authorization response (RFC 6749 §4.1.2).
+#[derive(Debug, Deserialize)]
+struct OAuthCallback {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+#[allow(clippy::unused_async)]
+async fn oauth_callback(
+    Query(callback): Query<OAuthCallback>,
+    expected_state: String,
+    tx: UnboundedSender<Result<String, Error>>,
+) -> Response {
+    // Any local process or web page can reach this listener, so a callback is
+    // only trusted when it echoes the `state` that `mz` sent to the
+    // authorization endpoint. Requests that fail the check are rejected without
+    // ending the login, so a stray or forged request cannot cancel it.
+    if callback.state.as_deref() != Some(expected_state.as_str()) {
+        return format_as_html_message("Invalid login request.").into_response();
+    }
+
+    let (result, msg) = match (callback.code, callback.error) {
+        (Some(code), None) => (Ok(code), "You can now close the tab."),
+        (_, Some(error)) if error == "access_denied" => (
+            Err(Error::LoginOperationCanceled),
+            "Login canceled. You can now close the tab.",
+        ),
+        (_, error) => (
+            Err(Error::OAuthError(
+                callback
+                    .error_description
+                    .or(error)
+                    .unwrap_or_else(|| "missing authorization code".into()),
+            )),
+            "Login failed. Please, try again or communicate with support.",
+        ),
+    };
+    tx.send(result)
+        .unwrap_or_else(|_| panic!("Error handling login details."));
+    format_as_html_message(msg).into_response()
+}
+
+/// Binds a loopback listener for an OAuth authorization response that must
+/// carry `expected_state`, and sends the authorization code (or the error the
+/// authorization server returned) to `tx`.
+pub async fn oauth_callback_server(
+    expected_state: String,
+    tx: UnboundedSender<Result<String, Error>>,
+) -> (impl Future<Output = Result<(), std::io::Error>>, u16) {
+    let app = Router::new().route("/", get(|query| oauth_callback(query, expected_state, tx)));
+    serve(app).await
+}
+
+async fn serve(app: Router) -> (impl Future<Output = Result<(), std::io::Error>>, u16) {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
     let listener = TcpListener::bind(addr).await.unwrap_or_else(|e| {
         panic!("error binding to {}: {}", addr, e);
@@ -95,4 +154,61 @@ pub async fn server(
     let server = axum::serve(listener, app.into_make_service());
 
     (server.into_future(), port)
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    async fn get(port: u16, query: &str) {
+        reqwest::get(format!("http://127.0.0.1:{port}/?{query}"))
+            .await
+            .expect("callback server reachable");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `socket`
+    async fn test_oauth_callback_ignores_wrong_state() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (server, port) = oauth_callback_server("expected".into(), tx).await;
+        mz_ore::task::spawn(|| "oauth-callback-server", server);
+
+        get(port, "code=forged&state=other").await;
+        get(port, "code=forged").await;
+        assert!(
+            rx.try_recv().is_err(),
+            "mismatched state must not end the login"
+        );
+
+        get(port, "code=real&state=expected").await;
+        assert_eq!(rx.recv().await.unwrap().unwrap(), "real");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `socket`
+    async fn test_oauth_callback_errors() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (server, port) = oauth_callback_server("s".into(), tx).await;
+        mz_ore::task::spawn(|| "oauth-callback-server", server);
+
+        get(port, "error=access_denied&state=s").await;
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            Err(Error::LoginOperationCanceled)
+        ));
+
+        get(port, "error=server_error&error_description=boom&state=s").await;
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            Err(Error::OAuthError(msg)) if msg == "boom"
+        ));
+
+        get(port, "state=s").await;
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            Err(Error::OAuthError(_))
+        ));
+    }
 }
