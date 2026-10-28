@@ -194,34 +194,6 @@ pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Sets metadata.recovery.strategy in librdkafka for sources and sinks.
-///
-/// With `none`, the configured bootstrap brokers stay in the broker list for the life of the
-/// client and reconnect with the exponential backoff set by `kafka_reconnect_backoff` and
-/// `kafka_reconnect_backoff_max`. Materialize resolves every broker address on every connect
-/// attempt, so a bootstrap hostname that moves is still picked up without a re-bootstrap.
-///
-/// With `rebootstrap`, the librdkafka default, the client replaces every broker object whenever
-/// all brokers are down. The reconnect backoff lives on the broker object, so a sustained outage
-/// makes the client reconnect every `reconnect.backoff.ms / 2` for its whole duration.
-pub const KAFKA_METADATA_RECOVERY_STRATEGY: Config<&'static str> = Config::new(
-    "kafka_metadata_recovery_strategy",
-    "none",
-    "Sets metadata.recovery.strategy in librdkafka for sources and sinks: none or rebootstrap.",
-    ParameterScope::Replica,
-);
-
-/// Sets metadata.recovery.rebootstrap.trigger.ms in librdkafka for sources and sinks.
-/// Defaults to the librdkafka default of 5 minutes. Only applies when
-/// `kafka_metadata_recovery_strategy` is `rebootstrap`.
-/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
-pub const KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER: Config<Duration> = Config::new(
-    "kafka_metadata_recovery_rebootstrap_trigger",
-    Duration::from_secs(300),
-    "Sets metadata.recovery.rebootstrap.trigger.ms in librdkafka for sources and sinks.",
-    ParameterScope::Replica,
-);
-
 /// Sets message.max.bytes in librdkafka for Kafka sink producers.
 /// Maximum Kafka protocol request message size. Producer-side, this controls
 /// the maximum size of a single message (including framing) that the client
@@ -638,8 +610,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_RETRY_BACKOFF_MAX)
         .add(&KAFKA_RECONNECT_BACKOFF)
         .add(&KAFKA_RECONNECT_BACKOFF_MAX)
-        .add(&KAFKA_METADATA_RECOVERY_STRATEGY)
-        .add(&KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER)
         .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)

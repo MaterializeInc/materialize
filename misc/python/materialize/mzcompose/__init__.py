@@ -960,8 +960,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "kafka_retry_backoff_max",
     "kafka_reconnect_backoff",
     "kafka_reconnect_backoff_max",
-    "kafka_metadata_recovery_strategy",
-    "kafka_metadata_recovery_rebootstrap_trigger",
     "kafka_sink_message_max_bytes",
     "kafka_sink_batch_size",
     "kafka_sink_batch_num_messages",

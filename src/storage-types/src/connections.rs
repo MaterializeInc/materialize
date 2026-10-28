@@ -85,10 +85,8 @@ use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
 use crate::dyncfgs::{
     ENFORCE_EXTERNAL_ADDRESSES, KAFKA_CLIENT_ID_ENRICHMENT_RULES,
-    KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM,
-    KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER, KAFKA_METADATA_RECOVERY_STRATEGY,
-    KAFKA_RECONNECT_BACKOFF, KAFKA_RECONNECT_BACKOFF_MAX, KAFKA_RETRY_BACKOFF,
-    KAFKA_RETRY_BACKOFF_MAX,
+    KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM, KAFKA_RECONNECT_BACKOFF,
+    KAFKA_RECONNECT_BACKOFF_MAX, KAFKA_RETRY_BACKOFF, KAFKA_RETRY_BACKOFF_MAX,
 };
 use crate::errors::{ContextCreationError, CsrConnectError};
 
@@ -1776,19 +1774,16 @@ impl KafkaConnection {
                 .as_millis()
                 .into(),
         );
-        options.insert(
-            "metadata.recovery.strategy".into(),
-            KAFKA_METADATA_RECOVERY_STRATEGY
-                .get(storage_configuration.config_set())
-                .into(),
-        );
-        options.insert(
-            "metadata.recovery.rebootstrap.trigger.ms".into(),
-            KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER
-                .get(storage_configuration.config_set())
-                .as_millis()
-                .into(),
-        );
+        // With `rebootstrap`, the librdkafka default, the client replaces every
+        // broker object whenever all brokers are down. The reconnect backoff
+        // lives on the broker object, so a sustained outage makes the client
+        // reconnect every `reconnect.backoff.ms / 2` for its whole duration
+        // (734 attempts in 40s measured against a broker that accepts and
+        // closes). With `none` the configured bootstrap brokers stay in the
+        // broker list and reconnect with the backoff set above, and the
+        // resolver re-resolves every broker on every attempt, so a bootstrap
+        // hostname that moves is still picked up.
+        options.insert("metadata.recovery.strategy".into(), "none".into());
 
         let mut config = mz_kafka_util::client::create_new_client_config(
             storage_configuration

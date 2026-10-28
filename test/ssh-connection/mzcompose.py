@@ -339,18 +339,13 @@ def resolver_calls(c: Composition) -> int:
     return logs.count("resolve_broker_addr called")
 
 
-def workflow_kafka_restart_broker(
-    c: Composition, redpanda: bool = False, strategy: str = "none"
-) -> None:
-    """Kafka sources behind an SSH tunnel recover after the broker itself
-    restarts, under either metadata.recovery.strategy.
+def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> None:
+    """Kafka sources behind an SSH tunnel back off while the broker is down
+    and recover after it restarts.
 
-    With `none`, the default, librdkafka keeps its broker list and reconnects
-    with exponential backoff, resolving each address through the
-    tunnel-rewriting resolver on every attempt. With `rebootstrap`, losing
-    every broker makes it drop the broker list and resolve each bootstrap
-    address again. librdkafka 2.16.0 also drops the reconnect backoff when it
-    re-bootstraps, so the attempt rate is only checked under `none`.
+    librdkafka keeps its broker list and reconnects with exponential backoff,
+    resolving each address through the tunnel-rewriting resolver on every
+    attempt.
     """
     c.down()
     with c.override(SshBastionHost(max_startups="2")):
@@ -377,19 +372,6 @@ def workflow_kafka_restart_broker(
             f"echo '{public_key}' > /etc/authorized_keys/mz && chmod 644 /etc/authorized_keys/mz",
         )
 
-        c.sql(
-            f"ALTER SYSTEM SET kafka_metadata_recovery_strategy = '{strategy}'",
-            user="mz_system",
-            port=6877,
-        )
-        # Re-bootstrap after one second without metadata instead of the
-        # five-minute librdkafka default, so the outage below exercises it.
-        c.sql(
-            "ALTER SYSTEM SET kafka_metadata_recovery_rebootstrap_trigger = '1s'",
-            user="mz_system",
-            port=6877,
-        )
-
         c.run_testdrive_files("--no-reset", "kafka-source.td")
         c.kill(broker)
         c.run_testdrive_files("--no-reset", "kafka-source-after-broker-failure.td")
@@ -398,16 +380,16 @@ def workflow_kafka_restart_broker(
         # cannot reach the broker, so every reconnect attempt reaches the
         # resolver. Four sources with two clients each, backing off from
         # kafka_reconnect_backoff to kafka_reconnect_backoff_max, resolve well
-        # under a hundred times in 30s. Without backoff librdkafka resolves
+        # under a hundred times in 30s. librdkafka 2.16.0 with
+        # metadata.recovery.strategy=rebootstrap drops the backoff and resolves
         # about twenty times a second per client.
         before = resolver_calls(c)
         time.sleep(30)
         calls = resolver_calls(c) - before
-        print(f"--- {calls} broker resolutions in 30s with strategy {strategy}")
-        if strategy == "none":
-            assert (
-                calls < 400
-            ), f"{calls} broker resolutions in 30s, reconnects are not backing off"
+        print(f"--- {calls} broker resolutions in 30s")
+        assert (
+            calls < 400
+        ), f"{calls} broker resolutions in 30s, reconnects are not backing off"
 
         c.up(*[d for d in dependencies if d != "materialized"])
         c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
@@ -798,7 +780,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         (workflow_pg, (), True),
         # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
         (workflow_kafka_restart_broker, (False,), True),
-        (workflow_kafka_restart_broker, (False, "rebootstrap"), True),
         (workflow_kafka_sink, (), True),
         (workflow_sql_server, (), True),
         (workflow_mysql, (), True),
@@ -809,7 +790,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 # (workflow_kafka, (True,), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
                 (workflow_hidden_hosts, (True,), True),
                 (workflow_kafka_restart_broker, (True,), True),
-                (workflow_kafka_restart_broker, (True, "rebootstrap"), True),
                 # Various special cases related to ssh
                 (workflow_ssh_key_after_restart, (), False),
                 (workflow_rotated_ssh_key_after_restart, (), False),
