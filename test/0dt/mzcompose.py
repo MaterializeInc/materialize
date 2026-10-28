@@ -820,6 +820,15 @@ def workflow_basic(c: Composition) -> None:
         > SELECT * FROM mv;
         9
         > DROP INDEX drop_idx
+        # NOTE: This deliberately orphans t_idx, which mv reads from, to cover
+        # the first upgrade from a release that allowed it: mz_new has to
+        # follow an old leader whose catalog no longer has an index that a
+        # running dataflow reads.
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM SET enable_drop_in_use_index = true
+        > DROP INDEX t_idx
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM RESET enable_drop_in_use_index
         > CREATE INDEX t_idx2 ON t (a, b)
         > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 
@@ -2667,6 +2676,15 @@ def workflow_ddl(c: Composition) -> None:
         > SELECT * FROM mv;
         9
         > DROP INDEX drop_idx
+        # NOTE: This deliberately orphans t_idx, which mv reads from, to cover
+        # the first upgrade from a release that allowed it: mz_new has to
+        # follow an old leader whose catalog no longer has an index that a
+        # running dataflow reads.
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM SET enable_drop_in_use_index = true
+        > DROP INDEX t_idx
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM RESET enable_drop_in_use_index
         > CREATE INDEX t_idx2 ON t (a, b)
         > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 

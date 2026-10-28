@@ -98,3 +98,54 @@ class DropIndex(Check):
                 8 8
                 9 9
            """))
+
+
+class DropIndexInUse(Check):
+    """`DROP INDEX` refuses an index that a materialized view reads from, also
+    after a restart or upgrade replans the view at bootstrap."""
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE drop_in_use_table1 (f1 INTEGER);
+                > INSERT INTO drop_in_use_table1 VALUES (1);
+                > CREATE INDEX drop_in_use_idx1 ON drop_in_use_table1 (f1);
+                > CREATE MATERIALIZED VIEW drop_in_use_view1 AS SELECT f1 FROM drop_in_use_table1 WHERE f1 > 0;
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > INSERT INTO drop_in_use_table1 VALUES (2);
+                > CREATE TABLE drop_in_use_table2 (f1 INTEGER);
+                > INSERT INTO drop_in_use_table2 VALUES (1);
+                > CREATE INDEX drop_in_use_idx2 ON drop_in_use_table2 (f1);
+                > CREATE MATERIALIZED VIEW drop_in_use_view2 AS SELECT f1 FROM drop_in_use_table2 WHERE f1 > 0;
+                """,
+                """
+                > INSERT INTO drop_in_use_table1 VALUES (3);
+                > INSERT INTO drop_in_use_table2 VALUES (2);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        # Older versions allow the drop and orphan the view, so the refusal is
+        # only asserted on versions that have it.
+        return Testdrive(dedent("""
+                ![version>=2604900] DROP INDEX drop_in_use_idx1
+                contains:still depended upon by
+
+                ![version>=2604900] DROP INDEX drop_in_use_idx2
+                contains:still depended upon by
+
+                > SELECT * FROM drop_in_use_view1
+                1
+                2
+                3
+
+                > SELECT * FROM drop_in_use_view2
+                1
+                2
+            """))
