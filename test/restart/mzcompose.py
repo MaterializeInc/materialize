@@ -401,6 +401,10 @@ def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> N
                 > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
                 test r1 {size} true ""
 
+                # The disabled size stays listed, so its replicas still join to it.
+                > SELECT r.name, s.disabled FROM mz_cluster_replicas r JOIN mz_cluster_replica_sizes s USING (size) JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'test'
+                r1 true
+
                 # Creating a new replica of the disabled size is rejected.
                 ! CREATE CLUSTER REPLICA test.r2 SIZE '{size}'
                 contains:unknown cluster replica size {size}

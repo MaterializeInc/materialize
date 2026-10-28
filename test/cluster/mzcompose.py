@@ -7652,8 +7652,8 @@ def workflow_test_sql_cluster_disk(c: Composition) -> None:
     # writes every size to `mz_cluster_replica_size_internal`, including
     # disabled ones, so `disk` for the existing `noswap_nonzero` cluster and
     # its replica should still resolve to `true`. The public
-    # `mz_cluster_replica_sizes` table drops the disabled row, which the
-    # final assertion checks.
+    # `mz_cluster_replica_sizes` table lists the disabled row as disabled,
+    # which the final assertion checks.
     c.kill("materialized")
     sizes_with_disabled = dict(sizes)
     sizes_with_disabled["noswap,nonzero"] = {
@@ -7685,8 +7685,8 @@ def workflow_test_sql_cluster_disk(c: Composition) -> None:
                 noswap_zero    false
                 noswap_nonzero true
 
-                > SELECT 'noswap,nonzero' IN (SELECT size FROM mz_cluster_replica_sizes)
-                false
+                > SELECT disabled FROM mz_cluster_replica_sizes WHERE size = 'noswap,nonzero'
+                true
                 """))
 
 

@@ -649,7 +649,7 @@ mz_internal.mz_cluster_replica_history:
       →Arrange (#0)
         →Union
           →Fused with Child Map/Filter/Project
-            Project: #0, #6, #7
+            Project: #0, #6, #8
             Map: true
               →Arranged mz_catalog.mz_cluster_replica_sizes
                 Key: (#0{size})
@@ -4930,7 +4930,7 @@ mz_catalog.mz_columns:
                               →Read l1
       →Differential Join %1:mz_catalog_raw[#1{schema_name}, #2{name}] » %0[#0{schema_name}, #1{relation_name}]
         →Arrange (#0{schema_name}, #1{relation_name})
-          →Constant (1937 rows)
+          →Constant (1938 rows)
         →Arrange (#1{schema_name}, #2{name})
           →Fused with Child Map/Filter/Project
             Project: #6, #4, #3
@@ -8796,7 +8796,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_columns";
 ----
 Explained Query (fast path):
-  →Constant (1937 rows)
+  →Constant (1938 rows)
 
 Target cluster: mz_catalog_server
 
