@@ -18,14 +18,23 @@ use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
+use kafka_protocol::messages::list_offsets_request::{ListOffsetsPartition, ListOffsetsTopic};
+use kafka_protocol::messages::{BrokerId, ListOffsetsRequest, TopicName};
+use kafka_protocol::protocol::StrBytes;
 use tracing::{debug, error, info, warn};
 
+use crate::config::settings::IsolationLevel;
 use crate::config::{ClientSettings, RDKafkaLogLevel};
 use crate::error::{KafkaError, KafkaResult};
-use crate::internal::cluster::Cluster;
+use crate::internal::cluster::{self, Cluster, MetadataTopics};
+use crate::internal::hooks::{Hooks, Logger};
+use crate::internal::net::RequestOptions;
+use crate::internal::net::tls::TlsConfig;
+use crate::internal::{protocol, runtime};
 use crate::metadata::Metadata;
 use crate::statistics::Statistics;
-use crate::util::Timeout;
+use crate::types::RDKafkaErrorCode;
+use crate::util::{Deadline, Timeout};
 
 /// Client-level context.
 ///
@@ -149,8 +158,23 @@ impl<C: ClientContext + 'static> Client<C> {
     /// Fails with [`KafkaError::ClientCreation`] if the settings are unusable,
     /// for example if TLS material cannot be parsed, with librdkafka's texts.
     pub(crate) fn new(settings: ClientSettings, context: C) -> KafkaResult<Client<C>> {
-        let _ = (settings, context);
-        todo!("foundation: build the cluster (connections, metadata) from settings and context")
+        let context = Arc::new(context);
+        let hooks: Arc<dyn Hooks> = Arc::<C>::clone(&context);
+        let creation_logger = Logger::for_creation(Arc::clone(&hooks), &settings);
+        creation_logger.log_conf_warnings(&settings);
+        // Like librdkafka, build the TLS context once, so that malformed
+        // certificates and keys fail client creation.
+        let tls = if settings.security_protocol.uses_tls() {
+            Some(
+                TlsConfig::new(&settings.ssl, &creation_logger)
+                    .map_err(KafkaError::ClientCreation)?,
+            )
+        } else {
+            None
+        };
+        let logger = Logger::new(Arc::clone(&hooks), &settings);
+        let cluster = Cluster::new(Arc::new(settings), hooks, logger, tls);
+        Ok(Client { context, cluster })
     }
 
     /// The shared cluster state used by the client engines.
@@ -175,8 +199,29 @@ impl<C: ClientContext + 'static> Client<C> {
         topic: Option<&str>,
         timeout: T,
     ) -> KafkaResult<Metadata> {
-        let _ = (topic, timeout.into());
-        todo!("foundation: Metadata request with the client's allow.auto.create.topics")
+        let deadline = Deadline::new(timeout);
+        let cluster = Arc::clone(&self.cluster);
+        let topic = topic.map(str::to_string);
+        runtime::block_on(async move {
+            let names: Vec<String> = topic.into_iter().collect();
+            let topics = if names.is_empty() {
+                MetadataTopics::All
+            } else {
+                // Like `rd_kafka_topic_new`, a requested topic becomes known
+                // and is refreshed periodically.
+                cluster.add_known_topics(names.iter().map(String::as_str));
+                MetadataTopics::Some(&names)
+            };
+            let (broker, response) = cluster
+                .fetch_metadata(topics, deadline)
+                .await
+                .map_err(|e| KafkaError::MetadataFetch(e.code()))?;
+            Ok(cluster::metadata_to_public(
+                &response,
+                broker.id(),
+                broker.name(),
+            ))
+        })
     }
 
     /// Returns the low and high watermarks for a specific topic and partition.
@@ -190,8 +235,111 @@ impl<C: ClientContext + 'static> Client<C> {
         partition: i32,
         timeout: T,
     ) -> KafkaResult<(i64, i64)> {
-        let _ = (topic, partition, timeout.into());
-        todo!("foundation: ListOffsets(EARLIEST, LATEST) to the leader with isolation.level")
+        let deadline = Deadline::new(timeout);
+        let cluster = Arc::clone(&self.cluster);
+        let topic = topic.to_string();
+        runtime::block_on(async move {
+            watermarks(&cluster, &topic, partition, deadline)
+                .await
+                .map_err(KafkaError::MetadataFetch)
+        })
+    }
+}
+
+impl<C: ClientContext + 'static> Drop for Client<C> {
+    fn drop(&mut self) {
+        // The client is the last user handle: stop all background work.
+        self.cluster.shutdown();
+    }
+}
+
+/// Lists the earliest and latest offsets of a partition at its leader, with
+/// the client's isolation level, retrying leader changes until the deadline.
+async fn watermarks(
+    cluster: &Cluster,
+    topic: &str,
+    partition: i32,
+    deadline: Deadline,
+) -> Result<(i64, i64), RDKafkaErrorCode> {
+    let isolation_level: i8 = match cluster.settings().isolation_level {
+        IsolationLevel::ReadUncommitted => 0,
+        IsolationLevel::ReadCommitted => 1,
+    };
+    loop {
+        let leader = cluster
+            .leader(topic, partition, deadline)
+            .await
+            .map_err(|e| e.code())?;
+        let list = |timestamp: i64| {
+            let leader = Arc::clone(&leader);
+            async move {
+                let response = leader
+                    .request::<ListOffsetsRequest, _>(
+                        |version| {
+                            let mut req = ListOffsetsRequest::default()
+                                .with_replica_id(BrokerId(-1))
+                                .with_topics(vec![
+                                    ListOffsetsTopic::default()
+                                        .with_name(TopicName(StrBytes::from_string(
+                                            topic.to_string(),
+                                        )))
+                                        .with_partitions(vec![
+                                            ListOffsetsPartition::default()
+                                                .with_partition_index(partition)
+                                                .with_timestamp(timestamp),
+                                        ]),
+                                ]);
+                            if version >= 2 {
+                                req.isolation_level = isolation_level;
+                            }
+                            req
+                        },
+                        RequestOptions::default(),
+                    )
+                    .await
+                    .map_err(|e| e.code())?;
+                let p = response
+                    .topics
+                    .iter()
+                    .flat_map(|t| t.partitions.iter())
+                    .find(|p| p.partition_index == partition)
+                    .ok_or(RDKafkaErrorCode::BadMessage)?;
+                match protocol::broker_error(p.error_code) {
+                    Some(code) => Err(code),
+                    None => Ok(p.offset),
+                }
+            }
+        };
+        let both = futures::future::try_join(list(-2), list(-1));
+        let result = match deadline.instant() {
+            Some(at) => tokio::time::timeout_at(at.into(), both)
+                .await
+                .unwrap_or(Err(RDKafkaErrorCode::OperationTimedOut)),
+            None => both.await,
+        };
+        match result {
+            Ok(offsets) => return Ok(offsets),
+            Err(
+                code @ (RDKafkaErrorCode::NotLeaderForPartition
+                | RDKafkaErrorCode::LeaderNotAvailable
+                | RDKafkaErrorCode::FencedLeaderEpoch
+                | RDKafkaErrorCode::UnknownLeaderEpoch
+                | RDKafkaErrorCode::BrokerTransportFailure
+                | RDKafkaErrorCode::DestroyBroker),
+            ) if !deadline.is_elapsed() => {
+                // The cached leader is stale: refresh and retry.
+                let topics = [topic.to_string()];
+                if let Err(e) = cluster.refresh_metadata(&topics, deadline).await {
+                    return Err(if deadline.is_elapsed() {
+                        code
+                    } else {
+                        e.code()
+                    });
+                }
+                tokio::time::sleep(cluster.settings().retry_backoff).await;
+            }
+            Err(code) => return Err(code),
+        }
     }
 }
 

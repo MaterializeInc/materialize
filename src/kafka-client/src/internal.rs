@@ -12,7 +12,9 @@
 //! * [`runtime`]: the process-wide `kafka-io` runtime and the sync/async
 //!   bridges.
 //! * [`hooks`]: type-erased access to the user's context, and log filtering.
-//! * [`cluster`]: connections, bootstrap, metadata cache, broker lookup.
+//! * [`cluster`]: bootstrap, brokers, metadata cache, broker lookup.
+//! * [`net`]: one connection: TCP, TLS, SASL, ApiVersions, pipelining.
+//! * [`protocol`]: API version ranges and negotiation, framing, error codes.
 //! * [`consumer`], [`producer`], [`admin`]: the client engines.
 //! * [`records`], [`compression`], [`partitioner`]: the record batch codec and
 //!   partitioner hashing.
@@ -22,9 +24,9 @@ pub(crate) mod cluster;
 pub(crate) mod compression;
 pub(crate) mod consumer;
 pub(crate) mod hooks;
+pub(crate) mod net;
 pub(crate) mod partitioner;
 pub(crate) mod producer;
+pub(crate) mod protocol;
 pub(crate) mod records;
 pub(crate) mod runtime;
-// pub(crate) mod net;
-// pub(crate) mod protocol;
