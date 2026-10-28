@@ -7768,7 +7768,34 @@ impl<'a> Parser<'a> {
     fn parse_delete(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(FROM)?;
         let table_name = RawItemName::Name(self.parse_item_name()?);
+        if self.peek_delete_rows() {
+            self.expect_keyword(ROWS)?;
+            self.expect_token(&Token::LParen)?;
+            let rows = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
+            if self.peek_one_of_keywords(&[USING, WHERE]) {
+                return parser_err!(
+                    self,
+                    self.peek_pos(),
+                    "DELETE ... ROWS cannot be combined with USING or WHERE"
+                );
+            }
+            return Ok(Statement::Delete(DeleteStatement {
+                table_name,
+                alias: None,
+                using: vec![],
+                selection: None,
+                rows: Some(rows),
+            }));
+        }
         let alias = self.parse_optional_table_alias()?;
+        if alias.is_some() && self.peek_delete_rows() {
+            return parser_err!(
+                self,
+                self.peek_pos(),
+                "DELETE ... ROWS does not support a table alias"
+            );
+        }
         let using = if self.parse_keyword(USING) {
             self.parse_comma_separated(Parser::parse_table_and_joins)?
         } else {
@@ -7785,7 +7812,24 @@ impl<'a> Parser<'a> {
             alias,
             using,
             selection,
+            rows: None,
         }))
+    }
+
+    /// Reports whether the next tokens start the `ROWS (<query>)` clause of a
+    /// `DELETE`.
+    fn peek_delete_rows(&self) -> bool {
+        // `ROWS (` alone also starts a bare table alias named `rows` with a
+        // column list, e.g. `DELETE FROM t rows (a) WHERE a = 1`. Requiring a
+        // query start after the parenthesis keeps that form parsing as an
+        // alias.
+        self.peek_keyword(ROWS)
+            && self.peek_nth_token(1) == Some(Token::LParen)
+            && match self.peek_nth_token(2) {
+                Some(Token::Keyword(kw)) => kw.begins_query_body(),
+                Some(Token::LParen) => true,
+                _ => false,
+            }
     }
 
     /// Parses a SELECT (or WITH, VALUES, TABLE) statement with optional AS OF.

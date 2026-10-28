@@ -329,6 +329,9 @@ def get_variable_system_parameters(
         # On by default so CI exercises the jq function, which is off in
         # production while it earns trust.
         VariableSystemParameter("enable_jq", "true", ["true", "false"]),
+        # On by default so CI exercises `DELETE ... ROWS`, which is off in
+        # production while it earns trust.
+        VariableSystemParameter("enable_delete_rows", "true", ["true", "false"]),
         # On by default so CI exercises the columnar merge batcher, which is
         # off in production while it earns trust.
         VariableSystemParameter(
