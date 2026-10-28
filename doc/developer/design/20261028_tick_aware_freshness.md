@@ -54,7 +54,8 @@ Leaves carry a ticker that describes their grid:
 
 * Sources: aligned to the epoch at the ingestion's `TIMESTAMP INTERVAL`, looked up live so `ALTER SOURCE` takes effect without rebuilding downstream dependence. The probe ticker in `src/storage/src/source/probe.rs` rounds probe times down to interval multiples, and the upper after a tick at T is T + 1.
 * Compute introspection collections: aligned to the introspection interval.
-* Tables, webhooks and storage-managed collections: an unaligned 1s tick. Tables can tick irregularly, up to 1 kHz when inserts bump them, and their freshness otherwise depends on the txn-wal tick. Recording treats them as an epoch-aligned 1s grid for window boundaries, an accepted quirk, while D uses the unaligned bound so it never underestimates.
+* Webhook sources and other storage-managed collections: an unaligned 1s tick. They have no timestamp interval: a write is visible once its batch is appended, and when idle the collection manager advances the upper every `DEFAULT_TICK_MS` (1s), resetting the timer after each write (`src/storage-controller/src/collection_mgmt.rs`).
+* Tables: an unaligned 1s tick. Tables can tick irregularly, up to 1 kHz when inserts bump them, and their freshness otherwise depends on the txn-wal tick. Recording treats them as an epoch-aligned 1s grid for window boundaries, an accepted quirk, while D uses the unaligned bound so it never underestimates.
 * Anything else: continuous wall clock.
 
 Today a leaf of `TimeDependence` has no identity, and `merge` collapses all wall-clock inputs into one leaf, so a 7s x 11s join loses both intervals.
@@ -168,7 +169,9 @@ A rollup would cap the cost of long windows and is the first optimization if the
 
 * Keep a high-water mark of recorded arrivals per collection (and per replica id for the diagnostic), and start every span at max(high-water mark, last_reflected(F)). Without it, ALTER of an interval recomputes last_reflected of the old frontier on the new grid and re-covers arrivals, and a reconnecting replica, whose frontier regresses, re-covers up to its as-of.
 * A replica that is removed with open periods loses them, which leaves a hole in its diagnostic histogram.
-* On environmentd restart, seed the high-water mark from the maximum emitted period end and drop the in-memory open periods, which the next advance re-covers. Arrivals during the outage are counted when the frontier is next observed, so a restart reads like a stall, which matches what queries saw. Arrivals of the open period before the crash were already visible, but are counted the same way, so each restart adds up to one period of inflated latency. If seeding is impossible for an object, start from its current frontier, which leaves a hole.
+* On environmentd restart, the in-memory open periods are lost, and a dyncfg selects what happens to the arrivals they and the outage covered:
+  * `hole` (default): start from each object's current frontier. The lost arrivals are not recorded, which the histogram shows as missing periods: we failed to record, and the only known bound on their latency is trivial.
+  * `charge`: seed the high-water mark from the maximum emitted period end, and count the lost arrivals when the frontier is next observed. A long outage then reads as a freshness degradation, which matches what queries saw, but arrivals of the open period before the crash, which were already visible, are inflated by up to one period plus the outage.
 * A new object starts recording at its creation time: arrivals before creation are not counted, and arrivals during hydration count with their real latency. A new replica's diagnostic starts at the replica's creation time.
 * An empty frontier means the object is complete forever. The recorder emits the open periods up to the last arrival and stops. A dropped object discards its open periods.
 * Sources assign timestamps by the clusterd clock, while the controller observes advances by the environmentd clock. When they disagree, an advance can appear to land before its window ends. Clamp the latency to at least the window's length.
