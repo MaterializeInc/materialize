@@ -14,6 +14,34 @@ default. Published implementation head is `c82c0769`. M3 is not complete.
 
 ## Resume here
 
+Replica resource sampling is restored at controllerd's process boundary in
+`5b466d0c`. The existing 60s sampler is shared with legacy provisioning. Samples
+retain capture time across delayed publication and write the existing,
+deployment-qualified metrics history. Adapter retention and policy are unchanged.
+Strict controller/environmentd all-target Clippy, 15 controller unit tests and
+the default build pass. The public recovery witness also verifies fresh resource
+observations timestamped strictly inside a 65s interval with no adapters.
+Evidence: `replica-metrics-79a8b795.tgz`, run
+`launcher-e0feb4c0c5184e39b8ec1527f740c6e3`, and
+`metrics-verification-79a8b795.log`. Cleanup succeeded. Independent review's
+sample-time finding was fixed before verification. Separate publisher startup
+plumbing remains local to the two actors rather than adding a shared abstraction.
+
+Aljoscha requests investigating fast-peek oracle overhead next. Reported optimized,
+unthrottled local measurements show two certification reads per simple query and
+three per extended query, even at serializable isolation. Source confirms these
+calls. No performance repair is implemented yet. The design appendix requires
+fresh catalog permissions/definitions independently of data isolation. Investigate
+operation-scoped reuse and oracle-free durable catalog certification, not stale
+local snapshots or Parse timestamps reused for later Execute requests. Oracle
+review task154 is pending. Do not claim the reported timings were reproduced here.
+
+Kubernetes research found missing orchestratord launch/readiness/SQL routing,
+separated child service-account authority, forwarded-file delivery and shared
+relay cleanup wiring. Existing backend resource tests do not establish these.
+The approved worker expiry was extended to 2026-10-28T22:00Z without changing
+capacity. CI141248 for the retention fix is terminal failed with no live jobs.
+
 Aljoscha's two-adapter boot crash from metrics-history retention is fixed and
 published as `c82c0769`. A definitive UpperMismatch now logs and skips that
 snapshot's retractions, matching status-history retention. Other errors retain
