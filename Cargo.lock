@@ -7230,6 +7230,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-dyncfgs",
  "mz-environmentd",
+ "mz-expr",
  "mz-frontegg-auth",
  "mz-frontegg-mock",
  "mz-http-util",

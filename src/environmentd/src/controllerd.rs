@@ -9,6 +9,7 @@
 
 //! Deployment-scoped process management, separate from SQL coordination.
 
+mod collections;
 mod http;
 mod observations;
 pub mod provisioning;

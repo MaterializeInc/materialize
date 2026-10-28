@@ -1,9 +1,8 @@
 # Local controllerd
 
-`bin/controllerd` builds controllerd, adapterd, clusterd and pubsubd through the
-developer launcher. `--optimized` is optional, with the same behavior as
-`bin/environmentd`. Local demos use the default development build.
-The launcher does not create SQL objects or adapter declarations. Controllerd
+`bin/controllerd` builds controllerd, adapterd, clusterd and pubsubd through
+the developer launcher. Local demos use the default development build. The
+launcher does not create SQL objects or adapter declarations. Controllerd
 initializes the default adapter only for a fresh catalog.
 
 M3 requires controllerd to provision pubsubd from static configuration and include
@@ -65,7 +64,7 @@ The default adapter tries configured SQL port 6875. If it is occupied, use the
 backend-assigned external SQL endpoint in `/api/adapters`, also for additional
 adapters. Wait for readiness before connecting. Assigned endpoints alone do not
 mean an adapter is ready. Do not assume all adapters share a fixed SQL/HTTP port.
-Controller HTTP is unauthenticated and binds to loopback on port 6880. Override
+Controller HTTP is unauthenticated and binds to loopback on port 6882. Override
 it with `-- --controller-http-listen-addr=127.0.0.1:PORT`. Adapter listeners use
 the existing no-auth developer configuration, which permits non-loopback access.
 Use only on a trusted development host or supply `--listeners-config-path`.
@@ -122,3 +121,35 @@ future connection.
 A restarted controller re-probes readiness rather than attaching the prior
 controller's sample to an unverified process. Readiness can briefly become unknown
 while existing SQL sessions and committed processes continue running.
+
+
+## Inspect Persist collections
+
+`GET /api/collections` returns pretty-printed JSON for catalog-known Persist-backed
+collections, including system collections. Each entry has an `id`, a qualified
+`name` (null when unnamed), and the committed combined collection `since` array
+(null when unavailable). This catalog compaction frontier is constrained by read,
+recovery and retention requirements. It is not physical Persist since, which can
+lag. An empty array is an empty frontier, not an unavailable observation.
+
+```sh
+curl -fsS http://127.0.0.1:6882/api/collections
+curl -fsSG http://127.0.0.1:6882/api/collections \
+  --data-urlencode 'id=s%' \
+  --data-urlencode 'name=%mz\_catalog.%'
+```
+
+The equivalent browser URL is:
+
+```text
+http://127.0.0.1:6882/api/collections?id=s%25&name=%25mz%5C_catalog.%25
+```
+
+Both optional filters use case-sensitive SQL LIKE patterns: `%` matches any
+sequence, `_` matches one character, and backslash escapes a literal character.
+When both are supplied, both must match. A name filter excludes unnamed entries.
+Filters apply to the committed catalog inventory.
+
+Inspection works without a serving adapter and reads only the catalog. It does
+not acquire read holds, inspect Persist shards, or change compaction. Missing
+catalog frontiers remain null rather than falling back to physical shard state.

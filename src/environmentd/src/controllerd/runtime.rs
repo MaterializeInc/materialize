@@ -155,6 +155,9 @@ async fn administer(
                     "replicas": observations.replicas(catalog, launch.generation),
                 }));
             }
+            Action::Collections(filters) => {
+                return Ok(super::collections::inspect(catalog, filters));
+            }
             Action::CreateAdapter { name, size } => {
                 Catalog::validate_adapter_size(size, &sizes.keys().cloned().collect())
                     .map_err(|error| catalog_error(error.into()))?;
@@ -195,7 +198,7 @@ async fn administer(
                         json!({"id": declaration.id.to_string(), "name": name, "size": size})
                     }
                     Action::DropAdapter { id } => json!({"dropped": id.to_string()}),
-                    Action::ListAdapters | Action::Inventory => {
+                    Action::ListAdapters | Action::Inventory | Action::Collections(_) => {
                         unreachable!("listing returns before mutation")
                     }
                 });

@@ -11,8 +11,8 @@
 //! This is not a SQL proxy. The command owner validates and commits changes
 //! and supplies response values and errors safe to expose to callers.
 
-use axum::extract::rejection::{JsonRejection, PathRejection};
-use axum::extract::{Path, State};
+use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
+use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
@@ -28,6 +28,7 @@ pub(super) enum Action {
     CreateAdapter { name: String, size: String },
     DropAdapter { id: AdapterId },
     Inventory,
+    Collections(super::collections::Filters),
 }
 
 /// Once received, a command must be executed even if its response receiver
@@ -86,6 +87,7 @@ fn router(sender: mpsc::Sender<Command>) -> Router {
         .route("/api/adapters", get(list_adapters).post(create_adapter))
         .route("/api/adapters/{id}", delete(drop_adapter))
         .route("/api/inventory", get(inventory))
+        .route("/api/collections", get(collections))
         .fallback(|| async {
             ApiError {
                 status: StatusCode::NOT_FOUND,
@@ -148,6 +150,18 @@ async fn inventory(State(sender): State<mpsc::Sender<Command>>) -> Result<Respon
     dispatch(sender, Action::Inventory).await
 }
 
+async fn collections(
+    State(sender): State<mpsc::Sender<Command>>,
+    query: Result<Query<super::collections::Patterns>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let Query(patterns) = query
+        .map_err(|_| ApiError::bad_request("expected optional id and name query parameters"))?;
+    let filters = patterns
+        .compile()
+        .map_err(|error| ApiError::bad_request(&error.to_string()))?;
+    dispatch(sender, Action::Collections(filters)).await
+}
+
 #[cfg(test)]
 mod tests {
     use axum::body::{Body, to_bytes};
@@ -188,13 +202,19 @@ mod tests {
             ),
             ("DELETE", "/api/adapters/a1", ""),
             ("GET", "/api/inventory", ""),
+            (
+                "GET",
+                "/api/collections?id=s%25&name=%25mz%5C_catalog.%25",
+                "",
+            ),
         ] {
             let reply = json!({"result": ["ok"]});
             let owner = async {
                 let command = receiver.recv().await.unwrap();
                 match (method, uri, command.action) {
                     ("GET", "/api/adapters", Action::ListAdapters)
-                    | ("GET", "/api/inventory", Action::Inventory) => (),
+                    | ("GET", "/api/inventory", Action::Inventory)
+                    | ("GET", _, Action::Collections(_)) => (),
                     ("POST", _, Action::CreateAdapter { name, size }) => {
                         assert_eq!(name, "example");
                         assert_eq!(size, "small");
@@ -225,6 +245,9 @@ mod tests {
             ),
             ("DELETE", "/api/adapters/u1", ""),
             ("DELETE", "/api/adapters/%FF", ""),
+            ("GET", "/api/collections?id=bad%5C", ""),
+            ("GET", "/api/collections?unknown=pattern", ""),
+            ("GET", "/api/collections?id=a&id=b", ""),
         ] {
             let response = app
                 .clone()
