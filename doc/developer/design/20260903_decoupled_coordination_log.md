@@ -10,7 +10,7 @@ appending a work log. Detailed evidence stays outside these documents.
 
 Sole implementer: `2026-10-27-11-01-36-080`. Bookmark: `decoupled-coordination`,
 based on pinned `d9a2c5dc40`. M2 remains closed, including the 60s publication
-default. Published implementation head is `c82c0769`. M3 is not complete.
+default. Published implementation head is `34942b30` (metrics implementation `5b466d0c`). M3 is not complete.
 
 ## Resume here
 
@@ -27,14 +27,66 @@ Evidence: `replica-metrics-79a8b795.tgz`, run
 sample-time finding was fixed before verification. Separate publisher startup
 plumbing remains local to the two actors rather than adding a shared abstraction.
 
-Aljoscha requests investigating fast-peek oracle overhead next. Reported optimized,
-unthrottled local measurements show two certification reads per simple query and
-three per extended query, even at serializable isolation. Source confirms these
-calls. No performance repair is implemented yet. The design appendix requires
-fresh catalog permissions/definitions independently of data isolation. Investigate
-operation-scoped reuse and oracle-free durable catalog certification, not stale
-local snapshots or Parse timestamps reused for later Execute requests. Oracle
-review task154 is pending. Do not claim the reported timings were reproduced here.
+Aljoscha explicitly rejects privilege/configuration follower lag for serializable.
+Preserve catalog freshness at every isolation level. Oracle review confirmed
+request-scoped reuse is safe, but its suggested freshness relaxation is rejected.
+The uncommitted performance repair carries a noncloneable StatementCatalog from
+preparation into the same simple-query or HTTP statement execution. Later requests,
+replans and SQL EXECUTE unrolling do not reuse it. Independent review43 found no
+counterexample. Review44 found that local Bind validation would allow BindComplete followed by
+DescribePortal to expose an obsolete description without Execute. That candidate
+is rejected. Bind, Describe and extended Execute retain fresh certification.
+
+The simple/HTTP regression passes on `af3d03f8`. Its earlier failures were HTTP
+fixture authorization: the anonymous role needed creation and a SELECT grant.
+Both failures were reproduced unchanged before repair. Assertions and production
+RBAC were not weakened. The expanded regression also checks HTTP REVOKE and
+retains independent Bind/Execute snapshot checks.
+
+The rejected-Bind candidate's full pgwire suite passed 57/58 twice. COPY TO failed
+because its configured MinIO endpoint localhost:40109 was absent. The unchanged
+case passes after provisioning the existing cached repository MinIO image, with
+the same copytos3 bucket setup as ci/test/cargo-test/mzcompose.py. Owned container:
+`aj-m3-pgwire-minio`, ID9466434e4470, goal-labelled and loopback-only. Preserve the
+other three PostgreSQL containers. One health probe initially hit a startup reset.
+Repeating it succeeded without restarting MinIO.
+
+Performance implementation is committed as `650352b5`. No Bind relaxation is
+included. Strict all-target Clippy, expanded SQL/HTTP snapshot-count and revocation
+regression, and the full 58-test pgwire suite pass on candidate `cc0f03b7`. The
+public default build and cross-adapter first-attempt GRANT/REVOKE plus recovery
+witness pass: `launcher-646539f1da5541339b8658b41452f6ee`. Optimized build completed
+in 65m33s. Full output: `/tmp/m3-peek-final-clean-fixture.log` (task176, exit0).
+Worker code matches the performance implementation. It predates only the separate
+metrics formatting/test-attribute repair. That metric unit wrapper still needs a
+rerun on the latest revision after access is restored.
+
+Task178 attempted to start the optimized benchmark but did not reach the worker:
+SSO token expired and refresh failed. Asked Aljoscha to run `bin/scratch login`.
+No latency measurements exist yet. Do not bypass authentication. The worker remains
+`i-0788036f0778687f1`, expiry2026-10-29T00:36:58Z. Archive the runtime evidence off
+worker once access returns. Local test/build logs and witness source are retained.
+
+The successful full suite required a fresh owned MinIO fixture. Two earlier
+57/58 results were reproduced unchanged: first a missing service, then an object
+left by the successful targeted COPY test. No test or production semantics changed.
+Current owned fixture ID is
+`051a06efcf43093703903481e6ed58429276a8fab6684ae4c43712f3c5fae9c8`.
+
+Published lint repair `34942b30` is verified by CI141276's passing Lint/rustfmt
+job. CI141276 is terminal failed on product registry visibility and merge skew.
+CI141256's product log explicitly says pubsubd is not public on Docker Hub.
+
+A reviewed private benchmark script is prepared at
+`~/.local/share/aj/m3-evidence/fast-peek-benchmark.py` and copied to worker evidence.
+Prebuild with the public optimized launcher before executing it. It requires an
+unthrottled 32-CPU adapter allocation on the 16-vCPU VM, records actual cgroups,
+and measures one-row indexed SELECT with simple/extended protocols, 1/8 clients,
+and strict/ordinary serializable. Capture candidate then published baseline
+`98de254e` on this same machine, with no concurrent compiler/tests during timings.
+The backend is PostgreSQL18, not the user's CRDB benchmark. No latency result yet.
+Cross-target triple debug/optimized caches were unused and removed after executable
+and symlink checks, leaving 106GiB free. Default target caches and evidence remain.
 
 Kubernetes research found missing orchestratord launch/readiness/SQL routing,
 separated child service-account authority, forwarded-file delivery and shared
