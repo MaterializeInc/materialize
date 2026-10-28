@@ -1342,7 +1342,7 @@ fn offsets_for_times() {
         assert_eq!(
             consumer.offsets_for_times(missing, Duration::from_secs(5)),
             Err(KafkaError::MetadataFetch(
-                RDKafkaErrorCode::UnknownTopicOrPartition
+                RDKafkaErrorCode::UnknownPartition
             ))
         );
         assert_eq!(
@@ -1556,15 +1556,24 @@ fn deleted_topic() {
         loop {
             assert!(q.poll(Duration::from_millis(100)).is_none());
             let errors = recorder.errors.lock().unwrap().clone();
-            if let Some((e, reason)) = errors.first() {
+            if errors.len() >= 2 {
                 assert_eq!(
-                    *e,
-                    KafkaError::Global(RDKafkaErrorCode::UnknownTopicOrPartition)
+                    errors[0],
+                    (
+                        KafkaError::Global(RDKafkaErrorCode::UnknownPartition),
+                        format!(
+                            "{topic} [0]: desired partition is no longer available \
+                             (Local: Unknown partition)"
+                        )
+                    )
                 );
                 assert_eq!(
-                    reason,
-                    &format!(
-                        "{topic} [0]: topic does not exist (Broker: Unknown topic or partition)"
+                    errors[1],
+                    (
+                        KafkaError::Global(RDKafkaErrorCode::UnknownTopicOrPartition),
+                        format!(
+                            "{topic} [0]: topic does not exist (Broker: Unknown topic or partition)"
+                        )
                     )
                 );
                 break;

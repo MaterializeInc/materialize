@@ -716,14 +716,53 @@ impl ConsumerInner {
         let results = runtime::block_on(async move {
             offsets::list_offsets(&cluster, isolation, &items, deadline).await
         });
-        // Like librdkafka, any partition error fails the call and leaves the
-        // list unchanged.
-        let mut offsets = Vec::with_capacity(results.len());
-        for result in results {
-            offsets.push(result.map_err(KafkaError::MetadataFetch)?);
+        // Like librdkafka's `rd_kafka_offsets_for_times`: partitions without
+        // a known leader are left out of the requests (and keep their input
+        // value), failing the call with `UnknownPartition` only if no
+        // partition has one; a leader that stays unavailable is a timeout;
+        // any partition error fails the call and leaves the list unchanged.
+        let mut lookup_error = None;
+        let mut request_error = None;
+        let mut any_leader = false;
+        for result in &results {
+            match result {
+                Ok(_) => any_leader = true,
+                Err(e) if e.leader_lookup => match e.code {
+                    RDKafkaErrorCode::UnknownTopicOrPartition
+                    | RDKafkaErrorCode::UnknownPartition => {}
+                    RDKafkaErrorCode::BrokerTransportFailure => {
+                        lookup_error.get_or_insert(RDKafkaErrorCode::AllBrokersDown);
+                    }
+                    RDKafkaErrorCode::LeaderNotAvailable
+                    | RDKafkaErrorCode::TimedOutQueue
+                    | RDKafkaErrorCode::OperationTimedOut => {
+                        lookup_error.get_or_insert(RDKafkaErrorCode::OperationTimedOut);
+                    }
+                    code => {
+                        lookup_error.get_or_insert(code);
+                    }
+                },
+                Err(e) => {
+                    any_leader = true;
+                    request_error.get_or_insert(e.code);
+                }
+            }
         }
-        for (i, offset) in offsets.into_iter().enumerate() {
-            tpl.set_raw_offset_at(i, offset);
+        if let Some(code) = lookup_error {
+            return Err(KafkaError::MetadataFetch(code));
+        }
+        if !any_leader {
+            return Err(KafkaError::MetadataFetch(
+                RDKafkaErrorCode::UnknownPartition,
+            ));
+        }
+        if let Some(code) = request_error {
+            return Err(KafkaError::MetadataFetch(code));
+        }
+        for (i, result) in results.into_iter().enumerate() {
+            if let Ok(offset) = result {
+                tpl.set_raw_offset_at(i, offset);
+            }
         }
         Ok(tpl)
     }
@@ -859,6 +898,9 @@ async fn manage(inner: Arc<ConsumerInner>) {
     // Topics seen missing, and since when: like librdkafka, missing topics
     // are reported only after `topic.metadata.propagation.max.ms`.
     let mut missing_since: BTreeMap<String, Instant> = BTreeMap::new();
+    // Assigned partitions seen with a leader, which are reported as no
+    // longer available when they disappear.
+    let mut existed: BTreeSet<(String, i32)> = BTreeSet::new();
     let mut noticed_version = 0;
     let auto_commit = settings.consumer.enable_auto_commit && inner.group_id.is_some();
     let auto_commit_interval = settings.consumer.auto_commit_interval;
@@ -876,6 +918,9 @@ async fn manage(inner: Arc<ConsumerInner>) {
         for partition in inner.assigned_partitions() {
             match leader_of(&md, &partition) {
                 Leader::Broker(id) => {
+                    if !existed.contains(&(partition.topic.to_string(), partition.id)) {
+                        existed.insert((partition.topic.to_string(), partition.id));
+                    }
                     let new = inner.lock_state().fetchers.insert(id);
                     if new {
                         runtime::spawn(
@@ -892,20 +937,33 @@ async fn manage(inner: Arc<ConsumerInner>) {
                         .entry(partition.topic.to_string())
                         .or_insert(now);
                     if notice && now.duration_since(since) >= settings.metadata_propagation_max {
-                        let reason = match code {
+                        // Like librdkafka: a partition that disappears is
+                        // first reported as no longer available, then, like
+                        // one that never existed, on every metadata update.
+                        let mut notices = Vec::new();
+                        if existed.remove(&(partition.topic.to_string(), partition.id)) {
+                            notices.push((
+                                RDKafkaErrorCode::UnknownPartition,
+                                "desired partition is no longer available",
+                            ));
+                        }
+                        notices.push(match code {
                             RDKafkaErrorCode::UnknownPartition => {
-                                "desired partition is not available"
+                                (code, "desired partition is not available")
                             }
-                            _ => "topic does not exist",
-                        };
-                        let text = format!(
-                            "{} [{}]: {reason} ({})",
-                            partition.topic,
-                            partition.id,
-                            code.err2str()
-                        );
-                        let mut state = partition.lock_state();
-                        if state.fetch.phase != FetchPhase::Idle {
+                            _ => (code, "topic does not exist"),
+                        });
+                        for (code, reason) in notices {
+                            let text = format!(
+                                "{} [{}]: {reason} ({})",
+                                partition.topic,
+                                partition.id,
+                                code.err2str()
+                            );
+                            let mut state = partition.lock_state();
+                            if state.fetch.phase == FetchPhase::Idle {
+                                break;
+                            }
                             let wake = state.push_notice(code, text, partition.is_split());
                             drop(state);
                             if let Some(wake) = wake {

@@ -356,6 +356,23 @@ fn list_offsets_retriable(code: RDKafkaErrorCode) -> bool {
     )
 }
 
+/// Why a ListOffsets lookup failed for one partition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct OffsetError {
+    pub code: RDKafkaErrorCode,
+    /// The partition's leader could not be found, so no request was sent.
+    pub leader_lookup: bool,
+}
+
+impl OffsetError {
+    fn request(code: RDKafkaErrorCode) -> OffsetError {
+        OffsetError {
+            code,
+            leader_lookup: false,
+        }
+    }
+}
+
 /// Looks up offsets at the partitions' leaders with the client's isolation
 /// level: per item the offset (-1 if no message has a timestamp at or after
 /// the requested one) or the partition's error.
@@ -364,9 +381,9 @@ pub(super) async fn list_offsets(
     isolation: IsolationLevel,
     items: &[ListOffsetsItem],
     deadline: Deadline,
-) -> Vec<Result<i64, RDKafkaErrorCode>> {
-    let mut results: Vec<Result<i64, RDKafkaErrorCode>> =
-        vec![Err(RDKafkaErrorCode::OperationTimedOut); items.len()];
+) -> Vec<Result<i64, OffsetError>> {
+    let mut results: Vec<Result<i64, OffsetError>> =
+        vec![Err(OffsetError::request(RDKafkaErrorCode::OperationTimedOut)); items.len()];
     let mut pending: Vec<usize> = (0..items.len()).collect();
     let mut attempt = 0;
     loop {
@@ -381,7 +398,12 @@ pub(super) async fn list_offsets(
                         .1
                         .push(i);
                 }
-                Err(e) => results[i] = Err(e.code()),
+                Err(e) => {
+                    results[i] = Err(OffsetError {
+                        code: e.code(),
+                        leader_lookup: true,
+                    })
+                }
             }
         }
         let requests = by_leader
@@ -404,7 +426,7 @@ pub(super) async fn list_offsets(
                     refresh |= code != RDKafkaErrorCode::RequestTimedOut;
                 }
             }
-            results[index] = result;
+            results[index] = result.map_err(OffsetError::request);
         }
         if retry.is_empty() || attempt >= MAX_RETRIES {
             return results;
@@ -580,7 +602,7 @@ pub(super) async fn resolve(inner: Arc<ConsumerInner>, batch: Vec<(Arc<Partition
         let mut results = results.into_iter();
         for (partition, version, target) in logical {
             let result = results.next().expect("one result per item");
-            let result = result.map(|offset| {
+            let result = result.map_err(|e| e.code).map(|offset| {
                 if target <= OFFSET_TAIL_BASE {
                     // Like librdkafka, a tail beyond the start reads from 0.
                     let tail = OFFSET_TAIL_BASE - target;

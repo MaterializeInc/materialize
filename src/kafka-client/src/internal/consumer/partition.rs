@@ -154,15 +154,15 @@ impl PartState {
         }
     }
 
-    /// Appends a notice unless the queue already ends with one, so that a
-    /// queue nobody polls does not grow with repeated notices.
+    /// Appends a notice unless the queue already ends with the same one, so
+    /// that a queue nobody polls does not grow with repeated notices.
     pub fn push_notice(
         &mut self,
         code: RDKafkaErrorCode,
         reason: String,
         split: bool,
     ) -> Option<Wake> {
-        if matches!(self.items.back(), Some(Item::Notice(..))) {
+        if matches!(self.items.back(), Some(Item::Notice(c, r)) if *c == code && *r == reason) {
             return None;
         }
         Some(self.push(Item::Notice(code, reason), split))
