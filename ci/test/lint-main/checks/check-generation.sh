@@ -20,5 +20,6 @@ cd "$(dirname "$0")/../../../.."
 try bin/gen-completion check
 try bin/gen-lints
 try bin/gen-metrics-catalog
+try bin/gen-system-parameter-catalog
 
 try_status_report

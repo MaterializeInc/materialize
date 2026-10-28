@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# gen-system-parameter-catalog — regenerate the catalog of synced system
+# parameters.
+#
+# Instantiates the default system variables and writes every parameter that the
+# config sync can set to src/sql/system-parameters.json, or to the file given as
+# the first argument. CI runs this through check-generation.sh and fails on any
+# resulting diff.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+cargo run --quiet -p mz-system-parameter-catalog -- "${1:-src/sql/system-parameters.json}"
