@@ -102,8 +102,10 @@ HINT:  Use ALTER CLUSTER to adjust the replication factor of the cluster. Exampl
 ```
 
 A query run from a *different* cluster against an object maintained by this one
-does not error. It blocks until the object's frontier advances, which it never
-will.
+does not error. Under the default `STRICT SERIALIZABLE` isolation, it blocks
+until the object's frontier advances, which it never will. Under
+`SERIALIZABLE`, it returns immediately, with results frozen at the moment the
+cluster scaled to zero.
 
 To find clusters in this state:
 
