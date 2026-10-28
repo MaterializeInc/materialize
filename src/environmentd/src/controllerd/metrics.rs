@@ -45,10 +45,18 @@ impl ReplicaMetrics {
         let now = catalog.config().now.clone();
         let (desired, mut changes) = watch::channel(BTreeMap::<String, u64>::new());
         let task = mz_ore::task::spawn(|| "controller-replica-metrics", async move {
-            let mut writer = persist.open_writer(
-                shard, Arc::new(desc), Arc::new(UnitSchema),
-                Diagnostics { shard_name: id.to_string(), handle_purpose: "controller replica metrics".into() },
-            ).await.expect("replica metrics schema matches catalog");
+            let mut writer = persist
+                .open_writer(
+                    shard,
+                    Arc::new(desc),
+                    Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: id.to_string(),
+                        handle_purpose: "controller replica metrics".into(),
+                    },
+                )
+                .await
+                .expect("replica metrics schema matches catalog");
             let (tx, mut rx) = mpsc::unbounded_channel();
             let mut samplers = BTreeMap::new();
             let mut inventory = BTreeMap::new();
@@ -65,9 +73,13 @@ impl ReplicaMetrics {
                                 let tx = tx.clone();
                                 let observed_now = now.clone();
                                 let service = service.clone();
-                                spawn_service_metrics_task(Arc::clone(&orchestrator), service.clone(), move |metrics| {
-                                    let _ = tx.send((service.clone(), metrics, observed_now()));
-                                })
+                                spawn_service_metrics_task(
+                                    Arc::clone(&orchestrator),
+                                    service.clone(),
+                                    move |metrics| {
+                                        let _ = tx.send((service.clone(), metrics, observed_now()));
+                                    },
+                                )
                             });
                         }
                     }
@@ -76,14 +88,18 @@ impl ReplicaMetrics {
                         let Ok(name) = service.parse::<ReplicaServiceName>() else { continue; };
                         if name.generation != generation { continue; }
                         let timestamp = Timestamp::from(now());
-                        let rows = metrics_rows(&name.replica_id.to_string(), &metrics, *processes, generation, observed_at);
+                        let rows = metrics_rows(
+                            &name.replica_id.to_string(), &metrics, *processes,
+                            generation, observed_at,
+                        );
                         // Do not cancel submitted appends when inventory changes. These
                         // are historical observations, not authority over the replica.
                         monotonic_append(&mut writer, rows, timestamp).await;
                     }
                 }
             }
-        }).abort_on_drop();
+        })
+        .abort_on_drop();
         Ok(Self { task, desired })
     }
 
@@ -134,7 +150,7 @@ mod tests {
     use super::*;
     use itertools::Itertools;
 
-    #[test]
+    #[mz_ore::test]
     fn observations_preserve_unknown_values_and_deployment_identity() {
         let samples = [
             ServiceProcessMetrics::default(),
