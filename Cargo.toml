@@ -428,7 +428,7 @@ mappings = "0.7.2"
 md-5 = "0.11.0"
 mime = "0.3.16"
 murmur2 = "0.1.0"
-mysql_async = { version = "0.37.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
+mysql_async = { version = "0.37.1", default-features = false, features = ["aws-lc-rs", "binlog", "minimal", "rustls-tls", "tls12", "tracing"] }
 mysql_common = { version = "0.37.3", default-features = false, features = ["chrono"] }
 # Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
 # 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
@@ -501,6 +501,7 @@ rlimit = "0.11.0"
 rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = "0.23.46"
+rustls-native-certs = "0.8.3"
 rustls-platform-verifier = "0.7.0"
 rpassword = "7.5.1"
 rusqlite = { version = "0.41.0", features = ["bundled"] }
@@ -686,6 +687,11 @@ serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+
+# v0.37.1 plus the upstream rustls verifier fixes for `skip_domain_validation`
+# and `accept_invalid_certs` (blackbeam/mysql_async#408, #409). Drop this patch
+# once a release contains both.
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "934c3cf3885c129b7150fd5787e48ada3908397a" }
 
 # Need to upstream a few PRs related to test builders.
 #

@@ -6184,8 +6184,7 @@ checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
 [[package]]
 name = "mysql_async"
 version = "0.37.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40d11da0e2d9fad4640c9f9198ee431c6d68444568f83ef1f10f3367270071e4"
+source = "git+https://github.com/MaterializeInc/mysql_async.git?rev=934c3cf3885c129b7150fd5787e48ada3908397a#934c3cf3885c129b7150fd5787e48ada3908397a"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -6198,19 +6197,19 @@ dependencies = [
  "keyed_priority_queue",
  "lru 0.18.5",
  "mysql_common",
- "native-tls",
- "pem 3.0.6",
  "percent-encoding",
  "rand 0.10.3",
+ "rustls",
  "serde",
  "socket2",
  "thiserror 2.0.21",
  "tokio",
- "tokio-native-tls",
+ "tokio-rustls",
  "tokio-util",
  "tracing",
  "twox-hash",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -9159,6 +9158,7 @@ dependencies = [
  "regex",
  "reqsign-core",
  "reqwest 0.12.28",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
