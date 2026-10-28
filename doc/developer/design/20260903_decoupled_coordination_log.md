@@ -10,9 +10,32 @@ appending a work log. Detailed evidence stays outside these documents.
 
 Sole implementer: `2026-10-27-11-01-36-080`. Bookmark: `decoupled-coordination`,
 based on pinned `d9a2c5dc40`. M2 remains closed, including the 60s publication
-default. Published implementation head is `6dbd009d`. M3 is not complete.
+default. Published implementation head is `c82c0769`. M3 is not complete.
 
 ## Resume here
+
+Aljoscha's two-adapter boot crash from metrics-history retention is fixed and
+published as `c82c0769`. A definitive UpperMismatch now logs and skips that
+snapshot's retractions, matching status-history retention. Other errors retain
+existing handling. No ownership change or stale-retraction retry. The real-Persist
+regression covers a successful pass, competing append and competing collector.
+It and strict storage-controller all-target Clippy pass. The default build passes.
+Evidence: `metrics-retention-19531e45.tgz` (verified candidate source matches the
+published fix).
+
+Full policy/recovery runtime verification also passes: concurrent ON REFRESH,
+non-forced warm resize with continued writes/reads, controller restart retaining
+healthy processes/status, replica termination followed by new offline/online
+history and maintained-read recovery, and survivor-only policy transitions.
+Cleanup succeeded. Evidence: `policy-recovery-retention-19531e45.tgz`, successful
+run `launcher-4e4c1ea912b443a7afd564bc60a8ca2f`. Earlier recovery witnesses used the
+wrong replica identity flag (`--replica-id` rather than `--catalog-replica-id`);
+the failure reproduced before correction. Their logs also exposed the real
+metrics-retention conflict independently reported by Aljoscha.
+
+This does not resolve the separate txn-cache GC assertion below. Its removal
+still awaits approval. Promotion readiness/adapter restart UX also awaits the
+previously requested decision. Do not infer either approval from the retention fix.
 
 Default debug revision `888e822f` passed the real `bin/controllerd` witness:
 managed relay initialization, maintained SQL, Ctrl-C and unchanged adoption,
@@ -172,6 +195,8 @@ full catalog suite passed (396 passed, two ignored). Evidence:
 
 ## CI and worker
 
+CI141243 for `68825578` is terminal failed, with no executing jobs when the
+retention fix was published. The new publication requires fresh CI inspection.
 CI141235 for `6dbd009d` is terminal failed. Failed jobs are x86 product
 `01a182a6-884a-4a85-a0a7-335a8a2a494a` and merge skew. The current product log confirms
 `pubsubd` is not public on Docker Hub. Merge-skew details remain uninspected. CI141217 built products but failed the
@@ -179,9 +204,9 @@ public Docker Hub visibility gate for `materialize/pubsubd`; a registry owner
 must resolve it without bypassing the gate. Its pinned-base merge-skew job also
 failed. Cargo/downstream integration did not run. Broad CI is not green.
 
-Worker `i-0788036f0778687f1` is now pinned at `d61d9c6b`, with default debug binaries
+Worker `i-0788036f0778687f1` is now pinned at `19531e45`, with default debug binaries
 and about57GiB free after cache cleanup. Scratch access works. Last expiry check showed
-five hours remaining. Task145 completed successfully. No runtime/build work remains active. Check again before syncing. Exact older CI product:
+five hours remaining. Task150 completed successfully. No runtime/build work remains active. Check again before syncing. Exact older CI product:
 `materialize/materialized:mzbuild-FJXSGTKPCPESYSV4SG3CJ3LIKLBPF5GP`, digest
 `sha256:6d4cb1d4f5065426e5c80fe7a813a663620cc123b9222baafd7bbebf7eca7f51`,
 extracted at `/home/ubuntu/m3-evidence/ci141217-product`. It supplies the distinct
