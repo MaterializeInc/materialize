@@ -1613,6 +1613,26 @@ impl Catalog {
         self.update_expression_cache(local_exprs, global_exprs, Default::default())
     }
 
+    /// Cache the local expression for the given `GlobalId` of an item being
+    /// created, which has no dataflow, such as a view. Otherwise the same as
+    /// [`Catalog::cache_expressions`].
+    pub(crate) fn cache_local_expression(
+        &self,
+        id: GlobalId,
+        local_mir: OptimizedMirRelationExpr,
+        optimizer_features: OptimizerFeatures,
+    ) -> BoxFuture<'static, ()> {
+        let local_exprs = vec![(
+            id,
+            LocalExpressions {
+                local_mir,
+                optimizer_features,
+                item_version: RelationVersion::root(),
+            },
+        )];
+        self.update_expression_cache(local_exprs, Vec::new(), Default::default())
+    }
+
     pub(crate) fn update_expression_cache<'a, 'b>(
         &'a self,
         new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
