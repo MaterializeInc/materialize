@@ -141,6 +141,7 @@ impl ReplicaProvisioningConfig<'_> {
 
         Ok(ServiceConfig {
             inherit_kubernetes_owner_references: true,
+            process_restart_on_image_change: false,
             app_name: "clusterd".into(),
             image: self.clusterd_image.to_owned(),
             init_container_image: self.init_container_image.map(str::to_owned),

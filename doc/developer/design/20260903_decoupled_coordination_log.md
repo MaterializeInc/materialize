@@ -88,12 +88,17 @@ verification is reported after safe shutdown work. All 22 launcher tests pass,
 including real disposable-process ordering/isolation cases, plus Black and Ruff.
 Actual product stop/restart with retained SQL data remains unverified.
 
-Process relay upgrades remain open. Aljoscha approved replacement only for managed
-pubsub when its configured binary changes, preserving the endpoint and leaving
-adapters/replicas unchanged. Unchanged controller restarts must adopt healthy
-processes. A reusable backend mechanism is allowed, but general argument/settings
-reconciliation is outside M3. Keep the standalone image publishable. Its registry
-visibility gate remains unresolved and does not prevent targeted candidate runs.
+Relay-only executable replacement is implemented through an opt-in process-backend
+mechanism. Only managed pubsub enables it. Filesystem executable identity and a
+PID/start-qualified sidecar distinguish the actual launch from desired state.
+Argument/settings changes do not trigger replacement, and adapters/replicas remain
+opted out. Unchanged adoption preserves connections and assigned TCP endpoints.
+Unverified legacy records remain adopted until exit, without inventing an identity.
+Review fixes cover forwarding wrappers on both adoption-time and live replacement,
+refreshing identity after automatic respawn, and unknown adopted state. Eleven
+process-library tests and combined strict all-target Clippy for environmentd and
+both backends pass. Real managed-relay rollout and plain-launcher acceptance remain
+pending. Keep the standalone image publishable. Its visibility gate is unresolved.
 
 Scratch access is restored. Worker `i-0788036f0778687f1` is running, with seven hours
 remaining when checked. The idle worker was clean and synced explicitly to
@@ -115,12 +120,12 @@ Two initial failures reproduced an incorrect witness setup: administrative SQL u
 the non-superuser materialize role. Only management commands now use the existing
 mz_system listener. Ordinary sessions and denied-user assertions remain unchanged.
 
-Next: implement relay-only binary replacement and verify the plain launcher,
+Next: build this revision on the idle worker and verify the plain launcher,
 managed relay, whole-environment stop/restart, replica policy and deployment
 walkthrough. The successful witness uses an external relay and is not acceptance
-of these remaining paths. Concurrent edits to observations.rs/controllerd.md add
-named HTTP endpoint labels. They are not covered by the pinned candidate run and
-must not be overwritten or committed as this session's work.
+of these remaining paths. The separately owned named HTTP endpoint change is committed as `3b78e424`.
+It is not covered by the pinned candidate run. Update the witness to the new labels
+when testing a product that includes that commit.
 `GET /api/collections` is committed as `7c6e3651` with LIKE filters,
 qualified names, unnamed entries and committed `collection_compaction_bounds`.
 It follows designer commit `16dcb3c6`: no Persist inspection or fallback to physical

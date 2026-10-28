@@ -222,6 +222,11 @@ pub struct ServiceConfig {
     ///
     /// Kubernetes-specific. Other orchestrator backends ignore this setting.
     pub inherit_kubernetes_owner_references: bool,
+    /// Replace retained local processes when their executable identity changes.
+    /// Does not reconcile arguments or settings. Other backends use their existing
+    /// image-update behavior. Enable only for services whose image rollout is owned
+    /// by this provisioner.
+    pub process_restart_on_image_change: bool,
     /// Static application name (usually present in labels)
     pub app_name: String,
     /// An opaque identifier for the executable or container image to run.

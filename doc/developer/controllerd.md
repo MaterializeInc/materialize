@@ -52,6 +52,13 @@ pubsubd as its entry point, such as the repository's `pubsubd` image definition.
 The managed relay defaults to one CPU and 512 MiB memory. Raw controller options
 `--pubsub-cpu-limit`, `--pubsub-memory-limit`, `--pubsub-http-port` and
 `--pubsubd-image` configure it. Forward these through the launcher after `--`.
+For the local managed relay, changing the configured binary or rebuilding it at
+the same path replaces only pubsubd and retains its assigned endpoints. Unchanged
+controller restarts adopt it. Argument/resource changes alone do not restart local
+processes. Adapters and replicas retain their existing adoption behavior.
+Processes without a matching executable-identity record are adopted conservatively
+until they exit, rather than replaced from an unverified configuration.
+
 The default adapter size `1` declares one CPU and 4 GiB memory. Override the map
 with `--adapter-sizes '{"1":{"cpu_limit":2,"memory_limit":"8 GiB"}}'`.
 

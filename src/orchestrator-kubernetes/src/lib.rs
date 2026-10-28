@@ -606,6 +606,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         &self,
         id: &str,
         ServiceConfig {
+            process_restart_on_image_change: _,
             inherit_kubernetes_owner_references,
             app_name,
             image,
@@ -1976,6 +1977,7 @@ mod tests {
                     infos_before
                 );
                 let config = ServiceConfig {
+                    process_restart_on_image_change: false,
                     inherit_kubernetes_owner_references,
                     app_name: "discovery-test".into(),
                     image: "materialize/clusterd:discovery-test".into(),

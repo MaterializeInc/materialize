@@ -126,6 +126,12 @@ impl Drop for Fixture {
         identities.extend(read_identity(&self.run_dir().join("0.pid")));
         for identity in identities {
             let mut system = System::new();
+            if !self.config.command_wrapper.is_empty() {
+                if let Some(process) = live_process(&mut system, identity) {
+                    process.kill_with(sysinfo::Signal::Term);
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            }
             if let Some(process) = live_process(&mut system, identity) {
                 process.kill();
             }
@@ -256,6 +262,7 @@ async fn explicit_drop_kills_orphan_without_a_supervisor() {
 fn service_config() -> ServiceConfig {
     ServiceConfig {
         inherit_kubernetes_owner_references: true,
+        process_restart_on_image_change: false,
         app_name: "lifetime-test".into(),
         image: "sh".into(),
         init_container_image: None,
@@ -438,6 +445,7 @@ fn echo_config(port: &ServicePort) -> ServiceConfig {
 import socket, sys
 host, port = sys.argv[1].split(':')
 s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind((host, int(port)))
 s.listen()
 c, _ = s.accept()
@@ -599,4 +607,232 @@ async fn launch_logging_omits_credential_arguments() {
         "launch arguments must not reach tracing"
     );
     fixture.drop_service(namespace.as_ref(), identity).await;
+}
+
+async fn online_identity(fixture: &Fixture, events: &mut Events) -> (Pid, u64) {
+    time::timeout(TIMEOUT, async {
+        loop {
+            let event = events.next().await.unwrap().unwrap();
+            if event.service_id == SERVICE && event.status == ServiceStatus::Online {
+                return fixture.identity();
+            }
+        }
+    })
+    .await
+    .expect("replacement did not become Online")
+}
+
+fn image_echo_config(image: &Path, port: &ServicePort, extra_argument: bool) -> ServiceConfig {
+    let mut config = echo_config(port);
+    config.image = image.to_str().unwrap().into();
+    config.process_restart_on_image_change = true;
+    let args = config.args;
+    config.args = Box::new(move |assignments| {
+        let mut args = args(assignments);
+        if extra_argument {
+            args.push("ignored-setting-change".into());
+        }
+        args
+    });
+    config
+}
+
+async fn connect_echo(address: &str) -> tokio::net::TcpStream {
+    time::timeout(TIMEOUT, async {
+        loop {
+            if let Ok(stream) = tokio::net::TcpStream::connect(address).await {
+                return stream;
+            }
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("replacement did not listen on retained endpoint")
+}
+
+async fn exchange_echo(connection: &mut tokio::net::TcpStream) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    time::timeout(TIMEOUT, async {
+        connection.write_all(b"alive").await.unwrap();
+        let mut bytes = [0; 5];
+        connection.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"alive");
+    })
+    .await
+    .unwrap();
+}
+
+#[mz_ore::test(tokio::test)]
+async fn image_replacement_retains_endpoints_and_ignores_arguments() {
+    for wrapped in [false, true] {
+        let mut fixture = Fixture::new(true);
+        if wrapped {
+            fixture.config.command_wrapper = vec![
+            "/bin/sh".into(), "-c".into(),
+            r#""$@" & child=$!; trap 'kill -TERM "$child"; wait "$child"; exit' TERM; wait "$child""#.into(),
+            "forwarding-wrapper".into(),
+        ];
+        }
+        let image = fixture.root.join("relay");
+        std::fs::write(&image, "#!/bin/sh\nexec /usr/bin/python3 \"$@\"\n").unwrap();
+        std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let owner = fixture.owner().await;
+        let namespace = owner.namespace(NAMESPACE);
+        let mut events = namespace.watch_services();
+        let port = tcp_port(0);
+        let service = namespace
+            .ensure_service(SERVICE, image_echo_config(&image, &port, false))
+            .unwrap();
+        let address = service.addresses(&port.name)[0].clone();
+        let original = online_identity(&fixture, &mut events).await;
+        let mut connection = connect_echo(&address).await;
+        exchange_echo(&mut connection).await;
+
+        namespace
+            .ensure_service(SERVICE, image_echo_config(&image, &port, true))
+            .unwrap();
+        namespace.flush().await.unwrap();
+        assert_eq!(fixture.identity(), original);
+        exchange_echo(&mut connection).await;
+        shutdown(owner, namespace, events).await;
+
+        let owner = fixture.owner().await;
+        let namespace = owner.namespace(NAMESPACE);
+        let mut events = namespace.watch_services();
+        namespace
+            .ensure_service(SERVICE, image_echo_config(&image, &port, true))
+            .unwrap();
+        assert_eq!(online_identity(&fixture, &mut events).await, original);
+        exchange_echo(&mut connection).await;
+
+        // Replacement after unchanged adoption cancels the adopted supervisor,
+        // not the spawned-child supervisor. It must also stop a wrapper's child.
+        let rebuilt = fixture.root.join("adopted-rebuild");
+        std::fs::copy(&image, &rebuilt).unwrap();
+        std::fs::rename(&rebuilt, &image).unwrap();
+        namespace
+            .ensure_service(SERVICE, image_echo_config(&image, &port, true))
+            .unwrap();
+        let previous = original;
+        let original = online_identity(&fixture, &mut events).await;
+        assert_ne!(original, previous);
+        wait_stopped(previous).await;
+        // Keep the previous client open so closing it cannot hide an orphan server.
+        let _old_connection = connection;
+        let mut connection = connect_echo(&address).await;
+        exchange_echo(&mut connection).await;
+        shutdown(owner, namespace, events).await;
+
+        // An atomic rebuild at the same path must be noticed by the next owner.
+        let replacement = fixture.root.join("replacement");
+        std::fs::copy(&image, &replacement).unwrap();
+        std::fs::rename(&replacement, &image).unwrap();
+        let owner = fixture.owner().await;
+        let namespace = owner.namespace(NAMESPACE);
+        let mut events = namespace.watch_services();
+        let service = namespace
+            .ensure_service(SERVICE, image_echo_config(&image, &port, true))
+            .unwrap();
+        assert_eq!(service.addresses(&port.name), vec![address.clone()]);
+        let replaced = online_identity(&fixture, &mut events).await;
+        assert_ne!(replaced, original);
+        wait_stopped(original).await;
+        let mut connection = connect_echo(&address).await;
+        exchange_echo(&mut connection).await;
+
+        // A configured path change also replaces the relay under a live owner.
+        std::fs::copy(&image, &replacement).unwrap();
+        let service = namespace
+            .ensure_service(SERVICE, image_echo_config(&replacement, &port, true))
+            .unwrap();
+        assert_eq!(service.addresses(&port.name), vec![address.clone()]);
+        let changed = online_identity(&fixture, &mut events).await;
+        assert_ne!(changed, replaced);
+        wait_stopped(replaced).await;
+        let mut connection = connect_echo(&address).await;
+        exchange_echo(&mut connection).await;
+        // A crash after an on-disk rebuild must record what the new spawn uses,
+        // rather than the executable identity captured at the initial ensure.
+        let rebuilt = fixture.root.join("rebuilt");
+        std::fs::copy(&replacement, &rebuilt).unwrap();
+        std::fs::rename(&rebuilt, &replacement).unwrap();
+        let mut system = System::new();
+        let process = live_process(&mut system, changed).unwrap();
+        if wrapped {
+            process.kill_with(sysinfo::Signal::Term);
+        } else {
+            process.kill();
+        }
+        let restarted = online_identity(&fixture, &mut events).await;
+        assert_ne!(restarted, changed);
+        shutdown(owner, namespace, events).await;
+        let owner = fixture.owner().await;
+        let namespace = owner.namespace(NAMESPACE);
+        let mut events = namespace.watch_services();
+        namespace
+            .ensure_service(SERVICE, image_echo_config(&replacement, &port, true))
+            .unwrap();
+        assert_eq!(online_identity(&fixture, &mut events).await, restarted);
+        let mut connection = connect_echo(&address).await;
+        exchange_echo(&mut connection).await;
+        fixture.drop_service(namespace.as_ref(), restarted).await;
+        shutdown(owner, namespace, events).await;
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+async fn services_without_image_opt_in_keep_existing_adoption() {
+    let fixture = Fixture::new(true);
+    let owner = fixture.owner().await;
+    let namespace = owner.namespace(NAMESPACE);
+    let (events, original) = fixture.ensure_online(namespace.as_ref()).await;
+    let mut config = service_config();
+    config.image = "/a/different/image".into();
+    namespace.ensure_service(SERVICE, config).unwrap();
+    namespace.flush().await.unwrap();
+    assert_eq!(fixture.identity(), original);
+    assert_alive(original);
+    assert!(!fixture.run_dir().join("0.image").exists());
+    fixture.drop_service(namespace.as_ref(), original).await;
+    shutdown(owner, namespace, events).await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn unverified_image_records_do_not_authorize_replacement() {
+    for missing in [false, true] {
+        let fixture = Fixture::new(true);
+        let owner = fixture.owner().await;
+        let namespace = owner.namespace(NAMESPACE);
+        let mut events = namespace.watch_services();
+        let mut config = service_config();
+        config.process_restart_on_image_change = true;
+        namespace.ensure_service(SERVICE, config).unwrap();
+        let original = online_identity(&fixture, &mut events).await;
+        shutdown(owner, namespace, events).await;
+        let record = fixture.run_dir().join("0.image");
+        if missing {
+            std::fs::remove_file(record).unwrap();
+        } else {
+            let mut contents: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+            contents[0] = serde_json::json!(0);
+            std::fs::write(record, serde_json::to_vec(&contents).unwrap()).unwrap();
+        }
+        let owner = fixture.owner().await;
+        let namespace = owner.namespace(NAMESPACE);
+        let mut events = namespace.watch_services();
+        let mut config = service_config();
+        config.process_restart_on_image_change = true;
+        config.image = "/bin/false".into();
+        namespace.ensure_service(SERVICE, config).unwrap();
+        assert_eq!(online_identity(&fixture, &mut events).await, original);
+        let mut config = service_config();
+        config.process_restart_on_image_change = true;
+        namespace.ensure_service(SERVICE, config).unwrap();
+        namespace.flush().await.unwrap();
+        assert_eq!(fixture.identity(), original);
+        assert_alive(original);
+        fixture.drop_service(namespace.as_ref(), original).await;
+        shutdown(owner, namespace, events).await;
+    }
 }

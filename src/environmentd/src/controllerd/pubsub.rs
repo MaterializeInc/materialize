@@ -37,6 +37,7 @@ impl PubsubConfig {
         ServiceConfig {
             app_name: "pubsubd".into(),
             inherit_kubernetes_owner_references: false,
+            process_restart_on_image_change: true,
             image: self.image.clone(),
             init_container_image: None,
             args: Box::new(|assigned| {
@@ -186,6 +187,7 @@ mod tests {
         }
         .service_config();
         assert!(!config.inherit_kubernetes_owner_references);
+        assert!(config.process_restart_on_image_change);
         assert_eq!(config.scale.get(), 1);
         assert!(config.ports.iter().all(|port| port.requires_tcp));
         assert!(config.ports.iter().any(|port| port.name == "internal-http"));

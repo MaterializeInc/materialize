@@ -118,6 +118,7 @@ impl AdapterProvisioningConfig {
         let generation = self.generation;
         Ok(ServiceConfig {
             inherit_kubernetes_owner_references: true,
+            process_restart_on_image_change: false,
             app_name: "adapterd".into(),
             image: self.image.clone(),
             init_container_image: self.init_container_image.clone(),

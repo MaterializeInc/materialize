@@ -15,7 +15,7 @@ use std::fs::Permissions;
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr, TcpListener as StdTcpListener};
 use std::num::NonZero;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -43,7 +43,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use nix::sys::signal::Signal;
 use scopeguard::defer;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::fs::remove_dir_all;
@@ -412,6 +412,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let disk = config.disk_limit != Some(DiskLimit::ZERO);
 
         let config = EnsureServiceConfig {
+            process_restart_on_image_change: config.process_restart_on_image_change,
             image: config.image,
             args: config.args,
             ports: config.ports,
@@ -527,6 +528,7 @@ enum WorkerCommand {
 
 /// Describes the desired state of a process.
 struct EnsureServiceConfig {
+    process_restart_on_image_change: bool,
     /// An opaque identifier for the executable or container image to run.
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
@@ -666,6 +668,7 @@ impl OrchestratorWorker {
         &self,
         id: String,
         EnsureServiceConfig {
+            process_restart_on_image_change,
             image,
             args,
             ports: ports_in,
@@ -693,15 +696,27 @@ impl OrchestratorWorker {
             None
         };
 
-        // The service might already exist. If it has the same config as requested (currently we
-        // check only the scale), we have nothing to do. Otherwise we need to drop and recreate it.
-        let old_scale = {
+        // Only opted-in services reconcile executable changes. In particular,
+        // settings-derived replica arguments must not trigger replacement.
+        let image_identity = process_restart_on_image_change
+            .then(|| ImageIdentity::read(self.config.image_dir.join(&image)))
+            .transpose()?;
+        let existing = {
             let services = self.services.lock().expect("poisoned");
-            services.get(&id).map(|states| states.len())
+            services.get(&id).map(|states| {
+                states.len() == usize::cast_from(scale)
+                    && (!process_restart_on_image_change
+                        || states.iter().all(|state| {
+                            state
+                                .image_identity
+                                .as_ref()
+                                .is_none_or(|actual| Some(actual) == image_identity.as_ref())
+                        }))
+            })
         };
-        match old_scale {
-            Some(old) if old == usize::cast_from(scale) => return Ok(()),
-            Some(_) => self.drop_service(&id).await?,
+        match existing {
+            Some(true) => return Ok(()),
+            Some(false) => self.drop_service(&id).await?,
             None => (),
         }
 
@@ -777,6 +792,7 @@ impl OrchestratorWorker {
                         run_dir: run_dir.clone(),
                         i,
                         image: image.clone(),
+                        image_identity: image_identity.clone(),
                         args,
                         command_wrapper,
                         ports,
@@ -788,6 +804,7 @@ impl OrchestratorWorker {
                 );
 
                 process_states.push(ProcessState {
+                    image_identity: None,
                     _handle: handle.abort_on_drop(),
                     terminate_on_drop,
                     status: ProcessStatus::NotReady,
@@ -913,6 +930,7 @@ impl OrchestratorWorker {
     fn supervise_service_process(
         &self,
         ServiceProcessConfig {
+            image_identity,
             id,
             run_dir,
             i,
@@ -963,7 +981,14 @@ impl OrchestratorWorker {
                 }
             }
 
-            supervise_existing_process(&state_updater, &pid_file, &terminate_on_drop).await;
+            supervise_existing_process(
+                &state_updater,
+                &pid_file,
+                &terminate_on_drop,
+                image_identity.as_ref(),
+                !command_wrapper.is_empty(),
+            )
+            .await;
 
             loop {
                 let mut cmd = launch_spec.refine_command(
@@ -983,15 +1008,25 @@ impl OrchestratorWorker {
                     cmd.stdout(Stdio::null());
                     cmd.stderr(Stdio::null());
                 }
-                match spawn_process(
-                    &state_updater,
-                    cmd,
-                    &pid_file,
-                    !command_wrapper.is_empty(),
-                    Arc::clone(&terminate_on_drop),
-                )
-                .await
-                {
+                let spawned_identity = image_identity
+                    .as_ref()
+                    .map(|_| ImageIdentity::read(image.clone()))
+                    .transpose();
+                let spawned = match spawned_identity {
+                    Ok(identity) => {
+                        spawn_process(
+                            &state_updater,
+                            cmd,
+                            &pid_file,
+                            identity.as_ref(),
+                            !command_wrapper.is_empty(),
+                            Arc::clone(&terminate_on_drop),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match spawned {
                     Ok(status) => {
                         assert!(
                             !(propagate_crashes && did_process_crash(status)),
@@ -1060,7 +1095,34 @@ impl OrchestratorWorker {
     }
 }
 
+// File identity detects in-place build replacement without hashing large binaries
+// on every reconciliation. This local record contains no launch arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ImageIdentity {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified: i64,
+    modified_nsec: i64,
+}
+
+impl ImageIdentity {
+    fn read(path: PathBuf) -> Result<Self, anyhow::Error> {
+        let metadata = std::fs::metadata(&path).context("reading service executable identity")?;
+        Ok(Self {
+            path,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            size: metadata.size(),
+            modified: metadata.mtime(),
+            modified_nsec: metadata.mtime_nsec(),
+        })
+    }
+}
+
 struct ServiceProcessConfig {
+    image_identity: Option<ImageIdentity>,
     id: String,
     run_dir: PathBuf,
     i: usize,
@@ -1085,6 +1147,8 @@ async fn supervise_existing_process(
     state_updater: &ProcessStateUpdater,
     pid_file: &Path,
     terminate_on_drop: &AtomicBool,
+    image_identity: Option<&ImageIdentity>,
+    send_sigterm: bool,
 ) {
     let name = format!(
         "{}-{}-{}",
@@ -1099,7 +1163,32 @@ async fn supervise_existing_process(
     let start_time = process.start_time();
 
     info!(%pid, "discovered existing process for {name}");
-    state_updater.update_state(ProcessStatus::Ready { pid });
+    let actual_image = image_identity.and_then(|_| {
+        std::fs::read(pid_file.with_extension("image"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<(u32, u64, ImageIdentity)>(&bytes).ok())
+            .filter(|(recorded_pid, recorded_start, _)| {
+                *recorded_pid == pid.as_u32() && *recorded_start == start_time
+            })
+            .map(|(_, _, actual)| actual)
+    });
+    let replace = match (image_identity, actual_image.as_ref()) {
+        (Some(desired), Some(actual)) => desired != actual,
+        (Some(_), None) => {
+            // Unknown legacy state is not authority to replace an adopted process.
+            warn!(%pid, "adopting {name} without a verified executable identity");
+            false
+        }
+        _ => false,
+    };
+    // A replacement is pending, or an adoption's actual executable is unknown.
+    // Do not publish the desired executable as if it had already been launched.
+    state_updater.update_image_identity(if replace { None } else { actual_image });
+    if replace {
+        info!(%pid, "replacing {name} after executable change");
+    } else {
+        state_updater.update_state(ProcessStatus::Ready { pid });
+    }
 
     // Stopping observation is distinct from an explicit service deletion.
     let need_kill = AtomicBool::new(true);
@@ -1107,8 +1196,27 @@ async fn supervise_existing_process(
         state_updater.update_state(ProcessStatus::NotReady);
         if need_kill.load(Ordering::SeqCst) && terminate_on_drop.load(Ordering::SeqCst) {
             info!(%pid, "terminating existing process for {name}");
-            process.kill();
+            if image_identity.is_some() && send_sigterm {
+                process.kill_with(sysinfo::Signal::Term);
+                tokio::task::block_in_place(|| std::thread::sleep(Duration::from_millis(500)));
+            }
+            // A forwarding wrapper may have exited during the grace period.
+            // Recheck incarnation before escalating rather than signaling a reused PID.
+            let mut current = System::new();
+            current.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing(),
+            );
+            if let Some(current) = current.process(pid).filter(|p| p.start_time() == start_time) {
+                current.kill();
+            }
         }
+    }
+
+    if replace && send_sigterm {
+        // Match owned-child replacement: let forwarding wrappers stop their
+        // children before escalating. The guard above also covers cancellation.
+        process.kill_with(sysinfo::Signal::Term);
+        time::sleep(Duration::from_millis(500)).await;
     }
 
     // Periodically check if the process has terminated. Verify start_time
@@ -1124,7 +1232,17 @@ async fn supervise_existing_process(
             break;
         }
         match system.process(pid) {
-            Some(p) if p.start_time() == start_time => {}
+            Some(p)
+                if p.start_time() == start_time
+                    && !matches!(
+                        p.status(),
+                        sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+                    ) =>
+            {
+                if replace {
+                    p.kill();
+                }
+            }
             _ => break,
         }
         time::sleep(Duration::from_secs(5)).await;
@@ -1152,6 +1270,7 @@ async fn spawn_process(
     state_updater: &ProcessStateUpdater,
     mut cmd: Command,
     pid_file: &Path,
+    image_identity: Option<&ImageIdentity>,
     send_sigterm: bool,
     terminate_on_drop: Arc<AtomicBool>,
 ) -> Result<ExitStatus, anyhow::Error> {
@@ -1200,8 +1319,9 @@ async fn spawn_process(
     // solution here is good enough given that the process orchestrator is only
     // used in development/testing.
     let pid = Pid::from_u32(child.child.id().unwrap());
-    write_pid_file(pid_file, pid)?;
+    write_pid_file(pid_file, pid, image_identity)?;
     child.pid_published = true;
+    state_updater.update_image_identity(image_identity.cloned());
     state_updater.update_state(ProcessStatus::Ready { pid });
     Ok(child.child.wait().await?)
 }
@@ -1222,7 +1342,11 @@ fn did_process_crash(status: ExitStatus) -> bool {
     })
 }
 
-fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
+fn write_pid_file(
+    pid_file: &Path,
+    pid: Pid,
+    image_identity: Option<&ImageIdentity>,
+) -> Result<(), anyhow::Error> {
     let mut system = System::new();
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
@@ -1233,6 +1357,15 @@ fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
     // Publish this small local record synchronously. A cancelled Tokio file
     // write can continue on its blocking worker after supervisor termination,
     // overwriting a replacement service's PID file after deletion/recreation.
+    if let Some(identity) = image_identity {
+        // Describe the actual spawn, not desired state before replacement. The
+        // PID/start qualification makes a sidecar from another incarnation inert.
+        // Publish it first, preserving the existing two-line PID format.
+        std::fs::write(
+            pid_file.with_extension("image"),
+            serde_json::to_vec(&(pid.as_u32(), start_time, identity))?,
+        )?;
+    }
     std::fs::write(pid_file, format!("{pid}\n{start_time}\n"))?;
     Ok(())
 }
@@ -1314,6 +1447,19 @@ struct ProcessStateUpdater {
 }
 
 impl ProcessStateUpdater {
+    fn update_image_identity(&self, identity: Option<ImageIdentity>) {
+        let Some(services) = self.services.upgrade() else {
+            return;
+        };
+        let mut services = services.lock().expect("lock poisoned");
+        if let Some(state) = services
+            .get_mut(&self.id)
+            .and_then(|states| states.get_mut(self.i))
+        {
+            state.image_identity = identity;
+        }
+    }
+
     fn update_state(&self, status: ProcessStatus) {
         let Some(services) = self.services.upgrade() else {
             return;
@@ -1348,6 +1494,7 @@ impl ProcessStateUpdater {
 
 #[derive(Debug)]
 struct ProcessState {
+    image_identity: Option<ImageIdentity>,
     _handle: AbortOnDropHandle<()>,
     terminate_on_drop: Arc<AtomicBool>,
     status: ProcessStatus,
@@ -1586,6 +1733,7 @@ mod tests {
                 assert!(orchestrator.services.lock().unwrap().is_empty());
                 let config = ServiceConfig {
                     inherit_kubernetes_owner_references: true,
+                    process_restart_on_image_change: false,
                     app_name: "discovery-test".into(),
                     image: "unused".into(),
                     init_container_image: None,
