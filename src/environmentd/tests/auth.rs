@@ -996,6 +996,54 @@ async fn test_auth_base_require_tls_frontegg() {
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
+            // An access token is accepted as the pgwire password.
+            TestCase::Pgwire {
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
+                password: Some(Cow::Borrowed(&frontegg_jwt)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // The token's user must match the connection's user.
+            TestCase::Pgwire {
+                user_to_auth_as: "materialize",
+                user_reported_by_system: "materialize",
+                password: Some(Cow::Borrowed(&frontegg_jwt)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            // Expired tokens and tokens for another tenant are rejected.
+            TestCase::Pgwire {
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
+                password: Some(Cow::Borrowed(&expired_jwt)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            TestCase::Pgwire {
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
+                password: Some(Cow::Borrowed(&bad_tenant_jwt)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
             // No TLS fails.
             TestCase::Pgwire {
                 user_to_auth_as: frontegg_user,
