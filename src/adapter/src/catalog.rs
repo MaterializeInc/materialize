@@ -2507,7 +2507,10 @@ mod tests {
     use std::{env, iter};
 
     use itertools::Itertools;
-    use mz_catalog::memory::objects::CatalogItem;
+    use mz_catalog::memory::objects::{
+        CatalogItem, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+    };
+    use mz_controller::clusters::ReplicaLogging;
     use mz_postgres_util::{query, sql};
     use tokio_postgres::NoTls;
     use tokio_postgres::types::Type;
@@ -2668,6 +2671,90 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_cluster_replica_size_sync() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let mut bootstrap_args = test_bootstrap_args();
+        // Builtin cluster replicas use the default size.
+        let in_use = bootstrap_args.default_cluster_replica_size.clone();
+        let unused = "scale=1,workers=2".to_string();
+        let changed = "scale=1,workers=4".to_string();
+        let cluster_only = "scale=1,workers=8".to_string();
+
+        let mut catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open debug catalog");
+        assert_eq!(
+            catalog.cluster_replica_sizes().0,
+            bootstrap_args.cluster_replica_size_map.0
+        );
+        // A managed cluster with no replicas still depends on its size.
+        let commit_ts = catalog.current_upper().await;
+        let cluster_id = catalog
+            .allocate_user_cluster_id(commit_ts)
+            .await
+            .expect("allocate cluster id");
+        let config = ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: cluster_only.clone(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 0,
+                optimizer_feature_overrides: Default::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let commit_ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                commit_ts,
+                None,
+                vec![Op::CreateCluster {
+                    id: cluster_id,
+                    name: "no_replicas".into(),
+                    introspection_sources: Vec::new(),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                    config,
+                }],
+            )
+            .await
+            .expect("create cluster");
+        catalog.expire().await;
+
+        let config_sizes = &mut bootstrap_args.cluster_replica_size_map.0;
+        config_sizes.remove(&in_use);
+        config_sizes.remove(&unused);
+        config_sizes.remove(&cluster_only);
+        config_sizes
+            .get_mut(&changed)
+            .expect("test size")
+            .cpu_exclusive = true;
+        let catalog = Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+            .await
+            .expect("unable to open debug catalog");
+        let sizes = &catalog.cluster_replica_sizes().0;
+        assert!(sizes[&in_use].disabled);
+        assert!(sizes[&cluster_only].disabled);
+        assert!(!sizes.contains_key(&unused));
+        assert_eq!(
+            sizes[&changed],
+            bootstrap_args.cluster_replica_size_map.0[&changed]
+        );
+        catalog.expire().await;
     }
 
     #[mz_ore::test(tokio::test)]
