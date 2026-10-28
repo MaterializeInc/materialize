@@ -218,10 +218,8 @@ def main() -> int:
         help="Controller adapter size allocations as JSON (must include size 1 for fresh initialization)",
     )
     args = parser.parse_intermixed_args()
-    if args.program == "controllerd" and args.reset:
-        raise UIError(
-            "controllerd does not support --reset; preserve its metadata and children"
-        )
+    if args.program == "controllerd" and args.reset and args.stop:
+        raise UIError("choose --reset to start fresh or --stop to preserve state")
     if args.stop:
         if args.program != "controllerd" or args.build_only:
             raise UIError(
@@ -541,6 +539,9 @@ def _controller_args(
         ):
             raise UIError("--pubsub-url requires an http(s) URL with an explicit port")
 
+    if args.reset:
+        _reset_controller_environment(args)
+
     with _connect_sql(args.postgres) as dbconn:
         if not (data / "environment-id").exists():
             with dbconn.cursor() as cur:
@@ -576,6 +577,113 @@ def _controller_args(
             f"--persist-pubsub-url={args.pubsub_url}",
         ]
     return command
+
+
+def _reset_controller_environment(args: argparse.Namespace) -> None:
+    data = (MZ_ROOT / "mzdata-controllerd").absolute()
+    if (
+        data.is_symlink()
+        or args.controller_data_directory.resolve() != data.resolve()
+        or args.postgres != "postgres://root@localhost:26257/materialize_controllerd"
+        or args.blob != f"file://{data.resolve()}/persist/blob"
+    ):
+        raise UIError(
+            "controllerd --reset supports only the default local database and state directory",
+            hint="Remove custom --postgres, --blob and --controller-data-directory settings "
+            "and unset MZDEV_POSTGRES/MZDEV_BLOB before resetting the default environment.",
+        )
+
+    # If local state was deleted, retained adapters/replicas still carry both
+    # their environment identity and this state's secrets directory. Recover
+    # only that association, never infer ownership from a process name alone.
+    recovered: dict[str, set[pathlib.Path]] = {}
+    controllers = []
+    children = []
+    for process in psutil.process_iter():
+        try:
+            if process.uids().real != os.getuid():
+                continue
+            command = process.cmdline()
+            if not command or pathlib.Path(command[0]).name not in (
+                "controllerd",
+                "adapterd",
+                "clusterd",
+                "environmentd",
+                "materialized",
+            ):
+                continue
+            secrets = _command_option(
+                command, "--orchestrator-process-secrets-directory"
+            ) or _command_option(command, "--secrets-reader-local-file-dir")
+            selected_state = (
+                secrets is not None
+                and pathlib.Path(secrets).resolve() == data.resolve() / "secrets"
+            )
+            for option in (
+                "--metadata-backend-url",
+                "--persist-consensus-url",
+                "--timestamp-oracle-url",
+                "--catalog-persist-consensus-url",
+                "--catalog-timestamp-oracle-url",
+            ):
+                value = _command_option(command, option)
+                if value is None:
+                    continue
+                url = urlparse(value)
+                if (
+                    url.hostname in ("localhost", "127.0.0.1", "::1")
+                    and url.port == 26257
+                    and url.path == "/materialize_controllerd"
+                    and not selected_state
+                ):
+                    raise UIError(
+                        "cannot reset: another local environment is using the default controller metadata database"
+                    )
+            if not selected_state:
+                continue
+            identity = _command_option(command, "--environment-id")
+            if (
+                not identity
+                or pathlib.Path(identity).name != identity
+                or identity in (".", "..")
+            ):
+                raise UIError(
+                    "cannot safely identify a surviving controller environment"
+                )
+            temp = pathlib.Path(
+                process.environ().get("TMPDIR", tempfile.gettempdir())
+            ).resolve()
+            recovered.setdefault(identity, set()).add(temp / f"environmentd-{identity}")
+            if pathlib.Path(command[0]).name in (
+                "controllerd",
+                "environmentd",
+                "materialized",
+            ):
+                controllers.append(process)
+            else:
+                children.append(process)
+                children.extend(process.children(recursive=True))
+        except psutil.NoSuchProcess:
+            continue
+    _terminate_controller_processes(controllers)
+    if (data / "environment-id").exists():
+        directories = recovered.pop(_controller_environment_id(data), set())
+        _stop_controller_environment(data, recovered_metadata=directories)
+    for identity, directories in recovered.items():
+        _stop_controller_environment(
+            data, recovered_identity=identity, recovered_metadata=directories
+        )
+
+    # Discovery is also authoritative when a child has lost its PID record.
+    _terminate_controller_processes(children)
+
+    # Clear durable metadata before deleting local blobs, as for environmentd.
+    # A failed SQL operation must leave the local state available for retry.
+    with _connect_sql(args.postgres) as dbconn:
+        for schema in ("consensus", "tsoracle", "storage"):
+            _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+    if data.exists():
+        shutil.rmtree(data)
 
 
 def _controller_environment_id(data: pathlib.Path) -> str:
@@ -655,14 +763,24 @@ def _terminate_controller_processes(processes: list[psutil.Process]) -> None:
         raise UIError("some environment processes did not stop")
 
 
-def _stop_controller_environment(directory: pathlib.Path) -> int:
+def _stop_controller_environment(
+    directory: pathlib.Path,
+    *,
+    recovered_identity: str | None = None,
+    recovered_metadata: set[pathlib.Path] | None = None,
+) -> int:
     data = directory.resolve()
     if data == MZDATA.resolve():
         raise UIError("controllerd requires state separate from environmentd's mzdata")
-    if not (data / "environment-id").exists():
+    if not (data / "environment-id").exists() and recovered_identity is None:
         print("No initialized controller environment to stop")
         return 0
-    environment_id = _controller_environment_id(data)
+    environment_id = recovered_identity or _controller_environment_id(data)
+    if pathlib.Path(environment_id).name != environment_id or environment_id in (
+        ".",
+        "..",
+    ):
+        raise UIError("invalid recovered controller environment identity")
     # A first launch can be interrupted before publishing its location. No
     # process has been launched yet in that case. Also recognize the original
     # backend location for older launchers without writing new state.
@@ -672,6 +790,7 @@ def _stop_controller_environment(directory: pathlib.Path) -> int:
     else:
         temp = pathlib.Path(os.environ.get("TMPDIR", tempfile.gettempdir())).resolve()
         directories = {temp / f"environmentd-{environment_id}"}
+    directories.update(recovered_metadata or set())
     errors = []
     controllers = []
     for process in psutil.process_iter():

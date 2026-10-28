@@ -20,6 +20,23 @@ old/new-version, prewarming, promotion, client switching and retirement outcomes
 
 ## Resume here
 
+Aljoscha explicitly requested destructive default-environment reset after deleting
+local state. `bin/controllerd --reset` now clears only the default local metadata
+schemas and state directory, then starts fresh. It stops recoverable associated
+processes first, rejects custom targets and refuses a live foreign-worktree user
+of the same database. Recovery also retains directly discovered process identities
+when PID records are missing. SQL failures preserve local files. Independent
+review findings on cross-worktree safety and lost PID records are resolved with
+real-process regressions. All 29 launcher tests pass, plus Black/Ruff. No reset has
+been executed against the user's database. This steering supersedes the earlier
+blanket reset rejection, without changing normal stop/restart preservation.
+
+The real default development build through `bin/controllerd --build-only` passed
+on worker `i-0788036f0778687f1` at revision `888e822f` in 42m33s. Task108 finished.
+Worker source must remain pinned for the corresponding runtime acceptance. The
+worker has about17GiB free after that build. Managed-relay/public-launcher runtime
+acceptance is next. Task109's disk monitor also finished.
+
 HTTP adapter listing and inventory use protocol-qualified listener names such as
 `sql-external` and `http-internal`, not backend ordinals. Backend port names and
 SQL observations are unchanged. Formatting and strict all-target Clippy pass.

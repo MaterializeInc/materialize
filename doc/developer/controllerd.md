@@ -124,9 +124,22 @@ some identity records are unusable, it stops verified processes first, then repo
 that it could not verify a complete shutdown. Do not launch another controller for
 this environment while `--stop` is running.
 
-`--reset` is rejected. Do not delete the state directory or reset metadata while
-children are running. An empty adapter inventory is valid after restart. Use
-HTTP POST to create an adapter and resume SQL without reinitializing the catalog.
+To discard the default local environment and start fresh:
+
+```sh
+bin/controllerd --reset
+```
+
+This is destructive. It stops identifiable processes associated with the default
+state directory, drops the `consensus`, `tsoracle` and `storage` schemas in
+`materialize_controllerd`, and deletes `mzdata-controllerd/` before starting again.
+It also works after the directory was deleted, recovering process identities from
+surviving adapters or replicas. It refuses custom database/blob/state settings and
+refuses to reset while another worktree uses the same metadata database. External
+relays are not adopted or stopped. Do not launch another controller during reset.
+
+An empty adapter inventory is valid after a normal restart. Use HTTP POST to create
+an adapter and resume SQL without reinitializing the catalog.
 
 HTTP names are exact, like quoted SQL identifiers. Creating `{"name":"Foo",
 "size":"1"}` requires `DROP ADAPTER "Foo"` in SQL. Invalid input returns 400,

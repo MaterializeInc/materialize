@@ -9,6 +9,7 @@
 
 import argparse
 import os
+import shutil
 import signal
 import socket as socket_module
 import subprocess
@@ -115,12 +116,37 @@ def test_controller_launch_and_restart(launcher, tmp_path, monkeypatch, optimize
     assert not (tmp_path / "mzdata").exists()
 
 
-def test_controller_reset_rejected_before_build(launcher, monkeypatch):
+def test_controller_reset_defaults_after_state_deletion(
+    launcher, monkeypatch, tmp_path
+):
     monkeypatch.setattr(run.sys, "argv", ["run", "controllerd", "--reset"])
-    with pytest.raises(UIError, match="does not support --reset"):
+    monkeypatch.setattr(run.psutil, "process_iter", lambda: iter(()))
+    assert run.main() == 0
+    statements = [call.args[1] for call in launcher[3].call_args_list]
+    assert statements[:3] == [
+        f"DROP SCHEMA IF EXISTS {name} CASCADE"
+        for name in ("consensus", "tsoracle", "storage")
+    ]
+    assert (tmp_path / "mzdata-controllerd/environment-id").exists()
+    launcher[5].assert_called_once()
+
+
+def test_controller_reset_refuses_custom_database(launcher, monkeypatch):
+    monkeypatch.setattr(
+        run.sys,
+        "argv",
+        [
+            "run",
+            "controllerd",
+            "--reset",
+            "--postgres",
+            "postgres://root@localhost:26257/materialize",
+        ],
+    )
+    with pytest.raises(UIError, match="only the default local database"):
         run.main()
-    launcher[0].assert_not_called()
     launcher[2].assert_not_called()
+    launcher[3].assert_not_called()
 
 
 def test_controller_build_only_needs_no_services(launcher, monkeypatch):
@@ -533,3 +559,124 @@ def test_controller_stop_bad_record_does_not_leave_valid_process(tmp_path):
         if process.poll() is None:
             process.terminate()
         process.wait(timeout=10)
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+@pytest.mark.parametrize("pid_record", [False, True])
+def test_controller_reset_stops_recovered_children_before_metadata(
+    monkeypatch, tmp_path, deleted, pid_record
+):
+    monkeypatch.setattr(run, "MZ_ROOT", tmp_path)
+    data = tmp_path / "mzdata-controllerd"
+    data.mkdir()
+    identity = f"local-az1-{uuid.uuid4()}-0"
+    (data / "environment-id").write_text(identity)
+    (data / "blob-marker").write_text("must survive SQL failure")
+    metadata = tmp_path / f"environmentd-{identity}"
+    service = metadata / "adapter-a1"
+    service.mkdir(parents=True)
+    (data / "process-metadata-directory").write_text(str(metadata))
+    processes = []
+    try:
+        adapter = subprocess.Popen(
+            [
+                "adapterd",
+                "-c",
+                "import time; time.sleep(120)",
+                f"--environment-id={identity}",
+                f"--orchestrator-process-secrets-directory={data}/secrets",
+            ],
+            executable=sys.executable,
+            env={**os.environ, "TMPDIR": str(tmp_path)},
+        )
+        relay = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        external = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(120)"]
+        )
+        processes.extend([adapter, relay, external])
+        for ordinal, process in enumerate([adapter, relay]):
+            if ordinal == 0 and not pid_record:
+                continue
+            start = int(psutil.Process(process.pid).create_time())
+            (service / f"{ordinal}.pid").write_text(f"{process.pid}\n{start}\n")
+        if deleted:
+            shutil.rmtree(data)
+        statements = []
+
+        def sql(connection, statement):
+            assert adapter.poll() is not None and relay.poll() is not None
+            assert external.poll() is None
+            if not deleted:
+                assert (data / "blob-marker").exists()
+            statements.append(statement)
+
+        monkeypatch.setattr(run, "_connect_sql", MagicMock())
+        monkeypatch.setattr(run, "_run_sql", sql)
+        args = argparse.Namespace(
+            controller_data_directory=data,
+            postgres="postgres://root@localhost:26257/materialize_controllerd",
+            blob=f"file://{data}/persist/blob",
+        )
+        run._reset_controller_environment(args)
+        assert statements == [
+            f"DROP SCHEMA IF EXISTS {name} CASCADE"
+            for name in ("consensus", "tsoracle", "storage")
+        ]
+        assert not data.exists()
+        assert external.poll() is None
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=10)
+
+
+def test_controller_reset_sql_failure_preserves_local_data(monkeypatch, tmp_path):
+    monkeypatch.setattr(run, "MZ_ROOT", tmp_path)
+    monkeypatch.setattr(run.psutil, "process_iter", lambda: iter(()))
+    monkeypatch.setattr(run, "_connect_sql", MagicMock())
+    monkeypatch.setattr(
+        run, "_run_sql", MagicMock(side_effect=RuntimeError("SQL failed"))
+    )
+    data = tmp_path / "mzdata-controllerd"
+    data.mkdir()
+    (data / "blob-marker").write_text("keep")
+    args = argparse.Namespace(
+        controller_data_directory=data,
+        postgres="postgres://root@localhost:26257/materialize_controllerd",
+        blob=f"file://{data}/persist/blob",
+    )
+    with pytest.raises(RuntimeError, match="SQL failed"):
+        run._reset_controller_environment(args)
+    assert (data / "blob-marker").read_text() == "keep"
+
+
+def test_controller_reset_refuses_another_worktree(monkeypatch, tmp_path):
+    monkeypatch.setattr(run, "MZ_ROOT", tmp_path)
+    connect = MagicMock()
+    monkeypatch.setattr(run, "_connect_sql", connect)
+    data = tmp_path / "mzdata-controllerd"
+    other = subprocess.Popen(
+        [
+            "adapterd",
+            "-c",
+            "import time; time.sleep(120)",
+            "--environment-id=another-environment",
+            f"--orchestrator-process-secrets-directory={tmp_path}/other/secrets",
+            "--persist-consensus-url=postgres://root@127.0.0.1:26257/materialize_controllerd?options=--search_path%3Dconsensus",
+        ],
+        executable=sys.executable,
+    )
+    try:
+        args = argparse.Namespace(
+            controller_data_directory=data,
+            postgres="postgres://root@localhost:26257/materialize_controllerd",
+            blob=f"file://{data}/persist/blob",
+        )
+        with pytest.raises(UIError, match="another local environment"):
+            run._reset_controller_environment(args)
+        connect.assert_not_called()
+        assert other.poll() is None
+    finally:
+        other.terminate()
+        other.wait(timeout=10)
