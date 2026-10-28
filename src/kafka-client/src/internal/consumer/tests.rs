@@ -112,6 +112,17 @@ impl ClientContext for Ctx {
             .unwrap()
             .push((error, reason.to_string()));
     }
+
+    /// The auth test broker advertises its listeners as `kafka:<port>`.
+    fn resolve_broker_addr(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<Vec<std::net::SocketAddr>, std::io::Error> {
+        use std::net::ToSocketAddrs;
+        let host = if host == "kafka" { "127.0.0.1" } else { host };
+        (host, port).to_socket_addrs().map(|a| a.collect())
+    }
 }
 
 impl ConsumerContext for Ctx {
@@ -671,6 +682,75 @@ fn msgs(items: &[Polled]) -> Vec<i64> {
             _ => None,
         })
         .collect()
+}
+
+/// A consumer whose principal may not use its group learns so from the
+/// coordinator lookup that librdkafka starts at creation for every consumer
+/// with a `group.id`: polling returns `GroupAuthorizationFailed` once, also
+/// for a consumer that only assigns partitions (Materialize's source and
+/// sink progress consumers).
+///
+/// Runs when `MZ_KAFKA_CLIENT_TEST_AUTH_SECRETS` is set, against the broker
+/// of `test/kafka-auth` (see `internal/cluster/auth_tests.rs`), whose
+/// `materialize_lockdown` user has no ACLs.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn group_authorization_failed() {
+    if std::env::var("MZ_KAFKA_CLIENT_TEST_AUTH_SECRETS").is_err() {
+        return;
+    }
+    let sasl = |user: &str| {
+        vec![
+            ("security.protocol", "SASL_PLAINTEXT".to_string()),
+            ("sasl.mechanisms", "PLAIN".to_string()),
+            ("sasl.username", user.to_string()),
+            ("sasl.password", "sekurity".to_string()),
+            ("group.id", unique("mzkc-auth-group")),
+        ]
+    };
+    let poll_for = |consumer: &BaseConsumer<Ctx>, d: Duration| {
+        let deadline = Instant::now() + d;
+        let mut out = Vec::new();
+        while Instant::now() < deadline {
+            match consumer.poll(Duration::from_millis(100)) {
+                Some(Ok(m)) => out.push(format!("message {}", m.offset())),
+                Some(Err(e)) => out.push(e.to_string()),
+                None => {}
+            }
+        }
+        out
+    };
+    for assign in [false, true] {
+        let pairs = sasl("materialize_lockdown");
+        let pairs: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let (consumer, _) = consumer("kafka:39095", &pairs);
+        if assign {
+            consumer
+                .assign(&tpl(&[("mzkc-auth-topic", 0, Offset::Offset(0))]))
+                .unwrap();
+        }
+        let got = poll_for(&consumer, Duration::from_secs(5));
+        assert_eq!(
+            got.iter()
+                .filter(|e| e.contains("GroupAuthorizationFailed"))
+                .count(),
+            1,
+            "assign={assign}: {got:?}"
+        );
+        assert_eq!(
+            got[0],
+            "Message consumption error: GroupAuthorizationFailed (Broker: Group authorization \
+             failed)"
+        );
+    }
+    // An authorized principal sees no error.
+    let pairs = sasl("materialize");
+    let pairs: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let (consumer, _) = consumer("kafka:39095", &pairs);
+    assert_eq!(
+        poll_for(&consumer, Duration::from_secs(2)),
+        Vec::<String>::new()
+    );
 }
 
 #[mz_ore::test]

@@ -53,7 +53,7 @@ use crate::config::RDKafkaLogLevel;
 use crate::config::settings::{AutoOffsetReset, ClientSettings, IsolationLevel};
 use crate::consumer::CommitMode;
 use crate::error::{KafkaError, KafkaResult};
-use crate::internal::cluster::{Cluster, MetadataSnapshot};
+use crate::internal::cluster::{Cluster, CoordinatorKind, MetadataSnapshot};
 use crate::internal::hooks::{ConsumerHooks, Logger};
 use crate::internal::runtime;
 use crate::message::BorrowedMessage;
@@ -166,6 +166,12 @@ impl ConsumerInner {
             }
         });
         runtime::spawn("kafka-consumer-manager", manage(Arc::clone(&inner)));
+        if let Some(group_id) = inner.group_id.clone() {
+            runtime::spawn(
+                "kafka-consumer-coordinator",
+                query_coordinator(Arc::clone(&inner), group_id),
+            );
+        }
         inner
     }
 
@@ -902,6 +908,88 @@ fn leader_of(md: &MetadataSnapshot, partition: &Partition) -> Leader {
         Some(p) if p.leader >= 0 => Leader::Broker(p.leader),
         Some(_) => Leader::Unknown,
         None => Leader::Missing(RDKafkaErrorCode::UnknownPartition),
+    }
+}
+
+/// How often the group coordinator is looked up while it is unknown, as
+/// librdkafka's `rd_kafka_cgrp_serve` does in state `QUERY_COORD`.
+const COORDINATOR_QUERY_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How often a known coordinator is checked against the cache, which commits
+/// and group requests invalidate when it moves.
+const COORDINATOR_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Whether librdkafka reports a FindCoordinator error to the application.
+///
+/// librdkafka (`rd_kafka_cgrp_handle_FindCoordinator`) refreshes or retries
+/// local errors and the broker errors `rd_kafka_err_action` classifies as
+/// such, silently. Any other error in a FindCoordinator response, e.g.
+/// `GROUP_AUTHORIZATION_FAILED`, is a consumer error.
+fn reported_coordinator_error(code: RDKafkaErrorCode) -> bool {
+    use RDKafkaErrorCode::*;
+    // Local codes are -100 and below; they never come from a response.
+    let from_response = code.to_i32() > -100;
+    from_response
+        && !matches!(
+            code,
+            LeaderNotAvailable
+                | NotLeaderForPartition
+                | BrokerNotAvailable
+                | ReplicaNotAvailable
+                | CoordinatorNotAvailable
+                | NotCoordinator
+                | KafkaStorageError
+                | RequestTimedOut
+                | NotEnoughReplicas
+                | NotEnoughReplicasAfterAppend
+                | InvalidMessage
+        )
+}
+
+/// Looks up the group coordinator from the start, like librdkafka's
+/// consumer group handle, which every consumer with a `group.id` has, also
+/// when it only assigns partitions. Reports a FindCoordinator error that the
+/// application should see (see [`reported_coordinator_error`]) as a consumer
+/// error on the main queue, once until a different one occurs, and keeps
+/// looking.
+async fn query_coordinator(inner: Arc<ConsumerInner>, group_id: String) {
+    let shutdown = inner.shutdown.clone();
+    let mut last_error = None;
+    loop {
+        let deadline = Deadline::new(inner.settings().socket_timeout);
+        let lookup = inner
+            .cluster
+            .coordinator(CoordinatorKind::Group, &group_id, deadline);
+        let result = tokio::select! {
+            _ = shutdown.cancelled() => return,
+            result = lookup => result,
+        };
+        let interval = match result {
+            Ok(_) => COORDINATOR_CHECK_INTERVAL,
+            Err(e) if e.code() == RDKafkaErrorCode::BrokerDestroy => return,
+            Err(e) => {
+                let code = e.code();
+                if reported_coordinator_error(code) && last_error != Some(code) {
+                    last_error = Some(code);
+                    inner.logger().debug(
+                        crate::config::settings::DebugContext::Cgrp,
+                        "CGRPCOORD",
+                        format_args!(
+                            "[thrd:main]: Group \"{group_id}\" FindCoordinator response error: \
+                             {}: {}",
+                            code.name(),
+                            e.message()
+                        ),
+                    );
+                    inner.push_event(KafkaError::MessageConsumption(code));
+                }
+                COORDINATOR_QUERY_INTERVAL
+            }
+        };
+        tokio::select! {
+            _ = shutdown.cancelled() => return,
+            _ = tokio::time::sleep(interval) => {}
+        }
     }
 }
 

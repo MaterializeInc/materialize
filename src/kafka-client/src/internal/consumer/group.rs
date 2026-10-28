@@ -169,6 +169,9 @@ struct Failure {
     code: RDKafkaErrorCode,
     immediately: bool,
     member_id: Option<String>,
+    /// The coordinator lookup failed. Such errors reach the application
+    /// through the consumer's coordinator query instead.
+    lookup: bool,
 }
 
 impl Failure {
@@ -177,6 +180,7 @@ impl Failure {
             code,
             immediately: false,
             member_id: None,
+            lookup: false,
         }
     }
 }
@@ -232,6 +236,7 @@ async fn run(
                 code,
                 immediately,
                 member_id: assigned_id,
+                lookup,
             }) => {
                 if let Some(id) = assigned_id {
                     member_id = id;
@@ -248,6 +253,7 @@ async fn run(
                     | RDKafkaErrorCode::IllegalGeneration
                     | RDKafkaErrorCode::CoordinatorLoadInProgress => {}
                     RDKafkaErrorCode::BrokerDestroy => return member_id,
+                    _ if lookup => {}
                     code => {
                         inner.log(
                             RDKafkaLogLevel::Error,
@@ -497,7 +503,11 @@ async fn join_and_sync(
     let coordinator = inner
         .cluster
         .coordinator(CoordinatorKind::Group, group_id, deadline)
-        .await?;
+        .await
+        .map_err(|e| Failure {
+            lookup: true,
+            ..Failure::new(e.code())
+        })?;
     let strategies: Vec<AssignmentStrategy> = consumer
         .partition_assignment_strategy
         .iter()
@@ -554,6 +564,7 @@ async fn join_and_sync(
             return Err(Failure {
                 code,
                 immediately: true,
+                lookup: false,
                 member_id: Some(response.member_id.as_str().to_string()),
             });
         }
