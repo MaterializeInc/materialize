@@ -2921,12 +2921,25 @@ impl MySqlConnection<InlinedConnection> {
             self.tls_mode,
             MySqlSslMode::VerifyCa | MySqlSslMode::VerifyIdentity
         ) {
+            // Trust the platform's roots, not the Mozilla set compiled into
+            // mysql_async, so a distrusted root goes away with an OS update.
+            let native = rustls_native_certs::load_native_certs();
+            for error in &native.errors {
+                tracing::warn!("failed to load native root certs: {error}");
+            }
+            let mut roots: Vec<_> = native
+                .certs
+                .into_iter()
+                .map(|cert| cert.to_vec().into())
+                .collect();
             if let Some(tls_root_cert) = &self.tls_root_cert {
                 let tls_root_cert = tls_root_cert.get_string(in_task, secrets_reader).await?;
-                ssl_opts = ssl_opts.map(|opts| {
-                    opts.with_root_certs(vec![tls_root_cert.as_bytes().to_vec().into()])
-                });
+                roots.push(tls_root_cert.into_bytes().into());
             }
+            ssl_opts = ssl_opts.map(|opts| {
+                opts.with_disable_built_in_roots(true)
+                    .with_root_certs(roots)
+            });
         }
 
         if let Some(identity) = &self.tls_identity {
@@ -2934,14 +2947,11 @@ impl MySqlConnection<InlinedConnection> {
                 .read_string_in_task_if(in_task, identity.key)
                 .await?;
             let cert = identity.cert.get_string(in_task, secrets_reader).await?;
-            let (der, pass) =
-                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?.into_parts();
-
-            // Add client identity to SSLOpts
             ssl_opts = ssl_opts.map(|opts| {
-                opts.with_client_identity(Some(
-                    mysql_async::ClientIdentity::new(der.into()).with_password(pass),
-                ))
+                opts.with_client_identity(Some(mysql_async::ClientIdentity::new(
+                    cert.into_bytes().into(),
+                    key.into_bytes().into(),
+                )))
             });
         }
 

@@ -476,7 +476,6 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     constraint_based_timestamp_selection
     enable_0dt_deployment
     enable_aws_msk_iam_auth
-    enable_compute_temporal_bucketing
     enable_consolidate_after_union_negate
     enable_continual_task_builtins
     enable_continual_task_transform
