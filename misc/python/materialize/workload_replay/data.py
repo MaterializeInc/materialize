@@ -345,6 +345,7 @@ def create_initial_data_external(
 
     # Lazily resolved ports — only looked up when a source of that type is seen.
     _ports: dict[str, int] = {}
+    postgres_conns: dict[str, dict[str, Any]] = {}
 
     def port(service: str) -> int:
         if service not in _ports:
@@ -384,6 +385,7 @@ def create_initial_data_external(
                                 "password": "postgres",
                                 "dbname": ref_db,
                             }
+                            postgres_conns[ref_db] = conn
                             _submit_chunks(
                                 pool,
                                 _copy_chunk,
@@ -458,6 +460,12 @@ def create_initial_data_external(
                 f"Creating {sum(totals.values()):,} rows across {len(totals)} sources"
             )
             _await_futures(futures, totals)
+
+    # Reduces disk usage: otherwise autovacuum's WAL is retained by source slots.
+    for dbname, conn_params in postgres_conns.items():
+        print(f"Vacuuming Postgres database {dbname}")
+        with psycopg.connect(**conn_params, autocommit=True) as conn:
+            conn.execute("VACUUM (FREEZE)")
 
     for child, source, cols, num_rows, pretty_name in sequential:
         data_columns = [
