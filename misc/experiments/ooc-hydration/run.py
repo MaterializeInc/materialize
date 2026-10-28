@@ -55,7 +55,9 @@ DEFAULT_SOURCE_SIZE = "200cc"  # 4 vCPU: headroom for the single ingest thread.
 DEFAULT_SCALE_FACTOR = 150
 DEFAULT_TICK = "1s"
 QUERIES = ["Q03", "Q05", "Q09", "Q18", "Q21"]
-ARMS = ["columnation", "chunked", "pool_raw", "pool_lz4", "pool_lz4_1"]
+DEFAULT_ARMS = ["columnation", "chunked", "pool_raw", "pool_lz4", "pool_lz4_1"]
+# Pool-tuning arms that isolate the no-pressure cost. Opt in with `--arms`.
+ARMS = DEFAULT_ARMS + ["pool_lz4_b50", "pool_lz4_rss50"]
 PHASES = ["idx", "mv_first", "mv_second"]
 SLT = "test/sqllogictest/tpch_create_materialized_view.slt"
 # Flags whose effective per-replica value is recorded with every cell.
@@ -102,8 +104,17 @@ class Mz:
 
     def __init__(self, mz_bin, config, region, profile):
         self.base = [
-            mz_bin, "--config", config, "--region", region,
-            "--profile", profile, "sql", "--", "-tAq", "-c",
+            mz_bin,
+            "--config",
+            config,
+            "--region",
+            region,
+            "--profile",
+            profile,
+            "sql",
+            "--",
+            "-tAq",
+            "-c",
         ]
 
     def __call__(self, stmt, timeout=900, search_path=None):
@@ -132,8 +143,11 @@ class Mz:
         for attempt in range(attempts):
             try:
                 r = subprocess.run(
-                    self.base + [stmt], capture_output=True, text=True,
-                    timeout=timeout, env=env,
+                    self.base + [stmt],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=env,
                 )
             except subprocess.TimeoutExpired:
                 last = f"timeout after {timeout}s"
@@ -141,7 +155,8 @@ class Mz:
                 continue
             if r.returncode == 0:
                 return [
-                    line for line in r.stdout.splitlines()
+                    line
+                    for line in r.stdout.splitlines()
                     if line.strip() and not line.startswith("Time:")
                 ]
             last = r.stderr or r.stdout
@@ -154,6 +169,7 @@ class Mz:
 
 
 # --- Names ----------------------------------------------------------------
+
 
 def schema(sf):
     return f"sf{sf}"
@@ -194,6 +210,7 @@ def extract_bodies():
 
 
 # --- Source ---------------------------------------------------------------
+
 
 def source_status(mz, sf):
     return mz.one(
@@ -238,6 +255,7 @@ def ensure_source(mz, sf, source_size, tick):
 
 
 # --- Clusters + workload --------------------------------------------------
+
 
 def ensure_cluster(mz, name, size):
     """Create managed cluster `name` at RF 0, or resize an existing one."""
@@ -304,8 +322,10 @@ def create_idx_workload(mz, sf, arm, slot):
         )
     for q in QUERIES:
         v = f"v{q.lower()}"
-        mz(f"CREATE DEFAULT INDEX IF NOT EXISTS {v}_{sfx} IN CLUSTER {cl} ON {sch}.{v};",
-           search_path=sch)
+        mz(
+            f"CREATE DEFAULT INDEX IF NOT EXISTS {v}_{sfx} IN CLUSTER {cl} ON {sch}.{v};",
+            search_path=sch,
+        )
 
 
 def create_mv_workload(mz, sf, arm, slot, bodies):
@@ -385,6 +405,7 @@ def offline_events(mz, rid, start_db, end_db):
 
 # --- Measurement ----------------------------------------------------------
 
+
 def measure(mz, started, objs_by_cluster, rids, baseline, timeout):
     """Wait until every object on every cluster hydrated.
 
@@ -398,8 +419,10 @@ def measure(mz, started, objs_by_cluster, rids, baseline, timeout):
     from the cluster's own start in `started`.
     """
     mv_oids = [
-        oid for objs in objs_by_cluster.values()
-        for oid, (_, kind) in objs.items() if kind == "mv"
+        oid
+        for objs in objs_by_cluster.values()
+        for oid, (_, kind) in objs.items()
+        if kind == "mv"
     ]
     rid_to_cluster = {rid: name for name, rid in rids.items()}
     all_oids = [oid for objs in objs_by_cluster.values() for oid in objs]
@@ -464,7 +487,8 @@ def run_cell(mz, sf, phase, trials, arms, size, bodies, timeout):
     kind = "idx" if phase == "idx" else "mv"
     instances = {
         cluster(kind, arm, slot): (arm, trial, slot)
-        for trial, slot in trials for arm in arms
+        for trial, slot in trials
+        for arm in arms
     }
     names = list(instances)
     print(f"  {phase} trials {[t for t, _ in trials]}: {', '.join(names)}")
@@ -491,10 +515,15 @@ def run_cell(mz, sf, phase, trials, arms, size, bodies, timeout):
 
     objs_by_cluster = {name: objects(mz, name) for name in names}
     uptime0 = mz.one("SELECT mz_uptime()::text;")
-    baseline = write_frontiers(mz, [
-        oid for objs in objs_by_cluster.values()
-        for oid, (_, okind) in objs.items() if okind == "mv"
-    ])
+    baseline = write_frontiers(
+        mz,
+        [
+            oid
+            for objs in objs_by_cluster.values()
+            for oid, (_, okind) in objs.items()
+            if okind == "mv"
+        ],
+    )
     t0_db = mz.one("SELECT now()::text;")
     started = set_rf(mz, names, 1)
     rids = replica_ids(mz, names)
@@ -503,31 +532,52 @@ def run_cell(mz, sf, phase, trials, arms, size, bodies, timeout):
     flags = effective_flags(mz, rids.values())
     t1_db = mz.one("SELECT now()::text;")
     uptime1 = mz.one("SELECT mz_uptime()::text;")
-    tns = time_ns(mz, [o for objs in objs_by_cluster.values() for o in objs],
-                  rids.values())
+    tns = time_ns(
+        mz, [o for objs in objs_by_cluster.values() for o in objs], rids.values()
+    )
 
     result_rows, window_rows = [], []
     for (name, oid), (hyd_s, wr_s) in sorted(done.items()):
         label, okind = objs_by_cluster[name][oid]
         arm, trial, _ = instances[name]
-        result_rows.append([
-            sf, phase, arm, trial, label, okind,
-            "" if hyd_s is None else hyd_s,
-            "" if wr_s is None else wr_s,
-            tns.get((oid, rids[name]), ""),
-        ])
+        result_rows.append(
+            [
+                sf,
+                phase,
+                arm,
+                trial,
+                label,
+                okind,
+                "" if hyd_s is None else hyd_s,
+                "" if wr_s is None else wr_s,
+                tns.get((oid, rids[name]), ""),
+            ]
+        )
     for name in names:
         arm, trial, _ = instances[name]
-        window_rows.append([
-            sf, phase, arm, trial, name, rids[name], size, t0_db, t1_db,
-            uptime0, uptime1, offline_events(mz, rids[name], t0_db, t1_db),
-            flags.get(rids[name], ""),
-        ])
+        window_rows.append(
+            [
+                sf,
+                phase,
+                arm,
+                trial,
+                name,
+                rids[name],
+                size,
+                t0_db,
+                t1_db,
+                uptime0,
+                uptime1,
+                offline_events(mz, rids[name], t0_db, t1_db),
+                flags.get(rids[name], ""),
+            ]
+        )
     print(f"    recorded {len(result_rows)} rows")
     return result_rows, window_rows
 
 
 # --- Main -----------------------------------------------------------------
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -536,21 +586,30 @@ def main():
     ap.add_argument("--region", default="aws/us-east-1")
     ap.add_argument("--profile", default="staging")
     ap.add_argument("--scale-factor", type=int, default=DEFAULT_SCALE_FACTOR)
-    ap.add_argument("--arms", default=",".join(ARMS))
+    ap.add_argument("--arms", default=",".join(DEFAULT_ARMS))
     ap.add_argument("--phases", default=",".join(PHASES))
-    ap.add_argument("--trials", default="idx=2,mv_first=2,mv_second=3",
-                    help="per-phase trial counts")
+    ap.add_argument(
+        "--trials",
+        default="idx=2,mv_first=2,mv_second=3",
+        help="per-phase trial counts",
+    )
     ap.add_argument("--size", default=DEFAULT_SIZE)
     ap.add_argument("--source-size", default=DEFAULT_SOURCE_SIZE)
     ap.add_argument("--tick", default=DEFAULT_TICK)
     ap.add_argument("--outdir", default="ooc-hydration-results")
     ap.add_argument("--hydrate-timeout", type=int, default=3 * 3600)
-    ap.add_argument("--parallel-trials", action="store_true",
-                    help="run all trials of a phase at once, each on its own "
-                         "clusters (mv_second reuses mv_first's trials, so "
-                         "give mv_first at least as many)")
-    ap.add_argument("--teardown", action="store_true",
-                    help="drop the arm clusters and their objects at the end")
+    ap.add_argument(
+        "--parallel-trials",
+        action="store_true",
+        help="run all trials of a phase at once, each on its own "
+        "clusters (mv_second reuses mv_first's trials, so "
+        "give mv_first at least as many)",
+    )
+    ap.add_argument(
+        "--teardown",
+        action="store_true",
+        help="drop the arm clusters and their objects at the end",
+    )
     args = ap.parse_args()
 
     if not args.config:
@@ -587,12 +646,37 @@ def main():
     wf = windows_path.open("a", newline="")
     rw, ww = csv.writer(rf), csv.writer(wf)
     if rf.tell() == 0:
-        rw.writerow(["sf", "phase", "arm", "trial", "object", "kind",
-                     "hydrated_s", "written_s", "time_ns"])
+        rw.writerow(
+            [
+                "sf",
+                "phase",
+                "arm",
+                "trial",
+                "object",
+                "kind",
+                "hydrated_s",
+                "written_s",
+                "time_ns",
+            ]
+        )
     if wf.tell() == 0:
-        ww.writerow(["sf", "phase", "arm", "trial", "cluster", "replica_id",
-                     "size", "started_at", "ended_at", "uptime_start",
-                     "uptime_end", "offline_events", "flags"])
+        ww.writerow(
+            [
+                "sf",
+                "phase",
+                "arm",
+                "trial",
+                "cluster",
+                "replica_id",
+                "size",
+                "started_at",
+                "ended_at",
+                "uptime_start",
+                "uptime_end",
+                "offline_events",
+                "flags",
+            ]
+        )
     rf.flush()
     wf.flush()
 
@@ -613,7 +697,13 @@ def main():
             if not batch:
                 continue
             result_rows, window_rows = run_cell(
-                mz, sf, phase, batch, arms, args.size, bodies,
+                mz,
+                sf,
+                phase,
+                batch,
+                arms,
+                args.size,
+                bodies,
                 args.hydrate_timeout,
             )
             rw.writerows(result_rows)
@@ -625,12 +715,16 @@ def main():
     # touch the clusters of this run's phases: a concurrent run of the other
     # workload is still measuring on its clusters.
     kinds = {"idx" if phase == "idx" else "mv" for phase in phases}
-    max_slot = max(trials.get(phase, 1) for phase in phases) if args.parallel_trials else 1
+    max_slot = (
+        max(trials.get(phase, 1) for phase in phases) if args.parallel_trials else 1
+    )
     for kind in sorted(kinds):
-        names = [cluster(kind, arm, slot)
-                 for slot in range(1, max_slot + 1) for arm in arms]
-        existing = [n for n in names
-                    if mz.one(f"SELECT 1 FROM mz_clusters WHERE name = '{n}';")]
+        names = [
+            cluster(kind, arm, slot) for slot in range(1, max_slot + 1) for arm in arms
+        ]
+        existing = [
+            n for n in names if mz.one(f"SELECT 1 FROM mz_clusters WHERE name = '{n}';")
+        ]
         set_rf(mz, existing, 0)
         if args.teardown:
             for name in existing:

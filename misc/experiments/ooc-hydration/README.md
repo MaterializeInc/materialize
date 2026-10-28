@@ -17,9 +17,14 @@ fallthrough. The fallthrough itself is the `pool_lz4` arm.
 | `pool_raw` | `column_chunk_compress_min_depth = 255` |
 | `pool_lz4` | none |
 | `pool_lz4_1` | `column_paged_batcher_budget_fraction = 0.01` |
+| `pool_lz4_b50` | `column_paged_batcher_budget_fraction = 0.5` |
+| `pool_lz4_rss50` | `column_paged_batcher_pool_rss_target_fraction = 0.5` |
 
 `column_chunk_compress_min_depth = 255` disables compression in practice, because
-no chunk reaches generation 255. `column_paged_batcher_lz4` only affects the old
+no chunk reaches generation 255. With `pool_lz4_b50` the budget exceeds the default
+RSS target of 0.25, which leaves the compressed-resident tier no capacity.
+`pool_lz4_rss50` doubles that tier's ceiling at the default budget.
+The default arm list omits these two, pass them with `--arms`. `column_paged_batcher_lz4` only affects the old
 pager and has no effect on the buffer pool.
 
 ## Running
