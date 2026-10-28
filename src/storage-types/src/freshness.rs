@@ -184,18 +184,36 @@ impl ResolvedTree {
     }
 
     /// The worst-case delay D in ms from an arrival to its visibility when every tick and refresh
-    /// is on time. Never below the true worst case.
+    /// is on time. Never below the true worst case in the steady state.
     ///
     /// The supremum is not attained in continuous time, so D is one more than the largest
-    /// single-arrival latency on the integer millisecond grid.
-    pub fn assignment_bound(&self) -> u64 {
+    /// single-arrival latency on the integer millisecond grid. Returns `None` if the delay is
+    /// unbounded, which is the case for a refresh node whose schedule has no `EVERY`: arrivals
+    /// after its last `AT` never become visible. Where a schedule has both, the `AT`s only add
+    /// refreshes and are ignored, which keeps the bound valid.
+    pub fn assignment_bound(&self) -> Option<u64> {
+        self.assignment_bound_with_cap(MAX_CHANGE_POINTS)
+    }
+
+    /// `assignment_bound` with the scan size limit as a parameter, so tests can force the
+    /// conservative path.
+    fn assignment_bound_with_cap(&self, max_change_points: u128) -> Option<u64> {
+        let mut unbounded = false;
+        self.for_each_schedule(&mut |s| unbounded |= s.everies.is_empty());
+        if unbounded {
+            return None;
+        }
         if !self.has_refresh() {
             let mut leaves = Vec::new();
             self.collect_leaves(&mut leaves);
-            return closed_form(&leaves);
+            return Some(closed_form(&leaves));
         }
-        self.scan_bound()
-            .unwrap_or_else(|| self.conservative_bound())
+        let periodic = self.without_ats();
+        Some(
+            periodic
+                .scan_bound(max_change_points)
+                .unwrap_or_else(|| periodic.conservative_bound()),
+        )
     }
 
     fn has_refresh(&self) -> bool {
@@ -203,6 +221,22 @@ impl ResolvedTree {
             ResolvedTree::Leaf(_) => false,
             ResolvedTree::Min(inputs) => inputs.iter().any(|i| i.has_refresh()),
             ResolvedTree::Refresh { .. } => true,
+        }
+    }
+
+    fn without_ats(&self) -> ResolvedTree {
+        match self {
+            ResolvedTree::Leaf(t) => ResolvedTree::Leaf(*t),
+            ResolvedTree::Min(inputs) => {
+                ResolvedTree::Min(inputs.iter().map(|i| i.without_ats()).collect())
+            }
+            ResolvedTree::Refresh { schedule, input } => ResolvedTree::Refresh {
+                schedule: RefreshSchedule {
+                    everies: schedule.everies.clone(),
+                    ats: Vec::new(),
+                },
+                input: Box::new(input.without_ats()),
+            },
         }
     }
 
@@ -222,45 +256,58 @@ impl ResolvedTree {
         }
     }
 
-    /// An upper bound that needs no scan, used if the scan would be too large.
+    /// An upper bound that needs no scan, twice [`Self::path_bound`].
+    ///
+    /// Let `f(x)` be the wall time at which the output frontier first covers timestamp `x`, and
+    /// `T(t)` the timestamp an arrival at `t` ends up with. A leaf rounds up to its grid, so
+    /// both move by at most its interval. A minimum takes the maximum of its inputs, and a
+    /// refresh first rounds up to its next refresh, at most one period, and then defers to its
+    /// input. Hence `T(t) - t` and `f(x) - x` are each at most the path bound, and the delay
+    /// `f(T(t)) - t` is at most their sum.
     fn conservative_bound(&self) -> u64 {
-        let mut leaves = Vec::new();
-        let others = self.collect_leaves(&mut leaves);
-        let mut bound = closed_form(&leaves);
-        for other in others {
-            let ResolvedTree::Refresh { schedule, input } = other else {
-                unreachable!("collect_leaves only returns refresh nodes");
-            };
-            // A refresh delays an arrival by at most one period on top of its input's bound.
-            bound = bound
-                .saturating_add(input.conservative_bound())
-                .saturating_add(max_period_ms(schedule));
+        self.path_bound().unwrap_or(u64::MAX).saturating_mul(2)
+    }
+
+    /// The largest sum of leaf interval and refresh periods along a path from the root to a
+    /// leaf. `None` if a refresh node on a path has no `EVERY`.
+    fn path_bound(&self) -> Option<u64> {
+        match self {
+            ResolvedTree::Leaf(t) => Some(t.grid_ms().unwrap_or(0)),
+            ResolvedTree::Min(inputs) => inputs
+                .iter()
+                .map(|i| i.path_bound())
+                .collect::<Option<Vec<_>>>()
+                .map(|bounds| bounds.into_iter().max().unwrap_or(0)),
+            ResolvedTree::Refresh { schedule, input } => {
+                let period = schedule
+                    .everies
+                    .iter()
+                    .map(|e| duration_ms(e.interval))
+                    .max()?;
+                Some(period.saturating_add(input.path_bound()?))
+            }
         }
-        bound
     }
 
     /// The largest `w - last_reflected(expected_upper(w))` over the points where the expected
-    /// frontier changes in one hyperperiod, plus one. Returns `None` if the scan is too large
-    /// or a schedule is not periodic.
-    fn scan_bound(&self) -> Option<u64> {
+    /// frontier changes in one hyperperiod, plus one. Returns `None` if the tree has unaligned
+    /// leaves, the scan has more than `max_change_points` points, or it cannot be set up.
+    fn scan_bound(&self, max_change_points: u128) -> Option<u64> {
         let mut grids = Vec::new();
-        let mut unaligned = Vec::new();
+        let mut has_unaligned = false;
         let mut schedules = Vec::new();
         self.for_each_ticker(&mut |t| match t {
             Ticker::Aligned { interval_ms } => grids.extend(Some(*interval_ms).filter(|i| *i > 0)),
-            Ticker::Unaligned { interval_ms } => {
-                if *interval_ms > 0 {
-                    grids.push(*interval_ms);
-                    unaligned.push(*interval_ms);
-                }
-            }
+            Ticker::Unaligned { .. } => has_unaligned = true,
             Ticker::Continuous => {}
         });
-        self.for_each_schedule(&mut |s| schedules.push(s));
-        // One-shot refreshes break periodicity.
-        if schedules.iter().any(|s| !s.ats.is_empty()) {
+        // NOTE: The scan reads `last_reflected`, which floors an unaligned leaf to the epoch
+        // grid of its interval, so it can undershoot the delay of a phase that is off that grid
+        // when a refresh sits on top. The conservative bound is the safe choice there.
+        if has_unaligned {
             return None;
         }
+        self.for_each_schedule(&mut |s| schedules.push(s));
         let periods: Vec<u64> = schedules
             .iter()
             .flat_map(|s| s.everies.iter().map(|e| duration_ms(e.interval)))
@@ -276,10 +323,8 @@ impl ResolvedTree {
                 return None;
             }
         }
-        // Each unaligned leaf adds two shifted copies of every point.
-        let copies = 1 + 2 * u128::try_from(unaligned.len()).ok()?;
-        let points: u128 = all.iter().map(|i| hyper / u128::from(*i)).sum::<u128>() * copies;
-        if points > MAX_CHANGE_POINTS {
+        let points: u128 = all.iter().map(|i| hyper / u128::from(*i)).sum();
+        if points > max_change_points {
             return None;
         }
         let hyper = u64::try_from(hyper).ok()?;
@@ -309,17 +354,6 @@ impl ResolvedTree {
                 from = r + 1;
             }
         }
-        // The expected frontier of an unaligned leaf trails the wall clock by its interval, so
-        // every change point `c` shows up again at `c + u`. The point before it is kept as well
-        // because the bound is read just before a change.
-        for u in unaligned {
-            let shifted: Vec<u64> = change_points
-                .iter()
-                .flat_map(|c| [c + u - 1, c + u])
-                .collect();
-            change_points.extend(shifted);
-        }
-
         change_points
             .into_iter()
             .filter_map(|c| {
@@ -334,14 +368,13 @@ impl ResolvedTree {
     /// The frontier of the output at wall clock `now` if every tick and refresh is on time.
     fn expected_upper(&self, now: u64) -> Option<Timestamp> {
         Some(Timestamp::from(match self {
-            ResolvedTree::Leaf(Ticker::Aligned { interval_ms }) if *interval_ms > 0 => {
+            // NOTE: `scan_bound` never runs on unaligned leaves, so the epoch grid here only
+            // matters for aligned ones.
+            ResolvedTree::Leaf(
+                Ticker::Aligned { interval_ms } | Ticker::Unaligned { interval_ms },
+            ) if *interval_ms > 0 => {
                 // A tick at `t` leaves the frontier at `t + 1`.
                 now - now % interval_ms + 1
-            }
-            // NOTE: An unaligned leaf has an unknown phase, so we assume the worst: the last
-            // tick was a full interval ago.
-            ResolvedTree::Leaf(Ticker::Unaligned { interval_ms }) if *interval_ms > 0 => {
-                now.saturating_sub(*interval_ms) + 1
             }
             ResolvedTree::Leaf(_) => now + 1,
             ResolvedTree::Min(inputs) => inputs
@@ -387,15 +420,6 @@ fn duration_ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// The longest gap between two refreshes of `schedule`.
-fn max_period_ms(schedule: &RefreshSchedule) -> u64 {
-    let everies = schedule.everies.iter().map(|e| duration_ms(e.interval));
-    let mut ats = schedule.ats.clone();
-    ats.sort();
-    let gaps = ats.windows(2).map(|w| u64::from(w[1]) - u64::from(w[0]));
-    everies.chain(gaps).max().unwrap_or(0)
-}
-
 fn gcd(a: u128, b: u128) -> u128 {
     if b == 0 { a } else { gcd(b, a % b) }
 }
@@ -413,9 +437,10 @@ fn lcm(a: u128, b: u128) -> u128 {
 ///
 /// NOTE: For two aligned leaves the alignment term is `i_m - gcd(i_k, i_m)`. An unaligned leaf
 /// has an arbitrary phase, so its alignment term is its full interval. A continuous leaf
-/// contributes 0 both ways. The proof for aligned leaves is in the appendix "the assignment bound
-/// of a join" of `doc/developer/design/20261028_tick_aware_freshness.md`, and the Lean model
-/// `Mz.Freshness.latency_le` covers the two-input case.
+/// contributes 0 both ways. The aligned alignment term holds because the multiples of `i_k`
+/// reduce modulo `i_m` to the multiples of `g = gcd(i_k, i_m)` (Bezout), so the distance to
+/// the next multiple of `i_m` is at most `i_m - g` and some multiple reaches it. The supremum
+/// over arrivals then adds the assignment term of up to `i_k` just below the tick.
 fn closed_form(leaves: &[Ticker]) -> u64 {
     // The assignment term of a leaf, 0 for a leaf that follows wall clock.
     fn interval(t: &Ticker) -> u64 {
