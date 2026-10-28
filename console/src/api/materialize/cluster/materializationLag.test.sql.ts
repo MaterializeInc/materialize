@@ -9,14 +9,13 @@
 
 import {
   executeSqlHttp,
-  getMaterializeClient,
+  explainOnCatalogServer,
   QUICKSTART_CLUSTER,
 } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
 
 import { SEARCH_PATH } from "../executeSql";
 import {
-  buildBlockedDependenciesQuery,
   buildMaterializationLagQuery,
   OUTDATED_THRESHOLD_SECONDS,
 } from "./materializationLag";
@@ -50,17 +49,6 @@ async function createBasicLagGraph() {
   await testdrive(`
       > CREATE SCHEMA ${testSchema};
       > SET schema to ${testSchema};
-      > CREATE TABLE ${testSchema}.mz_objects (
-          id TEXT NOT NULL,
-          name TEXT NOT NULL,
-          type TEXT NOT NULL
-        );
-      > INSERT INTO ${testSchema}.mz_objects VALUES
-          ('u1', 'source 1', 'source'),
-          ('u2', 'source 2', 'source'),
-          ('u3', 'index 1', 'index'),
-          ('u4', 'materialized view 1', 'materialized-view'),
-          ('u5', 'index 2', 'index');
       > CREATE TABLE ${testSchema}.mz_hydration_statuses (
           object_id TEXT NOT NULL,
           hydrated BOOLEAN
@@ -107,7 +95,6 @@ describe("buildMaterializationLagQuery", () => {
 
     expect(source1).toMatchObject({
       targetObjectId: "u1",
-      type: "source",
       hydrated: true,
       isOutdated: false,
     });
@@ -116,7 +103,6 @@ describe("buildMaterializationLagQuery", () => {
 
     expect(source2).toMatchObject({
       targetObjectId: "u2",
-      type: "source",
       hydrated: true,
       isOutdated: false,
     });
@@ -125,7 +111,6 @@ describe("buildMaterializationLagQuery", () => {
 
     expect(index1).toMatchObject({
       targetObjectId: "u3",
-      type: "index",
       hydrated: true,
       isOutdated: false,
     });
@@ -134,7 +119,6 @@ describe("buildMaterializationLagQuery", () => {
 
     expect(mv1).toMatchObject({
       targetObjectId: "u4",
-      type: "materialized-view",
       hydrated: true,
       isOutdated: false,
     });
@@ -143,7 +127,6 @@ describe("buildMaterializationLagQuery", () => {
 
     expect(index2).toMatchObject({
       targetObjectId: "u5",
-      type: "index",
       hydrated: true,
       // Should be outdated because the freshness value is greater than 10 seconds
       isOutdated: true,
@@ -153,48 +136,14 @@ describe("buildMaterializationLagQuery", () => {
   });
 });
 
-describe("buildBlockedDependenciesQuery", () => {
-  it("should return associated cluster info for indexes and materialized views", async () => {
-    await testdrive(`
-      > CREATE CLUSTER mv_cluster (SIZE = 'scale=1,workers=1');
-      > SET CLUSTER TO mv_cluster;
-      > CREATE MATERIALIZED VIEW mv AS SELECT id FROM mz_catalog.mz_objects;
-      > CREATE CLUSTER index_cluster (SIZE = 'scale=1,workers=1');
-      > SET CLUSTER TO index_cluster;
-      > CREATE DEFAULT INDEX idx ON mv;
-      > SET CLUSTER TO quickstart;
-      `);
-    const client = await getMaterializeClient();
-
-    const {
-      rows: [idx, mv],
-    } = await client.query(
-      "select id, name from mz_objects where name = 'mv' OR name='idx' ORDER BY name",
-    );
-
-    // Sometimes each object's frontiers are not created yet, so we need to wait for them
-    await client.query(
-      `select object_id from mz_internal.mz_wallclock_global_lag_recent_history where object_id = '${idx.id}' OR object_id='${mv.id}'`,
-    );
-
-    const blockedDependenciesQuery = buildBlockedDependenciesQuery({
-      objectIds: [idx.id, mv.id],
-    }).compile();
-
-    const result = await executeSqlHttp(blockedDependenciesQuery);
-
-    const [idxResult, mvResult] = result.rows;
-
-    expect(idxResult).toMatchObject({
-      targetObjectId: idx.id,
-      clusterId: expect.stringMatching("^u"),
-      clusterName: "index_cluster",
+describe("buildMaterializationLagQuery plan", () => {
+  it("reads the lag index by key for 400 ids", async () => {
+    const query = buildMaterializationLagQuery({
+      objectIds: Array.from({ length: 400 }, (_, i) => `u${i + 1}`),
     });
 
-    expect(mvResult).toMatchObject({
-      targetObjectId: mv.id,
-      clusterId: expect.stringMatching("^u"),
-      clusterName: "mv_cluster",
-    });
+    expect(await explainOnCatalogServer(query.compile())).toContain(
+      "mz_internal.mz_wallclock_global_lag_recent_history_ind (differential join)",
+    );
   });
 });
