@@ -1127,13 +1127,6 @@ WHERE
 /// so this table is locked down with `access: vec![]` (same pattern as
 /// `mz_catalog_raw`): builtin MVs read it at bootstrap, but direct user
 /// `SELECT` is denied.
-///
-/// Unlike `mz_cluster_replica_sizes`, this table includes rows for sizes
-/// flagged `disabled` — `CatalogState::cluster_replica_size_has_disk`
-/// indexed the in-memory map without checking `disabled`, so a managed
-/// cluster pinned to a disabled size still resolved its `disk` column from
-/// the size's real `swap_enabled` / `disk_limit`. Including disabled sizes
-/// here preserves that behavior.
 pub static MZ_CLUSTER_REPLICA_SIZE_INTERNAL: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
         name: "mz_cluster_replica_size_internal",

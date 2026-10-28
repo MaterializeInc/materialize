@@ -2832,11 +2832,7 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
         // `disk` is computed as in
         // `CatalogState::cluster_replica_size_has_disk`:
         // `NOT swap_enabled AND disk_bytes != 0`. Both flags are sourced from
-        // `mz_internal.mz_cluster_replica_size_internal`, which the catalog
-        // populates for every size — including ones flagged `disabled`, which
-        // the public `mz_cluster_replica_sizes` table omits. Using the internal
-        // table directly preserves the prior behavior of indexing the in-memory
-        // size map regardless of `disabled`.
+        // `mz_internal.mz_cluster_replica_size_internal`.
         //
         // `availability_zones` is normalised to NULL when empty, matching
         // `pack_cluster_update`'s `None` for an empty `Vec`. `list_agg` over
@@ -3145,6 +3141,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
             "credits_per_hour",
             SqlScalarType::Numeric { max_scale: None }.nullable(false),
         )
+        .with_column("disabled", SqlScalarType::Bool.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("size", "The human-readable replica size."),
@@ -3163,12 +3160,16 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
             "credits_per_hour",
             "The number of compute credits consumed per hour.",
         ),
+        (
+            "disabled",
+            "Whether the size is disabled. Existing replicas keep running on a disabled size, but new clusters and replicas cannot choose it.",
+        ),
     ]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "replica_size",
-        description: "Available cluster replica sizes with CPU, memory, and credit cost",
+        description: "Cluster replica sizes with CPU, memory, and credit cost",
         links: &const { [] },
         column_semantic_types: &const {
             [
