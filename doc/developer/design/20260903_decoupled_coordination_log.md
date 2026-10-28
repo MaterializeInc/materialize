@@ -82,30 +82,39 @@ verification is reported after safe shutdown work. All 22 launcher tests pass,
 including real disposable-process ordering/isolation cases, plus Black and Ruff.
 Actual product stop/restart with retained SQL data remains unverified.
 
-Process relay upgrades remain open. Oracle recommends per-process launch digests,
-following Kubernetes pod-template hashes, with PID/start-qualified sidecars and
-unchanged two-line PID files. Generic reconciliation would also restart adapters
-and replicas when their executable or launch arguments change, including some
-startup settings sampled from dyncfgs. Ask Aljoscha whether to accept that broader
-behavior or restrict changed-launch replacement to pubsub. Do not implement that
-behavior choice before agreement. Preserve unchanged-child adoption and assigned
-endpoints. Keep the single configured relay provisioner during overlap and external
-services outside teardown.
-See private `managed-pubsub-integration.md` for source pointers.
+Process relay upgrades remain open. Aljoscha approved replacement only for managed
+pubsub when its configured binary changes, preserving the endpoint and leaving
+adapters/replicas unchanged. Unchanged controller restarts must adopt healthy
+processes. A reusable backend mechanism is allowed, but general argument/settings
+reconciliation is outside M3. Keep the standalone image publishable. Its registry
+visibility gate remains unresolved and does not prevent targeted candidate runs.
 
-Scratch SSO remains expired. User must run `bin/scratch login`. Authorized cleanup
-removed only incremental build cache and obsolete CI140921/CI140930 executables.
-Source, worktrees, current scripts and the CI141032 baseline product remain.
-Local disk pressure is resolved. Keep product builds and broad codegen on the
-approved worker rather than replacing it.
+Scratch access is restored. Worker `i-0788036f0778687f1` is running, with seven hours
+remaining when checked. The idle worker was clean and synced explicitly to
+`969056d563114cf426c1b7a9df84afda00492a58`. Removed its unused incremental cache to
+recover disk space, preserving source, evidence, products and database containers.
+The exact CI141217 materialized image is
+`materialize/materialized:mzbuild-FJXSGTKPCPESYSV4SG3CJ3LIKLBPF5GP`, digest
+`sha256:6d4cb1d4f5065426e5c80fe7a813a663620cc123b9222baafd7bbebf7eca7f51`.
+Extracted binaries are in `/home/ubuntu/m3-evidence/ci141217-product` on the worker.
 
-Next: obtain the latest candidate's matching CI product and run
-`sql-http-adapter-lifecycle-smoke.py`, including self-drop, zero-adapter restart
-and HTTP recovery. The private script now also checks SQL named endpoints,
-backend status/readiness, dropped-observation cleanup, LIKE collection filters and
-collection inspection after a zero-adapter restart. It is syntax-checked, not
-executed, and requires the new matching product containing the collection endpoint.
-Separately exercise the public launcher and its managed pubsub path.
+The SQL/HTTP lifecycle witness now passes all 24 checks on that candidate, with
+successful cleanup. It covers required superuser authorization with RBAC disabled,
+peer observations, rename, shared DDL/writes, peer replacement, two controller
+restarts retaining PIDs/sessions/temp views, collection filters, zero-adapter
+restart without default recreation, and HTTP recovery of maintained data.
+Evidence is copied off-worker under
+`~/.local/share/aj/m3-evidence/run-4dc771671d034ee8a0a142f051818c1d/`.
+Two initial failures reproduced an incorrect witness setup: administrative SQL used
+the non-superuser materialize role. Only management commands now use the existing
+mz_system listener. Ordinary sessions and denied-user assertions remain unchanged.
+
+Next: implement relay-only binary replacement and verify the plain launcher,
+managed relay, whole-environment stop/restart, replica policy and deployment
+walkthrough. The successful witness uses an external relay and is not acceptance
+of these remaining paths. Concurrent edits to observations.rs/controllerd.md add
+named HTTP endpoint labels. They are not covered by the pinned candidate run and
+must not be overwritten or committed as this session's work.
 `GET /api/collections` is committed as `7c6e3651` with LIKE filters,
 qualified names, unnamed entries and committed `collection_compaction_bounds`.
 It follows designer commit `16dcb3c6`: no Persist inspection or fallback to physical
@@ -113,7 +122,7 @@ since. The earlier physical-shard implementation was removed, including its Pers
 API changes. Browser/curl examples and filter/transport tests are added. Formatting
 and whitespace checks pass. Strict environmentd all-target Clippy passes for the
 final catalog-frontier implementation. Its HTTP and filter tests compile but have
-not executed. The lifecycle witness needs a matching product.
+not executed. The lifecycle witness passes on the matching CI141217 product.
 
 CI141151 on prior head `9062a348` built both architectures. Rust tests stopped at
 compilation: the catalog debug/open test formatters omitted `adapter_runtimes`,
@@ -125,11 +134,9 @@ and accepted with cargo-insta. The original debug/open tests now pass. Runtime
 publication and authority/cleanup tests also pass (two tests). The full CI container
 command and HTTP/readiness unit tests remain unexecuted.
 
-Scratch authentication was rechecked and remains expired. Local disk pressure
-was resolved by the authorized cache cleanup. Targeted compilation and snapshot
-checks can resume locally. Replica policy, interrupted initialization, deployment
-coexistence and backend acceptance remain open. No M3 completion or
-new-product runtime claim is justified.
+Replica policy, interrupted initialization, deployment coexistence and full backend
+acceptance remain open. The current candidate's lifecycle witness is verified, but
+it does not establish M3 completion.
 
 Evidence: `runtime-review-resolution.md`, `runtime-reviewed-clippy.log`,
 `runtime-builtin-tests.log`, `lifecycle-review-resolution.md` and the earlier
