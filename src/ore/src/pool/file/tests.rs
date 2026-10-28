@@ -653,3 +653,22 @@ fn concurrent_allocations_all_find_punchable_room() {
     );
     assert!(s.allocated_bytes() <= s.capacity_bytes());
 }
+
+#[mz_ore::test]
+fn derived_capacity_floor() {
+    const GIB: u64 = 1 << 30;
+    let largest = 4 << 20;
+    assert_eq!(derived_capacity(0, largest), None);
+    assert_eq!(derived_capacity(GIB, largest), None, "all headroom");
+    assert_eq!(
+        derived_capacity(GIB + (2 << 20), largest),
+        None,
+        "less than one largest slot"
+    );
+    assert_eq!(derived_capacity(GIB + (4 << 20), largest), Some(4 << 20));
+    assert_eq!(
+        derived_capacity(100 * GIB, largest),
+        Some(98 * GIB),
+        "2% headroom above 50 GiB"
+    );
+}
