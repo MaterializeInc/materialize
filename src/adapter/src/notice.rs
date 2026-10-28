@@ -126,6 +126,7 @@ pub enum AdapterNotice {
         url: url::Url,
     },
     DroppedInUseIndex(DroppedInUseIndex),
+    DroppedIndexReadByInFlightStatements(InFlightIndexReaders),
     PerReplicaLogRead {
         log_names: Vec<String>,
     },
@@ -218,7 +219,8 @@ impl AdapterNotice {
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
             AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
-            AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
+            AdapterNotice::DroppedInUseIndex { .. } => Severity::Warning,
+            AdapterNotice::DroppedIndexReadByInFlightStatements(_) => Severity::Notice,
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
             AdapterNotice::StartupOnlyVarUpdated { .. } => Severity::Warning,
@@ -243,6 +245,12 @@ impl AdapterNotice {
                     "duration_us": u64::try_from(time.elapsed.as_micros()).unwrap_or(u64::MAX),
                 })
                 .to_string(),
+            ),
+            AdapterNotice::DroppedInUseIndex(..) => Some(
+                "The index no longer appears in the catalog, but it is still maintained, using \
+                 memory and CPU, until those objects are dropped or recreated, or replanned at \
+                 the next restart. The drop was allowed because enable_drop_in_use_index is set."
+                    .into(),
             ),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
                 "Adding replicas to the cluster does not make these sources more fault tolerant \
@@ -290,7 +298,7 @@ impl AdapterNotice {
                     .into(),
             ),
             AdapterNotice::OptimizerNotice { notice: _, hint } => Some(hint.clone()),
-            AdapterNotice::DroppedInUseIndex(..) => Some("To free up the resources used by the index, recreate all the above-mentioned objects.".into()),
+            AdapterNotice::DroppedInUseIndex(..) => Some("Drop and recreate those objects to free the index's resources.".into()),
             AdapterNotice::IntrospectionClusterUsage => Some("Use the new name instead.".into()),
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Some("Use the new name instead.".into()),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
@@ -348,7 +356,10 @@ impl AdapterNotice {
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
             AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::from_code("MZ005"),
             AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
-            AdapterNotice::DroppedInUseIndex { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::DroppedInUseIndex { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedIndexReadByInFlightStatements(_) => {
+                SqlState::SUCCESSFUL_COMPLETION
+            }
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
@@ -514,8 +525,17 @@ impl fmt::Display for AdapterNotice {
             }) => {
                 write!(
                     f,
-                    "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!",
+                    "index {} was dropped, but these objects still read from it: {}",
+                    index_name.quoted(),
                     separated(", ", dependant_objects)
+                )
+            }
+            AdapterNotice::DroppedIndexReadByInFlightStatements(readers) => {
+                write!(
+                    f,
+                    "index {} is still read by transient dataflows for {}. Those dataflows end when their statements finish, and the index is maintained until then.",
+                    readers.index_name.quoted(),
+                    readers.describe_statements()
                 )
             }
             AdapterNotice::PerReplicaLogRead { log_names } => {
@@ -601,6 +621,35 @@ impl fmt::Display for AdapterNotice {
 pub struct DroppedInUseIndex {
     pub index_name: String,
     pub dependant_objects: Vec<String>,
+}
+
+/// One-shot dataflows that read from a dropped index, by the kind of statement that owns them.
+#[derive(Clone, Debug, Default)]
+pub struct InFlightIndexReaders {
+    pub index_name: String,
+    pub subscribes: usize,
+    pub copy_tos: usize,
+    pub selects: usize,
+    /// Dataflows the system installed itself, such as introspection subscribes.
+    pub system: usize,
+}
+
+impl InFlightIndexReaders {
+    fn describe_statements(&self) -> String {
+        fn part(count: usize, what: &str) -> Option<String> {
+            let plural = if count == 1 { "" } else { "s" };
+            (count > 0).then(|| format!("{count} in-progress {what}{plural}"))
+        }
+        [
+            part(self.subscribes, "SUBSCRIBE statement"),
+            part(self.copy_tos, "COPY TO statement"),
+            part(self.selects, "SELECT statement"),
+            part(self.system, "system dataflow"),
+        ]
+        .into_iter()
+        .flatten()
+        .join(", ")
+    }
 }
 
 impl From<PlanNotice> for AdapterNotice {
