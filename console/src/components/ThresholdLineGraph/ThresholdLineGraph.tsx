@@ -126,6 +126,7 @@ const ThresholdLineGraphInner = <Datum,>(
   const step = props.thresholdStep ?? DEFAULT_THRESHOLD_STEP;
   const minThreshold = props.minThreshold ?? 0;
 
+  const plotClipId = React.useId();
   const [isDragging, setIsDragging] = React.useState(false);
   const [isFocused, setIsFocused] = React.useState(false);
 
@@ -316,23 +317,32 @@ const ThresholdLineGraphInner = <Datum,>(
         })}
       />
 
-      {orderedLines.map((line) => {
-        const highlighted = isHighlighted(line);
-        return (
-          <LinePath
-            key={line.key}
-            data={data}
-            stroke={
-              highlighted ? lineColors.get(line.key) : colors.border.secondary
-            }
-            strokeWidth={highlighted ? 2 : 1}
-            strokeLinejoin="round"
-            defined={(d) => line.yAccessor(d) !== null}
-            x={(d) => xScale(xAccessor(d))}
-            y={(d) => yScale(line.yAccessor(d) ?? 0)}
-          />
-        );
-      })}
+      <defs>
+        <clipPath id={plotClipId}>
+          <rect x={plot.x} y={plot.y} width={plot.width} height={plot.height} />
+        </clipPath>
+      </defs>
+      {/* A point can fall outside the time range, such as a bin that starts
+          before it, and would otherwise draw over the axes. */}
+      <g clipPath={`url(#${plotClipId})`}>
+        {orderedLines.map((line) => {
+          const highlighted = isHighlighted(line);
+          return (
+            <LinePath
+              key={line.key}
+              data={data}
+              stroke={
+                highlighted ? lineColors.get(line.key) : colors.border.secondary
+              }
+              strokeWidth={highlighted ? 2 : 1}
+              strokeLinejoin="round"
+              defined={(d) => line.yAccessor(d) !== null}
+              x={(d) => xScale(xAccessor(d))}
+              y={(d) => yScale(line.yAccessor(d) ?? 0)}
+            />
+          );
+        })}
+      </g>
 
       <Line
         from={{ x: plot.x, y: thresholdY }}

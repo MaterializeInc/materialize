@@ -68,14 +68,26 @@ function renderGraph(overrides: { threshold?: number; onChange?: () => void }) {
 }
 
 /**
- * The line paths, which are the only direct `path` children of the svg. The
- * axes and grid render theirs inside `g` wrappers.
+ * The line paths, the direct `path` children of the clipped group. The axes
+ * and grid render theirs inside their own `g` wrappers.
  */
 function linePaths(container: HTMLElement) {
-  return [...container.querySelectorAll("svg > path")];
+  return [...container.querySelectorAll("svg > g[clip-path] > path")];
 }
 
 describe("ThresholdLineGraph", () => {
+  it("clips the lines to the plot", async () => {
+    // A bin that starts before the range would otherwise draw over the y axis.
+    const { container } = await renderGraph({});
+
+    const clipped = container.querySelector("g[clip-path]");
+    expect(clipped?.querySelectorAll(":scope > path")).toHaveLength(
+      LINES.length,
+    );
+    const id = clipped?.getAttribute("clip-path")?.match(/#([^)]+)/)?.[1];
+    expect(container.querySelector(`clipPath[id="${id}"] rect`)).not.toBeNull();
+  });
+
   it("leaves room above the highest reading", async () => {
     // The data peaks at 5, a round number the axis would otherwise end on,
     // drawing that line along the graph's top border.

@@ -24,6 +24,7 @@ import {
 import React from "react";
 
 import { isSystemCluster } from "~/api/materialize";
+import { LATEST_READING_INTERVAL_MS } from "~/api/materialize/freshness/lagHistory";
 import Alert from "~/components/Alert";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import ErrorBox from "~/components/ErrorBox";
@@ -40,6 +41,7 @@ import {
   useThresholdControl,
 } from "~/components/ThresholdLineGraph/useThresholdControl";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
+import { useNow } from "~/hooks/useNow";
 import { ClustersIcon, SchemaIcon } from "~/icons";
 import {
   MainContentContainer,
@@ -72,6 +74,7 @@ import {
 } from "./freshnessRows";
 import { FreshnessStatboxes } from "./FreshnessStatboxes";
 import { FreshnessTable } from "./FreshnessTable";
+import { fitToRange } from "./graphWindow";
 import {
   HydrationCounts,
   inFreshnessScope,
@@ -199,6 +202,13 @@ const FreshnessContent = ({
   const { snapshotComplete } = useAllObjects();
   const objectIds = objects.map((object) => object.objectId);
   const freshness = useClusterFreshness({ lookbackMs, objects });
+  // The graph ends at now, advanced each minute with "Now", not at the last
+  // fetch, which at 24 hours can be a whole bin (24 minutes) old.
+  const now = useNow(LATEST_READING_INTERVAL_MS);
+  const graphData = React.useMemo(
+    () => freshness.data && fitToRange(freshness.data, lookbackMs, now),
+    [freshness.data, lookbackMs, now],
+  );
   const latest = useLatestLag(objectIds);
   const percentiles = useObjectLagPercentiles({ objectIds, lookbackMs });
   const hydration = useFreshnessHydration(objectIds);
@@ -253,14 +263,11 @@ const FreshnessContent = ({
         predicate={predicate}
         setPredicate={setPredicate}
       />
-      {freshness.data &&
-      latest.data &&
-      percentiles.data &&
-      objects.length > 0 ? (
+      {graphData && latest.data && percentiles.data && objects.length > 0 ? (
         // A failed hydration request leaves the column at "—" rather than
         // taking the page down: the lag readings are what the page is for.
         <FreshnessView
-          data={freshness.data}
+          data={graphData}
           latestByObjectId={latest.data}
           percentilesByObjectId={percentiles.data}
           hydrationByObjectId={hydration.data ?? NO_HYDRATION}
