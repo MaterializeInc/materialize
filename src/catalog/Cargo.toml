@@ -49,9 +49,9 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-transform = { path = "../transform" }
-openssl.workspace = true
 paste.workspace = true
 prometheus.workspace = true
+rand.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -71,7 +71,6 @@ mz-catalog-protos = { path = "../catalog-protos", features = ["proptest"] }
 mz-repr = { path = "../repr", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true
-rand.workspace = true
 
 [features]
 default = []
