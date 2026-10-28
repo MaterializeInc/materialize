@@ -830,9 +830,22 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Enables enforcement of the heap size limits that `max_query_heap_size` supplies.
+///
+/// Enabling takes effect on replicas created afterwards, because a replica renders the watchdog
+/// dataflow only when it initializes logging. Disabling takes effect immediately, including for
+/// dataflows that already carry a limit.
+pub const ENABLE_COMPUTE_HEAP_SIZE_LIMIT: Config<bool> = Config::new(
+    "enable_compute_heap_size_limit",
+    false,
+    "Whether to render the watchdog dataflow that enforces per-dataflow heap size limits.",
+    ParameterScope::Replica,
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
+        .add(&ENABLE_COMPUTE_HEAP_SIZE_LIMIT)
         .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
