@@ -42,10 +42,20 @@ The `HEADERS` option for Kafka sinks and the `materialize-sink-id` header, both 
 
 To see how a downstream loader can use the `materialize-sink-id` header to expose only fully committed timestamps, see [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/).
 
+### Safely drop upstream `NOT NULL` constraints in your MySQL sources {#v26.48-exclude-not-null-constraints}
+Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a MySQL source, as it already did for PostgreSQL sources. Every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
+
+```mzsql
+CREATE TABLE orders
+  FROM SOURCE mysql_source (REFERENCE mydb.orders)
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
+```
+
+For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/mysql/) for MySQL and the guide on [excluding nullability constraints](/ingest-data/mysql/source-versioning/#excluding-nullability-constraints).
+
 ### Improvements {#v26.48-improvements}
 - **New cluster details page on Self-Managed**: The [redesigned cluster details page](#v26.47-cluster-details-page) is now available on Materialize Self-Managed. To try it, open a cluster and select **Show the new cluster details page** in the breadcrumb bar.
 - **No Kubernetes restart backoff during zero-downtime upgrade catch-up**: A read-only `environmentd` that reboots to pick up DDL changes while it catches up now restarts inside its container instead of exiting it, so Kubernetes no longer applies crash-restart backoff to the repeated reboots a zero-downtime upgrade can need.
-- **`EXCLUDE ALL NOT NULL CONSTRAINTS` for MySQL source tables**: `CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE ALL NOT NULL CONSTRAINTS` against MySQL sources, which ignores the upstream `NOT NULL` constraints and makes the corresponding Materialize columns nullable, matching the PostgreSQL behavior added in v26.47.0; columns of a retained primary key stay `NOT NULL`, and a source type without support now rejects the option instead of silently ignoring it.
 - **Bounded replication slot creation for PostgreSQL sources**: Creating a PostgreSQL source's replication slot is now bounded by a one-minute timeout, applied as the upstream session's `lock_timeout` and configurable, so an upstream transaction holding the slot creation open surfaces an error the source can resume from rather than blocking it indefinitely; the timeout has no effect when the upstream is a physical standby.
 - **Faster progress tracking for sources with many tables**: A source now updates the committed progress of each of its tables only when that table has advanced, rather than walking all of them on every invocation, which on an idle source with 1,000 tables cut total source dataflow time by 40% (129s to 77s of operator time over a two-minute sample on an eight-worker replica).
 - **Fewer Kafka clients on replicas running many sources**: A worker now creates a Kafka reader consumer only once it is responsible for a partition of the source's topic, instead of one per source per worker, which on a four-worker replica with 11 mostly single-partition sources cut the replica's Kafka clients from 55 to 24; each consumer runs a thread per broker, so the old count was what drove the CPU throttling and degraded freshness seen with a few hundred sources on one replica.
