@@ -194,6 +194,7 @@ The recorder's parameters are dyncfgs:
 * Virtual arrival interval, default 1 ms.
 * Period interval, default 1 minute.
 * Retention interval, default 30 days.
+* Restart policy, `hole` or `charge`, default `hole`.
 
 ## Left to the implementer
 
