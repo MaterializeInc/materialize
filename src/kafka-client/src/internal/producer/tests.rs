@@ -106,6 +106,25 @@ impl ProducerContext for Ctx {
     }
 }
 
+/// Like [`Ctx`], with message contents in successful delivery reports.
+#[derive(Clone, Default)]
+struct FullCtx(Ctx);
+
+impl ClientContext for FullCtx {}
+
+impl ProducerContext for FullCtx {
+    type DeliveryOpaque = usize;
+    const DELIVERY_REPORT_CONTENTS: bool = true;
+
+    fn delivery(&self, result: &DeliveryResult<'_>, opaque: usize) {
+        if let Ok(m) = result {
+            // Contents carry the create time.
+            assert!(matches!(m.timestamp(), crate::message::Timestamp::CreateTime(t) if t > 0));
+        }
+        self.0.delivery(result, opaque)
+    }
+}
+
 impl Recorder {
     fn reports(&self) -> Vec<Report> {
         self.reports.lock().unwrap().clone()
@@ -1175,6 +1194,64 @@ fn statistics_report_producer_fields() {
         let eos = stats.eos.unwrap();
         assert_eq!(eos.txn_state, "Ready");
         assert!(stats.brokers.values().any(|b| b.tx > 0));
+    }
+}
+
+#[mz_ore::test]
+fn delivery_reports_with_contents_and_acks_zero() {
+    for brokers in test_brokers() {
+        let ctx = FullCtx::default();
+        let rec = Arc::clone(&ctx.0.0);
+        let p: ThreadedProducer<FullCtx> = ThreadedProducer::from_config_and_context(
+            &config(&brokers, &[("compression.type", "lz4")]),
+            ctx,
+        )
+        .unwrap();
+        let topic = unique("kc-contents");
+        create_topic(&cluster_of(&p), &topic, 1);
+        let _drop = DropTopics::new(&cluster_of(&p), &[&topic]);
+        for i in 0..100 {
+            let key = format!("k{i}");
+            let value = "v".repeat(i);
+            p.send(
+                BaseRecord::<[u8], [u8], usize>::with_opaque_to(&topic, i)
+                    .partition(0)
+                    .key(key.as_bytes())
+                    .payload(value.as_bytes()),
+            )
+            .unwrap();
+        }
+        p.flush(Duration::from_secs(30)).unwrap();
+        let reports = rec.reports();
+        assert_eq!(reports.len(), 100);
+        for (i, r) in reports.iter().enumerate() {
+            assert_eq!(r.opaque, i);
+            assert_eq!(r.offset, i64::try_from(i).unwrap());
+            assert_eq!(r.key.as_deref(), Some(format!("k{i}").as_bytes()));
+            assert_eq!(r.payload.as_deref(), Some("v".repeat(i).as_bytes()));
+        }
+
+        // acks=0: delivered once written, without offsets.
+        let (p0, rec0) = producer(&brokers, &[("acks", "0")]);
+        for i in 0..10 {
+            p0.send(
+                BaseRecord::<(), [u8], usize>::with_opaque_to(&topic, i)
+                    .partition(0)
+                    .payload(b"zero".as_slice()),
+            )
+            .unwrap();
+        }
+        p0.flush(Duration::from_secs(30)).unwrap();
+        let reports = rec0.reports();
+        assert_eq!(reports.len(), 10);
+        assert!(
+            reports
+                .iter()
+                .all(|r| r.error.is_none() && r.offset == -1001)
+        );
+        wait_for("acks=0 records", Duration::from_secs(10), || {
+            fetch_all(&cluster_of(&p), &topic, 0, false).len() == 110
+        });
     }
 }
 

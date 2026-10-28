@@ -72,8 +72,9 @@ pub fn current_time_millis() -> i64 {
 /// delivery report.
 ///
 /// NOTE: rust-rdkafka's trait converts to and from raw pointers. This one is
-/// a marker trait, because the engine stores opaques as `Box<dyn Any + Send>`,
-/// which also requires `'static`.
+/// a marker trait: the producer keeps opaques by value next to their queued
+/// records and reports them from its I/O tasks, which requires `Send` and
+/// `'static`.
 pub trait IntoOpaque: Send + Sync + Sized + 'static {}
 
 impl IntoOpaque for () {}
