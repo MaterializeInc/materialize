@@ -353,7 +353,8 @@ def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> Non
             "ssh-bastion-host",
             "bash",
             "-c",
-            f"echo '{public_key}' > /etc/authorized_keys/mz",
+            # sshd rejects a group- or world-writable key file.
+            f"echo '{public_key}' > /etc/authorized_keys/mz && chmod 644 /etc/authorized_keys/mz",
         )
 
         c.run_testdrive_files("--no-reset", "kafka-source.td")
