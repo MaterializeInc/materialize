@@ -20,6 +20,7 @@ use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine};
 
 use super::*;
+use crate::compute_state::description_iterator::DescriptionRange;
 
 /// The time at which the peeks in these tests read.
 pub(crate) const PEEK_TIMESTAMP: Timestamp = Timestamp::new(1);
@@ -231,5 +232,141 @@ fn a_limit_adopted_mid_walk_counts_the_keys_already_examined() {
     assert_eq!(
         scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel),
         ErrorScanStep::Finished(Ok(errors.len()))
+    );
+}
+
+fn frontier(time: u64) -> Antichain<Timestamp> {
+    Antichain::from_elem(Timestamp::new(time))
+}
+
+/// Walks a single-batch error trace holding `updates` over `range`, and returns the updates the
+/// walk emits.
+fn scan_description(
+    updates: ErrorUpdates,
+    range: DescriptionRange,
+) -> Vec<(DataflowErrorSer, Timestamp, Diff)> {
+    let mut scan = ErrorScan::from_batches(vec![error_batch(updates)]);
+    let mut fuel = usize::MAX;
+    let mut emitted = Vec::new();
+    let mut room = usize::MAX;
+    assert!(scan.step_description(&range, &mut fuel, &mut room, &mut emitted));
+    emitted
+}
+
+/// A first description `[as_of, upper)`.
+fn first(as_of: u64, upper: u64) -> DescriptionRange {
+    DescriptionRange::First {
+        as_of: frontier(as_of),
+        upper: frontier(upper),
+    }
+}
+
+fn later(lower: u64, upper: u64) -> DescriptionRange {
+    DescriptionRange::Later {
+        lower: frontier(lower),
+        upper: frontier(upper),
+    }
+}
+
+#[mz_ore::test]
+fn a_first_description_accumulates_errors_into_the_as_of() {
+    let err = error(0);
+    let updates = vec![
+        ((err.clone(), ()), Timestamp::new(2), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(4), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(6), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(8), Diff::ONE),
+    ];
+    assert_eq!(
+        scan_description(updates, first(5, 8)),
+        vec![
+            (err.clone(), Timestamp::new(5), Diff::from(2)),
+            (err, Timestamp::new(6), Diff::ONE),
+        ],
+        "updates before the as-of meet at it, and the upper bounds the range"
+    );
+}
+
+#[mz_ore::test]
+fn a_later_description_emits_its_errors_at_their_times() {
+    let err = error(0);
+    let updates = vec![
+        ((err.clone(), ()), Timestamp::new(1), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(4), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(8), Diff::ONE),
+    ];
+    assert_eq!(
+        scan_description(updates, later(3, 6)),
+        vec![(err, Timestamp::new(4), Diff::ONE)]
+    );
+}
+
+#[mz_ore::test]
+fn a_retraction_inside_a_later_description_is_emitted() {
+    let err = error(0);
+    // The insertion precedes the description, so inside it only the retraction remains.
+    let updates = vec![
+        ((err.clone(), ()), Timestamp::new(1), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(4), Diff::MINUS_ONE),
+    ];
+    assert_eq!(
+        scan_description(updates, later(3, 6)),
+        vec![(err, Timestamp::new(4), Diff::MINUS_ONE)]
+    );
+}
+
+#[mz_ore::test]
+fn errors_that_cancel_in_the_first_description_are_not_emitted() {
+    let err = error(0);
+    let updates = vec![
+        ((err.clone(), ()), Timestamp::new(1), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(4), Diff::MINUS_ONE),
+    ];
+    assert_eq!(scan_description(updates, first(5, 8)), vec![]);
+}
+
+/// The walk continues past the first error, and slicing it neither drops nor repeats one.
+#[mz_ore::test]
+fn the_description_walk_emits_every_error_when_sliced() {
+    let errors: Vec<DataflowErrorSer> = (0..16).map(error).collect();
+    let updates: Vec<_> = errors.iter().flat_map(holding).collect();
+    let expected = scan_description(updates.clone(), later(0, 5));
+    assert_eq!(expected.len(), errors.len());
+
+    let mut scan = ErrorScan::from_batches(vec![error_batch(updates)]);
+    let range = later(0, 5);
+    let mut emitted = Vec::new();
+    let mut calls = 0;
+    loop {
+        calls += 1;
+        let mut fuel = 3;
+        let mut room = usize::MAX;
+        if scan.step_description(&range, &mut fuel, &mut room, &mut emitted) {
+            break;
+        }
+        assert_eq!(fuel, 0, "a walk that stops early spent its fuel");
+    }
+    assert!(calls > 1, "the budget did not slice the walk");
+    assert_eq!(emitted, expected);
+}
+
+/// The walk stops once the updates it appended exhaust its room, after the error that did so.
+#[mz_ore::test]
+fn the_description_walk_stops_when_its_room_is_spent() {
+    let errors: Vec<DataflowErrorSer> = (0..16).map(error).collect();
+    let updates: Vec<_> = errors.iter().flat_map(holding).collect();
+    let mut scan = ErrorScan::from_batches(vec![error_batch(updates)]);
+    let range = later(0, 5);
+    let mut emitted = Vec::new();
+    let mut fuel = usize::MAX;
+    let mut room = 1;
+    assert!(!scan.step_description(&range, &mut fuel, &mut room, &mut emitted));
+    assert_eq!((emitted.len(), room), (1, 0));
+    let mut room = usize::MAX;
+    assert!(scan.step_description(&range, &mut fuel, &mut room, &mut emitted));
+    assert_eq!(
+        emitted.len(),
+        errors.len(),
+        "the walk resumes after the error"
     );
 }
