@@ -1240,38 +1240,20 @@ impl ComputeController {
         let instance = self
             .instance(instance_id)
             .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
-        let mut trees = Vec::new();
-
-        for id in dataflow
-            .imported_index_ids()
-            .filter(|id| used_imports.contains(id))
-        {
-            let tree = instance
-                .get_freshness_tree(id)
-                .map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
-            trees.push(tree);
-        }
-
-        'source: for id in dataflow
-            .imported_source_ids()
-            .filter(|id| used_imports.contains(id))
-        {
-            // Compute objects, like storage sinks, carry their own tree.
-            for instance in self.instances.values() {
-                if let Ok(tree) = instance.get_freshness_tree(id) {
-                    trees.push(tree);
-                    continue 'source;
-                }
-            }
-
-            // Not a compute object: Consult the storage collections controller.
-            trees.push(self.storage_collections.freshness_tree(id));
-        }
-
-        Ok(merge_freshness_trees(
-            trees,
+        walk_freshness_trees(
+            dataflow.imported_index_ids(),
+            dataflow.imported_source_ids(),
+            used_imports,
             dataflow.refresh_schedule.as_ref(),
-        ))
+            |id| instance.get_freshness_tree(id),
+            |id| {
+                // Compute objects, like storage sinks, carry their own tree.
+                self.instances
+                    .values()
+                    .find_map(|instance| instance.get_freshness_tree(id).ok())
+            },
+            |id| self.storage_collections.freshness_tree(id),
+        )
     }
 
     /// Processes the work queued by [`ComputeController::ready`].
@@ -1513,6 +1495,35 @@ struct Collection {
     time_dependence: Option<TimeDependence>,
     /// How the collection's frontier follows arrival time. None indicates no time dependence.
     freshness_tree: Option<FreshnessTree>,
+}
+
+/// Collects the freshness trees of the used imports of a dataflow and merges them under its
+/// refresh schedule.
+///
+/// `index_tree` resolves index imports and fails if the collection is missing. `compute_tree`
+/// resolves a source import that is backed by a compute object, `None` if it is not. Other
+/// source imports are resolved by `storage_tree`.
+fn walk_freshness_trees(
+    index_ids: impl Iterator<Item = GlobalId>,
+    source_ids: impl Iterator<Item = GlobalId>,
+    used_imports: &BTreeSet<GlobalId>,
+    schedule: Option<&RefreshSchedule>,
+    index_tree: impl Fn(GlobalId) -> Result<Option<FreshnessTree>, CollectionMissing>,
+    compute_tree: impl Fn(GlobalId) -> Option<Option<FreshnessTree>>,
+    storage_tree: impl Fn(GlobalId) -> Option<FreshnessTree>,
+) -> Result<Option<FreshnessTree>, TimeDependenceError> {
+    let mut trees = Vec::new();
+
+    for id in index_ids.filter(|id| used_imports.contains(id)) {
+        let tree = index_tree(id).map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
+        trees.push(tree);
+    }
+
+    for id in source_ids.filter(|id| used_imports.contains(id)) {
+        trees.push(compute_tree(id).unwrap_or_else(|| storage_tree(id)));
+    }
+
+    Ok(merge_freshness_trees(trees, schedule))
 }
 
 /// Merges the freshness trees of a dataflow's imports.
