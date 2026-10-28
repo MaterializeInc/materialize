@@ -451,6 +451,7 @@ impl<C: ProducerContext> ProducerInner<C> {
                 Err(e) => classify(e.code()),
             };
             let outcome = self.idempotent_outcome(&mut st, &s, outcome, broker_id, &mut fx);
+            let fatal = st.eos.fatal.is_some();
             touched.push(s.key);
             let count = s.batch.len();
             let sequenced = s.batch.sequenced;
@@ -501,7 +502,8 @@ impl<C: ProducerContext> ProducerInner<C> {
                             .config
                             .message_timeout
                             .is_some_and(|t| batch.created + t <= now);
-                        if expired || (counts && batch.retries >= self.config.retries) {
+                        // After a fatal error nothing is sent anymore.
+                        if fatal || expired || (counts && batch.retries >= self.config.retries) {
                             let code = if expired {
                                 RDKafkaErrorCode::MessageTimedOut
                             } else {

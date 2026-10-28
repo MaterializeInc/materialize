@@ -812,6 +812,16 @@ impl<D> State<D> {
     /// stay to keep sequence numbers gapless; they are delivered or fail on
     /// their own.
     pub fn purge_unsent(&mut self, fx: &mut Effects<D>) {
+        self.purge(false, fx);
+    }
+
+    /// Like [`State::purge_unsent`], also removing batches waiting to be
+    /// retried, after a fatal error, when nothing is sent anymore.
+    pub fn purge_queued(&mut self, fx: &mut Effects<D>) {
+        self.purge(true, fx);
+    }
+
+    fn purge(&mut self, include_sent: bool, fx: &mut Effects<D>) {
         for topic in &mut self.topics {
             let name = &topic.name;
             for m in topic.ua.drain(..) {
@@ -826,8 +836,12 @@ impl<D> State<D> {
             for (index, p) in topic.partitions.iter_mut().enumerate() {
                 let partition = i32::try_from(index).expect("partition count fits i32");
                 p.seal();
-                let sent = p.ready.iter().take_while(|b| b.attempts > 0).count();
-                for batch in p.ready.drain(sent..) {
+                let keep = if include_sent {
+                    0
+                } else {
+                    p.ready.iter().take_while(|b| b.attempts > 0).count()
+                };
+                for batch in p.ready.drain(keep..) {
                     fx.fail(
                         name,
                         partition,

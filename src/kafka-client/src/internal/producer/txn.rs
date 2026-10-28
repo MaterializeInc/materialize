@@ -387,7 +387,7 @@ impl<D> State<D> {
             self.eos
                 .set_result(Some(RDKafkaError::new(code, reason).mark_fatal()));
         }
-        self.purge_unsent(fx);
+        self.purge_queued(fx);
         fx.wake_all = true;
         fx.wake_eos = true;
     }
