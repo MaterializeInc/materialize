@@ -50,18 +50,41 @@ Fourteen scoped launcher Python tests, Black and Ruff pass. Actual startup/adopt
 through plain `bin/controllerd` remains unverified. Default development builds must
 work for demos, with `--optimized` optional as in `bin/environmentd`.
 Scratch SSO is still expired. User must run
-`bin/scratch login`. Only 5.6 GiB is free on the editing VM, so do not start product
-builds or another broad codegen run here. Do not replace the approved worker.
+`bin/scratch login`. The user authorized local cleanup. Removed only the Rust
+incremental cache after checking no builds were active, leaving 71 GiB free.
+Keep product builds and broad codegen on the approved worker.
 
 Next: obtain the latest candidate's matching CI product and run
 `sql-http-adapter-lifecycle-smoke.py`, including self-drop, zero-adapter restart
-and HTTP recovery. This private script is syntax-checked, not executed. Extend it
-with SQL status/endpoint assertions, and separately exercise the public launcher.
-Implement `GET /api/collections` from the current design: filtered catalog-known
-Persist collections and their committed combined catalog since, not physical
-shard since. That endpoint is not implemented yet. Replica policy,
-interrupted initialization, deployment coexistence and backend acceptance remain
-open. No M3 completion or new-product runtime claim is justified.
+and HTTP recovery. The private script now also checks SQL named endpoints,
+backend status/readiness, dropped-observation cleanup, LIKE collection filters and
+collection inspection after a zero-adapter restart. It is syntax-checked, not
+executed, and requires a product containing the pending collection endpoint.
+Separately exercise the public launcher and its managed pubsub path.
+`GET /api/collections` is committed as `7c6e3651` with LIKE filters,
+qualified names, unnamed entries and committed `collection_compaction_bounds`.
+It follows designer commit `16dcb3c6`: no Persist inspection or fallback to physical
+since. The earlier physical-shard implementation was removed, including its Persist
+API changes. Browser/curl examples and filter/transport tests are added. Formatting
+and whitespace checks pass. Strict environmentd all-target Clippy passes for the
+final catalog-frontier implementation. Its HTTP and filter tests compile but have
+not executed. The lifecycle witness needs a matching product.
+
+CI141151 on published `9062a348` built both architectures. Rust tests stopped at
+compilation: the catalog debug/open test formatters omitted `adapter_runtimes`,
+and a new runtime test used a forbidden Option unwrap. The exact scoped command
+`cargo clippy -p mz-catalog --all-targets -j 2 -- -D warnings` reproduced all three
+and passes after the fixes. Both formatters include the field rather than ignoring
+it. Both exact snapshot failures were reproduced, regenerated through the tests
+and accepted with cargo-insta. The original debug/open tests now pass. Runtime
+publication and authority/cleanup tests also pass (two tests). The full CI container
+command and HTTP/readiness unit tests remain unexecuted.
+
+Scratch authentication was rechecked and remains expired. Local disk pressure
+was resolved by the authorized cache cleanup. Targeted compilation and snapshot
+checks can resume locally. Replica policy, interrupted initialization, deployment
+coexistence and backend acceptance remain open. No M3 completion or
+new-product runtime claim is justified.
 
 Evidence: `runtime-review-resolution.md`, `runtime-reviewed-clippy.log`,
 `runtime-builtin-tests.log`, `lifecycle-review-resolution.md` and the earlier

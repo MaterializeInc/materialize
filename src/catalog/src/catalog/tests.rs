@@ -2551,7 +2551,7 @@ async fn test_adapter_runtime_publication() {
         .adapter_declarations()
         .values()
         .find(|adapter| adapter.name == "observed")
-        .unwrap()
+        .expect("created adapter declaration")
         .id;
     let generation = catalog.state().deployment_generation();
     let mut runtime = crate::durable::AdapterRuntime {

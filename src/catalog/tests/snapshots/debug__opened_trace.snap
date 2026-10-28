@@ -532,6 +532,9 @@ Trace {
             ),
         ],
     },
+    adapter_runtimes: CollectionTrace {
+        values: [],
+    },
     cluster_replica_declarations: CollectionTrace {
         values: [],
     },

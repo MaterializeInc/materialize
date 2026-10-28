@@ -117,6 +117,7 @@ impl Debug for StableSnapshot<'_> {
             network_policies,
             cluster_replicas,
             adapter_declarations,
+            adapter_runtimes,
             cluster_replica_declarations,
             cluster_runtimes,
             introspection_sources,
@@ -156,6 +157,7 @@ impl Debug for StableSnapshot<'_> {
             .field("network_policies", &encoded(network_policies))
             .field("cluster_replicas", &encoded(cluster_replicas))
             .field("adapter_declarations", &encoded(adapter_declarations))
+            .field("adapter_runtimes", &encoded(adapter_runtimes))
             .field(
                 "cluster_replica_declarations",
                 &encoded(cluster_replica_declarations),

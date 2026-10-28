@@ -711,6 +711,7 @@ Snapshot {
             size: "1",
         },
     },
+    adapter_runtimes: {},
     cluster_replica_declarations: {},
     cluster_runtimes: {},
     introspection_sources: {},
