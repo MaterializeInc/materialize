@@ -39,7 +39,7 @@ const KINDS = {
   },
   staged: {
     label: "in Materialize, staged",
-    help: "The time Materialize took for the statement, without the commit of its transaction, which comes after it.",
+    help: "The time Materialize took for the statement, without the commit of its transaction.",
   },
 } as const;
 

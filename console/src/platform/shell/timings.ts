@@ -23,7 +23,7 @@ export function getCommandResultCompletedTime(
 
 /**
  * Where a command result's duration is measured from: the previous result's
- * completion, or sending the command when no earlier result has completed.
+ * completion, or sending the command for the first result.
  */
 export function getCommandResultStartTime(
   commandOutput: CommandOutput,

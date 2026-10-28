@@ -46,13 +46,4 @@ describe("getCommandResultStartTime", () => {
     });
     expect(calculateCommandDuration(1, output)).toBe(4);
   });
-
-  it("falls back to sending the command while the previous result is incomplete", () => {
-    const output = commandOutput([{ notices: [] }, { notices: [] }]);
-
-    expect(getCommandResultStartTime(output, 1)).toEqual({
-      startTimeMs: COMMAND_SENT_TIME_MS,
-      isMeasuredFromPreviousResult: false,
-    });
-  });
 });

@@ -82,7 +82,7 @@ describe("describeExecutionTime", () => {
     expect(describeExecutionTime({ kind: "staged", durationMs: 1 })).toEqual({
       label: "In Materialize, staged",
       description:
-        "The time Materialize took for the statement, without the commit of its transaction, which comes after it.",
+        "The time Materialize took for the statement, without the commit of its transaction.",
     });
   });
 
