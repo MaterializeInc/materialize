@@ -347,6 +347,7 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_column_paged_batcher_spill", "false", ["true", "false"]
         ),
+        VariableSystemParameter("enable_subscribe_batched", "true", ["true", "false"]),
         # On by default so CI exercises the columnar accumulable diff layout, which
         # is off in production while it earns trust.
         VariableSystemParameter(

@@ -2038,6 +2038,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_subscribe_batched,
+        desc: "`SUBSCRIBE ... WITH (BATCHED)`",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_within_timestamp_order_by_in_subscribe,
         desc: "`WITHIN TIMESTAMP ORDER BY ..`",
         default: false,

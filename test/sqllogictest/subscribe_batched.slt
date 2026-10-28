@@ -1,0 +1,86 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_envelope_debezium_in_subscribe = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (a int, b int)
+
+statement ok
+CREATE VIEW v AS VALUES (1, 2)
+
+# The feature flag gates BATCHED.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_subscribe_batched = false
+----
+COMPLETE 0
+
+statement error db error: ERROR: `SUBSCRIBE \.\.\. WITH \(BATCHED\)` is not available
+SUBSCRIBE t WITH (BATCHED)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_subscribe_batched = true
+----
+COMPLETE 0
+
+# BATCHED = false is a plain subscribe.
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t WITH (BATCHED = false)
+
+query IIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_diff a b
+
+statement ok
+COMMIT
+
+# BATCHED requires plain diff output.
+
+statement error BATCHED requires plain diff output
+SUBSCRIBE t ENVELOPE UPSERT (KEY (a)) WITH (BATCHED)
+
+statement error BATCHED requires plain diff output
+SUBSCRIBE t WITHIN TIMESTAMP ORDER BY a WITH (BATCHED)
+
+statement error BATCHED implies PROGRESS
+SUBSCRIBE t WITH (BATCHED, PROGRESS = false)
+
+# BATCHED emits progress rows.
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE v WITH (BATCHED)
+
+query IIIII colnames
+FETCH ALL c WITH (timeout = '1s')
+----
+mz_timestamp mz_progressed mz_diff column1 column2
+18446744073709551615  1  NULL  NULL  NULL
+18446744073709551615  0  1     1     2
+
+statement ok
+COMMIT
