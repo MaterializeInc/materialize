@@ -443,6 +443,14 @@ impl CatalogState {
                     diff,
                 );
             }
+            StateUpdateKind::AdapterRuntime(runtime) => {
+                apply_inverted_lookup(
+                    &mut self.adapter_runtimes,
+                    &(runtime.adapter_id, runtime.deployment_generation),
+                    runtime,
+                    diff,
+                );
+            }
             StateUpdateKind::ClusterReplica(cluster_replica) => {
                 self.apply_cluster_replica_update(cluster_replica, diff, retractions);
             }
@@ -1729,6 +1737,7 @@ impl CatalogState {
             StateUpdateKind::ClusterReplica(_)
             | StateUpdateKind::AdapterDeclaration(_)
             | StateUpdateKind::ClusterReplicaDeclaration(_)
+            | StateUpdateKind::AdapterRuntime(_)
             | StateUpdateKind::ClusterRuntime(_) => Vec::new(),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 // Runtime-alterable system objects have real entries in the
@@ -2517,6 +2526,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::IntrospectionSourceIndex(_)
             | StateUpdateKind::AdapterDeclaration(_)
             | StateUpdateKind::ClusterReplicaDeclaration(_)
+            | StateUpdateKind::AdapterRuntime(_)
             | StateUpdateKind::ClusterRuntime(_)
             | StateUpdateKind::ClusterReplica(_)
             | StateUpdateKind::ReplicaSystemConfiguration(_) => push_update(
@@ -2779,6 +2789,7 @@ impl ApplyState {
             | NetworkPolicy(_)
             | AdapterDeclaration(_)
             | ClusterReplicaDeclaration(_)
+            | AdapterRuntime(_)
             | ClusterRuntime(_)
             | ClusterReplica(_)
             | SourceReferences(_)

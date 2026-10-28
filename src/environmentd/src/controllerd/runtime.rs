@@ -16,70 +16,11 @@ use futures::StreamExt;
 use mz_catalog::catalog::{Catalog, CatalogError, Op};
 use mz_catalog::memory::error::ErrorKind;
 use mz_controller::clusters::provisioning::ReplicaProvisioningConfig;
-use mz_orchestrator::ServiceEvent;
 use serde_json::{Value, json};
 
 use super::http::{Action, ApiError, Command};
+use super::observations::Observations;
 use super::provisioning::{AdapterAllocation, AdapterProvisioningConfig};
-use super::{AdapterInventoryEntry, ReplicaInventoryEntry};
-
-#[derive(Default)]
-struct Observations {
-    adapters: BTreeMap<String, AdapterInventoryEntry>,
-    replicas: BTreeMap<String, ReplicaInventoryEntry>,
-    processes: BTreeMap<(String, u64), ServiceEvent>,
-}
-
-impl Observations {
-    fn record(&mut self, event: Result<ServiceEvent, anyhow::Error>) {
-        match event {
-            Ok(event) => {
-                self.processes
-                    .insert((event.service_id.clone(), event.process_id), event);
-            }
-            Err(error) => tracing::warn!(%error, "controller process observation failed"),
-        }
-    }
-
-    fn processes(&self, service: &str) -> Vec<ServiceEvent> {
-        self.processes
-            .iter()
-            .filter(|((id, _), _)| id == service)
-            .map(|(_, event)| event.clone())
-            .collect()
-    }
-
-    fn adapters(
-        &self,
-        catalog: &Catalog,
-        launch: &AdapterProvisioningConfig,
-        sizes: &BTreeMap<String, AdapterAllocation>,
-    ) -> Vec<AdapterInventoryEntry> {
-        let mut desired = super::desired_adapters(catalog, launch, sizes);
-        for entry in &mut desired {
-            if let Some(observed) = self.adapters.get(&entry.service) {
-                entry.endpoints = observed.endpoints.clone();
-                if entry.provisioning_error.is_none() {
-                    entry.provisioning_error = observed.provisioning_error.clone();
-                }
-            }
-            entry.observed_processes = self.processes(&entry.service);
-        }
-        desired
-    }
-
-    fn replicas(&self, catalog: &Catalog, generation: u64) -> Vec<ReplicaInventoryEntry> {
-        let mut desired = super::desired_replicas(catalog, generation);
-        for entry in &mut desired {
-            if let Some(observed) = self.replicas.get(&entry.service) {
-                entry.endpoints = observed.endpoints.clone();
-                entry.provisioning_error = observed.provisioning_error.clone();
-            }
-            entry.observed_processes = self.processes(&entry.service);
-        }
-        desired
-    }
-}
 
 /// Reconciles committed process inventory and serves catalog administration.
 /// Replica-set policy, SQL execution and shared maintenance remain in the children.
@@ -112,7 +53,7 @@ pub async fn run(
     let mut server =
         mz_ore::task::spawn(|| "controller-http", super::http::serve(listener, sender))
             .abort_on_drop();
-    let mut observations = Observations::default();
+    let mut observations = Observations::new()?;
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -120,6 +61,9 @@ pub async fn run(
             result = &mut server => {
                 result?;
                 anyhow::bail!("controller HTTP server stopped");
+            }
+            Some(result) = observations.probes.next(), if !observations.probes.is_empty() => {
+                observations.complete_probe(result, &adapter_launch);
             }
             Some(event) = adapter_events.next() => observations.record(event),
             Some(event) = replica_events.next() => observations.record(event),
@@ -164,7 +108,13 @@ pub async fn run(
                 ).await?.into_iter().map(|entry| (entry.service.clone(), entry)).collect();
                 let desired: BTreeSet<_> = observations.adapters.keys()
                     .chain(observations.replicas.keys()).cloned().collect();
-                observations.processes.retain(|(service, _), _| desired.contains(service));
+                observations.retain(&desired);
+                observations.seed_readiness(&catalog);
+                observations.start_probes(&adapter_launch);
+                match observations.publish(&mut catalog, &adapter_launch, &adapter_sizes).await {
+                    Err(error) if catalog_out_of_sync(&error) => {},
+                    result => result?,
+                }
                 for replica in observations.replicas.values() {
                     if let Some(error) = &replica.provisioning_error {
                         tracing::warn!(replica_id = %replica.replica_id, %error, "replica provisioning failed");

@@ -660,6 +660,92 @@ impl DurableType for ClusterRuntime {
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct AdapterEndpoint {
+    pub listener: String,
+    pub kind: String,
+    pub address: String,
+}
+
+/// Observed deployment-local endpoints, backend status, and SQL readiness.
+/// Optional fields are unobserved when absent. Timestamps are Unix milliseconds.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct AdapterRuntime {
+    pub adapter_id: AdapterId,
+    pub deployment_generation: u64,
+    pub endpoints: Vec<AdapterEndpoint>,
+    pub status: Option<String>,
+    pub reason: Option<String>,
+    pub restart_count: Option<u64>,
+    pub status_changed_at: Option<i64>,
+    pub ready: Option<bool>,
+    pub readiness_error: Option<String>,
+    pub readiness_changed_at: Option<i64>,
+    pub provisioning_error: Option<String>,
+}
+
+impl DurableType for AdapterRuntime {
+    type Key = AdapterRuntimeKey;
+    type Value = AdapterRuntimeValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            self.key(),
+            AdapterRuntimeValue {
+                endpoints: self.endpoints,
+                status: self.status,
+                reason: self.reason,
+                restart_count: self.restart_count,
+                status_changed_at: self.status_changed_at,
+                ready: self.ready,
+                readiness_error: self.readiness_error,
+                readiness_changed_at: self.readiness_changed_at,
+                provisioning_error: self.provisioning_error,
+            },
+        )
+    }
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            adapter_id: key.adapter_id,
+            deployment_generation: key.deployment_generation,
+            endpoints: value.endpoints,
+            status: value.status,
+            reason: value.reason,
+            restart_count: value.restart_count,
+            status_changed_at: value.status_changed_at,
+            ready: value.ready,
+            readiness_error: value.readiness_error,
+            readiness_changed_at: value.readiness_changed_at,
+            provisioning_error: value.provisioning_error,
+        }
+    }
+    fn key(&self) -> Self::Key {
+        AdapterRuntimeKey {
+            adapter_id: self.adapter_id,
+            deployment_generation: self.deployment_generation,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Hash)]
+pub struct AdapterRuntimeKey {
+    pub(crate) adapter_id: AdapterId,
+    pub(crate) deployment_generation: u64,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct AdapterRuntimeValue {
+    pub(crate) endpoints: Vec<AdapterEndpoint>,
+    pub(crate) status: Option<String>,
+    pub(crate) reason: Option<String>,
+    pub(crate) restart_count: Option<u64>,
+    pub(crate) status_changed_at: Option<i64>,
+    pub(crate) ready: Option<bool>,
+    pub(crate) readiness_error: Option<String>,
+    pub(crate) readiness_changed_at: Option<i64>,
+    pub(crate) provisioning_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
@@ -1960,6 +2046,7 @@ pub struct Snapshot {
     pub cluster_replicas: imbl::OrdMap<ClusterReplicaKey, ClusterReplicaValue>,
     pub cluster_replica_declarations:
         imbl::OrdMap<ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue>,
+    pub adapter_runtimes: imbl::OrdMap<AdapterRuntimeKey, AdapterRuntimeValue>,
     pub cluster_runtimes: imbl::OrdMap<ClusterRuntimeKey, ClusterRuntimeValue>,
     pub introspection_sources:
         imbl::OrdMap<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,

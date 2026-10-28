@@ -14,10 +14,11 @@ use mz_proto::TryFromProtoError;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
-    AdapterDeclarationKey, AdapterDeclarationValue, AuditLogKey, ClientIncarnationKey,
-    ClientIncarnationValue, ClientReadRequirementKey, ClientReadRequirementValue,
-    ClientRealization, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue, ClusterReplicaKey,
+    AdapterDeclarationKey, AdapterDeclarationValue, AdapterEndpoint, AdapterRuntimeKey,
+    AdapterRuntimeValue, AuditLogKey, ClientIncarnationKey, ClientIncarnationValue,
+    ClientReadRequirementKey, ClientReadRequirementValue, ClientRealization,
+    ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue, ClusterKey,
+    ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue, ClusterReplicaKey,
     ClusterReplicaValue, ClusterRuntimeKey, ClusterRuntimeValue, ClusterSystemConfigurationKey,
     ClusterSystemConfigurationValue, ClusterValue, CollectionCompactionBoundKey,
     CollectionCompactionBoundValue, CommentKey, CommentValue, ConfigKey, ConfigValue, DatabaseKey,
@@ -1381,6 +1382,67 @@ impl RustType<proto::WrittenPlanValue> for super::WrittenPlanValue {
             revision: proto.revision,
             replica_owner: proto.replica_owner.into_rust()?,
             imports: proto.imports.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::AdapterEndpoint> for AdapterEndpoint {
+    fn into_proto(&self) -> proto::AdapterEndpoint {
+        proto::AdapterEndpoint {
+            listener: self.listener.clone(),
+            kind: self.kind.clone(),
+            address: self.address.clone(),
+        }
+    }
+    fn from_proto(proto: proto::AdapterEndpoint) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            listener: proto.listener,
+            kind: proto.kind,
+            address: proto.address,
+        })
+    }
+}
+
+impl RustType<proto::AdapterRuntimeKey> for AdapterRuntimeKey {
+    fn into_proto(&self) -> proto::AdapterRuntimeKey {
+        proto::AdapterRuntimeKey {
+            adapter_id: self.adapter_id.0,
+            deployment_generation: self.deployment_generation,
+        }
+    }
+    fn from_proto(proto: proto::AdapterRuntimeKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            adapter_id: mz_repr::AdapterId(proto.adapter_id),
+            deployment_generation: proto.deployment_generation,
+        })
+    }
+}
+
+impl RustType<proto::AdapterRuntimeValue> for AdapterRuntimeValue {
+    fn into_proto(&self) -> proto::AdapterRuntimeValue {
+        proto::AdapterRuntimeValue {
+            endpoints: self.endpoints.into_proto(),
+            status: self.status.clone(),
+            reason: self.reason.clone(),
+            restart_count: self.restart_count,
+            status_changed_at: self.status_changed_at,
+            ready: self.ready,
+            readiness_error: self.readiness_error.clone(),
+            readiness_changed_at: self.readiness_changed_at,
+            provisioning_error: self.provisioning_error.clone(),
+        }
+    }
+    fn from_proto(proto: proto::AdapterRuntimeValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            endpoints: proto.endpoints.into_rust()?,
+            status: proto.status,
+            reason: proto.reason,
+            restart_count: proto.restart_count,
+            status_changed_at: proto.status_changed_at,
+            ready: proto.ready,
+            readiness_error: proto.readiness_error,
+            readiness_changed_at: proto.readiness_changed_at,
+            provisioning_error: proto.provisioning_error,
         })
     }
 }

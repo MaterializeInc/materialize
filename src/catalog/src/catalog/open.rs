@@ -506,6 +506,7 @@ impl Catalog {
             adapter_declarations: Default::default(),
             cluster_replica_declarations: Default::default(),
             cluster_runtimes: Default::default(),
+            adapter_runtimes: Default::default(),
             roles_by_name: imbl::OrdMap::new(),
             roles_by_id: imbl::OrdMap::new(),
             network_policies_by_id: imbl::OrdMap::new(),
@@ -625,6 +626,7 @@ impl Catalog {
                 | StateUpdateKind::NetworkPolicy(_)
                 | StateUpdateKind::AdapterDeclaration(_)
                 | StateUpdateKind::ClusterReplicaDeclaration(_)
+                | StateUpdateKind::AdapterRuntime(_)
                 | StateUpdateKind::ClusterRuntime(_)
                 | StateUpdateKind::ClusterReplica(_) => pre_item_updates.push(StateUpdate {
                     kind,

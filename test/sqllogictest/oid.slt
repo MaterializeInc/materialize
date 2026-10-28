@@ -1269,3 +1269,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17137  mz_sessions_raw
 17138  mz_storage_statuses_raw
 17139  mz_adapters
+17140  mz_adapter_statuses
+17141  mz_adapter_endpoints

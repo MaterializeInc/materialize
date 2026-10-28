@@ -2319,6 +2319,9 @@ impl CatalogStateInner {
             StateUpdateKind::ClusterRuntime(key, value) => {
                 apply(&mut snapshot.cluster_runtimes, key, value, diff);
             }
+            StateUpdateKind::AdapterRuntime(key, value) => {
+                apply(&mut snapshot.adapter_runtimes, key, value, diff);
+            }
             StateUpdateKind::Comment(key, value) => {
                 apply(&mut snapshot.comments, key, value, diff);
             }
@@ -3328,6 +3331,9 @@ impl Trace {
                 }
                 StateUpdateKind::ClusterRuntime(k, v) => {
                     trace.cluster_runtimes.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::AdapterRuntime(k, v) => {
+                    trace.adapter_runtimes.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::Comment(k, v) => trace.comments.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Config(k, v) => trace.configs.values.push(((k, v), ts, diff)),

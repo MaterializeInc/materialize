@@ -177,7 +177,7 @@ pub(super) fn retired_realizations<'a>(
                 surviving_replicas.insert(key.id);
                 false
             }
-            "ClusterRuntime" => {
+            "ClusterRuntime" | "AdapterRuntime" => {
                 generations.contains(&decode::<Key<Deployment>>(row)?.key.deployment_generation)
             }
             _ => false,
@@ -316,6 +316,11 @@ mod tests {
                     "ClusterRuntime",
                     json!({"cluster_id": {"User": 1}, "deployment_generation": generation}),
                     json!({"realized_config": "opaque runtime"}),
+                ),
+                retirement_row(
+                    "AdapterRuntime",
+                    json!({"adapter_id": 1, "deployment_generation": generation}),
+                    json!({"status": "opaque observation"}),
                 ),
                 retirement_row(
                     "ReplicaSystemConfiguration",

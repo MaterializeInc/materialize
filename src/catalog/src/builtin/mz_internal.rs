@@ -1251,6 +1251,97 @@ pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock
     }
 });
 
+/// Last controller observations, qualified by the deployment that observed them.
+pub static MZ_ADAPTER_STATUSES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+    name: "mz_adapter_statuses",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::MV_MZ_ADAPTER_STATUSES_OID,
+    desc: RelationDesc::builder()
+        .with_column("adapter_id", SqlScalarType::String.nullable(false))
+        .with_column("deployment_generation", SqlScalarType::UInt64.nullable(false))
+        .with_column("status", SqlScalarType::String.nullable(true))
+        .with_column("reason", SqlScalarType::String.nullable(true))
+        .with_column("restart_count", SqlScalarType::UInt64.nullable(true))
+        .with_column("status_changed_at", SqlScalarType::TimestampTz { precision: None }.nullable(true))
+        .with_column("ready", SqlScalarType::Bool.nullable(true))
+        .with_column("readiness_error", SqlScalarType::String.nullable(true))
+        .with_column("readiness_changed_at", SqlScalarType::TimestampTz { precision: None }.nullable(true))
+        .with_column("provisioning_error", SqlScalarType::String.nullable(true))
+        .with_key(vec![0, 1])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("status", "Last observed backend process status, not SQL readiness."),
+        ("ready", "Last observed /api/readyz result. NULL means readiness could not be observed. This is not a guarantee about a future connection."),
+        ("status_changed_at", "Time of the last observed status or reason change, not a heartbeat."),
+        ("readiness_changed_at", "Time of the last observed readiness result or error change, not a heartbeat."),
+    ]),
+    sql: "
+IN CLUSTER mz_catalog_server
+WITH (ASSERT NOT NULL adapter_id, ASSERT NOT NULL deployment_generation) AS
+SELECT
+    'a' || (data->'key'->>'adapter_id') AS adapter_id,
+    (data->'key'->>'deployment_generation')::uint8 AS deployment_generation,
+    data->'value'->>'status' AS status,
+    data->'value'->>'reason' AS reason,
+    (data->'value'->>'restart_count')::uint8 AS restart_count,
+    to_timestamp((data->'value'->>'status_changed_at')::double precision / 1000.0) AS status_changed_at,
+    (data->'value'->>'ready')::boolean AS ready,
+    data->'value'->>'readiness_error' AS readiness_error,
+    to_timestamp((data->'value'->>'readiness_changed_at')::double precision / 1000.0) AS readiness_changed_at,
+    data->'value'->>'provisioning_error' AS provisioning_error
+FROM mz_internal.mz_catalog_shared
+WHERE data->>'kind' = 'AdapterRuntime'",
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+}
+});
+
+pub static MZ_ADAPTER_ENDPOINTS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_adapter_endpoints",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_ADAPTER_ENDPOINTS_OID,
+        desc: RelationDesc::builder()
+            .with_column("adapter_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(false),
+            )
+            .with_column("listener", SqlScalarType::String.nullable(false))
+            .with_column("kind", SqlScalarType::String.nullable(false))
+            .with_column("address", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "listener",
+                "Configured listener name, not its backend ordinal port name.",
+            ),
+            ("kind", "Listener protocol: sql or http."),
+            (
+                "address",
+                "Backend-assigned address. Assignment alone does not establish readiness.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (ASSERT NOT NULL adapter_id, ASSERT NOT NULL deployment_generation,
+      ASSERT NOT NULL listener, ASSERT NOT NULL kind, ASSERT NOT NULL address) AS
+SELECT
+    'a' || (data->'key'->>'adapter_id') AS adapter_id,
+    (data->'key'->>'deployment_generation')::uint8 AS deployment_generation,
+    endpoint.value->>'listener' AS listener,
+    endpoint.value->>'kind' AS kind,
+    endpoint.value->>'address' AS address
+FROM mz_internal.mz_catalog_shared
+CROSS JOIN LATERAL jsonb_array_elements(data->'value'->'endpoints') AS endpoint(value)
+WHERE data->>'kind' = 'AdapterRuntime'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
 pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_replica_statuses",
     schema: MZ_INTERNAL_SCHEMA,

@@ -2022,6 +2022,7 @@ impl Catalog {
             | StateUpdateKind::ClientIncarnation(_)
             | StateUpdateKind::ClientReadRequirement(_)
             | StateUpdateKind::UnfinalizedShard(_)
+            | StateUpdateKind::AdapterRuntime(_)
             | StateUpdateKind::AuditLog(_) => false,
             // These records affect only their deployment's planning projection.
             // Replica membership remains planning-visible because foreign members
@@ -2080,6 +2081,7 @@ impl Catalog {
                 StateUpdateKind::IntrospectionSourceIndex(_) => "IntrospectionSourceIndex",
                 StateUpdateKind::ClusterReplicaDeclaration(_) => "ClusterReplicaDeclaration",
                 StateUpdateKind::ClusterRuntime(_) => "ClusterRuntime",
+                StateUpdateKind::AdapterRuntime(_) => "AdapterRuntime",
                 StateUpdateKind::ClusterReplica(_) => "ClusterReplica",
                 StateUpdateKind::ReplicaSystemConfiguration(_) => "ReplicaSystemConfiguration",
                 StateUpdateKind::SourceReferences(_) => "SourceReferences",

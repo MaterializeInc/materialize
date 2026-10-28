@@ -1186,6 +1186,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZE_INTERNAL),
         Builtin::MaterializedView(&MZ_ADAPTERS),
+        Builtin::MaterializedView(&MZ_ADAPTER_STATUSES),
+        Builtin::MaterializedView(&MZ_ADAPTER_ENDPOINTS),
         Builtin::MaterializedView(&MZ_CLUSTERS),
         Builtin::MaterializedView(&MZ_CLUSTER_WORKLOAD_CLASSES),
         Builtin::MaterializedView(&MZ_CLUSTER_SCHEDULES),

@@ -277,6 +277,14 @@ mz_activity_log_thinned
 VIEW
 materialize
 mz_internal
+mz_adapter_endpoints
+MATERIALIZED VIEW
+materialize
+mz_internal
+mz_adapter_statuses
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_aggregates
 BASE TABLE
 materialize

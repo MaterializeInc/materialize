@@ -60,6 +60,7 @@ pub enum CollectionType {
     ClusterReplicaDeclaration,
     AdapterDeclaration,
     ClusterRuntime,
+    AdapterRuntime,
 
     Comments,
     Config,
@@ -186,6 +187,14 @@ collection_impl!({
     collection_type: CollectionType::ClusterRuntime,
     trace_field: cluster_runtimes,
     update: StateUpdateKind::ClusterRuntime,
+});
+collection_impl!({
+    name: AdapterRuntimeCollection,
+    key: proto::AdapterRuntimeKey,
+    value: proto::AdapterRuntimeValue,
+    collection_type: CollectionType::AdapterRuntime,
+    trace_field: adapter_runtimes,
+    update: StateUpdateKind::AdapterRuntime,
 });
 collection_impl!({
     name: CommentCollection,
@@ -426,6 +435,7 @@ pub struct Trace {
     pub cluster_replica_declarations: CollectionTrace<ClusterReplicaDeclarationCollection>,
     pub adapter_declarations: CollectionTrace<AdapterDeclarationCollection>,
     pub cluster_runtimes: CollectionTrace<ClusterRuntimeCollection>,
+    pub adapter_runtimes: CollectionTrace<AdapterRuntimeCollection>,
 
     pub comments: CollectionTrace<CommentCollection>,
     pub configs: CollectionTrace<ConfigCollection>,
@@ -490,6 +500,7 @@ impl Trace {
             cluster_replica_declarations: CollectionTrace::new(),
             adapter_declarations: CollectionTrace::new(),
             cluster_runtimes: CollectionTrace::new(),
+            adapter_runtimes: CollectionTrace::new(),
 
             comments: CollectionTrace::new(),
             configs: CollectionTrace::new(),
@@ -528,6 +539,7 @@ impl Trace {
             cluster_replica_declarations,
             adapter_declarations,
             cluster_runtimes,
+            adapter_runtimes,
 
             comments,
             configs,
@@ -562,6 +574,7 @@ impl Trace {
         cluster_replica_declarations.sort();
         adapter_declarations.sort();
         cluster_runtimes.sort();
+        adapter_runtimes.sort();
 
         comments.sort();
         configs.sort();

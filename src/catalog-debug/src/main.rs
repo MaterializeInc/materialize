@@ -31,9 +31,10 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
-    AdapterDeclarationCollection, AuditLogCollection, ClientIncarnationCollection,
-    ClientReadRequirementCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
-    ClusterReplicaCollection, ClusterReplicaDeclarationCollection, ClusterRuntimeCollection,
+    AdapterDeclarationCollection, AdapterRuntimeCollection, AuditLogCollection,
+    ClientIncarnationCollection, ClientReadRequirementCollection, ClusterCollection,
+    ClusterIntrospectionSourceIndexCollection, ClusterReplicaCollection,
+    ClusterReplicaDeclarationCollection, ClusterRuntimeCollection,
     ClusterSystemConfigurationCollection, Collection, CollectionCompactionBoundCollection,
     CollectionTrace, CollectionType, CommentCollection, ConfigCollection, DatabaseCollection,
     DebugCatalogState, DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection,
@@ -343,6 +344,7 @@ macro_rules! for_collection {
                 $fn::<AdapterDeclarationCollection>($($arg),*).await?
             }
             CollectionType::ClusterRuntime => $fn::<ClusterRuntimeCollection>($($arg),*).await?,
+            CollectionType::AdapterRuntime => $fn::<AdapterRuntimeCollection>($($arg),*).await?,
             CollectionType::Comments => $fn::<CommentCollection>($($arg),*).await?,
             CollectionType::Config => $fn::<ConfigCollection>($($arg),*).await?,
             CollectionType::Database => $fn::<DatabaseCollection>($($arg),*).await?,
@@ -531,6 +533,7 @@ async fn dump(
         cluster_replica_declarations,
         adapter_declarations,
         cluster_runtimes,
+        adapter_runtimes,
         comments,
         configs,
         databases,
@@ -598,6 +601,13 @@ async fn dump(
     dump_col(
         &mut data,
         cluster_runtimes,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        adapter_runtimes,
         &ignore,
         stats_only,
         consolidate,

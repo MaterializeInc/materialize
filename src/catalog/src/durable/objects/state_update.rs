@@ -143,6 +143,7 @@ impl StateUpdate {
             cluster_replica_declarations,
             adapter_declarations,
             cluster_runtimes,
+            adapter_runtimes,
             network_policies,
             introspection_sources,
             id_allocator,
@@ -182,6 +183,7 @@ impl StateUpdate {
         let adapter_declarations =
             from_batch(adapter_declarations, StateUpdateKind::AdapterDeclaration);
         let cluster_runtimes = from_batch(cluster_runtimes, StateUpdateKind::ClusterRuntime);
+        let adapter_runtimes = from_batch(adapter_runtimes, StateUpdateKind::AdapterRuntime);
         let network_policies = from_batch(network_policies, StateUpdateKind::NetworkPolicy);
         let introspection_sources = from_batch(
             introspection_sources,
@@ -239,6 +241,7 @@ impl StateUpdate {
             .chain(cluster_replica_declarations)
             .chain(adapter_declarations)
             .chain(cluster_runtimes)
+            .chain(adapter_runtimes)
             .chain(network_policies)
             .chain(introspection_sources)
             .chain(id_allocators)
@@ -279,6 +282,7 @@ pub enum StateUpdateKind {
     ),
     AdapterDeclaration(proto::AdapterDeclarationKey, proto::AdapterDeclarationValue),
     ClusterRuntime(proto::ClusterRuntimeKey, proto::ClusterRuntimeValue),
+    AdapterRuntime(proto::AdapterRuntimeKey, proto::AdapterRuntimeValue),
     Comment(proto::CommentKey, proto::CommentValue),
     Config(proto::ConfigKey, proto::ConfigValue),
     Database(proto::DatabaseKey, proto::DatabaseValue),
@@ -344,6 +348,7 @@ impl StateUpdateKind {
             }
             StateUpdateKind::AdapterDeclaration(_, _) => Some(CollectionType::AdapterDeclaration),
             StateUpdateKind::ClusterRuntime(_, _) => Some(CollectionType::ClusterRuntime),
+            StateUpdateKind::AdapterRuntime(_, _) => Some(CollectionType::AdapterRuntime),
             StateUpdateKind::Comment(_, _) => Some(CollectionType::Comments),
             StateUpdateKind::Config(_, _) => Some(CollectionType::Config),
             StateUpdateKind::Database(_, _) => Some(CollectionType::Database),
@@ -558,6 +563,9 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             StateUpdateKind::ClusterRuntime(key, value) => Some(
                 memory::objects::StateUpdateKind::ClusterRuntime(into_durable(key, value)?),
             ),
+            StateUpdateKind::AdapterRuntime(key, value) => Some(
+                memory::objects::StateUpdateKind::AdapterRuntime(into_durable(key, value)?),
+            ),
             StateUpdateKind::Comment(key, value) => {
                 let comment = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Comment(comment))
@@ -761,6 +769,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::ClusterRuntime(key, value) => {
                 proto::StateUpdateKind::ClusterRuntime(proto::ClusterRuntime { key, value })
             }
+            StateUpdateKind::AdapterRuntime(key, value) => {
+                proto::StateUpdateKind::AdapterRuntime(proto::AdapterRuntime { key, value })
+            }
             StateUpdateKind::Comment(key, value) => {
                 proto::StateUpdateKind::Comment(proto::Comment { key, value })
             }
@@ -889,6 +900,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             }) => StateUpdateKind::AdapterDeclaration(key, value),
             proto::StateUpdateKind::ClusterRuntime(proto::ClusterRuntime { key, value }) => {
                 StateUpdateKind::ClusterRuntime(key, value)
+            }
+            proto::StateUpdateKind::AdapterRuntime(proto::AdapterRuntime { key, value }) => {
+                StateUpdateKind::AdapterRuntime(key, value)
             }
             proto::StateUpdateKind::Comment(proto::Comment { key, value }) => {
                 StateUpdateKind::Comment(key, value)

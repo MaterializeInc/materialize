@@ -2521,3 +2521,145 @@ async fn test_adapter_declaration_lifecycle() {
     drop(before);
     catalog.expire().await;
 }
+
+#[mz_ore::test(tokio::test)]
+async fn test_adapter_runtime_publication() {
+    async fn apply(catalog: &mut Catalog, op: Op) -> Result<(), crate::catalog::CatalogError> {
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(None, None, ts, None, vec![op])
+            .await
+            .map(|_| ())
+    }
+    let persist = PersistClient::new_for_tests().await;
+    let organization = Uuid::new_v4();
+    let bootstrap = test_bootstrap_args();
+    let mut catalog = Catalog::open_debug_catalog(persist.clone(), organization, &bootstrap)
+        .await
+        .expect("open catalog");
+    apply(
+        &mut catalog,
+        Op::CreateAdapter {
+            name: "observed".into(),
+            size: "1".into(),
+        },
+    )
+    .await
+    .expect("declare adapter");
+    let id = catalog
+        .state()
+        .adapter_declarations()
+        .values()
+        .find(|adapter| adapter.name == "observed")
+        .unwrap()
+        .id;
+    let generation = catalog.state().deployment_generation();
+    let mut runtime = crate::durable::AdapterRuntime {
+        adapter_id: id,
+        deployment_generation: generation,
+        endpoints: vec![crate::durable::AdapterEndpoint {
+            listener: "external".into(),
+            kind: "sql".into(),
+            address: "localhost:6875".into(),
+        }],
+        status: Some("running".into()),
+        reason: Some("started".into()),
+        restart_count: Some(2),
+        status_changed_at: Some(1234),
+        ready: Some(false),
+        readiness_error: Some("warming".into()),
+        readiness_changed_at: Some(1235),
+        provisioning_error: Some("retrying".into()),
+    };
+    assert!(
+        Op::UpdateAdapterRuntime {
+            runtime: runtime.clone()
+        }
+        .is_deployment_metadata()
+    );
+    assert_eq!(catalog.state().get_adapter_runtime(id, generation), None);
+    for observation in [
+        runtime.clone(),
+        crate::durable::AdapterRuntime {
+            endpoints: vec![],
+            status: None,
+            reason: None,
+            restart_count: None,
+            status_changed_at: None,
+            ready: None,
+            readiness_error: None,
+            readiness_changed_at: None,
+            provisioning_error: None,
+            ..runtime.clone()
+        },
+    ] {
+        let before = catalog.clone();
+        let ts = catalog.current_upper().await;
+        let result = catalog
+            .transact(
+                None,
+                None,
+                ts,
+                None,
+                vec![Op::UpdateAdapterRuntime {
+                    runtime: observation.clone(),
+                }],
+            )
+            .await
+            .expect("publish observation");
+        assert!(result.builtin_table_updates.is_empty());
+        assert!(result.catalog_updates.is_empty());
+        assert!(result.audit_events.is_empty());
+        assert!(before.transient_revision_is_current());
+        assert_eq!(
+            catalog.state().get_adapter_runtime(id, generation),
+            Some(&observation)
+        );
+        let reopened =
+            Catalog::open_debug_read_only_catalog(persist.clone(), organization, &bootstrap)
+                .await
+                .expect("reconstruct persisted observations");
+        assert_eq!(
+            reopened.state().get_adapter_runtime(id, generation),
+            Some(&observation)
+        );
+        reopened.expire().await;
+    }
+    runtime.deployment_generation = generation + 1;
+    assert!(
+        apply(
+            &mut catalog,
+            Op::UpdateAdapterRuntime {
+                runtime: runtime.clone()
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        catalog.state().get_adapter_runtime(id, generation + 1),
+        None
+    );
+    runtime.deployment_generation = generation;
+    apply(
+        &mut catalog,
+        Op::DropAdapter {
+            id,
+            name: "observed".into(),
+        },
+    )
+    .await
+    .expect("drop adapter");
+    assert_eq!(catalog.state().get_adapter_runtime(id, generation), None);
+    assert!(
+        apply(&mut catalog, Op::UpdateAdapterRuntime { runtime })
+            .await
+            .is_err()
+    );
+    let reopened = Catalog::open_debug_read_only_catalog(persist, organization, &bootstrap)
+        .await
+        .expect("reconstruct drop cleanup");
+    assert_eq!(reopened.state().get_adapter_runtime(id, generation), None);
+    reopened.expire().await;
+    catalog.expire().await;
+}

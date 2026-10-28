@@ -96,6 +96,7 @@ rand = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 rlimit.workspace = true
 rustls.workspace = true
+reqwest.workspace = true
 semver.workspace = true
 sentry-tracing = { workspace = true, optional = true }
 serde.workspace = true
@@ -142,7 +143,6 @@ postgres_array.workspace = true
 predicates.workspace = true
 proptest.workspace = true
 rdkafka.workspace = true
-reqwest.workspace = true
 serde_json.workspace = true
 serde_urlencoded.workspace = true
 similar-asserts.workspace = true

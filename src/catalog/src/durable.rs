@@ -34,14 +34,15 @@ pub use crate::durable::metrics::Metrics;
 pub use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::state_update::StateUpdate;
 pub use crate::durable::objects::{
-    AdapterDeclaration, BurstState, ClientIncarnation, ClientReadRequirement, ClientRealization,
-    Cluster, ClusterConfig, ClusterReplica, ClusterReplicaDeclaration, ClusterRuntime,
-    ClusterSystemConfiguration, ClusterVariant, ClusterVariantManaged, Comment, Database,
-    DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReconfigurationState,
-    ReconfigurationStatus, ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
-    ReplicaSystemConfiguration, Role, RoleAuth, Schema, SourceReference, SourceReferences,
-    StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
-    UnfinalizedShard, WrittenPlan, managed_cluster_replica_name,
+    AdapterDeclaration, AdapterEndpoint, AdapterRuntime, BurstState, ClientIncarnation,
+    ClientReadRequirement, ClientRealization, Cluster, ClusterConfig, ClusterReplica,
+    ClusterReplicaDeclaration, ClusterRuntime, ClusterSystemConfiguration, ClusterVariant,
+    ClusterVariantManaged, Comment, Database, DefaultPrivilege, IntrospectionSourceIndex, Item,
+    NetworkPolicy, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
+    ReplicaConfig, ReplicaLocation, ReplicaSystemConfiguration, Role, RoleAuth, Schema,
+    SourceReference, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
+    SystemObjectDescription, SystemObjectMapping, UnfinalizedShard, WrittenPlan,
+    managed_cluster_replica_name,
 };
 pub use crate::durable::persist::{CatalogSnapshotReader, catalog_shard_id, shard_id};
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};

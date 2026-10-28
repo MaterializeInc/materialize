@@ -728,6 +728,8 @@ pg_authid_core                           ""
 > SHOW MATERIALIZED VIEWS FROM mz_internal
 name                   cluster             comment
 ----------------------------------------------------
+mz_adapter_endpoints mz_catalog_server ""
+mz_adapter_statuses mz_catalog_server ""
 mz_aws_connections             mz_catalog_server   ""
 mz_cluster_auto_scaling_strategies    mz_catalog_server   ""
 mz_cluster_reconfigurations    mz_catalog_server   ""

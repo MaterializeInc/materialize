@@ -10,6 +10,7 @@
 //! Deployment-scoped process management, separate from SQL coordination.
 
 mod http;
+mod observations;
 pub mod provisioning;
 mod runtime;
 mod startup;
@@ -58,6 +59,7 @@ pub struct AdapterInventoryEntry {
     pub resources: Option<provisioning::AdapterAllocation>,
     pub endpoints: std::collections::BTreeMap<String, Vec<String>>,
     pub observed_processes: Vec<mz_orchestrator::ServiceEvent>,
+    pub readiness: Option<observations::Readiness>,
     pub provisioning_error: Option<String>,
 }
 
@@ -83,6 +85,7 @@ pub fn desired_adapters(
                 resources,
                 endpoints: Default::default(),
                 observed_processes: Vec::new(),
+                readiness: None,
             }
         })
         .collect()

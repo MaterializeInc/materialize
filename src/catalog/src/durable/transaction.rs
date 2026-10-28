@@ -47,26 +47,27 @@ use crate::durable::initialize::{
 };
 use crate::durable::objects::serialization::{RustType, proto};
 use crate::durable::objects::{
-    AdapterDeclaration, AdapterDeclarationKey, AdapterDeclarationValue, AuditLogKey,
-    ClientIncarnationKey, ClientIncarnationValue, ClientReadRequirementKey,
-    ClientReadRequirementValue, ClientRealization, Cluster, ClusterConfig,
-    ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue, ClusterKey,
-    ClusterReplica, ClusterReplicaDeclaration, ClusterReplicaDeclarationKey,
-    ClusterReplicaDeclarationValue, ClusterReplicaKey, ClusterReplicaValue, ClusterRuntime,
-    ClusterRuntimeKey, ClusterRuntimeValue, ClusterSystemConfiguration,
-    ClusterSystemConfigurationKey, ClusterSystemConfigurationValue, ClusterValue,
-    CollectionCompactionBound, CollectionCompactionBoundKey, CollectionCompactionBoundValue,
-    CommentKey, CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
-    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue,
-    MaintainedReadRequirement, MaintainedReadRequirementKey, MaintainedReadRequirementValue,
-    NetworkPolicyKey, NetworkPolicyValue, ReadProtectionIndex, ReplicaConfig,
-    ReplicaSystemConfiguration, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue,
-    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
-    SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
-    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
-    TxnWalShardValue, UnfinalizedShardKey, WrittenPlan, WrittenPlanKey, WrittenPlanValue,
+    AdapterDeclaration, AdapterDeclarationKey, AdapterDeclarationValue, AdapterRuntime,
+    AdapterRuntimeKey, AdapterRuntimeValue, AuditLogKey, ClientIncarnationKey,
+    ClientIncarnationValue, ClientReadRequirementKey, ClientReadRequirementValue,
+    ClientRealization, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaDeclaration,
+    ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue, ClusterReplicaKey,
+    ClusterReplicaValue, ClusterRuntime, ClusterRuntimeKey, ClusterRuntimeValue,
+    ClusterSystemConfiguration, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
+    ClusterValue, CollectionCompactionBound, CollectionCompactionBoundKey,
+    CollectionCompactionBoundValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
+    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
+    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, MaintainedReadRequirement,
+    MaintainedReadRequirementKey, MaintainedReadRequirementValue, NetworkPolicyKey,
+    NetworkPolicyValue, ReadProtectionIndex, ReplicaConfig, ReplicaSystemConfiguration,
+    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
+    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey, WrittenPlan, WrittenPlanKey, WrittenPlanValue,
 };
 use crate::durable::objects::{NameIndex, NameIndexes, NameScope, NamedCatalogValue, OidIndex};
 use crate::durable::{
@@ -113,6 +114,7 @@ pub struct Transaction<'a> {
     cluster_replica_declarations:
         TableTransaction<ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue>,
     cluster_runtimes: TableTransaction<ClusterRuntimeKey, ClusterRuntimeValue>,
+    adapter_runtimes: TableTransaction<AdapterRuntimeKey, AdapterRuntimeValue>,
     introspection_sources:
         TableTransaction<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
     id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
@@ -242,6 +244,7 @@ impl<'a> Transaction<'a> {
             adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
+            adapter_runtimes,
             introspection_sources,
             id_allocator,
             configs,
@@ -370,6 +373,7 @@ impl<'a> Transaction<'a> {
             )?
             .with_name_index(name_indexes.cluster_replica_declarations),
             cluster_runtimes: TableTransaction::new(cluster_runtimes)?,
+            adapter_runtimes: TableTransaction::new(adapter_runtimes)?,
             introspection_sources: TableTransaction::new(introspection_sources)?,
             id_allocator: TableTransaction::new(id_allocator)?,
             configs: TableTransaction::new(configs)?,
@@ -1411,6 +1415,7 @@ impl<'a> Transaction<'a> {
             adapter_declarations: self.adapter_declarations.current_items(),
             cluster_replica_declarations: self.cluster_replica_declarations.current_items(),
             cluster_runtimes: self.cluster_runtimes.current_items(),
+            adapter_runtimes: self.adapter_runtimes.current_items(),
             introspection_sources: self.introspection_sources.current_items(),
             id_allocator: self.id_allocator.current_items(),
             configs: self.configs.current_items(),
@@ -2676,6 +2681,17 @@ impl<'a> Transaction<'a> {
     /// Removes shared intent and revokes only this adapter's executions and grants
     /// across deployments. The removal takes effect together at durable commit.
     pub fn remove_adapter_declaration(&mut self, id: AdapterId) -> Option<AdapterDeclaration> {
+        let keys: Vec<_> = self
+            .adapter_runtimes
+            .items()
+            .keys()
+            .filter(|key| key.adapter_id == id)
+            .map(|key| (*key).clone())
+            .collect();
+        for key in keys {
+            self.adapter_runtimes.delete_by_key(key, self.op_id);
+        }
+
         let key = AdapterDeclarationKey { id };
         let previous = self
             .adapter_declarations
@@ -2828,6 +2844,13 @@ impl<'a> Transaction<'a> {
         self.cluster_runtimes
             .delete_by_key(key.clone(), self.op_id)
             .map(|value| DurableType::from_key_value(key, value))
+    }
+
+    /// Inserts or replaces runtime state for exactly one adapter and deployment generation.
+    pub fn set_adapter_runtime(&mut self, runtime: AdapterRuntime) -> Result<(), CatalogError> {
+        let (key, value) = runtime.into_key_value();
+        self.adapter_runtimes.set(key, Some(value), self.op_id)?;
+        Ok(())
     }
 
     pub fn get_databases(&self) -> impl Iterator<Item = Database> + use<'_> {
@@ -2992,6 +3015,7 @@ impl<'a> Transaction<'a> {
             adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
+            adapter_runtimes,
             introspection_sources,
             system_gid_mapping,
             system_configurations,
@@ -3098,6 +3122,11 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 cluster_runtimes,
                 StateUpdateKind::ClusterRuntime,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                adapter_runtimes,
+                StateUpdateKind::AdapterRuntime,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -3917,6 +3946,7 @@ impl<'a> Transaction<'a> {
             adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
+            adapter_runtimes,
             introspection_sources,
             id_allocator,
             configs,
@@ -3991,6 +4021,11 @@ impl<'a> Transaction<'a> {
         for key in cluster_runtimes.changed_keys() {
             if key.deployment_generation != *deployment_generation {
                 return Err(denied("another deployment's cluster runtime"));
+            }
+        }
+        for key in adapter_runtimes.changed_keys() {
+            if key.deployment_generation != *deployment_generation {
+                return Err(denied("another deployment's adapter runtime"));
             }
         }
         // Private retirement may remove an annotation only when this handle
@@ -4146,6 +4181,22 @@ impl<'a> Transaction<'a> {
                 .into());
             }
         }
+        for key in self.adapter_runtimes.changed_keys() {
+            if self.adapter_runtimes.get(key).is_some() {
+                if key.deployment_generation != self.deployment_generation {
+                    return Err(DurableCatalogError::NotWritable(
+                        "adapter runtime belongs to another deployment".into(),
+                    )
+                    .into());
+                }
+                if self.get_adapter_declaration(key.adapter_id).is_none() {
+                    return Err(DurableCatalogError::NotWritable(
+                        "adapter runtime requires an existing declaration".into(),
+                    )
+                    .into());
+                }
+            }
+        }
         self.finalize_index_compaction_bounds();
         self.validate_read_protection()?;
         self.validate_prewarming_writes()?;
@@ -4170,6 +4221,7 @@ impl<'a> Transaction<'a> {
             adapter_declarations: self.adapter_declarations.pending(),
             cluster_replica_declarations: self.cluster_replica_declarations.pending(),
             cluster_runtimes: self.cluster_runtimes.pending(),
+            adapter_runtimes: self.adapter_runtimes.pending(),
             network_policies: self.network_policies.pending(),
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
@@ -4240,6 +4292,7 @@ impl<'a> Transaction<'a> {
             adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
+            adapter_runtimes,
             network_policies,
             introspection_sources,
             id_allocator,
@@ -4277,6 +4330,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(adapter_declarations);
         differential_dataflow::consolidation::consolidate_updates(cluster_replica_declarations);
         differential_dataflow::consolidation::consolidate_updates(cluster_runtimes);
+        differential_dataflow::consolidation::consolidate_updates(adapter_runtimes);
         differential_dataflow::consolidation::consolidate_updates(network_policies);
         differential_dataflow::consolidation::consolidate_updates(introspection_sources);
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
@@ -4536,6 +4590,7 @@ pub struct TransactionBatch {
         Diff,
     )>,
     pub(crate) cluster_runtimes: Vec<(proto::ClusterRuntimeKey, proto::ClusterRuntimeValue, Diff)>,
+    pub(crate) adapter_runtimes: Vec<(proto::AdapterRuntimeKey, proto::AdapterRuntimeValue, Diff)>,
     pub(crate) network_policies: Vec<(proto::NetworkPolicyKey, proto::NetworkPolicyValue, Diff)>,
     pub(crate) introspection_sources: Vec<(
         proto::ClusterIntrospectionSourceIndexKey,
@@ -4626,6 +4681,7 @@ impl TransactionBatch {
             adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
+            adapter_runtimes,
             network_policies,
             introspection_sources,
             id_allocator,
@@ -4661,6 +4717,7 @@ impl TransactionBatch {
             && adapter_declarations.is_empty()
             && cluster_replica_declarations.is_empty()
             && cluster_runtimes.is_empty()
+            && adapter_runtimes.is_empty()
             && network_policies.is_empty()
             && introspection_sources.is_empty()
             && id_allocator.is_empty()
@@ -4747,6 +4804,7 @@ mod unique_name {
         (),
         ClusterIntrospectionSourceIndexValue,
         ClusterRuntimeValue,
+        AdapterRuntimeValue,
         ClusterSystemConfigurationValue,
         CommentValue,
         ConfigValue,
@@ -6824,6 +6882,103 @@ mod tests {
                 .unwrap(),
             initial_id
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_adapter_runtime_authority_and_cleanup() {
+        let persist = mz_persist_client::PersistClient::new_for_tests().await;
+        let mut state = TestCatalogStateBuilder::new(persist)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        state.sync_to_current_updates().await.unwrap();
+        let mut tx = state.transaction().await.unwrap();
+        let id = AdapterId(42);
+        let generation = tx.deployment_generation();
+        let runtime = AdapterRuntime {
+            adapter_id: id,
+            deployment_generation: generation,
+            endpoints: vec![],
+            status: None,
+            reason: None,
+            restart_count: None,
+            status_changed_at: None,
+            ready: None,
+            readiness_error: None,
+            readiness_changed_at: None,
+            provisioning_error: None,
+        };
+        tx.set_adapter_runtime(runtime.clone()).unwrap();
+        assert!(matches!(
+            tx.into_parts(),
+            Err(CatalogError::Durable(DurableCatalogError::NotWritable(_)))
+        ));
+
+        state.sync_to_current_updates().await.unwrap();
+        let mut tx = state.transaction().await.unwrap();
+        tx.set_adapter_declaration(AdapterDeclaration {
+            id,
+            name: "observed".into(),
+            size: "1".into(),
+        })
+        .unwrap();
+        tx.set_adapter_runtime(runtime.clone()).unwrap();
+        let ts = tx.upper;
+        tx.commit_internal(ts).await.unwrap();
+
+        // Existing foreign rows cannot be overwritten, not just created.
+        state.sync_to_current_updates().await.unwrap();
+        let mut tx = state.transaction().await.unwrap();
+        tx.deployment_generation = generation + 1;
+        tx.set_adapter_runtime(AdapterRuntime {
+            ready: Some(true),
+            ..runtime.clone()
+        })
+        .unwrap();
+        assert!(matches!(
+            tx.into_parts(),
+            Err(CatalogError::Durable(DurableCatalogError::NotWritable(_)))
+        ));
+
+        state.sync_to_current_updates().await.unwrap();
+        let mut tx = state.transaction().await.unwrap();
+        tx.prewarming_plan_build = Some("test-build".into());
+        tx.set_adapter_runtime(AdapterRuntime {
+            ready: Some(true),
+            ..runtime.clone()
+        })
+        .unwrap();
+        tx.validate_prewarming_writes()
+            .expect("own observations are prewarming metadata");
+        assert!(
+            tx.adapter_runtimes
+                .delete_by_key(
+                    AdapterRuntimeKey {
+                        adapter_id: id,
+                        deployment_generation: generation,
+                    },
+                    tx.op_id
+                )
+                .is_some()
+        );
+        tx.deployment_generation = generation + 1;
+        assert!(tx.validate_prewarming_writes().is_err());
+        drop(tx);
+
+        // Seed a recovered snapshot with realizations in two deployments.
+        let mut snapshot = state.snapshot().await.unwrap();
+        let (key, value) = AdapterRuntime {
+            deployment_generation: generation + 1,
+            ..runtime
+        }
+        .into_key_value();
+        snapshot.adapter_runtimes.insert(key, value);
+        let mut dry_run = state.transaction_from_snapshot(snapshot).unwrap();
+        dry_run.transaction_mut().remove_adapter_declaration(id);
+        assert!(dry_run.current_snapshot().adapter_runtimes.is_empty());
     }
 
     /// Regression test for DB-147: inserting a replica with an explicit id must not consume the

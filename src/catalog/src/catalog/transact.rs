@@ -318,6 +318,10 @@ pub enum Op {
         member_id: RoleId,
         grantor_id: RoleId,
     },
+    /// Publishes observed endpoints, backend status, and readiness without audit events.
+    UpdateAdapterRuntime {
+        runtime: crate::durable::AdapterRuntime,
+    },
     /// Updates this deployment's realization without replacing shared intent.
     UpdateClusterRuntime {
         runtime: crate::durable::ClusterRuntime,
@@ -457,6 +461,7 @@ impl Op {
     pub fn is_deployment_metadata(&self) -> bool {
         match self {
             Self::CheckClusterState { .. }
+            | Self::UpdateAdapterRuntime { .. }
             | Self::UpdateClusterRuntime { .. }
             | Self::CreateClusterReplicaRealization { .. }
             | Self::DropClusterReplicaRealization { .. }
@@ -4047,6 +4052,21 @@ impl Catalog {
                         new_owner_id: new_owner.to_string(),
                     }),
                 )?;
+            }
+            Op::UpdateAdapterRuntime { runtime } => {
+                if runtime.deployment_generation != tx.deployment_generation() {
+                    return Err(DurableCatalogError::NotWritable(
+                        "adapter runtime belongs to another deployment".into(),
+                    )
+                    .into());
+                }
+                if tx.get_adapter_declaration(runtime.adapter_id).is_none() {
+                    return Err(DurableCatalogError::NotWritable(
+                        "adapter runtime requires an existing declaration".into(),
+                    )
+                    .into());
+                }
+                tx.set_adapter_runtime(runtime)?;
             }
             Op::UpdateClusterRuntime {
                 runtime,

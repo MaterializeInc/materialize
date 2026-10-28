@@ -2075,6 +2075,7 @@ pub enum StateUpdateKind {
     ClusterReplica(ClusterReplica),
     ClusterReplicaDeclaration(ClusterReplicaDeclaration),
     ClusterRuntime(ClusterRuntime),
+    AdapterRuntime(AdapterRuntime),
     Comment(Comment),
     Config(Config),
     Database(Database),
@@ -2557,4 +2558,40 @@ pub struct ReplicaPlanOwner {
 pub struct WrittenPlan {
     pub key: WrittenPlanKey,
     pub value: WrittenPlanValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct AdapterEndpoint {
+    pub listener: String,
+    pub kind: String,
+    pub address: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct AdapterRuntimeKey {
+    pub adapter_id: u64,
+    pub deployment_generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct AdapterRuntimeValue {
+    pub endpoints: Vec<AdapterEndpoint>,
+    pub status: Option<String>,
+    pub reason: Option<String>,
+    pub restart_count: Option<u64>,
+    pub status_changed_at: Option<i64>,
+    pub ready: Option<bool>,
+    pub readiness_error: Option<String>,
+    pub readiness_changed_at: Option<i64>,
+    pub provisioning_error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct AdapterRuntime {
+    pub key: AdapterRuntimeKey,
+    pub value: AdapterRuntimeValue,
 }

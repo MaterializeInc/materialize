@@ -90,3 +90,16 @@ unknown IDs return 404, and duplicate names or exhausted catalog-conflict retrie
 return 409. Retry a catalog-conflict response after refreshing the inventory.
 SQL CREATE, ALTER and DROP require a superuser even with RBAC disabled.
 Catalog listing follows the normal public metadata privileges.
+
+`mz_catalog.mz_adapters` lists declarations. `mz_internal.mz_adapter_endpoints`
+and `mz_internal.mz_adapter_statuses` expose observations for each deployment
+generation. HTTP inventory includes the same readiness observations. Backend
+`online` is process status, not SQL readiness. Readiness uses an existing
+unauthenticated `/api/readyz` route, without changing listener policy or bypassing
+TLS checks. It is unknown when no such endpoint can be observed. Change timestamps
+are not heartbeats, and neither assigned endpoints nor past readiness guarantee a
+future connection.
+
+A restarted controller re-probes readiness rather than attaching the prior
+controller's sample to an unverified process. Readiness can briefly become unknown
+while existing SQL sessions and committed processes continue running.

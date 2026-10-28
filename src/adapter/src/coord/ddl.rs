@@ -2526,6 +2526,7 @@ impl Coordinator {
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
                 | Op::UpdateClusterRuntime { .. }
+                | Op::UpdateAdapterRuntime { .. }
                 | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }

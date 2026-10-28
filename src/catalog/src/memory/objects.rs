@@ -4348,6 +4348,7 @@ pub enum StateUpdateKind {
     AdapterDeclaration(durable::objects::AdapterDeclaration),
     ClusterReplicaDeclaration(durable::objects::ClusterReplicaDeclaration),
     ClusterRuntime(durable::objects::ClusterRuntime),
+    AdapterRuntime(durable::objects::AdapterRuntime),
     ClusterReplica(durable::objects::ClusterReplica),
     ReplicaSystemConfiguration(durable::objects::ReplicaSystemConfiguration),
     SourceReferences(durable::objects::SourceReferences),

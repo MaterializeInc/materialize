@@ -137,6 +137,9 @@ pub struct CatalogState {
         imbl::OrdMap<ReplicaId, crate::durable::ClusterReplicaDeclaration>,
     #[serde(serialize_with = "serialize_cluster_runtimes")]
     pub(super) cluster_runtimes: imbl::OrdMap<(ClusterId, u64), crate::durable::ClusterRuntime>,
+    #[serde(serialize_with = "serialize_adapter_runtimes")]
+    pub(super) adapter_runtimes:
+        imbl::OrdMap<(mz_repr::AdapterId, u64), crate::durable::AdapterRuntime>,
     pub(super) roles_by_name: imbl::OrdMap<String, RoleId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) roles_by_id: imbl::OrdMap<RoleId, Role>,
@@ -544,6 +547,7 @@ impl CatalogState {
             adapter_declarations: Default::default(),
             cluster_replica_declarations: Default::default(),
             cluster_runtimes: Default::default(),
+            adapter_runtimes: Default::default(),
             clusters_by_name: Default::default(),
             network_policies_by_name: Default::default(),
             roles_by_name: Default::default(),
@@ -933,6 +937,15 @@ impl CatalogState {
         self.replica_membership
             .iter()
             .filter_map(move |((generation, id), _)| (Some(*generation) == active).then_some(*id))
+    }
+
+    /// Returns the last observation for this adapter and deployment, if any.
+    pub fn get_adapter_runtime(
+        &self,
+        id: mz_repr::AdapterId,
+        generation: u64,
+    ) -> Option<&crate::durable::AdapterRuntime> {
+        self.adapter_runtimes.get(&(id, generation))
     }
 
     /// The managed realization owned by this deployment, if initialized.
@@ -3467,6 +3480,21 @@ fn serialize_cluster_runtimes<S: serde::Serializer>(
     serializer.collect_seq(runtimes.values().map(|record| {
         let (key, value) = record.clone().into_key_value();
         mz_catalog_protos::objects::ClusterRuntime {
+            key: key.into_proto(),
+            value: value.into_proto(),
+        }
+    }))
+}
+
+fn serialize_adapter_runtimes<S: serde::Serializer>(
+    runtimes: &imbl::OrdMap<(mz_repr::AdapterId, u64), crate::durable::AdapterRuntime>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use crate::durable::objects::DurableType;
+    use crate::durable::objects::serialization::RustType;
+    serializer.collect_seq(runtimes.values().map(|record| {
+        let (key, value) = record.clone().into_key_value();
+        mz_catalog_protos::objects::AdapterRuntime {
             key: key.into_proto(),
             value: value.into_proto(),
         }
