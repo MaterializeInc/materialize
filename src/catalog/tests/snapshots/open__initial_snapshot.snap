@@ -668,6 +668,7 @@ Snapshot {
             oid: 17048,
         },
     },
+    cluster_replica_sizes: {},
     cluster_replicas: {
         ClusterReplicaKey {
             id: User(
@@ -742,6 +743,11 @@ Snapshot {
             next_id: 1,
         },
         IdAllocKey {
+            name: "system_cluster_replica_size",
+        }: IdAllocValue {
+            next_id: 1,
+        },
+        IdAllocKey {
             name: "system_compute",
         }: IdAllocValue {
             next_id: 1,
@@ -753,6 +759,11 @@ Snapshot {
         },
         IdAllocKey {
             name: "user",
+        }: IdAllocValue {
+            next_id: 1,
+        },
+        IdAllocKey {
+            name: "user_cluster_replica_size",
         }: IdAllocValue {
             next_id: 1,
         },
