@@ -9,6 +9,8 @@
 
 //! Controller-side description of how an object's output frontier follows arrival time.
 
+pub mod histogram;
+
 use std::collections::BTreeSet;
 use std::time::Duration;
 

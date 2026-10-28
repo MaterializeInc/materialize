@@ -7,12 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
+use mz_ore::cast::CastLossy;
 use mz_repr::Timestamp;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use proptest::prelude::*;
 
+use super::histogram::{BucketScheme, add_span};
 use super::*;
 
 fn aligned(ms: u64) -> ResolvedTree {
@@ -473,4 +476,231 @@ fn bound_covers_every_unaligned_phase() {
             );
         }
     }
+}
+
+fn scheme(b: u32) -> BucketScheme {
+    BucketScheme::new(b).expect("valid bucket count")
+}
+
+#[mz_ore::test]
+fn bucket_scheme_validates_per_octave() {
+    for b in [1, 2, 4, 8, 16, 32, 64, 128, 256] {
+        assert_eq!(scheme(b).per_octave(), b);
+    }
+    for b in [0, 3, 5, 6, 257, 512] {
+        assert!(BucketScheme::new(b).is_none(), "{b}");
+    }
+}
+
+#[mz_ore::test]
+fn bucket_boundaries() {
+    let s = scheme(4);
+    assert_eq!(s.bucket(1), 0);
+    assert_eq!(s.bucket(2), 4);
+    assert_eq!(s.bucket(1024), 40);
+    assert_eq!(s.bucket(1025), 41);
+    for x in 1..10_000u64 {
+        let k = s.bucket(x);
+        let x = f64::cast_lossy(x);
+        assert!(s.upper_bound_ms(k - 1) < x, "{x} above bucket {k}");
+        assert!(x <= s.upper_bound_ms(k), "{x} below bucket {k}");
+    }
+}
+
+#[mz_ore::test]
+fn bucket_exact_at_powers_of_two() {
+    for b in [1, 2, 4, 8, 16, 64, 256] {
+        let s = scheme(b);
+        let bi = i32::try_from(b).unwrap();
+        for e in 0..64i32 {
+            let x = 1u64 << e;
+            assert_eq!(s.bucket(x), e * bi, "b={b} 2^{e}");
+            if e > 0 {
+                // One past the bound is in the next bucket or, for a coarse scheme, a later one
+                // of the same octave.
+                assert!(s.bucket(x + 1) > e * bi, "b={b} 2^{e}+1");
+                assert!(s.bucket(x + 1) <= (e + 1) * bi, "b={b} 2^{e}+1");
+            }
+            if e > 1 {
+                // Just below 2^e, the top of the octave: the bucket is at most 2^e's.
+                assert!(s.bucket(x - 1) <= e * bi, "b={b} 2^{e}-1");
+                assert!(s.bucket(x - 1) > (e - 1) * bi, "b={b} 2^{e}-1");
+            }
+        }
+        assert_eq!(s.bucket(u64::MAX), 64 * bi);
+    }
+}
+
+/// The number of multiples of `interval` in `(from, to]`.
+fn multiples(interval: u64, from: u64, to: u64) -> u64 {
+    to / interval - from / interval
+}
+
+/// Whether `s` is a window boundary of `tree`, computed from its tickers only.
+fn is_boundary(tree: &ResolvedTree, s: u64) -> bool {
+    let mut b = false;
+    tree.for_each_ticker(&mut |t| {
+        b |= match t {
+            Ticker::Aligned { interval_ms } | Ticker::Unaligned { interval_ms } => {
+                *interval_ms == 0 || s % interval_ms == 0
+            }
+            Ticker::Continuous => true,
+        }
+    });
+    b
+}
+
+/// Reference for `add_span` that charges every arrival one by one: its window start is the
+/// largest boundary below it, and its latency is `max(advance, to)` minus that start.
+fn reference_span(
+    tree: &ResolvedTree,
+    scheme: &BucketScheme,
+    interval: u64,
+    from: u64,
+    to: u64,
+    advance: u64,
+    counts: &mut BTreeMap<i32, u64>,
+) {
+    let a = advance.max(to);
+    for t in (from + 1)..=to {
+        if t % interval != 0 {
+            continue;
+        }
+        let mut start = t - 1;
+        while !is_boundary(tree, start) {
+            start -= 1;
+        }
+        assert!(start >= from);
+        *counts.entry(scheme.bucket(a - start)).or_default() += 1;
+    }
+}
+
+/// A random tree with a span `(from, to]` between two of its window boundaries.
+fn arb_span() -> impl Strategy<Value = (ResolvedTree, u64, u64)> {
+    (arb_tree(), 0u64..300, 0u64..300).prop_map(|(tree, f, len)| {
+        let from = tree.next_boundary(f);
+        let to = tree.next_boundary(from + len);
+        (tree, from, to)
+    })
+}
+
+#[mz_ore::test]
+fn span_conserves_counts() {
+    proptest!(|(
+        (tree, from, to) in arb_span(),
+        extra in 0u64..500,
+        interval in prop_oneof![Just(1u64), Just(7u64), Just(10u64)],
+        b in prop_oneof![Just(1u32), Just(4u32), Just(16u32)],
+    )| {
+        let mut counts = BTreeMap::new();
+        add_span(&tree, &scheme(b), interval, from, to, to + extra, &mut counts);
+        prop_assert_eq!(counts.values().sum::<u64>(), multiples(interval, from, to));
+        prop_assert!(counts.values().all(|c| *c > 0));
+    });
+}
+
+#[mz_ore::test]
+fn span_matches_window_walk() {
+    proptest!(|(
+        (tree, from, to) in arb_span(),
+        extra in 0u64..500,
+        interval in prop_oneof![Just(1u64), Just(3u64), Just(7u64)],
+        b in prop_oneof![Just(1u32), Just(4u32), Just(16u32)],
+    )| {
+        let s = scheme(b);
+        let mut actual = BTreeMap::new();
+        add_span(&tree, &s, interval, from, to, to + extra, &mut actual);
+        let mut expected = BTreeMap::new();
+        reference_span(&tree, &s, interval, from, to, to + extra, &mut expected);
+        prop_assert_eq!(actual, expected);
+    });
+}
+
+#[mz_ore::test]
+fn span_clock_skew() {
+    proptest!(|((tree, from, to) in arb_span(), interval in 1u64..=5)| {
+        let s = scheme(4);
+        // The advance time precedes the span end, so the span end stands in for it, and every
+        // arrival's latency is at least the length of its window.
+        let mut skewed = BTreeMap::new();
+        add_span(&tree, &s, interval, from, to, 0, &mut skewed);
+        let mut clamped = BTreeMap::new();
+        add_span(&tree, &s, interval, from, to, to, &mut clamped);
+        prop_assert_eq!(&skewed, &clamped);
+        let mut expected = BTreeMap::new();
+        reference_span(&tree, &s, interval, from, to, 0, &mut expected);
+        prop_assert_eq!(skewed, expected);
+    });
+}
+
+#[mz_ore::test]
+fn span_join_7_11_hyperperiod() {
+    let tree = ResolvedTree::Min(vec![aligned(7000), aligned(11000)]);
+    let s = scheme(256);
+    let frontier = |w: u64| (w - w % 7000).min(w - w % 11000) + 1;
+    let reflected = |w: u64| {
+        tree.last_reflected(Timestamp::from(frontier(w)))
+            .expect("visible")
+    };
+    // Steady state: one hyperperiod after the start.
+    let (start, end) = (77_000u64, 154_000u64);
+    let mut counts = BTreeMap::new();
+    let mut prev = reflected(start);
+    for w in (start + 1)..=end {
+        if w % 7000 != 0 && w % 11000 != 0 {
+            continue;
+        }
+        let new = reflected(w);
+        add_span(&tree, &s, 1, prev, new, w, &mut counts);
+        prev = new;
+    }
+    // Seconds of arrivals at each latency in seconds.
+    let expected = [
+        (7, 7),
+        (11, 4),
+        (12, 6),
+        (13, 8),
+        (14, 31),
+        (15, 5),
+        (16, 7),
+        (17, 9),
+    ];
+    let mut by_bucket = BTreeMap::new();
+    for (secs, count) in expected {
+        by_bucket.insert(s.bucket(secs * 1000), count * 1000);
+    }
+    assert_eq!(
+        by_bucket.len(),
+        expected.len(),
+        "scheme separates latencies"
+    );
+    assert_eq!(counts, by_bucket);
+}
+
+#[mz_ore::test]
+fn span_long_stall_is_cheap() {
+    let tree = ResolvedTree::Min(vec![aligned(1000), aligned(1001)]);
+    let s = scheme(4);
+    let day = 86_400_000u64;
+    let (from, to) = (0, tree.next_boundary(day));
+    let calls = std::cell::Cell::new(0u64);
+    let mut counts = BTreeMap::new();
+    histogram::add_span_with(
+        &|z| {
+            calls.set(calls.get() + 1);
+            tree.next_boundary(z)
+        },
+        &s,
+        1,
+        from,
+        to,
+        to,
+        &mut counts,
+    );
+    assert_eq!(counts.values().sum::<u64>(), to - from);
+    // Windows are at least 1 ms long, so the buckets from latency 1 ms to the span length cover
+    // every window, and each costs two boundary evaluations.
+    let touched = u64::try_from(s.bucket(to - from) - s.bucket(1) + 1).unwrap();
+    assert!(touched <= 4 * 28, "{touched} buckets");
+    assert!(calls.get() <= 2 * touched, "{} calls", calls.get());
 }
