@@ -705,6 +705,10 @@ export interface MzClusterReplicaSizes {
    */
   credits_per_hour: Numeric;
   /**
+   * Whether the size is disabled. Existing replicas keep running on a disabled size, but new clusters and replicas cannot choose it.
+   */
+  disabled: Generated<boolean>;
+  /**
    * The disk allocation per process.
    */
   disk_bytes: string | null;
