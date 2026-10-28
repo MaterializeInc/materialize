@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::testing::{disk_tempdir, fault};
 use super::*;
 
 fn store(capacity: u64) -> (tempfile::TempDir, FileStore) {

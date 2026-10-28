@@ -63,6 +63,8 @@
 mod extent;
 mod file;
 mod region;
+#[cfg(test)]
+mod testing;
 
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -542,12 +544,10 @@ struct Spill {
     threads: AtomicU64,
     /// Queued plus currently-processing entries; `quiesce` waits on zero.
     in_flight: AtomicU64,
-    /// Test-only lifecycle: production spill threads are immortal (the pool
-    /// is a process singleton), but Miri rejects a test binary exiting with
-    /// live threads, so tests stop and join them.
-    #[cfg(test)]
+    /// Lifecycle: production spill threads are immortal (the pool is a
+    /// process singleton) and never set `stop`, but Miri rejects a test
+    /// binary exiting with live threads, so tests stop and join them.
     stop: std::sync::atomic::AtomicBool,
-    #[cfg(test)]
     handles: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
@@ -734,53 +734,6 @@ pub struct ChunkHandle {
     meta: Arc<ChunkMeta>,
 }
 
-// Test hook fired inside `PoolInner::enforce_budget`, between a pass's final
-// counter read and the release of the `enforcing` guard. A test arms it on the
-// thread whose pass it wants to freeze, to interleave a concurrent over-budget
-// insert. One-shot: the hook is taken before it runs, so a re-enforcing pass
-// does not re-arm.
-#[cfg(test)]
-thread_local! {
-    static ENFORCE_BUDGET_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-fn run_enforce_budget_hook() {
-    let hook = ENFORCE_BUDGET_HOOK.with(|cell| cell.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-
-// Test hook fired inside a demotion, after the chunk lock is released and
-// before the file write. One-shot, like `ENFORCE_BUDGET_HOOK`.
-#[cfg(test)]
-thread_local! {
-    static DEMOTION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-fn run_demotion_hook() {
-    let hook = DEMOTION_HOOK.with(|cell| cell.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-
-// Test counter of the file store slot probes demotions made on this thread,
-// so tests can bound the work a pass does against the store.
-#[cfg(test)]
-thread_local! {
-    static DEMOTION_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(all(test, target_os = "linux"))]
-fn demotion_probes() -> u64 {
-    DEMOTION_PROBES.with(std::cell::Cell::get)
-}
-
 impl Pool {
     /// Creates a pool over swap-backed extents, reserving one virtual
     /// region per size class. The pool starts with an unlimited budget, so
@@ -804,13 +757,6 @@ impl Pool {
                 IoMode::Buffered => BackendKind::FileBuffered,
             },
         }
-    }
-
-    /// As [`Pool::new`], with a caller-chosen virtual reservation per size
-    /// class. Small reservations let tests exercise slot exhaustion.
-    #[cfg(test)]
-    fn with_class_capacity(class_capacity_bytes: usize) -> std::io::Result<Pool> {
-        Pool::with_backend_and_class_capacity(ExtentBackend::Swap, class_capacity_bytes)
     }
 
     /// As [`Pool::with_backend`], with a caller-chosen virtual reservation
@@ -1118,15 +1064,12 @@ impl Pool {
                         .name(format!("pool-spill-{i}"))
                         .spawn(move || inner.spill_worker())
                         .expect("spawn pool spill thread");
-                    #[cfg(test)]
                     self.0
                         .spill
                         .handles
                         .lock()
                         .expect("spill handles poisoned")
                         .push(handle);
-                    #[cfg(not(test))]
-                    drop(handle);
                 }
             }
         }
@@ -1143,102 +1086,6 @@ impl Pool {
         if eager {
             self.0.spill.cv.notify_all();
         }
-    }
-
-    /// Test hook: performs one eager-backing step on the calling thread.
-    /// Returns whether progress was made.
-    #[cfg(test)]
-    fn back_step(&self) -> bool {
-        self.0.back_one()
-    }
-
-    /// Test hook: waits until the spill queue is empty and no entry is being
-    /// processed, so tests observe deterministic post-eviction states.
-    #[cfg(test)]
-    fn quiesce_spill(&self) {
-        while self.0.spill.in_flight.load(Ordering::Relaxed) > 0 {
-            std::thread::yield_now();
-        }
-    }
-
-    /// Test hook: stops and joins the spill threads, so a test binary exits
-    /// with none alive (which Miri requires). Stopped threads process no
-    /// further queued work; call [`Pool::quiesce_spill`] first when the test
-    /// depends on the queue draining.
-    #[cfg(test)]
-    fn join_spill_threads(&self) {
-        self.0.spill.stop.store(true, Ordering::Relaxed);
-        self.0.spill.cv.notify_all();
-        let handles =
-            std::mem::take(&mut *self.0.spill.handles.lock().expect("spill handles poisoned"));
-        for handle in handles {
-            handle.join().expect("spill thread panicked");
-        }
-    }
-
-    /// Test hook: enables spill scheduling without spawning threads, so tests
-    /// drive the queue deterministically via [`Pool::spill_step`].
-    #[cfg(test)]
-    fn enable_spill_without_threads(&self) {
-        self.0.spill.enabled.store(true, Ordering::Relaxed);
-    }
-
-    /// Test hook: makes the pool behave as if spill threads exist, without
-    /// spawning any or enabling hand-off, so the inline backstop and the
-    /// backstop threshold apply to inline passes and nothing else demotes.
-    #[cfg(all(test, target_os = "linux"))]
-    fn fake_spill_threads(&self) {
-        self.0.spill.threads.store(1, Ordering::Relaxed);
-    }
-
-    /// Test hook: processes one queued spill entry on the calling thread.
-    /// Returns whether an entry was processed.
-    #[cfg(test)]
-    fn spill_step(&self) -> bool {
-        let popped = self.0.spill_queue().pop_front();
-        let Some(meta) = popped else {
-            return false;
-        };
-        self.0.spill_process(&meta, SpillKind::Evict);
-        self.0.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
-        // The spill loop's trim, without its pacing, so tests observe
-        // deterministic post-commit states. While the full hint is set, a
-        // pass would probe the store for nothing.
-        if !self.0.full_hint.load(Ordering::Relaxed) {
-            self.0.enforce_compressed_cap(Pass::Background);
-        }
-        true
-    }
-
-    /// Test hook: runs one inline compressed-cap enforcement pass on the
-    /// calling thread.
-    #[cfg(test)]
-    fn enforce_compressed(&self) {
-        self.0.enforce_compressed_cap(Pass::Inline);
-    }
-
-    /// Test hook: the file store of a file-mode pool.
-    #[cfg(all(test, target_os = "linux"))]
-    fn file_store(&self) -> Option<Arc<FileStore>> {
-        match &self.0.store {
-            ExtentStore::Swap => None,
-            ExtentStore::File(store) => Some(Arc::clone(store)),
-        }
-    }
-
-    /// Test hook: evicts cold chunks until resident bytes fall to the budget
-    /// or every queued chunk has been visited once. Enforcement runs
-    /// automatically on every insert and budget shrink.
-    #[cfg(test)]
-    fn enforce_budget(&self) {
-        self.0.enforce_budget();
-    }
-
-    /// Test hook: runs one compressed-cap enforcement pass inline on the
-    /// calling thread, where the fake residency observation applies.
-    #[cfg(test)]
-    fn enforce_rss_target(&self) {
-        self.0.enforce_compressed_cap(Pass::Inline);
     }
 
     /// Retunes the resident-bytes budget in place and enforces it. Live
@@ -1284,47 +1131,6 @@ impl Pool {
     /// the spill threads have caught up.
     pub fn compressed_tier_above_cap(&self) -> bool {
         self.0.compressed_tier_above(self.0.compressed_cap())
-    }
-
-    /// Test-only: the number of entries across the second-chance queues,
-    /// live and stale.
-    #[cfg(test)]
-    fn queue_len(&self) -> usize {
-        (0..DEPTH_BANDS).map(|band| self.0.queue(band).len()).sum()
-    }
-
-    /// Test-only: the number of resident-extent queue entries, live and
-    /// stale.
-    #[cfg(test)]
-    fn extent_queue_len(&self) -> usize {
-        self.0.extent_queue().len()
-    }
-
-    /// Test hook: explicitly evicts one chunk. No-op if the chunk is already
-    /// evicted, in flight, empty, or oversize. With spill threads enabled the
-    /// compression is handed off and completes asynchronously (observable via
-    /// [`Residency::WriteInFlight`]); without them it runs inline.
-    #[cfg(test)]
-    fn evict(&self, handle: &ChunkHandle) {
-        let meta = &handle.meta;
-        let mut state = meta.state();
-        if !meta.pool.spill_handoff(meta, &mut state) {
-            meta.pool.evict_locked(meta, &mut state);
-        }
-        drop(state);
-        meta.pool.enforce_or_defer_compressed_cap();
-    }
-
-    /// Test hook: overwrites every free slot's bytes with `0xDE`. The free
-    /// list keeps a freed slot's old bytes on platforms where
-    /// `MADV_DONTNEED` retains contents (macOS); poisoning lets tests prove
-    /// that reads of evicted chunks decompress from the extent rather than
-    /// passing stale slot memory through.
-    #[cfg(test)]
-    fn poison_free_slots(&self) {
-        for region in &self.0.regions {
-            region.poison_free_slots();
-        }
     }
 }
 
@@ -1436,7 +1242,7 @@ impl PoolInner {
         loop {
             self.enforce_budget_inner();
             #[cfg(test)]
-            run_enforce_budget_hook();
+            testing::run_enforce_budget_hook();
             // A caller turned away since this pass's counter reads may have
             // left bytes unenforced; re-run rather than drop them. The Acquire
             // pairs with the turned-away Release so the re-read sees the bump,
@@ -1629,7 +1435,6 @@ impl PoolInner {
     fn spill_worker(self: Arc<Self>) {
         let mut hinted_retry = std::time::Instant::now();
         loop {
-            #[cfg(test)]
             if self.spill.stop.load(Ordering::Relaxed) {
                 return;
             }
@@ -2528,7 +2333,7 @@ impl PoolInner {
             "the file store and the arena resolve the extent to different classes",
         );
         #[cfg(test)]
-        DEMOTION_PROBES.with(|probes| probes.set(probes.get() + 1));
+        testing::DEMOTION_PROBES.with(|probes| probes.set(probes.get() + 1));
         // NOTE: the allocation runs under the chunk lock and can punch holes
         // or `fallocate`, so this lock can be held across those syscalls. The
         // lock order permits it, since the store's locks are leaves.
@@ -2544,7 +2349,7 @@ impl PoolInner {
         drop(state);
 
         #[cfg(test)]
-        run_demotion_hook();
+        testing::run_demotion_hook();
         // SAFETY: the extent stays `Demoting` until the commit below, per
         // `Home::Demoting`: only this function moves it out of that home.
         let (crc, written) = unsafe { source.write(store) };
@@ -2662,32 +2467,6 @@ impl PoolInner {
 }
 
 impl ChunkHandle {
-    /// Test hook: the chunk's current residency state.
-    #[cfg(test)]
-    fn residency(&self) -> Residency {
-        self.meta.state().residency
-    }
-
-    /// Test hook: the file slot of the chunk's extent, if demoted.
-    #[cfg(all(test, target_os = "linux"))]
-    fn file_slot(&self) -> Option<file::FileSlot> {
-        self.demoted_file().map(|(_, slot)| slot)
-    }
-
-    /// Test hook: the store and file slot of the chunk's extent, if
-    /// demoted.
-    #[cfg(all(test, target_os = "linux"))]
-    fn demoted_file(&self) -> Option<(Arc<FileStore>, file::FileSlot)> {
-        self.meta.state().extent.as_ref()?.file_slot()
-    }
-
-    /// Test hook: corrupts the file slot of the chunk's demoted extent.
-    #[cfg(all(test, target_os = "linux"))]
-    fn corrupt_file_extent(&self) {
-        let (store, slot) = self.demoted_file().expect("extent is demoted");
-        store.corrupt(slot);
-    }
-
     /// Copies the whole contents into `dst` (cleared first), leaving the
     /// chunk's residency untouched: a resident slot is copied out directly,
     /// and an evicted extent decompresses straight into `dst` without
@@ -2926,13 +2705,6 @@ impl ChunkHandle {
         let _ = range;
         self.prefetch();
     }
-
-    /// Test hook: the byte size of the chunk's size class, or `None` for
-    /// empty and oversize chunks.
-    #[cfg(test)]
-    fn size_class_bytes(&self) -> Option<usize> {
-        self.meta.class.map(|class| SIZE_CLASSES[class])
-    }
 }
 
 impl Drop for ChunkHandle {
@@ -2986,7 +2758,8 @@ impl Drop for ChunkHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pool::extent::TEST_CODEC;
+    use crate::pool::extent::testing::TEST_CODEC;
+    use crate::pool::testing::ENFORCE_BUDGET_HOOK;
 
     /// Keep test pools small: 64 MiB of virtual reservation per class.
     /// Under Miri the backing is real interpreter heap rather than lazy
