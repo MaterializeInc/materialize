@@ -471,36 +471,16 @@ impl Controller {
         )?;
         let service = self.orchestrator.ensure_service(&service_name, config)?;
 
-        let metrics_task = mz_ore::task::spawn(|| format!("replica-metrics-{replica_id}"), {
-            let tx = self.metrics_tx.clone();
-            let orchestrator = Arc::clone(&self.orchestrator);
-            let service_name = service_name.clone();
-            async move {
-                const METRICS_INTERVAL: Duration = Duration::from_secs(60);
+        let tx = self.metrics_tx.clone();
+        let metrics_task = spawn_service_metrics_task(
+            Arc::clone(&self.orchestrator),
+            service_name,
+            move |metrics| {
+                let _ = tx.send((replica_id, metrics));
+            },
+        );
 
-                // TODO[btv] -- I tried implementing a `watch_metrics` function,
-                // similar to `watch_services`, but it crashed due to
-                // https://github.com/kube-rs/kube/issues/1092 .
-                //
-                // If `metrics-server` can be made to fill in `resourceVersion`,
-                // or if that bug is fixed, we can try that again rather than using this inelegant
-                // loop.
-                let mut interval = tokio::time::interval(METRICS_INTERVAL);
-                loop {
-                    interval.tick().await;
-                    match orchestrator.fetch_service_metrics(&service_name).await {
-                        Ok(metrics) => {
-                            let _ = tx.send((replica_id, metrics));
-                        }
-                        Err(e) => {
-                            warn!("failed to get metrics for replica {replica_id}: {e}");
-                        }
-                    }
-                }
-            }
-        });
-
-        Ok((service, metrics_task.abort_on_drop()))
+        Ok((service, metrics_task))
     }
 
     /// Deprovisions a replica with the service orchestrator.
@@ -660,4 +640,26 @@ mod tests {
         });
         assert_eq!(result.unwrap_err().to_string(), "drop failed");
     }
+}
+
+/// Samples a provisioned service every minute until the returned handle is dropped.
+/// Backend errors skip a sample rather than terminating observation.
+pub fn spawn_service_metrics_task(
+    orchestrator: Arc<dyn NamespacedOrchestrator>,
+    service_name: String,
+    on_metrics: impl Fn(Vec<mz_orchestrator::ServiceProcessMetrics>) + Send + 'static,
+) -> AbortOnDropHandle<()> {
+    let task_name = format!("service-metrics-{service_name}");
+    mz_ore::task::spawn(|| task_name, async move {
+        // metrics-server does not supply resourceVersion for a reliable watch.
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            match orchestrator.fetch_service_metrics(&service_name).await {
+                Ok(metrics) => on_metrics(metrics),
+                Err(error) => warn!(%service_name, %error, "failed to fetch service metrics"),
+            }
+        }
+    })
+    .abort_on_drop()
 }

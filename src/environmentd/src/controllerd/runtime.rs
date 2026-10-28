@@ -50,8 +50,11 @@ pub async fn run(
         .persist_clients
         .open(config.controller.persist_location.clone())
         .await?;
-    let mut replica_history =
-        super::status::ReplicaHistory::new(&catalog, persist, config.controller.deploy_generation)?;
+    let mut replica_history = super::status::ReplicaHistory::new(
+        &catalog,
+        persist.clone(),
+        config.controller.deploy_generation,
+    )?;
     // Bind retained services before polling their initial watch events. Keeping
     // only the latest event until the first tick would lose intervening failures.
     replica_history.set_desired(
@@ -67,6 +70,12 @@ pub async fn run(
     );
     let adapters = config.controller.orchestrator.namespace("adapter");
     let replicas = config.controller.orchestrator.namespace("cluster");
+    let mut replica_metrics = super::metrics::ReplicaMetrics::new(
+        &catalog,
+        persist,
+        config.controller.deploy_generation,
+        std::sync::Arc::clone(&replicas),
+    )?;
     let mut adapter_events = adapters.watch_services();
     let mut replica_events = replicas.watch_services();
     let mut pubsub_events = pubsub
@@ -83,6 +92,9 @@ pub async fn run(
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            _ = &mut replica_metrics.task => {
+                anyhow::bail!("replica metrics publisher stopped");
+            }
             _ = &mut replica_history.task => {
                 anyhow::bail!("replica status publisher stopped");
             }
@@ -145,9 +157,11 @@ pub async fn run(
                 let desired: BTreeSet<_> = observations.adapters.keys()
                     .chain(observations.replicas.keys()).cloned().collect();
                 observations.retain(&desired);
-                replica_history.set_desired(observations.replicas.iter().map(|(service, replica)| {
+                let replica_inventory = observations.replicas.iter().map(|(service, replica)| {
                     (service.clone(), u64::from(replica.resources.allocation.scale.get()))
-                }).collect());
+                }).collect::<BTreeMap<_, _>>();
+                replica_metrics.set_desired(replica_inventory.clone());
+                replica_history.set_desired(replica_inventory);
                 // Initial watch events can precede the first inventory reconciliation.
                 for event in observations.process_events() {
                     replica_history.record(event);

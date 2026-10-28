@@ -11,6 +11,7 @@
 
 mod collections;
 mod http;
+mod metrics;
 mod observations;
 pub mod provisioning;
 pub mod pubsub;
