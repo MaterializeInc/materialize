@@ -1646,6 +1646,10 @@ impl Coordinator {
     ///
     /// TODO: once pinned LIR makes a dataflow's index imports a durable property, record them
     /// as catalog dependencies so the planner can do this with its regular dependency walk.
+    ///
+    /// NOTE: The check is sound only because `DROP` is serialized DDL (`must_serialize_ddl`)
+    /// and callers do not await between it and the catalog commit. Otherwise a concurrent
+    /// `CREATE MATERIALIZED VIEW` could start reading the index in between.
     fn check_index_dependents(
         &self,
         session: &Session,
