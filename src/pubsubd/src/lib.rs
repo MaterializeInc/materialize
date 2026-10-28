@@ -37,6 +37,12 @@ static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(Non
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Materialize Persist pubsub relay", version = VERSION.as_str())]
 struct Args {
+    // Backend launch arguments are shared with distributed services. The relay
+    // has one process and does not access secrets.
+    #[clap(long = "process", hide = true, default_value = "0", value_parser = clap::value_parser!(u16).range(0..=0))]
+    _process: u16,
+    #[clap(long = "secrets-reader-name-prefix", hide = true)]
+    _secrets_reader_name_prefix: Option<String>,
     /// Address for the internal Persist pubsub gRPC service.
     #[clap(long, default_value = "127.0.0.1:6879")]
     listen_addr: SocketAddr,
@@ -105,4 +111,26 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
 async fn metrics(State(registry): State<MetricsRegistry>, headers: HeaderMap) -> impl IntoResponse {
     mz_http_util::handle_prometheus(&registry, headers).await
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Args;
+
+    #[mz_ore::test]
+    fn backend_launch_arguments() {
+        let args = Args::try_parse_from([
+            "pubsubd",
+            "--process=0",
+            "--secrets-reader-name-prefix=environment",
+            "--listen-addr=127.0.0.1:17000",
+            "--internal-http-listen-addr=127.0.0.1:17001",
+        ])
+        .expect("single-process backend launch");
+        assert_eq!(args.listen_addr.port(), 17000);
+        assert_eq!(args.internal_http_listen_addr.port(), 17001);
+        assert!(Args::try_parse_from(["pubsubd", "--process=1"]).is_err());
+    }
 }
