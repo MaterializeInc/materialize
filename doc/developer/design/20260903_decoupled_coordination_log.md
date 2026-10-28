@@ -31,8 +31,9 @@ Do not dismiss this as a deadline or weaken the assertion. A two-shard reduction
 (`/tmp/txn-cache-repro/repro.rs`), not a Cargo test. The cache file is identical
 to pinned upstream. Per-shard cleanup leaves another shard behind the advancing
 global minimum, violating global compaction validation without losing writes in
-the reduction. Oracle review of the shared invariant/repair is running. No
-production changes or assertion weakening have been made.
+the reduction. Oracle confirmed the obsolete global-GC check is not a reader safety invariant.
+Removal with cross-shard/two-writer/replay regressions awaits Aljoscha approval,
+explicitly requested. No production changes or assertion weakening have been made.
 Both runs are preserved in `debug-lifecycle-888e822f.tgz`:
 `run-93d7927e3ac54f4597f18d7b4a8f6feb` failed,
 `run-04119edf999540daafc2b286ccba5fc7` passed.
@@ -48,14 +49,26 @@ only its adapter, and retained replica PIDs and maintained data. Evidence and
 cleanup success are preserved in `public-launcher-pkill-888e822f.tgz`, run
 `launcher-7d1c815c44d4461f89c5afd7fdae504f`. The local report remains unexplained.
 
-Next acceptance: concurrent adapter replica policy, interrupted initialization,
-compatible old/new deployment coexistence and the executed user-facing upgrade
-walkthrough in [the developer guide](../controllerd.md), then remaining backend
-and broad regression gates. Agent34 identified the existing ON REFRESH
-empty/one/empty regression in `test/testdrive/cluster-controller.td:1033–1117`:
-run with both adapters, resize across endpoints, then repeat new transitions with
-each adapter as sole survivor. Preserve default policy ticks and publication
-cadence. Single-active-deployment status queries do not prove prewarming isolation.
+Next: repair the replica-observation bridge. The ON REFRESH witness failed twice.
+The first run hit the cache assertion. The exact repeat created a scheduled replica
+and installed its MV, but SQL replica statuses remained empty. Evidence:
+`policy-failure-888e822f.tgz` and `policy-repeat-888e822f.tgz` (last run
+`launcher-deee7f176eaf455691145bd93bfbc80d`). Both cleaned up successfully.
+Controllerd records replica backend events only in HTTP inventory. Adapterd's
+`Controller::events_stream` returns pending when process ownership is disabled,
+so policy's local status map never receives Online. Do not weaken readiness tests.
+The local next-version witness additionally verifies dropped adapter processes
+have exited before asserting survivor-only policy. It has not run.
+
+Deployment coexistence requires implementation, not just acceptance. Controller
+startup has only fresh/active-restart paths. Pending admission and promotion APIs
+already exist in durable catalog and environmentd preflight, but controllerd lacks
+those lifecycle paths, adapter catch-up reporting, serving-mode transition and
+retired-generation cleanup. Agent37 traced reuse boundaries. Keep policy/readiness
+computation in adapters, reuse existing admission/fencing and external promotion,
+and bring consequential serving-mode/cleanup choices to Aljoscha. The executed
+old/new upgrade walkthrough and backend integration remain open, alongside
+interrupted initialization and remaining broad regressions.
 
 ## Implemented contracts and verification
 
