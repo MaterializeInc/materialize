@@ -194,6 +194,16 @@ pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Sets metadata.recovery.rebootstrap.trigger.ms in librdkafka for sources and sinks.
+/// Defaults to the librdkafka default of 5 minutes.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER: Config<Duration> = Config::new(
+    "kafka_metadata_recovery_rebootstrap_trigger",
+    Duration::from_secs(300),
+    "Sets metadata.recovery.rebootstrap.trigger.ms in librdkafka for sources and sinks.",
+    ParameterScope::Replica,
+);
+
 /// Sets message.max.bytes in librdkafka for Kafka sink producers.
 /// Maximum Kafka protocol request message size. Producer-side, this controls
 /// the maximum size of a single message (including framing) that the client
@@ -610,6 +620,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_RETRY_BACKOFF_MAX)
         .add(&KAFKA_RECONNECT_BACKOFF)
         .add(&KAFKA_RECONNECT_BACKOFF_MAX)
+        .add(&KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER)
         .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)

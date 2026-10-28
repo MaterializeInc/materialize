@@ -331,6 +331,52 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
         c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
 
 
+def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> None:
+    """Kafka sources behind an SSH tunnel recover after the broker itself
+    restarts. Losing every broker makes librdkafka re-bootstrap, which drops
+    its broker list and resolves each bootstrap address again through the
+    tunnel-rewriting resolver."""
+    c.down()
+    with c.override(SshBastionHost(max_startups="2")):
+        broker = "redpanda" if redpanda else "kafka"
+        dependencies = ["materialized", "ssh-bastion-host", broker]
+        if not redpanda:
+            dependencies.append("schema-registry")
+        c.up(*dependencies)
+
+        c.run_testdrive_files("setup.td")
+
+        public_key = c.sql_query("""
+            select public_key_1 from mz_ssh_tunnel_connections ssh \
+            join mz_connections c on c.id = ssh.id
+            where c.name = 'thancred';
+            """)[0][0]
+
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            # sshd rejects a world-writable key file, and the exec shell's
+            # umask is not guaranteed, so set the mode explicitly.
+            f"echo '{public_key}' > /etc/authorized_keys/mz && chmod 644 /etc/authorized_keys/mz",
+        )
+
+        # Re-bootstrap after one second without metadata instead of the
+        # five-minute librdkafka default, so the outage below exercises it.
+        c.sql(
+            "ALTER SYSTEM SET kafka_metadata_recovery_rebootstrap_trigger = '1s'",
+            user="mz_system",
+            port=6877,
+        )
+
+        c.run_testdrive_files("--no-reset", "kafka-source.td")
+        c.kill(broker)
+        c.run_testdrive_files("--no-reset", "kafka-source-after-broker-failure.td")
+
+        c.up(*[d for d in dependencies if d != "materialized"])
+        c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
+
+
 def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
     c.down()
     # Configure the SSH bastion host to allow only two connections to be
@@ -715,6 +761,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         (workflow_basic_ssh_features, (), False),
         (workflow_pg, (), True),
         # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
+        (workflow_kafka_restart_broker, (False,), True),
         (workflow_kafka_sink, (), True),
         (workflow_sql_server, (), True),
         (workflow_mysql, (), True),
@@ -724,6 +771,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             [
                 # (workflow_kafka, (True,), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
                 (workflow_hidden_hosts, (True,), True),
+                (workflow_kafka_restart_broker, (True,), True),
                 # Various special cases related to ssh
                 (workflow_ssh_key_after_restart, (), False),
                 (workflow_rotated_ssh_key_after_restart, (), False),
