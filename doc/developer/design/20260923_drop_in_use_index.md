@@ -44,7 +44,7 @@ be refused.
   workflows depend on it. In Materialize Cloud every use of the escape hatch is
   visible to us. Self-managed deployments see only the user-facing warning and
   their own logs and metrics.
-- One-shot `SUBSCRIBE` and `SELECT` dataflows never block DDL.
+- One-shot `SUBSCRIBE`, `COPY TO`, and `SELECT` dataflows never block DDL.
 
 ## Out of Scope
 
