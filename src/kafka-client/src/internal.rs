@@ -14,15 +14,17 @@
 //! * [`hooks`]: type-erased access to the user's context, and log filtering.
 //! * [`cluster`]: connections, bootstrap, metadata cache, broker lookup.
 //! * [`consumer`], [`producer`], [`admin`]: the client engines.
+//! * [`records`], [`compression`], [`partitioner`]: the record batch codec and
+//!   partitioner hashing.
 
 pub(crate) mod admin;
 pub(crate) mod cluster;
+pub(crate) mod compression;
 pub(crate) mod consumer;
 pub(crate) mod hooks;
+pub(crate) mod partitioner;
 pub(crate) mod producer;
+pub(crate) mod records;
 pub(crate) mod runtime;
-// pub(crate) mod compression;
 // pub(crate) mod net;
-// pub(crate) mod partitioner;
 // pub(crate) mod protocol;
-// pub(crate) mod records;
