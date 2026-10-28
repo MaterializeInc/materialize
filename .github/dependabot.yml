@@ -34,23 +34,32 @@ updates:
   # letter (aws-*, serde*, windows*) together and bounds how much one broken
   # update blocks. A dependency joins the first group whose pattern matches it.
   # Major updates are not grouped.
+  #
+  # NOTE: Dependabot classifies 0.y -> 0.(y+1) as a minor update, but Cargo
+  # treats it as breaking, so such bumps land in these groups too. When a
+  # group PR is red, either push a fix commit to its branch, or drop the
+  # offending crate with `@dependabot ignore <crate> minor version` and handle
+  # it separately.
   groups:
     async-stack:
       applies-to: version-updates
       update-types: [minor, patch]
       patterns: ["tokio*", "hyper*", "http*", "tower*", "h2", "rustls*"]
-    telemetry:
+    # opentelemetry-otlp and console-subscriber depend on tonic and prost.
+    telemetry-grpc:
       applies-to: version-updates
       update-types: [minor, patch]
-      patterns: ["tracing*", "opentelemetry*"]
-    proto:
-      applies-to: version-updates
-      update-types: [minor, patch]
-      patterns: ["prost*", "tonic*"]
+      patterns:
+        - "tracing*"
+        - "opentelemetry*"
+        - "prost*"
+        - "tonic*"
+        - "console-subscriber"
+    # duckdb depends on arrow, and libduckdb-sys moves in lockstep with duckdb.
     arrow:
       applies-to: version-updates
       update-types: [minor, patch]
-      patterns: ["arrow*", "parquet", "iceberg*", "object_store"]
+      patterns: ["arrow*", "parquet", "iceberg*", "duckdb", "libduckdb-sys"]
     simple1:
       applies-to: version-updates
       update-types: [minor, patch]
