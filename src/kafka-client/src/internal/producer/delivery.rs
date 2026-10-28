@@ -43,8 +43,8 @@ struct Contents {
 
 /// Decodes the records of a batch, or `None` if that fails, which it does not
 /// for batches this producer encoded.
-fn decode<D>(batch: &Batch<D>) -> Option<Vec<Contents>> {
-    let records: RecordIter = match &batch.data {
+fn decode(data: &BatchData) -> Option<Vec<Contents>> {
+    let records: RecordIter = match data {
         BatchData::Open(builder) => builder.records(),
         BatchData::Encoded(encoded) => parse_batches(encoded.bytes())
             .next()?
@@ -80,7 +80,8 @@ fn contents(record: Record) -> Contents {
 }
 
 /// Reports a delivered batch. `base_offset` and `log_append_time` are -1 when
-/// unknown (acks=0, or a duplicate of an earlier send).
+/// unknown (acks=0, or a duplicate of an earlier send). Returns the batch's
+/// buffer for reuse.
 pub(super) fn delivered<C: ProducerContext>(
     context: &C,
     only_errors: bool,
@@ -89,17 +90,40 @@ pub(super) fn delivered<C: ProducerContext>(
     batch: Batch<C::DeliveryOpaque>,
     base_offset: i64,
     log_append_time: i64,
-) {
-    if only_errors {
-        return;
+) -> Option<Vec<u8>> {
+    if !only_errors {
+        report_delivered(
+            context,
+            topic,
+            partition,
+            &batch.data,
+            batch.opaques,
+            base_offset,
+            log_append_time,
+        );
     }
+    match batch.data {
+        BatchData::Encoded(encoded) => encoded.into_buffer(),
+        BatchData::Open(_) => None,
+    }
+}
+
+fn report_delivered<C: ProducerContext>(
+    context: &C,
+    topic: &Arc<str>,
+    partition: i32,
+    data: &BatchData,
+    opaques: Vec<C::DeliveryOpaque>,
+    base_offset: i64,
+    log_append_time: i64,
+) {
     let contents = if C::DELIVERY_REPORT_CONTENTS {
-        decode(&batch)
+        decode(data)
     } else {
         None
     };
     let mut contents = contents.map(Vec::into_iter);
-    for (i, opaque) in batch.opaques.into_iter().enumerate() {
+    for (i, opaque) in opaques.into_iter().enumerate() {
         let offset = if base_offset >= 0 {
             base_offset + i64::try_from(i).expect("fits")
         } else {
@@ -142,7 +166,7 @@ pub(super) fn failed<C: ProducerContext>(
     let error = KafkaError::MessageProduction(error);
     match records {
         Undelivered::Batch(batch) => {
-            let mut contents = decode(&batch).map(Vec::into_iter);
+            let mut contents = decode(&batch.data).map(Vec::into_iter);
             for opaque in batch.opaques {
                 let c = contents.as_mut().and_then(Iterator::next);
                 let (key, payload, headers, timestamp) = match c {

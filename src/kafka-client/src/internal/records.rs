@@ -153,6 +153,29 @@ impl BatchBuilder {
         }
     }
 
+    /// Like [`BatchBuilder::with_capacity`], encoding into `buf`, whose
+    /// contents are discarded, to reuse its allocation.
+    pub(crate) fn with_buffer(
+        compression: Compression,
+        level: Option<i32>,
+        transactional: bool,
+        mut buf: Vec<u8>,
+        capacity: usize,
+    ) -> Self {
+        buf.clear();
+        buf.reserve(BATCH_HEADER_LEN + capacity);
+        buf.resize(BATCH_HEADER_LEN, 0);
+        BatchBuilder {
+            compression,
+            level,
+            transactional,
+            buf,
+            record_count: 0,
+            first_timestamp: 0,
+            max_timestamp: i64::MIN,
+        }
+    }
+
     /// The number of bytes [`BatchBuilder::append`] would add for this record.
     pub(crate) fn encoded_record_size(
         &self,
@@ -242,20 +265,38 @@ impl BatchBuilder {
         ident: ProducerIdentity,
         base_sequence: i32,
     ) -> Result<EncodedBatch, CodecError> {
+        self.build_reusing(ident, base_sequence, None)
+            .map(|(batch, _)| batch)
+    }
+
+    /// Like [`BatchBuilder::build`], compressing into `scratch` (whose
+    /// contents are discarded) if given. Also returns the buffer the batch
+    /// does not use, for reuse: the uncompressed records, or the scratch
+    /// buffer if the batch is not compressed.
+    pub(crate) fn build_reusing(
+        self,
+        ident: ProducerIdentity,
+        base_sequence: i32,
+        scratch: Option<Vec<u8>>,
+    ) -> Result<(EncodedBatch, Option<Vec<u8>>), CodecError> {
         if self.record_count == 0 {
             return Err(CodecError::EmptyBatch);
         }
         let mut buf = self.buf;
+        let mut spare = scratch;
         let mut compression = self.compression;
         if compression != Compression::None {
             let records = &buf[BATCH_HEADER_LEN..];
-            let mut compressed = Vec::with_capacity(BATCH_HEADER_LEN + records.len() / 2);
+            let mut compressed = spare.take().unwrap_or_default();
+            compressed.clear();
+            compressed.reserve(BATCH_HEADER_LEN + records.len() / 2);
             compressed.resize(BATCH_HEADER_LEN, 0);
             compression::compress(compression, self.level, records, &mut compressed)?;
             if compressed.len() > buf.len() {
                 compression = Compression::None;
+                spare = Some(compressed);
             } else {
-                buf = compressed;
+                spare = Some(std::mem::replace(&mut buf, compressed));
             }
         }
         let batch_length = i32::try_from(buf.len() - LOG_OVERHEAD)
@@ -274,11 +315,12 @@ impl BatchBuilder {
         put_i64(&mut buf, MAX_TIMESTAMP, self.max_timestamp);
         put_i32(&mut buf, RECORD_COUNT, self.record_count);
         stamp(&mut buf, ident, base_sequence);
-        Ok(EncodedBatch {
+        let batch = EncodedBatch {
             data: Bytes::from(buf),
             record_count: self.record_count,
             compression,
-        })
+        };
+        Ok((batch, spare))
     }
 
     fn timestamp_delta(&self, timestamp_ms: i64) -> i64 {
@@ -389,6 +431,12 @@ impl EncodedBatch {
     ///
     /// `Bytes` previously returned by [`EncodedBatch::bytes`] keep the old
     /// contents: if any are still alive, the batch is copied first.
+    /// The batch's buffer, for reuse, unless `Bytes` previously returned by
+    /// [`EncodedBatch::bytes`] are still alive.
+    pub(crate) fn into_buffer(self) -> Option<Vec<u8>> {
+        self.data.try_into_mut().ok().map(Vec::from)
+    }
+
     pub(crate) fn restamp(&mut self, ident: ProducerIdentity, base_sequence: i32) {
         let data = std::mem::take(&mut self.data);
         let mut buf = data

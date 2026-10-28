@@ -345,12 +345,17 @@ impl<C: ProducerContext> ProducerInner<C> {
                     topic: id,
                     partition,
                 };
-                let wake = st.partition_mut(key).append(
-                    &new_record,
-                    record.delivery_opaque,
-                    &self.config,
-                    now,
-                );
+                let state = &mut *st;
+                let wake = state.topics[id]
+                    .partition_mut(partition)
+                    .expect("chosen partitions exist")
+                    .append(
+                        &new_record,
+                        record.delivery_opaque,
+                        &self.config,
+                        &mut state.buffers,
+                        now,
+                    );
                 st.added_to_partition(key, wake, &mut fx);
             }
         }
@@ -472,6 +477,7 @@ impl<C: ProducerContext> ProducerInner<C> {
         }
         let mut done_msgs = 0;
         let mut done_bytes = 0;
+        let mut buffers = Vec::new();
         for (topic, partition, batch, base_offset, log_append_time) in delivered {
             let n = u64::try_from(batch.len()).expect("fits");
             done_msgs += n;
@@ -479,7 +485,7 @@ impl<C: ProducerContext> ProducerInner<C> {
             self.txmsgs.fetch_add(n, Ordering::Relaxed);
             self.txmsg_bytes
                 .fetch_add(batch.kv_bytes, Ordering::Relaxed);
-            delivery::delivered(
+            buffers.extend(delivery::delivered(
                 &*self.context,
                 self.config.delivery_report_only_error,
                 &topic,
@@ -487,7 +493,13 @@ impl<C: ProducerContext> ProducerInner<C> {
                 batch,
                 base_offset,
                 log_append_time,
-            );
+            ));
+        }
+        if !buffers.is_empty() {
+            let mut st = self.lock();
+            for buf in buffers {
+                st.buffers.put(buf);
+            }
         }
         for failure in failures {
             done_msgs += u64::try_from(failure.records.len()).expect("fits");
@@ -543,6 +555,7 @@ impl<C: ProducerContext> ProducerInner<C> {
         }
         if maintenance {
             self.expire_unrouted(&mut st, now, &mut fx);
+            st.buffers.trim_idle();
         }
         self.finish(st, fx);
     }
@@ -555,18 +568,14 @@ impl<C: ProducerContext> ProducerInner<C> {
         now: Instant,
         fx: &mut Effects<C::DeliveryOpaque>,
     ) {
-        let Some(timeout) = self.config.message_timeout else {
-            return;
-        };
+        // Without a timeout, nothing expires.
+        let timeout = self.config.message_timeout.unwrap_or(Duration::MAX);
+        let expired = |since: Instant| now.saturating_duration_since(since) >= timeout;
         let mut timed_out = Vec::new();
         for topic in &mut st.topics {
             let name = Arc::clone(&topic.name);
             let mut ua_expired = 0;
-            while topic
-                .ua
-                .front()
-                .is_some_and(|m| m.enqueued + timeout <= now)
-            {
+            while topic.ua.front().is_some_and(|m| expired(m.enqueued)) {
                 let m = topic.ua.pop_front().expect("checked");
                 let partition = m.partition.unwrap_or(-1);
                 fx.fail(
@@ -587,6 +596,13 @@ impl<C: ProducerContext> ProducerInner<C> {
                 if p.leader >= 0 {
                     continue;
                 }
+                if p.has_queued() || p.in_flight > 0 {
+                    // Records wait for a leader.
+                    fx.refresh_metadata = true;
+                }
+                let Some(timeout) = self.config.message_timeout else {
+                    continue;
+                };
                 let partition = i32::try_from(index).expect("fits");
                 let (expired, sequenced) = p.expire(&name, partition, now, timeout, fx);
                 if expired > 0 {

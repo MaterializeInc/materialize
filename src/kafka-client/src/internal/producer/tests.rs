@@ -305,6 +305,12 @@ fn fetch_all(
                         .push(a.first_offset);
                 }
             }
+            if read_committed && p.last_stable_offset < p.high_watermark && !deadline.is_elapsed() {
+                // Brokers write transaction markers after answering EndTxn;
+                // the tests have no transaction open when they read.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                continue;
+            }
             let end = if read_committed {
                 p.last_stable_offset
             } else {
@@ -1250,7 +1256,16 @@ fn broker_restart_mid_produce() {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
-    p.flush(Duration::from_secs(120)).unwrap();
+    if let Err(e) = p.flush(Duration::from_secs(120)) {
+        let mut stats = crate::statistics::Statistics::default();
+        super::StatsSource::fill(&**p.inner(), &mut stats);
+        panic!(
+            "flush failed: {e}; topics {:?}; eos {:?}; errors {:?}",
+            stats.topics,
+            stats.eos,
+            rec.errors.lock().unwrap()
+        );
+    }
     restarter.join().unwrap();
     eprintln!(
         "produced {n} in {:?}, {} transactions committed, aborted: {txn_errors:?}",

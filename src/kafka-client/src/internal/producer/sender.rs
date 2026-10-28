@@ -62,6 +62,8 @@ struct Picked<D> {
     /// The identity and base sequence to stamp.
     ident: ProducerIdentity,
     base_seq: i32,
+    /// A buffer to compress into.
+    scratch: Option<Vec<u8>>,
 }
 
 /// A batch in a request awaiting its response.
@@ -297,12 +299,16 @@ impl<C: ProducerContext> ProducerInner<C> {
             batch.retry_at = None;
             p.in_flight += 1;
             bytes += batch.uncompressed_size();
+            let scratch = (matches!(batch.data, BatchData::Open(_))
+                && cfg.compression != Compression::None)
+                .then(|| st.buffers.take(batch.uncompressed_size()));
             picked.push(Picked {
                 key,
                 topic,
                 batch,
                 ident,
                 base_seq,
+                scratch,
             });
         }
         st.in_flight += u32::try_from(picked.len()).expect("few batches");
@@ -394,14 +400,26 @@ impl<C: ProducerContext> ProducerInner<C> {
             matches!(p.batch.data, BatchData::Open(_))
                 && p.batch.uncompressed_size() >= OFFLOAD_COMPRESSION_BYTES
         });
-        if heavy {
-            crate::internal::runtime::run_blocking(move || {
-                picked.into_iter().map(encode_one).collect()
-            })
-            .await
+        let encode_all = move || {
+            let mut spares = Vec::new();
+            let sent: Vec<_> = picked
+                .into_iter()
+                .map(|p| encode_one(p, &mut spares))
+                .collect();
+            (sent, spares)
+        };
+        let (sent, spares) = if heavy {
+            crate::internal::runtime::run_blocking(encode_all).await
         } else {
-            picked.into_iter().map(encode_one).collect()
+            encode_all()
+        };
+        if !spares.is_empty() {
+            let mut st = self.lock();
+            for buf in spares {
+                st.buffers.put(buf);
+            }
         }
+        sent
     }
 
     /// Handles the result of a ProduceRequest: delivery reports, retries and
@@ -715,17 +733,21 @@ impl<C: ProducerContext> ProducerInner<C> {
 
 /// Stamps and compresses one batch. A batch that cannot be compressed is
 /// sent uncompressed.
-fn encode_one<D>(p: Picked<D>) -> Sent<D> {
+fn encode_one<D>(p: Picked<D>, spares: &mut Vec<Vec<u8>>) -> Sent<D> {
     let Picked {
         key,
         topic,
         mut batch,
         ident,
         base_seq,
+        scratch,
     } = p;
     batch.data = match batch.data {
-        BatchData::Open(builder) => match builder.build(ident, base_seq) {
-            Ok(encoded) => BatchData::Encoded(encoded),
+        BatchData::Open(builder) => match builder.build_reusing(ident, base_seq, scratch) {
+            Ok((encoded, spare)) => {
+                spares.extend(spare);
+                BatchData::Encoded(encoded)
+            }
             Err(e) => panic!("encoding a non-empty batch failed: {e}"),
         },
         BatchData::Encoded(mut encoded) => {

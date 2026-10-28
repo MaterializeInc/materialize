@@ -25,7 +25,7 @@ use crate::config::RDKafkaLogLevel;
 use crate::error::KafkaError;
 use crate::internal::cluster::TopicMetadata;
 use crate::internal::partitioner::StickyPartition;
-use crate::internal::records::{BatchBuilder, EncodedBatch, RecordHeader};
+use crate::internal::records::{BATCH_HEADER_LEN, BatchBuilder, EncodedBatch, RecordHeader};
 use crate::message::OwnedHeaders;
 use crate::types::RDKafkaErrorCode;
 
@@ -261,6 +261,7 @@ impl<D> PartitionState<D> {
         record: &NewRecord<'_>,
         opaque: D,
         cfg: &Config,
+        pool: &mut BufferPool,
         now: Instant,
     ) -> bool {
         let mut wake = !self.has_queued();
@@ -278,15 +279,18 @@ impl<D> PartitionState<D> {
             None => {
                 // Start at the size of the previous batch so that a steady
                 // stream rarely grows the buffer.
-                let capacity = self
-                    .last_batch_size
+                // Start a quarter above the size of the previous batch, so
+                // that a steady stream does not grow the buffer. A batch
+                // exceeds `max_batch_bytes` by at most one record.
+                let capacity = (self.last_batch_size + self.last_batch_size / 4)
                     .max(record.wire_size)
                     .max(MIN_BATCH_CAPACITY)
-                    .min(cfg.max_batch_bytes.max(record.wire_size));
-                let builder = BatchBuilder::with_capacity(
+                    .min(cfg.max_batch_bytes + record.wire_size);
+                let builder = BatchBuilder::with_buffer(
                     cfg.compression,
                     cfg.compression_level,
                     cfg.transactional_id.is_some(),
+                    pool.take(capacity + BATCH_HEADER_LEN),
                     capacity,
                 );
                 let records = if self.last_batch_size == 0 {
@@ -315,6 +319,68 @@ impl<D> PartitionState<D> {
 
 /// The smallest initial capacity of a batch buffer.
 const MIN_BATCH_CAPACITY: usize = 1024;
+
+/// Buffers of batches that were sent or compressed, for new batches to
+/// reuse. Batches are large, short-lived allocations; recycling them saves
+/// the allocator's work and keeps it from retaining freed pages.
+#[derive(Debug, Default)]
+pub(super) struct BufferPool {
+    bufs: Vec<Vec<u8>>,
+    bytes: usize,
+    /// Whether a buffer was taken since the last [`BufferPool::trim_idle`].
+    used: bool,
+}
+
+/// The pool's limits. Smaller buffers are cheap to allocate.
+const POOL_MIN_BUFFER: usize = 64 << 10;
+const POOL_MAX_BUFFERS: usize = 64;
+const POOL_MAX_BYTES: usize = 32 << 20;
+
+impl BufferPool {
+    /// A buffer for about `size` bytes: the smallest pooled one that fits,
+    /// unless that is much larger than needed, else a new one.
+    pub fn take(&mut self, size: usize) -> Vec<u8> {
+        if size < POOL_MIN_BUFFER {
+            return Vec::with_capacity(size);
+        }
+        self.used = true;
+        let best = self
+            .bufs
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.capacity() >= size)
+            .min_by_key(|(_, b)| b.capacity())
+            .map(|(i, _)| i);
+        match best {
+            Some(i) if self.bufs[i].capacity() / 8 <= size => {
+                let buf = self.bufs.swap_remove(i);
+                self.bytes -= buf.capacity();
+                buf
+            }
+            _ => Vec::with_capacity(size),
+        }
+    }
+
+    pub fn put(&mut self, buf: Vec<u8>) {
+        let capacity = buf.capacity();
+        if capacity >= POOL_MIN_BUFFER
+            && self.bufs.len() < POOL_MAX_BUFFERS
+            && self.bytes + capacity <= POOL_MAX_BYTES
+        {
+            self.bytes += capacity;
+            self.bufs.push(buf);
+        }
+    }
+
+    /// Frees the pooled buffers if none was taken since the previous call.
+    pub fn trim_idle(&mut self) {
+        if !self.used {
+            self.bufs.clear();
+            self.bytes = 0;
+        }
+        self.used = false;
+    }
+}
 
 /// A record to append, validated by `send`.
 pub(super) struct NewRecord<'a> {
@@ -461,6 +527,7 @@ pub(super) struct State<D> {
     pub eos: Eos,
     /// Batches in flight over all partitions.
     pub in_flight: u32,
+    pub buffers: BufferPool,
 }
 
 impl<D> State<D> {
@@ -472,6 +539,7 @@ impl<D> State<D> {
             senders: BTreeMap::new(),
             eos,
             in_flight: 0,
+            buffers: BufferPool::default(),
         }
     }
 
@@ -616,6 +684,15 @@ impl<D> State<D> {
                         fx.wake.insert(new);
                     }
                 }
+                // Like librdkafka's fast leader queries: keep refreshing while
+                // records wait for a leader.
+                if self.topics[id]
+                    .partitions
+                    .iter()
+                    .any(|p| p.leader < 0 && (p.has_queued() || p.in_flight > 0))
+                {
+                    fx.refresh_metadata = true;
+                }
                 self.route_ua(id, cfg, now, fx);
             }
             Some(RDKafkaErrorCode::UnknownTopicOrPartition) => {
@@ -698,7 +775,7 @@ impl<D> State<D> {
             let p = topic
                 .partition_mut(partition)
                 .expect("chosen partitions exist");
-            p.append(&record, m.opaque, cfg, m.enqueued);
+            p.append(&record, m.opaque, cfg, &mut self.buffers, m.enqueued);
             touched.insert(partition);
         }
         for partition in touched {

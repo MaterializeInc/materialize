@@ -47,6 +47,7 @@ use kafka_protocol::messages::{
 use kafka_protocol::protocol::StrBytes;
 
 use crate::config::RDKafkaLogLevel;
+use crate::config::settings::DebugContext;
 use crate::error::{KafkaError, KafkaResult, RDKafkaError};
 use crate::internal::cluster::{Broker, CoordinatorKind};
 use crate::internal::net::{NetError, RequestOptions};
@@ -201,6 +202,8 @@ pub(super) struct Eos {
     pub pid_at: Option<Instant>,
     /// When to (re)send AddPartitionsToTxn.
     pub register_at: Option<Instant>,
+    /// The last backoff after `CONCURRENT_TRANSACTIONS` from AddPartitionsToTxn.
+    pub concurrent_backoff: Option<Duration>,
 }
 
 impl Eos {
@@ -233,6 +236,7 @@ impl Eos {
             fatal: None,
             pid_at: (idempotent && !transactional).then_some(now),
             register_at: None,
+            concurrent_backoff: None,
         }
     }
 
@@ -558,6 +562,11 @@ enum PidOutcome {
 
 /// The retry backoff of AddPartitionsToTxn and the producer id request.
 const PID_RETRY_BACKOFF: Duration = Duration::from_millis(500);
+
+/// The backoff range after `CONCURRENT_TRANSACTIONS` from AddPartitionsToTxn,
+/// which Kafka returns while it completes the previous transaction.
+const CONCURRENT_RETRY_BACKOFF_MIN: Duration = Duration::from_millis(1);
+const CONCURRENT_RETRY_BACKOFF_MAX: Duration = Duration::from_millis(20);
 
 impl<C: ProducerContext> ProducerInner<C> {
     fn ensure_transactional(&self) -> Result<(), RDKafkaError> {
@@ -1290,8 +1299,11 @@ impl<C: ProducerContext> ProducerInner<C> {
         let mut err = None;
         let mut reset_coordinator = false;
         let mut retry_backoff = PID_RETRY_BACKOFF;
+        let mut concurrent = false;
         let mut require_bump = false;
         let mut registered = BTreeSet::new();
+        let debug = self.cluster.logger().debug_enabled(DebugContext::Eos);
+        let mut debug_lines = Vec::new();
         match response {
             Err(code) => {
                 err = Some(code);
@@ -1318,6 +1330,12 @@ impl<C: ProducerContext> ProducerInner<C> {
                         registered.insert(key);
                         continue;
                     };
+                    if debug {
+                        debug_lines.push(format!(
+                            "AddPartitionsToTxn response: partition \"{topic}\": [{partition}]: {}",
+                            code.err2str()
+                        ));
+                    }
                     let (p_action, request_error) = match code {
                         RDKafkaErrorCode::NotCoordinator
                         | RDKafkaErrorCode::CoordinatorNotAvailable => {
@@ -1325,7 +1343,7 @@ impl<C: ProducerContext> ProducerInner<C> {
                             (Action::Retry, true)
                         }
                         RDKafkaErrorCode::ConcurrentTransactions => {
-                            retry_backoff = Duration::from_millis(20);
+                            concurrent = true;
                             (Action::Retry, true)
                         }
                         RDKafkaErrorCode::CoordinatorLoadInProgress
@@ -1365,6 +1383,9 @@ impl<C: ProducerContext> ProducerInner<C> {
                     }
                 }
             }
+        }
+        if !registered.is_empty() {
+            st.eos.concurrent_backoff = None;
         }
         for key in &registering {
             if registered.contains(key) {
@@ -1409,6 +1430,19 @@ impl<C: ProducerContext> ProducerInner<C> {
                 }
             }
             (Some(Action::Retry), _) => {
+                if concurrent {
+                    // NOTE: librdkafka always waits 20 ms. Right after a commit
+                    // the coordinator is usually done within a few, so start
+                    // lower and back off to that.
+                    let backoff = st
+                        .eos
+                        .concurrent_backoff
+                        .map_or(CONCURRENT_RETRY_BACKOFF_MIN, |b| {
+                            (b * 2).min(CONCURRENT_RETRY_BACKOFF_MAX)
+                        });
+                    st.eos.concurrent_backoff = Some(backoff);
+                    retry_backoff = backoff;
+                }
                 st.eos.register_at = Some(Instant::now() + retry_backoff);
             }
             _ => {
@@ -1419,6 +1453,11 @@ impl<C: ProducerContext> ProducerInner<C> {
         }
         fx.wake_eos = true;
         self.finish(st, fx);
+        for line in debug_lines {
+            self.cluster
+                .logger()
+                .debug(DebugContext::Eos, "ADDPARTS", format_args!("{line}"));
+        }
     }
 
     /// Sends EndTxn until it succeeds or fails permanently, like librdkafka's
