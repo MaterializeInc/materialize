@@ -192,14 +192,26 @@ pub(crate) struct FileStore {
     counters: Counters,
 }
 
+/// The capacity of a store on a volume with `available` bytes free to
+/// unprivileged writers: those bytes minus the larger of 1 GiB and 2% of
+/// them. `None` if that cannot hold one slot of `largest_class` bytes, the
+/// largest extent class.
+fn derived_capacity(available: u64, largest_class: usize) -> Option<u64> {
+    // Headroom for filesystem metadata of the preallocated extents and for
+    // incidental writers sharing the volume.
+    let capacity = available.saturating_sub(std::cmp::max(1 << 30, available / 50));
+    (capacity >= u64::cast_from(largest_class)).then_some(capacity)
+}
+
 impl FileStore {
     /// Opens one anonymous file per entry of `classes` in `dir`. `classes`
     /// is the ladder of slot sizes, ascending page multiples. `capacity_bytes`
-    /// `None` derives capacity from the volume: the bytes available to
-    /// unprivileged writers, minus the larger of 1 GiB and 2% of them.
+    /// `None` derives capacity from the volume per [`derived_capacity`].
     ///
     /// Fails with [`io::ErrorKind::Unsupported`] when `dir` is on a
-    /// memory-backed filesystem or the platform is not Linux.
+    /// memory-backed filesystem or the platform is not Linux, and with
+    /// [`io::ErrorKind::StorageFull`] when a derived capacity cannot hold
+    /// one slot of the largest class.
     pub(crate) fn open(
         dir: &Path,
         capacity_bytes: Option<u64>,
@@ -211,15 +223,6 @@ impl FileStore {
                 "scratch directory is memory-backed",
             ));
         }
-        let capacity = match capacity_bytes {
-            Some(capacity) => capacity,
-            None => {
-                let available = sys::available_bytes(dir)?;
-                // Headroom for filesystem metadata of the preallocated
-                // extents and for incidental writers sharing the volume.
-                available.saturating_sub(std::cmp::max(1 << 30, available / 50))
-            }
-        };
         let page = page_size();
         assert!(
             !classes.is_empty()
@@ -227,6 +230,22 @@ impl FileStore {
                 && classes.is_sorted(),
             "classes must be ascending page multiples: {classes:?}",
         );
+        let capacity = match capacity_bytes {
+            Some(capacity) => capacity,
+            None => {
+                let available = sys::available_bytes(dir)?;
+                let largest = *classes.last().expect("classes is not empty");
+                derived_capacity(available, largest).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::StorageFull,
+                        format!(
+                            "scratch volume has {available} bytes available, too few for \
+                             the file store"
+                        ),
+                    )
+                })?
+            }
+        };
         let (files, io_mode) = match open_files(dir, classes.len(), page, IoMode::Direct) {
             Ok(files) => (files, IoMode::Direct),
             Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {
