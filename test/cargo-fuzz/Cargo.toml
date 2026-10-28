@@ -41,23 +41,23 @@ members = [
 
 [patch.crates-io]
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
 
 # Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
 # `mz_changes` branch carries current IANA data only, no code changes.
 chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "1463cc380e9a2d842b9ed12cbe5952f983dc2b4a" }
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
-serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git", rev = "a84c6b71825efaffb332c0d19f18c2bdf9ee7b40" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "642daa6e293065ec653c04f2d1147a7675ce2430" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "642daa6e293065ec653c04f2d1147a7675ce2430" }
 
 # v0.37.1 plus the upstream rustls verifier fixes for `skip_domain_validation`
 # and `accept_invalid_certs` (blackbeam/mysql_async#408, #409). Drop this patch
