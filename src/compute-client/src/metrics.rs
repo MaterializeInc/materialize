@@ -568,6 +568,7 @@ struct ResponseMetrics<M> {
     peek_response: M,
     subscribe_response: M,
     copy_to_response: M,
+    batched_subscribe_response: M,
     status: M,
 }
 
@@ -581,6 +582,7 @@ impl<M> ResponseMetrics<M> {
             peek_response: build_metric("peek_response"),
             subscribe_response: build_metric("subscribe_response"),
             copy_to_response: build_metric("copy_to_response"),
+            batched_subscribe_response: build_metric("batched_subscribe_response"),
             status: build_metric("status"),
         }
     }
@@ -593,6 +595,7 @@ impl<M> ResponseMetrics<M> {
             PeekResponse(..) => &self.peek_response,
             SubscribeResponse(..) => &self.subscribe_response,
             CopyToResponse(..) => &self.copy_to_response,
+            BatchedSubscribeResponse(..) => &self.batched_subscribe_response,
             Status(..) => &self.status,
         }
     }
