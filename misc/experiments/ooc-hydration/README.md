@@ -19,12 +19,14 @@ fallthrough. The fallthrough itself is the `pool_lz4` arm.
 | `pool_lz4_1` | `column_paged_batcher_budget_fraction = 0.01` |
 | `pool_lz4_rss100` | `column_paged_batcher_pool_rss_target_fraction = 1.0` |
 | `pool_lz4_b50_rss100` | `column_paged_batcher_budget_fraction = 0.5`, `column_paged_batcher_pool_rss_target_fraction = 1.0` |
+| `pool_lz4_nocorr` | `enable_compute_correction_v2_spill = false` |
+| `chunked_corr` | `enable_column_paged_batcher_spill = false` |
 
 `column_chunk_compress_min_depth = 255` disables compression in practice, because
 no chunk reaches generation 255. `column_paged_batcher_lz4` only affects the old
 pager and has no effect on the buffer pool.
 
-The last two arms isolate the pool's cost when the working set fits in memory,
+The last four arms isolate the pool's cost when the working set fits in memory,
 and the default arm list omits them. Pass them with `--arms`. An RSS target of
 1.0 lifts the ceiling on resident compressed extents to all of RAM, so
 `pool_lz4_rss100` against `pool_lz4` measures paging out without memory
@@ -32,6 +34,11 @@ pressure. A budget of 0.5 keeps half of RAM in uncompressed slots, so
 `pool_lz4_b50_rss100` against `pool_lz4_rss100` measures compression. The
 budget arm needs the higher target too, because a budget above the target
 leaves the compressed tier no capacity.
+
+`pool_lz4_nocorr` and `chunked_corr` split the two spill gates for the MV
+phases. Each enables exactly one of batcher spill and MV sink correction
+spill, so against `pool_lz4` and `chunked` they attribute the cost to one gate.
+The buffer pool is installed whenever either gate is on.
 
 ## Running
 

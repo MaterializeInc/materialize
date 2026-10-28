@@ -57,7 +57,12 @@ DEFAULT_TICK = "1s"
 QUERIES = ["Q03", "Q05", "Q09", "Q18", "Q21"]
 DEFAULT_ARMS = ["columnation", "chunked", "pool_raw", "pool_lz4", "pool_lz4_1"]
 # Pool-tuning arms that isolate the no-pressure cost. Opt in with `--arms`.
-ARMS = DEFAULT_ARMS + ["pool_lz4_b50_rss100", "pool_lz4_rss100"]
+ARMS = DEFAULT_ARMS + [
+    "pool_lz4_b50_rss100",
+    "pool_lz4_rss100",
+    "pool_lz4_nocorr",
+    "chunked_corr",
+]
 PHASES = ["idx", "mv_first", "mv_second"]
 SLT = "test/sqllogictest/tpch_create_materialized_view.slt"
 # Flags whose effective per-replica value is recorded with every cell.
