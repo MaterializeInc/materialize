@@ -49,6 +49,7 @@ SERVICES = [
 TD_CMD = [
     "--var=default-replica-size=25cc",
     "--var=default-storage-size=25cc",
+    "--var=multi-worker-replica-size=100cc",
 ]
 
 COMPATIBLE_TESTDRIVE_FILES = [

@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ set-arg-default single-replica-cluster=quickstart
+$ set-arg-default multi-worker-replica-size=scale=1,workers=4
 
 # Test the cardinality of TPCH tables. For tables that have a random
 # cardinality, don't depend on exact count that could change if the rng
@@ -1532,7 +1533,7 @@ true
 
 # A cluster with several workers splits the snapshot across them, and must
 # produce exactly the data of the single worker above.
-> CREATE CLUSTER tpch_multi SIZE 'scale=1,workers=4'
+> CREATE CLUSTER tpch_multi SIZE '${arg.multi-worker-replica-size}'
 
 > BEGIN
 > CREATE SOURCE gen_multi
