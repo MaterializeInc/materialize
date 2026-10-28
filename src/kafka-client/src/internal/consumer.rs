@@ -55,6 +55,7 @@ use crate::consumer::CommitMode;
 use crate::error::{KafkaError, KafkaResult};
 use crate::internal::cluster::{Cluster, CoordinatorKind, MetadataSnapshot};
 use crate::internal::hooks::{ConsumerHooks, Logger};
+use crate::internal::pool::BufferPool;
 use crate::internal::runtime;
 use crate::message::BorrowedMessage;
 use crate::topic_partition_list::TopicPartitionList;
@@ -118,6 +119,8 @@ pub(crate) struct ConsumerInner {
     blocking_polls: AtomicUsize,
     next_request_id: AtomicU64,
     next_queue_id: AtomicU64,
+    /// Buffers for fetched record sets.
+    pool: BufferPool,
     shutdown: CancellationToken,
 }
 
@@ -158,6 +161,7 @@ impl ConsumerInner {
             blocking_polls: AtomicUsize::new(0),
             next_request_id: AtomicU64::new(1),
             next_queue_id: AtomicU64::new(1),
+            pool: BufferPool::with_fit(4),
             shutdown,
         });
         // Client errors and statistics wait for the application to poll, as

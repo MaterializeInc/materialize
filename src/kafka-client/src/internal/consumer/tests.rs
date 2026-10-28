@@ -2012,7 +2012,6 @@ fn undecodable_record_sets() {
             &mut state,
             Bytes::from(records),
             Vec::new(),
-            false,
             &mut wakes,
         );
         let result = (state.fetch.offset, state.fetch.backoff_until);

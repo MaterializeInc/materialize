@@ -11,10 +11,11 @@
 
 use std::io;
 
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_util::codec::Decoder;
 
+use crate::internal::pool::BufferPool;
 use crate::internal::protocol::FRAME_LEN_SIZE;
 
 /// A frame read error.
@@ -89,6 +90,130 @@ impl Decoder for FrameCodec {
     }
 }
 
+/// Frames larger than this are read into a buffer of their own.
+const LARGE_FRAME: usize = 64 << 10;
+
+/// How much [`FrameReader`] reads ahead for headers and small frames.
+const READ_AHEAD: usize = 64 << 10;
+
+/// The least capacity of a large frame's buffer: a Fetch response of the
+/// consumer's 8 MiB cap plus some batches over it (KIP-74). Responses that
+/// grow while consumption ramps up then reuse one buffer, instead of each
+/// replacing a smaller one whose freed pages the allocator keeps resident.
+/// Capacity that is never written takes address space, not memory.
+const LARGE_FRAME_CAPACITY: usize = 10 << 20;
+
+/// A large frame being read.
+struct LargeFrame {
+    buf: Vec<u8>,
+    size: usize,
+}
+
+/// Reads response frames from a stream, like `FramedRead` with
+/// [`FrameCodec`], except that a frame larger than [`LARGE_FRAME`] (Fetch
+/// responses, mostly) is read into a pooled buffer of its own.
+///
+/// NOTE: `FramedRead` reads ahead into its buffer right after splitting a
+/// frame off it, while the frame still shares that buffer, so every large
+/// frame lands in a new allocation of its size. Consuming at a high rate,
+/// those allocations, coming from whichever thread polls the reader, kept
+/// several times the live memory resident in the allocator (see
+/// [`crate::internal::pool`]). One pooled frame buffer is reused while large
+/// frames keep coming, and freed once only small frames arrived for a
+/// while.
+pub(crate) struct FrameReader<R> {
+    io: R,
+    codec: FrameCodec,
+    /// Read-ahead for headers and small frames.
+    buf: BytesMut,
+    large: Option<LargeFrame>,
+    pool: BufferPool,
+
+    eof: bool,
+}
+
+impl<R: AsyncRead + Unpin> FrameReader<R> {
+    pub(crate) fn new(io: R, max_size: usize) -> FrameReader<R> {
+        FrameReader {
+            io,
+            codec: FrameCodec::new(max_size),
+            buf: BytesMut::new(),
+            large: None,
+            // The one kept buffer serves any smaller frame.
+            pool: BufferPool::with_fit(usize::MAX),
+            eof: false,
+        }
+    }
+
+    /// Reads the next frame, without its length prefix. `None` when the
+    /// stream ended at a frame boundary; a stream that ends inside a frame
+    /// is an `UnexpectedEof` error.
+    ///
+    /// Cancel safe: if the future is dropped, no data is lost, and the next
+    /// call continues where this one stopped.
+    pub(crate) async fn next(&mut self) -> Option<Result<Bytes, FrameError>> {
+        loop {
+            if let Some(large) = &mut self.large {
+                let remaining = large.size - large.buf.len();
+                if remaining == 0 {
+                    let large = self.large.take().expect("checked");
+                    return Some(Ok(self.pool.freeze(large.buf)));
+                }
+                // Read at most the rest of this frame into its buffer.
+                match self
+                    .io
+                    .read_buf(&mut (&mut large.buf).limit(remaining))
+                    .await
+                {
+                    Ok(0) => {
+                        return Some(Err(FrameError::Io(io::ErrorKind::UnexpectedEof.into())));
+                    }
+                    Ok(_) => continue,
+                    Err(e) => return Some(Err(e.into())),
+                }
+            }
+            match self.decode() {
+                Err(e) => return Some(Err(e)),
+                Ok(Some(frame)) => return Some(Ok(frame)),
+                Ok(None) if self.large.is_some() => continue,
+                Ok(None) => {}
+            }
+            if self.eof {
+                return self.codec.decode_eof(&mut self.buf).transpose();
+            }
+            self.buf.reserve(READ_AHEAD);
+            match self.io.read_buf(&mut self.buf).await {
+                Ok(0) => self.eof = true,
+                Ok(_) => {}
+                Err(e) => return Some(Err(e.into())),
+            }
+        }
+    }
+
+    /// Decodes a small frame from the read-ahead buffer, or starts reading a
+    /// large one.
+    fn decode(&mut self) -> Result<Option<Bytes>, FrameError> {
+        if self.buf.len() >= RESPONSE_HEADER_SIZE {
+            let size = i32::from_be_bytes(self.buf[..FRAME_LEN_SIZE].try_into().expect("4 bytes"));
+            let size = check_size(size, self.codec.max_size)?;
+            if size > LARGE_FRAME {
+                self.buf.advance(FRAME_LEN_SIZE);
+                let have = self.buf.len().min(size);
+                let mut buf = self.pool.take(size.max(LARGE_FRAME_CAPACITY));
+                buf.extend_from_slice(&self.buf[..have]);
+                self.buf.advance(have);
+                // Keep a buffer for the next large frame, as long as large
+                // frames keep coming.
+                self.pool.decay_limit(buf.capacity());
+                self.large = Some(LargeFrame { buf, size });
+                return Ok(None);
+            }
+            self.pool.decay_limit(0);
+        }
+        self.codec.decode(&mut self.buf)
+    }
+}
+
 /// Reads one frame from `io`, for the sequential connection setup phase.
 pub(crate) async fn read_frame<S: AsyncRead + Unpin>(
     io: &mut S,
@@ -131,6 +256,82 @@ pub(crate) async fn write_frame<S: AsyncWrite + Unpin>(io: &mut S, frame: &[u8])
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Writes `frames` to a reader in pieces of `chunk` bytes and collects
+    /// what [`FrameReader`] yields.
+    async fn read_all(
+        frames: &[Vec<u8>],
+        chunk: usize,
+        close_early: bool,
+    ) -> Vec<Result<Bytes, String>> {
+        let mut wire = Vec::new();
+        for f in frames {
+            wire.extend_from_slice(&i32::try_from(f.len()).unwrap().to_be_bytes());
+            wire.extend_from_slice(f);
+        }
+        if close_early {
+            wire.truncate(wire.len() - 1);
+        }
+        let (mut tx, rx) = tokio::io::duplex(chunk);
+        let writer = mz_ore::task::spawn(|| "frame-reader-test-writer", async move {
+            for piece in wire.chunks(chunk) {
+                tx.write_all(piece).await.unwrap();
+            }
+        });
+        let mut reader = FrameReader::new(rx, 1 << 20);
+        let mut out = Vec::new();
+        while let Some(r) = reader.next().await {
+            let failed = r.is_err();
+            out.push(r.map_err(|e| format!("{e:?}")));
+            if failed {
+                break;
+            }
+        }
+        writer.await;
+        out
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn frame_reader() {
+        let small = vec![1u8, 2, 3, 4, 5];
+        let large: Vec<u8> = (0..200_000u32)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let frames = vec![
+            small.clone(),
+            large.clone(),
+            small.clone(),
+            large.clone(),
+            large.clone(),
+        ];
+        for chunk in [7, 1000, 70_000, 1 << 20] {
+            let got = read_all(&frames, chunk, false).await;
+            let got: Vec<Vec<u8>> = got.into_iter().map(|r| r.unwrap().to_vec()).collect();
+            assert_eq!(got, frames, "chunk {chunk}");
+            let got = read_all(&frames, chunk, true).await;
+            assert_eq!(got.len(), 5, "chunk {chunk}");
+            assert!(
+                got[4].as_ref().unwrap_err().contains("UnexpectedEof"),
+                "{:?}",
+                got[4]
+            );
+        }
+        // An invalid size is reported once the header is complete.
+        let (mut tx, rx) = tokio::io::duplex(64);
+        tx.write_all(&[0, 0, 0, 3, 0, 0, 0, 0]).await.unwrap();
+        let mut reader = FrameReader::new(rx, 1 << 20);
+        assert!(matches!(
+            reader.next().await,
+            Some(Err(FrameError::Size(3)))
+        ));
+        // A stream that ends at a frame boundary ends the reader.
+        drop(tx);
+        let (tx, rx) = tokio::io::duplex(64);
+        drop(tx);
+        let mut reader = FrameReader::new(rx, 1 << 20);
+        assert!(reader.next().await.is_none());
+    }
 
     #[mz_ore::test]
     fn decodes_frames() {

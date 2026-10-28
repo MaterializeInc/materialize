@@ -26,6 +26,7 @@ pub(crate) mod consumer;
 pub(crate) mod hooks;
 pub(crate) mod net;
 pub(crate) mod partitioner;
+pub(crate) mod pool;
 pub(crate) mod producer;
 pub(crate) mod protocol;
 pub(crate) mod records;

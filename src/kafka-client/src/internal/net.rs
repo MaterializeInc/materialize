@@ -26,13 +26,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures::StreamExt;
 use kafka_protocol::messages::ApiKey;
 use kafka_protocol::protocol::Request;
 use mz_ore::cast::CastFrom;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
-use tokio_util::codec::FramedRead;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::RDKafkaLogLevel;
@@ -497,7 +495,7 @@ impl Connection {
             "kafka-conn-reader",
             read_loop(
                 Arc::clone(&shared),
-                FramedRead::new(read, frame::FrameCodec::new(receive_max)),
+                frame::FrameReader::new(read, receive_max),
             ),
         );
         Connection {
@@ -943,10 +941,7 @@ async fn write_loop(
     let _ = write.shutdown().await;
 }
 
-async fn read_loop(
-    shared: Arc<Shared>,
-    mut frames: FramedRead<ReadHalf<BoxedIo>, frame::FrameCodec>,
-) {
+async fn read_loop(shared: Arc<Shared>, mut frames: frame::FrameReader<ReadHalf<BoxedIo>>) {
     loop {
         let wake_at = next_wakeup(&shared);
         let next = tokio::select! {

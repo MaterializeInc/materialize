@@ -17,10 +17,28 @@
 //! off share the main queue, so like librdkafka's forwarded queues they are
 //! limited by the main queue's total.
 //!
+//! # Prefetching
+//!
+//! Those limits are only ceilings. Each partition has a prefetch target:
+//! [`TARGET_LATENCIES`] times the bytes its reader drains during one fetch
+//! round trip, but at least [`TARGET_FLOOR`]. A partition triggers a fetch
+//! once its queue holds less than half its target, and partitions below
+//! three quarters of theirs ride along, each asking for what fills it up to
+//! its target. So a fetch is in flight while the queue still holds about two
+//! round trips of data, the reader does not wait, and memory stays at what
+//! the drain rate needs instead of the limits. A target doubles whenever a
+//! response finds its queue empty (the reader waited), up to the limits.
+//! Readers wake the fetcher when a queue drops below its trigger.
+//!
+//! NOTE: With one request in flight, a request that only covers partitions
+//! at the end of their logs would wait at the broker for up to
+//! `fetch.wait.max.ms` while partitions left out because their queues were
+//! full drain and need data. Such requests wait only until those queues are
+//! expected to reach their triggers, at their drain rate.
+//!
 //! Each partition's `PartitionMaxBytes` is also capped by what its queue can
-//! still take before reaching those limits (but at least
-//! [`MIN_PARTITION_FETCH_BYTES`]), so that a response does not overshoot
-//! them by up to `fetch.max.bytes`, as librdkafka's can.
+//! still take before reaching the limits, so that a response does not
+//! overshoot them by up to `fetch.max.bytes`, as librdkafka's can.
 //!
 //! Like the Java client (KIP-74), a request lists the partitions that got data
 //! in the previous responses last, so that a partition with a large backlog,
@@ -28,9 +46,10 @@
 //! a response in request order.
 //!
 //! Responses are not decoded: each partition's record set is queued as is,
-//! after reading batch headers to find the next fetch offset. When a
-//! response carries data for several partitions, each record set is copied
-//! out, so that a partition whose queue drains slowly does not keep the
+//! after reading batch headers to find the next fetch offset. Record sets are
+//! copied out of the response into pooled buffers (see [`crate::internal::pool`]), so
+//! that the response is freed right away: the connection then reuses its
+//! read buffer, and a partition whose queue drains slowly does not keep a
 //! whole response alive.
 
 use std::collections::BTreeMap;
@@ -60,10 +79,15 @@ use super::{ConsumerInner, Leader, Partition, leader_of, offset_reset};
 /// single batch does not fit, as in librdkafka.
 const MAX_PARTITION_FETCH_BYTES: i32 = 1 << 30;
 
-/// The smallest queue-budget cap on a partition's fetch size, so that a
-/// nearly full queue does not cause a stream of tiny fetches. Brokers return
-/// at least one whole batch regardless (KIP-74).
-const MIN_PARTITION_FETCH_BYTES: u64 = 1 << 20;
+/// The smallest prefetch target, in queued bytes per partition.
+const TARGET_FLOOR: u64 = 512 << 10;
+
+/// How many fetch round trips of drained data a prefetch target covers.
+const TARGET_LATENCIES: u128 = 4;
+
+/// The smallest `PartitionMaxBytes` the fetcher asks for. Brokers return at
+/// least one whole batch regardless (KIP-74).
+const MIN_PARTITION_FETCH_BYTES: u64 = 64 << 10;
 
 /// The largest `MaxBytes` of a Fetch request, below `fetch.max.bytes`
 /// (default 50 MB).
@@ -104,6 +128,8 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
     // order requests; see the module documentation.
     let mut got_data: BTreeMap<(Arc<str>, i32), u64> = BTreeMap::new();
     let mut responses: u64 = 0;
+    // Smoothed round trip of Fetch requests to this broker.
+    let mut latency = Duration::ZERO;
     loop {
         wake_rx.borrow_and_update();
         let md = Arc::clone(&md_rx.borrow_and_update());
@@ -116,7 +142,12 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
         }
         broker_backoff_until = None;
         let request_id = inner.request_id();
-        let (mut fetching, next_wakeup) = plan(&inner, broker_id, &md, request_id, now);
+        let (mut fetching, next_wakeup, soonest_need) =
+            plan(&inner, broker_id, &md, request_id, now);
+        let max_wait_ms = match soonest_need {
+            Some(d) => max_wait_ms.min(i32::try_from(d.as_millis()).unwrap_or(i32::MAX).max(1)),
+            None => max_wait_ms,
+        };
         if fetching.is_empty() {
             if !wait(&shutdown, &mut wake_rx, &mut md_rx, next_wakeup).await {
                 return;
@@ -150,6 +181,7 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
                 None => topics.push((&f.partition.topic, vec![f])),
             }
         }
+        let sent_at = Instant::now();
         let request = broker.request::<FetchRequest, _>(
             |_version| {
                 FetchRequest::default()
@@ -254,7 +286,16 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
             .flat_map(|t| t.partitions.iter())
             .filter(|p| p.records.as_ref().is_some_and(|r| !r.is_empty()))
             .count();
-        let copy = with_data > 1;
+        // The round trip of responses with data; empty ones may have waited
+        // up to `fetch.wait.max.ms` at the broker.
+        if with_data > 0 {
+            let sample = sent_at.elapsed();
+            latency = if latency.is_zero() {
+                sample
+            } else {
+                (latency + sample) / 2
+            };
+        }
         responses += 1;
         for topic in response.responses {
             for data in topic.partitions {
@@ -267,7 +308,7 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
                 if data.records.as_ref().is_some_and(|r| !r.is_empty()) {
                     got_data.insert((Arc::clone(&f.partition.topic), f.partition.id), responses);
                 }
-                handle_partition(&inner, broker_id, request_id, f, data, copy);
+                handle_partition(&inner, broker_id, request_id, f, data, latency);
             }
         }
         // Partitions the broker did not answer for. `release` only clears
@@ -303,7 +344,7 @@ fn plan(
     md: &MetadataSnapshot,
     request_id: u64,
     now: Instant,
-) -> (Vec<Fetching>, Option<Instant>) {
+) -> (Vec<Fetching>, Option<Instant>, Option<Duration>) {
     let settings = inner.settings();
     let max_bytes = settings.consumer.queued_max_bytes();
     let max_msgs = u64::try_from(settings.consumer.queued_min_messages).unwrap_or(u64::MAX);
@@ -315,6 +356,10 @@ fn plan(
         .map(|p| p.queued())
         .fold((0, 0), |(b, m), (pb, pm)| (b + pb, m + pm));
     let mut fetching = Vec::new();
+    let mut triggered = false;
+    // When the soonest partition left out because its queue is full is
+    // expected to need data.
+    let mut soonest_need: Option<Duration> = None;
     let mut next_wakeup: Option<Instant> = None;
     let mut wake_at = |at: Instant| {
         next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
@@ -340,7 +385,18 @@ fn plan(
         } else {
             (main_bytes, main_msgs)
         };
+        let target = fetch.target.max(TARGET_FLOOR);
+        let (queued, _) = partition.queued();
+        let mut need_in = |fetch: &super::partition::FetchState| {
+            if fetch.drain_rate > 0 {
+                let excess = u128::from(queued.saturating_sub(target / 2));
+                let nanos = excess * 1_000_000_000 / u128::from(fetch.drain_rate);
+                let d = Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX));
+                soonest_need = Some(soonest_need.map_or(d, |s| s.min(d)));
+            }
+        };
         if bytes >= max_bytes || msgs >= max_msgs {
+            need_in(fetch);
             // Readers wake the fetchers when they drain; the timer is a
             // fallback, like librdkafka's `fetch.queue.backoff.ms`.
             inner
@@ -349,19 +405,31 @@ fn plan(
             wake_at(now + settings.consumer.fetch_queue_backoff);
             continue;
         }
+        if queued >= target * 3 / 4 {
+            // Readers wake the fetchers once the queue drops below the
+            // trigger; the timer is a fallback.
+            if !partition.fetchable_below(target / 2) {
+                need_in(fetch);
+                wake_at(now + settings.consumer.fetch_queue_backoff);
+                continue;
+            }
+        }
+        triggered |= queued < target / 2 || partition.fetchable_below(target / 2);
         let byte_budget = max_bytes - bytes;
         // Until a fetch has shown the partition's message size, fetch small:
         // one response may otherwise hold far more messages than
         // `queued.min.messages`.
         let msg_budget = match fetch.avg_msg_bytes {
-            0 => MIN_PARTITION_FETCH_BYTES,
+            0 => TARGET_FLOOR,
             avg => (max_msgs - msgs).saturating_mul(avg),
         };
-        let budget = byte_budget.min(msg_budget).max(MIN_PARTITION_FETCH_BYTES);
+        let budget = byte_budget
+            .min(msg_budget)
+            .min(target.saturating_sub(queued))
+            .max(MIN_PARTITION_FETCH_BYTES);
         let max_bytes = fetch
             .max_bytes
             .min(i32::try_from(budget).unwrap_or(i32::MAX));
-        fetch.in_flight = Some(request_id);
         let (version, offset) = (state.version, state.fetch.offset);
         drop(state);
         fetching.push(Fetching {
@@ -371,7 +439,46 @@ fn plan(
             max_bytes,
         });
     }
-    (fetching, next_wakeup)
+    // The pool keeps as much free capacity as the queues of partitions that
+    // are being drained are meant to hold, and nothing once they are idle.
+    let total_target: u64 = inner
+        .assigned_partitions()
+        .iter()
+        .map(|p| {
+            let state = p.lock_state();
+            if state.fetch.drain_rate > 0 {
+                state.fetch.target.max(TARGET_FLOOR)
+            } else {
+                0
+            }
+        })
+        .sum();
+    // Twice the targets: buffers circulate between the queues, the pool and
+    // the response being copied out.
+    inner
+        .pool
+        .decay_limit(usize::try_from(total_target.saturating_mul(2)).unwrap_or(usize::MAX));
+    if !triggered {
+        // Nobody needs data yet; the candidates wait for their triggers.
+        if !fetching.is_empty() {
+            wake_at(now + settings.consumer.fetch_queue_backoff);
+        }
+        return (Vec::new(), next_wakeup, None);
+    }
+    fetching.retain(|f| {
+        let mut state = f.partition.lock_state();
+        // Checked again: the partition was unlocked meanwhile.
+        if state.version != f.version
+            || state.fetch.phase != FetchPhase::Active
+            || state.fetch.offset != f.offset
+            || state.fetch.in_flight.is_some()
+        {
+            return false;
+        }
+        state.fetch.in_flight = Some(request_id);
+        true
+    });
+    (fetching, next_wakeup, soonest_need)
 }
 
 /// Clears the in-flight marks of a request that got no answer for these
@@ -419,7 +526,7 @@ fn handle_partition(
     request_id: u64,
     f: &Fetching,
     data: PartitionData,
-    copy: bool,
+    latency: Duration,
 ) {
     let partition = &f.partition;
     let settings = inner.settings();
@@ -469,10 +576,11 @@ fn handle_partition(
     } else {
         state.fetch.last_error = None;
         let records = data.records.unwrap_or_default();
+        // The reader had nothing left when data arrived: it waited.
+        let starved = !records.is_empty() && partition.queued().0 == 0;
+        update_target(inner, partition, &mut state.fetch, latency, starved);
         if !records.is_empty() {
-            handle_records(
-                inner, partition, &mut state, records, aborted, copy, &mut wakes,
-            );
+            handle_records(inner, partition, &mut state, records, aborted, &mut wakes);
         }
     }
     // An offset reset hands the partition to the manager for an offset
@@ -487,6 +595,50 @@ fn handle_partition(
     }
 }
 
+/// Updates a partition's prefetch target from its drain rate and the fetch
+/// round trip, see the module documentation.
+fn update_target(
+    inner: &ConsumerInner,
+    partition: &Partition,
+    fetch: &mut super::partition::FetchState,
+    latency: Duration,
+    starved: bool,
+) {
+    let now = Instant::now();
+    let consumed = partition.consumed();
+    match fetch.drain_mark {
+        Some((mark, at)) => {
+            let elapsed = now.saturating_duration_since(at);
+            if elapsed >= Duration::from_millis(1) {
+                let drained = u128::from(consumed.saturating_sub(mark));
+                let rate =
+                    u64::try_from(drained * 1_000_000_000 / elapsed.as_nanos()).unwrap_or(u64::MAX);
+                fetch.drain_rate = if fetch.drain_rate == 0 {
+                    rate
+                } else {
+                    fetch.drain_rate / 2 + rate / 2
+                };
+                fetch.drain_mark = Some((consumed, now));
+            }
+        }
+        None => fetch.drain_mark = Some((consumed, now)),
+    }
+    let wanted =
+        u128::from(fetch.drain_rate) * latency.as_nanos() * TARGET_LATENCIES / 1_000_000_000;
+    let mut target = u64::try_from(wanted).unwrap_or(u64::MAX).max(TARGET_FLOOR);
+    if starved {
+        target = target.max(fetch.target.saturating_mul(2));
+    }
+    // The limits cap the target.
+    let consumer = &inner.settings().consumer;
+    let max_msgs = u64::try_from(consumer.queued_min_messages).unwrap_or(u64::MAX);
+    let mut cap = consumer.queued_max_bytes();
+    if fetch.avg_msg_bytes > 0 {
+        cap = cap.min(max_msgs.saturating_mul(fetch.avg_msg_bytes));
+    }
+    fetch.target = target.min(cap.max(TARGET_FLOOR));
+}
+
 /// Queues a partition's record set and advances its fetch offset.
 pub(super) fn handle_records(
     inner: &ConsumerInner,
@@ -494,7 +646,6 @@ pub(super) fn handle_records(
     state: &mut super::partition::PartState,
     records: Bytes,
     aborted: Vec<(i64, i64)>,
-    copy: bool,
     wakes: &mut Vec<Wake>,
 ) {
     let consumer = &inner.settings().consumer;
@@ -563,11 +714,7 @@ pub(super) fn handle_records(
     }
     state.fetch.leader_epoch = leader_epoch;
     state.fetch.offset = next_offset;
-    let records = if copy {
-        Bytes::copy_from_slice(&records)
-    } else {
-        records
-    };
+    let records = inner.pool.copy(&records);
     partition.add_queued(bytes, msgs);
     wakes.push(state.push(
         Item::Chunk(Chunk {

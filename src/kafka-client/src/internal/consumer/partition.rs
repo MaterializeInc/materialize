@@ -117,6 +117,13 @@ pub(super) struct FetchState {
     /// Bytes per message in the last fetched record set, or 0 if unknown,
     /// to convert the queue's message budget into bytes.
     pub avg_msg_bytes: u64,
+    /// The prefetch target in queued bytes, see the fetcher.
+    pub target: u64,
+    /// Bytes per second the reader drained, smoothed.
+    pub drain_rate: u64,
+    /// `Partition::consumed` and the time when `drain_rate` was last
+    /// sampled.
+    pub drain_mark: Option<(u64, Instant)>,
     /// The last error reported to the application, for errors reported once.
     pub last_error: Option<RDKafkaErrorCode>,
     /// Log start offset, high watermark and last stable offset from the last
@@ -212,6 +219,11 @@ pub(crate) struct Partition {
     /// Bytes and messages queued and not yet consumed by a reader.
     queued_bytes: AtomicU64,
     queued_msgs: AtomicU64,
+    /// Bytes readers consumed in total, for the drain rate.
+    consumed: AtomicU64,
+    /// When non-zero, the fetcher waits for the queue to hold fewer bytes
+    /// than this, and the reader that drains it below wakes the fetchers.
+    resume_below: AtomicU64,
     callback: Mutex<Option<Callback>>,
 }
 
@@ -242,6 +254,9 @@ impl Partition {
                     eof_offset: OFFSET_INVALID,
                     max_bytes,
                     avg_msg_bytes: 0,
+                    target: 0,
+                    drain_rate: 0,
+                    drain_mark: None,
                     last_error: None,
                     lo_offset: -1,
                     hi_offset: -1,
@@ -259,6 +274,8 @@ impl Partition {
             split: AtomicBool::new(false),
             queued_bytes: AtomicU64::new(0),
             queued_msgs: AtomicU64::new(0),
+            consumed: AtomicU64::new(0),
+            resume_below: AtomicU64::new(0),
             callback: Mutex::new(None),
         }
     }
@@ -295,8 +312,27 @@ impl Partition {
 
     /// Accounts for data added to the queue.
     pub(super) fn add_queued(&self, bytes: u64, msgs: u64) {
-        self.queued_bytes.fetch_add(bytes, Ordering::AcqRel);
+        self.queued_bytes.fetch_add(bytes, Ordering::SeqCst);
         self.queued_msgs.fetch_add(msgs, Ordering::AcqRel);
+    }
+
+    /// Bytes consumed by readers in total.
+    pub(super) fn consumed(&self) -> u64 {
+        self.consumed.load(Ordering::Acquire)
+    }
+
+    /// Reports whether the queue holds fewer than `limit` bytes. If not,
+    /// arms readers to wake the fetchers once it does.
+    pub(super) fn fetchable_below(&self, limit: u64) -> bool {
+        // Arm, then check: a reader that drains in between either sees the
+        // armed limit or its subtraction is seen here (both sides are
+        // sequentially consistent), so the wakeup is not lost.
+        self.resume_below.store(limit, Ordering::SeqCst);
+        if self.queued_bytes.load(Ordering::SeqCst) < limit {
+            self.resume_below.store(0, Ordering::SeqCst);
+            return true;
+        }
+        false
     }
 
     /// Routes the partition's data to its own queue from now on.
@@ -347,8 +383,12 @@ impl Partition {
         fetch.resolve_failures = 0;
         fetch.eof_offset = OFFSET_INVALID;
         fetch.last_error = None;
-        self.queued_bytes.store(0, Ordering::Release);
+        fetch.target = 0;
+        fetch.drain_rate = 0;
+        fetch.drain_mark = None;
+        self.queued_bytes.store(0, Ordering::SeqCst);
         self.queued_msgs.store(0, Ordering::Release);
+        self.resume_below.store(0, Ordering::SeqCst);
         self.position.store(OFFSET_INVALID, Ordering::Release);
     }
 
@@ -484,8 +524,16 @@ impl Partition {
             }
         }
         if progress.bytes > 0 || progress.msgs > 0 {
-            saturating_sub(&self.queued_bytes, progress.bytes);
+            self.consumed.fetch_add(progress.bytes, Ordering::Release);
+            let bytes = saturating_sub(&self.queued_bytes, progress.bytes);
             saturating_sub(&self.queued_msgs, progress.msgs);
+            let resume_below = self.resume_below.load(Ordering::SeqCst);
+            if resume_below != 0
+                && bytes < resume_below
+                && self.resume_below.swap(0, Ordering::SeqCst) != 0
+            {
+                inner.wake();
+            }
             inner.queue_drained();
         }
     }
@@ -515,16 +563,14 @@ impl Partition {
     }
 }
 
-fn saturating_sub(counter: &AtomicU64, amount: u64) {
-    let mut current = counter.load(Ordering::Acquire);
+/// Subtracts `amount` from `counter`, stopping at zero. Returns the new
+/// value.
+fn saturating_sub(counter: &AtomicU64, amount: u64) -> u64 {
+    let mut current = counter.load(Ordering::SeqCst);
     loop {
-        match counter.compare_exchange_weak(
-            current,
-            current.saturating_sub(amount),
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => return,
+        let new = current.saturating_sub(amount);
+        match counter.compare_exchange_weak(current, new, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return new,
             Err(actual) => current = actual,
         }
     }
