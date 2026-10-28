@@ -16,7 +16,9 @@ use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use proptest::prelude::*;
 
 use super::histogram::{BucketScheme, add_span};
+use super::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use super::*;
+use timely::progress::Antichain;
 
 fn aligned(ms: u64) -> ResolvedTree {
     ResolvedTree::Leaf(Ticker::Aligned { interval_ms: ms })
@@ -703,4 +705,242 @@ fn span_long_stall_is_cheap() {
     let touched = u64::try_from(s.bucket(to - from) - s.bucket(1) + 1).unwrap();
     assert!(touched <= 4 * 28, "{touched} buckets");
     assert!(calls.get() <= 2 * touched, "{} calls", calls.get());
+}
+
+fn config(per_octave: u32) -> RecorderConfig {
+    RecorderConfig {
+        scheme: scheme(per_octave),
+        interval_ms: 1,
+        period_ms: 60_000,
+    }
+}
+
+fn at(frontier: u64) -> Antichain<Timestamp> {
+    Antichain::from_elem(Timestamp::from(frontier))
+}
+
+/// The summed counts of the rows of each period start.
+fn period_totals(rows: &[PeriodRow]) -> BTreeMap<u64, u64> {
+    let mut totals = BTreeMap::new();
+    for row in rows {
+        *totals.entry(row.period_start_ms).or_default() += row.count;
+    }
+    totals
+}
+
+#[mz_ore::test]
+fn rows_are_final_and_conserved() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(0);
+    let mut rows = Vec::new();
+    let mut emitted_at = BTreeMap::new();
+    for w in (1000..=300_000u64).step_by(1000) {
+        let new = recorder.observe(&tree, &at(w + 1), w + 1, &cfg);
+        for p in period_totals(&new).into_keys() {
+            // Every period is emitted by exactly one call.
+            assert!(
+                emitted_at.insert(p, w).is_none(),
+                "period {p} emitted twice"
+            );
+        }
+        rows.extend(new);
+    }
+    let totals = period_totals(&rows);
+    assert_eq!(totals.len(), 5);
+    for (start, total) in totals {
+        assert_eq!(total, 60_000, "period {start}");
+        // A period is emitted once its last arrival is reflected.
+        assert_eq!(emitted_at[&start], start + 60_000);
+    }
+}
+
+#[mz_ore::test]
+fn stall_charged_to_arrival_periods() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(0);
+    let mut rows = Vec::new();
+    for w in (1000..=100_000u64).step_by(1000) {
+        rows.extend(recorder.observe(&tree, &at(w + 1), w + 1, &cfg));
+    }
+    // Only the first period closed before the stall.
+    assert_eq!(
+        period_totals(&rows).keys().copied().collect::<Vec<_>>(),
+        [0]
+    );
+    // The frontier stays at 100_000 for 90 s and then recovers.
+    let new = recorder.observe(&tree, &at(191_001), 191_001, &cfg);
+    let totals = period_totals(&new);
+    assert_eq!(
+        totals,
+        BTreeMap::from([(60_000, 60_000), (120_000, 60_000)])
+    );
+    let s = cfg.scheme;
+    let extremes = |start: u64| {
+        let buckets: Vec<i32> = new
+            .iter()
+            .filter(|r| r.period_start_ms == start)
+            .map(|r| r.bucket)
+            .collect();
+        (*buckets.first().unwrap(), *buckets.last().unwrap())
+    };
+    // The stalled windows start at 100_000 and are visible at 191_000, so latencies fall from
+    // 91 s. Period (60 s, 120 s] holds 20 s of them, ending with the window starting at 119_000.
+    assert_eq!(extremes(60_000).1, s.bucket(91_000));
+    let stalled: u64 = new
+        .iter()
+        .filter(|r| r.period_start_ms == 60_000 && r.bucket >= s.bucket(72_000))
+        .map(|r| r.count)
+        .sum();
+    assert_eq!(stalled, 20_000);
+    assert_eq!(extremes(120_000), (s.bucket(12_000), s.bucket(71_000)));
+}
+
+#[mz_ore::test]
+fn regress_does_not_double_count() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(0);
+    let mut rows = Vec::new();
+    for (frontier, now) in [(100_001, 100_001), (50_001, 100_500), (120_001, 121_000)] {
+        rows.extend(recorder.observe(&tree, &at(frontier), now, &cfg));
+    }
+    rows.extend(recorder.observe(&tree, &Antichain::new(), 130_000, &cfg));
+    let total: u64 = rows.iter().map(|r| r.count).sum();
+    assert_eq!(total, 120_000);
+}
+
+#[mz_ore::test]
+fn alter_interval_does_not_double_count() {
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(0);
+    let mut rows = Vec::new();
+    rows.extend(recorder.observe(&aligned(1000), &at(30_001), 30_001, &cfg));
+    // The ingestion ticker changes from 1 s to 11 s.
+    rows.extend(recorder.observe(&aligned(11_000), &at(33_001), 34_000, &cfg));
+    rows.extend(recorder.observe(&aligned(11_000), &at(121_001), 122_000, &cfg));
+    rows.extend(recorder.observe(&aligned(11_000), &Antichain::new(), 123_000, &cfg));
+    let total: u64 = rows.iter().map(|r| r.count).sum();
+    assert_eq!(total, 121_000);
+}
+
+#[mz_ore::test]
+fn nothing_reflected_records_nothing() {
+    let schedule = RefreshSchedule {
+        everies: vec![],
+        ats: vec![Timestamp::from(60_000u64)],
+    };
+    let tree = refresh(schedule, aligned(1000));
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(0);
+    assert!(
+        recorder
+            .observe(&tree, &at(30_000), 30_000, &cfg)
+            .is_empty()
+    );
+    // The recorder is not finished by that and records the first refresh once it happens.
+    let rows = recorder.observe(&tree, &at(60_001), 61_000, &cfg);
+    assert_eq!(period_totals(&rows), BTreeMap::from([(0, 60_000)]));
+    assert!(
+        recorder
+            .observe(&tree, &Antichain::new(), 62_000, &cfg)
+            .is_empty()
+    );
+}
+
+#[mz_ore::test]
+fn empty_frontier_finishes() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(0);
+    assert!(
+        recorder
+            .observe(&tree, &at(30_001), 30_001, &cfg)
+            .is_empty()
+    );
+    let rows = recorder.observe(&tree, &Antichain::new(), 31_000, &cfg);
+    // The open period is emitted up to the last arrival.
+    assert_eq!(period_totals(&rows), BTreeMap::from([(0, 30_000)]));
+    assert!(
+        recorder
+            .observe(&tree, &at(200_001), 200_001, &cfg)
+            .is_empty()
+    );
+    assert!(
+        recorder
+            .observe(&tree, &Antichain::new(), 201_000, &cfg)
+            .is_empty()
+    );
+}
+
+#[mz_ore::test]
+fn scheme_change_applies_next_period() {
+    let tree = aligned(1000);
+    let mut recorder = FreshnessRecorder::new(0);
+    assert!(
+        recorder
+            .observe(&tree, &at(30_001), 30_001, &config(4))
+            .is_empty()
+    );
+    let rows = recorder.observe(&tree, &at(130_001), 130_001, &config(1));
+    let bpo = |start: u64| -> Vec<u32> {
+        let mut v: Vec<u32> = rows
+            .iter()
+            .filter(|r| r.period_start_ms == start)
+            .map(|r| r.buckets_per_octave)
+            .collect();
+        v.dedup();
+        v
+    };
+    // Period (0, 60 s] was opened under the old scheme and keeps it.
+    assert_eq!(bpo(0), [4]);
+    assert_eq!(bpo(60_000), [1]);
+    assert_eq!(period_totals(&rows).get(&120_000), None);
+    // The rows of a period are sorted by bucket.
+    let buckets: Vec<i32> = rows
+        .iter()
+        .filter(|r| r.period_start_ms == 0)
+        .map(|r| r.bucket)
+        .collect();
+    assert!(buckets.windows(2).all(|w| w[0] < w[1]));
+}
+
+#[mz_ore::test]
+fn period_split_matches_arrival_walk() {
+    let tree = ResolvedTree::Min(vec![aligned(7000), aligned(11000)]);
+    let cfg = RecorderConfig {
+        period_ms: 10_000,
+        ..config(4)
+    };
+    let mut recorder = FreshnessRecorder::new(0);
+    let mut rows = Vec::new();
+    let mut expected: BTreeMap<(u64, i32), u64> = BTreeMap::new();
+    let mut high_water = 0;
+    // Spans that cut windows at period boundaries, including a stall and a clock-skewed call.
+    for (frontier, now) in [
+        (11_001, 11_500),
+        (21_001, 40_000),
+        (22_001, 22_000),
+        (60_001, 61_000),
+        (150_001, 150_100),
+    ] {
+        rows.extend(recorder.observe(&tree, &at(frontier), now, &cfg));
+        let lr = tree.last_reflected(Timestamp::from(frontier)).unwrap();
+        let advance = now.max(lr);
+        for x in (high_water + 1)..=lr {
+            let start = tree.prev_boundary(x - 1);
+            let period = (x - 1) - (x - 1) % 10_000;
+            *expected
+                .entry((period, cfg.scheme.bucket(advance - start)))
+                .or_default() += 1;
+        }
+        high_water = high_water.max(lr);
+    }
+    rows.extend(recorder.observe(&tree, &Antichain::new(), 160_000, &cfg));
+    let actual: BTreeMap<(u64, i32), u64> = rows
+        .iter()
+        .map(|r| ((r.period_start_ms, r.bucket), r.count))
+        .collect();
+    assert_eq!(actual, expected);
 }

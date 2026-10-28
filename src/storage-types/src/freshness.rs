@@ -10,6 +10,8 @@
 //! Controller-side description of how an object's output frontier follows arrival time.
 
 pub mod histogram;
+mod period;
+pub mod recorder;
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -189,6 +191,20 @@ impl ResolvedTree {
             Some(i) => {
                 let b = z.div_ceil(i).saturating_mul(i);
                 best = Some(best.map_or(b, |x| x.min(b)));
+            }
+            None => continuous = true,
+        });
+        if continuous { z } else { best.unwrap_or(z) }
+    }
+
+    /// The largest window boundary at or before `z`, the counterpart of `next_boundary`.
+    pub fn prev_boundary(&self, z: u64) -> u64 {
+        let mut best: Option<u64> = None;
+        let mut continuous = false;
+        self.for_each_ticker(&mut |t| match t.grid_ms() {
+            Some(i) => {
+                let b = z - z % i;
+                best = Some(best.map_or(b, |x| x.max(b)));
             }
             None => continuous = true,
         });
