@@ -264,12 +264,19 @@ fn bound_ignores_ats_next_to_everies() {
     );
 }
 
-/// A hyperperiod with more than 10^6 change points takes the conservative bound, twice the
-/// largest path sum of periods and intervals.
+/// A hyperperiod with more than 10^6 change points takes the conservative bound, the period
+/// plus the assignment and lag of the input.
 #[mz_ore::test]
 fn bound_refresh_conservative_fallback() {
     let tree = refresh(every(1_000_003), aligned(1));
-    assert_eq!(tree.assignment_bound(), Some(2 * (1_000_003 + 1)));
+    assert_eq!(tree.assignment_bound(), Some(1_000_003 + 1 + 1));
+}
+
+/// A minute refresh over a table reads about a minute, not two.
+#[mz_ore::test]
+fn bound_refresh_over_table() {
+    let tree = refresh(every(60_000), unaligned(1000));
+    assert_eq!(tree.assignment_bound(), Some(62_000));
 }
 
 /// The worst `visibility - arrival` over arrivals in a steady-state hyperperiod, found by

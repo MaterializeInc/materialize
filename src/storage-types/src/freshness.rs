@@ -19,6 +19,16 @@ use mz_repr::{GlobalId, Timestamp};
 /// conservative bound.
 const MAX_CHANGE_POINTS: u128 = 1_000_000;
 
+/// Bounds in ms on one subtree when every tick and refresh is on time.
+struct Bounds {
+    /// Most an arrival's timestamp can exceed the arrival time.
+    assign: u64,
+    /// Most the frontier can trail the timestamp it covers.
+    lag: u64,
+    /// Most the visibility of an arrival can trail the arrival.
+    delay: u64,
+}
+
 /// How a wall-clock leaf advances its frontier.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Ticker {
@@ -209,11 +219,9 @@ impl ResolvedTree {
             return Some(closed_form(&leaves));
         }
         let periodic = self.without_ats();
-        Some(
-            periodic
-                .scan_bound(max_change_points)
-                .unwrap_or_else(|| periodic.conservative_bound()),
-        )
+        periodic
+            .scan_bound(max_change_points)
+            .or_else(|| periodic.conservative_bound())
     }
 
     fn has_refresh(&self) -> bool {
@@ -256,35 +264,70 @@ impl ResolvedTree {
         }
     }
 
-    /// An upper bound that needs no scan, twice [`Self::path_bound`].
-    ///
-    /// Let `f(x)` be the wall time at which the output frontier first covers timestamp `x`, and
-    /// `T(t)` the timestamp an arrival at `t` ends up with. A leaf rounds up to its grid, so
-    /// both move by at most its interval. A minimum takes the maximum of its inputs, and a
-    /// refresh first rounds up to its next refresh, at most one period, and then defers to its
-    /// input. Hence `T(t) - t` and `f(x) - x` are each at most the path bound, and the delay
-    /// `f(T(t)) - t` is at most their sum.
-    fn conservative_bound(&self) -> u64 {
-        self.path_bound().unwrap_or(u64::MAX).saturating_mul(2)
+    /// An upper bound on D that needs no scan. `None` if a refresh node has no `EVERY`.
+    fn conservative_bound(&self) -> Option<u64> {
+        self.bounds().map(|b| b.delay)
     }
 
-    /// The largest sum of leaf interval and refresh periods along a path from the root to a
-    /// leaf. `None` if a refresh node on a path has no `EVERY`.
-    fn path_bound(&self) -> Option<u64> {
+    /// The assignment, lag and delay bounds of this subtree, see [`Bounds`].
+    ///
+    /// Let `T(t)` be the timestamp an arrival at `t` ends up with and `f(x)` the wall time at
+    /// which the frontier first covers timestamp `x`. A leaf rounds up to its grid, so both
+    /// move by at most its interval, and the delay of a lone leaf is that interval. A minimum
+    /// takes the maximum of its inputs for both. A refresh with period `r` over `Y` rounds
+    /// `T` up to a refresh point `R <= T_Y + r` and then defers to `Y`, so `T(t) - t <= r + A(Y)`,
+    /// `f(x) - x <= r + L(Y)` for any `x`, and, because `f` is then evaluated exactly at the
+    /// refresh point `R`, the delay is at most `R - t + L(Y)`, which is `r + A(Y) + L(Y)` with
+    /// the period counted once.
+    ///
+    /// For a minimum, the delay is `f(T) - t` where `T` and `f` each come from one input. Two
+    /// leaves combine as in [`closed_form`]. For any other pair, `T` from input `k` and `f` from
+    /// input `m` give at most `A(k) + L(m)`, and `k = m` is that input's own delay.
+    fn bounds(&self) -> Option<Bounds> {
         match self {
-            ResolvedTree::Leaf(t) => Some(t.grid_ms().unwrap_or(0)),
-            ResolvedTree::Min(inputs) => inputs
-                .iter()
-                .map(|i| i.path_bound())
-                .collect::<Option<Vec<_>>>()
-                .map(|bounds| bounds.into_iter().max().unwrap_or(0)),
+            ResolvedTree::Leaf(_) | ResolvedTree::Min(_) => {
+                let mut leaves = Vec::new();
+                let others = self.collect_leaves(&mut leaves);
+                let others: Vec<Bounds> = others
+                    .iter()
+                    .map(|o| o.bounds())
+                    .collect::<Option<Vec<_>>>()?;
+                let leaf_max = leaves.iter().filter_map(|t| t.grid_ms()).max().unwrap_or(0);
+                let mut bounds = Bounds {
+                    assign: leaf_max,
+                    lag: leaf_max,
+                    delay: closed_form(&leaves),
+                };
+                for (j, o) in others.iter().enumerate() {
+                    bounds.assign = bounds.assign.max(o.assign);
+                    bounds.lag = bounds.lag.max(o.lag);
+                    bounds.delay = bounds.delay.max(o.delay);
+                    // Every leaf against this refresh node, in both directions.
+                    bounds.delay = bounds
+                        .delay
+                        .max(leaf_max.saturating_add(o.lag.max(o.assign)));
+                    for (k, p) in others.iter().enumerate() {
+                        if j != k {
+                            bounds.delay = bounds.delay.max(p.assign.saturating_add(o.lag));
+                        }
+                    }
+                }
+                Some(bounds)
+            }
             ResolvedTree::Refresh { schedule, input } => {
                 let period = schedule
                     .everies
                     .iter()
                     .map(|e| duration_ms(e.interval))
                     .max()?;
-                Some(period.saturating_add(input.path_bound()?))
+                let inner = input.bounds()?;
+                Some(Bounds {
+                    assign: period.saturating_add(inner.assign),
+                    lag: period.saturating_add(inner.lag),
+                    delay: period
+                        .saturating_add(inner.assign)
+                        .saturating_add(inner.lag),
+                })
             }
         }
     }
