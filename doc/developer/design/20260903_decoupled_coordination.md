@@ -31,6 +31,10 @@ participating versions are in scope. Conversion of existing environments and
 interoperation with binaries that lack this deployment model remain separate
 rollout work, not prerequisites for the [milestones](#milestones).
 
+M3 targets local-process deployments, including the multi-adapter demo and an
+executed version-upgrade walkthrough. Kubernetes backend and operator integration,
+including runtime acceptance on Kubernetes, are deferred beyond M3.
+
 Enabling the new ownership model for existing environments requires a separate
 conversion and rollout decision that preserves their promised results. Conversion
 to logical-input protection becomes active only once remaining recovery requirements
@@ -455,8 +459,9 @@ Split environmentd into adapterd for SQL serving and controllerd for catalog-dri
 process management. One controllerd manages each deployment identity, not each
 distinct binary version. Within a deployment, controllerd, adapterd and clusterd
 use the same release. Old and new deployments have their own controllers,
-adapters and replicas. Controllerd uses the local-process/Kubernetes backends to
+adapters and replicas. Controllerd uses the existing orchestration interface to
 reconcile its deployment's committed inventory with matching launch configuration.
+M3 uses the local-process backend.
 
 Adapterd runs the existing cluster-controller policy, including replica
 declaration realization, burst scaling, reconfiguration and ON REFRESH scheduling.
@@ -472,7 +477,7 @@ privileges. Losing or restarting controllerd leaves healthy children running.
 Provisioning and recovery of failed processes may wait for its return, but
 running SQL, maintained execution and cooperative maintenance do not depend on it.
 
-The external launcher/operator launches controllers, authorizes promotion,
+The external launcher launches controllers, authorizes promotion,
 manages routing and completes physical teardown after durable deployment
 retirement, even if the retired controller is gone. Starting a deployment's
 controller before its children does not require upgrading the old deployment's
@@ -889,10 +894,10 @@ Build through these slices, preserving working outcomes as the split progresses:
    plus controllerd HTTP listing, creation and drop, with resource sizes,
    endpoints and readiness through the same catalog and reconciliation path.
    Include the filtered durable-collection inspection endpoint.
-4. **Deployment coexistence and backends.** Exercise old/new deployment
+4. **Local deployment coexistence.** Exercise old/new deployment
    controllers with shared pubsub, externally authorized promotion and retired
-   deployment cleanup. Complete local-process and Kubernetes integration through
-   their existing backends and external lifecycle owner.
+   deployment cleanup through the local-process backend and external launcher.
+   Kubernetes backend and operator integration are not M3 completion criteria.
 
 Publish and execute a local version-upgrade walkthrough in
 `doc/developer/controllerd.md`. Include copyable commands to select two compatible

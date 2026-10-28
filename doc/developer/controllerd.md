@@ -5,6 +5,9 @@ the developer launcher. Local demos use the default development build. The
 launcher does not create SQL objects or adapter declarations. Controllerd
 initializes the default adapter only for a fresh catalog.
 
+M3 targets this local-process workflow, including version upgrades. Kubernetes
+backend and operator integration are deferred beyond M3.
+
 Controllerd provisions an environment-scoped pubsubd from static configuration and
 includes it in `/api/inventory`. Ordinary startup needs no separate pubsub command.
 The relay is shared by adapters and replicas and survives controller termination.
@@ -53,8 +56,7 @@ controllers connect using the provisioner's discovered relay URL. Transfer
 provisioning ownership only after stopping the previous provisioner, using the
 same environment identity and backend namespace/prefix for retained adoption.
 The relay executable/image and resource configuration must stay environment-scoped,
-independent of the deployment release. Kubernetes deployments use an image with
-pubsubd as its entry point, such as the repository's `pubsubd` image definition.
+independent of the deployment release.
 
 The managed relay defaults to one CPU and 512 MiB memory. Raw controller options
 `--pubsub-cpu-limit`, `--pubsub-memory-limit`, `--pubsub-http-port` and

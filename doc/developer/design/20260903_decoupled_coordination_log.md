@@ -14,6 +14,11 @@ default. Published implementation head is `34942b30` (metrics implementation `5b
 
 ## Resume here
 
+M3 targets local-process deployments. Kubernetes backend/operator integration and
+runtime acceptance are deferred, not milestone blockers. Preserve existing backend
+work without expanding it. The executed local version-upgrade walkthrough remains
+required, including prewarming, promotion, endpoint switching and retirement.
+
 Replica resource sampling is restored at controllerd's process boundary in
 `5b466d0c`. The existing 60s sampler is shared with legacy provisioning. Samples
 retain capture time across delayed publication and write the existing,
@@ -88,9 +93,10 @@ The backend is PostgreSQL18, not the user's CRDB benchmark. No latency result ye
 Cross-target triple debug/optimized caches were unused and removed after executable
 and symlink checks, leaving 106GiB free. Default target caches and evidence remain.
 
-Kubernetes research found missing orchestratord launch/readiness/SQL routing,
-separated child service-account authority, forwarded-file delivery and shared
-relay cleanup wiring. Existing backend resource tests do not establish these.
+Deferred beyond M3: Kubernetes research found missing orchestratord launch,
+readiness and SQL routing, separated child service-account authority,
+forwarded-file delivery and shared relay cleanup wiring. Existing backend resource
+tests do not establish these.
 The approved worker expiry was extended to 2026-10-28T22:00Z without changing
 capacity. CI141248 for the retention fix is terminal failed with no live jobs.
 
@@ -217,7 +223,7 @@ those lifecycle paths, adapter catch-up reporting, serving-mode transition and
 retired-generation cleanup. Agent37 traced reuse boundaries. Keep policy/readiness
 computation in adapters, reuse existing admission/fencing and external promotion,
 and bring consequential serving-mode/cleanup choices to Aljoscha. The executed
-old/new upgrade walkthrough and backend integration remain open, alongside
+local old/new upgrade walkthrough remains open, alongside
 interrupted initialization and remaining broad regressions.
 
 ## Implemented contracts and verification
@@ -255,7 +261,7 @@ Adapters/replicas and argument/settings changes do not trigger native replacemen
 Qualified image sidecars preserve safe unchanged adoption and stable endpoints.
 Unknown legacy identities remain adopted. Eleven process-library tests and six
 Kubernetes library tests pass, plus strict Clippy. Runtime Kubernetes acceptance
-remains open. Keep the standalone image publishable.
+is deferred beyond M3. Keep the standalone image publishable.
 
 `--stop` is scoped, idempotent and data-preserving without rebuilding. Ctrl-C
 stops only controllerd. PID/start identities and recorded backend locations keep

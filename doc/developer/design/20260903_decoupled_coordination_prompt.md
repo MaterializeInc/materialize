@@ -21,8 +21,13 @@ native maintained execution rather than restoring an adapter-side installer.
 
 Follow the M3 slices in the design, starting with one controller-managed default
 adapter and separate pubsub. Continue through independent adapters, SQL/HTTP-managed
-lifecycle and deployment/backend integration, not just the binary extraction.
+lifecycle and local deployment coexistence, not just the binary extraction.
 The handoff identifies the current slice, concrete gaps and next useful check.
+
+Kubernetes backend and operator integration, including Kubernetes runtime
+acceptance, are deferred beyond M3. Preserve existing backend code, but do not
+pursue that integration or treat it as a milestone blocker. The local-process
+demo and version-upgrade walkthrough remain required.
 
 M3's local entry point is plain `bin/controllerd`, using the existing developer
 launcher. The default development build must work for demos. `--optimized` is
