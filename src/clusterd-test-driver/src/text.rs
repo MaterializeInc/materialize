@@ -376,6 +376,12 @@ fn parse_export(args: &BTreeMap<String, String>) -> anyhow::Result<ExportSpec> {
                 schema: opt_string(args, "schema"),
                 up_to: opt_u64(args, "up-to")?,
             },
+            "batched-subscribe" => ExportSpec::BatchedSubscribe {
+                sink_id: req_id(args, "sink")?,
+                on_id,
+                schema: opt_string(args, "schema"),
+                up_to: opt_u64(args, "up-to")?,
+            },
             "copy-to" => bail!("copy-to export is not implemented"),
             other => bail!("unknown export kind `{other}`"),
         },
@@ -559,6 +565,11 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
         "await-subscribe" => Command::AwaitSubscribe {
             id: req_id(&args, "id")?,
             up_to: req_u64(&args, "up-to")?,
+            timeout_secs: opt_u64(&args, "timeout-secs")?,
+        },
+        "await-batched-subscribe" => Command::AwaitBatchedSubscribe {
+            id: req_id(&args, "id")?,
+            up_to: opt_u64(&args, "up-to")?,
             timeout_secs: opt_u64(&args, "timeout-secs")?,
         },
         "create-dataflow" => {
@@ -889,6 +900,20 @@ mod tests {
             }]
         );
 
+        let batched = "create-dataflow name=b as-of=0\n  import source=1000 shard=s upper=2\n  build id=2000\n    Get u1000\n  export kind=batched-subscribe sink=2001 on=2000";
+        let Command::CreateDataflow { exports, .. } = parse_command(batched).unwrap() else {
+            panic!("expected create-dataflow");
+        };
+        assert_eq!(
+            exports,
+            vec![ExportSpec::BatchedSubscribe {
+                sink_id: GlobalId::User(2001),
+                on_id: GlobalId::User(2000),
+                schema: None,
+                up_to: None,
+            }]
+        );
+
         // copy-to is named but not implemented.
         let copy = "create-dataflow name=c as-of=0\n  import source=1000 shard=s upper=1\n  build id=2000\n    Get u1000\n  export kind=copy-to sink=2001 on=2000";
         assert!(parse_command(copy).is_err());
@@ -965,6 +990,27 @@ mod tests {
                 id: GlobalId::User(2001),
                 up_to: 2,
                 timeout_secs: Some(5),
+            }
+        );
+    }
+
+    /// `await-batched-subscribe` parses its arguments, with `up-to` optional.
+    #[mz_ore::test]
+    fn parses_await_batched_subscribe() {
+        assert_eq!(
+            parse_command("await-batched-subscribe id=2001 up-to=2").unwrap(),
+            Command::AwaitBatchedSubscribe {
+                id: GlobalId::User(2001),
+                up_to: Some(2),
+                timeout_secs: None,
+            }
+        );
+        assert_eq!(
+            parse_command("await-batched-subscribe id=2001").unwrap(),
+            Command::AwaitBatchedSubscribe {
+                id: GlobalId::User(2001),
+                up_to: None,
+                timeout_secs: None,
             }
         );
     }

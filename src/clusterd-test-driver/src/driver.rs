@@ -26,7 +26,7 @@ use timely::progress::Antichain;
 
 use crate::ctp::connect_and_hello;
 use crate::persist_host::PersistHost;
-use crate::responses::{ComputeSender, Responses};
+use crate::responses::{BatchedSubscribeEvent, ComputeSender, Responses};
 
 /// Headless frontend to a clusterd replica.
 pub struct Driver {
@@ -270,5 +270,44 @@ impl Driver {
         .await
         .map_err(|_| anyhow::anyhow!("subscribe {id} did not reach {up_to:?} in time"))?;
         self.responses.drain_subscribe(id)
+    }
+
+    /// Registers a batched subscribe buffer for `id`, so the response pump records its
+    /// responses. Call this before scheduling the sink.
+    pub fn register_batched_subscribe(&self, id: GlobalId) {
+        let _ = self.responses.ensure_batched_subscribe(id);
+    }
+
+    /// Waits until batched subscribe `id` has reported a response with an upper at or beyond
+    /// `upper`, then drains and returns its recorded responses in arrival order. An empty `upper`
+    /// waits for completion or a drop.
+    pub async fn await_batched_subscribe(
+        &self,
+        id: GlobalId,
+        upper: Antichain<Timestamp>,
+        timeout: Duration,
+    ) -> anyhow::Result<Vec<BatchedSubscribeEvent>> {
+        let mut rx = self.responses.ensure_batched_subscribe(id);
+        tokio::time::timeout(timeout, async {
+            loop {
+                if timely::PartialOrder::less_equal(&upper, &*rx.borrow_and_update()) {
+                    return;
+                }
+                if rx.changed().await.is_err() {
+                    futures::future::pending::<()>().await;
+                }
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("batched subscribe {id} did not reach {upper:?} in time"))?;
+        self.responses.drain_batched_subscribe(id)
+    }
+
+    /// Drains the responses recorded for batched subscribe `id` without waiting.
+    pub fn take_batched_subscribe(
+        &self,
+        id: GlobalId,
+    ) -> anyhow::Result<Vec<BatchedSubscribeEvent>> {
+        self.responses.drain_batched_subscribe(id)
     }
 }

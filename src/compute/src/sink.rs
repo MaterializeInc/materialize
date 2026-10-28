@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+pub(crate) mod batched_subscribe;
 mod copy_to_s3_oneshot;
 #[cfg(feature = "bench")]
 pub mod correction;

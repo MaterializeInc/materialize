@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex};
 
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::response::{
-    ComputeResponse, FrontiersResponse, PeekResponse, SubscribeResponse,
+    BatchedSubscribeResponse, ComputeResponse, FrontiersResponse, PeekResponse, Share,
+    SubscribeResponse,
 };
 use mz_repr::{GlobalId, Row, Timestamp};
 use mz_service::client::GenericClient;
@@ -53,10 +54,106 @@ impl SubscribeState {
     }
 }
 
+/// One merged response of a batched subscribe, as the pump records it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BatchedSubscribeEvent {
+    /// The output for the description `[lower, upper)`.
+    Batch {
+        lower: Antichain<Timestamp>,
+        upper: Antichain<Timestamp>,
+        /// The updates of every share, sorted.
+        updates: Vec<(Row, Timestamp, i64)>,
+        /// The error updates of every share, as `(message, time, diff)`, sorted.
+        errors: Vec<(String, Timestamp, i64)>,
+        /// The batch's fatal error, if any.
+        fatal: Option<String>,
+    },
+    /// The subscribe was dropped at `frontier`.
+    DroppedAt {
+        frontier: Antichain<Timestamp>,
+        /// The number of orphaned shares the response carried.
+        orphans: usize,
+    },
+}
+
+impl BatchedSubscribeEvent {
+    /// Records `response`. The driver reads no stash, so a stashed share fails the recording.
+    fn record(response: BatchedSubscribeResponse) -> Result<Self, String> {
+        match response {
+            BatchedSubscribeResponse::Batch(batch) => {
+                let mut updates = Vec::new();
+                let mut errors = Vec::new();
+                for share in batch.shares {
+                    match share {
+                        Share::Inline {
+                            rows,
+                            errors: share_errors,
+                        } => {
+                            for (row, ts, diff) in rows.iter() {
+                                updates.push((row.to_owned(), *ts, diff.into_inner()));
+                            }
+                            for (error, ts, diff) in share_errors {
+                                errors.push((error.to_string(), ts, diff.into_inner()));
+                            }
+                        }
+                        Share::Stashed { .. } => {
+                            return Err("the driver cannot read stashed shares".into());
+                        }
+                    }
+                }
+                updates.sort();
+                errors.sort();
+                Ok(BatchedSubscribeEvent::Batch {
+                    lower: batch.lower,
+                    upper: batch.upper,
+                    updates,
+                    errors,
+                    fatal: batch.fatal,
+                })
+            }
+            BatchedSubscribeResponse::DroppedAt { frontier, orphans } => {
+                Ok(BatchedSubscribeEvent::DroppedAt {
+                    frontier,
+                    orphans: orphans.len(),
+                })
+            }
+        }
+    }
+
+    /// The frontier the response advances the subscribe to. A drop ends the output, so it
+    /// advances to the empty frontier.
+    fn upper(&self) -> Antichain<Timestamp> {
+        match self {
+            BatchedSubscribeEvent::Batch { upper, .. } => upper.clone(),
+            BatchedSubscribeEvent::DroppedAt { .. } => Antichain::new(),
+        }
+    }
+}
+
+/// Buffered state for one batched subscribe sink: its responses in arrival order, and a watch on
+/// the upper of the last one.
+struct BatchedSubscribeState {
+    events: Vec<BatchedSubscribeEvent>,
+    upper_tx: watch::Sender<Antichain<Timestamp>>,
+    /// Why recording a response failed, if it did.
+    error: Option<String>,
+}
+
+impl BatchedSubscribeState {
+    fn new() -> Self {
+        BatchedSubscribeState {
+            events: Vec::new(),
+            upper_tx: watch::channel(Antichain::from_elem(Timestamp::default())).0,
+            error: None,
+        }
+    }
+}
+
 struct Shared {
     frontiers: BTreeMap<GlobalId, FrontierTx>,
     peeks: BTreeMap<uuid::Uuid, oneshot::Sender<PeekResponse>>,
     subscribes: BTreeMap<GlobalId, SubscribeState>,
+    batched_subscribes: BTreeMap<GlobalId, BatchedSubscribeState>,
     raw: broadcast::Sender<ComputeResponse>,
 }
 
@@ -75,6 +172,7 @@ impl Responses {
             frontiers: BTreeMap::new(),
             peeks: BTreeMap::new(),
             subscribes: BTreeMap::new(),
+            batched_subscribes: BTreeMap::new(),
             raw: raw_tx,
         }));
         let pump_shared = Arc::clone(&shared);
@@ -170,6 +268,24 @@ impl Responses {
                 };
                 let _ = state.upper_tx.send(upper);
             }
+            ComputeResponse::BatchedSubscribeResponse(id, response) => {
+                let state = g
+                    .batched_subscribes
+                    .entry(id)
+                    .or_insert_with(BatchedSubscribeState::new);
+                match BatchedSubscribeEvent::record(*response) {
+                    Ok(event) => {
+                        let upper = event.upper();
+                        state.events.push(event);
+                        let _ = state.upper_tx.send(upper);
+                    }
+                    Err(e) => {
+                        state.error.get_or_insert(e);
+                        // Nothing after the failed response can be trusted, so release waiters.
+                        let _ = state.upper_tx.send(Antichain::new());
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -223,6 +339,34 @@ impl Responses {
         }
         Ok(std::mem::take(&mut state.updates))
     }
+
+    /// Ensures a batched subscribe buffer exists for `id` and returns a watch receiver for the
+    /// upper of its last response.
+    pub fn ensure_batched_subscribe(&self, id: GlobalId) -> watch::Receiver<Antichain<Timestamp>> {
+        let mut g = self.shared.lock().expect("lock");
+        g.batched_subscribes
+            .entry(id)
+            .or_insert_with(BatchedSubscribeState::new)
+            .upper_tx
+            .subscribe()
+    }
+
+    /// Drains the responses recorded for batched subscribe `id`, in arrival order. Errors if a
+    /// response could not be recorded.
+    pub fn drain_batched_subscribe(
+        &self,
+        id: GlobalId,
+    ) -> anyhow::Result<Vec<BatchedSubscribeEvent>> {
+        let mut g = self.shared.lock().expect("lock");
+        let state = g
+            .batched_subscribes
+            .get_mut(&id)
+            .ok_or_else(|| anyhow::anyhow!("no batched subscribe registered for {id}"))?;
+        if let Some(e) = &state.error {
+            anyhow::bail!("recording batched subscribe {id} failed: {e}");
+        }
+        Ok(std::mem::take(&mut state.events))
+    }
 }
 
 /// Send half: forwards commands into the pump task that owns the client.
@@ -252,6 +396,7 @@ mod tests {
             frontiers: BTreeMap::new(),
             peeks: BTreeMap::new(),
             subscribes: BTreeMap::new(),
+            batched_subscribes: BTreeMap::new(),
             raw,
         }))
     }
