@@ -750,8 +750,22 @@ impl SessionClient {
         sql: String,
         param_types: Vec<Option<SqlScalarType>>,
     ) -> Result<(), AdapterError> {
+        self.prepare_for_execution(name, stmt, sql, param_types)
+            .await
+            .map(|_| ())
+    }
+
+    /// Prepares and certifies a statement for execution within this client operation.
+    /// The returned catalog must not be retained for a later protocol request.
+    pub async fn prepare_for_execution(
+        &mut self,
+        name: String,
+        stmt: Option<Statement<Raw>>,
+        sql: String,
+        param_types: Vec<Option<SqlScalarType>>,
+    ) -> Result<crate::peek_client::StatementCatalog, AdapterError> {
         crate::coord::trace_create_mv_phase(self.session(), stmt.as_ref(), "prepare_start");
-        let (catalog, _) = self.peek_client.fresh_catalog_snapshot("prepare").await?;
+        let (catalog, read_ts) = self.peek_client.fresh_catalog_snapshot("prepare").await?;
         crate::coord::trace_create_mv_phase(self.session(), stmt.as_ref(), "prepare_catalog_ready");
 
         // Note: This failpoint is used to simulate a request outliving the external connection
@@ -775,7 +789,7 @@ impl SessionClient {
         };
         self.session()
             .set_prepared_statement(name, stmt, sql, desc, state_revision, now);
-        Ok(())
+        Ok(crate::peek_client::StatementCatalog { catalog, read_ts })
     }
 
     /// Binds a statement to a portal.
@@ -786,8 +800,21 @@ impl SessionClient {
         stmt: Statement<Raw>,
         sql: String,
     ) -> Result<(), AdapterError> {
+        self.declare_for_execution(name, stmt, sql)
+            .await
+            .map(|_| ())
+    }
+
+    /// Binds and certifies a portal for execution within this client operation.
+    /// The returned catalog must not be retained for a later protocol request.
+    pub async fn declare_for_execution(
+        &mut self,
+        name: String,
+        stmt: Statement<Raw>,
+        sql: String,
+    ) -> Result<crate::peek_client::StatementCatalog, AdapterError> {
         crate::coord::trace_create_mv_phase(self.session(), Some(&stmt), "declare_start");
-        let (catalog, _) = self.peek_client.fresh_catalog_snapshot("declare").await?;
+        let (catalog, read_ts) = self.peek_client.fresh_catalog_snapshot("declare").await?;
         crate::coord::trace_create_mv_phase(self.session(), Some(&stmt), "declare_catalog_ready");
         let param_types = vec![];
         let desc =
@@ -810,7 +837,7 @@ impl SessionClient {
             result_formats,
             state_revision,
         )?;
-        Ok(())
+        Ok(crate::peek_client::StatementCatalog { catalog, read_ts })
     }
 
     /// Executes a previously-bound portal.
@@ -825,6 +852,29 @@ impl SessionClient {
         portal_name: String,
         cancel_future: impl Future<Output = std::io::Error> + Send,
         outer_ctx_extra: Option<ExecuteContextGuard>,
+    ) -> Result<(ExecuteResponse, Instant), AdapterError> {
+        self.execute_inner(portal_name, cancel_future, outer_ctx_extra, None)
+            .await
+    }
+
+    /// Executes using certification obtained during this same client operation.
+    /// A certificate from an earlier protocol request is not valid here.
+    pub async fn execute_with_catalog(
+        &mut self,
+        portal_name: String,
+        cancel_future: impl Future<Output = std::io::Error> + Send,
+        catalog: crate::peek_client::StatementCatalog,
+    ) -> Result<(ExecuteResponse, Instant), AdapterError> {
+        self.execute_inner(portal_name, cancel_future, None, Some(catalog))
+            .await
+    }
+
+    async fn execute_inner(
+        &mut self,
+        portal_name: String,
+        cancel_future: impl Future<Output = std::io::Error> + Send,
+        outer_ctx_extra: Option<ExecuteContextGuard>,
+        catalog: Option<crate::peek_client::StatementCatalog>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
         let timing_stmt = self
@@ -852,6 +902,7 @@ impl SessionClient {
             cancel_future,
             execute_started,
             new_statement,
+            catalog,
         ))
         .await;
 
@@ -875,6 +926,7 @@ impl SessionClient {
         cancel_future: impl Future<Output = ()> + Send + Clone,
         execute_started: Instant,
         new_statement: bool,
+        mut catalog: Option<crate::peek_client::StatementCatalog>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let timing_stmt = self
             .session()
@@ -927,6 +979,11 @@ impl SessionClient {
         // statement logging on the outer portal, so that
         // `mz_statement_execution_history` records `EXECUTE foo (...)`
         // rather than the inner SQL.
+        if matches!(timing_stmt.as_deref(), Some(Statement::Execute(_))) {
+            // Unrolling certifies and describes a different portal. Do not pair
+            // that description with the earlier outer statement's snapshot.
+            catalog = None;
+        }
         let portal_name = self.unroll_sql_execute(portal_name, logging).await?;
 
         // Attempt peek sequencing in the session task.
@@ -939,6 +996,7 @@ impl SessionClient {
                 logging,
                 cancel_future.clone(),
                 execute_started,
+                catalog,
             )
             .await?;
         crate::coord::trace_create_mv_phase(
@@ -1610,6 +1668,7 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         diagnostic_cancel: impl Future<Output = ()> + Send,
         execute_started: Instant,
+        catalog: Option<crate::peek_client::StatementCatalog>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");
@@ -1620,6 +1679,7 @@ impl SessionClient {
                     logging,
                     diagnostic_cancel,
                     execute_started,
+                    catalog,
                 )
                 .await
         } else {

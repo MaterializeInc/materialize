@@ -278,6 +278,19 @@ guarantees that its calls cannot coalesce. When exactly one round trip is
 required, use one explicit shared call only if it occurs within every
 operation's real-time bounds and satisfies every caller's contract.
 
+Preparation and execution may share one immutable catalog certificate within a
+single simple-query statement or HTTP statement operation. Carry it explicitly,
+not in a session or prepared-statement cache. Extended-protocol Parse and Execute
+can arrive in separate requests, so Parse's certificate cannot authorize a later
+Execute. Replanning and execution at a later timestamp retain their freshness
+checks. Serializable data isolation does not permit stale catalog privileges or
+configuration.
+
+Bind also needs fresh validation. A locally valid prepared statement can refer
+to a relation dropped by a peer. BindComplete followed by DescribePortal can
+expose its obsolete description without any Execute request. Certifying only
+local validation errors or relying on a later Execute does not cover this path.
+
 #### Why caching an oracle result is not correct
 
 It is tempting to cache or snapshot the most recent `read_ts` result (e.g. in a

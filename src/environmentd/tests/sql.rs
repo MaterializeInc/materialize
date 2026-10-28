@@ -55,6 +55,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::SqlState;
 use tracing::{debug, info};
 
+#[path = "sql/catalog_certification.rs"]
+mod catalog_certification;
 #[path = "sql/comment_id_collision.rs"]
 mod comment_id_collision;
 #[path = "sql/index_timeline.rs"]

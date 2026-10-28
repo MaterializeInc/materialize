@@ -1616,19 +1616,19 @@ async fn execute_stmt<S: ResultSender>(
     raw_params: Vec<Option<String>>,
 ) -> Result<StatementResult, Error> {
     const EMPTY_PORTAL: &str = "";
-    if let Err(e) = client
-        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), sql, vec![])
+    let catalog = match client
+        .prepare_for_execution(EMPTY_PORTAL.into(), Some(stmt.clone()), sql, vec![])
         .await
     {
-        return Ok(SqlResult::err(client, e).into());
-    }
-
-    let prep_stmt = match client.get_prepared_statement(EMPTY_PORTAL).await {
-        Ok(stmt) => stmt,
-        Err(err) => {
-            return Ok(SqlResult::err(client, err).into());
-        }
+        Ok(catalog) => catalog,
+        Err(e) => return Ok(SqlResult::err(client, e).into()),
     };
+
+    // Preparation just validated this description in the same operation.
+    let prep_stmt = client
+        .session()
+        .get_prepared_statement_unverified(EMPTY_PORTAL)
+        .expect("statement was just prepared");
 
     let param_types = &prep_stmt.desc().param_types;
     if param_types.len() != raw_params.len() {
@@ -1706,7 +1706,7 @@ async fn execute_stmt<S: ResultSender>(
         .expect("unnamed portal should be present");
 
     let res = client
-        .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
+        .execute_with_catalog(EMPTY_PORTAL.into(), futures::future::pending(), catalog)
         .await;
 
     if S::SUPPORTS_STREAMING_NOTICES {

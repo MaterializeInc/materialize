@@ -1109,15 +1109,18 @@ where
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
         const EMPTY_PORTAL: &str = "";
-        if let Err(e) = self
+        let catalog = match self
             .adapter_client
-            .declare(EMPTY_PORTAL.to_string(), stmt, sql)
+            .declare_for_execution(EMPTY_PORTAL.to_string(), stmt, sql)
             .await
         {
-            return self
-                .send_error_and_get_state(e.into_response(Severity::Error))
-                .await;
-        }
+            Ok(catalog) => catalog,
+            Err(e) => {
+                return self
+                    .send_error_and_get_state(e.into_response(Severity::Error))
+                    .await;
+            }
+        };
         let portal = self
             .adapter_client
             .session()
@@ -1149,7 +1152,7 @@ where
 
         let result = match self
             .adapter_client
-            .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed(), None)
+            .execute_with_catalog(EMPTY_PORTAL.to_string(), self.conn.wait_closed(), catalog)
             .await
         {
             Ok((response, execute_started)) => {

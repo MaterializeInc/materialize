@@ -85,6 +85,7 @@ impl PeekClient {
         logging: &mut ExecutionLogging,
         diagnostic_cancel: impl std::future::Future<Output = ()> + Send,
         execute_started: std::time::Instant,
+        statement_catalog: Option<crate::peek_client::StatementCatalog>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         // # From handle_execute
 
@@ -104,12 +105,17 @@ impl PeekClient {
         // Catalog certification is shared by statements with different timeout
         // policies. Keep it cancellable without imposing an execution deadline.
         let diagnostic_cancel = diagnostic_cancel.boxed().shared();
-        let (mut catalog, mut catalog_read_ts) = crate::util::run_cancellable(
-            diagnostic_cancel.clone(),
-            None,
-            self.fresh_catalog_snapshot("try_frontend_peek"),
-        )
-        .await?;
+        let (mut catalog, mut catalog_read_ts) = match statement_catalog {
+            Some(catalog) => (catalog.catalog, catalog.read_ts),
+            None => {
+                crate::util::run_cancellable(
+                    diagnostic_cancel.clone(),
+                    None,
+                    self.fresh_catalog_snapshot("try_frontend_peek"),
+                )
+                .await?
+            }
+        };
 
         // Extract things from the portal. A failed verification does not begin
         // an entry, mirroring the coordinator: the portal is what statement

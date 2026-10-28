@@ -92,6 +92,16 @@ pub struct PeekClient {
     pub read_only: bool,
 }
 
+/// A catalog certified during one client operation.
+///
+/// May only be passed from preparation to execution within that same operation.
+/// Never retain it for a subsequent protocol request, including Execute after Parse.
+/// It is deliberately not cloneable.
+pub struct StatementCatalog {
+    pub(crate) catalog: Arc<Catalog>,
+    pub(crate) read_ts: Option<Timestamp>,
+}
+
 /// A command sender that does not make background work keep the coordinator alive.
 #[derive(Debug, Clone)]
 pub(crate) enum CoordinatorClient {
