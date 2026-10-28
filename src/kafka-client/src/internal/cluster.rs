@@ -28,6 +28,9 @@
 //!   background tasks; connections close and pending requests fail with
 //!   `BrokerDestroy`. Engine tasks should select on a child of the token.
 //! * Statistics: [`Cluster::register_stats_source`].
+//! * Errors and statistics reach the application through
+//!   [`Cluster::events`], like librdkafka's main queue: consumers deliver
+//!   them when polled, producers right away, admin clients never.
 //!
 //! # All brokers down
 //!
@@ -69,17 +72,21 @@ use crate::types::RDKafkaErrorCode;
 use crate::util::Deadline;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod auth_tests;
 mod bootstrap;
 mod broker;
+mod events;
 mod metadata;
 pub(crate) mod stats;
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests;
 
 // Part of the engine-facing API.
 #[allow(unused_imports)]
 pub(crate) use broker::{Broker, BrokerSource};
+pub(crate) use events::EventQueue;
 #[allow(unused_imports)]
 pub(crate) use metadata::{
     BrokerMetadata, MetadataSnapshot, PartitionMetadata, SharedMetadata, TopicMetadata,
@@ -137,6 +144,7 @@ static HANDLE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 pub(crate) struct Cluster {
     weak: Weak<Cluster>,
     ctx: ConnectContext,
+    events: Arc<EventQueue>,
     shutdown: CancellationToken,
     registry: Mutex<Registry>,
     /// Bumped on every broker state change and connection attempt outcome.
@@ -170,11 +178,13 @@ impl Cluster {
         tls: Option<TlsConfig>,
     ) -> Arc<Cluster> {
         let shutdown = CancellationToken::new();
+        let events = Arc::new(EventQueue::new(Arc::clone(&hooks), settings.kind));
         let oauth = (settings.security_protocol.uses_sasl()
             && settings.sasl.mechanism == Some(SaslMechanism::OAuthBearer))
         .then(|| {
             OAuthTokens::start(
                 Arc::clone(&hooks),
+                Arc::clone(&events),
                 settings.sasl.oauthbearer_config.clone(),
                 hooks.oauth_enabled(),
                 shutdown.child_token(),
@@ -226,6 +236,7 @@ impl Cluster {
             Cluster {
                 weak: Weak::clone(weak),
                 ctx,
+                events,
                 shutdown,
                 registry: Mutex::new(registry),
                 state_version,
@@ -258,6 +269,13 @@ impl Cluster {
 
     pub(crate) fn hooks(&self) -> &Arc<dyn Hooks> {
         &self.ctx.hooks
+    }
+
+    /// The client's error and statistics events. Raise errors and statistics
+    /// through it rather than calling the hooks, so that they reach the
+    /// application like librdkafka's main queue.
+    pub(crate) fn events(&self) -> &EventQueue {
+        &self.events
     }
 
     pub(crate) fn logger(&self) -> &Logger {
@@ -432,7 +450,7 @@ impl Cluster {
         };
         if total > 0 && down == total {
             self.rebootstrap();
-            self.ctx.hooks.error(
+            self.events.error(
                 KafkaError::Global(RDKafkaErrorCode::AllBrokersDown),
                 &format!("{down}/{total} brokers are down"),
             );

@@ -77,9 +77,14 @@ where
     /// Returns messages and per-partition errors of partitions that are not
     /// split off with [`split_partition_queue`](Self::split_partition_queue).
     /// Partition ends are reported as [`KafkaError::PartitionEOF`] when
-    /// `enable.partition.eof` is set. Callbacks do not depend on this method
-    /// being called.
+    /// `enable.partition.eof` is set.
     ///
+    /// Also delivers pending [`ClientContext::error`] and
+    /// [`ClientContext::stats`] callbacks on the calling thread, before
+    /// returning and while waiting; they are not delivered otherwise.
+    ///
+    /// [`ClientContext::error`]: crate::ClientContext::error
+    /// [`ClientContext::stats`]: crate::ClientContext::stats
     /// [`KafkaError::PartitionEOF`]: crate::error::KafkaError::PartitionEOF
     pub fn poll<T: Into<Timeout>>(&self, timeout: T) -> Option<KafkaResult<BorrowedMessage<'_>>> {
         self.inner.poll(timeout.into())

@@ -412,6 +412,9 @@ fn connection_refused() {
             .is_some_and(|l| l.starts_with(&expected) && l.ends_with("ms in state CONNECT)")),
         "{lines:#?}"
     );
+    // Like librdkafka's main queue, a consumer's errors wait for a poll.
+    assert!(recorder.error_reasons().is_empty());
+    client.cluster().events().serve();
     let errors = recorder.error_reasons();
     assert!(
         errors.iter().any(|e| e
@@ -822,6 +825,21 @@ fn diff_scenario() {
             return;
         }
     };
+    // Unless `MZKC_NOPOLL` is set, serve the client's events as an
+    // application polling a consumer would.
+    let polling = Arc::new(std::sync::atomic::AtomicBool::new(
+        std::env::var("MZKC_NOPOLL").is_err(),
+    ));
+    let poller = {
+        let cluster = Arc::clone(client.cluster());
+        let polling = Arc::clone(&polling);
+        std::thread::spawn(move || {
+            while polling.load(std::sync::atomic::Ordering::SeqCst) {
+                cluster.events().serve();
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        })
+    };
     let topic = std::env::var("MZKC_TOPIC").ok();
     match client.fetch_metadata(topic.as_deref(), timeout) {
         Ok(md) => println!(
@@ -844,4 +862,6 @@ fn diff_scenario() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(500);
     std::thread::sleep(Duration::from_millis(linger));
+    polling.store(false, std::sync::atomic::Ordering::SeqCst);
+    poller.join().unwrap();
 }

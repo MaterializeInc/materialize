@@ -112,6 +112,8 @@ fn fetch(
         .fetch_metadata(None, timeout)
         .map(|md| md.brokers().len());
     let fails = ctx.fail_lines();
+    // Deliver the errors, as a consumer poll would.
+    client.cluster().events().serve();
     let errors = ctx.errors.lock().unwrap().clone();
     (result, fails, errors)
 }
@@ -391,6 +393,7 @@ fn oauthbearer_tokens() {
             err,
             KafkaError::MetadataFetch(RDKafkaErrorCode::BrokerTransportFailure)
         );
+        client.cluster().events().serve();
         let errors = ctx.errors.lock().unwrap().clone();
         assert!(
             errors.iter().any(|e| e.contains(
@@ -406,11 +409,12 @@ fn oauthbearer_tokens() {
     let ctx = Arc::new(OAuthCtx::default());
     ctx.fail.store(true, Ordering::SeqCst);
     let settings = ClientSettings::from_config(&config, ClientKind::Consumer).unwrap();
-    let _client = Client::new(settings, Arc::clone(&ctx)).unwrap();
+    let client = Client::new(settings, Arc::clone(&ctx)).unwrap();
     let start = Instant::now();
     while ctx.errors.lock().unwrap().is_empty() {
         assert!(start.elapsed() < Duration::from_secs(10));
         std::thread::sleep(Duration::from_millis(10));
+        client.cluster().events().serve();
     }
     assert_eq!(
         ctx.errors.lock().unwrap()[0],

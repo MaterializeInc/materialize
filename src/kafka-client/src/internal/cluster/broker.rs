@@ -685,9 +685,11 @@ impl Broker {
                 format_args!("[thrd:{name}]: {name}: {full}"),
             );
             if level <= RDKafkaLogLevel::Error.severity() {
-                logger
-                    .hooks()
-                    .error(KafkaError::Global(failure.code), &format!("{name}: {full}"));
+                if let Some(cluster) = self.cluster.upgrade() {
+                    cluster
+                        .events()
+                        .error(KafkaError::Global(failure.code), &format!("{name}: {full}"));
+                }
             }
         }
     }

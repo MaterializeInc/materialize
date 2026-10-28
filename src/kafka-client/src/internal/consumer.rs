@@ -157,6 +157,14 @@ impl ConsumerInner {
             next_queue_id: AtomicU64::new(1),
             shutdown,
         });
+        // Client errors and statistics wait for the application to poll, as
+        // on librdkafka's main queue; wake a waiting poll or stream for them.
+        let weak = Arc::downgrade(&inner);
+        inner.cluster.events().set_wakeup(move || {
+            if let Some(inner) = weak.upgrade() {
+                inner.notify_main(inner.lock_main());
+            }
+        });
         runtime::spawn("kafka-consumer-manager", manage(Arc::clone(&inner)));
         inner
     }
@@ -278,7 +286,12 @@ impl ConsumerInner {
     ///
     /// Without `group.id`, returns `UnknownGroup` immediately, like
     /// librdkafka's `rd_kafka_consumer_poll`.
+    ///
+    /// Delivers pending client errors and statistics to the context first,
+    /// and while waiting, like rust-rdkafka's `rd_kafka_poll(rk, 0)` calls.
     pub(crate) fn poll(&self, timeout: Timeout) -> Option<KafkaResult<BorrowedMessage<'static>>> {
+        let events = self.cluster.events();
+        events.serve();
         if self.group_id.is_none() {
             return Some(Err(KafkaError::MessageConsumption(
                 RDKafkaErrorCode::UnknownGroup,
@@ -292,6 +305,13 @@ impl ConsumerInner {
             }
             let mut main = self.lock_main();
             if !main.ready.is_empty() || !main.events.is_empty() {
+                continue;
+            }
+            // Checked under the main lock, which the event queue's wakeup
+            // takes before notifying, so that no wakeup is lost.
+            if events.has_pending() {
+                drop(main);
+                events.serve();
                 continue;
             }
             let remaining = deadline.remaining_duration();

@@ -47,21 +47,22 @@ use crate::util::{Deadline, Timeout};
 ///
 /// # Threading
 ///
-/// Callbacks run on the client's I/O threads, not on the threads that call the
-/// client:
-///
-/// * [`log`](Self::log), [`error`](Self::error) and [`stats`](Self::stats)
-///   (and `ProducerContext::delivery`, `ConsumerContext` callbacks) are called
-///   inline from I/O tasks. They must return quickly and must not block, or
-///   they stall I/O for every client in the process. They may be called
-///   concurrently from several threads.
+/// * [`log`](Self::log) (and `ProducerContext::delivery`, `ConsumerContext`
+///   callbacks) are called inline from the client's I/O tasks. They must
+///   return quickly and must not block, or they stall I/O for every client in
+///   the process. They may be called concurrently from several threads.
+/// * [`error`](Self::error) and [`stats`](Self::stats) are delivered like
+///   rust-rdkafka delivers them from librdkafka's main queue: a consumer
+///   delivers them on the thread that calls `BaseConsumer::poll` or polls a
+///   `StreamConsumer` stream (not `PartitionQueue::poll`), so a consumer that
+///   is never polled never receives them; producers deliver them promptly
+///   from I/O tasks, as rust-rdkafka's polling thread would; admin clients
+///   never deliver them. Errors of a consumer that is not polled are kept up
+///   to a bound, and only its latest statistics.
 /// * [`resolve_broker_addr`](Self::resolve_broker_addr) and
 ///   [`generate_oauth_token`](Self::generate_oauth_token) are called on a
 ///   blocking thread, where they may block, including with
 ///   `tokio::runtime::Handle::block_on` on another runtime.
-///
-/// Unlike rust-rdkafka, `error` and `stats` do not depend on the application
-/// polling the client.
 pub trait ClientContext: Send + Sync + 'static {
     /// Whether to obtain SASL `OAUTHBEARER` tokens by calling
     /// [`ClientContext::generate_oauth_token`].

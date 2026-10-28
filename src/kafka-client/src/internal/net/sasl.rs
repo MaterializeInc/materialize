@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::settings::{SaslMechanism, SaslSettings};
 use crate::error::KafkaError;
+use crate::internal::cluster::EventQueue;
 use crate::internal::hooks::{self, Hooks};
 use crate::types::RDKafkaErrorCode;
 
@@ -360,11 +361,13 @@ pub(crate) struct OAuthTokens {
 
 impl OAuthTokens {
     /// Starts the refresh task, which stops when `shutdown` is cancelled.
+    /// Token errors are raised on `events`.
     ///
     /// `enabled` is `ClientContext::ENABLE_REFRESH_OAUTH_TOKEN`; without it
     /// there is no token source and authentication fails.
     pub(crate) fn start(
         hooks: Arc<dyn Hooks>,
+        events: Arc<EventQueue>,
         config: Option<String>,
         enabled: bool,
         shutdown: CancellationToken,
@@ -417,7 +420,7 @@ impl OAuthTokens {
                             s.attempted = true;
                         });
                         if changed {
-                            hooks.error(
+                            events.error(
                                 KafkaError::Global(RDKafkaErrorCode::Authentication),
                                 &format!("Failed to acquire SASL OAUTHBEARER token: {e}"),
                             );

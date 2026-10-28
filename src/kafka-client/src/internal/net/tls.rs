@@ -565,6 +565,7 @@ fn set_certs(b: &mut SslContextBuilder, ssl: &SslSettings, logger: &Logger) -> R
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

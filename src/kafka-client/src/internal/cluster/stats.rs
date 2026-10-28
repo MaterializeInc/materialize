@@ -131,6 +131,6 @@ pub(super) async fn stats_loop(
             return;
         };
         let stats = build(&cluster);
-        cluster.hooks().stats(stats);
+        cluster.events().stats(stats);
     }
 }
