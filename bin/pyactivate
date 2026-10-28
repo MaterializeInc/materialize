@@ -28,7 +28,8 @@ logger = logging.getLogger("bootstrap")
 # in `doc/developer/guide.md`.
 MIN_HEXVERSION = 0x030D0000
 MIN_VERSION = f"{MIN_HEXVERSION >> 24}.{(MIN_HEXVERSION >> 16) & 0xFF}"
-# First unsupported Python. Pinned dependencies lag new releases, so a newer
+# First unsupported Python. Keep in sync with the version named in
+# `doc/developer/guide.md`. Pinned dependencies lag new releases, so a newer
 # interpreter (e.g. after a Homebrew upgrade) fails deep in dependency resolution
 # instead of here. Raise it once the lock resolves and CI passes on the new version.
 MAX_HEXVERSION = 0x030F0000
