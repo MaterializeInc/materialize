@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 async-compression.workspace = true
+aws-lc-rs.workspace = true
 bytes.workspace = true
 clap = { workspace = true, features = ["env"] }
 csv-async.workspace = true
@@ -41,6 +42,7 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+mz-ore = { path = "../ore", features = ["async", "test"] }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
