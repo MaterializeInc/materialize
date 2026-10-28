@@ -894,6 +894,15 @@ Build through these slices, preserving working outcomes as the split progresses:
    deployment cleanup. Complete local-process and Kubernetes integration through
    their existing backends and external lifecycle owner.
 
+Publish and execute a local version-upgrade walkthrough in
+`doc/developer/controllerd.md`. Include copyable commands to select two compatible
+participating versions, start the old deployment and a workload, and prewarm the
+new deployment under its own controller against the same environment and shared
+pubsub. Show readiness inspection, explicit promotion, client endpoint switching,
+old-deployment retirement and process cleanup, including relay provisioning
+handoff where needed. Verify continued ingestion and query results. Keep the
+existing compatibility exclusions. Test-harness coverage alone does not suffice.
+
 Demonstrate SQL creation, listing, rename and drop of adapters, endpoint discovery
 and the HTTP inventory. Use two adapters concurrently, kill one, and show
 controllerd restoring it while the other continues serving against the same

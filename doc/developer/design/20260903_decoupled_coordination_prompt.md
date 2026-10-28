@@ -36,6 +36,10 @@ Include `bin/controllerd --stop` for idempotent, data-preserving local environme
 shutdown, even after controller exit and without rebuilding. Keep Ctrl-C as
 controller-only shutdown. Follow the design's environment-scoping contract.
 
+M3 also requires an executed, user-facing local version-upgrade walkthrough in
+`doc/developer/controllerd.md`, covering compatible old/new deployments through
+prewarming, promotion and retirement. Document commands, not only test coverage.
+
 Include `GET /api/collections`: pretty JSON with collection ID, name and the
 catalog's committed combined since, not physical Persist since. Support SQL LIKE
 patterns in the `id`/`name` URL filters. Follow the design's read-only inspection

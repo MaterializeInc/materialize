@@ -14,6 +14,10 @@ The controller-managed two-adapter demonstration passes. SQL/HTTP lifecycle,
 replica-policy integration, zero-adapter recovery, interrupted initialization and
 deployment/backend acceptance remain open. Broad CI is not green.
 
+Deployment acceptance includes publishing and executing the local upgrade
+walkthrough in [the developer guide](../controllerd.md), following the design's
+old/new-version, prewarming, promotion, client switching and retirement outcomes.
+
 ## Resume here
 
 Lifecycle core (`c5838f31`), local launcher (`4515a0df`) and deployment-qualified
