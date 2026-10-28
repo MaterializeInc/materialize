@@ -53,7 +53,7 @@ use mz_sql_parser::ast::{CreateClusterStatement, Raw, Statement};
 use mz_sql_parser::parser::parse_statements;
 
 pub use crate::config::Profile;
-pub use connection::{Client, DevOverlaysClient};
+pub use connection::{Client, DevOverlaysClient, copy_escape};
 pub(crate) use connection::{build_options_string, default_sslmode, is_loopback_host};
 
 /// Double-quote a SQL identifier, escaping any embedded double quotes.
