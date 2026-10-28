@@ -33,7 +33,7 @@ struct OpenPeriod<S> {
 #[derive(Debug)]
 pub(super) struct PeriodBook<S> {
     high_water_ms: u64,
-    open: BTreeMap<u64, OpenPeriod<S>>,
+    open: BTreeMap<(u64, u64), OpenPeriod<S>>,
     finished: bool,
 }
 
@@ -69,7 +69,10 @@ impl<S> PeriodBook<S> {
             let start = from - from % period_ms;
             let end = start.saturating_add(period_ms);
             let part_end = to_ms.min(end);
-            let period = self.open.entry(start).or_insert_with(|| OpenPeriod {
+            // NOTE: Keyed by the end as well, because a changed period length can give a new
+            // period the start of an open one with a different end. Sharing the entry would
+            // charge arrivals past the open period's end to it.
+            let period = self.open.entry((start, end)).or_insert_with(|| OpenPeriod {
                 end_ms: end,
                 state: open(),
             });
@@ -99,7 +102,7 @@ impl<S> PeriodBook<S> {
             .collect()
     }
 
-    fn close((start_ms, p): (u64, OpenPeriod<S>)) -> ClosedPeriod<S> {
+    fn close(((start_ms, _), p): ((u64, u64), OpenPeriod<S>)) -> ClosedPeriod<S> {
         ClosedPeriod {
             start_ms,
             end_ms: p.end_ms,

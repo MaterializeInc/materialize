@@ -944,3 +944,47 @@ fn period_split_matches_arrival_walk() {
         .collect();
     assert_eq!(actual, expected);
 }
+
+#[mz_ore::test]
+fn period_length_change_keeps_arrivals_in_their_period() {
+    let tree = aligned(1000);
+    let mut recorder = FreshnessRecorder::new(0);
+    let mut rows = Vec::new();
+    let mut covered = 0;
+    // Open (0, 10 s], then switch to 60 s periods, so the new period starts at 0 as well. The
+    // later steps change the length again, including to one that nests the open periods.
+    for (frontier, period_ms) in [
+        (5_001, 10_000),
+        (40_001, 60_000),
+        (45_001, 20_000),
+        (130_001, 60_000),
+        (200_001, 7_000),
+    ] {
+        let cfg = RecorderConfig {
+            period_ms,
+            ..config(4)
+        };
+        rows.extend(recorder.observe(&tree, &at(frontier), frontier, &cfg));
+        covered = frontier - 1;
+    }
+    rows.extend(recorder.observe(&tree, &Antichain::new(), 201_000, &config(4)));
+    let mut per_period: BTreeMap<(u64, u64), u64> = BTreeMap::new();
+    for r in &rows {
+        *per_period
+            .entry((r.period_start_ms, r.period_end_ms))
+            .or_default() += r.count;
+    }
+    // Every period holds at most its own length, so no arrival sits outside its period.
+    for ((start, end), count) in &per_period {
+        assert!(
+            *count <= end - start,
+            "period ({start}, {end}] holds {count}"
+        );
+    }
+    let total: u64 = per_period.values().sum();
+    assert_eq!(total, covered);
+    // The old period only holds the arrivals before the change, and the new (0, 60 s] period,
+    // which shares its start, takes the rest.
+    assert_eq!(per_period[&(0, 10_000)], 5_000);
+    assert_eq!(per_period[&(0, 60_000)], 50_000);
+}
