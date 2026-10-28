@@ -24,6 +24,18 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-10-29* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
 
+### Improved hydration times and memory efficiency for upsert sources {#v26.48-upsert-hydration}
+
+Upsert sources that spill to disk now hydrate up to 1.9x faster, with up to 66% lower peak memory and disk usage.
+
+![Hydration time and peak memory plus disk usage for an upsert source, old versus new: hydration time drops from 206.1 minutes to 107.9–113.3 minutes, and peak memory plus disk usage drops from 542 GiB to 183–208 GiB](/images/releases/v2648_upsert_hydration.png)
+
+In our tests, hydration time dropped from 206 minutes to between 108 and 113 minutes, and peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
+
+Materialize now uses its own buffer pool to keep hot data in memory and serve sequential work from disk. Previously, this was left to the operating system's swap. See our [blog post](https://materialize.com/blog/materialize-out-of-core/) for details on how it works.
+
+This change has been rolled out to all Materialize Cloud environments and applies to all existing and new clusters. It will be enabled by default in Materialize Self-Managed in the coming weeks.
+
 ### Native Google Cloud Storage for persist {#v26.48-native-gcs-for-persist}
 
 Self-managed deployments on Google Cloud can now point persist at a `gcs://<bucket>/<prefix>` URL, which reaches the bucket through a native Google Cloud Storage client authenticated with Google's default credentials. Previously a GCS deployment had to reach the same bucket through the S3-compatible API with static HMAC keys, so credentials can now be managed the way the rest of a GCP deployment manages them. Blob restore copies back the newest noncurrent generation and so requires a versioned bucket, which is the default in the self-managed Terraform modules; soft delete is not yet supported.
