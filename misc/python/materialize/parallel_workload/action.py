@@ -2962,6 +2962,12 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         # Applies to replicas provisioned after the flip.
         self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_wallclock_freshness_reporting"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["enable_wallclock_freshness_recording"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -3430,6 +3436,11 @@ class FlipFlagsAction(Action):
             "replica_metrics_history_retention_interval",
             "wallclock_lag_history_retention_interval",
             "wallclock_global_lag_histogram_retention_interval",
+            "wallclock_freshness_histogram_retention_interval",
+            "wallclock_freshness_buckets_per_octave",
+            "wallclock_freshness_virtual_arrival_interval",
+            "wallclock_freshness_period_interval",
+            "wallclock_freshness_restart_policy",
             "kafka_client_id_enrichment_rules",
             "kafka_offset_commit_refresh_interval",
             "kafka_poll_max_wait",

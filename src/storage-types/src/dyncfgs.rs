@@ -85,6 +85,14 @@ pub const WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL: Config<Duration> = 
     ParameterScope::Environment,
 );
 
+/// The interval of time to keep when truncating the wallclock freshness histograms.
+pub const WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_freshness_histogram_retention_interval",
+    Duration::from_secs(60 * 60 * 24 * 30), // 30 days
+    "The interval of time to keep when truncating the wallclock freshness histograms.",
+    ParameterScope::Environment,
+);
+
 // Kafka
 
 /// Rules for enriching the `client.id` property of Kafka clients with
@@ -642,6 +650,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_UPSERT_PAGED_SPILL)
         .add(&ENABLE_UPSERT_CHUNKED_STASH)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
+        .add(&WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES)
