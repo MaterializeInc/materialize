@@ -38,9 +38,12 @@ unused transaction helpers was subsequently compile-checked. HTTP and observatio
 unit tests compile but have not executed. Updated SLT/testdrive catalog listings
 and the RBAC-disabled denial regression also await execution.
 
-The launcher currently requires an external relay. Wire default pubsub provisioning
-into controllerd from static configuration, including HTTP inventory and retained
-process adoption. Preserve the shared relay across deployment retirement, with
+The launcher currently requires an external relay. `5cf78700` makes pubsubd accept
+the backend's single-process and secrets-prefix arguments and adds a standalone
+`pubsubd` image definition. Its parser regression and strict all-target Clippy pass.
+`bin/mzimage describe pubsubd` validates the image definition, but the image has not
+been built. Wire default pubsub provisioning into controllerd from static
+configuration, including HTTP inventory and retained process adoption. Preserve the shared relay across deployment retirement, with
 only one configured provisioner during overlap. No catalog declaration or election
 protocol. Update the [local recipe](../controllerd.md) as that path becomes usable.
 Add `bin/controllerd --stop` with the design's local environment scope, retaining
@@ -53,6 +56,17 @@ Scratch SSO is still expired. User must run
 `bin/scratch login`. The user authorized local cleanup. Removed only the Rust
 incremental cache after checking no builds were active, leaving 71 GiB free.
 Keep product builds and broad codegen on the approved worker.
+
+Provision the relay after backend construction in `environmentd/main.rs::run`,
+before Persist clients capture their URL. Use assigned addresses rather than port
+hints, propagate the resolved URL to both adapter and replica launch arguments,
+and never start an in-process relay in controller mode. The Kubernetes backend
+currently copies the controller pod's owner references onto every child Service
+and StatefulSet. The relay must opt out so deployment retirement cannot collect
+it. Keep other services' ownership unchanged. Process adoption currently compares
+only scale and retains an existing PID, so changing an image does not upgrade a
+healthy retained relay. Relay upgrade behavior remains to implement and verify.
+See private `managed-pubsub-integration.md` for code pointers.
 
 Next: obtain the latest candidate's matching CI product and run
 `sql-http-adapter-lifecycle-smoke.py`, including self-drop, zero-adapter restart
