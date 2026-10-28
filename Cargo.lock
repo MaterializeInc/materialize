@@ -10825,7 +10825,7 @@ dependencies = [
 [[package]]
 name = "postgres"
 version = "0.19.12"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
+source = "git+https://github.com/MaterializeInc/rust-postgres?rev=fcca71c8a6ee351eda7b6dfcd607055fa9a6d302#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
@@ -10838,7 +10838,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.2"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
+source = "git+https://github.com/MaterializeInc/rust-postgres?rev=fcca71c8a6ee351eda7b6dfcd607055fa9a6d302#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "openssl",
  "tokio",
@@ -10849,7 +10849,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.12"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
+source = "git+https://github.com/MaterializeInc/rust-postgres?rev=fcca71c8a6ee351eda7b6dfcd607055fa9a6d302#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "base64 0.22.1",
  "byteorder",
@@ -10866,7 +10866,7 @@ dependencies = [
 [[package]]
 name = "postgres-replication"
 version = "0.6.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
+source = "git+https://github.com/MaterializeInc/rust-postgres?rev=fcca71c8a6ee351eda7b6dfcd607055fa9a6d302#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "byteorder",
  "bytes",
@@ -10881,7 +10881,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.11"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
+source = "git+https://github.com/MaterializeInc/rust-postgres?rev=fcca71c8a6ee351eda7b6dfcd607055fa9a6d302#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "bytes",
  "chrono",
@@ -10894,8 +10894,9 @@ dependencies = [
 
 [[package]]
 name = "postgres_array"
-version = "0.11.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres-array#f58d0101e5198e04e8692629018d9b58f8543534"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2667c8b8c3a857620d87fc5172972c3385254a7563a5ab303bc9a41a16a7bf4e"
 dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
@@ -11568,7 +11569,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.29.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#642daa6e293065ec653c04f2d1147a7675ce2430"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git?rev=642daa6e293065ec653c04f2d1147a7675ce2430#642daa6e293065ec653c04f2d1147a7675ce2430"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -11585,7 +11586,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.3.0+2.5.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#642daa6e293065ec653c04f2d1147a7675ce2430"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git?rev=642daa6e293065ec653c04f2d1147a7675ce2430#642daa6e293065ec653c04f2d1147a7675ce2430"
 dependencies = [
  "cmake",
  "libc",
@@ -12657,7 +12658,7 @@ dependencies = [
 [[package]]
 name = "serde-value"
 version = "0.7.0"
-source = "git+https://github.com/MaterializeInc/serde-value.git#a84c6b71825efaffb332c0d19f18c2bdf9ee7b40"
+source = "git+https://github.com/MaterializeInc/serde-value.git?rev=a84c6b71825efaffb332c0d19f18c2bdf9ee7b40#a84c6b71825efaffb332c0d19f18c2bdf9ee7b40"
 dependencies = [
  "ordered-float 4.6.0",
  "serde",
@@ -13742,7 +13743,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.15"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
+source = "git+https://github.com/MaterializeInc/rust-postgres?rev=fcca71c8a6ee351eda7b6dfcd607055fa9a6d302#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "async-trait",
  "byteorder",
