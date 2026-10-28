@@ -69,6 +69,23 @@ describe("SubscribeManager", () => {
     expect(uppers.at(-1)).toBe(30);
   });
 
+  it("gives a listener told the snapshot completed the snapshot's upper", async () => {
+    serve();
+    const manager = connect();
+    let upperAtCompletion: number | undefined;
+    manager.onChange(() => {
+      if (manager.getSnapshot().snapshotComplete) {
+        upperAtCompletion ??= manager.getUpper();
+      }
+    });
+
+    await vi.waitFor(() =>
+      expect(manager.getSnapshot().snapshotComplete).toBe(true),
+    );
+
+    expect(upperAtCompletion).toBe(11);
+  });
+
   it("reports a statement that ends on its own and closes its socket, without sending it again", async () => {
     const queries = serve();
     const manager = connect(true);

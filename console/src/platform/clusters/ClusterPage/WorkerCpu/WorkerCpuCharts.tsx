@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { Box, Text, useTheme, VStack } from "@chakra-ui/react";
+import { curveStepAfter } from "@visx/curve";
 import { scaleLinear, scaleTime } from "@visx/scale";
 import { Area, Line, LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
@@ -183,6 +184,13 @@ const CpuMarks = React.memo(
     const x = (point: { atMs: number }) => xScale(new Date(point.atMs));
     const measuredLeft = measured && xScale(new Date(measured.startMs));
     const measuredRight = measured && xScale(new Date(measured.endMs));
+    const lastCpu = replicaCpu.at(-1);
+    const replicaSteps = lastCpu
+      ? [
+          ...replicaCpu,
+          { ...lastCpu, atMs: lastCpu.atMs + millisecondsInMinute },
+        ]
+      : replicaCpu;
     return (
       <>
         <BeforeOpen
@@ -234,10 +242,14 @@ const CpuMarks = React.memo(
               pointerEvents="none"
             />
           ))}
+          {/* Each sample covers the minute after it, as `replicaCpuAt` reads
+              it, so the line steps and holds the last one to its minute's
+              end. Joined points cut under the fill between samples. */}
           <LinePath
-            data={replicaCpu}
+            data={replicaSteps}
             x={x}
             y={(point) => yScale(point.percent)}
+            curve={curveStepAfter}
             stroke={color}
             strokeWidth={2}
             pointerEvents="none"

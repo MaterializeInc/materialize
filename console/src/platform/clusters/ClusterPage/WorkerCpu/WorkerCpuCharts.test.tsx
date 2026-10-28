@@ -181,6 +181,64 @@ describe("WorkerCpuCharts", () => {
     expect(tooltip).toHaveTextContent(/Replica CPU\s*20% of allocation/);
   });
 
+  it("steps the replica's CPU line across each sample's minute, like the fill under it", async () => {
+    await renderCharts({
+      replicaCpu: [
+        { atMs: START_MS + 9 * millisecondsInMinute, percent: 20 },
+        { atMs: START_MS + 10 * millisecondsInMinute, percent: 80 },
+      ],
+    });
+
+    const line = screen
+      .getByRole("img", { name: /CPU and its workers' time/ })
+      .querySelector(`path[stroke="${REPLICA.color}"]`);
+    const points = [
+      ...(line?.getAttribute("d") ?? "").matchAll(/(-?[\d.]+),(-?[\d.]+)/g),
+    ]
+      .map(([, x, y]) => [Math.round(Number(x)), Math.round(Number(y))])
+      // A step to a point at the same height repeats its vertex.
+      .filter(
+        ([x, y], i, all) =>
+          i === 0 || x !== all[i - 1][0] || y !== all[i - 1][1],
+      );
+    const [x9, x10, x11] = [9, 10, 11].map((minute) =>
+      Math.round(xOf(START_MS + minute * millisecondsInMinute)),
+    );
+    const [[, y20], , [, y80]] = points;
+
+    expect(points).toEqual([
+      [x9, y20],
+      [x10, y20],
+      [x10, y80],
+      [x11, y80],
+    ]);
+    expect(y80).toBeLessThan(y20);
+  });
+
+  it("labels the time axis at round clock times that stay put as the window slides", async () => {
+    const axisLabels = () =>
+      [...document.querySelectorAll("svg[aria-hidden] text")].map(
+        (label) => label.textContent ?? "",
+      );
+    // Short enough for second-precision labels.
+    const windowMs = 5 * millisecondsInMinute;
+    const first = await renderCharts({
+      startMs: OPENED_AT_MS + 13_000,
+      endMs: OPENED_AT_MS + 13_000 + windowMs,
+    });
+    const labels = axisLabels();
+    first.unmount();
+
+    await renderCharts({
+      startMs: OPENED_AT_MS + 18_000,
+      endMs: OPENED_AT_MS + 18_000 + windowMs,
+    });
+
+    expect(labels.length).toBeGreaterThan(2);
+    expect(labels.every((label) => /:(00|30)$/.test(label))).toBe(true);
+    expect(axisLabels()).toEqual(labels);
+  });
+
   it("leaves out replica CPU when no sample covers the hovered minute", async () => {
     await renderCharts({ replicaCpu: REPLICA_CPU.slice(0, 9) });
 

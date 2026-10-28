@@ -364,19 +364,20 @@ export class SubscribeManager<T extends object, R> implements Connectable {
 
     // Once we've received a second progress message, we know we've received
     // the initial snapshot.
-    if (
+    const completesSnapshot =
       meta.mzProgressed &&
       this.currentTimestamp &&
-      !this.currentState.snapshotComplete
-    ) {
+      !this.currentState.snapshotComplete;
+    // Track the new currently open timestamp. It moves before the snapshot is
+    // announced, since that notifies listeners that may call `getUpper`.
+    this.currentTimestamp = meta.mzTimestamp;
+    if (completesSnapshot) {
       // Eagerly flush the buffer to make the snapshot available.
       this.flushSocketBuffer();
       this.setState({
         snapshotComplete: true,
       });
     }
-    // Track the new currently open timestamp.
-    this.currentTimestamp = meta.mzTimestamp;
     const row = mapRowToObject<T>(payload, this.columns, [
       "mz_timestamp",
       "mz_state",

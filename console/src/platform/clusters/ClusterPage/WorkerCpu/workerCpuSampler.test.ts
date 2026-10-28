@@ -888,6 +888,29 @@ describe("createWorkerCpuSampler", () => {
     ]);
   });
 
+  it("starts an asked-for minute and its countdown over at the first read after a pause", async () => {
+    createSteadyReplica();
+    const sampler = startSampler();
+    await advance(72_000);
+    sampler.measure();
+    await advance(3_000);
+    expect(sampler.getState().measuringFromMs).toBe(START_MS + 75_000);
+
+    await advance(20_000);
+    sampler.pause();
+    expect(sampler.getState().measuringFromMs).toBeUndefined();
+    await advance(30_000);
+    sampler.resume();
+    await advance(0);
+
+    const resumedFromMs = sampler.getState().objectReads.at(-1)?.atMs;
+    expect(resumedFromMs).toBeGreaterThanOrEqual(START_MS + 125_000);
+    expect(sampler.getState()).toMatchObject({
+      isMeasuring: true,
+      measuringFromMs: resumedFromMs,
+    });
+  });
+
   it("opens a new session when asked to measure too close to the open one's bound for a minute to fit", async () => {
     const replica = createSteadyReplica();
     const sampler = startSampler();

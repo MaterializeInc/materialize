@@ -87,8 +87,11 @@ const OBJECTS_BY_ID = new Map<string, DatabaseObject>(
   ]),
 );
 
+// Names the queries row as the Workers tab does.
 const objectName = (objectId: string) =>
-  OBJECTS_BY_ID.get(objectId)?.name ?? objectId;
+  objectId === ADHOC_ROW_ID
+    ? "Queries and subscribes"
+    : (OBJECTS_BY_ID.get(objectId)?.name ?? objectId);
 
 /**
  * A minute in which each worker was `busy` for that share of its core and
@@ -791,15 +794,148 @@ describe("Verdict", () => {
     ).toBeVisible();
   });
 
-  it("says the workers are idle when they did no measurable work", async () => {
-    await renderVerdict({ measurement: buildMeasurement([0, 0, 0, 0]) });
+  it("says how busy the busiest worker was when the workers are nearly idle, without denying the work the bars show", async () => {
+    await renderVerdict({
+      measurement: buildMeasurement([0.03, 0.002, 0.002, 0.002], {
+        u5: [1.8, 0.1, 0.1, 0.1],
+      }),
+    });
 
     expect(heading("Workers are idle")).toBeVisible();
     expect(
       screen.getByText(
-        "No object did measurable work on r1 in this span. Skew only shows while workers are busy.",
+        "r1's workers were nearly idle in this span: the busiest, w0, was 3% busy. Skew only shows while workers are busy.",
       ),
     ).toBeVisible();
+    expect(screen.queryByText(/No object did/)).not.toBeInTheDocument();
+  });
+
+  it("speaks of a lone idle worker as one worker, not as idle workers that could skew", async () => {
+    await renderVerdict({
+      measurement: buildMeasurement([0.004], { u5: [0.24] }),
+      replica: ONE_WORKER_REPLICA,
+    });
+
+    expect(
+      heading("r1 runs one worker, so its work can't be uneven"),
+    ).toBeVisible();
+    expect(screen.queryByText("Workers are idle")).not.toBeInTheDocument();
+  });
+
+  describe("names every worker at its core's limit, whatever leads", () => {
+    it("calls a pegged worker at its limit when it leads the others by less than SKEW_RATIO", async () => {
+      await renderVerdict({
+        measurement: buildMeasurement([1, 0.55, 0.55, 0.55], {
+          u5: [20, 15, 15, 15],
+        }),
+      });
+
+      expect(heading("w0 is at its core's limit")).toBeVisible();
+      const finding = screen.getByText(/does 1\.8× their work\./);
+      expect(finding).toHaveTextContent(
+        "That's short of the 2× that counts as skew, but work routed to w0 waits on it.",
+      );
+      expect(screen.queryByText(/spread evenly/)).not.toBeInTheDocument();
+    });
+
+    it("says a pegged worker at 1.9× and at 2.1× is at its limit, without the story flipping to even", async () => {
+      await renderVerdict({
+        measurement: buildMeasurement([0.95, 0.5, 0.5, 0.5]),
+      });
+      expect(heading("w0 is at its core's limit")).toBeVisible();
+
+      await renderVerdict({
+        measurement: buildMeasurement([0.95, 0.45, 0.45, 0.45]),
+      });
+      expect(heading(/^w0 is overloaded/)).toBeVisible();
+    });
+
+    it("counts the workers at their limit instead of calling the work even when one lags far behind", async () => {
+      const busy = [...Array.from({ length: 15 }, () => 0.96), 0.3];
+      await renderVerdict({ measurement: buildMeasurement(busy) });
+
+      expect(
+        heading("Not skew: 15 of 16 workers are at their limit"),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          /15 of 16 workers are at their core's limit, and the least busy, w15, is at 30%\. r1 has less than 10% headroom\./,
+        ),
+      ).toBeVisible();
+      expect(screen.queryByText(/spread evenly/)).not.toBeInTheDocument();
+    });
+
+    it("counts them on a replica near its allocation too", async () => {
+      const busy = [...Array.from({ length: 15 }, () => 0.96), 0.3];
+      await renderVerdict({
+        measurement: buildMeasurement(busy),
+        replicaCpuFraction: 0.97,
+      });
+
+      expect(
+        heading("Not skew: 15 of 16 workers are at their limit"),
+      ).toBeVisible();
+      expect(
+        screen.getByText(/15 of 16 workers are at their core's limit/),
+      ).toBeVisible();
+    });
+
+    it("names a worker at its limit in evenly spread work", async () => {
+      await renderVerdict({
+        measurement: buildMeasurement([0.92, 0.8, 0.8, 0.8]),
+      });
+
+      expect(heading("Work is spread evenly")).toBeVisible();
+      expect(
+        screen.getByText(
+          /w0 is at its core's limit, 92% busy, so work routed to it waits\./,
+        ),
+      ).toBeVisible();
+    });
+
+    it("says work leans a little, not that it's spread evenly, between EVEN_RATIO and SKEW_RATIO", async () => {
+      await renderVerdict({
+        measurement: buildMeasurement([0.6, 0.32, 0.32, 0.32]),
+      });
+
+      expect(heading("Work leans a little on w0")).toBeVisible();
+      expect(
+        screen.getByText(/short of the 2× that counts as skew/),
+      ).toBeVisible();
+    });
+  });
+
+  describe("blames the same row in every finding", () => {
+    const QUERIES_HEAVY = { [ADHOC_ROW_ID]: [50, 3, 3, 3], u5: [4, 4, 4, 4] };
+
+    it("names queries and subscribes as the skew without a cross join or hot key, and links to the queries", async () => {
+      await renderVerdict({
+        measurement: buildMeasurement(SATURATED_BUSY, QUERIES_HEAVY),
+      });
+
+      expect(heading(/^w0 is overloaded/)).toBeVisible();
+      expect(screen.queryByText(/cross join/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/hot key/)).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("link", {
+          name: "Queries started on quickstart in these minutes",
+        }),
+      ).toHaveAttribute("href", QUERIES_PATH);
+    });
+
+    it("names queries and subscribes as where to start on a busy replica when they take the most", async () => {
+      await renderVerdict({
+        measurement: buildMeasurement([0.6, 0.58, 0.57, 0.59], {
+          [ADHOC_ROW_ID]: [20, 20, 20, 20],
+          u5: [5, 5, 5, 5],
+        }),
+        replicaCpuFraction: 0.9,
+      });
+
+      expect(
+        screen.getByText(/^Queries and subscribes took the most/),
+      ).toBeVisible();
+    });
   });
 });
 

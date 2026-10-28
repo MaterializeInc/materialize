@@ -25,6 +25,7 @@ import docUrls from "~/mz-doc-urls.json";
 import {
   bucketProcessReadings,
   BusiestProcess,
+  EVEN_RATIO,
   readProcessSamples,
 } from "../ResourceUsage/processReadingsModel";
 
@@ -176,7 +177,7 @@ export function workerBusySeries(
  */
 export const SKEW_RATIO = 2;
 /** A worker this busy is at its core's limit, so work routed to it waits. */
-const SATURATED_FRACTION = 0.9;
+export const SATURATED_FRACTION = 0.9;
 /**
  * Skew only costs anything as a worker nears its core's limit, so below this
  * the busiest worker's lead over the average isn't worth a warning.
@@ -194,12 +195,19 @@ const IDLE_BUSIEST_FRACTION = 0.05;
 export type WorkerVerdict =
   | { kind: "idle" }
   | {
-      /** `light`: uneven, but no worker is near its core's limit. */
-      kind: "saturated" | "allBusy" | "uneven" | "light" | "balanced";
+      /**
+       * The most urgent finding. `pegged`: the busiest worker is at its core's
+       * limit, ahead of the others but short of `SKEW_RATIO`. `light`: uneven,
+       * but no worker is near its core's limit.
+       */
+      kind:
+        "saturated" | "pegged" | "allBusy" | "uneven" | "light" | "balanced";
       busiest: WorkerBusy;
       averageBusyFraction: number;
       /** Every worker but the busiest, the average skew is judged against. */
       othersBusyFraction: number;
+      /** The workers at their core's limit, busiest first, whatever `kind`. */
+      atLimit: WorkerBusy[];
     };
 
 /**
@@ -220,16 +228,25 @@ export function workerVerdict(workers: WorkerBusy[]): WorkerVerdict {
   ) {
     return { kind: "idle" };
   }
-  const result = { busiest, averageBusyFraction, othersBusyFraction };
+  const result = {
+    busiest,
+    averageBusyFraction,
+    othersBusyFraction,
+    atLimit: workers.filter(
+      ({ busyFraction }) => busyFraction >= SATURATED_FRACTION,
+    ),
+  };
   if (averageBusyFraction >= ALL_BUSY_FRACTION) {
     return { kind: "allBusy", ...result };
   }
-  const isSkewed =
-    workers.length > 1 &&
-    busiest.busyFraction >= SKEW_RATIO * othersBusyFraction;
-  if (isSkewed && busiest.busyFraction >= SATURATED_FRACTION) {
-    return { kind: "saturated", ...result };
-  }
+  const leadsBy = (ratio: number) =>
+    workers.length > 1 && busiest.busyFraction >= ratio * othersBusyFraction;
+  const isSkewed = leadsBy(SKEW_RATIO);
+  const isAtLimit = busiest.busyFraction >= SATURATED_FRACTION;
+  if (isSkewed && isAtLimit) return { kind: "saturated", ...result };
+  // Short of skew, a worker at its limit still holds up the work routed to
+  // it, so the work can't read as spread evenly.
+  if (isAtLimit && leadsBy(EVEN_RATIO)) return { kind: "pegged", ...result };
   if (isSkewed && busiest.busyFraction >= UNEVEN_FRACTION) {
     return { kind: "uneven", ...result };
   }
@@ -238,7 +255,7 @@ export function workerVerdict(workers: WorkerBusy[]): WorkerVerdict {
 }
 
 /** Replica CPU this high is worth explaining, whatever the workers show. */
-const HIGH_CPU_FRACTION = 0.75;
+export const HIGH_CPU_FRACTION = 0.75;
 
 export type CpuVerdict =
   | WorkerVerdict
@@ -254,6 +271,8 @@ export type CpuVerdict =
        */
       outsideFraction: number;
       busiest: WorkerBusy;
+      /** The workers at their core's limit, busiest first. */
+      atLimit: WorkerBusy[];
       /** Set when the work is also uneven, short of saturating a worker. */
       uneven?: { busiest: WorkerBusy; othersBusyFraction: number };
     };
@@ -263,7 +282,7 @@ export const isSkewVerdict = (verdict: CpuVerdict | undefined) =>
   verdict?.kind === "saturated" || verdict?.kind === "uneven";
 
 /**
- * A saturated worker is the most specific finding, so it wins. Otherwise a
+ * A worker at its limit is the most specific finding, so it wins. Otherwise a
  * replica near its allocation leads with that, even with idle workers, since
  * its CPU then goes to work outside the running dataflows, and uneven work
  * short of a saturated worker becomes a note on it.
@@ -280,7 +299,8 @@ export function cpuVerdict(
     workers.length > 0 &&
     replicaCpuFraction !== undefined &&
     replicaCpuFraction >= HIGH_CPU_FRACTION &&
-    verdict.kind !== "saturated"
+    verdict.kind !== "saturated" &&
+    verdict.kind !== "pegged"
   ) {
     const dataflowFraction = averageBusy(workers) * workersPerCore;
     return {
@@ -289,6 +309,7 @@ export function cpuVerdict(
       dataflowFraction,
       outsideFraction: Math.max(0, replicaCpuFraction - dataflowFraction),
       busiest: workers[0],
+      atLimit: verdict.kind === "idle" ? [] : verdict.atLimit,
       ...(verdict.kind === "uneven" && {
         uneven: {
           busiest: verdict.busiest,
@@ -309,7 +330,7 @@ export const workersPerCore = ({ workers, cpuNanoCores }: SizeAllocation) =>
   cpuNanoCores > 0 ? workers / (cpuNanoCores / 1e9) : 1;
 
 // One threshold for even, whether processes or workers.
-export { EVEN_RATIO } from "../ResourceUsage/processReadingsModel";
+export { EVEN_RATIO };
 /** Past this many times the other workers' average, skew reads as severe. */
 export const SEVERE_SKEW_RATIO = 3;
 
@@ -412,8 +433,6 @@ export interface ObjectCpuRow {
   /** Indexed by worker id. */
   perWorkerNs: number[];
   totalNs: number;
-  /** An even share: the object's time divided by its workers. */
-  averageNs: number;
   hottestWorkerId: number;
   /**
    * The hottest worker's time over the other workers' average, infinite when
@@ -421,8 +440,6 @@ export interface ObjectCpuRow {
    * this at the worker count.
    */
   ratio: number;
-  /** Time the hottest worker spent beyond the other workers' average. */
-  extraNs: number;
 }
 
 const key = (row: { dataflowId: string; workerId: number }) =>
@@ -630,10 +647,8 @@ const toObjectCpuRow = (
     dataflowCount,
     perWorkerNs,
     totalNs,
-    averageNs: totalNs / workerCount,
     hottestWorkerId,
     ratio: othersAverageNs > 0 ? hottestNs / othersAverageNs : Infinity,
-    extraNs: hottestNs - othersAverageNs,
   };
 };
 
@@ -853,11 +868,15 @@ export const objectSpread = ({
     : { kind: "even" };
 };
 
-/** The object with the most dataflow time, with its share of all of it. */
+/**
+ * The row with the most dataflow time, with its share of all of it. The
+ * queries row counts like an object, as in `topObjectOnWorker`, so every
+ * finding blames the same row.
+ */
 export function largestShare(rows: ObjectCpuRow[], workerTotalsNs: number[]) {
   const totalNs = workerTotalsNs.reduce((sum, ns) => sum + ns, 0);
   const top = rows
-    .filter((row) => !isPooledRow(row.objectId))
+    .filter((row) => row.objectId !== SYSTEM_ROW_ID)
     .reduce<ObjectCpuRow | undefined>(
       (best, row) => (!best || row.totalNs > best.totalNs ? row : best),
       undefined,
@@ -916,7 +935,7 @@ export const topObjectOnWorker = (
 
 /**
  * The object a verdict is about: the one with the most of the busiest
- * worker's time when the work leans on that worker, else the one with the
+ * worker's time when the finding is about that worker, else the one with the
  * most time overall.
  */
 export function verdictObjectId(
@@ -924,11 +943,35 @@ export function verdictObjectId(
   { rows, workerTotalsNs }: Measurement,
 ) {
   if (verdict.kind === "idle") return undefined;
-  if (isSkewVerdict(verdict) || verdict.kind === "light") {
+  if (
+    isSkewVerdict(verdict) ||
+    verdict.kind === "pegged" ||
+    verdict.kind === "light"
+  ) {
     return topObjectOnWorker(rows, workerTotalsNs, verdict.busiest.workerId)
       ?.objectId;
   }
   return largestShare(rows, workerTotalsNs)?.objectId;
+}
+
+/**
+ * The worker the bars call out, named as the verdict names it: overloaded
+ * only when it's at its limit with skewed work.
+ */
+export function markedWorker(verdict: CpuVerdict | undefined) {
+  switch (verdict?.kind) {
+    case "saturated":
+      return { workerId: verdict.busiest.workerId, label: "Overloaded worker" };
+    case "pegged":
+      return {
+        workerId: verdict.busiest.workerId,
+        label: "Worker at its core's limit",
+      };
+    case "uneven":
+      return { workerId: verdict.busiest.workerId, label: "Busiest worker" };
+    default:
+      return undefined;
+  }
 }
 
 /**

@@ -757,12 +757,17 @@ export const TimeAxis = ({ width, xScale, tickFormat }: TimeAxisProps) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
   const [startDate, endDate] = xScale.domain();
   // Evenly spaced and labeled by time before now, matching `UtilizationGraph`.
-  const tickValues = Array.from(
-    { length: TIME_TICK_COUNT },
-    (_, tickIndex) =>
-      startDate.getTime() +
-      (tickIndex * (endDate.getTime() - startDate.getTime())) / TIME_TICK_COUNT,
-  );
+  // Clock labels take the scale's round times instead, which stay put as the
+  // window slides.
+  const tickValues = tickFormat
+    ? xScale.ticks(TIME_TICK_COUNT).map((date) => date.getTime())
+    : Array.from(
+        { length: TIME_TICK_COUNT },
+        (_, tickIndex) =>
+          startDate.getTime() +
+          (tickIndex * (endDate.getTime() - startDate.getTime())) /
+            TIME_TICK_COUNT,
+      );
   return (
     // Visible overflow keeps the edge labels, centered on the plot's ends, from
     // being clipped. The card's padding leaves room for them.

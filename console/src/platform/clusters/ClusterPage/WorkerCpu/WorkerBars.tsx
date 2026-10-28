@@ -54,8 +54,8 @@ export interface WorkerBarsProps {
   measurement: Measurement;
   /** The object whose part of each worker's time is drawn darker. */
   picked: { name: string; perWorkerNs: number[] } | undefined;
-  /** The worker to call out as overloaded, when the work is skewed. */
-  hotWorkerId: number | undefined;
+  /** The worker to call out, with its legend label, from `markedWorker`. */
+  hotWorker: { workerId: number; label: string } | undefined;
   /** The worker whose time the objects table breaks down. */
   selectedWorkerId: number;
   onSelectWorker: (workerId: number) => void;
@@ -166,12 +166,13 @@ export const WorkerBars = ({
   width,
   measurement,
   picked,
-  hotWorkerId,
+  hotWorker,
   selectedWorkerId,
   onSelectWorker,
   replica,
 }: WorkerBarsProps) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
+  const hotWorkerId = hotWorker?.workerId;
   const {
     tooltipData: hoveredWorkerId,
     tooltipLeft,
@@ -323,10 +324,10 @@ export const WorkerBars = ({
             color: barColors.rest,
             variant: "square",
           },
-          ...(hotWorkerId !== undefined
+          ...(hotWorker
             ? [
                 {
-                  label: "Overloaded worker",
+                  label: hotWorker.label,
                   color: barColors.hotPicked,
                   variant: "square" as const,
                 },

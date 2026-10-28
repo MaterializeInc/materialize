@@ -23,6 +23,7 @@ import {
   hasDataflowCounterReset,
   largestShare,
   lifetimeWorkerSkew,
+  markedWorker,
   measureLatest,
   Measurement,
   ObjectCpuRead,
@@ -495,6 +496,30 @@ describe("workerVerdict", () => {
   it("calls a replica with almost no dataflow work idle, whatever the ratios", () => {
     expect(workerVerdict(busy([0.02, 0, 0, 0])).kind).toEqual("idle");
   });
+
+  it("calls a worker at its core's limit pegged when it leads the others by less than SKEW_RATIO", () => {
+    expect(workerVerdict(busy([1, 0.55, 0.55, 0.55])).kind).toEqual("pegged");
+  });
+
+  it("calls workers as busy as a worker at its limit balanced, keeping it among those at their limit", () => {
+    const verdict = workerVerdict(busy([0.92, 0.8, 0.8, 0.8]));
+
+    expect(verdict.kind).toBe("balanced");
+    expect(
+      verdict.kind !== "idle" &&
+        verdict.atLimit.map(({ workerId }) => workerId),
+    ).toEqual([0]);
+  });
+
+  it("keeps every worker at its limit on a busy replica, busiest first", () => {
+    const verdict = workerVerdict(busy([0.97, 0.96, 0.95, 0.98, 0.7]));
+
+    expect(verdict.kind).toBe("allBusy");
+    expect(
+      verdict.kind !== "idle" &&
+        verdict.atLimit.map(({ workerId }) => workerId),
+    ).toEqual([3, 0, 1, 2]);
+  });
 });
 
 describe("cpuVerdict", () => {
@@ -545,6 +570,22 @@ describe("cpuVerdict", () => {
     expect(cpuVerdict(busy([1, 0.2]), 0.8, 1).kind).toEqual("saturated");
   });
 
+  it("reports a pegged worker on a busy replica as pegged, not high CPU", () => {
+    expect(cpuVerdict(busy([1, 0.55, 0.55, 0.55]), 0.8, 1).kind).toEqual(
+      "pegged",
+    );
+  });
+
+  it("keeps the workers at their limit on a high CPU verdict", () => {
+    const verdict = cpuVerdict(busy([0.95, 0.96, 0.94, 0.8]), 0.95, 1);
+
+    expect(verdict.kind).toBe("highCpu");
+    expect(
+      verdict.kind === "highCpu" &&
+        verdict.atLimit.map(({ workerId }) => workerId),
+    ).toEqual([1, 0, 2]);
+  });
+
   it("reports a saturated worker even on a busy replica", () => {
     expect(cpuVerdict(busy([0.97, 0.14, 0.12, 0.13]), 0.9, 1).kind).toEqual(
       "saturated",
@@ -590,15 +631,14 @@ describe("objectCpuRows", () => {
     expect(
       [...rows]
         .sort((a, b) => a.objectId.localeCompare(b.objectId))
-        .map(({ objectId, hottestWorkerId, ratio, extraNs }) => [
+        .map(({ objectId, hottestWorkerId, ratio }) => [
           objectId,
           hottestWorkerId,
           ratio,
-          extraNs / SECOND_NS,
         ]),
     ).toEqual([
-      ["u10", 0, 7, 60],
-      ["u20", 0, 1, 0],
+      ["u10", 0, 7],
+      ["u20", 0, 1],
     ]);
   });
 
@@ -682,6 +722,28 @@ describe("objectCpuRows", () => {
     expect(workerTotalsNs.map((ns) => ns / SECOND_NS)).toEqual([11, 2]);
     expect(largestShare(rows, workerTotalsNs)?.objectId).toBe("u10");
     expect(topObjectOnWorker(rows, workerTotalsNs, 0)?.objectId).toBe("u10");
+  });
+
+  it("counts the queries row like an object, as the per-worker ranking does, but not Materialize's own dataflows", () => {
+    const row = (objectId: string, totalNs: number) => ({
+      objectId,
+      dataflowCount: 1,
+      perWorkerNs: [totalNs],
+      totalNs,
+      hottestWorkerId: 0,
+      ratio: 1,
+    });
+    const rows = [
+      row(SYSTEM_ROW_ID, 50),
+      row(ADHOC_ROW_ID, 30),
+      row("u10", 20),
+    ];
+
+    expect(largestShare(rows, [100])).toEqual({
+      objectId: ADHOC_ROW_ID,
+      share: 0.3,
+    });
+    expect(topObjectOnWorker(rows, [100], 0)?.objectId).toBe(ADHOC_ROW_ID);
   });
 
   it("names the object with the most of the replica's dataflow time, with its share", () => {
@@ -1083,6 +1145,9 @@ describe("verdictObjectId", () => {
       ["uneven", "u20"],
       ["light", "u20"],
     ]);
+    expect(
+      verdictObjectId(workerVerdict(busy([0.55, 0.55, 1, 0.55])), measurement),
+    ).toBe("u20");
   });
 
   it("names the object with the most time overall when the work doesn't lean on one worker", () => {
@@ -1104,6 +1169,24 @@ describe("verdictObjectId", () => {
 
     expect(verdict.kind).toBe("idle");
     expect(verdictObjectId(verdict, measurement)).toBeUndefined();
+  });
+});
+
+describe("markedWorker", () => {
+  it("calls the busiest worker overloaded only when the verdict does", () => {
+    expect(
+      [
+        busy([0.97, 0.14, 0.12, 0.13]),
+        busy([1, 0.55, 0.55, 0.55]),
+        busy([0.5, 0.1, 0.1, 0.1]),
+        busy([0.21, 0.17, 0.16, 0.18]),
+      ].map((workers) => markedWorker(workerVerdict(workers))?.label),
+    ).toEqual([
+      "Overloaded worker",
+      "Worker at its core's limit",
+      "Busiest worker",
+      undefined,
+    ]);
   });
 });
 

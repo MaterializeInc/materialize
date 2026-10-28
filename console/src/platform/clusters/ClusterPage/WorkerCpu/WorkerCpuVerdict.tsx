@@ -38,12 +38,14 @@ import {
 } from "../ResourceUsage/processReadingsModel";
 import { TabLink } from "../tabLinks";
 import {
+  ADHOC_ROW_ID,
   ALL_BUSY_FRACTION,
   CPU_DOCS,
   CpuPoint,
   CpuVerdict,
   EVEN_RATIO,
   formatMultiple,
+  HIGH_CPU_FRACTION,
   isPooledRow,
   largestShare,
   lifetimeWorkerSkew,
@@ -54,6 +56,7 @@ import {
   processOfWorker,
   SKEW_RATIO,
   topObjectOnWorker,
+  WorkerBusy,
   WorkerCpuReading,
   workerLabel,
   WorkerReplica,
@@ -123,6 +126,46 @@ const ratioOnWorker = ({
   ns: number;
   othersAverageNs: number;
 }) => (othersAverageNs > 0 ? ns / othersAverageNs : Infinity);
+
+/** The busiest worker over the others' average, of workers busiest first. */
+const leadOverOthers = ([busiest, ...others]: WorkerBusy[]) => {
+  const othersAverage = mean(others, ({ busyFraction }) => busyFraction) ?? 0;
+  return busiest && othersAverage > 0
+    ? busiest.busyFraction / othersAverage
+    : Infinity;
+};
+
+/** Whether the least busy worker is within `EVEN_RATIO` of the busiest. */
+const isEvenlyBusy = (workers: WorkerBusy[]) => {
+  const most = workers.at(0)?.busyFraction ?? 0;
+  const least = workers.at(-1)?.busyFraction ?? 0;
+  return least > 0 && most / least < EVEN_RATIO;
+};
+
+/**
+ * The workers at their core's limit, as a sentence, so a finding about
+ * something else still names them. Empty when no worker is.
+ */
+const atLimitSentence = (
+  atLimit: WorkerBusy[],
+  workers: WorkerBusy[],
+  replica: WorkerReplica,
+) => {
+  const least = workers.at(-1);
+  if (atLimit.length === 0 || !least) return "";
+  if (atLimit.length === workers.length) {
+    return `All ${workers.length} workers are at their core's limit.`;
+  }
+  if (atLimit.length === 1) {
+    return `${workerLabel(atLimit[0].workerId, replica)} is at its core's limit, ${formatPercentage(atLimit[0].busyFraction, 0)} busy, so work routed to it waits.`;
+  }
+  return `${atLimit.length} of ${workers.length} workers are at their core's limit, and the least busy, ${workerLabel(least.workerId, replica)}, is at ${formatPercentage(least.busyFraction, 0)}.`;
+};
+
+const allBusyLabel = (atLimit: WorkerBusy[], workers: WorkerBusy[]) =>
+  isEvenlyBusy(workers) || atLimit.length === workers.length
+    ? "Not skew: every worker is busy"
+    : `Not skew: ${atLimit.length} of ${workers.length} workers are at their limit`;
 
 export interface FirstLookProps {
   replica: WorkerReplica;
@@ -267,20 +310,10 @@ export const Verdict = ({
     ({ lagMs }) => lagMs,
   );
 
-  if (verdict.kind === "idle") {
-    return (
-      <Alert
-        variant="info"
-        label="Workers are idle"
-        message={`No object did measurable work on ${replica.name} in this span. Skew only shows while workers are busy.`}
-      />
-    );
-  }
-
   // One worker's work can't be uneven, so the finding is how busy it was and
-  // what on, with the replica's CPU when it's high.
-  if (workerCount === 1) {
-    const only = verdict.busiest;
+  // what on, with the replica's CPU when it's high. That holds while it idles.
+  const only = measurement.workers.at(0);
+  if (workerCount === 1 && only) {
     const largest = largestShare(rows, workerTotalsNs);
     const isBusy = only.busyFraction >= ALL_BUSY_FRACTION;
     const highCpu = verdict.kind === "highCpu" ? verdict : undefined;
@@ -324,9 +357,31 @@ export const Verdict = ({
     );
   }
 
+  if (verdict.kind === "idle") {
+    return (
+      <Alert
+        variant="info"
+        label="Workers are idle"
+        message={`${replica.name}'s workers were nearly idle in this span${
+          only
+            ? `: the busiest, ${workerLabel(only.workerId, replica)}, was ${formatPercentage(only.busyFraction, 0)} busy`
+            : ""
+        }. Skew only shows while workers are busy.`}
+      />
+    );
+  }
+
   if (verdict.kind === "highCpu") {
-    const { dataflowFraction, outsideFraction, busiest, uneven } = verdict;
+    const { dataflowFraction, outsideFraction, busiest, uneven, atLimit } =
+      verdict;
     const cpu = formatPercentage(verdict.replicaCpuFraction, 0);
+    const limitSentence = atLimitSentence(
+      atLimit,
+      measurement.workers,
+      replica,
+    );
+    const isSpreadEvenly =
+      !uneven && leadOverOthers(measurement.workers) < EVEN_RATIO;
     const largest = largestShare(rows, workerTotalsNs);
     const startThere =
       largest &&
@@ -347,7 +402,8 @@ export const Verdict = ({
           message={
             <VStack spacing={2} alignItems="stretch">
               <Text>
-                {workersSentence} The other{" "}
+                {workersSentence}
+                {limitSentence && ` ${limitSentence}`} The other{" "}
                 {formatPercentage(outsideFraction, 0)} went to work outside the
                 workers&apos; dataflows:{" "}
                 {hasSourcesOrSinks &&
@@ -388,13 +444,14 @@ export const Verdict = ({
         variant="warning"
         label={
           dataflowFraction >= ALL_BUSY_FRACTION
-            ? "Not skew: every worker is busy"
-            : `Not skew: ${replica.name} is at ${cpu} of its CPU${uneven ? "" : ", spread evenly across its workers"}`
+            ? allBusyLabel(atLimit, measurement.workers)
+            : `Not skew: ${replica.name} is at ${cpu} of its CPU${isSpreadEvenly ? ", spread evenly across its workers" : ""}`
         }
         message={
           <VStack spacing={2} alignItems="stretch">
             <Text>
               {workersSentence}
+              {limitSentence && ` ${limitSentence}`}
               {outsideFraction >= NOTABLE_OUTSIDE_FRACTION &&
                 ` Another ${formatPercentage(outsideFraction, 0)} went to work outside the workers' dataflows.`}
             </Text>
@@ -429,9 +486,15 @@ export const Verdict = ({
   const topRatio = top && ratioOnWorker(top);
   const topName = top && objectName(top.objectId);
 
-  if (verdict.kind === "saturated" || verdict.kind === "uneven") {
+  if (
+    verdict.kind === "saturated" ||
+    verdict.kind === "pegged" ||
+    verdict.kind === "uneven"
+  ) {
     const isSaturated = verdict.kind === "saturated";
+    const isPegged = verdict.kind === "pegged";
     const isMostlyOne = top !== undefined && top.share >= MOST_OF_WORKER;
+    const isQueries = top?.objectId === ADHOC_ROW_ID;
     const topObject = top && objectsById.get(top.objectId);
     const statement =
       isMostlyOne &&
@@ -453,10 +516,18 @@ export const Verdict = ({
     const label = isMostlyOne
       ? isSaturated
         ? `${worker} is overloaded, and most of its time goes to ${topName}`
-        : `Work leans on ${worker}, mostly from ${topName}`
+        : isPegged
+          ? `${worker} is at its core's limit, and most of its time goes to ${topName}`
+          : `Work leans on ${worker}, mostly from ${topName}`
       : isSaturated
         ? `${worker} is overloaded, with no single object behind it`
-        : `Work leans on ${worker}`;
+        : isPegged
+          ? `${worker} is at its core's limit`
+          : `Work leans on ${worker}`;
+    const isCpuHigh =
+      hasCpuMetrics &&
+      replicaCpuFraction !== undefined &&
+      replicaCpuFraction >= HIGH_CPU_FRACTION;
     const workerProcess = String(
       processOfWorker(busiest.workerId, replica.allocation.workers),
     );
@@ -472,8 +543,12 @@ export const Verdict = ({
         : busiestProcess.processId === workerProcess
           ? `Its process, process ${workerProcess}, used the most CPU: ${processPercent(busiestProcess.value)} against ${processPercent(busiestProcess.othersMean)} for ${otherProcessesLabel(busiestProcess.otherCount)}.`
           : `Process ${busiestProcess.processId} used the most CPU, ${processPercent(busiestProcess.value)} against ${processPercent(busiestProcess.othersMean)} for ${otherProcessesLabel(busiestProcess.otherCount)}.`);
+    // Queries and subscribes pool many dataflows, so no one plan's join or
+    // key explains their lean, and a pegged worker's top object may not lean.
     const cause =
       topRatio !== undefined &&
+      !isQueries &&
+      (!isPegged || topRatio >= SKEW_RATIO) &&
       (topRatio >= ONE_WORKER_RATIO
         ? "Nearly all of an object's work on one worker is what a cross join does, since it has no key to split the work by. A key value that almost every row shares does the same."
         : "That pattern usually means a hot key: one value in a join or GROUP BY key holds most of the rows, so all of them land on one worker.");
@@ -481,6 +556,8 @@ export const Verdict = ({
       top && behind(top.objectId),
       isCpuLow &&
         `Replica CPU reads only ${formatPercentage(replicaCpuFraction, 0)}, because the average across workers hides ${worker}.`,
+      isCpuHigh &&
+        `${replica.name} is also at ${formatPercentage(replicaCpuFraction, 0)} of its CPU.`,
     ]
       .filter(Boolean)
       .join(" ");
@@ -504,10 +581,18 @@ export const Verdict = ({
                 (isMostlyOne
                   ? ` ${formatPercentage(top.share, 0)} of ${worker}'s time goes to ${topName}, which ${spreadPhrase(topRatio, worker)}.`
                   : ` Its time is split across several objects. The largest, ${topName}, takes ${formatPercentage(top.share, 0)} of it.`)}
-              {!isSaturated &&
-                " No worker is at its limit yet, so results aren't waiting on it."}
+              {isPegged
+                ? ` That's short of the ${SKEW_RATIO}× that counts as skew, but work routed to ${worker} waits on it.`
+                : !isSaturated &&
+                  " No worker is at its limit yet, so results aren't waiting on it."}
             </Text>
             {isMostlyOne && cause && <Text>{cause}</Text>}
+            {isQueries && (
+              <Text>
+                Queries and subscribes aren&apos;t one maintained object, so see
+                which of them ran on {clusterName} in these minutes.
+              </Text>
+            )}
             {freshness && <Text>{freshness}</Text>}
             {statement && (
               <>
@@ -520,7 +605,17 @@ export const Verdict = ({
             )}
             {processSentence && <Note>{processSentence}</Note>}
             <HStack spacing={4} flexWrap="wrap">
+              {isQueries && (
+                <TextLink as={Link} to={queriesPath}>
+                  Queries started on {clusterName} in these minutes
+                </TextLink>
+              )}
               <DocLink anchor="worker-skew">How to fix worker skew</DocLink>
+              {isPegged && (
+                <DocLink anchor="an-expensive-object">
+                  Troubleshoot an expensive object
+                </DocLink>
+              )}
               {processesLink && (
                 <TextLink as={Link} {...processesLink}>
                   CPU and memory by process
@@ -538,18 +633,19 @@ export const Verdict = ({
       ({ busyFraction }) => busyFraction,
     );
     const largest = largestShare(rows, workerTotalsNs);
+    // A worker well behind the rest would make "spread evenly" untrue, so
+    // the workers at their limit are named instead.
+    const workersSentence = isEvenlyBusy(measurement.workers)
+      ? `All ${workerCount} workers are ${formatPercentage(Math.min(...busyFractions), 0)} to ${formatPercentage(Math.max(...busyFractions), 0)} busy, so the work is already spread evenly and ${replica.name} has less than 10% headroom.`
+      : `${atLimitSentence(verdict.atLimit, measurement.workers, replica)} ${replica.name} has less than 10% headroom.`;
     return (
       <Alert
         variant="warning"
-        label="Not skew: every worker is busy"
+        label={allBusyLabel(verdict.atLimit, measurement.workers)}
         message={
           <VStack spacing={2} alignItems="stretch">
             <Text>
-              All {workerCount} workers are{" "}
-              {formatPercentage(Math.min(...busyFractions), 0)} to{" "}
-              {formatPercentage(Math.max(...busyFractions), 0)} busy, so the
-              work is already spread evenly and {replica.name} has less than 10%
-              headroom.
+              {workersSentence}
               {largest &&
                 ` ${objectName(largest.objectId)} takes the most, ${formatPercentage(largest.share, 0)} of the workers' time, so start there.`}
             </Text>
@@ -593,16 +689,33 @@ export const Verdict = ({
     );
   }
 
+  const lead = leadOverOthers(measurement.workers);
+  // Between `EVEN_RATIO` and `SKEW_RATIO` the work leans, too little to call
+  // skew, and "spread evenly" would contradict the bars.
+  const leansALittle = lead >= EVEN_RATIO;
+  const limitSentence = atLimitSentence(
+    verdict.atLimit,
+    measurement.workers,
+    replica,
+  );
   return (
     <Alert
       variant="info"
-      label="Work is spread evenly"
+      label={
+        leansALittle
+          ? `Work leans a little on ${worker}`
+          : "Work is spread evenly"
+      }
       message={
         <VStack spacing={2} alignItems="stretch">
           <Text>
             The busiest worker, {worker}, is {busyText} busy, and the other
-            workers average {othersText}. Skew isn&apos;t slowing {replica.name}{" "}
-            down.
+            workers average {othersText}
+            {leansALittle
+              ? `, so ${worker} does ${formatMultiple(lead)} their work, short of the ${SKEW_RATIO}× that counts as skew.`
+              : "."}{" "}
+            Skew isn&apos;t slowing {replica.name} down.
+            {limitSentence && ` ${limitSentence}`}
           </Text>
           {outdated && <Note>{behind(outdated.objectId)}</Note>}
         </VStack>

@@ -10,14 +10,13 @@
 import { addMinutes, startOfMinute, subMinutes } from "date-fns";
 import PostgresInterval from "postgres-interval";
 
-import { queryHistoryListSchema } from "~/api/materialize/query-history/queryHistoryList";
-
 import {
   createMultiSelectReactHookFormHandler,
   formatDuration,
   mapQueryHistorySearchParams,
   queryHistoryPath,
 } from "./queryHistoryUtils";
+import { queryHistoryListUrlSchema } from "./utils";
 
 type Values = "value1" | "value2" | "value3";
 
@@ -125,7 +124,7 @@ describe("queryHistoryPath", () => {
 
     expect(url.pathname).toBe("/regions/aws-us-east-1/query-history");
     expect(
-      queryHistoryListSchema.parse(
+      queryHistoryListUrlSchema.parse(
         mapQueryHistorySearchParams(url.searchParams, "me@example.com"),
       ),
     ).toMatchObject({
@@ -149,7 +148,7 @@ describe("queryHistoryPath", () => {
     const url = new URL(path, "https://console.test");
 
     expect(
-      queryHistoryListSchema.parse(
+      queryHistoryListUrlSchema.parse(
         mapQueryHistorySearchParams(url.searchParams, "me@example.com"),
       ),
     ).toMatchObject({

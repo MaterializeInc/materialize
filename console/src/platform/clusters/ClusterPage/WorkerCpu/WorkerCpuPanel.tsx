@@ -53,6 +53,7 @@ import {
   cpuVerdict,
   isPooledRow,
   isSkewVerdict,
+  markedWorker,
   Measurement,
   MEASUREMENT_MS,
   objectCpuRows,
@@ -521,7 +522,7 @@ export const WorkerCpuPanel = ({
               width={bars.width}
               measurement={measurement}
               picked={picked}
-              hotWorkerId={isSkewed ? busiestWorkerId : undefined}
+              hotWorker={markedWorker(verdict)}
               selectedWorkerId={selectedWorkerId}
               onSelectWorker={onSelectWorker}
               replica={replica}

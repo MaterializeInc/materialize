@@ -349,14 +349,23 @@ export function createWorkerCpuSampler({
     live = undefined;
   };
 
+  // An asked-for measurement can't span a gap, so its minute starts over at
+  // the first read after one, and so does its countdown.
+  const breakReading = (): Partial<WorkerCpuState> => {
+    afterGap = true;
+    close();
+    if (state.measuringFromMs === undefined) return {};
+    isObjectReadDue = true;
+    return { measuringFromMs: undefined };
+  };
+
   const pauseFor = (
     pauseReason: PauseReason,
     update: Partial<WorkerCpuState> = {},
   ) => {
-    afterGap = true;
-    close();
     setState({
       ...update,
+      ...breakReading(),
       status: "paused",
       pauseReason,
       waitingMs: undefined,
@@ -364,9 +373,12 @@ export function createWorkerCpuSampler({
   };
 
   const fail = (message: string) => {
-    afterGap = true;
-    close();
-    setState({ status: "error", error: message, waitingMs: undefined });
+    setState({
+      ...breakReading(),
+      status: "error",
+      error: message,
+      waitingMs: undefined,
+    });
   };
 
   const readObjects = (
