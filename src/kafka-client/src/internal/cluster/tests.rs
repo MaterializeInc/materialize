@@ -159,7 +159,24 @@ pub(crate) fn create_topic(cluster: &Arc<Cluster>, name: &str, partitions: i32) 
             .unwrap();
         assert_eq!(response.topics[0].error_code, 0, "{response:?}");
         for p in 0..partitions {
-            cluster.leader(&name, p, deadline).await.unwrap();
+            // The new topic reaches the brokers' metadata asynchronously:
+            // until then a lookup fails with `UnknownTopicOrPartition` or
+            // `UnknownPartition`, which `leader` treats as final.
+            loop {
+                match cluster.leader(&name, p, deadline).await {
+                    Ok(_) => break,
+                    Err(e)
+                        if matches!(
+                            e.code(),
+                            RDKafkaErrorCode::UnknownTopicOrPartition
+                                | RDKafkaErrorCode::UnknownPartition
+                        ) && !deadline.is_elapsed() =>
+                    {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    Err(e) => panic!("no leader for {name} [{p}]: {e:?}"),
+                }
+            }
         }
     })
 }
