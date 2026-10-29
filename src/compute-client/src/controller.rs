@@ -45,6 +45,7 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dyncfgs::{
     COMPUTE_REPLICA_EXPIRATION_OFFSET, ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
 };
+use mz_controller_types::DEFAULT_REPLICA_LOGGING_INTERVAL;
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
 use mz_expr::row::RowCollection;
@@ -1381,8 +1382,11 @@ impl InstanceState {
 
     /// Sets the tick interval of the introspection collections.
     ///
-    /// NOTE: The logging interval is a replica setting, but the collections exist once per
-    /// instance. The most recently added replica with logging enabled determines the interval.
+    /// NOTE: The logging interval can differ between the replicas of a cluster. Introspection
+    /// is read through replica-targeted queries, so only the per-replica freshness rows are
+    /// meaningful, not the global aggregate. The tree is kept per instance with the interval
+    /// of the most recently added replica with logging, so a replica with a different interval
+    /// records against the wrong grid.
     fn set_logging_interval(&mut self, interval: Duration) {
         let tree = logging_freshness_tree(interval);
         for id in &self.log_ids {
@@ -1551,8 +1555,8 @@ impl Collection {
             compute_dependencies: Default::default(),
             shared: SharedCollectionState::new(as_of),
             time_dependence: Some(TimeDependence::default()),
-            // Until a replica with logging is added, assume the default interval.
-            freshness_tree: Some(logging_freshness_tree(Duration::from_secs(1))),
+            // Replaced by the replica's interval once a replica with logging is added.
+            freshness_tree: Some(logging_freshness_tree(DEFAULT_REPLICA_LOGGING_INTERVAL)),
         }
     }
 
