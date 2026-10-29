@@ -19,11 +19,59 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  # Also propose lockfile-only updates of indirect dependencies.
+  allow:
+    - dependency-type: all
+  ignore:
+    # idna_adapter 1.2 switches idna to the ICU4X backend, which adds about 20
+    # crates. 1.1 keeps the unicode-rs backend. See the idna_adapter README.
+    - dependency-name: idna_adapter
+      versions: [">=1.2"]
+  # Families whose crates must move together but whose names start with
+  # different letters get their own group, so their shared transitive
+  # dependencies stay unified and cargo deny's duplicate check passes. Everything
+  # else is split alphabetically, which keeps families that share a first
+  # letter (aws-*, serde*, windows*) together and bounds how much one broken
+  # update blocks. A dependency joins the first group whose pattern matches it.
+  # Major updates are not grouped.
+  #
+  # NOTE: Dependabot classifies 0.y -> 0.(y+1) as a minor update, but Cargo
+  # treats it as breaking, so such bumps land in these groups too. When a
+  # group PR is red, either push a fix commit to its branch, or drop the
+  # offending crate with `@dependabot ignore <crate> minor version` and handle
+  # it separately.
   groups:
+    async-stack:
+      applies-to: version-updates
+      update-types: [minor, patch]
+      patterns: ["tokio*", "hyper*", "http*", "tower*", "h2", "rustls*"]
+    # opentelemetry-otlp and console-subscriber depend on tonic and prost.
+    telemetry-grpc:
+      applies-to: version-updates
+      update-types: [minor, patch]
+      patterns:
+        - "tracing*"
+        - "opentelemetry*"
+        - "prost*"
+        - "tonic*"
+        - "console-subscriber"
+    # The middle number of the duckdb and libduckdb-sys version encodes the
+    # DuckDB release, and bin/lint-versions requires ci/builder/Dockerfile to
+    # install that same libduckdb. Dependabot cannot edit the Dockerfile, so a
+    # DuckDB release arrives red here until the Dockerfile change (download
+    # URL and checksums) is pushed to the group branch. A separate group keeps
+    # that from blocking arrow. Patch releases of the crates pass on their own.
+    duckdb:
+      applies-to: version-updates
+      update-types: [minor, patch]
+      patterns: ["duckdb", "libduckdb-sys"]
+    arrow:
+      applies-to: version-updates
+      update-types: [minor, patch]
+      patterns: ["arrow*", "parquet", "iceberg*"]
     simple1:
       applies-to: version-updates
-      update-types:
-        - patch
+      update-types: [minor, patch]
       patterns:
         - "a*"
         - "b*"
@@ -40,8 +88,7 @@ updates:
         - "m*"
     simple2:
       applies-to: version-updates
-      update-types:
-        - patch
+      update-types: [minor, patch]
       patterns:
         - "n*"
         - "o*"
