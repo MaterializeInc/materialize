@@ -40,6 +40,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -567,11 +568,18 @@ def _ensure_objects(host: str) -> None:
 
 
 def _run_probes(host: str) -> list[ProbeResult]:
-    results = []
-    for name in PROBES:
-        r = run_probe(host, name)
+    # A stalled path must not delay starting the probes of the other paths.
+    # Each run_probe has its own deadline and abandons a stuck daemon worker.
+    with ThreadPoolExecutor(max_workers=len(PROBES)) as pool:
+        results = list(pool.map(lambda name: run_probe(host, name), PROBES))
+    for r in results:
+        name = r.name
         log(f"{name}: {r.status} in {r.elapsed_s:.1f}s {r.details}")
-        results.append(r)
+        sometimes(
+            r.answered and not r.answered_in_time,
+            "coordinator canary: a probe answered after missing the tight deadline",
+            {"probe": name, **r.details},
+        )
     return results
 
 
@@ -667,21 +675,25 @@ def _probe_under_load(env: Environment, host: str, paused: bool) -> None:
     results = _run_probes(host)
     deployment_after = _deployment_signature(env)
     load_after = history.recent_activity() + counters.recent_activity()
-    # The rollout driver keeps running through the quiet period, and a
-    # promotion or an environmentd restart legitimately leaves probes
-    # unanswered for longer than the deadline.
+    # A promotion can interrupt SQL while the rollout driver keeps running.
+    # Candidate churn does not interrupt the leader. Exempting any pod restart
+    # would also hide a coordinator wedge recovered by its liveness probe.
     disrupted = (
         deployment_before is not None
         and deployment_after is not None
-        and deployment_before != deployment_after
+        and (
+            deployment_before["active_generation"]
+            != deployment_after["active_generation"]
+            or "Promoting" in (deployment_before["phase"], deployment_after["phase"])
+        )
     )
     sometimes(
         disrupted,
-        "coordinator canary: environmentd restarted or the rollout state changed during the probe window",
+        "coordinator canary: a rollout promotion overlapped the probe window",
         {"before": deployment_before, "after": deployment_after},
     )
     if disrupted:
-        log("deployment changed during the probes, skipping the deadline checks")
+        log("rollout promotion overlapped the probes, skipping the deadline checks")
         return
     _assert_accepted(results)
     for r in results:

@@ -64,8 +64,9 @@ check would catch, is a plain `always`, so an open known bug does not mask it.
 
 Fault handling: a persistcli failure (non-zero exit, timeout, unparsable
 output) means consensus or blob was unreachable or the shard moved under the
-read, and the audit is skipped. Violations are asserted only from parsed
-persistcli output, so a skip never hides one.
+read, and that audit is recorded as incomplete. Each invocation shares one
+budget across its persistcli commands. The final sweep asserts completeness
+after faults stop, so unreachable or unreadable shards cannot silently pass.
 
 Endpoints: consensus is the metadata Postgres with
 `options=--search_path=consensus`, as environmentd derives it from
@@ -113,10 +114,14 @@ DEFAULT_BLOB_URL = (
 ANYTIME_SHARDS = 3
 ANYTIME_UNMAPPED_SHARDS = 1
 ANYTIME_TIMEOUT_S = 60
+ANYTIME_BUDGET_S = 180
 FINALLY_USER_SHARDS = 25
 FINALLY_SYSTEM_SHARDS = 5
 FINALLY_UNMAPPED_SHARDS = 10
 FINALLY_TIMEOUT_S = 300
+# Calibration: bound the entire sample, including remap pairs, rather than
+# spending a fresh five-minute timeout on every command. Not yet measured.
+FINALLY_BUDGET_S = 900
 ANYTIME_REMAP_PAIRS = 2
 FINALLY_REMAP_PAIRS = 20
 # Calibration: a dropped collection's shard is finalized by the storage
@@ -349,7 +354,7 @@ def run_persistcli(
     subcommand: str,
     shard_id: str,
     endpoints: Endpoints,
-    timeout_s: int,
+    timeout_s: float,
     extra: list[str],
 ) -> dict[str, Any] | None:
     """Run one audit subcommand. None means it reached no conclusion."""
@@ -409,10 +414,36 @@ class Auditor:
     def __init__(self, origin: str, timeout_s: int) -> None:
         self.origin = origin
         self.timeout_s = timeout_s
+        self.started = time.monotonic()
+        self.budget_s = FINALLY_BUDGET_S if origin == "finally" else ANYTIME_BUDGET_S
+        self.deadline = self.started + self.budget_s
+        self.completed = 0
+        self.incomplete = 0
+        self.enumerated = True
         self.env = Environment()
         self.host = self.env.sql_host()
         self.db = open_state()
         self.txns_shard = txns_shard(self.host)
+
+    def inspect(
+        self, subcommand: str, shard_id: str, extra: list[str]
+    ) -> dict[str, Any] | None:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            self.incomplete += 1
+            return None
+        report = run_persistcli(
+            subcommand,
+            shard_id,
+            self.env.endpoints,
+            min(self.timeout_s, remaining),
+            extra,
+        )
+        if report is None:
+            self.incomplete += 1
+        else:
+            self.completed += 1
+        return report
 
     def signature(self) -> str | None:
         return lifecycle.safe_signature(self.env)
@@ -441,8 +472,37 @@ class Auditor:
     def run(
         self, user_count: int, system_count: int, unmapped_count: int, remap_count: int
     ) -> int:
+        result = self._run(user_count, system_count, unmapped_count, remap_count)
+        elapsed = time.monotonic() - self.started
+        complete = self.enumerated and self.incomplete == 0 and elapsed <= self.budget_s
+        details = {
+            "origin": self.origin,
+            "budget_s": self.budget_s,
+            "elapsed_s": elapsed,
+            "completed_commands": self.completed,
+            "incomplete_commands": self.incomplete,
+            "enumerated": self.enumerated,
+        }
+        if self.origin == "finally":
+            always(
+                complete,
+                "shard audit: all selected audits complete within the final sweep budget",
+                details,
+            )
+        else:
+            sometimes(
+                complete,
+                "shard audit: all selected audits completed within the anytime budget",
+                details,
+            )
+        return result
+
+    def _run(
+        self, user_count: int, system_count: int, unmapped_count: int, remap_count: int
+    ) -> int:
         live = live_shards(self.host)
         if live is None:
+            self.enumerated = False
             return 0
         signature = self.signature()
         record_live(self.db, live, signature)
@@ -451,10 +511,17 @@ class Auditor:
         for shard in targets:
             self.audit(shard, signature)
 
+        if time.monotonic() >= self.deadline:
+            self.enumerated = False
+            return 0
         self.audit_remaps(remap_count)
 
+        if time.monotonic() >= self.deadline:
+            self.enumerated = False
+            return 0
         shards = consensus_shards(self.env.endpoints)
         if shards is None:
+            self.enumerated = False
             return 0
         record_consensus(self.db, shards)
         unmapped = unmapped_candidates(self.db, shards, live)
@@ -484,13 +551,10 @@ class Auditor:
 
     def audit_unmapped(self, shard_id: str) -> None:
         """Audit a consensus shard that no live collection maps."""
-        endpoints = self.env.endpoints
-        blobs = run_persistcli("audit-blobs", shard_id, endpoints, self.timeout_s, [])
-        mult = run_persistcli(
+        blobs = self.inspect("audit-blobs", shard_id, [])
+        mult = self.inspect(
             "audit-multiplicities",
             shard_id,
-            endpoints,
-            self.timeout_s,
             ["--max-reported", str(MAX_REPORTED_NEGATIVES)],
         )
         known = self.db.execute(
@@ -556,6 +620,9 @@ class Auditor:
         """Check a sample of live (remap, export) pairs against the invariant
         stated in `remap_frontiers`."""
         pairs = remap_pairs(self.host)
+        if pairs is None:
+            self.enumerated = False
+            return
         if not pairs:
             return
         picked = rng.sample(pairs, min(count, len(pairs)))
@@ -567,19 +634,16 @@ class Auditor:
         endpoints = self.env.endpoints
         # Remap first, export second: `remap_frontiers` owns why only this
         # order makes a single observation sound.
-        remap_report = run_persistcli(
-            "audit-frontiers", pair.remap_shard, endpoints, self.timeout_s, []
-        )
+        remap_report = self.inspect("audit-frontiers", pair.remap_shard, [])
         if remap_report is None:
             return
-        data_report = run_persistcli(
-            "audit-frontiers", pair.data_shard, endpoints, self.timeout_s, []
-        )
+        data_report = self.inspect("audit-frontiers", pair.data_shard, [])
         if data_report is None:
             return
         remap = remap_frontiers.Frontiers.parse(remap_report)
         data = remap_frontiers.Frontiers.parse(data_report)
         if remap is None or data is None:
+            self.incomplete += 1
             log(f"{pair.data_name}: malformed audit-frontiers output, skipping")
             return
         check = remap_frontiers.classify(remap, data)
@@ -608,6 +672,7 @@ class Auditor:
             # pair live before and after the reads is a violation.
             after = remap_pairs(self.host)
             if after is None:
+                self.enumerated = False
                 log(
                     f"{pair.data_name}: {check.verdict.value}, cannot re-read pairs, skipping"
                 )
@@ -679,15 +744,10 @@ class Auditor:
         )
 
     def audit(self, shard: LiveShard, signature: str | None) -> None:
-        endpoints = self.env.endpoints
-        blobs = run_persistcli(
-            "audit-blobs", shard.shard_id, endpoints, self.timeout_s, []
-        )
-        mult = run_persistcli(
+        blobs = self.inspect("audit-blobs", shard.shard_id, [])
+        mult = self.inspect(
             "audit-multiplicities",
             shard.shard_id,
-            endpoints,
-            self.timeout_s,
             ["--max-reported", str(MAX_REPORTED_NEGATIVES)],
         )
         details: dict[str, Any] = {
@@ -759,6 +819,7 @@ class Auditor:
             # audit. Only a shard live in both reads is a violation.
             live = live_shards(self.host)
             if live is None:
+                self.enumerated = False
                 log(
                     f"{shard.shard_id}: tombstoned or empty since, cannot re-read the live set, skipping"
                 )
@@ -829,6 +890,12 @@ def _main(
         auditor = Auditor(origin, timeout_s)
     except (ApiException, OSError, RuntimeError) as e:
         log(f"cannot locate the environment: {e}")
+        if origin == "finally":
+            always(
+                False,
+                "shard audit: all selected audits complete within the final sweep budget",
+                {"origin": origin, "enumerated": False, "error": str(e)},
+            )
         return 0
     return auditor.run(user_count, system_count, unmapped_count, remap_count)
 

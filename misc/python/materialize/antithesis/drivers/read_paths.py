@@ -50,11 +50,15 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     sometimes,
     unreachable,
 )
-from kubernetes import client  # type: ignore
 
-from materialize.antithesis import sql, state
-from materialize.antithesis.drivers import configure, history
+from materialize.antithesis import quiet, sql, state
+from materialize.antithesis.drivers import configure, history, pod_restarts
 from materialize.antithesis.drivers.recovery import observe_pods
+from materialize.antithesis.drivers.rollouts import (
+    GRACE_MENU,
+    K8S_TIMEOUT_SECONDS,
+    Kube,
+)
 from materialize.antithesis.drivers.session_mix import classify_read, quote_literal
 from materialize.antithesis.drivers.sources_common import (
     bag_diff,
@@ -156,7 +160,8 @@ def open_state() -> sqlite3.Connection:
 
 def _connect(host: str, **kwargs: Any) -> psycopg.Connection:
     kwargs.setdefault("statement_timeout_ms", STATEMENT_TIMEOUT_MS)
-    return sql.connect_with_retry(host, CONNECT_DEADLINE_S, **kwargs)
+    deadline_s = kwargs.pop("connect_deadline_s", CONNECT_DEADLINE_S)
+    return sql.connect_with_retry(host, deadline_s, **kwargs)
 
 
 def _ddl(conn: psycopg.Connection, statement: str) -> None:
@@ -317,18 +322,38 @@ class Read:
 
 
 class Round:
-    def __init__(self, host: str, t: int, reps: list[tuple[str, str, str]]) -> None:
+    def __init__(
+        self,
+        host: str,
+        t: int,
+        reps: list[tuple[str, str, str]],
+        deadline: float | None = None,
+    ) -> None:
         self.host = host
         self.t = t
         self.reps = reps
+        self.deadline = (
+            time.monotonic() + CHECK_BUDGET_S if deadline is None else deadline
+        )
         self.conn: psycopg.Connection | None = None
         self.since_race = False
 
     def reader(self) -> psycopg.Connection:
         if self.conn is None or self.conn.closed:
-            self.conn = _connect(self.host)
+            self.conn = _connect(
+                self.host,
+                connect_deadline_s=min(
+                    CONNECT_DEADLINE_S, max(0.001, self.deadline - time.monotonic())
+                ),
+                statement_timeout_ms=self.remaining_ms(),
+            )
             self.conn.execute("SET transaction_isolation = 'serializable'")
         return self.conn
+
+    def remaining_ms(self) -> int:
+        return max(
+            1, min(STATEMENT_TIMEOUT_MS, int((self.deadline - time.monotonic()) * 1000))
+        )
 
     def close(self) -> None:
         if self.conn is not None:
@@ -340,6 +365,7 @@ class Round:
 
     def target(self, cluster: str, replica: str | None) -> psycopg.Connection:
         conn = self.reader()
+        conn.execute(f"SET statement_timeout = '{self.remaining_ms()}ms'".encode())
         conn.execute(f"SET cluster = {quote_literal(cluster)}".encode())
         if replica is None:
             conn.execute("RESET cluster_replica")
@@ -348,6 +374,8 @@ class Round:
         return conn
 
     def guarded(self, path: str, rel: Relation, fn: Any) -> Read:
+        if time.monotonic() >= self.deadline:
+            return Read(None)
         try:
             return fn()
         except Exception as e:
@@ -388,7 +416,7 @@ class Round:
         def run() -> Read:
             conn = self.target(CLUSTER, replica)
             acc: Counter = Counter()
-            deadline = time.monotonic() + SUBSCRIBE_DEADLINE_S
+            deadline = min(self.deadline, time.monotonic() + SUBSCRIBE_DEADLINE_S)
             done = False
             with conn.transaction():
                 conn.execute(
@@ -401,10 +429,11 @@ class Round:
                     ).fetchall()
                     for r in rows:
                         ts, progressed, diff = int(r[0]), bool(r[1]), r[2]
-                        if ts > self.t:
-                            done = True
-                            break
-                        if not progressed:
+                        if progressed:
+                            if ts > self.t:
+                                done = True
+                                break
+                        elif ts <= self.t:
                             acc[_norm(tuple(r[3:]))] += int(diff)
                 conn.execute("CLOSE c")
             if not done:
@@ -416,20 +445,23 @@ class Round:
 
     def compare(self, rel: Relation, restarted: list[str]) -> int:
         """Read `rel` through every path at T and assert agreement. Returns paths compared."""
-        reads: dict[str, Read] = {
-            "index": self.select(rel, "index", CLUSTER, None),
-        }
+        paths: list[tuple[str, str, str | None]] = [("index", CLUSTER, None)]
         for _, _, name in self.reps:
-            reads[f"replica:{name}"] = self.select(
-                rel, f"replica:{name}", CLUSTER, name
-            )
-        reads["persist"] = self.select(rel, "persist", OTHER_CLUSTER, None)
+            paths.append((f"replica:{name}", CLUSTER, name))
+        paths.append(("persist", OTHER_CLUSTER, None))
         if rel.definition is not None:
-            reads["recompute"] = self.select(rel, "recompute", CLUSTER, None)
+            paths.append(("recompute", CLUSTER, None))
         sub_replica = (
             rng.choice([None] + [n for _, _, n in self.reps]) if self.reps else None
         )
-        reads["subscribe"] = self.subscribe(rel, sub_replica)
+        paths.append(("subscribe", CLUSTER, sub_replica))
+        reads = {}
+        for path, cluster, replica in rng.sample(paths, len(paths)):
+            reads[path] = (
+                self.subscribe(rel, replica)
+                if path == "subscribe"
+                else self.select(rel, path, cluster, replica)
+            )
 
         sub = reads["subscribe"]
         if sub.negatives is not None:
@@ -526,7 +558,7 @@ def _max_since(conn: psycopg.Connection) -> int | None:
 
 
 def run_round(
-    env: Environment, host: str, db: sqlite3.Connection, margin_ms: int
+    env: Environment, host: str, db: sqlite3.Connection, margin_ms: int, deadline: float
 ) -> bool | None:
     """One comparison round. True if compared, False on a since race, None if skipped."""
     # The hold transaction idles while side sessions read, which on one
@@ -551,9 +583,12 @@ def run_round(
                     since = _max_since(side)
                 if since is not None and held - margin_ms >= since:
                     t = held - margin_ms
-            r = Round(host, t, reps)
+            r = Round(host, t, reps, deadline)
             try:
-                compared = [r.compare(rel, restarted) for rel in RELATIONS]
+                compared = [
+                    r.compare(rel, restarted)
+                    for rel in rng.sample(RELATIONS, len(RELATIONS))
+                ]
             finally:
                 r.close()
     sometimes(
@@ -589,7 +624,7 @@ def check_main() -> int:
             if time.monotonic() >= end:
                 return 0
             try:
-                result = run_round(env, host, db, margin)
+                result = run_round(env, host, db, margin, end)
             except (psycopg.Error, OSError) as e:
                 c = sql.classify(e)
                 if c.outcome is sql.Outcome.VIOLATION and not is_since_race(e):
@@ -606,25 +641,44 @@ def check_main() -> int:
 
 
 def _kill_replica_pod(env: Environment, conn: psycopg.Connection) -> None:
+    if quiet.active_quiet_period():
+        return
     reps = replicas(conn)
     if not reps:
         return
     cluster_id, replica_id, name = rng.choice(reps)
     marker = f"cluster-{cluster_id}-replica-{replica_id}-gen-"
-    core = client.CoreV1Api()
+    kube = Kube(env)
     pods = [
-        p.metadata.name
-        for p in core.list_namespaced_pod(env.endpoints.namespace).items
-        if p.metadata is not None and p.metadata.name and marker in p.metadata.name
+        p
+        for p in kube.core.list_namespaced_pod(
+            kube.namespace,
+            _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        ).items
+        if p.metadata is not None
+        and p.metadata.name
+        and marker in p.metadata.name
+        and p.metadata.deletion_timestamp is None
     ]
     if not pods:
         return
     victim = rng.choice(pods)
-    core.delete_namespaced_pod(victim, env.endpoints.namespace)
-    reachable(
-        "read paths load: deleted a read_paths_c replica pod",
-        {"replica": name, "pod": victim},
+    assert victim.metadata is not None and victim.metadata.name is not None
+    acked = pod_restarts.delete_recorded(
+        kube,
+        origin="read_paths_load",
+        role="clusterd",
+        namespace=kube.namespace,
+        pod=victim.metadata.name,
+        uid=victim.metadata.uid,
+        grace=rng.choice(GRACE_MENU),
+        reason="read path comparisons",
     )
+    if acked:
+        reachable(
+            "read paths load: deleted a read_paths_c replica pod",
+            {"replica": name, "pod": victim.metadata.name},
+        )
 
 
 def _dml(conn: psycopg.Connection, rows: int) -> str:

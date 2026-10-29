@@ -65,6 +65,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
+from materialize import orchestratord
 from materialize.antithesis import sql, state
 from materialize.antithesis.environment import Environment
 from materialize.antithesis.render import (
@@ -235,7 +236,11 @@ def update_system_params(namespace: str, updates: dict[str, str]) -> dict[str, A
     }
     api = client.CoreV1Api()
     for _ in range(CONFIGMAP_CAS_ATTEMPTS):
-        cm = api.read_namespaced_config_map(CONFIGMAP, namespace)
+        cm = api.read_namespaced_config_map(
+            CONFIGMAP,
+            namespace,
+            _request_timeout=orchestratord.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        )
         data = cm.data or {}
         try:
             current = json.loads(data.get(CONFIGMAP_KEY) or "{}")
@@ -244,7 +249,12 @@ def update_system_params(namespace: str, updates: dict[str, str]) -> dict[str, A
         merged = guard_panic({**defaults, **current, **updates, **fixed})
         cm.data = {**data, CONFIGMAP_KEY: json.dumps(merged, indent=2, sort_keys=True)}
         try:
-            api.replace_namespaced_config_map(CONFIGMAP, namespace, cm)
+            api.replace_namespaced_config_map(
+                CONFIGMAP,
+                namespace,
+                cm,
+                _request_timeout=orchestratord.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+            )
             return merged
         except ApiException as e:
             if e.status != 409:

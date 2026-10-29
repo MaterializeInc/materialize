@@ -126,6 +126,7 @@ def problems(report: Report) -> dict[str, object]:
             "aborted_reads",
             "duplicates",
             "internal",
+            "invalid_rmw_counts",
             "incompatible_orders",
             "rmw_self_reads",
             "stale_reads",
@@ -458,6 +459,54 @@ def test_read_modify_write_observes_its_own_append() -> None:
         ]
     )
     assert len(report.rmw_self_reads) == 1
+
+
+def test_read_modify_write_count_must_be_present() -> None:
+    report = check([rmw(1, 1, 0, 0, 1), read(2, 2, 3, {1: [1]})])
+    assert report.internal
+
+
+def test_blind_append_must_not_acquire_a_count() -> None:
+    report = check([append(1, 0, 0, 1), read(2, 2, 3, {0: [1]}, counts={1: 0})])
+    assert report.internal
+
+
+def test_read_modify_write_count_cannot_exceed_possible_inputs() -> None:
+    report = check(
+        [
+            append(1, 0, 0, 1),
+            append(2, 0, 0, 1, outcome=FAIL),
+            rmw(3, 1, 0, 2, 3),
+            append(4, 0, 4, 5),
+            read(5, 6, 7, {1: [3]}, counts={3: 2}),
+        ]
+    )
+    assert report.invalid_rmw_counts == [
+        {"rmw": 3, "key": 0, "count": 2, "minimum": 1, "maximum": 1}
+    ]
+
+
+def test_read_modify_write_count_cannot_be_negative() -> None:
+    report = check([rmw(1, 1, 0, 0, 1), read(2, 2, 3, {1: [1]}, counts={1: -1})])
+    assert report.invalid_rmw_counts
+
+
+def test_read_modify_write_count_includes_prior_acknowledged_writes() -> None:
+    report = check(
+        [append(1, 0, 0, 1), rmw(2, 1, 0, 2, 3), read(3, 4, 5, {1: [2]}, counts={2: 0})]
+    )
+    assert report.invalid_rmw_counts
+
+
+def test_indeterminate_read_modify_write_may_count_after_its_error() -> None:
+    report = check(
+        [
+            rmw(1, 1, 0, 0, 1, outcome=INFO),
+            append(2, 0, 2, 3),
+            read(3, 4, 5, {1: [1]}, counts={1: 1}),
+        ]
+    )
+    assert_clean(report)
 
 
 def test_timestamp_regression() -> None:
