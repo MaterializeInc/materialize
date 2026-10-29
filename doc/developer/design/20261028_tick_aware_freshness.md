@@ -164,14 +164,15 @@ End-to-end latency shows how stale an object is, but not which hop in a chain of
 Each arrival's end-to-end charge splits into three parts, which sum to it exactly:
 
 * Upstream: from the window start until the slowest direct input showed the arrival. This is that input's own end-to-end latency, so following the slowest input hop by hop walks the critical path.
-* Skew: from then until every direct input's frontier passed the timestamp the object needs for the arrival, $T(a) = \max_k \lceil a \rceil_{i_k}$ under the object's tree without its own refresh node, capped at the wait the inputs' grids alone cause, $g(a) = \max_k \lceil T(a) \rceil_{i_k} - T(a)$.
+* Skew: from then until every direct input's frontier passed the timestamp the object needs for the arrival, $T(a)$ under the object's tree without its own refresh node, capped at the wait the inputs' grids alone cause. With every input on time, input $k$'s frontier passes a timestamp $t$ at $p_k(t)$ and shows the arrival at $s_k(a)$, both from its own tree, so the cap is $g(a) = \max_k p_k(T(a)) - \max_k s_k(a)$. For a join of plain sources this is $\max_k \lceil T(a) \rceil_{i_k} - T(a)$ with $T(a) = \max_k \lceil a \rceil_{i_k}$. An input that is itself a join or a refresh view shows arrivals later than $T(a)$, and measuring from its showing time keeps that input's own wait out of the cap.
 * Local: from then until the object showed the arrival. This is what the hop itself adds.
 
 The cap keeps lateness out of skew.
 Without it, an input that shows an arrival and then stalls before its frontier passes $T(a)$ makes the object wait out the stall after every input has shown the arrival, and that stall would read as skew.
 A join of a 1 s source with a view that refreshes once a day would then charge a 5 minute source stall around the refresh as skew to a whole day of arrivals.
 With the cap, skew is the delay mismatched grids cause when every input ticks on time, and any wait beyond $g(a)$ stays upstream, where the late input's own histogram shows it.
-An input whose ticks drift from its grid moves the drift to upstream, which understates skew and never overstates it.
+An input whose ticks drift from its grid moves the drift to upstream, which understates skew.
+Unaligned leaves, such as tables and webhooks, tick at a phase the controller does not know, so their on-time wait cannot be computed. They contribute no wait to the cap, which understates skew for objects that combine them with ticking inputs and never overstates it.
 
 Skew is the wait that combining inputs causes without any input being late.
 A join of a 7 s and an 11 s input shows an arrival only once the 7 s input's frontier passes the 11 s timestamp, which happens at the 7 s input's next tick.
