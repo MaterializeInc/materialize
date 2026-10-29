@@ -798,6 +798,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "column_paged_batcher_spill_worker_fraction",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
+    "column_paged_batcher_file_release_interval",
+    "column_paged_batcher_file_release_bytes",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",

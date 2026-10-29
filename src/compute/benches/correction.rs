@@ -161,6 +161,8 @@ impl Spill {
                 spill_threads: 2,
                 eager_backing: false,
                 rss_target_bytes: 0,
+                file_release_interval: std::time::Duration::ZERO,
+                file_release_bytes: 0,
             },
             pool_config::ExtentBackend::Swap,
         );

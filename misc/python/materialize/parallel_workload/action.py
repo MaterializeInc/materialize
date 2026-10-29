@@ -3300,6 +3300,8 @@ class FlipFlagsAction(Action):
             "enable_lgalloc_eager_reclamation",
             "enable_s3_tables_region_check",
             "lgalloc_background_interval",
+            "column_paged_batcher_file_release_interval",
+            "column_paged_batcher_file_release_bytes",
             "lgalloc_file_growth_dampener",
             "lgalloc_local_buffer_bytes",
             "lgalloc_slow_clear_bytes",

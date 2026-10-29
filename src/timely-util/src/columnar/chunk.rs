@@ -2871,6 +2871,8 @@ mod tests {
                 spill_threads: 1,
                 eager_backing: false,
                 rss_target_bytes: 16 << 20,
+                file_release_interval: std::time::Duration::ZERO,
+                file_release_bytes: 0,
             },
             crate::pool_config::ExtentBackend::Swap,
         );
