@@ -50,25 +50,29 @@ fn record_tick(log: &mut ConsumedVisibilityLog, s: u64) {
 }
 
 #[mz_ore::test]
-fn visibility_log_is_pruned_by_age() {
+fn visibility_log_thins_what_a_waiting_consumer_keeps() {
     let mut log = ConsumedVisibilityLog::default();
     let consumer = (GlobalId::User(1), None);
-    assert_eq!(log.read(consumer, None, 0).visible_at(1), None);
-    // One advance per second for 15 minutes. The consumer's recording has not started, so only
-    // the age cap prunes.
+    assert_eq!(log.read(consumer, None).visible_at(1), None);
+    // One advance per second for 15 minutes. The consumer's recording has not started, so it
+    // keeps everything, thinned by age.
     for s in 1..=900u64 {
         record_tick(&mut log, s);
-        log.read(consumer, None, s * 1000 + 5);
+        log.read(consumer, None);
     }
-    let copy = log.read(consumer, None, 900_005);
-    // Ten minutes are kept, and older arrivals are answered by the last pruned entry.
-    assert_eq!(copy.visible_at(300_000), Some(300_005));
-    assert_eq!(copy.visible_at(299_000), Some(299_005));
-    assert_eq!(copy.visible_at(1), Some(299_005));
+    // The last minute, and one entry per doubling of the age beyond it.
+    assert!(log.len() <= 60 + 4 + 1, "{}", log.len());
+    let copy = log.read(consumer, None);
+    // The oldest entry stays, recent arrivals are answered exactly, and thinned ones by a later
+    // observation.
+    assert_eq!(copy.visible_at(1), Some(1005));
     assert_eq!(copy.visible_at(900_000), Some(900_005));
-    // A copy for a consumer answers what it has not recorded yet exactly.
-    let copy = log.read(consumer, Some(600_000), 900_005);
-    assert_eq!(copy.visible_at(600_001), Some(601_005));
+    assert_eq!(copy.visible_at(850_000), Some(850_005));
+    let thinned = copy.visible_at(300_000).unwrap();
+    assert!(thinned >= 300_005, "{thinned}");
+    // A copy for a consumer answers what it has not recorded yet like the log.
+    let copy = log.read(consumer, Some(600_000));
+    assert_eq!(copy.visible_at(899_000), Some(899_005));
 }
 
 #[mz_ore::test]
@@ -80,8 +84,7 @@ fn visibility_log_is_pruned_through_consumers() {
     }
     assert_eq!(log.len(), 1);
     assert_eq!(
-        log.read((GlobalId::User(9), None), None, 10_005)
-            .visible_at(10_000),
+        log.read((GlobalId::User(9), None), None).visible_at(10_000),
         Some(10_005)
     );
     log.deregister((GlobalId::User(9), None));
@@ -89,19 +92,19 @@ fn visibility_log_is_pruned_through_consumers() {
     // Registered consumers keep everything before their first read.
     let a = (GlobalId::User(1), None);
     let b = (GlobalId::User(2), Some(ReplicaId::User(1)));
-    log.register(a, 10_005);
-    log.register(b, 10_005);
+    log.register(a);
+    log.register(b);
     for s in 11..=20 {
         record_tick(&mut log, s);
     }
     assert_eq!(log.len(), 11);
 
     // The log keeps what the consumer that recorded the least still needs.
-    log.read(a, Some(15_000), 20_005);
-    let before = log.read(b, Some(13_000), 20_005);
+    log.read(a, Some(15_000));
+    let before = log.read(b, Some(13_000));
     record_tick(&mut log, 21);
     assert_eq!(log.len(), 8);
-    let after = log.read(b, Some(13_000), 21_005);
+    let after = log.read(b, Some(13_000));
     for arrival in 13_001..=20_000 {
         assert_eq!(after.visible_at(arrival), before.visible_at(arrival));
     }
@@ -110,31 +113,27 @@ fn visibility_log_is_pruned_through_consumers() {
     log.deregister(b);
     record_tick(&mut log, 22);
     assert_eq!(log.len(), 7);
-    assert_eq!(
-        log.read(a, Some(15_000), 22_005).visible_at(15_001),
-        Some(16_005)
-    );
+    assert_eq!(log.read(a, Some(15_000)).visible_at(15_001), Some(16_005));
 
     // The last entry stays, even if every consumer recorded past it.
-    log.read(a, Some(u64::MAX), 22_005);
+    log.read(a, Some(u64::MAX));
     record_tick(&mut log, 23);
     assert_eq!(log.len(), 1);
-    assert_eq!(
-        log.read(a, Some(22_000), 23_005).visible_at(23_000),
-        Some(23_005)
-    );
+    assert_eq!(log.read(a, Some(22_000)).visible_at(23_000), Some(23_005));
 
-    // A consumer that stops reading is forgotten after the retention.
-    log.read(a, Some(0), 23_005);
+    // A consumer that stops reading keeps what it needs until it is deregistered, thinned by
+    // age.
+    log.read(a, Some(23_000));
     for s in 24..=700 {
         record_tick(&mut log, s);
     }
-    assert_eq!(log.len(), 1);
-    // When it reads again, the arrivals it missed were visible at the latest when the last
-    // pruned entry was observed, not when it reads.
-    let late = log.read(a, Some(0), 700_005);
-    assert_eq!(late.visible_at(1000), Some(699_005));
+    assert!(log.len() <= 60 + 4 + 1, "{}", log.len());
+    let late = log.read(a, Some(23_000));
+    assert_eq!(late.visible_at(24_000), Some(24_005));
     assert_eq!(late.visible_at(700_000), Some(700_005));
+    log.deregister(a);
+    record_tick(&mut log, 701);
+    assert_eq!(log.len(), 1);
 }
 
 #[mz_ore::test]
@@ -151,7 +150,7 @@ fn closed_collection_stays_visible_from_its_close() {
     log.record(&tree, &Antichain::new(), 2005, &config);
     // Later observations, which prune, keep the close.
     log.record(&tree, &Antichain::new(), 10_000_000, &config);
-    let copy = log.with(|log| log.read((GlobalId::User(1), None), Some(5_000_000), 10_000_000));
+    let copy = log.with(|log| log.read((GlobalId::User(1), None), Some(5_000_000)));
     assert_eq!(copy.visible_at(5_000_001), Some(2005));
     assert_eq!(copy.visible_at(u64::MAX), Some(2005));
 }
