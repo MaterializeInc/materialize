@@ -362,9 +362,12 @@ fn update_configuration_merges_replica_override() {
 #[derive(Debug)]
 struct FixedTickers(u64);
 
+/// An ingestion that [`FixedTickers`] does not know.
+const UNKNOWN_INGESTION: GlobalId = GlobalId::User(999);
+
 impl TickerLookup for FixedTickers {
-    fn ingestion_ticker(&self, _id: GlobalId) -> Option<Ticker> {
-        Some(Ticker::Aligned {
+    fn ingestion_ticker(&self, id: GlobalId) -> Option<Ticker> {
+        (id != UNKNOWN_INGESTION).then_some(Ticker::Aligned {
             interval_ms: self.0,
         })
     }
@@ -721,6 +724,18 @@ impl FreshnessHarness {
 
     /// Adds a collection with a 1 s ingestion leaf that reads `inputs`.
     fn add_collection_with_inputs(&mut self, id: GlobalId, as_of: u64, inputs: &[GlobalId]) {
+        let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT));
+        let inputs: Vec<_> = inputs.iter().map(|id| (*id, tree.clone())).collect();
+        self.add_collection_with_input_trees(id, as_of, &inputs);
+    }
+
+    /// Adds a collection with a 1 s ingestion leaf that reads `inputs` with the given trees.
+    fn add_collection_with_input_trees(
+        &mut self,
+        id: GlobalId,
+        as_of: u64,
+        inputs: &[(GlobalId, FreshnessTree)],
+    ) {
         let as_of = Antichain::from_elem(Timestamp::from(as_of));
         self.instance.add_collection(
             id,
@@ -735,13 +750,7 @@ impl FreshnessHarness {
             None,
             None,
             Some(FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))),
-            inputs
-                .iter()
-                .map(|input| {
-                    let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT));
-                    (*input, tree)
-                })
-                .collect(),
+            inputs.iter().cloned().collect(),
         );
     }
 
@@ -998,6 +1007,59 @@ async fn skew_needs_two_inputs() {
                 "{id} {replica:?}"
             );
         }
+    }
+}
+
+/// An input whose tree no longer resolves counts as ready at each observation, and the
+/// collection still records its own histograms and visibility for its consumers.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn unresolvable_input_tree_counts_as_ready() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let (a, b) = (GlobalId::User(10), GlobalId::User(11));
+    let unknown = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(UNKNOWN_INGESTION));
+    h.add_collection_with_input_trees(a, T0, &[(STORAGE_INPUT, unknown)]);
+    h.add_collection_with_inputs(b, T0, &[a]);
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+    let config =
+        mz_storage_client::freshness::recorder_config(&h.instance.dyncfg).expect("recording on");
+    let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))
+        .resolve(&FixedTickers(1000))
+        .expect("resolves");
+    for s in 1..=60 {
+        let tick = T0 + s * 1000;
+        h.set_now(tick + 2);
+        let frontier = Antichain::from_elem(Timestamp::from(tick + 1));
+        h.storage_log.record(&tree, &frontier, tick + 2, &config);
+        h.set_now(tick + 5);
+        h.report(r1, a, tick + 1);
+        h.set_now(tick + 13);
+        h.report(r1, b, tick + 1);
+    }
+    let recorded = h.recorded();
+    let scheme = BucketScheme::new(4).expect("power of two");
+    let expected = vec![(T0, T0 + 60_000, 60_000)];
+    for replica in [None, Some(r1)] {
+        for measure in ["end_to_end", "local"] {
+            assert_eq!(
+                recorded.measure_periods(measure, Some(a), replica),
+                expected,
+                "{measure} {replica:?}"
+            );
+        }
+        assert_eq!(
+            recorded.buckets("local", a, replica),
+            BTreeSet::from([scheme.bucket(1)]),
+            "{replica:?}"
+        );
+        // `b` reads the visibility `a` recorded.
+        assert_eq!(
+            recorded.buckets("local", b, replica),
+            BTreeSet::from([scheme.bucket(8)]),
+            "{replica:?}"
+        );
     }
 }
 

@@ -218,6 +218,38 @@ fn grid_wait_matches_on_time_frontier() {
     });
 }
 
+/// `tree` with its unaligned leaves aligned to the epoch.
+fn unaligned_as_aligned(tree: &ResolvedTree) -> ResolvedTree {
+    match tree {
+        ResolvedTree::Leaf(Ticker::Unaligned { interval_ms }) => aligned(*interval_ms),
+        ResolvedTree::Leaf(t) => ResolvedTree::Leaf(*t),
+        ResolvedTree::Min(inputs) => {
+            ResolvedTree::Min(inputs.iter().map(unaligned_as_aligned).collect())
+        }
+        ResolvedTree::Refresh { schedule, input } => ResolvedTree::Refresh {
+            schedule: schedule.clone(),
+            input: Box::new(unaligned_as_aligned(input)),
+        },
+    }
+}
+
+#[mz_ore::test]
+fn latest_show_bounds_on_time_show() {
+    proptest!(|(tree in arb_tree(), arrival in 1u64..400)| {
+        // Without unaligned leaves, the latest show is the on-time show: when the frontier
+        // passes the timestamp the arrival is assigned.
+        let model = unaligned_as_aligned(&tree);
+        let shown = model
+            .assigned(arrival)
+            .map(|t| t + model.grid_wait(t));
+        prop_assert_eq!(model.latest_show(arrival), shown);
+        // Treating a leaf as unaligned only moves its latest show later.
+        if let (Some(latest), Some(shown)) = (tree.latest_show(arrival), shown) {
+            prop_assert!(latest >= shown, "{latest} < {shown}");
+        }
+    });
+}
+
 #[mz_ore::test]
 fn last_reflected_matches_oracle() {
     proptest!(|(tree in arb_tree(), frontier in 0u64..400)| {
@@ -2272,6 +2304,120 @@ fn dominated_by(low: &BTreeMap<i32, u64>, high: &BTreeMap<i32, u64>) -> bool {
         && at_or_above(low, i32::MIN) == at_or_above(high, i32::MIN)
 }
 
+/// An input that ticks on time: a join of leaves `(interval_ms, phase_ms)`, aligned to the epoch
+/// without a phase, optionally under a refresh every `refresh_ms`. Independent of the
+/// recorder's model, it knows the phase of its unaligned leaves.
+#[derive(Debug, Clone)]
+struct OnTimeInput {
+    leaves: Vec<(u64, Option<u64>)>,
+    refresh_ms: Option<u64>,
+}
+
+impl OnTimeInput {
+    fn tree(&self) -> ResolvedTree {
+        let mut leaves: Vec<ResolvedTree> = self
+            .leaves
+            .iter()
+            .map(|(i, phase)| match phase {
+                None => aligned(*i),
+                Some(_) => unaligned(*i),
+            })
+            .collect();
+        let inner = match leaves.len() {
+            1 => leaves.pop().unwrap(),
+            _ => ResolvedTree::Min(leaves),
+        };
+        match self.refresh_ms {
+            None => inner,
+            Some(p) => refresh(every(p), inner),
+        }
+    }
+
+    /// The frontier at wall clock `w`. A leaf's tick at `t` leaves it at `t + 1`, and a refresh
+    /// advances to its next refresh once its input passed the previous one.
+    fn frontier(&self, w: u64) -> u64 {
+        let f = self
+            .leaves
+            .iter()
+            .map(|(i, phase)| {
+                let phase = phase.unwrap_or(0);
+                if w >= phase {
+                    phase + (w - phase) / i * i + 1
+                } else {
+                    1
+                }
+            })
+            .min()
+            .unwrap();
+        self.refresh_ms.map_or(f, |p| ceil_to(f, 0, p))
+    }
+
+    /// The timestamp `arrival` gets: the latest of the leaves' next ticks, rounded up to the
+    /// next refresh.
+    fn assigned(&self, arrival: u64) -> u64 {
+        let t = self
+            .leaves
+            .iter()
+            .map(|(i, phase)| ceil_to(arrival, phase.unwrap_or(0), *i))
+            .max()
+            .unwrap();
+        self.refresh_ms.map_or(t, |p| ceil_to(t, 0, p))
+    }
+
+    /// The first wall clock at which the frontier is past `timestamp`.
+    fn passes(&self, timestamp: u64) -> u64 {
+        let (mut lo, mut hi) = (0, timestamp.saturating_add(1 << 30));
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if self.frontier(mid) > timestamp {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo
+    }
+
+    /// The first wall clock at which the frontier reflects `arrival`.
+    fn shows(&self, arrival: u64) -> u64 {
+        self.passes(self.assigned(arrival))
+    }
+
+    /// The frontier history up to `end`, each advance observed `delay` ms after it, held in
+    /// `stall` until its end.
+    fn history(&self, end: u64, delay: u64, stall: Option<(u64, u64)>) -> History {
+        let mut ticks = Vec::new();
+        for (i, phase) in &self.leaves {
+            let mut t = phase.unwrap_or(0);
+            while t <= end {
+                ticks.push(t);
+                t += i;
+            }
+        }
+        ticks.sort();
+        ticks.dedup();
+        let mut history = Vec::new();
+        for t in ticks {
+            let mut observed = t + delay;
+            if let Some((from, to)) = stall
+                && (from..to).contains(&observed)
+            {
+                observed = to + delay;
+            }
+            push_advance(&mut history, observed, self.frontier(t));
+        }
+        history
+    }
+}
+
+/// The skew of `arrival` with every input on time, from the last input showing it until every
+/// input passes `timestamp`, the timestamp the object needs.
+fn on_time_cap(inputs: &[OnTimeInput], arrival: u64, timestamp: u64) -> u64 {
+    let passed = inputs.iter().map(|i| i.passes(timestamp)).max().unwrap();
+    let shown = inputs.iter().map(|i| i.shows(arrival)).max().unwrap();
+    passed.saturating_sub(shown)
+}
+
 /// Checks that `rows` have, per period of length `period_ms`, the same periods and counts as
 /// the `latency` of `truths`, and never more mass at or above any bucket.
 fn never_exceeds(
@@ -2535,7 +2681,12 @@ fn split_single_input_records_no_skew() {
 #[cfg_attr(miri, ignore)] // too slow
 fn split_never_exceeds_per_arrival_oracle() {
     const END: u64 = 2_000;
-    let leaf = select(vec![1u64, 2, 3, 5, 7, 11, 13, 20]);
+    // A leaf ticks at multiples of its interval, or, if unaligned, at a random phase.
+    let leaf = (
+        select(vec![1u64, 2, 3, 5, 7, 11, 13, 20]),
+        proptest::option::of(0u64..1000),
+    )
+        .prop_map(|(interval, phase)| (interval, phase.map(|p| p % interval)));
     // Leads above about 550 ms with leaves of a few ms defer more observations than the
     // recorder keeps, which makes it merge them.
     let lead = select(vec![0u64, 100, 400, 600, 900, 1500]);
@@ -2560,56 +2711,25 @@ fn split_never_exceeds_per_arrival_oracle() {
             state % (max_delay + 1)
         };
         let cfg = RecorderConfig { period_ms: 500, ..config(4) };
-        let trees: Vec<ResolvedTree> = specs
+        let models: Vec<OnTimeInput> = specs
             .iter()
-            .map(|(leaves, refresh_ms, _, _)| {
-                let inner = match leaves.as_slice() {
-                    [one] => aligned(*one),
-                    _ => ResolvedTree::Min(leaves.iter().map(|i| aligned(*i)).collect()),
-                };
-                match refresh_ms {
-                    None => inner,
-                    Some(p) => refresh(every(*p), inner),
-                }
+            .map(|(leaves, refresh_ms, _, _)| OnTimeInput {
+                leaves: leaves.clone(),
+                refresh_ms: *refresh_ms,
             })
             .collect();
+        let trees: Vec<ResolvedTree> = models.iter().map(OnTimeInput::tree).collect();
         let tree = ResolvedTree::Min(trees.clone());
-        // The frontier of input `k` at wall clock `t` when it is on time. A refresh advances
-        // to its next refresh once its input passed the previous one.
-        let on_time = |k: usize, t: u64| -> u64 {
-            let (leaves, refresh_ms, _, _) = &specs[k];
-            let f = leaves.iter().map(|i| t / i * i + 1).min().unwrap();
-            refresh_ms.map_or(f, |p| ceil_to(f, 0, p))
-        };
         // The true frontier, held during the input's stall.
         let frontier = |k: usize, t: u64| -> u64 {
             match specs[k].2 {
-                Some((from, len)) if (from..from + len).contains(&t) => on_time(k, from - 1),
-                _ => on_time(k, t),
+                Some((from, len)) if (from..from + len).contains(&t) => {
+                    models[k].frontier(from - 1)
+                }
+                _ => models[k].frontier(t),
             }
         };
-        // The timestamp input `k` assigns an arrival: the latest of its leaves' next ticks,
-        // rounded up to its next refresh.
-        let assigned = |k: usize, arrival: u64| -> u64 {
-            let (leaves, refresh_ms, _, _) = &specs[k];
-            let t = leaves.iter().map(|i| ceil_to(arrival, 0, *i)).max().unwrap();
-            refresh_ms.map_or(t, |p| ceil_to(t, 0, p))
-        };
-        // The first wall clock at which on-time input `k`'s frontier is past `timestamp`.
-        let passes = |k: usize, timestamp: u64| -> u64 {
-            (0..).find(|w| on_time(k, *w) > timestamp).unwrap()
-        };
-        // The skew with every input on time: from the last input showing the arrival, when its
-        // frontier passes the timestamp it assigns the arrival, until every input passes the
-        // timestamp the object needs.
-        let mut cap = |arrival: u64, timestamp: u64| -> u64 {
-            let passed = (0..specs.len()).map(|k| passes(k, timestamp)).max().unwrap();
-            let shown = (0..specs.len())
-                .map(|k| passes(k, assigned(k, arrival)))
-                .max()
-                .unwrap();
-            passed.saturating_sub(shown)
-        };
+        let mut cap = |arrival: u64, timestamp: u64| on_time_cap(&models, arrival, timestamp);
         let mut histories: Vec<History> = vec![Vec::new(); specs.len()];
         let mut history = Vec::new();
         for t in 0..END {
@@ -2819,27 +2939,64 @@ fn split_cap_measures_from_inner_join_showing() {
 #[cfg_attr(miri, ignore)] // too slow
 fn split_unaligned_input_adds_no_skew_cap() {
     // A table that ticks every second at a phase off the epoch grid, joined with a 300 ms
-    // source that stalls for a minute. The table's on-time wait is unknown, so only the
-    // source's grid can cause skew.
-    let table = unaligned(1000);
-    let source = aligned(300);
-    let join = ResolvedTree::Min(vec![table.clone(), source.clone()]);
+    // source that stalls for a minute. The table's phase is unknown to the recorder, so only
+    // the source's grid can cause skew.
+    let table = OnTimeInput {
+        leaves: vec![(1000, Some(437))],
+        refresh_ms: None,
+    };
+    let source = OnTimeInput {
+        leaves: vec![(300, None)],
+        refresh_ms: None,
+    };
+    let (t_table, t_source) = (table.tree(), source.tree());
+    let join = ResolvedTree::Min(vec![t_table.clone(), t_source.clone()]);
     let end = 400_000;
-    let mut h_table = Vec::new();
-    let mut tick = 437;
-    while tick <= end {
-        push_advance(&mut h_table, tick + 10, tick + 1);
-        tick += 1000;
-    }
-    let h_source = leaf_history(300, 10, end, Some((200_000, 260_000)), 0);
+    let h_table = table.history(end, 10, None);
+    let h_source = source.history(end, 10, Some((200_000, 260_000)));
     let history = derived_history(&[&h_table, &h_source], 20);
-    let inputs = [(&table, &h_table), (&source, &h_source)];
+    let inputs = [(&t_table, &h_table), (&t_source, &h_source)];
     let recorded = record_history(&join, &join, &history, &inputs, 120_000);
     let span = (120_000, recorded.high_water_ms);
-    let truths = Truth::all(&join, &join, &history, &inputs, span);
-    never_exceeds(&recorded.skew, &truths, config(4).period_ms, Truth::skew_ms).unwrap();
+    let models = [table, source];
+    let mut cap = |arrival: u64, timestamp: u64| on_time_cap(&models, arrival, timestamp);
+    let truths = Truth::all_with(&join, &join, &history, &inputs, &mut cap, span);
+    let period_ms = config(4).period_ms;
+    never_exceeds(&recorded.skew, &truths, period_ms, Truth::skew_ms).unwrap();
     let skew_max = bucket_counts(&recorded.skew).into_keys().last().unwrap();
     assert!(skew_max <= scheme(4).bucket(299), "{skew_max}");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_cap_bounds_nested_unaligned_leaf() {
+    // A join of `x`, a join of a 3 s table at an unknown phase with a 7 s source, with a 2 s
+    // source that stalls for 5 minutes. `x` shows an arrival only once its table passes the
+    // 7 s timestamp, which takes up to 3 s, so the cap must allow for the latest such tick.
+    let x = OnTimeInput {
+        leaves: vec![(3000, Some(1234)), (7000, None)],
+        refresh_ms: None,
+    };
+    let y = OnTimeInput {
+        leaves: vec![(2000, None)],
+        refresh_ms: None,
+    };
+    let (t_x, t_y) = (x.tree(), y.tree());
+    let outer = ResolvedTree::Min(vec![t_x.clone(), t_y.clone()]);
+    let end = 600_000;
+    let h_x = x.history(end, 10, None);
+    let h_y = y.history(end, 10, Some((130_000, 430_000)));
+    let history = derived_history(&[&h_x, &h_y], 20);
+    let inputs = [(&t_x, &h_x), (&t_y, &h_y)];
+    let recorded = record_history(&outer, &outer, &history, &inputs, 120_000);
+    let span = (120_000, recorded.high_water_ms);
+    let models = [x, y];
+    let mut cap = |arrival: u64, timestamp: u64| on_time_cap(&models, arrival, timestamp);
+    let truths = Truth::all_with(&outer, &outer, &history, &inputs, &mut cap, span);
+    let period_ms = config(4).period_ms;
+    never_exceeds(&recorded.skew, &truths, period_ms, Truth::skew_ms).unwrap();
+    never_exceeds(&recorded.local, &truths, period_ms, Truth::local_ms).unwrap();
+    assert!(truths.iter().map(Truth::raw_skew_ms).max().unwrap() >= 290_000);
 }
 
 #[mz_ore::test]

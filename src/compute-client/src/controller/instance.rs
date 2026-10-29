@@ -2127,27 +2127,34 @@ impl Instance {
             Some(collection) => collection.freshness.as_ref(),
         };
         let recorded_through = recording.and_then(|r| r.recorded_through());
-        // An input's tree is part of the collection's tree, so it resolves if that did.
-        let Some(inputs) = collection
+        let inputs: Vec<_> = collection
             .freshness_inputs
             .iter()
             .map(|(input, (tree, storage_log))| {
-                let tree = tree.resolve(&*self.ticker_lookup)?;
-                let log = self.freshness_input_log(
-                    *input,
-                    storage_log.as_ref(),
-                    replica_id,
-                    recorded_through,
-                );
-                Some((tree, log))
+                // NOTE: An input's tree is part of the collection's tree, but a ticker lookup
+                // that changed since the collection's tree resolved can fail it. The input then
+                // counts as unanswered, like one without a log, which makes it ready at the
+                // observation and leaves its tree unused, so any tree stands in.
+                match tree.resolve(&*self.ticker_lookup) {
+                    Some(tree) => {
+                        let log = self.freshness_input_log(
+                            *input,
+                            storage_log.as_ref(),
+                            replica_id,
+                            recorded_through,
+                        );
+                        (Some(tree), log)
+                    }
+                    None => (None, VisibilityLog::default()),
+                }
             })
-            .collect::<Option<Vec<_>>>()
-        else {
-            return;
-        };
+            .collect();
         let inputs: Vec<_> = inputs
             .iter()
-            .map(|(tree, log)| LocalInput { tree, log })
+            .map(|(input_tree, log)| LocalInput {
+                tree: input_tree.as_ref().unwrap_or(&tree),
+                log,
+            })
             .collect();
 
         let (recording, frontier) = match replica_id {
