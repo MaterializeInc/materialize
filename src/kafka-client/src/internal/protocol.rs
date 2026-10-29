@@ -36,8 +36,11 @@
 //! it is released this is a residual risk of connecting to untrusted
 //! endpoints.
 
+use std::collections::VecDeque;
+use std::io::IoSlice;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use kafka_protocol::messages::{ApiKey, RequestHeader, ResponseHeader};
+use kafka_protocol::messages::{ApiKey, ProduceRequest, RequestHeader, ResponseHeader};
 use kafka_protocol::protocol::{Decodable, Encodable, Request, StrBytes, VersionRange};
 
 use crate::types::RDKafkaErrorCode;
@@ -173,6 +176,199 @@ pub(crate) fn encode_request<R: Request>(
         .and_then(|()| request.encode(&mut buf, version))
         .map_err(|e| format!("failed to encode {api_key:?} v{version} request: {e:#}"))?;
     Ok(buf.freeze())
+}
+
+/// A request frame as segments written back to back, consumed as a [`Buf`]
+/// while it is written.
+#[derive(Debug)]
+pub(crate) struct Frame {
+    /// Never contains empty segments, so that `chunk` is not empty while
+    /// bytes remain.
+    segments: VecDeque<Bytes>,
+    remaining: usize,
+}
+
+impl Frame {
+    fn push(&mut self, segment: Bytes) {
+        if !segment.is_empty() {
+            self.remaining += segment.len();
+            self.segments.push_back(segment);
+        }
+    }
+}
+
+impl From<Bytes> for Frame {
+    fn from(frame: Bytes) -> Frame {
+        let mut f = Frame {
+            segments: VecDeque::with_capacity(1),
+            remaining: 0,
+        };
+        f.push(frame);
+        f
+    }
+}
+
+impl Buf for Frame {
+    fn remaining(&self) -> usize {
+        self.remaining
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.segments.front().map_or(&[], |s| s.as_ref())
+    }
+
+    fn advance(&mut self, mut cnt: usize) {
+        assert!(cnt <= self.remaining, "advance past the end of the frame");
+        self.remaining -= cnt;
+        while cnt > 0 {
+            let front = self.segments.front_mut().expect("checked remaining");
+            if cnt < front.len() {
+                front.advance(cnt);
+                return;
+            }
+            cnt -= front.len();
+            self.segments.pop_front();
+        }
+    }
+
+    fn chunks_vectored<'a>(&'a self, dst: &mut [IoSlice<'a>]) -> usize {
+        let n = dst.len().min(self.segments.len());
+        for (i, segment) in self.segments.iter().take(n).enumerate() {
+            dst[i] = IoSlice::new(segment);
+        }
+        n
+    }
+}
+
+/// Like [`encode_request`] for a ProduceRequest, but each partition's record
+/// batch stays in its own buffer, a segment of the frame, instead of being
+/// copied into the frame.
+pub(crate) fn encode_produce_request(
+    request: &ProduceRequest,
+    version: i16,
+    correlation_id: i32,
+    client_id: &str,
+) -> Result<Frame, String> {
+    let tagged = !request.unknown_tagged_fields.is_empty()
+        || request.topic_data.iter().any(|t| {
+            !t.unknown_tagged_fields.is_empty()
+                || t.partition_data
+                    .iter()
+                    .any(|p| !p.unknown_tagged_fields.is_empty())
+        });
+    // The encoding below covers v3 (which added the transactional id) to
+    // v12 (the last that names topics), without tagged fields.
+    if !(3..=12).contains(&version) || tagged {
+        return encode_request(request, version, correlation_id, client_id).map(Frame::from);
+    }
+    let flexible = version >= 9;
+    let header_version = ApiKey::Produce.request_header_version(version);
+    let header = RequestHeader::default()
+        .with_request_api_key(ProduceRequest::KEY)
+        .with_request_api_version(version)
+        .with_correlation_id(correlation_id)
+        .with_client_id(Some(StrBytes::from_string(client_id.to_string())));
+    let size = header
+        .compute_size(header_version)
+        .and_then(|h| Ok(h + request.compute_size(version)?))
+        .map_err(|e| format!("failed to encode Produce v{version} request: {e:#}"))?;
+    let len = i32::try_from(size).map_err(|_| "Produce request too large".to_string())?;
+    let partitions: usize = request
+        .topic_data
+        .iter()
+        .map(|t| t.partition_data.len())
+        .sum();
+    let names: usize = request.topic_data.iter().map(|t| t.name.0.len()).sum();
+    let mut buf = BytesMut::with_capacity(64 + client_id.len() + names + 16 * partitions);
+    let mut frame = Frame {
+        segments: VecDeque::with_capacity(2 * partitions + 1),
+        remaining: 0,
+    };
+    buf.put_i32(len);
+    header
+        .encode(&mut buf, header_version)
+        .map_err(|e| format!("failed to encode Produce v{version} request: {e:#}"))?;
+    put_string(
+        &mut buf,
+        flexible,
+        request.transactional_id.as_ref().map(|id| id.0.as_str()),
+    )?;
+    buf.put_i16(request.acks);
+    buf.put_i32(request.timeout_ms);
+    put_array_len(&mut buf, flexible, request.topic_data.len())?;
+    for topic in &request.topic_data {
+        put_string(&mut buf, flexible, Some(topic.name.0.as_str()))?;
+        put_array_len(&mut buf, flexible, topic.partition_data.len())?;
+        for partition in &topic.partition_data {
+            buf.put_i32(partition.index);
+            match &partition.records {
+                None if flexible => buf.put_u8(0),
+                None => buf.put_i32(-1),
+                Some(records) => {
+                    let n = i32::try_from(records.len())
+                        .map_err(|_| "record batch too large".to_string())?;
+                    if flexible {
+                        put_uvarint(&mut buf, n.unsigned_abs() + 1);
+                    } else {
+                        buf.put_i32(n);
+                    }
+                    frame.push(buf.split().freeze());
+                    frame.push(records.clone());
+                }
+            }
+            if flexible {
+                // No tagged fields.
+                buf.put_u8(0);
+            }
+        }
+        if flexible {
+            buf.put_u8(0);
+        }
+    }
+    if flexible {
+        buf.put_u8(0);
+    }
+    frame.push(buf.freeze());
+    Ok(frame)
+}
+
+/// A nullable string: an `INT16` length (-1 for null), or for flexible
+/// versions an unsigned varint of the length plus one (0 for null).
+fn put_string(buf: &mut BytesMut, flexible: bool, s: Option<&str>) -> Result<(), String> {
+    match s {
+        None if flexible => buf.put_u8(0),
+        None => buf.put_i16(-1),
+        Some(s) => {
+            if flexible {
+                let len = u32::try_from(s.len()).map_err(|_| "string too long".to_string())?;
+                put_uvarint(buf, len + 1);
+            } else {
+                buf.put_i16(i16::try_from(s.len()).map_err(|_| "string too long".to_string())?);
+            }
+            buf.put_slice(s.as_bytes());
+        }
+    }
+    Ok(())
+}
+
+/// An array length: an `INT32`, or for flexible versions an unsigned varint
+/// of the length plus one.
+fn put_array_len(buf: &mut BytesMut, flexible: bool, len: usize) -> Result<(), String> {
+    let len = i32::try_from(len).map_err(|_| "array too long".to_string())?;
+    if flexible {
+        put_uvarint(buf, len.unsigned_abs() + 1);
+    } else {
+        buf.put_i32(len);
+    }
+    Ok(())
+}
+
+fn put_uvarint(buf: &mut BytesMut, mut v: u32) {
+    while v >= 0x80 {
+        buf.put_u8(u8::try_from(v & 0x7f).expect("masked") | 0x80);
+        v >>= 7;
+    }
+    buf.put_u8(u8::try_from(v).expect("below 0x80"));
 }
 
 /// Reads the correlation id at the start of a response frame (after the
@@ -367,5 +563,86 @@ mod tests {
         assert!(is_retriable(RDKafkaErrorCode::BrokerTransportFailure));
         assert!(!is_retriable(RDKafkaErrorCode::TopicAuthorizationFailed));
         assert!(!is_retriable(RDKafkaErrorCode::ProducerFenced));
+    }
+
+    #[mz_ore::test]
+    fn segmented_produce_request_matches_kafka_protocol() {
+        use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
+        use kafka_protocol::messages::{TopicName, TransactionalId};
+
+        let records = |n: usize| Some(Bytes::from(vec![u8::try_from(n % 251).unwrap(); n]));
+        // 300 bytes need a two-byte varint length.
+        let topic = |name: &str, sizes: &[usize]| {
+            TopicProduceData::default()
+                .with_name(TopicName(StrBytes::from_string(name.to_string())))
+                .with_partition_data(
+                    sizes
+                        .iter()
+                        .enumerate()
+                        .map(|(i, n)| {
+                            PartitionProduceData::default()
+                                .with_index(i32::try_from(i).unwrap())
+                                .with_records(records(*n))
+                        })
+                        .collect(),
+                )
+        };
+        let requests = [
+            ProduceRequest::default()
+                .with_acks(-1)
+                .with_timeout_ms(30_000)
+                .with_topic_data(vec![topic("a", &[300, 1]), topic("bb", &[70_000])]),
+            ProduceRequest::default()
+                .with_transactional_id(Some(TransactionalId(StrBytes::from_static_str("txn"))))
+                .with_acks(1)
+                .with_timeout_ms(5)
+                .with_topic_data(vec![
+                    topic("t", &[5]),
+                    TopicProduceData::default()
+                        .with_name(TopicName(StrBytes::from_static_str("nulls")))
+                        .with_partition_data(vec![PartitionProduceData::default().with_index(3)]),
+                ]),
+            ProduceRequest::default(),
+        ];
+        for request in &requests {
+            for version in 3..=12 {
+                let expected = encode_request(request, version, 42, "client").unwrap();
+                let mut frame = encode_produce_request(request, version, 42, "client").unwrap();
+                assert_eq!(frame.remaining(), expected.len(), "v{version}");
+                let mut actual = Vec::new();
+                while frame.has_remaining() {
+                    let chunk = frame.chunk();
+                    assert!(!chunk.is_empty());
+                    actual.extend_from_slice(chunk);
+                    let n = chunk.len();
+                    frame.advance(n);
+                }
+                assert_eq!(actual, expected, "v{version}");
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn segmented_produce_request_keeps_batches_out_of_line() {
+        use kafka_protocol::messages::TopicName;
+        use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
+
+        let batch = Bytes::from(vec![7; 1000]);
+        let request = ProduceRequest::default().with_topic_data(vec![
+            TopicProduceData::default()
+                .with_name(TopicName(StrBytes::from_static_str("t")))
+                .with_partition_data(vec![
+                    PartitionProduceData::default().with_records(Some(batch.clone())),
+                ]),
+        ]);
+        let frame = encode_produce_request(&request, 9, 1, "c").unwrap();
+        let mut slices = [IoSlice::new(&[]); 8];
+        let n = frame.chunks_vectored(&mut slices);
+        assert_eq!(n, 3);
+        assert_eq!(slices[1].as_ptr(), batch.as_ptr());
+        assert_eq!(
+            slices.iter().map(|s| s.len()).sum::<usize>(),
+            frame.remaining()
+        );
     }
 }

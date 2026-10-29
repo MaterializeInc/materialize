@@ -25,8 +25,8 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, AtomicUsize
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
-use kafka_protocol::messages::ApiKey;
+use bytes::{Buf, Bytes};
+use kafka_protocol::messages::{ApiKey, ProduceRequest, ProduceResponse};
 use kafka_protocol::protocol::Request;
 use mz_ore::cast::CastFrom;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -445,7 +445,7 @@ struct Pending {
 
 struct Outgoing {
     correlation_id: i32,
-    frame: Bytes,
+    frame: protocol::Frame,
     /// Requests that expect no response (acks=0 produce) are complete once
     /// written.
     expects_response: bool,
@@ -578,41 +578,46 @@ impl Connection {
             .map_err(|e| NetError::new(RDKafkaErrorCode::BadMessage, e))
     }
 
-    /// Sends a request that expects no response (a Produce request with
-    /// `acks=0`) and waits until it is written.
-    pub(crate) async fn send_oneway<R, F>(
+    /// Queues a ProduceRequest for writing and returns a future of its
+    /// response.
+    ///
+    /// Unlike concurrent [`Connection::request`] calls, whose requests may be
+    /// written in any order, requests queued by consecutive calls are written
+    /// in the order of the calls. The request is sent whether or not the
+    /// returned future is polled. Its record batches are written from their
+    /// own buffers instead of being copied into the request frame.
+    pub(crate) async fn queue_produce<F>(
+        &self,
+        build: F,
+        opts: &RequestOptions,
+    ) -> Result<impl Future<Output = Result<ProduceResponse, NetError>> + Send + 'static, NetError>
+    where
+        F: FnOnce(i16) -> ProduceRequest,
+    {
+        let (version, reply) = self
+            .enqueue::<ProduceRequest, F>(build, opts, true, protocol::encode_produce_request)
+            .await?;
+        Ok(async move {
+            let frame = Self::reply(reply, true).await?.expect("response expected");
+            protocol::decode_response::<ProduceRequest>(frame, version)
+                .map_err(|e| NetError::new(RDKafkaErrorCode::BadMessage, e))
+        })
+    }
+
+    /// Sends a ProduceRequest with `acks=0`, which has no response, and
+    /// waits until it is written, like [`Connection::queue_produce`].
+    pub(crate) async fn send_produce_oneway<F>(
         &self,
         build: F,
         opts: &RequestOptions,
     ) -> Result<(), NetError>
     where
-        R: Request,
-        F: FnOnce(i16) -> R,
+        F: FnOnce(i16) -> ProduceRequest,
     {
-        self.send::<R, F>(build, opts, false).await.map(|_| ())
-    }
-
-    /// Queues a request for writing and returns a future of its response.
-    ///
-    /// Unlike concurrent [`Connection::request`] calls, whose requests may be
-    /// written in any order, requests queued by consecutive calls are written
-    /// in the order of the calls. The request is sent whether or not the
-    /// returned future is polled.
-    pub(crate) async fn queue_request<R, F>(
-        &self,
-        build: F,
-        opts: &RequestOptions,
-    ) -> Result<impl Future<Output = Result<R::Response, NetError>> + Send + 'static, NetError>
-    where
-        R: Request,
-        F: FnOnce(i16) -> R,
-    {
-        let (version, reply) = self.enqueue::<R, F>(build, opts, true).await?;
-        Ok(async move {
-            let frame = Self::reply(reply, true).await?.expect("response expected");
-            protocol::decode_response::<R>(frame, version)
-                .map_err(|e| NetError::new(RDKafkaErrorCode::BadMessage, e))
-        })
+        let (_, reply) = self
+            .enqueue::<ProduceRequest, F>(build, opts, false, protocol::encode_produce_request)
+            .await?;
+        Self::reply(reply, false).await.map(|_| ())
     }
 
     async fn send<R, F>(
@@ -625,7 +630,9 @@ impl Connection {
         R: Request,
         F: FnOnce(i16) -> R,
     {
-        let (version, reply) = self.enqueue::<R, F>(build, opts, expects_response).await?;
+        let (version, reply) = self
+            .enqueue::<R, F>(build, opts, expects_response, encode_frame::<R>)
+            .await?;
         Ok((version, Self::reply(reply, expects_response).await?))
     }
 
@@ -642,13 +649,15 @@ impl Connection {
         }
     }
 
-    /// Queues a request for writing once an in-flight slot is free. Returns
-    /// the negotiated version and the receiver of the reply.
+    /// Queues a request for writing once an in-flight slot is free, encoded
+    /// by `encode` from the request, version, correlation id and client id.
+    /// Returns the negotiated version and the receiver of the reply.
     async fn enqueue<R, F>(
         &self,
         build: F,
         opts: &RequestOptions,
         expects_response: bool,
+        encode: fn(&R, i16, i32, &str) -> Result<protocol::Frame, String>,
     ) -> Result<(i16, oneshot::Receiver<Result<Bytes, NetError>>), NetError>
     where
         R: Request,
@@ -684,7 +693,7 @@ impl Connection {
             .shared
             .next_correlation_id
             .fetch_add(1, Ordering::Relaxed);
-        let frame = protocol::encode_request(
+        let frame = encode(
             &request,
             version,
             correlation_id,
@@ -738,6 +747,15 @@ impl Connection {
         }
         Ok((version, reply_rx))
     }
+}
+
+fn encode_frame<R: Request>(
+    request: &R,
+    version: i16,
+    correlation_id: i32,
+    client_id: &str,
+) -> Result<protocol::Frame, String> {
+    protocol::encode_request(request, version, correlation_id, client_id).map(protocol::Frame::from)
 }
 
 impl Drop for Connection {
@@ -879,11 +897,12 @@ async fn write_loop(
                 }
             },
         };
-        let len = out.frame.len();
+        let mut frame = out.frame;
+        let len = frame.remaining();
         let res = tokio::select! {
             biased;
             _ = shared.closed.cancelled() => break,
-            res = write.write_all(&out.frame) => res,
+            res = write.write_all_buf(&mut frame) => res,
         };
         if let Err(e) = res {
             shared.counters.txerrs.fetch_add(1, Ordering::Relaxed);

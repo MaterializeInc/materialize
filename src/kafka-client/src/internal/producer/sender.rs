@@ -401,10 +401,10 @@ impl<C: ProducerContext> ProducerInner<C> {
                 .with_topic_data(topic_data)
         };
         if acks == 0 {
-            let result = conn.send_oneway::<ProduceRequest, _>(build, &opts).await;
+            let result = conn.send_produce_oneway(build, &opts).await;
             return Box::pin(async move { (sent, result.map(|()| None)) });
         }
-        match conn.queue_request::<ProduceRequest, _>(build, &opts).await {
+        match conn.queue_produce(build, &opts).await {
             Ok(response) => Box::pin(async move { (sent, response.await.map(Some)) }),
             Err(e) => Box::pin(async move { (sent, Err(e)) }),
         }

@@ -282,10 +282,11 @@ impl<D> PartitionState<D> {
         let open = match &mut self.open {
             Some(open) => open,
             None => {
-                // Start a quarter above the size of the previous batch, so
-                // that a steady stream does not grow the buffer. A batch
-                // exceeds `max_batch_bytes` by at most one record.
-                let capacity = (self.last_batch_size + self.last_batch_size / 4)
+                // Start at the size of the previous batch, which the pool
+                // rounds up to its next size class. A batch exceeds
+                // `max_batch_bytes` by at most one record.
+                let capacity = self
+                    .last_batch_size
                     .max(record.wire_size)
                     .max(MIN_BATCH_CAPACITY)
                     .min(cfg.max_batch_bytes + record.wire_size);
@@ -307,6 +308,14 @@ impl<D> PartitionState<D> {
         let BatchData::Open(builder) = &mut open.data else {
             unreachable!("the open batch is never encoded");
         };
+        if builder.spare_capacity() < record.wire_size {
+            // Grow through the pool: a reallocation would free the old
+            // buffer to the arena of the appending thread (see
+            // `BufferPool`). `wire_size` bounds the encoded record.
+            let len = builder.uncompressed_size();
+            let bigger = pool.take((2 * len).max(len + record.wire_size));
+            pool.put(builder.move_to(bigger));
+        }
         builder.append(record.timestamp, record.key, record.value, record.headers);
         let size = builder.uncompressed_size();
         open.opaques.push(opaque);
@@ -327,64 +336,125 @@ const MIN_BATCH_CAPACITY: usize = 1024;
 static NEXT_INCARNATION: AtomicU64 = AtomicU64::new(0);
 
 /// Buffers of batches that were sent or compressed, for new batches to
-/// reuse. Batches are large, short-lived allocations; recycling them saves
-/// the allocator's work and keeps it from retaining freed pages.
+/// reuse.
+///
+/// NOTE: As with `internal::pool`, this is about the allocator. Batch buffers
+/// are large and short-lived, and are allocated and freed on whichever thread
+/// appends or runs the sender task. Each jemalloc arena keeps the pages freed
+/// in it resident for its decay time, so freeing them would keep a multiple
+/// of the live batches resident. The pool keeps as much free capacity as was
+/// in use at once during the previous maintenance interval: it follows the
+/// demand and empties when the producer is idle.
 #[derive(Debug, Default)]
 pub(super) struct BufferPool {
-    bufs: Vec<Vec<u8>>,
-    bytes: usize,
-    /// Whether a buffer was taken since the last [`BufferPool::trim_idle`].
-    used: bool,
+    /// Free buffers by capacity.
+    free: BTreeMap<usize, Vec<Vec<u8>>>,
+    pooled: usize,
+    /// The capacity handed out by `take` and not returned. Approximate:
+    /// buffers can grow while out.
+    out: usize,
+    /// The most capacity out at once in this interval.
+    peak_out: usize,
+    /// The free capacity kept: the peak of the previous interval.
+    limit: usize,
 }
 
-/// The pool's limits. Smaller buffers are cheap to allocate.
-const POOL_MIN_BUFFER: usize = 64 << 10;
-const POOL_MAX_BUFFERS: usize = 64;
-const POOL_MAX_BYTES: usize = 32 << 20;
+/// Smaller buffers are not pooled: jemalloc caches small allocations per
+/// thread.
+const POOL_MIN_BUFFER: usize = 16 << 10;
+
+/// The capacity of the buffer for `len` bytes: the next of four steps per
+/// doubling, so that buffers fit later batches of similar size while wasting
+/// at most a fifth.
+fn capacity_class(len: usize) -> usize {
+    if len <= POOL_MIN_BUFFER {
+        return POOL_MIN_BUFFER;
+    }
+    let power = len.next_power_of_two() / 2;
+    let step = power / 4;
+    power + (len - power).div_ceil(step) * step
+}
 
 impl BufferPool {
-    /// A buffer for about `size` bytes: the smallest pooled one that fits,
-    /// unless that is much larger than needed, else a new one.
+    /// A buffer with room for at least `size` bytes: the smallest free one
+    /// that fits, else a new one.
     pub fn take(&mut self, size: usize) -> Vec<u8> {
         if size < POOL_MIN_BUFFER {
             return Vec::with_capacity(size);
         }
-        self.used = true;
-        let best = self
-            .bufs
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.capacity() >= size)
-            .min_by_key(|(_, b)| b.capacity())
-            .map(|(i, _)| i);
-        match best {
-            Some(i) if self.bufs[i].capacity() / 8 <= size => {
-                let buf = self.bufs.swap_remove(i);
-                self.bytes -= buf.capacity();
+        let class = capacity_class(size);
+        let found = self
+            .free
+            .range(class..)
+            .next()
+            .map(|(capacity, _)| *capacity);
+        let buf = match found {
+            Some(capacity) => {
+                let bufs = self.free.get_mut(&capacity).expect("found");
+                let buf = bufs.pop().expect("no empty entries");
+                if bufs.is_empty() {
+                    self.free.remove(&capacity);
+                }
+                self.pooled -= capacity;
                 buf
             }
-            _ => Vec::with_capacity(size),
-        }
+            None => Vec::with_capacity(class),
+        };
+        self.out += buf.capacity();
+        self.peak_out = self.peak_out.max(self.out);
+        buf
     }
 
+    /// Returns a buffer for reuse, or frees it if the pool is full. Smaller
+    /// free buffers make room for it, so that the pool adapts to growing
+    /// batches instead of freeing every larger buffer.
     pub fn put(&mut self, buf: Vec<u8>) {
         let capacity = buf.capacity();
-        if capacity >= POOL_MIN_BUFFER
-            && self.bufs.len() < POOL_MAX_BUFFERS
-            && self.bytes + capacity <= POOL_MAX_BYTES
-        {
-            self.bytes += capacity;
-            self.bufs.push(buf);
+        self.out = self.out.saturating_sub(capacity);
+        if capacity < POOL_MIN_BUFFER {
+            return;
         }
+        let limit = self.limit.max(self.peak_out);
+        while self.pooled + capacity > limit {
+            let Some(mut smallest) = self.free.first_entry() else {
+                break;
+            };
+            if *smallest.key() >= capacity {
+                break;
+            }
+            let evicted = smallest.get_mut().pop().expect("no empty entries");
+            if smallest.get().is_empty() {
+                smallest.remove();
+            }
+            self.pooled -= evicted.capacity();
+        }
+        if self.pooled + capacity > limit {
+            return;
+        }
+        self.pooled += capacity;
+        self.free.entry(capacity).or_default().push(buf);
     }
 
-    /// Frees the pooled buffers if none was taken since the previous call.
-    pub fn trim_idle(&mut self) {
-        if !self.used {
-            self.bufs.clear();
-            self.bytes = 0;
+    #[cfg(test)]
+    pub fn pooled(&self) -> usize {
+        self.pooled
+    }
+
+    /// Starts a maintenance interval, freeing the free buffers beyond the
+    /// most capacity that was in use at once in the previous one.
+    pub fn trim(&mut self) {
+        self.limit = self.peak_out;
+        self.peak_out = self.out;
+        while self.pooled > self.limit {
+            let Some(mut largest) = self.free.last_entry() else {
+                break;
+            };
+            let buf = largest.get_mut().pop().expect("no empty entries");
+            if largest.get().is_empty() {
+                largest.remove();
+            }
+            self.pooled -= buf.capacity();
         }
-        self.used = false;
     }
 }
 

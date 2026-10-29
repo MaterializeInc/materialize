@@ -233,6 +233,19 @@ impl BatchBuilder {
         self.record_count == 0
     }
 
+    /// The bytes that can be appended without reallocating the buffer.
+    pub(crate) fn spare_capacity(&self) -> usize {
+        self.buf.capacity() - self.buf.len()
+    }
+
+    /// Moves the batch into `buf`, whose contents are discarded, and returns
+    /// the previous buffer for reuse.
+    pub(crate) fn move_to(&mut self, mut buf: Vec<u8>) -> Vec<u8> {
+        buf.clear();
+        buf.extend_from_slice(&self.buf);
+        std::mem::replace(&mut self.buf, buf)
+    }
+
     /// Decodes the records appended so far, with offsets from 0. Copies the
     /// encoded records once.
     pub(crate) fn records(&self) -> RecordIter {

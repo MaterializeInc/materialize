@@ -213,17 +213,7 @@ pub(crate) fn compress(
                 }
             }
         }
-        Compression::Lz4 => {
-            let info = lz4_flex::frame::FrameInfo::new()
-                .block_size(lz4_flex::frame::BlockSize::Max64KB)
-                .block_mode(lz4_flex::frame::BlockMode::Independent);
-            let mut encoder = lz4_flex::frame::FrameEncoder::with_frame_info(info, out);
-            encoder
-                .write_all(input)
-                .map_err(|e| CodecError::compress(c, e))?;
-            encoder.finish().map_err(|e| CodecError::compress(c, e))?;
-            Ok(())
-        }
+        Compression::Lz4 => lz4_compress(input, out),
         Compression::Zstd => {
             let level = level.map_or(3, |l| l.min(22));
             let start = out.len();
@@ -423,6 +413,47 @@ impl<'a> Iterator for XerialChunks<'a> {
 const LZ4_FRAME_MAGIC: [u8; 4] = [0x04, 0x22, 0x4d, 0x18];
 /// The LZ4 block window: how far back a match in linked block mode may reach.
 const LZ4_WINDOW: usize = 64 * 1024;
+
+/// The frame descriptor this client writes: version 1 with independent
+/// blocks and no checksums (`FLG`), 64 KiB blocks (`BD`), as librdkafka.
+const LZ4_DESCRIPTOR: [u8; 2] = [0b0110_0000, 0b0100_0000];
+const LZ4_BLOCK_SIZE: usize = 64 * 1024;
+/// The high bit of a block size marks a block stored uncompressed.
+const LZ4_UNCOMPRESSED_BLOCK: u32 = 1 << 31;
+
+/// Writes `input` as one LZ4 frame to `out`, compressing each block straight
+/// into `out`.
+///
+/// NOTE: lz4_flex's `FrameEncoder` would allocate a 64 KiB input buffer, an
+/// output buffer of the same size and its hash table for every batch, on the
+/// sender's thread (see the producer's `BufferPool` for why that matters).
+fn lz4_compress(input: &[u8], out: &mut Vec<u8>) -> Result<(), CodecError> {
+    out.extend_from_slice(&LZ4_FRAME_MAGIC);
+    out.extend_from_slice(&LZ4_DESCRIPTOR);
+    out.push(lz4_header_checksum(&LZ4_DESCRIPTOR));
+    for block in input.chunks(LZ4_BLOCK_SIZE) {
+        let at = out.len();
+        let len = u32::try_from(block.len()).expect("blocks are 64 KiB");
+        out.resize(
+            at + 4 + lz4_flex::block::get_maximum_output_size(block.len()),
+            0,
+        );
+        let compressed = lz4_flex::block::compress_into(block, &mut out[at + 4..])
+            .map_err(|e| CodecError::compress(Compression::Lz4, e))?;
+        if compressed < block.len() {
+            let n = u32::try_from(compressed).expect("smaller than the block");
+            out[at..at + 4].copy_from_slice(&n.to_le_bytes());
+            out.truncate(at + 4 + compressed);
+        } else {
+            out.truncate(at);
+            out.extend_from_slice(&(len | LZ4_UNCOMPRESSED_BLOCK).to_le_bytes());
+            out.extend_from_slice(block);
+        }
+    }
+    // End mark.
+    out.extend_from_slice(&0u32.to_le_bytes());
+    Ok(())
+}
 
 /// Decodes one LZ4 frame (lz4 frame format v1.6) straight into the output
 /// buffer.
@@ -787,6 +818,44 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn lz4_frames_decode_with_lz4_flex() {
+        use lz4_flex::frame::{BlockMode, BlockSize, FrameDecoder, FrameEncoder, FrameInfo};
+        // Incompressible data is stored in uncompressed blocks.
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let random: Vec<u8> = (0..150_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x.to_le_bytes()[0]
+            })
+            .collect();
+        for input in [
+            Vec::new(),
+            b"hello".to_vec(),
+            sample(LZ4_BLOCK_SIZE),
+            sample(200_001),
+            random,
+        ] {
+            let frame = compressed(Compression::Lz4, &input);
+            let mut decoded = Vec::new();
+            FrameDecoder::new(&frame[..])
+                .read_to_end(&mut decoded)
+                .unwrap();
+            assert!(decoded == input, "{}", input.len());
+            assert!(decompress(Compression::Lz4, &frame, input.len()).unwrap() == input);
+            // The frame header is lz4_flex's for the same settings.
+            let info = FrameInfo::new()
+                .block_size(BlockSize::Max64KB)
+                .block_mode(BlockMode::Independent);
+            let mut enc = FrameEncoder::with_frame_info(info, Vec::new());
+            enc.write_all(&input).unwrap();
+            assert_eq!(frame[..7], enc.finish().unwrap()[..7]);
         }
     }
 

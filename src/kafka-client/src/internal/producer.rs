@@ -616,7 +616,7 @@ impl<C: ProducerContext> ProducerInner<C> {
         }
         if maintenance {
             self.expire_unrouted(&mut st, now, &mut fx);
-            st.buffers.trim_idle();
+            st.buffers.trim();
         }
         self.finish(st, fx);
     }

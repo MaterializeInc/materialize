@@ -76,7 +76,14 @@ impl Decoder for FrameCodec {
             return Ok(None);
         }
         src.advance(FRAME_LEN_SIZE);
-        Ok(Some(src.split_to(size).freeze()))
+        // A copy, so that `src` stays the only owner of its allocation and
+        // keeps reading into it. A frame split off it would pin the
+        // allocation until the response is handled, so that the next read
+        // would allocate a new read-ahead buffer, typically on another
+        // worker's jemalloc arena.
+        let frame = Bytes::copy_from_slice(&src[..size]);
+        src.advance(size);
+        Ok(Some(frame))
     }
 
     fn decode_eof(&mut self, src: &mut BytesMut) -> Result<Option<Bytes>, FrameError> {

@@ -649,6 +649,41 @@ fn topic_missing_from_metadata_becomes_unknown() {
 }
 
 #[mz_ore::test]
+fn buffer_pool_follows_demand() {
+    use super::state::BufferPool;
+    let mut pool = BufferPool::default();
+    // Buffers come in size classes, four per doubling.
+    let a = pool.take(100_000);
+    assert_eq!(a.capacity(), 112 << 10);
+    let b = pool.take(200_000);
+    assert_eq!(b.capacity(), 224 << 10);
+    pool.put(a);
+    pool.put(b);
+    assert_eq!(pool.pooled(), 336 << 10);
+    // The smallest free buffer that fits is reused.
+    let c = pool.take(50_000);
+    assert_eq!(c.capacity(), 112 << 10);
+    pool.put(c);
+    // Small buffers are not pooled.
+    let small = pool.take(1000);
+    pool.put(small);
+    assert_eq!(pool.pooled(), 336 << 10);
+    // Beyond what was in use at once, a returned buffer evicts smaller free
+    // ones, or is freed if none is smaller.
+    let d = pool.take(400_000);
+    assert_eq!(d.capacity(), 448 << 10);
+    assert_eq!(pool.pooled(), 336 << 10);
+    pool.put(d);
+    assert_eq!(pool.pooled(), 448 << 10);
+    // An interval keeps what the previous one used at once; an idle one
+    // frees everything.
+    pool.trim();
+    assert_eq!(pool.pooled(), 448 << 10);
+    pool.trim();
+    assert_eq!(pool.pooled(), 0);
+}
+
+#[mz_ore::test]
 fn sequence_order_wraps_at_i32_max() {
     use super::sender::seq_before;
     assert!(seq_before(0, 1));
