@@ -12,6 +12,7 @@ import {
   parseAutoScaling,
   replicaStatus,
   resetAutoScalingStatement,
+  resizeNote,
   setAutoScalingStatement,
 } from "./clusterConfigurationModel";
 
@@ -131,5 +132,30 @@ describe("formatLinger", () => {
   it("reads a zero linger in seconds", () => {
     expect(formatLinger(0)).toBe("0s");
     expect(formatLinger(1_500)).toBe("1.5s");
+  });
+});
+
+describe("resizeNote", () => {
+  const CLUSTER = { size: "100cc", replicationFactor: 1 };
+
+  it("names the target size, and the target replication factor when it changes too", () => {
+    expect(resizeNote(CLUSTER, { size: "800cc", replicationFactor: 1 })).toBe(
+      "A resize to 800cc is in progress. Size shows the current size until it finishes.",
+    );
+    expect(resizeNote(CLUSTER, { size: "800cc", replicationFactor: 2 })).toBe(
+      "A resize to 800cc with replication factor 2 is in progress. Size and replication factor show the current values until it finishes.",
+    );
+    expect(resizeNote(CLUSTER, { size: "100cc", replicationFactor: 2 })).toBe(
+      "A change to replication factor 2 is in progress. Replication factor shows the current factor until it finishes.",
+    );
+  });
+
+  it("says nothing when the size and replication factor stay", () => {
+    expect(
+      resizeNote(CLUSTER, { size: "100cc", replicationFactor: 1 }),
+    ).toBeUndefined();
+    expect(
+      resizeNote(CLUSTER, { size: null, replicationFactor: null }),
+    ).toBeUndefined();
   });
 });

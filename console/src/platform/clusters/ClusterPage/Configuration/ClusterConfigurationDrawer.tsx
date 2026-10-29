@@ -63,6 +63,7 @@ import {
   parseAutoScaling,
   replicaStatus,
   resetAutoScalingStatement,
+  resizeNote,
   setAutoScalingStatement,
 } from "./clusterConfigurationModel";
 
@@ -221,6 +222,9 @@ const OverviewPanel = ({
   const createdAt = configuration?.creationTimes.find(
     ({ id, objectType }) => objectType === "cluster" && id === cluster.id,
   )?.occurredAt;
+  const resize =
+    configuration?.resizeTarget &&
+    resizeNote(cluster, configuration.resizeTarget);
   return (
     <VStack spacing={6} alignItems="stretch">
       <PanelHeader
@@ -235,6 +239,7 @@ const OverviewPanel = ({
           )
         }
       />
+      {resize && <Alert variant="info" message={resize} />}
       <Grid templateColumns="repeat(3, minmax(0, 1fr))" gap={5}>
         <Detail label="Name">{cluster.name}</Detail>
         <Detail label="Size">{cluster.size ?? "-"}</Detail>

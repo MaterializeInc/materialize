@@ -14,7 +14,10 @@ import {
 } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
 
-import { buildClusterAutoScalingQuery } from "./clusterConfiguration";
+import {
+  buildClusterAutoScalingQuery,
+  buildClusterResizeTargetQuery,
+} from "./clusterConfiguration";
 import { buildObjectCreationTimesQuery } from "./objectCreationTimes";
 
 async function clusterIdByName(name: string) {
@@ -81,5 +84,25 @@ describe("cluster configuration queries", () => {
       lingerMs: undefined,
     });
     expect(await policy("steady")).toBeNull();
+  });
+
+  it("reads no resize target once a resize settles, or for a cluster never resized", async () => {
+    await testdrive(`
+      > CREATE CLUSTER settled (SIZE 'scale=1,workers=1');
+      > CREATE CLUSTER unresized (SIZE 'scale=1,workers=1');
+      > ALTER CLUSTER settled SET (SIZE 'scale=1,workers=2');
+    `);
+    await testdrive(
+      `> SELECT r.status FROM mz_internal.mz_cluster_reconfigurations r JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'settled'
+      finalized`,
+      { noReset: true, timeoutSeconds: 30 },
+    );
+
+    for (const name of ["settled", "unresized"]) {
+      const { rows } = await executeSqlHttp(
+        buildClusterResizeTargetQuery(await clusterIdByName(name)).compile(),
+      );
+      expect(rows).toEqual([]);
+    }
   });
 });

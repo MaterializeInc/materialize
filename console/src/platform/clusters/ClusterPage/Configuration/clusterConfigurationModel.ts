@@ -132,3 +132,33 @@ export const setAutoScalingStatement = (
 /** Removes a cluster's autoscaling strategy. */
 export const resetAutoScalingStatement = (clusterName: string) =>
   `ALTER CLUSTER ${quoteIdentifier(clusterName)} RESET (AUTO SCALING STRATEGY);`;
+
+/**
+ * Says what an in-progress resize changes about the size and replication
+ * factor, or undefined when it changes neither. Until it finishes,
+ * `mz_clusters` keeps the current values.
+ */
+export function resizeNote(
+  cluster: Pick<Cluster, "size" | "replicationFactor">,
+  target: { size: string | null; replicationFactor: number | null },
+) {
+  const size =
+    target.size !== null && target.size !== cluster.size
+      ? target.size
+      : undefined;
+  const factor =
+    target.replicationFactor !== null &&
+    target.replicationFactor !== cluster.replicationFactor
+      ? target.replicationFactor
+      : undefined;
+  if (size !== undefined && factor !== undefined) {
+    return `A resize to ${size} with replication factor ${factor} is in progress. Size and replication factor show the current values until it finishes.`;
+  }
+  if (size !== undefined) {
+    return `A resize to ${size} is in progress. Size shows the current size until it finishes.`;
+  }
+  if (factor !== undefined) {
+    return `A change to replication factor ${factor} is in progress. Replication factor shows the current factor until it finishes.`;
+  }
+  return undefined;
+}

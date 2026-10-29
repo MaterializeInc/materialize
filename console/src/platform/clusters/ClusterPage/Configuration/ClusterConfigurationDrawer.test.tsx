@@ -50,6 +50,7 @@ const environmentAt = (version: string) => ({
 });
 
 type AutoScalingRow = { strategy: unknown; state: unknown };
+type ResizeTargetRow = { size: string; replicationFactor: number };
 
 const CLUSTER_CREATED_MS = Date.UTC(2026, 6, 23, 22, 26);
 const REPLICA_CREATED_MS = Date.UTC(2026, 6, 24, 9, 0);
@@ -88,6 +89,7 @@ const SYSTEM_CLUSTER = buildClusterServerResponse(
 const configurationHandler = (
   cluster: Cluster,
   autoScaling: AutoScalingRow[] | null,
+  resizeTargets: ResizeTargetRow[],
   fails: boolean,
 ) => {
   // Cluster and replica ids come from separate counters, so each id here is
@@ -146,6 +148,16 @@ const configurationHandler = (
               columns: [
                 buildColumn({ name: "strategy", type_oid: MzDataType.jsonb }),
                 buildColumn({ name: "state", type_oid: MzDataType.jsonb }),
+              ],
+            }),
+            mapKyselyToTabular({
+              rows: resizeTargets,
+              columns: [
+                buildColumn({ name: "size" }),
+                buildColumn({
+                  name: "replicationFactor",
+                  type_oid: MzDataType.int4,
+                }),
               ],
             }),
           ],
@@ -216,6 +228,7 @@ const renderDrawer = async ({
   isOwner = true,
   version = "26.45.0",
   autoScaling = [],
+  resizeTargets = [],
   configurationFails = false,
   clusterSizesLoading = false,
 }: {
@@ -225,13 +238,19 @@ const renderDrawer = async ({
   version?: string;
   /** Null for an environment without autoscaling. */
   autoScaling?: AutoScalingRow[] | null;
+  resizeTargets?: ResizeTargetRow[];
   configurationFails?: boolean;
   clusterSizesLoading?: boolean;
 }) => {
   const environment = environmentAt(version);
   await setFakeEnvironment(getStore().set, "aws/us-east-1", environment);
   server.use(
-    configurationHandler(cluster, autoScaling, configurationFails),
+    configurationHandler(
+      cluster,
+      autoScaling,
+      resizeTargets,
+      configurationFails,
+    ),
     ownersHandler(isOwner),
     maxReplicasHandler(),
     clusterSizesHandler(clusterSizesLoading),
@@ -286,6 +305,19 @@ describe("ClusterConfigurationDrawer", () => {
     expect(within(drawer).getByRole("button", { name: "Edit" })).toBeVisible();
     expect(
       within(drawer).getByRole("button", { name: "Drop cluster" }),
+    ).toBeVisible();
+  });
+
+  it("notes an in-progress resize's target size", async () => {
+    await renderDrawer({
+      section: "overview",
+      resizeTargets: [{ size: "800cc", replicationFactor: 1 }],
+    });
+
+    expect(
+      await screen.findByText(
+        "A resize to 800cc is in progress. Size shows the current size until it finishes.",
+      ),
     ).toBeVisible();
   });
 

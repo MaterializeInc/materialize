@@ -382,6 +382,34 @@ export interface MzClusterDeploymentLineage {
   current_deployment_cluster_id: string;
 }
 
+// TODO: hand-added for mz >= 26.34. Keep through `yarn gen:types` until every environment has it.
+export interface MzClusterReconfigurations {
+  /**
+   * The ID of the cluster. Corresponds to `mz_clusters.id`.
+   */
+  cluster_id: string;
+  /**
+   * The lifecycle status of the reconfiguration: `in-progress` while the controller converges on the target, then a terminal `finalized`, `timed-out`, `cancelled`, or `resource-exhausted`. The record is retained after it settles, so the latest outcome stays inspectable until a later reconfiguration overwrites it.
+   */
+  status: string;
+  /**
+   * The deadline by which the reconfiguration must complete. After it passes, the `on_timeout` action applies.
+   */
+  deadline: string;
+  /**
+   * The action applied if `deadline` passes before the target hydrates: `commit` (cut over to the not-yet-hydrated target) or `rollback` (revert to the pre-reconfiguration shape).
+   */
+  on_timeout: string;
+  /**
+   * The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, `logging`, and `arrangement_compression`. The realized (current) shape is in `mz_clusters`.
+   */
+  target: Json;
+  /**
+   * The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff.
+   */
+  changes: Json;
+}
+
 export interface MzClusterReplicaFrontiers {
   /**
    * The ID of the source, sink, index, materialized view, or subscription.
@@ -4339,6 +4367,7 @@ export interface DB {
   mz_base_types: MzBaseTypes;
   mz_cluster_auto_scaling_strategies: MzClusterAutoScalingStrategies;
   mz_cluster_deployment_lineage: MzClusterDeploymentLineage;
+  mz_cluster_reconfigurations: MzClusterReconfigurations;
   mz_cluster_replica_frontiers: MzClusterReplicaFrontiers;
   mz_cluster_replica_history: MzClusterReplicaHistory;
   mz_cluster_replica_metrics: MzClusterReplicaMetrics;

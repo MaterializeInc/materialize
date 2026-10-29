@@ -8,12 +8,16 @@
 // by the Apache License, Version 2.0.
 
 import { QueryKey } from "@tanstack/react-query";
+import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 
 import { buildObjectCreationTimesQuery } from "./objectCreationTimes";
 
-/** First version with `mz_internal.mz_cluster_auto_scaling_strategies`. */
+/**
+ * First version with `mz_internal.mz_cluster_auto_scaling_strategies` and
+ * `mz_internal.mz_cluster_reconfigurations`.
+ */
 export const AUTO_SCALING_MIN_VERSION = "26.34.0";
 
 /** A cluster's autoscaling strategy and any in-flight burst, as JSON. */
@@ -22,6 +26,23 @@ export function buildClusterAutoScalingQuery(clusterId: string) {
     .selectFrom("mz_cluster_auto_scaling_strategies")
     .select(["strategy", "state"])
     .where("cluster_id", "=", clusterId);
+}
+
+/**
+ * The size and replication factor an in-progress resize of the cluster is
+ * heading to.
+ */
+export function buildClusterResizeTargetQuery(clusterId: string) {
+  return queryBuilder
+    .selectFrom("mz_cluster_reconfigurations")
+    .select([
+      sql<string | null>`target->>'size'`.as("size"),
+      sql<number | null>`(target->>'replication_factor')::int4`.as(
+        "replicationFactor",
+      ),
+    ])
+    .where("cluster_id", "=", clusterId)
+    .where("status", "=", "in-progress");
 }
 
 /** The configuration the cluster list doesn't carry, read in one request. */
@@ -33,7 +54,10 @@ export async function fetchClusterConfiguration({
   params: {
     clusterId: string;
     replicaIds: string[];
-    /** The autoscaling relation only exists from `AUTO_SCALING_MIN_VERSION`. */
+    /**
+     * The autoscaling and reconfiguration relations only exist from
+     * `AUTO_SCALING_MIN_VERSION`.
+     */
     includeAutoScaling: boolean;
   };
   queryKey: QueryKey;
@@ -52,19 +76,27 @@ export async function fetchClusterConfiguration({
       queryKey,
       requestOptions,
     });
-    return { creationTimes: creationTimesRes.rows, autoScaling: undefined };
+    return {
+      creationTimes: creationTimesRes.rows,
+      autoScaling: undefined,
+      resizeTarget: undefined,
+    };
   }
-  const [creationTimesRes, autoScalingRes] = await executeSqlV2({
-    queries: [
-      creationTimes,
-      buildClusterAutoScalingQuery(clusterId).compile(),
-    ] as const,
-    queryKey,
-    requestOptions,
-  });
+  const [creationTimesRes, autoScalingRes, resizeTargetRes] =
+    await executeSqlV2({
+      queries: [
+        creationTimes,
+        buildClusterAutoScalingQuery(clusterId).compile(),
+        buildClusterResizeTargetQuery(clusterId).compile(),
+      ] as const,
+      queryKey,
+      requestOptions,
+    });
   return {
     creationTimes: creationTimesRes.rows,
     // No row means no strategy and no burst.
     autoScaling: autoScalingRes.rows.at(0) ?? null,
+    // No row means no resize in progress.
+    resizeTarget: resizeTargetRes.rows.at(0),
   };
 }
