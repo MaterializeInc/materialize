@@ -39,8 +39,9 @@ pub enum Measure {
     /// an arrival to the arrival's visibility in the output.
     Local,
     /// The delay from visibility in the slowest direct input to every direct input's frontier
-    /// passing the timestamp the output needs. Recorded only for outputs with two or more
-    /// direct inputs.
+    /// passing the timestamp the output needs, at most the wait the inputs' tick and refresh
+    /// schedules cause when they are on time. Recorded only for outputs with two or more direct
+    /// inputs.
     Skew,
 }
 

@@ -3195,7 +3195,7 @@ pub static MZ_WALLCLOCK_GLOBAL_FRESHNESS_HISTOGRAM_RAW: LazyLock<BuiltinSource> 
             ),
             (
                 "measure",
-                "The measured quantity: `end_to_end` for the freshness of the object, `local` for the time the object takes to show an arrival once the frontiers of all its inputs passed the timestamp the arrival needs, and `skew` for the time from the arrival showing in the slowest input until the frontiers of all inputs passed that timestamp. `skew` is recorded only for objects with two or more inputs.",
+                "The measured quantity: `end_to_end` for the freshness of the object, `local` for the time the object takes to show an arrival once the frontiers of all its inputs passed the timestamp the arrival needs, and `skew` for the time from the arrival showing in the slowest input until the frontiers of all inputs passed that timestamp, at most the wait that the inputs' tick and refresh schedules cause when they are on time. `skew` is recorded only for objects with two or more inputs.",
             ),
             (
                 "buckets_per_octave",
@@ -3245,7 +3245,7 @@ pub static MZ_WALLCLOCK_GLOBAL_FRESHNESS_HISTOGRAM: LazyLock<BuiltinView> = Lazy
             ),
             (
                 "measure",
-                "The measured quantity: `end_to_end` for the freshness of the object, `local` for the time the object takes to show an arrival once the frontiers of all its inputs passed the timestamp the arrival needs, and `skew` for the time from the arrival showing in the slowest input until the frontiers of all inputs passed that timestamp. `skew` is recorded only for objects with two or more inputs.",
+                "The measured quantity: `end_to_end` for the freshness of the object, `local` for the time the object takes to show an arrival once the frontiers of all its inputs passed the timestamp the arrival needs, and `skew` for the time from the arrival showing in the slowest input until the frontiers of all inputs passed that timestamp, at most the wait that the inputs' tick and refresh schedules cause when they are on time. `skew` is recorded only for objects with two or more inputs.",
             ),
             (
                 "buckets_per_octave",
@@ -3289,7 +3289,7 @@ pub static MZ_WALLCLOCK_REPLICA_FRESHNESS_HISTOGRAM_RAW: LazyLock<BuiltinSource>
             ),
             (
                 "measure",
-                "The measured quantity: `end_to_end` for the freshness of the object, `local` for the time the object takes to show an arrival once the frontiers of all its inputs passed the timestamp the arrival needs, and `skew` for the time from the arrival showing in the slowest input until the frontiers of all inputs passed that timestamp. `skew` is recorded only for objects with two or more inputs.",
+                "The measured quantity: `end_to_end` for the freshness of the object, `local` for the time the object takes to show an arrival once the frontiers of all its inputs passed the timestamp the arrival needs, and `skew` for the time from the arrival showing in the slowest input until the frontiers of all inputs passed that timestamp, at most the wait that the inputs' tick and refresh schedules cause when they are on time. `skew` is recorded only for objects with two or more inputs.",
             ),
             (
                 "buckets_per_octave",
@@ -3344,7 +3344,7 @@ pub static MZ_WALLCLOCK_REPLICA_FRESHNESS_HISTOGRAM: LazyLock<BuiltinView> = Laz
         ),
         (
             "measure",
-            "The measured quantity: `end_to_end` for the freshness of the object, `local` for the time the object takes to show an arrival once the frontiers of all its inputs passed the timestamp the arrival needs, and `skew` for the time from the arrival showing in the slowest input until the frontiers of all inputs passed that timestamp. `skew` is recorded only for objects with two or more inputs.",
+            "The measured quantity: `end_to_end` for the freshness of the object, `local` for the time the object takes to show an arrival once the frontiers of all its inputs passed the timestamp the arrival needs, and `skew` for the time from the arrival showing in the slowest input until the frontiers of all inputs passed that timestamp, at most the wait that the inputs' tick and refresh schedules cause when they are on time. `skew` is recorded only for objects with two or more inputs.",
         ),
         (
             "buckets_per_octave",

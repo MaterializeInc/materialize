@@ -206,6 +206,44 @@ impl ResolvedTree {
         }
     }
 
+    /// How long after wall clock `timestamp` the frontier first passes `timestamp` when every
+    /// tick and refresh is on time.
+    ///
+    /// A leaf waits for its next tick at or after `timestamp`. An unaligned leaf is taken on
+    /// the epoch grid of its interval, like everywhere else, and a continuous one waits 0. A
+    /// minimum waits for its slowest input.
+    pub fn grid_wait(&self, timestamp: u64) -> u64 {
+        match self {
+            ResolvedTree::Leaf(ticker) => match ticker.grid_ms() {
+                Some(i) => timestamp.div_ceil(i).saturating_mul(i) - timestamp,
+                None => 0,
+            },
+            ResolvedTree::Min(inputs) => inputs
+                .iter()
+                .map(|i| i.grid_wait(timestamp))
+                .max()
+                .unwrap_or(0),
+            // The output frontier rounds the input frontier up to the next refresh, so it
+            // passes `timestamp` once the input passed the last refresh at or before it. Before
+            // the first refresh the output frontier is past `timestamp` already.
+            ResolvedTree::Refresh { schedule, input } => {
+                let Some(refresh) =
+                    schedule.round_down_timestamp_m1(Timestamp::from(timestamp.saturating_add(1)))
+                else {
+                    return 0;
+                };
+                // NOTE: `round_down_timestamp_m1` saturates at timestamp 0 when the previous
+                // refresh would be negative, so 0 only counts if it is an actual refresh.
+                if schedule.round_up_timestamp(refresh) != Some(refresh) {
+                    return 0;
+                }
+                let refresh = u64::from(refresh);
+                let passed = refresh.saturating_add(input.grid_wait(refresh));
+                passed.saturating_sub(timestamp)
+            }
+        }
+    }
+
     /// The input of a top-level refresh node, or the tree itself if it has none.
     pub fn below_refresh(&self) -> &ResolvedTree {
         match self {

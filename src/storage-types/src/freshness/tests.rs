@@ -174,6 +174,17 @@ fn arb_tree() -> impl Strategy<Value = ResolvedTree> {
 }
 
 #[mz_ore::test]
+fn grid_wait_matches_on_time_frontier() {
+    proptest!(|(tree in arb_tree(), timestamp in 0u64..400)| {
+        // Brute force: the first wall clock at which the on-time frontier is past `timestamp`.
+        let passed = (timestamp..)
+            .find(|w| tree.expected_upper(*w).is_some_and(|f| u64::from(f) > timestamp))
+            .unwrap();
+        prop_assert_eq!(tree.grid_wait(timestamp), passed - timestamp);
+    });
+}
+
+#[mz_ore::test]
 fn last_reflected_matches_oracle() {
     proptest!(|(tree in arb_tree(), frontier in 0u64..400)| {
         // Brute force: the largest arrival whose assigned timestamp is below the frontier.
@@ -1932,6 +1943,8 @@ struct Truth {
     advance_ms: u64,
     arrival_ready_ms: u64,
     timestamp_ready_ms: u64,
+    /// The wait for the needed timestamp that on-time inputs cause, the cap of skew.
+    grid_wait_ms: u64,
 }
 
 impl Truth {
@@ -1940,6 +1953,7 @@ impl Truth {
         needed: &ResolvedTree,
         history: &History,
         inputs: &[(&ResolvedTree, &History)],
+        grid_wait: &dyn Fn(u64) -> u64,
         arrival: u64,
     ) -> Self {
         let reflects = |tree: &ResolvedTree, f: u64| {
@@ -1971,19 +1985,39 @@ impl Truth {
             advance_ms,
             arrival_ready_ms,
             timestamp_ready_ms,
+            grid_wait_ms: grid_wait(timestamp),
         }
     }
 
-    /// The truths of the arrivals in `(from, to]`.
+    /// The truths of the arrivals in `(from, to]`, with the grid wait of `needed`.
     fn all(
         tree: &ResolvedTree,
         needed: &ResolvedTree,
         history: &History,
         inputs: &[(&ResolvedTree, &History)],
+        span: (u64, u64),
+    ) -> Vec<Self> {
+        Truth::all_with(
+            tree,
+            needed,
+            history,
+            inputs,
+            &|t| needed.grid_wait(t),
+            span,
+        )
+    }
+
+    /// The truths of the arrivals in `(from, to]`, with the grid wait `grid_wait`.
+    fn all_with(
+        tree: &ResolvedTree,
+        needed: &ResolvedTree,
+        history: &History,
+        inputs: &[(&ResolvedTree, &History)],
+        grid_wait: &dyn Fn(u64) -> u64,
         (from, to): (u64, u64),
     ) -> Vec<Self> {
         (from + 1..=to)
-            .map(|a| Truth::new(tree, needed, history, inputs, a))
+            .map(|a| Truth::new(tree, needed, history, inputs, grid_wait, a))
             .collect()
     }
 
@@ -1991,12 +2025,27 @@ impl Truth {
         self.advance_ms - self.window_start
     }
 
+    /// The rest of the end-to-end charge. Panics if skew and local delay exceed it.
     fn upstream_ms(&self) -> u64 {
+        let split = self.skew_ms() + self.local_ms();
+        self.end_to_end_ms()
+            .checked_sub(split)
+            .unwrap_or_else(|| panic!("skew and local exceed end to end: {self:?}"))
+    }
+
+    /// The time from the window start until the slowest input showed the arrival, a lower
+    /// bound of upstream.
+    fn arrival_upstream_ms(&self) -> u64 {
         self.arrival_ready_ms - self.window_start
     }
 
-    fn skew_ms(&self) -> u64 {
+    /// The wait for the inputs' frontiers after they all showed the arrival.
+    fn raw_skew_ms(&self) -> u64 {
         self.timestamp_ready_ms - self.arrival_ready_ms
+    }
+
+    fn skew_ms(&self) -> u64 {
+        self.raw_skew_ms().min(self.grid_wait_ms)
     }
 
     fn local_ms(&self) -> u64 {
@@ -2102,9 +2151,12 @@ fn split_join_charges_alignment_to_skew() {
         histogram(truths.iter().map(Truth::end_to_end_ms))
     );
     for truth in &truths {
+        // With every input on time the cap never binds, and upstream is the time until the
+        // slowest input showed the arrival.
+        assert_eq!(truth.raw_skew_ms(), truth.skew_ms(), "{truth:?}");
         assert_eq!(
-            truth.upstream_ms() + truth.skew_ms() + truth.local_ms(),
-            truth.end_to_end_ms(),
+            truth.upstream_ms(),
+            truth.arrival_upstream_ms(),
             "{truth:?}"
         );
     }
@@ -2129,15 +2181,16 @@ fn split_join_input_stall_is_upstream() {
         bucket_counts(&recorded.skew),
         histogram(truths.iter().map(Truth::skew_ms))
     );
-    // NOTE: An arrival that the 11 s input showed before its stall, but whose needed timestamp,
-    // rounded up on the 7 s grid, lies past that input's last tick before the stall, waits in
-    // skew for that input's frontier through the stall. Such arrivals lie within the largest
-    // gap between an arrival and its needed timestamp, here one window of the 7 s input.
-    let long_skew: u64 = bucket_counts(&recorded.skew)
-        .range(s.bucket(10_000) + 1..)
-        .map(|(_, c)| c)
-        .sum();
-    assert!(long_skew <= 7_000, "{long_skew}");
+    // An arrival that the 11 s input showed before its stall, but whose needed timestamp lies
+    // past that input's last tick before the stall, waits for that input's frontier through
+    // the stall. The cap keeps that wait in upstream.
+    assert!(truths.iter().map(Truth::raw_skew_ms).max().unwrap() >= 290_000);
+    for truth in &truths {
+        assert!(truth.skew_ms() <= truth.grid_wait_ms, "{truth:?}");
+        assert!(truth.grid_wait_ms <= 10_000, "{truth:?}");
+    }
+    let skew_max = bucket_counts(&recorded.skew).into_keys().last().unwrap();
+    assert!(skew_max <= s.bucket(10_000), "{skew_max}");
     // The arrivals during the stall wait for the input to show them, its own latency, and
     // little else.
     assert!(truths.iter().map(Truth::upstream_ms).max().unwrap() >= 290_000);
@@ -2317,16 +2370,26 @@ fn split_never_exceeds_per_arrival_oracle() {
             })
             .collect();
         let tree = ResolvedTree::Min(trees.clone());
-        // The true frontier of input `k` at wall clock `t`, held during its stall. A refresh
-        // advances to its next refresh once its input passed the previous one.
-        let frontier = |k: usize, t: u64| -> u64 {
-            let (leaves, refresh_ms, stall, _) = &specs[k];
-            let t = match stall {
-                Some((from, len)) if (*from..from + len).contains(&t) => from - 1,
-                _ => t,
-            };
+        // The frontier of input `k` at wall clock `t` when it is on time. A refresh advances
+        // to its next refresh once its input passed the previous one.
+        let on_time = |k: usize, t: u64| -> u64 {
+            let (leaves, refresh_ms, _, _) = &specs[k];
             let f = leaves.iter().map(|i| t / i * i + 1).min().unwrap();
             refresh_ms.map_or(f, |p| ceil_to(f, 0, p))
+        };
+        // The true frontier, held during the input's stall.
+        let frontier = |k: usize, t: u64| -> u64 {
+            match specs[k].2 {
+                Some((from, len)) if (from..from + len).contains(&t) => on_time(k, from - 1),
+                _ => on_time(k, t),
+            }
+        };
+        // The wait until every on-time input passes `timestamp`, by scanning the wall clock.
+        let grid_wait = |timestamp: u64| -> u64 {
+            (0..specs.len())
+                .map(|k| (0..).find(|w| on_time(k, timestamp + w) > timestamp).unwrap())
+                .max()
+                .unwrap()
         };
         let mut histories: Vec<History> = vec![Vec::new(); specs.len()];
         let mut history = Vec::new();
@@ -2369,12 +2432,15 @@ fn split_never_exceeds_per_arrival_oracle() {
         recorded.skew.extend(rows.skew);
 
         let inputs: Vec<_> = trees.iter().zip_eq(histories.iter()).collect();
-        let truths = Truth::all(&tree, &tree, &history, &inputs, (0, high_water_ms));
+        let truths =
+            Truth::all_with(&tree, &tree, &history, &inputs, &grid_wait, (0, high_water_ms));
         for truth in &truths {
-            let split = truth.upstream_ms() + truth.skew_ms() + truth.local_ms();
-            prop_assert!(split <= truth.end_to_end_ms(), "{truth:?}");
-            if truth.advance_ms == truth.observed_ms {
-                prop_assert_eq!(split, truth.end_to_end_ms(), "{:?}", truth);
+            // `upstream_ms` panics if skew and local exceed the end-to-end charge. Upstream
+            // takes the time until the slowest input showed the arrival, and any excess skew.
+            let upstream = truth.upstream_ms();
+            prop_assert!(truth.arrival_upstream_ms() <= upstream, "{truth:?}");
+            if truth.advance_ms == truth.observed_ms && truth.raw_skew_ms() == truth.skew_ms() {
+                prop_assert_eq!(truth.arrival_upstream_ms(), upstream, "{:?}", truth);
             }
         }
         prop_assert_eq!(
@@ -2438,4 +2504,45 @@ fn split_merges_held_back_observations() {
     let truths = Truth::all(&join, &join, &history, &inputs, (start_ms, high_water_ms));
     never_exceeds(&rows.local, &truths, cfg.period_ms, Truth::local_ms).unwrap();
     never_exceeds(&rows.skew, &truths, cfg.period_ms, Truth::skew_ms).unwrap();
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_refresh_join_input_stall_is_not_skew() {
+    // A join of a 1 s source with a view that refreshes every 10 minutes over another 1 s
+    // source and shows each refresh 2 s after it is due. The joined source stalls for 5 minutes
+    // around the refresh at 20 minutes.
+    const PERIOD: u64 = 600_000;
+    let end = 3 * PERIOD + 60_000;
+    let source = aligned(1000);
+    let view = refresh(every(PERIOD), aligned(1000));
+    let join = ResolvedTree::Min(vec![source.clone(), view.clone()]);
+    let stall = (2 * PERIOD - 150_000, 2 * PERIOD + 150_000);
+    let h_source = leaf_history(1000, 10, end, Some(stall), 0);
+    let mut h_view = Vec::new();
+    for k in 1..=end / PERIOD {
+        // After the refresh at `k * PERIOD`, the view's frontier is the next refresh.
+        push_advance(&mut h_view, k * PERIOD + 2000, (k + 1) * PERIOD);
+    }
+    let history = derived_history(&[&h_source, &h_view], 20);
+    let inputs = [(&source, &h_source), (&view, &h_view)];
+    let start_ms = PERIOD;
+    let recorded = record_history(&join, &join, &history, &inputs, start_ms);
+    let span = (start_ms, recorded.high_water_ms);
+    assert!(span.1 >= 2 * PERIOD, "{span:?}");
+    let truths = Truth::all(&join, &join, &history, &inputs, span);
+    let s = scheme(4);
+    // Every arrival needs a refresh time, which both inputs' grids reach without waiting.
+    assert!(truths.iter().all(|t| t.grid_wait_ms == 0));
+    // Without the cap, the period before the stall would wait out the stall in skew.
+    let waited = truths.iter().filter(|t| t.raw_skew_ms() >= 140_000).count();
+    assert!(waited >= 400_000, "{waited}");
+    assert_eq!(
+        bucket_counts(&recorded.skew),
+        BTreeMap::from([(s.bucket(1), span.1 - span.0)])
+    );
+    assert_eq!(
+        bucket_counts(&recorded.local),
+        BTreeMap::from([(s.bucket(20), span.1 - span.0)])
+    );
 }
