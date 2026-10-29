@@ -15,7 +15,7 @@ use mz_repr::Timestamp;
 use timely::progress::Antichain;
 
 use super::ResolvedTree;
-use super::histogram::{BucketScheme, add_span};
+use super::histogram::{BucketScheme, add_window_latencies};
 use super::period::{ClosedPeriod, PeriodBook};
 
 /// Parameters of one observation. They may change between observations.
@@ -138,8 +138,9 @@ pub(super) fn rows(closed: Vec<ClosedPeriod<PeriodHistogram>>) -> Vec<PeriodRow>
 
 /// Adds the arrivals in `(from, to]` to `counts`, where the ends may fall inside a window.
 ///
-/// The arrivals of a window carry the latency of the window start, wherever the window is cut.
-/// `advance_ms` must be at least `to`.
+/// The arrivals of a window carry the latency `advance_ms - s` from the window start `s`,
+/// wherever the window is cut. A latency of at most 1 ms, also a negative one, takes the bucket
+/// of 1 ms.
 pub(super) fn add_part(
     tree: &ResolvedTree,
     scheme: &BucketScheme,
@@ -155,9 +156,8 @@ pub(super) fn add_part(
     let mut add_window_part = |window_start: u64, lo: u64, hi: u64| {
         let n = hi / interval_ms - lo / interval_ms;
         if n > 0 {
-            *counts
-                .entry(scheme.bucket(advance_ms - window_start))
-                .or_default() += n;
+            let latency_ms = advance_ms.saturating_sub(window_start);
+            *counts.entry(scheme.bucket(latency_ms)).or_default() += n;
         }
     };
     // The leading part of the window that contains `from`, if `from` is not a boundary.
@@ -173,9 +173,10 @@ pub(super) fn add_part(
     if inner_to < to {
         add_window_part(last_start, inner_to, to);
     }
-    // Whole windows in between start and end at boundaries, as `add_span` requires.
-    add_span(
-        tree,
+    // Whole windows in between start and end at boundaries, as `add_window_latencies`
+    // requires.
+    add_window_latencies(
+        &|z| tree.next_boundary(z),
         scheme,
         interval_ms,
         inner_from,

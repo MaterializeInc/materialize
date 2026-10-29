@@ -1959,12 +1959,14 @@ impl Truth {
                 timestamp_ready_ms.max(h.get(passed).map_or(observed_ms, |(o, _)| *o));
         }
         // An input observed after the object showed the arrival cannot have delayed it beyond
-        // that observation.
-        let arrival_ready_ms = arrival_ready_ms.min(observed_ms);
+        // that observation, and one that showed it before its window started was ready no
+        // earlier than the window start.
+        let window_start = tree.prev_boundary(arrival - 1);
+        let arrival_ready_ms = arrival_ready_ms.min(observed_ms).max(window_start);
         let timestamp_ready_ms = timestamp_ready_ms.min(observed_ms).max(arrival_ready_ms);
         Truth {
             arrival,
-            window_start: tree.prev_boundary(arrival - 1),
+            window_start,
             observed_ms,
             advance_ms,
             arrival_ready_ms,
@@ -1990,12 +1992,11 @@ impl Truth {
     }
 
     fn upstream_ms(&self) -> u64 {
-        self.arrival_ready_ms.saturating_sub(self.window_start)
+        self.arrival_ready_ms - self.window_start
     }
 
     fn skew_ms(&self) -> u64 {
-        self.timestamp_ready_ms
-            .saturating_sub(self.arrival_ready_ms)
+        self.timestamp_ready_ms - self.arrival_ready_ms
     }
 
     fn local_ms(&self) -> u64 {
@@ -2023,6 +2024,42 @@ fn dominated_by(low: &BTreeMap<i32, u64>, high: &BTreeMap<i32, u64>) -> bool {
         .chain([&i32::MIN])
         .all(|b| at_or_above(low, *b) <= at_or_above(high, *b))
         && at_or_above(low, i32::MIN) == at_or_above(high, i32::MIN)
+}
+
+/// Checks that `rows` have, per period of length `period_ms`, the same periods and counts as
+/// the `latency` of `truths`, and never more mass at or above any bucket.
+fn never_exceeds(
+    rows: &[PeriodRow],
+    truths: &[Truth],
+    period_ms: u64,
+    latency: fn(&Truth) -> u64,
+) -> Result<(), String> {
+    let mut recorded: BTreeMap<u64, BTreeMap<i32, u64>> = BTreeMap::new();
+    for row in rows {
+        *recorded
+            .entry(row.period_start_ms)
+            .or_default()
+            .entry(row.bucket)
+            .or_default() += row.count;
+    }
+    let mut latencies: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    for truth in truths {
+        let start = (truth.arrival - 1) / period_ms * period_ms;
+        latencies.entry(start).or_default().push(latency(truth));
+    }
+    let expected: BTreeMap<u64, BTreeMap<i32, u64>> = latencies
+        .into_iter()
+        .map(|(p, l)| (p, histogram(l.into_iter())))
+        .collect();
+    if recorded.keys().ne(expected.keys()) {
+        return Err(format!("periods {recorded:?} != {expected:?}"));
+    }
+    for (p, counts) in &recorded {
+        if !dominated_by(counts, &expected[p]) {
+            return Err(format!("{p}: {counts:?} > {:?}", expected[p]));
+        }
+    }
+    Ok(())
 }
 
 /// A join of a 7 s and an 11 s source, each observed 10 ms after its tick, which the join shows
@@ -2201,10 +2238,18 @@ fn split_frontier_ahead_of_wall_clock_is_not_local() {
     let index = derived_history(&[&source], 5);
     let inputs = [(&leaf, &source)];
     let recorded = record_history(&leaf, &leaf, &index, &inputs, 120_000);
-    assert_eq!(
-        bucket_counts(&recorded.local),
-        BTreeMap::from([(scheme(4).bucket(5), recorded.high_water_ms - 120_000)])
+    let truths = Truth::all(
+        &leaf,
+        &leaf,
+        &index,
+        &inputs,
+        (120_000, recorded.high_water_ms),
     );
+    // The index shows each arrival 5 ms after its source, which is before the arrival's window
+    // starts, so it adds nothing to the end-to-end charge.
+    let local = bucket_counts(&recorded.local);
+    assert_eq!(local, histogram(truths.iter().map(Truth::local_ms)));
+    assert!(local.keys().all(|b| *b <= scheme(4).bucket(5)), "{local:?}");
     assert_eq!(recorded.skew, vec![]);
 }
 
@@ -2233,16 +2278,19 @@ fn split_single_input_records_no_skew() {
 #[cfg_attr(miri, ignore)] // too slow
 fn split_never_exceeds_per_arrival_oracle() {
     const END: u64 = 2_000;
-    let leaf = select(vec![3u64, 5, 7, 11, 13, 20]);
+    let leaf = select(vec![1u64, 2, 3, 5, 7, 11, 13, 20]);
+    // Leads above about 550 ms with leaves of a few ms defer more observations than the
+    // recorder keeps, which makes it merge them.
+    let lead = select(vec![0u64, 100, 400, 600, 900, 1500]);
     let input = (
         proptest::collection::vec(leaf, 1..=2),
         proptest::option::of(select(vec![20u64, 30, 50])),
         proptest::option::of((1u64..END, 0u64..300)),
-        0u64..800,
+        lead.clone(),
     );
     let strategy = (
         proptest::collection::vec(input, 1..=3),
-        0u64..800,
+        lead,
         any::<u64>(),
         0u64..30,
     );
@@ -2323,64 +2371,71 @@ fn split_never_exceeds_per_arrival_oracle() {
         let inputs: Vec<_> = trees.iter().zip_eq(histories.iter()).collect();
         let truths = Truth::all(&tree, &tree, &history, &inputs, (0, high_water_ms));
         for truth in &truths {
-            // The split covers the end-to-end charge unless an input showed the arrival before
-            // its window started, which a frontier ahead of the wall clock allows.
-            if truth.arrival_ready_ms >= truth.window_start {
-                let split = truth.upstream_ms() + truth.skew_ms() + truth.local_ms();
-                prop_assert!(split <= truth.end_to_end_ms(), "{truth:?}");
-                if truth.advance_ms == truth.observed_ms {
-                    prop_assert_eq!(split, truth.end_to_end_ms(), "{:?}", truth);
-                }
+            let split = truth.upstream_ms() + truth.skew_ms() + truth.local_ms();
+            prop_assert!(split <= truth.end_to_end_ms(), "{truth:?}");
+            if truth.advance_ms == truth.observed_ms {
+                prop_assert_eq!(split, truth.end_to_end_ms(), "{:?}", truth);
             }
         }
-        let per_period = |rows: &[PeriodRow]| {
-            let mut periods: BTreeMap<u64, BTreeMap<i32, u64>> = BTreeMap::new();
-            for row in rows {
-                *periods
-                    .entry(row.period_start_ms)
-                    .or_default()
-                    .entry(row.bucket)
-                    .or_default() += row.count;
-            }
-            periods
-        };
-        let truth_per_period = |latency: fn(&Truth) -> u64| {
-            let mut periods: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-            for truth in &truths {
-                let start = (truth.arrival - 1) / cfg.period_ms * cfg.period_ms;
-                periods.entry(start).or_default().push(latency(truth));
-            }
-            periods
-                .into_iter()
-                .map(|(p, latencies)| (p, histogram(latencies.into_iter())))
-                .collect::<BTreeMap<_, _>>()
-        };
         prop_assert_eq!(
             period_totals(&recorded.local),
             period_totals(&recorded.end_to_end)
         );
-        let local_truth = truth_per_period(Truth::local_ms);
-        let local_recorded = per_period(&recorded.local);
-        prop_assert_eq!(
-            local_truth.keys().collect::<Vec<_>>(),
-            local_recorded.keys().collect::<Vec<_>>()
-        );
-        for (p, counts) in &local_recorded {
-            let truth = &local_truth[p];
-            prop_assert!(dominated_by(counts, truth), "local {p}: {counts:?} > {truth:?}");
+        if let Err(e) = never_exceeds(&recorded.local, &truths, cfg.period_ms, Truth::local_ms) {
+            return Err(TestCaseError::fail(format!("local {e}")));
         }
         if specs.len() >= 2 {
             prop_assert_eq!(
                 period_totals(&recorded.skew),
                 period_totals(&recorded.end_to_end)
             );
-            let skew_truth = truth_per_period(Truth::skew_ms);
-            for (p, counts) in &per_period(&recorded.skew) {
-                let truth = &skew_truth[p];
-                prop_assert!(dominated_by(counts, truth), "skew {p}: {counts:?} > {truth:?}");
+            if let Err(e) = never_exceeds(&recorded.skew, &truths, cfg.period_ms, Truth::skew_ms) {
+                return Err(TestCaseError::fail(format!("skew {e}")));
             }
         } else {
             prop_assert!(recorded.skew.is_empty());
         }
     });
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_merges_held_back_observations() {
+    // A join of a 10 ms and a 15 ms source whose frontiers run 5 s ahead of the controller's
+    // clock, shown by the join 5 ms after the input that advances it. With 1 s periods, the
+    // period book defers about 5 s of join observations, far more than the recorder keeps.
+    let (fast, slow) = (aligned(10), aligned(15));
+    let join = ResolvedTree::Min(vec![fast.clone(), slow.clone()]);
+    let end = 60_000;
+    let h_fast = leaf_history(10, 0, end, None, 5000);
+    let h_slow = leaf_history(15, 0, end, None, 5000);
+    let history = derived_history(&[&h_fast, &h_slow], 5);
+    let inputs = [(&fast, &h_fast), (&slow, &h_slow)];
+    let cfg = RecorderConfig {
+        period_ms: 1000,
+        ..config(4)
+    };
+    let logs = [log_of(&fast, &h_fast), log_of(&slow, &h_slow)];
+    let logs: Vec<&VisibilityLog> = logs.iter().collect();
+    let start_ms = 10_000;
+    let mut local = LocalDelayRecorder::new(start_ms);
+    let mut rows = LocalRows::default();
+    let mut longest = 0;
+    for (o, f) in &history {
+        let new = local.observe(&join, &join, &at(*f), *o, &logs, &cfg);
+        rows.local.extend(new.local);
+        rows.skew.extend(new.skew);
+        longest = longest.max(local.shown_len());
+    }
+    let high_water_ms = local.high_water_ms();
+    let new = local.finish();
+    rows.local.extend(new.local);
+    rows.skew.extend(new.skew);
+    // The join advances every 5 ms, so about 1000 observations wait at a time, and the list
+    // stays at its bound only by merging.
+    assert_eq!(longest, super::local::MAX_SHOWN);
+    // The oracle charges every arrival at its first observation, as an unmerged list would.
+    let truths = Truth::all(&join, &join, &history, &inputs, (start_ms, high_water_ms));
+    never_exceeds(&rows.local, &truths, cfg.period_ms, Truth::local_ms).unwrap();
+    never_exceeds(&rows.skew, &truths, cfg.period_ms, Truth::skew_ms).unwrap();
 }

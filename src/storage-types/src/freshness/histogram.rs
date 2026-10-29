@@ -118,16 +118,49 @@ pub(super) fn add_span_with(
     // NOTE: A frontier can be reported before the wall clock reaches the span end, for example
     // under clock skew between the writer and the controller. Latency is then measured from
     // the span end, which keeps every latency at least the length of its window.
-    let a = advance_ms.max(to);
-    // A window starting at boundary `s` in `[from, to)` has latency `a - s`.
-    let (shortest, longest) = (a - to + 1, a - from);
+    add_window_latencies(
+        beta,
+        scheme,
+        interval_ms,
+        from,
+        to,
+        advance_ms.max(to),
+        counts,
+    );
+}
+
+/// Adds the virtual arrivals in `(from, to]` to `counts`, each with the latency `x - s` for
+/// the start `s` of its window, and a latency of at most 1 ms, also a negative one, in the
+/// bucket of 1 ms.
+///
+/// `from` and `to` must be window boundaries under `beta`. The work is bounded by the number of
+/// touched buckets.
+pub(super) fn add_window_latencies(
+    beta: &dyn Fn(u64) -> u64,
+    scheme: &BucketScheme,
+    interval_ms: u64,
+    from: u64,
+    to: u64,
+    x: u64,
+    counts: &mut BTreeMap<i32, u64>,
+) {
+    if from >= to || interval_ms == 0 {
+        return;
+    }
+    // A window starting at boundary `s` in `[from, to)` has latency `x - s`.
+    let shortest = x.saturating_sub(to - 1).max(1);
+    let longest = x.saturating_sub(from).max(1);
     for k in scheme.bucket(shortest)..=scheme.bucket(longest) {
-        // The windows with latency in this bucket start in `[a - hi, a - lo)`, so their
-        // arrivals are `(beta(a - hi), beta(a - lo)]`.
+        // The windows with latency in this bucket start in `[x - hi, x - lo)`, so their
+        // arrivals are `(beta(x - hi), beta(x - lo)]`. The lowest bucket also takes the
+        // windows that start at or after `x`.
         let lo = scheme.max_latency_ms(k - 1);
         let hi = scheme.max_latency_ms(k);
-        let start = beta(a.saturating_sub(hi)).max(from);
-        let end = beta(a.saturating_sub(lo)).min(to);
+        let start = beta(x.saturating_sub(hi)).max(from);
+        let end = match k {
+            0 => to,
+            _ => beta(x.saturating_sub(lo)).min(to),
+        };
         if start < end {
             let n = end / interval_ms - start / interval_ms;
             if n > 0 {
