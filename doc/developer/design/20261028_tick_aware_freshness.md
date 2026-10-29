@@ -173,7 +173,7 @@ A join of a 1 s source with a view that refreshes once a day would then charge a
 With the cap, skew is the delay mismatched grids cause when every input ticks on time, and any wait beyond $g(a)$ stays upstream, where the late input's own histogram shows it.
 An input whose ticks drift from its grid moves the drift to upstream, which understates skew.
 Unaligned leaves, such as tables and webhooks, tick at a phase the controller does not know, so their on-time times are only known within one interval.
-The cap takes the earliest time an unaligned leaf can pass the timestamp and the latest time it can show the arrival, wherever the leaf sits in an input's tree, so the cap never overstates and understates skew by at most one interval of the unaligned leaf.
+The cap takes the earliest time an unaligned leaf can pass the timestamp and the latest time it can show the arrival, wherever the leaf sits in an input's tree, so the cap never overstates. It understates skew by at most one interval for an unaligned direct input, and by more when the unaligned leaf is nested inside a join, whose show time then also covers the other leaves' grids.
 
 Skew is the wait that combining inputs causes without any input being late.
 A join of a 7 s and an 11 s input shows an arrival only once the 7 s input's frontier passes the 11 s timestamp, which happens at the 7 s input's next tick.
