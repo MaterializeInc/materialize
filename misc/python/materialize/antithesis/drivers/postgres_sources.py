@@ -391,6 +391,8 @@ def _ensure_mz(
 ) -> bool:
     if _is_ready(db, f"mz_slot{slot}"):
         return True
+    if ddl_hold.active():
+        return False
     url = urlparse(endpoints.upstream_postgres_url)
     password = unquote(url.password or "").replace("'", "''")
     retain = f"WITH (RETAIN HISTORY = FOR '{_retain(db, slot)}')"
@@ -676,6 +678,8 @@ def _maintain_exports(
 ) -> None:
     """Keep at least one export per table that no recorded terminal op has killed,
     and at most `MAX_EXPORTS_PER_TABLE` exports per table."""
+    if ddl_hold.active():
+        return
     for j in range(TABLES_PER_SLOT):
         exports = [e for e in _exports(db, slot) if e.j == j]
         live = [
@@ -1230,12 +1234,36 @@ def _check_ledger(
         entries.sort()
 
     recorded: dict[str, set[str]] = {}
-    for txn_id, tbl in db.execute(
-        "SELECT o.txn_id, o.tbl FROM ops o JOIN txns t ON o.txn_id = t.txn_id"
+    metadata: dict[tuple[str, str], tuple[int, str, str]] = {}
+    for txn_id, tbl, seq, kind, status in db.execute(
+        "SELECT o.txn_id, o.tbl, o.seq, o.kind, t.status"
+        " FROM ops o JOIN txns t ON o.txn_id = t.txn_id"
         " WHERE t.slot = ?",
         (slot,),
     ):
         recorded.setdefault(txn_id, set()).add(tbl)
+        metadata[(txn_id, tbl)] = (int(seq), str(kind), str(status))
+
+    mismatches = []
+    for txn_id, tbl, seq, kind in ledger_rows:
+        expected = metadata.get((str(txn_id), str(tbl)))
+        if expected is not None and (
+            expected[2] == "aborted" or expected[:2] != (int(seq), str(kind))
+        ):
+            mismatches.append(
+                {
+                    "txn_id": txn_id,
+                    "table": tbl,
+                    "seq": seq,
+                    "kind": kind,
+                    "recorded": expected,
+                }
+            )
+    always(
+        not mismatches,
+        "postgres source: visible ledger rows preserve recorded transaction metadata and exclude aborted transactions",
+        {**details, "mismatches": mismatches[:10]},
+    )
 
     phantoms = sorted(t for t in tables_of if t not in recorded)
     always(
@@ -1293,7 +1321,7 @@ def _check_ledger(
         "postgres source: transactions begun above the mapped LSN are not visible in the ledger",
         {**details, "early": early[:10], "early_count": len(early)},
     )
-    if phantoms or torn or gaps:
+    if phantoms or torn or gaps or mismatches:
         return None
     return _Ledger(by_tbl, tables_of)
 

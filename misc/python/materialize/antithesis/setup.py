@@ -56,7 +56,9 @@ def ensure_blob_bucket(env: Environment) -> bool:
     reported as `False` so the caller retries.
     """
     secret = client.CoreV1Api().read_namespaced_secret(
-        "materialize-backend", env.endpoints.namespace
+        "materialize-backend",
+        env.endpoints.namespace,
+        _request_timeout=orchestratord.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
     )
     assert secret.data is not None
     url = urlparse(base64.b64decode(secret.data["persist_backend_url"]).decode())
@@ -87,7 +89,9 @@ def create_materialize(env: Environment) -> None:
         log("Materialize CR already exists")
         return
     configmap = client.CoreV1Api().read_namespaced_config_map(
-        "materialize-cr", env.endpoints.namespace
+        "materialize-cr",
+        env.endpoints.namespace,
+        _request_timeout=orchestratord.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
     )
     assert configmap.data is not None
     body = yaml.safe_load(configmap.data["materialize.yaml"])

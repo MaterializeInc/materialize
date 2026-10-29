@@ -286,6 +286,8 @@ def ensure_ready(
     if _ready_flags(db, g.gen)[1]:
         _drop_old_generations(db, endpoints, host, g)
         return g
+    if ddl_hold.active():
+        return None
     failure = with_retry(
         "kafka sinks",
         f"setup of gen {g.gen}",
@@ -376,7 +378,7 @@ def _admin(broker: str) -> AdminClient:
 def _drop_old_generations(
     db: sqlite3.Connection, endpoints: Endpoints, host: str, g: Gen
 ) -> None:
-    if g.dropped_below >= g.gen:
+    if g.dropped_below >= g.gen or ddl_hold.active():
         return
     old = list(range(g.dropped_below, g.gen))
     try:
@@ -951,6 +953,12 @@ def _check_stream(out: SinkOutput, details: dict[str, Any]) -> None:
             },
         )
     if out.envelope == "debezium":
+        key_mismatches = oracle.debezium_key_mismatches(out.messages, ["id"])
+        always(
+            not key_mismatches,
+            "kafka sink: every Debezium message key equals the row id in its before and after images",
+            {**d, "mismatches": key_mismatches[:10]},
+        )
         breaks = oracle.debezium_chain_breaks(out.messages, ITEM_COLUMNS)
         always(
             not breaks,

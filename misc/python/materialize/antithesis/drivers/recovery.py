@@ -287,6 +287,13 @@ class ContainerObservation:
     finished_at: str | None
     waiting_reason: str | None
     deleting: bool = False
+    current_terminated: bool = False
+
+    @property
+    def termination_count(self) -> int:
+        # The current incarnation has not incremented restart_count yet.
+        # Use its eventual ordinal to deduplicate it after the kubelet restarts it.
+        return self.restart_count + int(self.current_terminated)
 
 
 def pod_role(
@@ -307,7 +314,10 @@ def observe_pods(env: Environment) -> list[ContainerObservation]:
     core = client.CoreV1Api()
     result = []
     for namespace in (env.endpoints.namespace, env.endpoints.operator_namespace):
-        for pod in core.list_namespaced_pod(namespace).items:
+        for pod in core.list_namespaced_pod(
+            namespace,
+            _request_timeout=rollouts.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        ).items:
             metadata = pod.metadata
             assert metadata is not None
             role = pod_role(
@@ -318,7 +328,8 @@ def observe_pods(env: Environment) -> list[ContainerObservation]:
             assert metadata.name is not None and metadata.uid is not None
             assert pod.status is not None
             for cs in pod.status.container_statuses or []:
-                term = cs.last_state.terminated if cs.last_state else None
+                current = cs.state.terminated if cs.state else None
+                term = current or (cs.last_state.terminated if cs.last_state else None)
                 waiting = cs.state.waiting if cs.state else None
                 result.append(
                     ContainerObservation(
@@ -334,6 +345,7 @@ def observe_pods(env: Environment) -> list[ContainerObservation]:
                         finished_at=str(term.finished_at) if term else None,
                         waiting_reason=waiting.reason if waiting else None,
                         deleting=metadata.deletion_timestamp is not None,
+                        current_terminated=current is not None,
                     )
                 )
     return result
@@ -380,7 +392,7 @@ def record_terminations(
                 (
                     o.pod_uid,
                     o.container,
-                    o.restart_count,
+                    o.termination_count,
                     o.role,
                     o.pod,
                     o.exit_code,
@@ -407,7 +419,9 @@ def record_terminations(
             # Kubernetes keeps only the last termination; restarts between two
             # samples are counted but not classified.
             "unobserved_terminations": (
-                max(0, o.restart_count - previous - 1) if previous is not None else None
+                max(0, o.termination_count - previous - 1)
+                if previous is not None
+                else None
             ),
         }
         log(f"termination {cls}: {details}")
@@ -783,7 +797,7 @@ class Recovery:
                         crash_loops.Sample(
                             key=(o.pod_uid, o.container),
                             name=name,
-                            restart_count=o.restart_count,
+                            restart_count=o.termination_count,
                             exit_class=(
                                 classify_exit(o.exit_code, o.reason)
                                 if o.exit_code is not None
@@ -872,19 +886,26 @@ class Recovery:
         """Restart pods while no driver runs DDL, then compare the lifecycle
         projection (restart-preserves-derived-state) and re-read every
         lifecycle collection (live-collection-shard-never-tombstoned)."""
+        from materialize.antithesis.drivers.pod_restarts import delete_recorded
+
         s = lifecycle.Session(self.env, lifecycle.open_state())
         before = lifecycle.quiet_projection(s)
         if before is None:
             log("no quiet lifecycle projection, skipping restart comparison")
             return
         victims = rng.choice(["environmentd", "clusterd", "both"])
-        core = client.CoreV1Api()
+        kube = rollouts.Kube(self.env)
         killed = []
-        pods = core.list_namespaced_pod(self.env.endpoints.namespace).items
+        pods = kube.core.list_namespaced_pod(
+            self.env.endpoints.namespace,
+            _request_timeout=rollouts.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        ).items
         metas = []
         for pod in pods:
             meta = pod.metadata
             assert meta is not None
+            if meta.deletion_timestamp is not None:
+                continue
             metas.append(meta)
             role = pod_role(
                 self.env.endpoints.namespace,
@@ -893,8 +914,17 @@ class Recovery:
             )
             if role == ROLE_ENVIRONMENTD and victims in ("environmentd", "both"):
                 assert meta.name is not None and meta.namespace is not None
-                core.delete_namespaced_pod(meta.name, meta.namespace)
-                killed.append(meta.name)
+                if delete_recorded(
+                    kube,
+                    origin="recovery",
+                    role=role,
+                    namespace=meta.namespace,
+                    pod=meta.name,
+                    uid=meta.uid,
+                    grace=None,
+                    reason="restart_and_compare",
+                ):
+                    killed.append(meta.name)
         clusterd = [
             m
             for m in metas
@@ -908,8 +938,17 @@ class Recovery:
         if clusterd and victims in ("clusterd", "both"):
             victim = rng.choice(clusterd)
             assert victim.name is not None and victim.namespace is not None
-            core.delete_namespaced_pod(victim.name, victim.namespace)
-            killed.append(victim.name)
+            if delete_recorded(
+                kube,
+                origin="recovery",
+                role=ROLE_CLUSTERD,
+                namespace=victim.namespace,
+                pod=victim.name,
+                uid=victim.uid,
+                grace=None,
+                reason="restart_and_compare",
+            ):
+                killed.append(victim.name)
         if not killed:
             return
         reachable(

@@ -210,10 +210,11 @@ def follow_until_settled(
                 and snap.spec.get("forcePromote") != snap.request
                 and snap.request not in promoted
             ):
-                rollouts.submit(
+                _, stored = rollouts.submit_patch(
                     ctx, "spec_phase_promote", {"forcePromote": snap.request}
                 )
-                promoted.add(snap.request)
+                if stored is not None:
+                    promoted.add(snap.request)
             if settled(snap, min_generation):
                 return snap, phases
         time.sleep(rollouts.POLL_SECONDS)
@@ -417,8 +418,7 @@ def eventually_main() -> int:
             if not normalized:
                 # A strategy or timeout override left by a killed driver
                 # would park the rollout legitimately.
-                rollouts.normalize(ctx, "spec_phase_eventually_normalize")
-                normalized = True
+                normalized = rollouts.normalize(ctx, "spec_phase_eventually_normalize")
             last = kube.snapshot()
             if settled(last, None):
                 final = last

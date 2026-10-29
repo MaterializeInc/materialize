@@ -31,6 +31,7 @@ import bisect
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
+from itertools import islice
 from typing import Any
 
 SCHEMA = "ivm"
@@ -343,13 +344,13 @@ def reference(kind: str, base: Base, t: int) -> Bag:
 
 
 def bag_diff(expected: Bag, observed: Bag, limit: int = 10) -> dict[str, Any]:
-    missing = list((expected - observed).elements())
-    extra = list((observed - expected).elements())
+    missing = expected - observed
+    extra = observed - expected
     return {
-        "missing_count": len(missing),
-        "extra_count": len(extra),
-        "missing": [list(r) for r in missing[:limit]],
-        "extra": [list(r) for r in extra[:limit]],
+        "missing_count": sum(missing.values()),
+        "extra_count": sum(extra.values()),
+        "missing": [list(r) for r in islice(missing.elements(), limit)],
+        "extra": [list(r) for r in islice(extra.elements(), limit)],
     }
 
 

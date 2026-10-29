@@ -330,6 +330,8 @@ def eventually_main() -> int:
 
 
 def _eventually(host: str, conn: psycopg.Connection, deadline: Deadline) -> int:
+    from materialize.antithesis.drivers import recovery
+
     conn.execute("SET transaction_isolation = 'serializable'")
     exports = _data_exports(conn)
     if not exports:
@@ -339,9 +341,14 @@ def _eventually(host: str, conn: psycopg.Connection, deadline: Deadline) -> int:
     source_of = {e: s for e, s, _ in exports}
     source_ids = sorted(set(source_of.values()))
     all_ids = export_ids + source_ids
+    db = recovery.open_state()
+    try:
+        exempt_ids = set(lookup_ids(conn, recovery.exempt_names(db)).values())
+    finally:
+        db.close()
 
-    recovery = Deadline(RECOVERY_BUDGET_S)
-    while not recovery.expired():
+    recovery_window = Deadline(RECOVERY_BUDGET_S)
+    while not recovery_window.expired():
         st = latest_statuses(conn, export_ids)
         stats = statistics(conn, export_ids)
         ready = [
@@ -350,7 +357,7 @@ def _eventually(host: str, conn: psycopg.Connection, deadline: Deadline) -> int:
             if any(s == "running" for s, _ in st.get(e, {}).values())
             and _hydrated(stats, e)
         ]
-        if len(ready) == len(export_ids):
+        if set(export_ids) <= set(ready) | exempt_ids:
             break
         time.sleep(5)
 
@@ -358,6 +365,11 @@ def _eventually(host: str, conn: psycopg.Connection, deadline: Deadline) -> int:
     status0 = latest_statuses(conn, all_ids)
     stats0 = statistics(conn, all_ids)
     hydrated0 = {e: _hydrated(stats0, e) for e in export_ids}
+    eligible = {
+        e
+        for e in export_ids
+        if hydrated0[e] and any(s == "running" for s, _ in status0.get(e, {}).values())
+    }
 
     # The source drivers import this module for `observe`.
     from materialize.antithesis.drivers import kafka_sources, postgres_sources
@@ -371,6 +383,8 @@ def _eventually(host: str, conn: psycopg.Connection, deadline: Deadline) -> int:
         heartbeats += postgres_sources.send_heartbeats(host)
     except Exception as e:
         log(f"postgres heartbeats failed: {e}")
+    names = lookup_ids(conn, [hb.export_name for hb in heartbeats])
+    heartbeats = [hb for hb in heartbeats if names.get(hb.export_name) in eligible]
 
     # Replicas that had not yet committed what they knew of at t0.
     lagging = {
@@ -411,7 +425,7 @@ def _eventually(host: str, conn: psycopg.Connection, deadline: Deadline) -> int:
             ):
                 committed[key] = time.monotonic() - start
         if (
-            len(advanced) == len(export_ids)
+            eligible <= advanced.keys()
             and len(visible) == len(heartbeats)
             and lagging <= committed.keys()
         ) or window.expired():
@@ -449,7 +463,6 @@ def _eventually(host: str, conn: psycopg.Connection, deadline: Deadline) -> int:
             details,
         )
 
-    names = lookup_ids(conn, [hb.export_name for hb in heartbeats])
     for i, hb in enumerate(heartbeats):
         eid = names.get(hb.export_name)
         if eid is None or eid not in qualified:

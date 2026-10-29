@@ -165,6 +165,9 @@ class ClientDeadline:
 
     def __exit__(self, *exc: object) -> None:
         self.timer.cancel()
+        # A callback already sending a cancel must finish before this
+        # connection starts another statement, or it can cancel that statement.
+        self.timer.join()
 
 
 def open_state() -> sqlite3.Connection:
@@ -426,6 +429,7 @@ class Session:
 
     def connect(self) -> psycopg.Connection:
         conn = sql.connect(self.host, statement_timeout_ms=None)
+        self.conn = conn
         conn.execute(
             f"SET transaction_isolation = {quote_literal(self.config.isolation)}".encode()
         )
@@ -450,7 +454,6 @@ class Session:
             {},
         )
         self.apply_target(conn)
-        self.conn = conn
         return conn
 
     def apply_target(self, conn: psycopg.Connection) -> None:
@@ -496,7 +499,13 @@ class Session:
                     self.target = draw_target(self.targets)
                     try:
                         self.apply_target(self.conn)
-                    except Exception:
+                    except Exception as e:
+                        c = classify_read(e)
+                        if c.outcome is sql.Outcome.VIOLATION:
+                            unreachable(
+                                "session mix: retargeting returns only classified errors",
+                                self.details(sqlstate=c.sqlstate, template=c.template),
+                            )
                         self.close()
                         continue
                 family = rng.choice(families)
@@ -529,7 +538,7 @@ class Session:
             if error.outcome is sql.Outcome.INDETERMINATE and conn.closed:
                 self.close()
         end = time.monotonic()
-        ok = error is None
+        ok = error is None and (family != "rtr_read" or info.get("marker") is not None)
         details = self.details(family=family, elapsed_s=end - start, **info)
         if error is not None:
             details.update(sqlstate=error.sqlstate, template=error.template)
