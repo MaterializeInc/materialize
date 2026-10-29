@@ -781,8 +781,8 @@ async fn freshness_histograms_need_flag_and_writes() {
     }
 }
 
-/// Turning recording off discards open periods, and turning it on again starts at the next
-/// observed frontier.
+/// Turning recording off discards open periods, and turning it on again starts at the wall-clock
+/// time of the next observed frontier.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
 async fn freshness_recording_restarts_after_toggle() {
@@ -801,8 +801,9 @@ async fn freshness_recording_restarts_after_toggle() {
         h.set_now(T0 + s * 1000 + 5);
         h.report(r1, id, T0 + s * 1000 + 1);
     }
+    // Recording restarts at the observation at T0 + 91_005, where its first period starts.
     let expected = vec![
-        (T0 + 60_000, T0 + 120_000, 29_000),
+        (T0 + 91_005, T0 + 120_000, 28_995),
         (T0 + 120_000, T0 + 180_000, 60_000),
     ];
     let recorded = h.recorded();
@@ -810,10 +811,11 @@ async fn freshness_recording_restarts_after_toggle() {
     assert_eq!(recorded.periods(Some(r1)), expected, "replica");
 }
 
-/// The frontier of a dropped collection becomes empty, which does not close its open period.
+/// Dropping a collection emits its open period up to the last observed frontier, and its empty
+/// frontier afterwards records nothing.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
-async fn freshness_recording_discards_dropped_collections() {
+async fn freshness_recording_finishes_dropped_collections() {
     let mut h = FreshnessHarness::new(true, false);
     h.instance.initialization_complete();
     let id = GlobalId::User(10);
@@ -828,8 +830,104 @@ async fn freshness_recording_discards_dropped_collections() {
         .drop_collections(vec![id])
         .expect("collection exists");
     h.report_frontier(r1, id, Antichain::new());
-    let expected = vec![(T0, T0 + 60_000, 60_000)];
+    let expected = vec![
+        (T0, T0 + 60_000, 60_000),
+        (T0 + 60_000, T0 + 120_000, 30_000),
+    ];
     let recorded = h.recorded();
     assert_eq!(recorded.periods(None), expected, "global");
     assert_eq!(recorded.periods(Some(r1)), expected, "replica");
+}
+
+/// A collection created with as-of `[0]`, as over a source that is still snapshotting, records
+/// only the arrivals after its creation, however small its first frontier is.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn freshness_as_of_zero_starts_at_creation() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let id = GlobalId::User(10);
+    h.add_collection(id, 0);
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+    h.set_now(T0 + 5);
+    h.report(r1, id, 1);
+    for s in 1..=120 {
+        h.set_now(T0 + s * 1000 + 5);
+        h.report(r1, id, T0 + s * 1000 + 1);
+    }
+    let recorded = h.recorded();
+    let expected = vec![
+        (T0, T0 + 60_000, 60_000),
+        (T0 + 60_000, T0 + 120_000, 60_000),
+    ];
+    assert_eq!(recorded.periods(None), expected, "global");
+    assert_eq!(recorded.periods(Some(r1)), expected, "replica");
+}
+
+/// A cluster loses its only replica for thirty days. The global recording writes nothing while
+/// there is no replica and charges the catch-up of the next replica as latency, in pieces of at
+/// most a day.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn freshness_replica_outage_is_charged_in_day_pieces() {
+    const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let id = GlobalId::User(10);
+    h.add_collection(id, T0);
+    let (r1, r2) = (ReplicaId::User(1), ReplicaId::User(2));
+    h.add_replica(r1);
+    for s in 1..=90 {
+        h.set_now(T0 + s * 1000 + 5);
+        h.report(r1, id, T0 + s * 1000 + 1);
+    }
+    let drop_ms = T0 + 90_000;
+    h.instance.remove_replica(r1).expect("replica exists");
+    let before = h.recorded();
+    // Removing the replica ends its recording, while the global one stays open.
+    assert_eq!(
+        before.periods(None),
+        vec![(T0, T0 + 60_000, 60_000)],
+        "global"
+    );
+    assert_eq!(
+        before.periods(Some(r1)),
+        vec![
+            (T0, T0 + 60_000, 60_000),
+            (T0 + 60_000, T0 + 120_000, 30_000)
+        ],
+        "replica"
+    );
+
+    let now = drop_ms + 30 * DAY_MS;
+    h.set_now(now + 5);
+    h.add_replica(r2);
+    h.report(r2, id, now + 1);
+    let after = h.recorded();
+    assert_eq!(
+        after.periods(Some(r2)),
+        vec![],
+        "the new replica starts now"
+    );
+    let periods = after.periods(None);
+    // The first period continues the open one of the drop, and the pieces are contiguous and
+    // hold one arrival per ms each, except for the few ms of the outage that fell out of the
+    // 30 day retention while the observation was 5 ms late.
+    let expired = now + 5 - 30 * DAY_MS - drop_ms;
+    let mut pos = T0 + 60_000;
+    for (start, end, count) in &periods {
+        assert!(*start <= pos && pos < *end, "gap before ({start}, {end}]");
+        let expected = match *start == T0 + 60_000 {
+            true => end - pos - expired,
+            false => end - pos,
+        };
+        assert_eq!(u64::try_from(*count).expect("positive"), expected);
+        assert!(end - start <= DAY_MS);
+        pos = *end;
+    }
+    assert_eq!(pos, now - now % 60_000);
+    assert!((30..=33).contains(&periods.len()), "{periods:?}");
+    // The rows are the pieces times the buckets they touch.
+    assert!(after.counts.len() <= 200, "{} rows", after.counts.len());
 }
