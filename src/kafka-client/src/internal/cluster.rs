@@ -106,6 +106,25 @@ impl CoordinatorKind {
     }
 }
 
+/// A failed coordinator lookup, see [`Cluster::find_coordinator`].
+#[derive(Debug)]
+pub(crate) struct CoordinatorError {
+    pub error: NetError,
+    /// The name of the broker that answered FindCoordinator with `error`,
+    /// `None` if the lookup failed without such an answer (transport errors,
+    /// timeouts, shutdown).
+    pub broker: Option<String>,
+}
+
+impl From<NetError> for CoordinatorError {
+    fn from(error: NetError) -> CoordinatorError {
+        CoordinatorError {
+            error,
+            broker: None,
+        }
+    }
+}
+
 /// Which topics a Metadata request asks for.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum MetadataTopics<'a> {
@@ -784,6 +803,20 @@ impl Cluster {
         key: &str,
         deadline: Deadline,
     ) -> Result<Arc<Broker>, NetError> {
+        self.find_coordinator(kind, key, deadline)
+            .await
+            .map_err(|e| e.error)
+    }
+
+    /// Like [`Cluster::coordinator`], also naming the broker that answered
+    /// FindCoordinator with an error, which librdkafka's texts for
+    /// transactional producers include.
+    pub(crate) async fn find_coordinator(
+        &self,
+        kind: CoordinatorKind,
+        key: &str,
+        deadline: Deadline,
+    ) -> Result<Arc<Broker>, CoordinatorError> {
         let cache_key = (kind, key.to_string());
         if let Some(id) = self
             .coordinators
@@ -799,7 +832,7 @@ impl Cluster {
         loop {
             let result = async {
                 let broker = self.any_broker(deadline).await?;
-                broker
+                let response = broker
                     .request::<FindCoordinatorRequest, _>(
                         |version| {
                             let mut req = FindCoordinatorRequest::default()
@@ -811,7 +844,8 @@ impl Cluster {
                         },
                         RequestOptions::default(),
                     )
-                    .await
+                    .await?;
+                Ok::<_, NetError>((broker, response))
             };
             let result = match deadline.instant() {
                 Some(at) => tokio::time::timeout_at(at.into(), result)
@@ -820,7 +854,7 @@ impl Cluster {
                 None => result.await,
             };
             match result {
-                Ok(response) => match protocol::broker_error(response.error_code) {
+                Ok((answered, response)) => match protocol::broker_error(response.error_code) {
                     None => {
                         let id = response.node_id.0;
                         let broker = self.ensure_broker(
@@ -847,19 +881,22 @@ impl Cluster {
                             .as_ref()
                             .map(|m| m.as_str().to_string())
                             .unwrap_or_else(|| code.err2str());
-                        return Err(NetError::new(code, message));
+                        return Err(CoordinatorError {
+                            error: NetError::new(code, message),
+                            broker: Some(answered.name()),
+                        });
                     }
                 },
-                Err(e) if e.code() == RDKafkaErrorCode::BrokerDestroy => return Err(e),
+                Err(e) if e.code() == RDKafkaErrorCode::BrokerDestroy => return Err(e.into()),
                 Err(e) => last_error = e,
             }
             let backoff = self.ctx.settings.retry_backoff;
             if deadline.remaining_duration().is_some_and(|r| r <= backoff) {
-                return Err(last_error);
+                return Err(last_error.into());
             }
             tokio::select! {
                 _ = tokio::time::sleep(backoff) => {}
-                _ = self.shutdown.cancelled() => return Err(Self::shutdown_error()),
+                _ = self.shutdown.cancelled() => return Err(Self::shutdown_error().into()),
             }
         }
     }

@@ -49,8 +49,8 @@ use kafka_protocol::protocol::StrBytes;
 use crate::config::RDKafkaLogLevel;
 use crate::config::settings::DebugContext;
 use crate::error::{KafkaError, KafkaResult, RDKafkaError};
-use crate::internal::cluster::{Broker, CoordinatorKind};
-use crate::internal::net::{NetError, RequestOptions};
+use crate::internal::cluster::{Broker, CoordinatorError, CoordinatorKind, MetadataTopics};
+use crate::internal::net::RequestOptions;
 use crate::internal::protocol;
 use crate::internal::records::ProducerIdentity;
 use crate::producer::ProducerContext;
@@ -569,7 +569,7 @@ enum EosWork {
 enum PidOutcome {
     Assigned(ProducerIdentity),
     /// The coordinator lookup failed.
-    Coordinator(NetError),
+    Coordinator(CoordinatorError),
     /// The request failed; the broker's name for the error text.
     Failed(RDKafkaErrorCode, String),
 }
@@ -1069,17 +1069,33 @@ impl<C: ProducerContext> ProducerInner<C> {
         let current = self.lock().eos.pid;
         let deadline = Deadline::new(self.config.socket_timeout);
         let outcome = async {
+            if self.cluster.metadata().brokers.is_empty() {
+                // Learn the brokers first, as librdkafka was observed to do,
+                // so that the request goes to (and errors name) a learned
+                // broker rather than a bootstrap one. A failure surfaces in
+                // the lookup below.
+                let _ = self
+                    .cluster
+                    .fetch_metadata(MetadataTopics::None, deadline)
+                    .await;
+            }
             let broker = match &transactional_id {
                 Some(id) => {
                     self.cluster
-                        .coordinator(CoordinatorKind::Transaction, id, deadline)
+                        .find_coordinator(CoordinatorKind::Transaction, id, deadline)
                         .await
                 }
-                None => self.cluster.any_broker(deadline).await,
+                None => self.cluster.any_broker(deadline).await.map_err(Into::into),
             };
             let broker = match broker {
                 Ok(b) => b,
                 Err(e) => return PidOutcome::Coordinator(e),
+            };
+            // librdkafka sends a transactional producer's InitProducerId
+            // through its logical coordinator broker handle.
+            let broker_name = match &transactional_id {
+                Some(_) => format!("TxnCoordinator/{}", broker.id()),
+                None => broker.name(),
             };
             let timeout_ms = transactional_id.as_ref().map_or(-1, |_| {
                 i32::try_from(self.config.transaction_timeout.as_millis()).unwrap_or(i32::MAX)
@@ -1110,9 +1126,9 @@ impl<C: ProducerContext> ProducerInner<C> {
                         producer_id: r.producer_id.0,
                         producer_epoch: r.producer_epoch,
                     }),
-                    Some(code) => PidOutcome::Failed(code, broker.name()),
+                    Some(code) => PidOutcome::Failed(code, broker_name),
                 },
-                Err(e) => PidOutcome::Failed(e.code(), broker.name()),
+                Err(e) => PidOutcome::Failed(e.code(), broker_name),
             }
         }
         .await;
@@ -1139,11 +1155,12 @@ impl<C: ProducerContext> ProducerInner<C> {
                     st.assign_pid(pid, &mut fx);
                 }
             }
-            PidOutcome::Coordinator(e) => match e.code() {
+            PidOutcome::Coordinator(CoordinatorError { error: e, broker }) => match e.code() {
                 code @ (RDKafkaErrorCode::TransactionalIdAuthorizationFailed
                 | RDKafkaErrorCode::ClusterAuthorizationFailed) => {
                     let reason = format!(
-                        "Failed to find transaction coordinator: {}{}",
+                        "Failed to find transaction coordinator: {}{}{}",
+                        broker.map(|b| format!("{b}: ")).unwrap_or_default(),
                         code.err2str(),
                         if e.message().is_empty() || e.message() == code.err2str() {
                             String::new()

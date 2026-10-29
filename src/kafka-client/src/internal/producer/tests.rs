@@ -1821,3 +1821,100 @@ fn deleted_topic_fails_transaction() {
         assert_eq!(values.last(), Some(&Bytes::from_static(b"after")));
     }
 }
+
+#[mz_ore::test]
+fn invalid_transaction_timeout_names_coordinator() {
+    for brokers in test_brokers() {
+        let (p, _) = producer(
+            &brokers,
+            &[
+                ("transactional.id", &unique("kc-txn-timeout")),
+                // Above the brokers' default `transaction.max.timeout.ms`.
+                ("transaction.timeout.ms", "1000000"),
+            ],
+        );
+        let err = p.init_transactions(Duration::from_secs(30)).unwrap_err();
+        let KafkaError::Transaction(e) = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(e.code(), RDKafkaErrorCode::InvalidTransactionTimeout);
+        assert!(e.is_fatal());
+        let message = e.string();
+        let rest = message
+            .strip_prefix("Failed to acquire transactional PID from broker TxnCoordinator/")
+            .unwrap_or_else(|| panic!("{message}"));
+        let (id, rest) = rest.split_once(": ").unwrap();
+        id.parse::<i32>().unwrap();
+        assert_eq!(rest, RDKafkaErrorCode::InvalidTransactionTimeout.err2str());
+    }
+}
+
+/// Resolves `kafka`, the host the broker of `internal::cluster::auth_tests`
+/// advertises, to 127.0.0.1.
+#[derive(Clone, Default)]
+struct AuthBrokerCtx(Ctx);
+
+impl ClientContext for AuthBrokerCtx {
+    fn resolve_broker_addr(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<Vec<std::net::SocketAddr>, std::io::Error> {
+        use std::net::ToSocketAddrs;
+        let host = if host == "kafka" { "127.0.0.1" } else { host };
+        (host, port).to_socket_addrs().map(|a| a.collect())
+    }
+}
+
+impl ProducerContext for AuthBrokerCtx {
+    type DeliveryOpaque = usize;
+
+    fn delivery(&self, result: &DeliveryResult<'_>, opaque: usize) {
+        self.0.delivery(result, opaque)
+    }
+}
+
+/// Runs against the SASL_PLAINTEXT listener of the broker of
+/// `internal::cluster::auth_tests`, whose `materialize_lockdown` user may use
+/// only transactional ids starting with `lockdown`.
+#[mz_ore::test]
+fn unauthorized_transactional_id_names_broker() {
+    if std::env::var_os("MZ_KAFKA_CLIENT_TEST_AUTH_SECRETS").is_none() {
+        return;
+    }
+    let p = ThreadedProducer::from_config_and_context(
+        &config(
+            "127.0.0.1:39095",
+            &[
+                ("security.protocol", "SASL_PLAINTEXT"),
+                ("sasl.mechanisms", "PLAIN"),
+                ("sasl.username", "materialize_lockdown"),
+                ("sasl.password", "sekurity"),
+                ("transactional.id", &unique("kc-unauthorized")),
+            ],
+        ),
+        AuthBrokerCtx::default(),
+    )
+    .unwrap();
+    let err = p.init_transactions(Duration::from_secs(30)).unwrap_err();
+    let KafkaError::Transaction(e) = &err else {
+        panic!("{err:?}")
+    };
+    assert_eq!(
+        e.code(),
+        RDKafkaErrorCode::TransactionalIdAuthorizationFailed
+    );
+    assert!(e.is_fatal());
+    // The learned broker that answered FindCoordinator comes first, then the
+    // error and the broker's message.
+    let message = e.string();
+    let rest = message
+        .strip_prefix("Failed to find transaction coordinator: sasl_plaintext://kafka:39095/")
+        .unwrap_or_else(|| panic!("{message}"));
+    let (id, rest) = rest.split_once(": ").unwrap();
+    id.parse::<i32>().unwrap();
+    assert!(
+        rest.starts_with("Broker: Transactional Id authorization failed: "),
+        "{message}"
+    );
+}
