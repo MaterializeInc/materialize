@@ -22,8 +22,7 @@
 //!
 //! One sender task per leader broker ([`sender`]) sends sealed batches and
 //! open ones whose `linger.ms` expired or that a flush or commit waits for,
-//! compressing them on the I/O side. Delivery reports are called from the
-//! sender task, in order per partition.
+//! compressing them on the I/O side.
 //!
 //! [`txn`] implements idempotence and transactions. A metadata task applies
 //! every metadata update (partition counts, leaders) and once a second
@@ -34,7 +33,10 @@
 //! All mutable state is in one mutex. Context callbacks (delivery reports,
 //! logs, errors) are never called with it held, since a delivery callback may
 //! produce. State changes collect their side effects in [`state::Effects`],
-//! which [`ProducerInner::finish`] carries out after unlocking.
+//! which [`ProducerInner::finish`] carries out after unlocking. Delivery
+//! reports are queued in the order of the state changes and delivered by one
+//! I/O thread at a time, so in order per partition, and never on the thread
+//! of a `send` or transaction call.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
@@ -64,8 +66,8 @@ mod tests;
 mod txn;
 
 use self::state::{
-    Batch, Effects, NewRecord, PartKey, State, TopicId, TopicStatus, UaMessage, Undelivered,
-    payload_len,
+    Batch, Effects, NewRecord, PartKey, Report, State, TopicId, TopicStatus, UaMessage,
+    Undelivered, payload_len,
 };
 use self::txn::Eos;
 
@@ -443,6 +445,21 @@ impl<C: ProducerContext> ProducerInner<C> {
             let failed: usize = failures.iter().map(|f| f.records.len()).sum();
             st.eos.dr_fails += u64::try_from(failed).expect("fits");
         }
+        let has_reports = !delivered.is_empty() || !failures.is_empty();
+        st.reports.extend(delivered.into_iter().map(
+            |(topic, partition, batch, base_offset, log_append_time)| Report::Delivered {
+                topic,
+                partition,
+                batch,
+                base_offset,
+                log_append_time,
+            },
+        ));
+        st.reports.extend(failures.into_iter().map(Report::Failed));
+        let serve = has_reports && !st.serving_reports;
+        if serve {
+            st.serving_reports = true;
+        }
         let mut notifies = Vec::new();
         if wake_all || !wake.is_empty() || st.senders.values().any(|s| !s.spawned) {
             for (broker, entry) in &mut st.senders {
@@ -480,53 +497,89 @@ impl<C: ProducerContext> ProducerInner<C> {
         for (error, reason) in errors {
             self.cluster.hooks().error(error, &reason);
         }
-        if delivered.is_empty() && failures.is_empty() {
+        if !serve {
             return;
         }
-        let mut done_msgs = 0;
-        let mut done_bytes = 0;
-        let mut buffers = Vec::new();
-        for (topic, partition, batch, base_offset, log_append_time) in delivered {
-            let n = u64::try_from(batch.len()).expect("fits");
-            done_msgs += n;
-            done_bytes += batch.payload_bytes;
-            self.txmsgs.fetch_add(n, Ordering::Relaxed);
-            self.txmsg_bytes
-                .fetch_add(batch.kv_bytes, Ordering::Relaxed);
-            buffers.extend(delivery::delivered(
-                &*self.context,
-                self.config.delivery_report_only_error,
-                &topic,
-                partition,
-                batch,
-                base_offset,
-                log_append_time,
-            ));
-        }
-        if !buffers.is_empty() {
-            let mut st = self.lock();
-            for buf in buffers {
-                st.buffers.put(buf);
-            }
-        }
-        for failure in failures {
-            done_msgs += u64::try_from(failure.records.len()).expect("fits");
-            done_bytes += failure.records.payload_bytes();
-            delivery::failed(
-                &*self.context,
-                &failure.topic,
-                failure.partition,
-                failure.records,
-                failure.error,
+        // Like librdkafka, which serves delivery reports from its own
+        // threads, never on the thread of a `send` or transaction call: a
+        // callback that takes a lock its caller holds would deadlock.
+        if runtime::is_io_thread() {
+            self.serve_reports();
+        } else if let Some(inner) = self.weak.upgrade() {
+            runtime::spawn(
+                "kafka-producer-reports",
+                async move { inner.serve_reports() },
             );
         }
-        self.msg_bytes.fetch_sub(done_bytes, Ordering::SeqCst);
-        let before = self.msg_cnt.fetch_sub(done_msgs, Ordering::SeqCst);
-        if before == done_msgs {
-            // Wake flushes. Taking the lock orders this after a waiter's
-            // check of the count.
-            let _st = self.lock();
-            self.cond.notify_all();
+    }
+
+    /// Delivers the queued reports until none is left. Only the thread that
+    /// set `State::serving_reports` calls this.
+    fn serve_reports(&self) {
+        loop {
+            let reports = {
+                let mut st = self.lock();
+                if st.reports.is_empty() {
+                    st.serving_reports = false;
+                    return;
+                }
+                std::mem::take(&mut st.reports)
+            };
+            let mut done_msgs = 0;
+            let mut done_bytes = 0;
+            let mut buffers = Vec::new();
+            for report in reports {
+                match report {
+                    Report::Delivered {
+                        topic,
+                        partition,
+                        batch,
+                        base_offset,
+                        log_append_time,
+                    } => {
+                        let n = u64::try_from(batch.len()).expect("fits");
+                        done_msgs += n;
+                        done_bytes += batch.payload_bytes;
+                        self.txmsgs.fetch_add(n, Ordering::Relaxed);
+                        self.txmsg_bytes
+                            .fetch_add(batch.kv_bytes, Ordering::Relaxed);
+                        buffers.extend(delivery::delivered(
+                            &*self.context,
+                            self.config.delivery_report_only_error,
+                            &topic,
+                            partition,
+                            batch,
+                            base_offset,
+                            log_append_time,
+                        ));
+                    }
+                    Report::Failed(failure) => {
+                        done_msgs += u64::try_from(failure.records.len()).expect("fits");
+                        done_bytes += failure.records.payload_bytes();
+                        delivery::failed(
+                            &*self.context,
+                            &failure.topic,
+                            failure.partition,
+                            failure.records,
+                            failure.error,
+                        );
+                    }
+                }
+            }
+            if !buffers.is_empty() {
+                let mut st = self.lock();
+                for buf in buffers {
+                    st.buffers.put(buf);
+                }
+            }
+            self.msg_bytes.fetch_sub(done_bytes, Ordering::SeqCst);
+            let before = self.msg_cnt.fetch_sub(done_msgs, Ordering::SeqCst);
+            if before == done_msgs {
+                // Wake flushes. Taking the lock orders this after a waiter's
+                // check of the count.
+                let _st = self.lock();
+                self.cond.notify_all();
+            }
         }
     }
 

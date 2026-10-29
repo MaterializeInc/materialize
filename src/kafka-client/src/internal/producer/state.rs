@@ -425,12 +425,6 @@ impl<D> TopicState<D> {
         }
     }
 
-    pub fn partition(&self, partition: i32) -> Option<&PartitionState<D>> {
-        usize::try_from(partition)
-            .ok()
-            .and_then(|p| self.partitions.get(p))
-    }
-
     pub fn partition_mut(&mut self, partition: i32) -> Option<&mut PartitionState<D>> {
         usize::try_from(partition)
             .ok()
@@ -488,6 +482,18 @@ pub(super) struct Failure<D> {
     pub partition: i32,
     pub records: Undelivered<D>,
     pub error: RDKafkaErrorCode,
+}
+
+/// A delivery report waiting in [`State::reports`].
+pub(super) enum Report<D> {
+    Delivered {
+        topic: Arc<str>,
+        partition: i32,
+        batch: Batch<D>,
+        base_offset: i64,
+        log_append_time: i64,
+    },
+    Failed(Failure<D>),
 }
 
 /// Side effects of a state change, carried out once the lock is released.
@@ -557,6 +563,12 @@ pub(super) struct State<D> {
     /// Batches in flight over all partitions.
     pub in_flight: u32,
     pub buffers: BufferPool,
+    /// Delivery reports in the order of the state changes that produced
+    /// them, for `ProducerInner::serve_reports`.
+    pub reports: VecDeque<Report<D>>,
+    /// Whether a thread is serving `reports`. One at a time, so that the
+    /// reports of a partition are delivered in order.
+    pub serving_reports: bool,
 }
 
 impl<D> State<D> {
@@ -569,6 +581,8 @@ impl<D> State<D> {
             eos,
             in_flight: 0,
             buffers: BufferPool::default(),
+            reports: VecDeque::new(),
+            serving_reports: false,
         }
     }
 
@@ -696,6 +710,12 @@ impl<D> State<D> {
                     }
                 }
                 // Partition counts only grow unless the topic was recreated.
+                // NOTE: Like librdkafka, a partition that comes back after a
+                // shrink starts over at sequence number 0. If the shrink came
+                // from stale metadata, the broker still knows the producer's
+                // sequence and rejects the next batch with
+                // OUT_OF_ORDER_SEQUENCE_NUMBER, which is fatal. Without topic
+                // ids, stale metadata and a recreated topic look alike.
                 let shrunk = topic.partitions.len() > count;
                 if shrunk {
                     self.remove_partitions(id, count, fx);

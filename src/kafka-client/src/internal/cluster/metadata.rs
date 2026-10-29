@@ -12,7 +12,6 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 use kafka_protocol::messages::MetadataResponse;
 
@@ -46,20 +45,11 @@ pub(crate) struct PartitionMetadata {
 /// One topic.
 #[derive(Clone, Debug)]
 pub(crate) struct TopicMetadata {
-    // TODO: drop the unread `name`, `is_internal` and `updated_at` together
-    // with their initialization in the producer tests.
-    #[allow(dead_code)]
-    pub name: String,
     /// The topic-level error, e.g. `UnknownTopicOrPartition` for a topic
     /// that does not exist.
     pub error: Option<RDKafkaErrorCode>,
     /// Sorted by partition id.
     pub partitions: Vec<PartitionMetadata>,
-    #[allow(dead_code)]
-    pub is_internal: bool,
-    /// When this entry was last updated from a response.
-    #[allow(dead_code)]
-    pub updated_at: Instant,
 }
 
 impl TopicMetadata {
@@ -103,7 +93,6 @@ impl MetadataSnapshot {
 
     /// The snapshot after applying `response`.
     pub(crate) fn apply(&self, response: &MetadataResponse, all_topics: bool) -> MetadataSnapshot {
-        let now = Instant::now();
         let mut next = self.clone();
         next.version += 1;
         next.brokers = response
@@ -144,15 +133,11 @@ impl MetadataSnapshot {
                 })
                 .collect();
             partitions.sort_by_key(|p| p.id);
-            let name = name.0.as_str().to_string();
             next.topics.insert(
-                name.clone(),
+                name.0.as_str().to_string(),
                 TopicMetadata {
-                    name,
                     error: protocol::broker_error(t.error_code),
                     partitions,
-                    is_internal: t.is_internal,
-                    updated_at: now,
                 },
             );
         }

@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
@@ -177,11 +178,13 @@ impl<C: ProducerContext> ProducerInner<C> {
                     self.handle_result(broker_id, sent, result);
                     // Handle the responses that are already in before picking
                     // again.
-                    while let Some(Some((sent, result))) = futures::FutureExt::now_or_never(in_flight.next()) {
+                    while let Some(Some((sent, result))) = in_flight.next().now_or_never() {
                         self.handle_result(broker_id, sent, result);
                     }
                 }
-                r = async { connecting.as_mut().expect("guarded").await }, if connecting.is_some() => {
+                r = async { connecting.as_mut().expect("guarded").await },
+                    if connecting.is_some() =>
+                {
                     connecting = None;
                     match r {
                         Ok(c) => {
@@ -613,12 +616,7 @@ impl<C: ProducerContext> ProducerInner<C> {
                 }
             }
         }
-        if st.in_flight == 0
-            && matches!(
-                st.eos.idemp_state,
-                IdempState::DrainBump | IdempState::DrainReset
-            )
-        {
+        if st.in_flight == 0 && st.eos.idemp_state == IdempState::DrainBump {
             fx.wake_eos = true;
         }
         if retries > 0 {

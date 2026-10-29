@@ -68,7 +68,6 @@ pub(super) enum IdempState {
     RequestPid,
     WaitPid,
     Assigned,
-    DrainReset,
     DrainBump,
     WaitTxnAbort,
 }
@@ -81,7 +80,6 @@ impl IdempState {
             IdempState::RequestPid => "RequestPID",
             IdempState::WaitPid => "WaitPID",
             IdempState::Assigned => "Assigned",
-            IdempState::DrainReset => "DrainReset",
             IdempState::DrainBump => "DrainBump",
             IdempState::WaitTxnAbort => "WaitTxnAbort",
         }
@@ -472,10 +470,6 @@ impl<D> State<D> {
     /// `rd_kafka_idemp_drain_done`.
     fn drain_done(&mut self, fx: &mut Effects<D>) {
         match self.eos.idemp_state {
-            IdempState::DrainReset => {
-                self.eos.set_idemp_state(IdempState::RequestPid);
-                self.eos.pid_at = Some(Instant::now());
-            }
             IdempState::DrainBump if self.eos.pid.producer_id >= 0 => {
                 if self.eos.transactional || self.eos.pid.producer_epoch == i16::MAX {
                     // The coordinator bumps the epoch of a transactional
@@ -1027,11 +1021,7 @@ impl<C: ProducerContext> ProducerInner<C> {
         if st.eos.fatal.is_some() {
             return None;
         }
-        if matches!(
-            st.eos.idemp_state,
-            IdempState::DrainBump | IdempState::DrainReset
-        ) && st.in_flight == 0
-        {
+        if st.eos.idemp_state == IdempState::DrainBump && st.in_flight == 0 {
             st.drain_done(fx);
         }
         if st.eos.idemp_state == IdempState::RequestPid && st.eos.pid_at.is_some_and(|at| at <= now)
@@ -1404,7 +1394,8 @@ impl<C: ProducerContext> ProducerInner<C> {
                             RDKafkaLogLevel::Error,
                             "ADDPARTS",
                             format!(
-                                "Failed to add partition \"{topic}\" [{partition}] to transaction: {}",
+                                "Failed to add partition \"{topic}\" [{partition}] to \
+                                 transaction: {}",
                                 code.err2str()
                             ),
                         );

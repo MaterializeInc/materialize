@@ -474,7 +474,6 @@ fn txn_state(now: Instant) -> (State<usize>, Config) {
 /// Metadata for a topic whose partitions are led by broker 1.
 fn topic_md(error: Option<RDKafkaErrorCode>, partitions: i32) -> TopicMetadata {
     TopicMetadata {
-        name: "t".into(),
         error,
         partitions: (0..partitions)
             .map(|id| PartitionMetadata {
@@ -486,8 +485,6 @@ fn topic_md(error: Option<RDKafkaErrorCode>, partitions: i32) -> TopicMetadata {
                 error: None,
             })
             .collect(),
-        is_internal: false,
-        updated_at: Instant::now(),
     }
 }
 
@@ -743,6 +740,74 @@ impl ProducerContext for UnreachableCtx {
 
     fn delivery(&self, result: &DeliveryResult<'_>, opaque: usize) {
         self.0.delivery(result, opaque)
+    }
+}
+
+/// Records the thread each delivery report ran on.
+#[derive(Clone, Default)]
+struct ThreadCtx(Ctx, Arc<Mutex<Vec<std::thread::ThreadId>>>);
+
+impl ClientContext for ThreadCtx {}
+
+impl ProducerContext for ThreadCtx {
+    type DeliveryOpaque = usize;
+
+    fn delivery(&self, result: &DeliveryResult<'_>, opaque: usize) {
+        self.1.lock().unwrap().push(std::thread::current().id());
+        self.0.delivery(result, opaque)
+    }
+}
+
+#[mz_ore::test]
+fn delivery_reports_never_run_on_the_calling_thread() {
+    for brokers in test_brokers() {
+        let ctx = ThreadCtx::default();
+        let p = ThreadedProducer::from_config_and_context(
+            &config(
+                &brokers,
+                &[
+                    ("transactional.id", &unique("kc-report-thread")),
+                    // Keep the records queued until the abort purges them.
+                    ("queue.buffering.max.ms", "30000"),
+                ],
+            ),
+            ctx.clone(),
+        )
+        .unwrap();
+        let topic = unique("kc-report-thread");
+        let cluster = cluster_of(&p);
+        create_topic(&cluster, &topic, 2);
+        let _drop = DropTopics::new(&cluster, &[&topic]);
+        p.init_transactions(Duration::from_secs(30)).unwrap();
+        p.begin_transaction().unwrap();
+        for i in 0..100 {
+            p.send(
+                BaseRecord::<(), [u8], usize>::with_opaque_to(&topic, i)
+                    .partition(i32::try_from(i % 2).unwrap())
+                    .payload(b"x".as_slice()),
+            )
+            .unwrap();
+        }
+        p.abort_transaction(Duration::from_secs(30)).unwrap();
+        let reports = ctx.0.0.reports();
+        assert_eq!(reports.len(), 100);
+        assert!(
+            reports
+                .iter()
+                .all(|r| r.error == Some(RDKafkaErrorCode::PurgeQueue)),
+            "{reports:?}"
+        );
+        let caller = std::thread::current().id();
+        assert!(ctx.1.lock().unwrap().iter().all(|t| *t != caller));
+        // In order per partition.
+        for partition in 0..2 {
+            let opaques: Vec<usize> = reports
+                .iter()
+                .filter(|r| r.partition == partition)
+                .map(|r| r.opaque)
+                .collect();
+            assert!(opaques.is_sorted(), "{opaques:?}");
+        }
     }
 }
 
@@ -1777,6 +1842,17 @@ fn deleted_topic_fails_transaction() {
         p.commit_transaction(Duration::from_secs(30)).unwrap();
 
         drop(DropTopics::new(&cluster, &[&topic]));
+        // Brokers complete a deletion asynchronously, and the next
+        // transaction could still commit to the topic. A separate client
+        // waits, so that the producer keeps its stale metadata, as the sink's
+        // does.
+        let (observer, _) = producer(&brokers, &[("allow.auto.create.topics", "false")]);
+        wait_for("the topic to be deleted", Duration::from_secs(30), || {
+            observer
+                .client()
+                .fetch_metadata(Some(&topic), Duration::from_secs(5))
+                .is_ok_and(|md| md.topics().iter().all(|t| t.error().is_some()))
+        });
         let start = Instant::now();
         sink_transaction(&p, &topic, &progress, 1, 1, 1);
         // Like the sink's partition count task.

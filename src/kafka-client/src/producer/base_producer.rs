@@ -172,6 +172,7 @@ where
     }
 
     /// The producer engine.
+    #[cfg(test)]
     pub(crate) fn inner(&self) -> &Arc<ProducerInner<C>> {
         &self.inner
     }
