@@ -245,6 +245,24 @@
       "dyncfg": true
     },
     {
+      "name": "column_paged_batcher_file_release_bytes",
+      "typeName": "unsigned integer",
+      "default": "134217728",
+      "description": "Bytes of free file store slots the buffer pool releases per extent class and interval. Zero disables the release.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "column_paged_batcher_file_release_interval",
+      "typeName": "duration",
+      "default": "1 s",
+      "description": "Interval at which the buffer pool releases free file store slots to the filesystem.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "column_paged_batcher_lz4",
       "typeName": "boolean",
       "default": "off",
@@ -864,6 +882,15 @@
       "typeName": "boolean",
       "default": "off",
       "description": "Use the columnar-native chunked merge batcher at arrange sites, whose chunk bodies the process buffer pool can spill. Takes precedence over enable_columnar_merge_batcher; with both false, arranges use the columnation `Col2ValBatcher` / `RowRowBuilder` path.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_column_paged_batcher_file_extents",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Use the scratch directory as the buffer pool's extent store when one exists. Read once at pool installation.",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true
