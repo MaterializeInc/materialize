@@ -19,6 +19,11 @@ stored in Amazon S3 or S3-compatible object storage. The examples use [Apache
 Polaris](https://polaris.apache.org/) as the catalog and MinIO as the object
 store.
 
+Materialize does not take a storage endpoint or storage credentials of its own.
+The catalog supplies both: with [credential
+vending](/sql/create-connection/#iceberg-catalog-access-delegation), it hands
+Materialize temporary credentials scoped to the table it writes.
+
 {{< tip >}}
 Some catalogs have their own guide: [AWS S3 Tables](/export-data/iceberg-aws/),
 [GCP BigLake](/export-data/iceberg-gcp/), and [Databricks Unity
