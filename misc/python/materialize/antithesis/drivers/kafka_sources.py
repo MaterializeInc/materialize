@@ -69,7 +69,7 @@ from confluent_kafka.cimpl import (
     TopicPartition,
 )
 
-from materialize.antithesis import remap_frontiers, sql, state
+from materialize.antithesis import ddl_hold, remap_frontiers, sql, state
 from materialize.antithesis.drivers.source_status import Export, observe
 from materialize.antithesis.drivers.sources_common import (
     LAZY_SETUP_BUDGET_S,
@@ -273,6 +273,8 @@ def ensure_slot(
     if _is_ready(db, s):
         _drop_old_generations(db, endpoints, host, s)
         return s
+    if ddl_hold.active():
+        return None
     with db:
         db.execute(
             "INSERT OR IGNORE INTO generations VALUES (?, ?, ?)",
@@ -338,7 +340,7 @@ def _setup_slot(
 def _drop_old_generations(
     db: sqlite3.Connection, endpoints: Endpoints, host: str, s: Slot
 ) -> None:
-    if s.dropped_below >= s.gen:
+    if s.dropped_below >= s.gen or ddl_hold.active():
         return
     try:
         with mz_connect(host) as conn:
@@ -369,12 +371,15 @@ def _drop_old_generations(
         )
 
 
-def _rotate_if_full(db: sqlite3.Connection, s: Slot) -> None:
+def _rotate_if_full(db: sqlite3.Connection, s: Slot) -> bool:
+    """Whether the topic reached its cap, rotating unless DDL is held."""
     row = db.execute(
         "SELECT attempted FROM attempts WHERE topic = ?", (s.topic,)
     ).fetchone()
     if row is None or int(row[0]) < TOPIC_RECORD_CAP:
-        return
+        return False
+    if ddl_hold.active():
+        return True
     with db:
         cur = db.execute(
             "UPDATE slots SET gen = gen + 1, partitions = ?, retain = ?"
@@ -388,6 +393,7 @@ def _rotate_if_full(db: sqlite3.Connection, s: Slot) -> None:
         )
     if cur.rowcount:
         log(f"slot {s.slot} rotated past gen {s.gen}")
+    return True
 
 
 def _value(tag: str) -> str:
@@ -546,6 +552,8 @@ def produce_main() -> int:
     )
     if s is None:
         return 0
+    if _rotate_if_full(db, s):
+        return 0
     deadline = Deadline(DRIVER_BUDGET_S)
     producer = _timeline_producer(db, endpoints)
     total = 0
@@ -553,7 +561,8 @@ def produce_main() -> int:
         n = rng.choice(BATCH_CHOICES)
         _produce(db, producer, s, _records(db, n))
         total += n
-        _rotate_if_full(db, s)
+        if _rotate_if_full(db, s):
+            break
         if rng.random() < 0.5:
             break
     log(f"produced {total} records to {s.topic}")

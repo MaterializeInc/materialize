@@ -96,12 +96,15 @@ def decode_progress(offset: int, payload: bytes | None) -> ProgressRecord | str:
     try:
         doc = json.loads(payload)
         elems = doc["frontier"]
-        version = int(doc.get("version", 0))
+        version = doc.get("version", 0)
     except (ValueError, KeyError, TypeError, UnicodeDecodeError) as e:
         return f"{offset}: {e}"
     if not isinstance(elems, list) or len(elems) > 1:
         return f"{offset}: frontier {elems!r} is not a total-order antichain"
-    return ProgressRecord(offset, int(elems[0]) if elems else None, version)
+    for name, value in [("version", version), *(("frontier", t) for t in elems)]:
+        if type(value) is not int or not 0 <= value < 2**64:
+            return f"{offset}: {name} {value!r} is not a u64"
+    return ProgressRecord(offset, elems[0] if elems else None, version)
 
 
 def frontier_le(a: int | None, b: int | None) -> bool:
@@ -207,6 +210,31 @@ def debezium_chain_breaks(
                     }
                 )
             current = row(value.get("after"), columns)
+    return out
+
+
+def debezium_key_mismatches(
+    messages: Iterable[SinkMessage], key_columns: Sequence[str]
+) -> list[dict[str, Any]]:
+    """Messages whose key differs from a nonempty before or after image's key."""
+    out = []
+    for m in messages:
+        for image in ("before", "after"):
+            value = (m.value or {}).get(image)
+            if value is None:
+                continue
+            expected = freeze({c: value.get(c) for c in key_columns})
+            if m.key != expected:
+                out.append(
+                    {
+                        "partition": m.partition,
+                        "offset": m.offset,
+                        "image": image,
+                        "key": repr(m.key),
+                        "expected_key": repr(expected),
+                    }
+                )
+                break
     return out
 
 

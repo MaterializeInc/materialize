@@ -13,6 +13,8 @@ import json
 from collections import Counter
 from typing import Any
 
+import pytest
+
 from materialize.antithesis import sink_oracle as o
 
 ITEM = ("id", "grp", "val", "tok")
@@ -87,6 +89,25 @@ def test_decode_progress() -> None:
     assert isinstance(o.decode_progress(5, b'{"timestamp": 1}'), str)
     assert isinstance(o.decode_progress(5, b'{"frontier": [1, 2]}'), str)
     assert isinstance(o.decode_progress(5, None), str)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'{"frontier": ["invalid"]}',
+        b'{"frontier": [null]}',
+        b'{"frontier": [{}]}',
+        b'{"frontier": [1.5]}',
+        b'{"frontier": [true]}',
+        b'{"frontier": [-1]}',
+        b'{"frontier": [18446744073709551616]}',
+        b'{"frontier": [1], "version": 0.5}',
+        b'{"frontier": [1], "version": -1}',
+        b'{"frontier": [1], "version": true}',
+    ],
+)
+def test_invalid_progress_is_an_oracle_error(payload: bytes) -> None:
+    assert isinstance(o.decode_progress(0, payload), str)
 
 
 def test_progress_regressions() -> None:
@@ -174,6 +195,30 @@ def test_debezium_detects_lost_and_duplicated_updates() -> None:
     no_value = [o.SinkMessage(0, 0, o.freeze({"id": 1}), None, 10)]
     assert len(o.debezium_chain_breaks(no_value, ITEM)) == 1
     assert o.consolidate_debezium(no_value, None, ITEM) == (Counter(), [])
+
+
+def test_debezium_rejects_keys_that_disagree_with_row_images() -> None:
+    first = dbz(10, 9, None, item(1, 0, 5))
+    second = dbz(12, 9, item(1, 0, 5), item(1, 0, 6))
+    assert o.debezium_chain_breaks([first, second], ITEM) == []
+    assert len(o.debezium_key_mismatches([first, second], ["id"])) == 2
+    assert o.debezium_key_mismatches([dbz(10, 1, None, item(1, 0, 5))], ["id"]) == []
+
+
+def test_stream_reports_debezium_key_corruption(monkeypatch) -> None:
+    pytest.importorskip("antithesis")
+    from materialize.antithesis.drivers import kafka_sinks
+
+    messages = [
+        dbz(10, 9, None, item(1, 0, 5)),
+        dbz(12, 9, item(1, 0, 5), item(1, 0, 6)),
+    ]
+    progress = [o.ProgressRecord(0, 13, 0)]
+    output = kafka_sinks.SinkOutput("sink", "debezium", messages, progress, progress)
+    assertions: list[bool] = []
+    monkeypatch.setattr(kafka_sinks, "always", lambda ok, *args: assertions.append(ok))
+    kafka_sinks._check_stream(output, {})
+    assert not all(assertions)
 
 
 def test_keyed_rows_flags_conflicts() -> None:
