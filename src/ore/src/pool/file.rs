@@ -36,8 +36,10 @@
 //! charged at its class size against the store's capacity. When an
 //! allocation does not fit, the store punches holes over warm slots of the
 //! other class holding the most warm bytes, moving them cold, until it
-//! fits. This returns space stranded by a shift in the class mix exactly
-//! when it blocks an allocation, and never otherwise.
+//! fits. Independently, [`FileStore::release_warm`] punches warm slots on
+//! its caller's schedule, so the bytes the store holds follow its live data
+//! and space freed in one class is available to any other. A slot it punches
+//! pays a `fallocate` when next allocated.
 //!
 //! **Alignment.** Class sizes are page multiples, and every transfer covers
 //! whole pages from a page-aligned buffer, which satisfies `O_DIRECT` on
@@ -590,6 +592,14 @@ impl FileStore {
         (0..self.classes.len()).any(|class| self.can_alloc(class))
     }
 
+    /// Punches warm slots of every class, up to `max_bytes` per class
+    /// rounded up to a whole slot, and returns the bytes punched.
+    pub(crate) fn release_warm(&self, max_bytes: u64) -> u64 {
+        (0..self.classes.len())
+            .map(|class| self.punch_warm(class, max_bytes).0)
+            .sum()
+    }
+
     pub(crate) fn stats(&self) -> FileStoreStats {
         let c = &self.counters;
         FileStoreStats {
@@ -656,61 +666,68 @@ impl FileStore {
             let Some((_, victim)) = victim else {
                 return false;
             };
-            let c = &self.classes[victim];
-            let class_size = u64::cast_from(c.size);
             let shortfall = self
                 .allocated
                 .load(Ordering::Relaxed)
                 .saturating_add(size)
                 .saturating_sub(self.capacity_bytes());
-            // Take the victims off the warm list under the lock and punch
-            // them after releasing it. `free` takes this mutex on workers
-            // holding a chunk's state lock, so it must not wait out the
-            // punches. A popped slot is on no free list, so nothing can
-            // allocate it meanwhile.
-            let popped: Vec<u32> = {
-                let mut slots = c.slots();
-                let mut popped = Vec::new();
-                while u64::cast_from(popped.len()).saturating_mul(class_size) < shortfall {
-                    let Some(index) = slots.pop_warm() else {
-                        break;
-                    };
-                    c.warm_bytes.fetch_sub(class_size, Ordering::Relaxed);
-                    popped.push(index);
-                }
-                popped
-            };
-            let mut punched = 0;
-            for &index in &popped {
-                let slot = FileSlot {
-                    class: victim,
-                    index,
-                };
-                if let Err(err) = sys::punch_hole(&c.file, self.offset(slot), c.size) {
-                    tracing::warn!("pool file store: punching a free slot failed: {err}");
-                    break;
-                }
-                punched += 1;
-                self.allocated.fetch_sub(class_size, Ordering::Relaxed);
-                self.counters
-                    .holes_punched_bytes
-                    .fetch_add(class_size, Ordering::Relaxed);
-            }
-            let (cold, warm) = popped.split_at(punched);
-            let mut slots = c.slots();
-            for &index in cold {
-                slots.free(index, false);
-            }
-            for &index in warm {
-                slots.free(index, true);
-                c.warm_bytes.fetch_add(class_size, Ordering::Relaxed);
-            }
-            if !warm.is_empty() {
-                // A punch failed.
+            let (_, failed) = self.punch_warm(victim, shortfall);
+            if failed {
                 return false;
             }
         }
         true
+    }
+
+    /// Punches warm slots of `class` until at least `want` bytes are punched
+    /// or none is left, moving them cold. Returns the bytes punched and
+    /// whether a punch failed, which leaves the failed slot and the ones not
+    /// yet punched warm.
+    fn punch_warm(&self, class: usize, want: u64) -> (u64, bool) {
+        let c = &self.classes[class];
+        let class_size = u64::cast_from(c.size);
+        // Take the victims off the warm list under the lock and punch them
+        // after releasing it. `free` takes this mutex on workers holding a
+        // chunk's state lock, so it must not wait out the punches. A popped
+        // slot is on no free list, so nothing can allocate it meanwhile.
+        let popped: Vec<u32> = {
+            let mut slots = c.slots();
+            let mut popped = Vec::new();
+            while u64::cast_from(popped.len()).saturating_mul(class_size) < want {
+                let Some(index) = slots.pop_warm() else {
+                    break;
+                };
+                c.warm_bytes.fetch_sub(class_size, Ordering::Relaxed);
+                popped.push(index);
+            }
+            popped
+        };
+        let mut punched = 0;
+        for &index in &popped {
+            let slot = FileSlot { class, index };
+            if let Err(err) = sys::punch_hole(&c.file, self.offset(slot), c.size) {
+                tracing::warn!("pool file store: punching a free slot failed: {err}");
+                break;
+            }
+            punched += 1;
+            self.allocated.fetch_sub(class_size, Ordering::Relaxed);
+            self.counters
+                .holes_punched_bytes
+                .fetch_add(class_size, Ordering::Relaxed);
+        }
+        let (cold, warm) = popped.split_at(punched);
+        let mut slots = c.slots();
+        for &index in cold {
+            slots.free(index, false);
+        }
+        for &index in warm {
+            slots.free(index, true);
+            c.warm_bytes.fetch_add(class_size, Ordering::Relaxed);
+        }
+        (
+            u64::cast_from(punched).saturating_mul(class_size),
+            !warm.is_empty(),
+        )
     }
 
     fn disable_writes(&self, op: &str, err: &io::Error) {

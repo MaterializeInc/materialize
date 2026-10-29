@@ -672,3 +672,57 @@ fn derived_capacity_floor() {
         "2% headroom above 50 GiB"
     );
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn release_warm_punches_up_to_the_limit_per_class() {
+    let classes = classes();
+    let (small, big) = (0, classes.len() - 1);
+    let (small_size, big_size) = (u64::cast_from(classes[small]), u64::cast_from(classes[big]));
+    let (_dir, s) = store(3 * small_size + 3 * big_size);
+    let live = s.alloc(small).unwrap();
+    let data = pattern(100, 5);
+    write_bytes(&s, live, &data).unwrap();
+    for class in [small, big] {
+        let slots: Vec<_> = (0..2).map(|_| s.alloc(class).unwrap()).collect();
+        for slot in slots {
+            s.free(slot);
+        }
+    }
+    assert_eq!(s.allocated_bytes(), 3 * small_size + 2 * big_size);
+
+    assert_eq!(
+        s.release_warm(small_size),
+        small_size + big_size,
+        "one slot per class, the limit rounded up to a whole slot"
+    );
+    assert_eq!(s.allocated_bytes(), 2 * small_size + big_size);
+
+    assert_eq!(s.release_warm(u64::MAX), small_size + big_size);
+    assert_eq!(
+        s.allocated_bytes(),
+        small_size,
+        "only the live slot holds blocks"
+    );
+    assert_eq!(s.stats().holes_punched_bytes, 2 * small_size + 2 * big_size);
+    assert_eq!(s.release_warm(u64::MAX), 0, "nothing warm is left");
+    assert_reads_back(&s, live, &data);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn release_warm_keeps_a_slot_whose_punch_failed_warm() {
+    let (_dir, s) = store(64 << 20);
+    let class = s.class_for(10_000).unwrap();
+    let slot = s.alloc(class).unwrap();
+    s.free(slot);
+    fault::fail_next(fault::Op::Punch, libc::EIO);
+    assert_eq!(s.release_warm(u64::MAX), 0);
+    assert_eq!(
+        s.classes[class].warm_bytes.load(Ordering::Relaxed),
+        u64::cast_from(s.class_size(class))
+    );
+    assert_eq!(s.alloc(class).unwrap(), slot, "the slot is still warm");
+}
