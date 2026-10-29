@@ -84,8 +84,13 @@ pub const BUILTIN_MIGRATION_SHARD_KEY: &str = "builtin_migration_shard";
 pub const EXPRESSION_CACHE_SHARD_KEY: &str = "expression_cache_shard";
 pub const MOCK_AUTHENTICATION_NONCE_KEY: &str = "mock_authentication_nonce";
 
+/// Provenance established at controller-owned creation: 0 pending, 1 complete.
+/// Absence does not grant permission to initialize an existing environment.
+pub const CONTROLLER_INITIALIZATION_COMPLETE_KEY: &str = "controller_initialization_complete";
+
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
+    pub controller_initialization: bool,
     pub default_adapter_size: String,
     pub cluster_replica_size_map: ClusterReplicaSizeMap,
     pub default_cluster_replica_size: String,
@@ -283,6 +288,10 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Whether this catalog uses durable read protection and native deployment admission.
     async fn catalog_read_protection_enabled(&mut self) -> Result<bool, CatalogError>;
 
+    /// Whether explicitly controller-owned initialization is unfinished.
+    /// Unmarked environments return false, not permission to initialize.
+    async fn controller_initialization_pending(&mut self) -> Result<bool, CatalogError>;
+
     /// Get the `with_0dt_deployment_max_wait` config value of this instance.
     ///
     /// This mirrors the `with_0dt_deployment_max_wait` "system var" so that we can
@@ -396,6 +405,15 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// Validates fencing and the runtime identity bound by
     /// [`DurableCatalogState::mark_bootstrap_complete`] before returning it.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
+
+    /// Reads initialization provenance without consuming pending catalog updates.
+    async fn controller_initialization_pending(&mut self) -> Result<bool, CatalogError> {
+        let snapshot = self.snapshot().await?;
+        let key = objects::ConfigKey {
+            key: CONTROLLER_INITIALIZATION_COMPLETE_KEY.into(),
+        };
+        Ok(snapshot.configs.get(&key).map(|value| value.value) == Some(0))
+    }
 
     /// Returns cleanup eligibility from the cached committed prefix, across all
     /// deployments. Validates the cached runtime context, but performs no I/O.
@@ -796,6 +814,7 @@ pub async fn persist_backed_catalog_join_active(
 
 pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
+        controller_initialization: false,
         default_adapter_size: DEFAULT_ADAPTER_SIZE.into(),
         default_cluster_replica_size: "scale=1,workers=1".into(),
         default_cluster_replication_factor: 1,

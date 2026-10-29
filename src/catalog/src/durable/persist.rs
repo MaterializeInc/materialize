@@ -1508,6 +1508,38 @@ impl UnopenedPersistCatalogState {
                 }
                 .into());
             }
+            // Resample provenance inside admission, before fencing or migrations.
+            // A pre-open check alone can race another environment creator.
+            let controller_pending = self
+                .update_applier
+                .configs
+                .get(super::CONTROLLER_INITIALIZATION_COMPLETE_KEY)
+                == Some(&0);
+            let controller_initializer =
+                bootstrap_args.is_some_and(|args| args.controller_initialization);
+            if (controller_initializer && self.is_initialized_inner() && !controller_pending)
+                || (controller_pending
+                    && (join || (matches!(self.mode, Mode::Writable) && !controller_initializer)))
+            {
+                return Err(DurableCatalogError::NotWritable(
+                    "catalog initialization admission does not match controller provenance".into(),
+                )
+                .into());
+            }
+            if controller_pending
+                && controller_initializer
+                && self
+                    .update_applier
+                    .settings
+                    .get(super::CATALOG_CONTENT_VERSION_KEY)
+                    != Some(&self.catalog_content_version.to_string())
+            {
+                return Err(DurableCatalogError::NotWritable(
+                    "unfinished controller initialization requires its original build version"
+                        .into(),
+                )
+                .into());
+            }
             let protection_enabled = self
                 .update_applier
                 .configs
@@ -1548,6 +1580,12 @@ impl UnopenedPersistCatalogState {
                 .token()
                 .expect("admitted token")
                 .deploy_generation;
+            if controller_pending && durable_generation != Some(admitted_generation) {
+                return Err(DurableCatalogError::NotWritable(
+                    "unfinished initialization requires its original deployment generation".into(),
+                )
+                .into());
+            }
             if protection_enabled
                 && durable_generation.is_some_and(|generation| generation < admitted_generation)
                 && matches!(
@@ -1824,7 +1862,14 @@ impl UnopenedPersistCatalogState {
                 // Note: Need to exclude read-only catalog mode here, because in that mode all
                 // transactions are expected to be no-ops.
                 // TODO: remove this once we only support upgrades from version >= 0.164
-                if txn.get_setting("migration_version".into()).is_none() && mode != Mode::Readonly {
+                // An interrupted controller creation has not run builtin
+                // initialization yet. Backfilling would suppress native birth.
+                let controller_pending =
+                    txn.get_config(super::CONTROLLER_INITIALIZATION_COMPLETE_KEY.into()) == Some(0);
+                if txn.get_setting("migration_version".into()).is_none()
+                    && mode != Mode::Readonly
+                    && !controller_pending
+                {
                     let old_version = txn.get_catalog_content_version();
                     txn.set_setting("migration_version".into(), old_version.map(Into::into))?;
                 }
@@ -2116,6 +2161,13 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .get_current_config(READ_PROTECTION_CONFIG)
             .await?
             .is_some_and(|value| value != 0))
+    }
+
+    async fn controller_initialization_pending(&mut self) -> Result<bool, CatalogError> {
+        Ok(self
+            .get_current_config(super::CONTROLLER_INITIALIZATION_COMPLETE_KEY)
+            .await?
+            == Some(0))
     }
 
     #[mz_ore::instrument(level = "debug")]

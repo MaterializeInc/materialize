@@ -751,6 +751,7 @@ async fn upgrade_check(
         .open_savepoint(
             now().into(),
             &BootstrapArgs {
+                controller_initialization: false,
                 default_adapter_size: mz_catalog::durable::DEFAULT_ADAPTER_SIZE.into(),
                 default_cluster_replica_size:
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),

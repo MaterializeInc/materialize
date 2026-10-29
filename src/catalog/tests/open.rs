@@ -960,6 +960,131 @@ async fn test_persist_open() {
     test_open(state_builder).await;
 }
 
+// Durable creation can commit before the first Catalog::open. Controller-owned
+// recovery must preserve that distinction without adopting unmarked catalogs.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_controller_initialization_provenance() {
+    use mz_catalog::durable::CONTROLLER_INITIALIZATION_COMPLETE_KEY;
+
+    for owned in [false, true] {
+        let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+            .with_default_deploy_generation();
+        let mut args = test_bootstrap_args();
+        args.controller_initialization = owned;
+        let mut unopened = builder.clone().unwrap_build().await;
+        assert!(!unopened.controller_initialization_pending().await.unwrap());
+        let mut state = unopened.open(NOW_ZERO().into(), &args).await.unwrap();
+        let before = state.snapshot().await.unwrap();
+        let before_epoch = state.epoch();
+        Box::new(state).expire().await;
+
+        // The creation option must not confer provenance on a later open.
+        args.controller_initialization = true;
+        let mut unopened = builder.clone().unwrap_build().await;
+        assert_eq!(
+            unopened.controller_initialization_pending().await.unwrap(),
+            owned
+        );
+        if !owned {
+            let error = unopened
+                .open(SYSTEM_TIME().into(), &args)
+                .await
+                .err()
+                .unwrap();
+            assert!(matches!(
+                error,
+                CatalogError::Durable(DurableCatalogError::NotWritable(_))
+            ));
+            // Refusal must precede fencing the existing owner.
+            args.controller_initialization = false;
+            unopened = builder.unwrap_build().await;
+        }
+        let mut state = unopened.open(SYSTEM_TIME().into(), &args).await.unwrap();
+        assert_eq!(state.epoch().get(), before_epoch.get() + 1);
+        if owned {
+            assert_eq!(state.snapshot().await.unwrap(), before);
+        }
+        {
+            let _ = state.sync_to_current_updates().await.unwrap();
+            let txn = state.transaction().await.unwrap();
+            assert_eq!(
+                txn.get_config(CONTROLLER_INITIALIZATION_COMPLETE_KEY.into()),
+                owned.then_some(0)
+            );
+            assert_eq!(txn.get_setting("migration_version".into()).is_none(), owned);
+        }
+        Box::new(state).expire().await;
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_pending_controller_refuses_join() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut args = test_bootstrap_args();
+    args.controller_initialization = true;
+    let mut state = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(NOW_ZERO().into(), &args)
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    // Native protection alone must not authorize joining an unfinished catalog.
+    txn.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let before = state.snapshot().await.unwrap();
+    // Savepoint inspection cannot publish initialization or fence the owner.
+    let diagnostic = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    Box::new(diagnostic).expire().await;
+    assert_eq!(state.snapshot().await.unwrap(), before);
+    let error = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error,
+        CatalogError::Durable(DurableCatalogError::NotWritable(_))
+    ));
+    for incompatible in [
+        builder.clone().with_deploy_generation(1),
+        builder.with_version(semver::Version::new(0, 1, 0)),
+    ] {
+        let error = incompatible
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &args)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            error,
+            CatalogError::Durable(DurableCatalogError::NotWritable(_))
+        ));
+        // Neither an incompatible resume nor a join may fence or mutate its owner.
+        assert_eq!(state.snapshot().await.unwrap(), before);
+    }
+    assert_eq!(state.snapshot().await.unwrap(), before);
+    Box::new(state).expire().await;
+}
+
 async fn test_open(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
 

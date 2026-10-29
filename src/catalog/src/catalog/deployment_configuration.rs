@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Finite publication of active deployment configuration before child launch.
+//! Finite publication of initializer snapshots and active deployment configuration.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -41,18 +41,44 @@ impl Catalog {
         snapshot: &[BuiltinTableUpdate],
         oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
     ) -> Result<(), CatalogError> {
+        self.reconcile_bootstrap_tables(persist, infrastructure, snapshot, oracle, false)
+            .await
+    }
+
+    /// Reconciles the initializer's full builtin snapshot before children start.
+    /// This is not repair of projections in an already serving environment.
+    pub(crate) async fn reconcile_initial_builtin_snapshot(
+        &self,
+        persist: &mz_persist_client::PersistClient,
+        infrastructure: &mut TableInfrastructure,
+        snapshot: &[BuiltinTableUpdate],
+        oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
+    ) -> Result<(), CatalogError> {
+        self.reconcile_bootstrap_tables(persist, infrastructure, snapshot, oracle, true)
+            .await
+    }
+
+    async fn reconcile_bootstrap_tables(
+        &self,
+        persist: &mz_persist_client::PersistClient,
+        infrastructure: &mut TableInfrastructure,
+        snapshot: &[BuiltinTableUpdate],
+        oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
+        initial_seed: bool,
+    ) -> Result<(), CatalogError> {
         {
             let storage = self.storage().await;
             if self.diagnostic_config.read_only
                 || storage.is_read_only()
                 || storage.is_savepoint()
+                || (initial_seed && storage.is_join())
                 || self.state().active_deployment_generation()
                     != Some(self.state().deployment_generation())
             {
                 return Err(CatalogError::ReadOnly);
             }
         }
-        let mut desired: BTreeMap<_, Vec<Row>> = [
+        let mut desired: BTreeMap<_, Vec<(Row, i64)>> = [
             &*MZ_CLUSTER_REPLICA_SIZES,
             &*MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
             &*MZ_EGRESS_IPS,
@@ -61,6 +87,15 @@ impl Catalog {
         .into_iter()
         .map(|table| (self.resolve_builtin_table(table), Vec::new()))
         .collect();
+        if initial_seed {
+            for builtin in crate::builtin::BUILTINS::iter() {
+                if let crate::builtin::Builtin::Table(table) = builtin {
+                    desired
+                        .entry(self.resolve_builtin_table(table))
+                        .or_default();
+                }
+            }
+        }
         let sizes = self
             .state()
             .resolve_builtin_table_updates(self.state().pack_all_replica_size_updates());
@@ -70,12 +105,23 @@ impl Catalog {
                     return Err(anyhow::anyhow!("configuration snapshot must contain rows").into());
                 };
                 for (row, diff) in updates {
-                    if *diff != Diff::ONE {
+                    if !initial_seed && *diff != Diff::ONE {
                         return Err(
                             anyhow::anyhow!("configuration snapshot must be positive").into()
                         );
                     }
-                    rows.push(row.clone());
+                    rows.push((row.clone(), diff.into_inner()));
+                }
+            }
+        }
+        if initial_seed {
+            for rows in desired.values_mut() {
+                differential_dataflow::consolidation::consolidate(rows);
+                if rows.iter().any(|(_, diff)| *diff <= 0) {
+                    return Err(anyhow::anyhow!(
+                        "initial builtin snapshot must consolidate to positive rows"
+                    )
+                    .into());
                 }
             }
         }
@@ -157,8 +203,7 @@ impl Catalog {
                         .map_err(|_| {
                             anyhow::anyhow!("configuration snapshot lost its leased since")
                         })?;
-                    let mut diffs: Vec<_> =
-                        desired.iter().cloned().map(|row| (row, 1i64)).collect();
+                    let mut diffs = desired.clone();
                     for ((data, ()), _, diff) in actual {
                         let row = data.0.map_err(|error| {
                             anyhow::anyhow!("invalid configuration row: {error}")
@@ -170,6 +215,21 @@ impl Catalog {
                     for (row, diff) in diffs {
                         txn.write(shard, SourceData(Ok(row)), (), diff).await;
                     }
+                }
+                // Certify after observing the tables, not before. If a peer
+                // completes after this check, its children's writes invalidate
+                // the B+1 append below. Retrying must recheck provenance before
+                // any completed-deployment rows can become seed retractions.
+                if initial_seed
+                    && !self
+                        .storage()
+                        .await
+                        .controller_initialization_pending()
+                        .await?
+                {
+                    return Err(
+                        anyhow::anyhow!("controller initialization ownership changed").into(),
+                    );
                 }
                 if !changed {
                     return Ok(());

@@ -19,8 +19,9 @@ use mz_repr::Timestamp;
 /// Opens a fresh deployment or reconstructs an initialized same-generation one.
 ///
 /// Restart joins without migrations or positive snapshot publication. The launcher
-/// must pair same-build children and preserve deployment configuration. This does
-/// not implement recovery from interrupted fresh initialization or upgrades.
+/// must pair same-build children and preserve deployment configuration. Explicitly
+/// pending controller initialization resumes before child launch. Unmarked existing
+/// environments remain join-only. This does not implement upgrades.
 pub async fn open_catalog(
     config: &crate::Config,
     adapter_sizes: &std::collections::BTreeMap<String, super::provisioning::AdapterAllocation>,
@@ -94,9 +95,16 @@ pub async fn open_catalog(
         config.config_sync_timeout,
     )
     .await?;
-    let fresh = !openable.is_initialized().await?;
+    let pending = openable.controller_initialization_pending().await?;
+    if pending {
+        ensure!(
+            openable.get_deployment_generation().await? == config.controller.deploy_generation,
+            "unfinished initialization requires its original deployment generation"
+        );
+    }
+    let initialize = !openable.is_initialized().await? || pending;
     let mut system_parameter_defaults = config.system_parameter_defaults.clone();
-    if fresh {
+    if initialize {
         ensure!(
             adapter_sizes.contains_key(mz_catalog::durable::DEFAULT_ADAPTER_SIZE),
             "fresh controller initialization requires an allocation for the default adapter size"
@@ -110,11 +118,12 @@ pub async fn open_catalog(
             parameters.insert(native, "true".into());
         }
     }
-    let mut storage = if fresh {
+    let mut storage = if initialize {
         openable
             .open(
                 (config.now)().into(),
                 &BootstrapArgs {
+                    controller_initialization: true,
                     default_adapter_size: mz_catalog::durable::DEFAULT_ADAPTER_SIZE.into(),
                     default_cluster_replica_size: config
                         .bootstrap_default_cluster_replica_size
@@ -193,7 +202,7 @@ pub async fn open_catalog(
         },
     };
     let persist = catalog_config.state.persist_client.clone();
-    let catalog = if fresh {
+    let catalog = if initialize {
         super::initialize_fresh(catalog_config, oracle.as_ref()).await?
     } else {
         Catalog::open(catalog_config)

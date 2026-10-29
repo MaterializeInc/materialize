@@ -582,6 +582,13 @@ depend on compute queries. Prewarming skips shared reconciliation even though it
 catalog handle can write protection. Private replacement-shard backfill remains
 separate, and planning continues to use deployment-local configuration.
 
+Initial seed reconciliation must freshly certify pending initialization after
+each table snapshot. An entry check cannot authorize a delayed initializer after
+a peer completes and starts children. If completion follows the fresh check,
+subsequent child WAL writes invalidate the append at B+1. A retry takes new
+snapshots and rechecks authorization. This preserves completed-deployment changes
+without an additional initializer lease or ownership protocol.
+
 ### Durable sink progress can precede controller observations
 
 A sink commits external output before advancing its Persist progress shard, then

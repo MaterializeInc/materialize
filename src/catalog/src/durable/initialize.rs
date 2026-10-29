@@ -218,6 +218,9 @@ pub(crate) async fn initialize(
     initial_ts: EpochMillis,
     catalog_content_version: String,
 ) -> Result<(), CatalogError> {
+    if options.controller_initialization {
+        tx.insert_config(super::CONTROLLER_INITIALIZATION_COMPLETE_KEY.to_string(), 0)?;
+    }
     // Collect audit events so we can commit them once at the very end.
     let mut audit_events = vec![];
 

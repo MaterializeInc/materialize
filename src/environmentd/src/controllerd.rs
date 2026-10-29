@@ -24,17 +24,24 @@ pub use startup::open_catalog;
 
 /// Completes fresh deployment initialization before provisioning its children.
 ///
-/// The launcher supplies the writable initializer admission. Existing environments
-/// are rejected here rather than replaying positive snapshots on restart. This
-/// path starts neither a SQL coordinator nor shared maintenance.
+/// Requires explicit unfinished controller provenance and writable initializer
+/// admission. Completed and unmarked environments cannot enter this path. It
+/// starts neither a SQL coordinator nor shared maintenance.
 pub async fn initialize_fresh(
-    config: mz_catalog::config::Config<'_>,
+    mut config: mz_catalog::config::Config<'_>,
     oracle: &(dyn mz_timestamp_oracle::TimestampOracle<mz_repr::Timestamp> + Send + Sync),
 ) -> Result<mz_catalog::catalog::Catalog, mz_catalog::catalog::CatalogError> {
-    if !config.storage.initialized_catalog() {
-        return Err(
-            anyhow::anyhow!("fresh controller initialization requires a new catalog").into(),
-        );
+    if config.storage.is_read_only() || config.storage.is_savepoint() || config.storage.is_join() {
+        return Err(anyhow::anyhow!(
+            "controller initialization requires writable initializer admission"
+        )
+        .into());
+    }
+    if !config.storage.controller_initialization_pending().await? {
+        return Err(anyhow::anyhow!(
+            "controller initialization requires explicit unfinished provenance"
+        )
+        .into());
     }
     let persist = config.state.persist_client.clone();
     let metrics = config.metrics_registry.clone();

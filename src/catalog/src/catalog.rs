@@ -106,6 +106,8 @@ mod apply;
 pub mod cluster_state;
 mod deployment_configuration;
 mod deployment_initialization;
+#[cfg(test)]
+mod deployment_initialization_tests;
 mod error;
 mod open;
 mod retention;
@@ -1523,6 +1525,7 @@ impl Catalog {
     ) -> Result<crate::durable::CatalogSnapshotReader, CatalogError> {
         let config = &self.diagnostic_config;
         let bootstrap = BootstrapArgs {
+            controller_initialization: false,
             default_adapter_size: crate::durable::DEFAULT_ADAPTER_SIZE.into(),
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
             default_cluster_replica_size: config.builtin_system_cluster_config.size.clone(),

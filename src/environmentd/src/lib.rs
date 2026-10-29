@@ -713,6 +713,7 @@ impl Listeners {
                 .await?;
 
         let bootstrap_args = BootstrapArgs {
+            controller_initialization: false,
             default_adapter_size: mz_catalog::durable::DEFAULT_ADAPTER_SIZE.into(),
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
@@ -751,6 +752,13 @@ impl Listeners {
         let catalog_open_start = Instant::now();
         info!("startup: envd serve: durable catalog open beginning");
 
+        // No execution process may race an unfinished controller seed.
+        if openable_adapter_storage
+            .controller_initialization_pending()
+            .await?
+        {
+            return Err(anyhow!("controller initialization is not complete").into());
+        }
         // Load the adapter durable storage.
         if config.joined_adapter_id.is_some()
             && !openable_adapter_storage

@@ -1384,6 +1384,7 @@ async fn create_materialize_state(
     };
 
     let bootstrap_args = BootstrapArgs {
+        controller_initialization: false,
         default_adapter_size: mz_catalog::durable::DEFAULT_ADAPTER_SIZE.into(),
         cluster_replica_size_map: config.materialize_cluster_replica_sizes.clone(),
         default_cluster_replica_size: "ABC".to_string(),
