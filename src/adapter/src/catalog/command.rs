@@ -13,6 +13,10 @@
 //! by its predecessors. Pending external work abandons that candidate. A continuation
 //! rebuilds the prefix before consuming its indexed response, so successful preparation
 //! and preparation errors are accepted only when their inputs still match.
+//!
+//! External mutations are not catalog operations. ROTATE KEYS uses a pinned publication
+//! command instead of retrying its external mutation. Catalog rollback cannot undo
+//! secret writes or changes in external services.
 
 pub(crate) mod connection;
 pub(crate) mod source;
