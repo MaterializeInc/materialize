@@ -74,8 +74,10 @@ import { FreshnessTable } from "./FreshnessTable";
 import {
   HydrationCounts,
   inFreshnessScope,
+  LagPercentiles,
   useFreshnessHydration,
   useLatestLag,
+  useObjectLagPercentiles,
 } from "./queries";
 import {
   parsePredicate,
@@ -140,6 +142,7 @@ const FreshnessContent = ({
   const objectIds = objects.map((object) => object.objectId);
   const freshness = useClusterFreshness({ lookbackMs, objects });
   const latest = useLatestLag(objectIds);
+  const percentiles = useObjectLagPercentiles({ objectIds, lookbackMs });
   const hydration = useFreshnessHydration(objectIds);
 
   // Before the headline, the graph and the tables, because each of them would
@@ -153,12 +156,17 @@ const FreshnessContent = ({
     );
   }
 
-  // Waits for both, because drawing the graph before the latest readings would
-  // show a "Now" column that disagrees with it. An error only replaces the page
-  // when there is nothing to show, so a failed refetch keeps the last good
-  // readings on screen.
-  if (!freshness.data || !latest.data || objects.length === 0) {
-    return freshness.isError || latest.isError ? (
+  // Waits for all three, because drawing the graph before the latest readings
+  // or the percentiles would show columns that disagree with it. An error only
+  // replaces the page when there is nothing to show, so a failed refetch keeps
+  // the last good readings on screen.
+  if (
+    !freshness.data ||
+    !latest.data ||
+    !percentiles.data ||
+    objects.length === 0
+  ) {
+    return freshness.isError || latest.isError || percentiles.isError ? (
       <ErrorBox message="An error occurred fetching freshness data." />
     ) : (
       <Box height="320px" width="100%">
@@ -173,6 +181,7 @@ const FreshnessContent = ({
     <FreshnessView
       data={freshness.data}
       latestByObjectId={latest.data}
+      percentilesByObjectId={percentiles.data}
       hydrationByObjectId={hydration.data ?? NO_HYDRATION}
       scope={scope}
       {...viewOptions}
@@ -183,6 +192,7 @@ const FreshnessContent = ({
 const FreshnessView = ({
   data: { historicalData, startTime, endTime, lines, objectsById },
   latestByObjectId,
+  percentilesByObjectId,
   hydrationByObjectId,
   scope,
   rangeLabel,
@@ -192,13 +202,14 @@ const FreshnessView = ({
 }: FreshnessViewOptions & {
   data: FreshnessData;
   latestByObjectId: Map<string, number | null>;
+  percentilesByObjectId: Map<string, LagPercentiles>;
   hydrationByObjectId: Map<string, HydrationCounts>;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { judged, rows, breaching } = useFreshnessRows({
     lines,
-    historicalData,
     latestByObjectId,
+    percentilesByObjectId,
     objectsById,
     hydrationByObjectId,
     typeFilters,
