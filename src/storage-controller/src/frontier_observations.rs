@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Cooperative observations of physical storage progress. These rows are not
-//! read holds. Catalog views must filter them by current object and shard.
+//! Cooperative storage frontiers combine committed logical read permission with
+//! durable write progress. These rows are not read holds. Catalog views must
+//! filter them by current object and shard.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound::{Excluded, Unbounded};
@@ -216,9 +217,6 @@ impl Inventory {
 }
 
 async fn sample(persist: &PersistClient, metadata: &CollectionMetadata) -> Observation {
-    let read = persist
-        .recent_since::<SourceData, (), Timestamp, StorageDiff>(metadata.data_shard, diagnostics())
-        .await;
     // TxnsCodecRow uses the same key/value codecs as data shards. The WAL
     // upper, not the possibly unapplied data upper, bounds transactional writes.
     let write = persist
@@ -227,14 +225,14 @@ async fn sample(persist: &PersistClient, metadata: &CollectionMetadata) -> Obser
             diagnostics(),
         )
         .await;
-    if let Err(error) = &read {
-        tracing::warn!(?error, shard = %metadata.data_shard, "sampling storage since");
-    }
     if let Err(error) = &write {
         tracing::warn!(?error, shard = %metadata.data_shard, "sampling storage upper");
     }
     Observation {
-        read: read.map_or(Frontier::Unknown, Frontier::observed),
+        // Physical since can lag logical readability, e.g. while ingestion
+        // resumption retains an old remap lease. Catalog certification supplies
+        // the logical bound for this exact binding, not any peer's local holds.
+        read: Frontier::Unknown,
         write: write.map_or(Frontier::Unknown, Frontier::observed),
     }
 }
@@ -253,6 +251,7 @@ struct Output {
     observed_upper: Timestamp,
     certifier: Option<Arc<dyn CollectionMetadataCertifier>>,
     dirty: BTreeSet<Key>,
+    certify_after: Option<Key>,
     revisit_after: Option<Key>,
     // Drained into inventory after preparation, never retained as tombstones.
     retired: BTreeSet<Key>,
@@ -294,6 +293,7 @@ impl Output {
             observed_upper: Timestamp::MIN,
             certifier: None,
             dirty: BTreeSet::new(),
+            certify_after: None,
             revisit_after: None,
             retired: BTreeSet::new(),
         }
@@ -403,13 +403,21 @@ impl Output {
         let lower = self.observed_upper;
         let mut updates = Vec::new();
         let mut retired = BTreeSet::new();
+        let mut certified_reads = Samples::new();
         if let Some(certifier) = &self.certifier {
-            let batch: Vec<_> = self
-                .dirty
-                .iter()
-                .take(CERTIFICATION_BATCH)
-                .cloned()
-                .collect();
+            // Rotate independently of the cold-row revisit cursor. Hot low
+            // keys can become dirty after every append, but cannot monopolize
+            // certification and leave other logical frontiers unknown.
+            let start = self.certify_after.as_ref().map_or(Unbounded, Excluded);
+            let batch: Vec<_> =
+                self.dirty
+                    .range((start, Unbounded))
+                    .chain(self.dirty.iter().take_while(|key| {
+                        self.certify_after.as_ref().is_some_and(|last| *key <= last)
+                    }))
+                    .take(CERTIFICATION_BATCH)
+                    .cloned()
+                    .collect();
             let ids: BTreeSet<_> = batch
                 .iter()
                 .filter(|key| self.observed.contains_key(*key))
@@ -422,16 +430,19 @@ impl Output {
                 BTreeMap::new()
             } else {
                 certifier
-                    .collection_shards_at_current(&ids)
+                    .collection_metadata_at_current(&ids)
                     .await
                     .map_err(PrepareError::Certification)?
             };
+            if let Some(last) = batch.last() {
+                self.certify_after = Some(last.clone());
+            }
             for key in batch {
                 self.dirty.remove(&key);
                 if let Some(rows) = self.observed.get(&key) {
                     let id = key.0.parse().expect("native observation global id");
                     let shard = key.1.parse().expect("native observation shard id");
-                    if current.get(&id) != Some(&shard) {
+                    if current.get(&id).map(|metadata| metadata.shard) != Some(shard) {
                         for (observation, diff) in rows {
                             updates.push((
                                 (SourceData(Ok(observation.row(&key))), ()),
@@ -443,12 +454,35 @@ impl Output {
                         // also needs subscription confirmation before forgetting.
                         self.dirty.insert(key.clone());
                         retired.insert(key);
+                    } else if let Some(bound) = current[&id].compaction_bound.as_ref() {
+                        certified_reads.insert(
+                            key,
+                            Observation {
+                                read: Frontier::observed(bound.clone()),
+                                write: Frontier::Unknown,
+                            },
+                        );
                     }
                 }
             }
         }
         self.retired.extend(retired.iter().cloned());
-        for (index, (key, sampled)) in samples.iter().enumerate() {
+        // Overlay the bounded certificate batch without cloning the pending map.
+        let proposed = samples
+            .iter()
+            .map(|(key, sample)| {
+                (
+                    key,
+                    sample.join(certified_reads.get(key).copied().unwrap_or_default()),
+                )
+            })
+            .chain(
+                certified_reads
+                    .iter()
+                    .filter(|(key, _)| !samples.contains_key(*key))
+                    .map(|(key, sample)| (key, *sample)),
+            );
+        for (index, (key, sampled)) in proposed.enumerate() {
             if retired.contains(key) {
                 continue;
             }
@@ -458,7 +492,7 @@ impl Output {
                 assert_eq!(*diff, 1);
                 *observation
             });
-            let joined = old.unwrap_or_default().join(*sampled);
+            let joined = old.unwrap_or_default().join(sampled);
             if old != Some(joined) {
                 if let Some(old) = old {
                     updates.push(((SourceData(Ok(old.row(key))), ()), lower, -1));
@@ -592,16 +626,20 @@ mod tests {
     #[derive(Debug, Default)]
     struct Catalog {
         mappings: std::sync::Mutex<BTreeMap<GlobalId, ShardId>>,
+        bounds: std::sync::Mutex<BTreeMap<GlobalId, Antichain<Timestamp>>>,
         fail: std::sync::atomic::AtomicBool,
         calls: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait::async_trait]
     impl CollectionMetadataCertifier for Catalog {
-        async fn collection_shards_at_current(
+        async fn collection_metadata_at_current(
             &self,
             ids: &BTreeSet<GlobalId>,
-        ) -> Result<BTreeMap<GlobalId, ShardId>, anyhow::Error> {
+        ) -> Result<
+            BTreeMap<GlobalId, mz_storage_client::controller::CertifiedCollectionMetadata>,
+            anyhow::Error,
+        > {
             use std::sync::atomic::Ordering::SeqCst;
             assert!(ids.len() <= CERTIFICATION_BATCH);
             self.calls.fetch_add(1, SeqCst);
@@ -612,7 +650,15 @@ mod tests {
                 .unwrap()
                 .iter()
                 .filter(|(id, _)| ids.contains(*id))
-                .map(|(id, shard)| (*id, *shard))
+                .map(|(id, shard)| {
+                    (
+                        *id,
+                        mz_storage_client::controller::CertifiedCollectionMetadata {
+                            shard: *shard,
+                            compaction_bound: self.bounds.lock().unwrap().get(id).cloned(),
+                        },
+                    )
+                })
                 .collect())
         }
     }
@@ -733,26 +779,23 @@ mod tests {
         let persist = PersistClient::new_for_tests().await;
         let output_shard = ShardId::new();
         let data_shard = ShardId::new();
-        let (mut writer, mut lease) = data(&persist, data_shard).await;
+        let (mut writer, _lease) = data(&persist, data_shard).await;
         let metadata = metadata(data_shard, None);
         advance(&mut writer, 5).await;
         let old = sample(&persist, &metadata).await;
         assert_eq!(
             old,
             Observation {
-                read: at(0),
+                read: Frontier::Unknown,
                 write: at(5)
             }
         );
         advance(&mut writer, 10).await;
-        lease
-            .downgrade_since(&Antichain::from_elem(Timestamp::from(2)))
-            .await;
         let new = sample(&persist, &metadata).await;
         assert_eq!(
             new,
             Observation {
-                read: at(2),
+                read: Frontier::Unknown,
                 write: at(10)
             }
         );
@@ -802,11 +845,11 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn physical_since_and_transactional_upper() {
+    async fn logical_permission_and_transactional_upper_ignore_physical_pins() {
         let persist = PersistClient::new_for_tests().await;
         let data_shard = ShardId::new();
         let wal_shard = ShardId::new();
-        let (mut writer, mut lease) = data(&persist, data_shard).await;
+        let (mut writer, lease) = data(&persist, data_shard).await;
         advance(&mut writer, 20).await;
         let mut critical = persist
             .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
@@ -818,13 +861,6 @@ mod tests {
             .await
             .unwrap();
         let epoch = critical.opaque().clone();
-        critical
-            .compare_and_downgrade_since(
-                &epoch,
-                (&epoch, &Antichain::from_elem(Timestamp::from(10))),
-            )
-            .await
-            .unwrap();
         let mut wal: Writer = persist
             .open_writer(
                 wal_shard,
@@ -836,46 +872,141 @@ mod tests {
             .unwrap();
         advance(&mut wal, 40).await;
         let metadata = metadata(data_shard, Some(wal_shard));
-        let key = ("u1".to_owned(), data_shard.to_string());
+        let id = GlobalId::User(1);
+        let key = (id.to_string(), data_shard.to_string());
         let output_shard = ShardId::new();
         let mut output = Output::open(&persist, binding(output_shard)).await;
-        // Controller protection is 10, but the physical since is held at 0 by
-        // another lease. The table's physical upper is 20, but its WAL is at 40.
-        for expected_since in [0, 5, 10] {
-            if expected_since != 0 {
-                lease
-                    .downgrade_since(&Antichain::from_elem(Timestamp::from(expected_since)))
-                    .await;
+        let catalog = Arc::new(Catalog::default());
+        catalog.mappings.lock().unwrap().insert(id, data_shard);
+        output.certifier = Some(Arc::<Catalog>::clone(&catalog));
+        let sampled = sample(&persist, &metadata).await;
+        let samples = BTreeMap::from([(key.clone(), sampled)]);
+        assert_eq!(
+            sampled,
+            Observation {
+                read: Frontier::Unknown,
+                write: at(40)
             }
-            let observed = sample(&persist, &metadata).await;
-            assert_eq!(
-                observed,
+        );
+        publish(&mut output, &samples).await;
+        assert_eq!(
+            rows(&persist, output_shard).await,
+            samples,
+            "physical since does not establish logical permission"
+        );
+
+        // Permission-only progress must publish from retained observations,
+        // even after a peer changes the output and invalidates our first CAS.
+        let bound = Antichain::from_elem(Timestamp::from(10));
+        catalog.bounds.lock().unwrap().insert(id, bound.clone());
+        critical
+            .compare_and_downgrade_since(&epoch, (&epoch, &bound))
+            .await
+            .unwrap();
+        output.revisit();
+        let attempt = output
+            .prepare(&Samples::new(), &NowFn::from(|| 0))
+            .await
+            .unwrap()
+            .unwrap();
+        advance(&mut wal, 50).await;
+        let mut peer = Output::open(&persist, binding(output_shard)).await;
+        let newer = BTreeMap::from([(key.clone(), sample(&persist, &metadata).await)]);
+        publish(&mut peer, &newer).await;
+        assert!(!output.append(attempt).await);
+        publish(&mut output, &Samples::new()).await;
+        assert_eq!(
+            rows(&persist, output_shard).await,
+            BTreeMap::from([(
+                key.clone(),
                 Observation {
-                    read: at(expected_since),
-                    write: at(40)
+                    read: at(10),
+                    write: at(50)
                 }
-            );
-            let expected = BTreeMap::from([(key.clone(), observed)]);
-            publish(&mut output, &expected).await;
-            assert_eq!(rows(&persist, output_shard).await, expected);
-        }
-        // Observation itself acquired no lease that could hold back this since.
-        lease.expire().await;
+            )])
+        );
+
+        // A resumption lease can retain physical history at 0 even after
+        // logical permission becomes empty. Empty is not missing permission.
+        catalog.bounds.lock().unwrap().insert(id, Antichain::new());
         critical
             .compare_and_downgrade_since(&epoch, (&epoch, &Antichain::new()))
             .await
             .unwrap();
-        let observed = sample(&persist, &metadata).await;
         assert_eq!(
-            observed,
-            Observation {
-                read: Frontier::Empty,
-                write: at(40)
-            }
+            persist
+                .recent_since::<SourceData, (), Timestamp, StorageDiff>(
+                    data_shard,
+                    Diagnostics::for_tests()
+                )
+                .await
+                .unwrap(),
+            Antichain::from_elem(Timestamp::MIN)
         );
-        let expected = BTreeMap::from([(key, observed)]);
-        publish(&mut output, &expected).await;
-        assert_eq!(rows(&persist, output_shard).await, expected);
+        output.revisit();
+        publish(&mut output, &Samples::new()).await;
+        assert_eq!(
+            rows(&persist, output_shard).await,
+            BTreeMap::from([(
+                key,
+                Observation {
+                    read: Frontier::Empty,
+                    write: at(50)
+                }
+            )])
+        );
+        lease.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn logical_permission_certification_does_not_starve_high_keys() {
+        let persist = PersistClient::new_for_tests().await;
+        let shard = ShardId::new();
+        let catalog = Arc::new(Catalog::default());
+        let mut initial = Samples::new();
+        let mut ids = Vec::new();
+        for index in 0..=CERTIFICATION_BATCH {
+            let id = GlobalId::User(10_000 + u64::try_from(index).unwrap());
+            let data_shard = ShardId::new();
+            ids.push(id);
+            catalog.mappings.lock().unwrap().insert(id, data_shard);
+            catalog
+                .bounds
+                .lock()
+                .unwrap()
+                .insert(id, Antichain::from_elem(Timestamp::from(1)));
+            initial.insert(
+                (id.to_string(), data_shard.to_string()),
+                Observation {
+                    read: Frontier::Unknown,
+                    write: at(100),
+                },
+            );
+        }
+        let last = initial.last_key_value().unwrap().0.clone();
+        let mut producer = Output::open(&persist, binding(shard)).await;
+        publish(&mut producer, &initial).await;
+        let mut observer = Output::open(&persist, binding(shard)).await;
+        observer.certifier = Some(Arc::<Catalog>::clone(&catalog));
+        for round in 1..=4 {
+            for id in &ids[..CERTIFICATION_BATCH] {
+                catalog
+                    .bounds
+                    .lock()
+                    .unwrap()
+                    .insert(*id, Antichain::from_elem(Timestamp::from(round)));
+            }
+            // Low keys become dirty again through our own publication while
+            // their permissions keep advancing. The last key still needs a turn.
+            if let Some(attempt) = observer
+                .prepare(&Samples::new(), &NowFn::from(|| 0))
+                .await
+                .unwrap()
+            {
+                assert!(observer.append(attempt).await);
+            }
+        }
+        assert_eq!(rows(&persist, shard).await[&last].read, at(1));
     }
 
     #[mz_ore::test(tokio::test)]
@@ -906,7 +1037,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn sampling_errors_preserve_independent_knowledge() {
+    async fn transactional_sampling_does_not_infer_logical_permission() {
         let persist = PersistClient::new_for_tests().await;
         let incompatible = ShardId::new();
         let _wrong_codec = persist
@@ -931,7 +1062,7 @@ mod tests {
         assert_eq!(
             sample(&persist, &metadata(shard, Some(incompatible))).await,
             Observation {
-                read: at(0),
+                read: Frontier::Unknown,
                 write: Frontier::Unknown
             },
         );
@@ -1128,6 +1259,10 @@ mod tests {
                     mappings: std::sync::Mutex::new(BTreeMap::from([(
                         GlobalId::User(1),
                         data_shard,
+                    )])),
+                    bounds: std::sync::Mutex::new(BTreeMap::from([(
+                        GlobalId::User(1),
+                        Antichain::from_elem(Timestamp::MIN),
                     )])),
                     ..Default::default()
                 }),

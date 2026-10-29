@@ -3670,7 +3670,7 @@ where
     /// This method is invoked by `Controller::maintain`, which we expect to be called once per
     /// second during normal operation.
     fn update_frontier_introspection(&mut self) {
-        // Native frontiers derive from replica reports and cooperative physical
+        // Native frontiers derive from replica reports and cooperative
         // storage samples. An adapter must not replace those shared observations.
         if self.replica_owned {
             return;

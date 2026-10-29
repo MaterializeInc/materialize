@@ -430,7 +430,24 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     async fn collection_shards_at_current(
         &mut self,
         ids: &BTreeSet<GlobalId>,
-    ) -> Result<BTreeMap<GlobalId, ShardId>, CatalogError>;
+    ) -> Result<BTreeMap<GlobalId, ShardId>, CatalogError> {
+        Ok(self
+            .collection_metadata_at_current(ids)
+            .await?
+            .into_iter()
+            .map(|(id, metadata)| (id, metadata.shard))
+            .collect())
+    }
+
+    /// Returns bindings and logical permissions from the same fresh prefix,
+    /// without consuming pending projection updates.
+    async fn collection_metadata_at_current(
+        &mut self,
+        ids: &BTreeSet<GlobalId>,
+    ) -> Result<
+        BTreeMap<GlobalId, mz_storage_client::controller::CertifiedCollectionMetadata>,
+        CatalogError,
+    >;
 
     /// Listen and return all updates that are currently in the catalog.
     ///

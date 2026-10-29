@@ -214,11 +214,19 @@ pub struct OpenCommittedCatalog {
 
 #[async_trait::async_trait]
 impl mz_storage_client::controller::CollectionMetadataCertifier for CatalogUpperHandle {
-    async fn collection_shards_at_current(
+    async fn collection_metadata_at_current(
         &self,
         ids: &BTreeSet<GlobalId>,
-    ) -> Result<BTreeMap<GlobalId, mz_persist_client::ShardId>, anyhow::Error> {
-        Ok(CatalogUpperHandle::collection_shards_at_current(self, ids).await?)
+    ) -> Result<
+        BTreeMap<GlobalId, mz_storage_client::controller::CertifiedCollectionMetadata>,
+        anyhow::Error,
+    > {
+        Ok(self
+            .storage
+            .lock()
+            .await
+            .collection_metadata_at_current(ids)
+            .await?)
     }
 }
 

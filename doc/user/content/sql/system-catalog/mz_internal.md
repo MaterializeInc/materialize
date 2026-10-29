@@ -445,9 +445,9 @@ A dataflow operator is hydrated on a given replica when it has fully processed t
 
 ## `mz_frontiers`
 
-The `mz_frontiers` table describes the frontiers of each source, sink, table,
-materialized view, index, and subscription in the system, as observed from the
-coordinator.
+The `mz_frontiers` view describes the frontiers of each source, sink, table,
+materialized view, index, and subscription in the system. Read frontiers describe
+logical readability, not all physical history still retained by storage.
 
 An index has no row when its frontiers have not been observed from a connected
 replica, including when its cluster has no replicas. Missing observations are

@@ -2830,10 +2830,13 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         })
     }
 
-    async fn collection_shards_at_current(
+    async fn collection_metadata_at_current(
         &mut self,
         ids: &BTreeSet<GlobalId>,
-    ) -> Result<BTreeMap<GlobalId, ShardId>, CatalogError> {
+    ) -> Result<
+        BTreeMap<GlobalId, mz_storage_client::controller::CertifiedCollectionMetadata>,
+        CatalogError,
+    > {
         self.validate_runtime()?;
         if self.mode != Mode::Writable {
             return Err(DurableCatalogError::NotWritable(
@@ -2849,7 +2852,22 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                     .snapshot
                     .storage_collection_metadata
                     .get(&crate::durable::objects::StorageCollectionMetadataKey { id: *id })
-                    .map(|value| (*id, value.shard))
+                    .map(|value| {
+                        (
+                            *id,
+                            mz_storage_client::controller::CertifiedCollectionMetadata {
+                                shard: value.shard,
+                                compaction_bound: self
+                                    .update_applier
+                                    .snapshot
+                                    .collection_compaction_bounds
+                                    .get(&crate::durable::objects::CollectionCompactionBoundKey {
+                                        id: *id,
+                                    })
+                                    .map(|bound| Antichain::from_iter(bound.frontier)),
+                            },
+                        )
+                    })
             })
             .collect())
     }

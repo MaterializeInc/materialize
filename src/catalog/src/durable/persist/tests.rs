@@ -143,6 +143,8 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
         .expect("enable joins");
     txn.insert_collection_metadata(mappings.clone())
         .expect("insert mappings");
+    txn.set_collection_compaction_bound(retained, Some(mz_repr::Timestamp::from(10)))
+        .expect("initial logical permission accompanies binding birth");
     // This durable-only test has no in-memory projection to update.
     let _ = txn.get_and_commit_op_updates();
     let ts = txn.upper();
@@ -160,6 +162,21 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
             .await
             .expect("certify current collection mappings"),
         mappings
+    );
+    let metadata = joiner
+        .collection_metadata_at_current(&ids)
+        .await
+        .expect("binding and permission");
+    assert_eq!(metadata[&retained].shard, mappings[&retained]);
+    assert_eq!(
+        metadata[&retained].compaction_bound,
+        Some(timely::progress::Antichain::from_elem(
+            mz_repr::Timestamp::from(10)
+        ))
+    );
+    assert_eq!(
+        metadata[&dropped].compaction_bound, None,
+        "missing is not completed"
     );
     let cached_upper = joiner.current_upper().await;
 
@@ -198,6 +215,8 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
     let mut txn = writer.transaction().await.expect("replacement transaction");
     txn.insert_collection_metadata(BTreeMap::from([(dropped, successor)]))
         .expect("insert successor binding");
+    txn.set_collection_compaction_bound(dropped, None)
+        .expect("completed successor permission");
     let _ = txn.get_and_commit_op_updates();
     let ts = txn.upper();
     txn.commit(ts).await.expect("commit successor binding");
@@ -207,6 +226,15 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
             .await
             .expect("certify successor"),
         BTreeMap::from([(dropped, successor), (retained, mappings[&retained])])
+    );
+    let metadata = joiner
+        .collection_metadata_at_current(&ids)
+        .await
+        .expect("successor permission");
+    assert_eq!(metadata[&dropped].shard, successor);
+    assert_eq!(
+        metadata[&dropped].compaction_bound,
+        Some(timely::progress::Antichain::new())
     );
     assert!(
         !joiner

@@ -7,22 +7,49 @@ Preserve native execution and the 60s publication default.
 
 ## Current slice and next action
 
-Initialization recovery is ready to land with this handoff. Recovery, admission,
-entry-point compilation, strict catalog Clippy and formatting all pass. No worker
-job is currently active. Missing worker Clippy/pkg-config/OpenSSL dependencies were
-installed after their failures were reproduced. Source checks then passed unchanged.
+The logical storage-frontier correction is complete. It combines committed read
+permission and exact shard binding from one fresh catalog prefix with durable
+write progress. Physical since can remain pinned by ingestion resumption leases
+and must not define the public logical read frontier. Certification stays bounded
+and incremental, with round-robin selection to prevent hot-key starvation.
 
-Next:
-1. Build the exact committed tree through default `bin/controllerd --build-only`
-   and run the default-debug restart/placement witnesses. Earlier runtime evidence
-   used an integrated candidate, not the exact final initialization commit.
-2. Add retained public-frontier placement/replacement regression coverage using
-   the existing testdrive suite.
-3. Continue deployment coexistence and the executed compatible-version upgrade
-   walkthrough. M3 is not complete.
+Verification passes: all44 storage-controller tests, targeted durable catalog
+certification, strict storage-controller/catalog/adapter all-target Clippy, default
+`bin/environmentd` and `bin/controllerd` builds, two-adapter restart and placement,
+and the full `controller-frontiers.td` on default-debug binaries. The source
+assertion that failed three times before the correction passes unchanged. The
+obsolete assertion that treated `mz_frontiers` as a storage source now checks
+`mz_storage_frontier_observations`, retaining both progress predicates. Targeted
+MV replacement/alias coverage is retained. Review67's starvation and permission-only
+coverage findings are resolved, including a real peer CAS conflict and twice-red
+starvation regression. All runtime compositions and managed test processes stopped.
 
-Entry-point evidence: `/tmp/m3-init-constructor-check-fixed.log` checks
-mz-environmentd, mz-catalog-debug and mz-testdrive, all targets.
+Evidence is archived under `startup-spin/logical-frontier-runtime-pass.json.gz`
+and `logical-frontier-full-test-pass.json.gz`. Runtime binary source is ec0ca0def,
+full test checkout3580c0fd differs only in test/docs. The full-test archive records
+binary hashes and both revisions. Logs: `/tmp/m3-logical-frontier-runtime.log`,
+`/tmp/m3-logical-frontier-debug-testdrive-final.log`, and
+`/tmp/m3-logical-frontier-final-checks.log` (tests pass, subsequently corrected
+Clippy casts). No worker job remains active.
+
+**Next: compatible-version full writers and explicit retirement.** Aljoscha
+approved both compatible versions accepting SQL, DDL and table writes. Promotion
+switches active execution authority without implicitly retiring the old deployment.
+Retirement is a separate deliberate administrative command, durably fencing the
+selected deployment before reclaiming its protections/execution and processes.
+Surviving deployments and shared pubsub must remain untouched. Keep one authorized
+external-sink execution to avoid Kafka producer fencing. Brief candidate-adapter
+restart is acceptable, but read-only prewarming is no longer the final M3 outcome.
+
+Agent68/task321 identified the existing constraints: pending DDL is restricted,
+same-generation admission requires equal SemVer precedence, and promotion removes
+old membership/protection/execution. Schema/fingerprint and semantic compatibility
+constraints still apply. Do not substitute same-version build-metadata variation
+for real version overlap. Output write enablement is currently one-way
+(`execution.rs::apply_catalog`), so simply preserving old sink executions would
+leave competing Kafka producers. Reuse admission and explicit retirement rather
+than introducing a new consensus protocol. The designer-owned design/prompt still
+need alignment with this approved steering.
 
 ## Initialization recovery
 
@@ -94,19 +121,14 @@ before freshly certifying exact bindings, retains incremental state, and retries
 CAS conflicts with new certification. Silence or certification error cannot authorize
 retirement. Zero adapters may pause cleanup.
 
-Retained test coverage opportunity: `test/testdrive/controller-frontiers.td` already
-covers normal MVs, indexes, empty/missing frontiers and drop. Extend it with targeted
-MV placement and replacement aliases from the passing private placement witness.
-Mzcompose enables native catalog protection for current versions. No new framework
-is needed. No testdrive edit has been made yet.
-
 ## Remaining M3 work
 
 Implement controller deployment coexistence: pending admission, adapter readiness,
-promotion/serving transition and retired-generation cleanup. Reuse existing durable
+promotion/serving transition, overlapping compatible full writers and explicit
+retirement/retired-generation cleanup. Reuse existing durable
 admission/fencing and environmentd preflight. Keep policy/readiness in adapters
-without a designated leader. Bring consequential serving/promotion UX decisions to
-Aljoscha before implementation. Execute the copyable local version-upgrade recipe
+without a designated leader. The brief candidate-adapter restart at promotion is approved. Bring other
+consequential UX decisions to Aljoscha before implementation. Execute the copyable local version-upgrade recipe
 in `doc/developer/controllerd.md`, preserving warmed execution and shared pubsub.
 
 Remaining acceptance also includes matched fast-peek measurements, diagnostic/notice
@@ -118,12 +140,14 @@ in b422b581, preserve the audit backlog without authorizing unrelated implementa
 
 ## CI
 
-[Build141410](https://buildkite.com/materialize/test/builds/141410), head37a38130,
-failed on upstream merge conflicts before cargo and the public-image registry gate:
-`pubsubd` is not public on DockerHub. Its optimized Rust build completed. Registry
-visibility needs its owner (@team-testing), not a gate bypass. Later heads still
-need broad verification. Do not merge upstream, enable nightly validation, bypass
-gates or mark the PR ready. The PR summary was updated in place.
+Broad CI is not green. Builds141410 and141419 (latest published head0cc15b05)
+completed optimized Rust builds but failed the public-image gate because `pubsubd`
+is not public on DockerHub. Registry visibility needs @team-testing, not a bypass.
+Build141419 published materialized and testdrive images, used for the unchanged
+frontier regression. Worker `current-candidate-images.json` records their tags.
+They do not contain the pending logical-frontier correction. Upstream merge-skew
+failures remain outside the authorized integration scope. Do not merge upstream,
+enable nightly validation, bypass gates or mark the PR ready.
 
 ## Worker and evidence
 

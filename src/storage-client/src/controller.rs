@@ -144,7 +144,7 @@ pub enum IntrospectionType {
     StorageStatuses,
     /// Native compute observations, written by their replica incarnation.
     ReplicaFrontierObservations,
-    /// Cooperative observations of physical storage progress, keyed by shard.
+    /// Cooperative logical read and durable write frontiers, keyed by shard.
     StorageFrontierObservations,
 }
 
@@ -375,6 +375,14 @@ impl StorageWriteOp {
     }
 }
 
+/// A binding and its logical compaction permission from one committed prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertifiedCollectionMetadata {
+    pub shard: ShardId,
+    /// Missing permission is unknown. An explicitly empty frontier is completed.
+    pub compaction_bound: Option<Antichain<Timestamp>>,
+}
+
 /// Certifies exact storage bindings against a freshly fetched catalog prefix.
 ///
 /// Retirement callers must observe shared rows before invoking this method.
@@ -384,10 +392,10 @@ impl StorageWriteOp {
 /// An error never authorizes deletion.
 #[async_trait]
 pub trait CollectionMetadataCertifier: Debug + Send + Sync {
-    async fn collection_shards_at_current(
+    async fn collection_metadata_at_current(
         &self,
         ids: &BTreeSet<GlobalId>,
-    ) -> Result<BTreeMap<GlobalId, ShardId>, anyhow::Error>;
+    ) -> Result<BTreeMap<GlobalId, CertifiedCollectionMetadata>, anyhow::Error>;
 }
 
 /// Controls local storage enactment.

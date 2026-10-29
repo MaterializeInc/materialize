@@ -63,6 +63,49 @@ mv1 r2
 mv1
 
 
+# A targeted MV reports its actual replica, not every replica that shares the
+# persisted output. Replacement keeps the predecessor alias, but that alias
+# must not acquire a current replica frontier from the successor's storage upper.
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_replica_targeted_materialized_views = true
+
+> CREATE MATERIALIZED VIEW frontier_pinned IN CLUSTER test REPLICA r1 AS SELECT * FROM t1
+
+> SELECT replicas.name
+  FROM mz_cluster_replica_frontiers frontiers
+  JOIN mz_internal.mz_object_global_ids ids ON ids.global_id = frontiers.object_id
+  JOIN mz_objects objects ON objects.id = ids.id
+  JOIN mz_cluster_replicas replicas ON replicas.id = frontiers.replica_id
+  WHERE objects.name = 'frontier_pinned'
+r1
+
+> CREATE REPLACEMENT MATERIALIZED VIEW frontier_replacement FOR frontier_pinned
+  IN CLUSTER test REPLICA r2 AS SELECT * FROM t1
+> ALTER MATERIALIZED VIEW frontier_pinned APPLY REPLACEMENT frontier_replacement
+
+> SELECT count(*)
+  FROM mz_internal.mz_object_global_ids ids
+  JOIN mz_objects objects ON objects.id = ids.id
+  WHERE objects.name = 'frontier_pinned'
+2
+
+> SELECT replicas.name
+  FROM mz_cluster_replica_frontiers frontiers
+  JOIN mz_internal.mz_object_global_ids ids ON ids.global_id = frontiers.object_id
+  JOIN mz_objects objects ON objects.id = ids.id
+  JOIN mz_cluster_replicas replicas ON replicas.id = frontiers.replica_id
+  WHERE objects.name = 'frontier_pinned'
+r2
+
+> SELECT * FROM frontier_pinned
+1
+
+> DROP MATERIALIZED VIEW frontier_pinned
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET enable_replica_targeted_materialized_views
+
 # Test that frontiers of indexes are reported.
 
 > CREATE INDEX idx1 ON t1 (a)
@@ -210,7 +253,8 @@ r2
 source1_tbl
 t1
 
-# Test that the frontiers of storage-managed collections are reported.
+# Test that storage-managed observation collections have frontiers. The public
+# mz_frontiers relation is a view, not a storage collection of its own.
 
 > SELECT
     sources.name
@@ -218,10 +262,10 @@ t1
   JOIN mz_sources sources
     ON frontiers.object_id = sources.id
   WHERE
-    sources.name = 'mz_frontiers' AND
+    sources.name = 'mz_storage_frontier_observations' AND
     frontiers.read_frontier > 0 AND
     frontiers.write_frontier > 0
-mz_frontiers
+mz_storage_frontier_observations
 
 # Test that frontiers are added when replicas are created.
 
