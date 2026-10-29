@@ -3163,7 +3163,7 @@ class FlipFlagsAction(Action):
         # Parallel workload uses only sizes outside the `legacy` family.
         self.flags_with_values["cluster_family_allowed_workloads"] = [
             "'{}'",
-            '\'{"legacy": ["ingest"]}\'',
+            '\'{"legacy": ["ingest", "compute_introspection"]}\'',
         ]
         self.flags_with_values["enable_union_cancellation_after_relation_cse"] = (
             BOOLEAN_FLAG_VALUES

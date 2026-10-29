@@ -2944,7 +2944,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
         ),
         (
             "allowed_workloads",
-            "The workload classes that clusters of this size may run: `ingest`, `sink`, `compute_maintained`, and `compute_interactive`.",
+            "The workload classes that clusters of this size may run: `ingest`, `sink`, `compute_maintained`, `compute_interactive`, and `compute_introspection`.",
         ),
     ]),
     is_retained_metrics_object: true,

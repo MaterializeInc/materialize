@@ -167,14 +167,19 @@ pub enum WorkloadClass {
     ComputeMaintained,
     /// `SELECT`, `COPY TO`, and the reads of `INSERT`, `UPDATE`, and `DELETE`.
     ComputeInteractive,
+    /// `SELECT` and `SUBSCRIBE` that read only system objects, including
+    /// per-replica introspection relations, which only the replicas of the
+    /// target cluster can answer.
+    ComputeIntrospection,
 }
 
 impl WorkloadClass {
-    pub const ALL: [WorkloadClass; 4] = [
+    pub const ALL: [WorkloadClass; 5] = [
         WorkloadClass::Ingest,
         WorkloadClass::Sink,
         WorkloadClass::ComputeMaintained,
         WorkloadClass::ComputeInteractive,
+        WorkloadClass::ComputeIntrospection,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -183,6 +188,7 @@ impl WorkloadClass {
             WorkloadClass::Sink => "sink",
             WorkloadClass::ComputeMaintained => "compute_maintained",
             WorkloadClass::ComputeInteractive => "compute_interactive",
+            WorkloadClass::ComputeIntrospection => "compute_introspection",
         }
     }
 }

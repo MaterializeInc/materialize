@@ -195,7 +195,7 @@ pub const OIDC_AUDIENCE: Config<fn() -> serde_json::Value> = Config::new(
 pub const CLUSTER_FAMILY_ALLOWED_WORKLOADS: Config<fn() -> serde_json::Value> = Config::new(
     "cluster_family_allowed_workloads",
     || serde_json::json!({}),
-    "The workload classes that clusters using sizes of a family may run. A JSON object mapping family names to arrays of classes: ingest, sink, compute_maintained, compute_interactive. Families not listed allow every class.",
+    "The workload classes that clusters using sizes of a family may run. A JSON object mapping family names to arrays of classes: ingest, sink, compute_maintained, compute_interactive, compute_introspection. Families not listed allow every class.",
     ParameterScope::Environment,
 );
 
