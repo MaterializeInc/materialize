@@ -160,6 +160,9 @@ impl VisibilityLog {
         let old = self
             .entries
             .partition_point(|e| now_ms.saturating_sub(e.observed_ms) > period_ms);
+        if old < 2 {
+            return;
+        }
         let last = self.entries.len().saturating_sub(1);
         // Entries are ascending in observation time, so ages, and with them the buckets,
         // descend.

@@ -2359,7 +2359,9 @@ impl Instance {
     /// Registers `consumer` with the visibility logs of its freshness inputs, so that they keep
     /// the entries it needs before its first observation. Does nothing while recording is off.
     fn register_freshness_consumer(&mut self, consumer: LogConsumer) {
-        if self.freshness_config.is_none() {
+        // `record_freshness` skips transient collections, so they would never read and their
+        // mark would keep every entry of their inputs.
+        if self.freshness_config.is_none() || consumer.0.is_transient() {
             return;
         }
         self.with_freshness_input_logs(consumer, |log| log.register(consumer));

@@ -456,10 +456,9 @@ pub type LogConsumer = (GlobalId, Option<ReplicaId>);
 ///
 /// Entries are kept while a consumer may still need them, for as long as the consumer is
 /// registered, which it is from its creation until it is dropped or its recording stops.
-/// Entries older than one period are thinned geometrically by age, see [`VisibilityLog::thin`],
-/// and entries older than the histogram retention are dropped. So a log holds about
-/// `2 * buckets_per_octave * log2(retention / period)` old entries plus those of the last period,
-/// however long a consumer lags.
+/// Entries older than one period are thinned geometrically by age, which bounds the log however
+/// long a consumer lags, see [`VisibilityLog::thin`], and entries older than the histogram
+/// retention are dropped.
 #[derive(Debug, Default, Clone)]
 pub struct ConsumedVisibilityLog {
     log: VisibilityLog,

@@ -1671,7 +1671,7 @@ async fn local_delay_spans_a_long_replica_outage() {
 }
 
 /// A collection whose only replica is dropped and replaced 15 minutes later records the outage
-/// as the local delay of its global recording, also though the new replica's recording starts
+/// as the local delay of its global recording, even though the new replica's recording starts
 /// later.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
@@ -1706,6 +1706,21 @@ async fn local_delay_spans_a_recreated_replica() {
     // 965 + 5 ms.
     let buckets = recorded.buckets("local", a, None);
     assert_eq!(buckets.last(), Some(&scheme.bucket(904_003)), "{buckets:?}");
+}
+
+/// A transient collection, which is not recorded, does not keep its input's log.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn transient_collection_does_not_keep_input_log() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let transient = GlobalId::Transient(20);
+    h.add_collection_with_inputs(transient, T0, &[STORAGE_INPUT]);
+    h.add_replica(ReplicaId::User(1));
+    for s in 1..=20 {
+        storage_tick(&h, s);
+    }
+    assert_eq!(h.storage_log.with(|log| log.len()), 1);
 }
 
 /// A consumer that is dropped, or whose recording stops, stops keeping its input's log.
