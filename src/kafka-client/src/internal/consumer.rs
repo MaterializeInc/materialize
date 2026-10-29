@@ -257,8 +257,6 @@ impl ConsumerInner {
             .collect()
     }
 
-    // Main queue.
-
     /// Adds a partition with new data to the main queue.
     fn main_ready(&self, partition: Arc<Partition>) {
         let mut main = self.lock_main();
@@ -371,8 +369,6 @@ impl ConsumerInner {
             *current = Some(self.lock_main().ready.pop_front()?);
         }
     }
-
-    // Assignment.
 
     /// Replaces the assignment, like `rd_kafka_assign`.
     ///
@@ -525,8 +521,6 @@ impl ConsumerInner {
             id: self.next_queue_id.fetch_add(1, Ordering::Relaxed),
         })
     }
-
-    // Offsets.
 
     /// Stores `offset` (raw) as the next offset to commit for a partition.
     pub(crate) fn store_offset(&self, topic: &str, id: i32, offset: i64) -> KafkaResult<()> {
@@ -815,8 +809,6 @@ impl ConsumerInner {
         }
         Ok(tpl)
     }
-
-    // Groups.
 
     /// Subscribes to `topics`, joining the group.
     pub(crate) fn subscribe(self: &Arc<Self>, topics: &[&str]) -> KafkaResult<()> {

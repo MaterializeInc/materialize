@@ -322,7 +322,8 @@ async fn run(
                     }
                     next_heartbeat = now + consumer.heartbeat_interval;
                     if poll_overdue(&inner) {
-                        let exceeded = inner.since_poll().saturating_sub(consumer.max_poll_interval);
+                        let max_poll = consumer.max_poll_interval;
+                        let exceeded = inner.since_poll().saturating_sub(max_poll);
                         inner.log(
                             RDKafkaLogLevel::Warning,
                             "MAXPOLL",
@@ -330,19 +331,24 @@ async fn run(
                                 "Application maximum poll interval ({}ms) exceeded by {}ms \
                                  (adjust max.poll.interval.ms for long-running message \
                                  processing): leaving group",
-                                consumer.max_poll_interval.as_millis(),
+                                max_poll.as_millis(),
                                 exceeded.as_millis()
                             ),
                         );
-                        inner.push_event(KafkaError::MessageConsumption(RDKafkaErrorCode::PollExceeded));
+                        let error = KafkaError::MessageConsumption(RDKafkaErrorCode::PollExceeded);
+                        inner.push_event(error);
                         revoke(&inner).await;
                         send_leave(&inner, &group_id, &member_id, instance_id.as_deref()).await;
                         member_id.clear();
                         break;
                     }
-                    match heartbeat(&inner, &group_id, generation, &member_id, instance_id.as_deref()).await {
+                    let instance = instance_id.as_deref();
+                    match heartbeat(&inner, &group_id, generation, &member_id, instance).await {
                         Ok(()) => last_ok = Instant::now(),
-                        Err(RDKafkaErrorCode::RebalanceInProgress | RDKafkaErrorCode::IllegalGeneration) => break,
+                        Err(
+                            RDKafkaErrorCode::RebalanceInProgress
+                            | RDKafkaErrorCode::IllegalGeneration,
+                        ) => break,
                         Err(RDKafkaErrorCode::UnknownMemberId) => {
                             member_id.clear();
                             break;
@@ -355,7 +361,9 @@ async fn run(
                         }
                         Err(code) => {
                             if is_coordinator_error(code) {
-                                inner.cluster.invalidate_coordinator(CoordinatorKind::Group, &group_id);
+                                inner
+                                    .cluster
+                                    .invalidate_coordinator(CoordinatorKind::Group, &group_id);
                             }
                             if last_ok.elapsed() >= consumer.session_timeout {
                                 // The coordinator has expired the session by now.

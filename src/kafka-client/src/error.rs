@@ -77,11 +77,6 @@ impl RDKafkaError {
         }))
     }
 
-    /// Creates an error whose message is librdkafka's description of `code`.
-    pub(crate) fn from_code(code: RDKafkaErrorCode) -> RDKafkaError {
-        RDKafkaError::new(code, code.err2str())
-    }
-
     fn with_flags(self, f: impl FnOnce(&mut RDKafkaErrorInner)) -> RDKafkaError {
         let mut inner = Arc::unwrap_or_clone(self.0);
         f(&mut inner);
@@ -453,7 +448,8 @@ mod tests {
 
     #[mz_ore::test]
     fn rdkafka_error_flags() {
-        let err = RDKafkaError::from_code(RDKafkaErrorCode::ProducerFenced).mark_fatal();
+        let code = RDKafkaErrorCode::ProducerFenced;
+        let err = RDKafkaError::new(code, code.err2str()).mark_fatal();
         assert!(err.is_fatal());
         assert!(!err.is_retriable());
         assert!(!err.txn_requires_abort());

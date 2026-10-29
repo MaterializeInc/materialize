@@ -408,34 +408,6 @@ impl Broker {
         Ok(response)
     }
 
-    /// Sends a request that has no response (Produce with `acks=0`); returns
-    /// once it is written.
-    pub(crate) async fn send_oneway<R, F>(
-        self: &Arc<Self>,
-        build: F,
-        opts: RequestOptions,
-    ) -> Result<(), NetError>
-    where
-        R: Request,
-        F: FnOnce(i16) -> R,
-    {
-        let timeout = opts.timeout.unwrap_or(self.ctx.settings.socket_timeout);
-        let deadline = Deadline::new(timeout);
-        let conn = self.connection(deadline).await?;
-        let mut opts = opts;
-        opts.timeout = Some(deadline.remaining_duration().unwrap_or(timeout));
-        conn.send_oneway::<R, F>(build, &opts).await
-    }
-
-    /// The API version that requests of `R` would use on the current
-    /// connection, if connected.
-    pub(crate) fn api_version(&self, key: kafka_protocol::messages::ApiKey) -> Option<i16> {
-        let slot = self.slot.lock().expect("lock poisoned");
-        slot.conn
-            .as_ref()
-            .and_then(|c| c.api_versions().version(key))
-    }
-
     async fn run_attempt(self: Arc<Self>, epoch: u64) {
         let result = self.attempt_inner().await;
         self.attempt.send_modify(|s| {

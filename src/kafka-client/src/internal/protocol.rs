@@ -15,7 +15,7 @@
 //! Kafka's message schemas. Record batches are encoded and decoded by
 //! [`records`](crate::internal::records), not here.
 //!
-//! The version ranges in [`supported_versions`] deliberately stop below
+//! The version ranges in [`SUPPORTED`] deliberately stop below
 //! versions that identify topics by ID instead of name (Fetch 13,
 //! OffsetCommit/OffsetFetch 10, Produce 13), below the batched coordinator and
 //! offset-fetch formats (FindCoordinator 4, OffsetFetch 8), and below the
@@ -90,15 +90,6 @@ pub(crate) fn api_key_value(key: ApiKey) -> Option<i16> {
     supported_index(key).map(|i| SUPPORTED[i].1)
 }
 
-/// The version range this client supports for `key`, or `None` if the client
-/// does not use the API.
-pub(crate) fn supported_versions(key: ApiKey) -> Option<VersionRange> {
-    supported_index(key).map(|i| VersionRange {
-        min: SUPPORTED[i].2,
-        max: SUPPORTED[i].3,
-    })
-}
-
 /// The ApiVersions version sent first. v3 carries the client software name
 /// and version. A broker that does not support it answers with a v0 response
 /// carrying `UNSUPPORTED_VERSION`, after which the client retries with v0.
@@ -118,8 +109,6 @@ pub(crate) struct ApiVersions {
     /// Indexed like `SUPPORTED`; `None` if the broker does not support any
     /// version this client supports, or does not support the API at all.
     versions: [Option<i16>; SUPPORTED.len()],
-    /// The broker's advertised ranges, indexed like `SUPPORTED`.
-    broker: [Option<VersionRange>; SUPPORTED.len()],
 }
 
 impl ApiVersions {
@@ -128,14 +117,12 @@ impl ApiVersions {
     pub(crate) fn negotiate(broker_ranges: impl IntoIterator<Item = (i16, i16, i16)>) -> Self {
         let mut versions = ApiVersions {
             versions: [None; SUPPORTED.len()],
-            broker: [None; SUPPORTED.len()],
         };
         for (key, min, max) in broker_ranges {
             let Some(idx) = SUPPORTED.iter().position(|(_, raw, ..)| *raw == key) else {
                 continue;
             };
             let broker = VersionRange { min, max };
-            versions.broker[idx] = Some(broker);
             let (_, _, our_min, our_max) = SUPPORTED[idx];
             let both = VersionRange {
                 min: our_min,
@@ -153,11 +140,6 @@ impl ApiVersions {
     /// version this client supports.
     pub(crate) fn version(&self, key: ApiKey) -> Option<i16> {
         self.versions[supported_index(key)?]
-    }
-
-    /// The broker's advertised range for `key`, if any.
-    pub(crate) fn broker_range(&self, key: ApiKey) -> Option<VersionRange> {
-        self.broker[supported_index(key)?]
     }
 }
 
@@ -290,7 +272,7 @@ mod tests {
             );
             assert!(min <= max);
         }
-        assert!(supported_versions(ApiKey::DescribeGroups).is_none());
+        assert!(api_key_value(ApiKey::DescribeGroups).is_none());
         assert_eq!(api_key_value(ApiKey::Metadata), Some(3));
     }
 
@@ -310,10 +292,6 @@ mod tests {
         assert_eq!(v.version(ApiKey::Metadata), Some(4));
         assert_eq!(v.version(ApiKey::OffsetCommit), None);
         assert_eq!(v.version(ApiKey::ListOffsets), None);
-        assert_eq!(
-            v.broker_range(ApiKey::OffsetCommit),
-            Some(VersionRange { min: 10, max: 11 })
-        );
     }
 
     #[mz_ore::test]

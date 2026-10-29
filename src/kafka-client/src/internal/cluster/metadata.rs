@@ -46,14 +46,19 @@ pub(crate) struct PartitionMetadata {
 /// One topic.
 #[derive(Clone, Debug)]
 pub(crate) struct TopicMetadata {
+    // TODO: drop the unread `name`, `is_internal` and `updated_at` together
+    // with their initialization in the producer tests.
+    #[allow(dead_code)]
     pub name: String,
     /// The topic-level error, e.g. `UnknownTopicOrPartition` for a topic
     /// that does not exist.
     pub error: Option<RDKafkaErrorCode>,
     /// Sorted by partition id.
     pub partitions: Vec<PartitionMetadata>,
+    #[allow(dead_code)]
     pub is_internal: bool,
     /// When this entry was last updated from a response.
+    #[allow(dead_code)]
     pub updated_at: Instant,
 }
 

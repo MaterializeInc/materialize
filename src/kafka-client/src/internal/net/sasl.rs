@@ -318,8 +318,6 @@ impl Scram {
 pub(crate) struct TokenValue {
     pub value: String,
     pub principal: String,
-    /// Expiry in milliseconds since the Unix epoch.
-    pub lifetime_ms: i64,
 }
 
 enum OAuthState {
@@ -438,7 +436,6 @@ impl OAuthTokens {
                             s.token = Some(TokenValue {
                                 value: t.token,
                                 principal: t.principal_name,
-                                lifetime_ms: t.lifetime_ms,
                             });
                             s.attempted = true;
                         });
@@ -630,7 +627,6 @@ mod tests {
         let token = TokenValue {
             value: "tok".into(),
             principal: String::new(),
-            lifetime_ms: 0,
         };
         let mut oauth = Mechanism::new(SaslMechanism::OAuthBearer, &sasl, Some(&token)).unwrap();
         assert_eq!(

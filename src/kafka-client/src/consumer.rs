@@ -41,8 +41,7 @@ pub enum Rebalance<'a> {
 ///
 /// This user-defined object can be used to provide custom callbacks for
 /// consumer events. Refer to the list of methods to check which callbacks can
-/// be specified. All callbacks are called inline from the client's I/O tasks
-/// and must not block (see [`ClientContext`]).
+/// be specified. [`ClientContext`] documents the threads that call them.
 ///
 /// NOTE: Unlike rust-rdkafka, there is no `rebalance` method taking the native
 /// client and no `main_queue_min_poll_interval`: the client applies
@@ -51,18 +50,15 @@ pub enum Rebalance<'a> {
 pub trait ConsumerContext: ClientContext + Sized {
     /// Pre-rebalance callback. This method will run before the rebalance and
     /// should terminate its execution quickly.
-    #[allow(unused_variables)]
-    fn pre_rebalance(&self, rebalance: &Rebalance<'_>) {}
+    fn pre_rebalance(&self, _rebalance: &Rebalance<'_>) {}
 
     /// Post-rebalance callback. This method will run after the rebalance and
     /// should terminate its execution quickly.
-    #[allow(unused_variables)]
-    fn post_rebalance(&self, rebalance: &Rebalance<'_>) {}
+    fn post_rebalance(&self, _rebalance: &Rebalance<'_>) {}
 
     /// Post commit callback. This method will run after a group of offsets was
     /// committed to the offset store.
-    #[allow(unused_variables)]
-    fn commit_callback(&self, result: KafkaResult<()>, offsets: &TopicPartitionList) {}
+    fn commit_callback(&self, _result: KafkaResult<()>, _offsets: &TopicPartitionList) {}
 }
 
 /// An inert [`ConsumerContext`] that can be used when no customizations are

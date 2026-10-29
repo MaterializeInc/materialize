@@ -97,7 +97,7 @@ impl PoolState {
 }
 
 /// A pool of buffers. Initially it keeps nothing; see
-/// [`BufferPool::set_limit`].
+/// [`BufferPool::decay_limit`].
 #[derive(Debug)]
 pub(crate) struct BufferPool {
     state: Arc<Mutex<PoolState>>,
@@ -204,9 +204,8 @@ impl BufferPool {
         self.freeze(buf)
     }
 
-    /// Sets how much free capacity the pool keeps, freeing buffers beyond
-    /// it.
-    pub(crate) fn set_limit(&self, limit: usize) {
+    #[cfg(test)]
+    fn set_limit(&self, limit: usize) {
         let freed = {
             let mut state = self.state.lock().expect("lock poisoned");
             state.limit = limit;
@@ -216,8 +215,9 @@ impl BufferPool {
         drop(freed);
     }
 
-    /// Like [`BufferPool::set_limit`], but lowers the limit only once it has
-    /// not been raised to or above its current value for [`LIMIT_DECAY`].
+    /// Sets how much free capacity the pool keeps, freeing buffers beyond
+    /// it. Lowers the limit only once it has not been raised to or above its
+    /// current value for [`LIMIT_DECAY`].
     pub(crate) fn decay_limit(&self, limit: usize) {
         let now = Instant::now();
         let freed = {

@@ -47,10 +47,10 @@
 //!
 //! Responses are not decoded: each partition's record set is queued as is,
 //! after reading batch headers to find the next fetch offset. Record sets are
-//! copied out of the response into pooled buffers (see [`crate::internal::pool`]), so
-//! that the response is freed right away: the connection then reuses its
-//! read buffer, and a partition whose queue drains slowly does not keep a
-//! whole response alive.
+//! copied out of the response into pooled buffers (see
+//! [`crate::internal::pool`]), so that the response is freed right away: the
+//! connection then reuses its read buffer, and a partition whose queue
+//! drains slowly does not keep a whole response alive.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -228,7 +228,8 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
                     }
                     let md = Arc::clone(&md_rx.borrow_and_update());
                     let moved = fetching.iter().any(|f| {
-                        !matches!(leader_of(&md, &f.partition), Leader::Broker(id) if id == broker_id)
+                        let leader = leader_of(&md, &f.partition);
+                        !matches!(leader, Leader::Broker(id) if id == broker_id)
                     });
                     if moved {
                         break None;

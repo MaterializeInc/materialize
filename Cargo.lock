@@ -7645,14 +7645,12 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "snap",
- "socket2",
  "thiserror 2.0.21",
  "tokio",
  "tokio-openssl",
  "tokio-util",
  "tracing",
  "twox-hash",
- "uuid",
  "zstd",
 ]
 

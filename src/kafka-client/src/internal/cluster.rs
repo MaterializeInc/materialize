@@ -28,9 +28,7 @@
 //!   background tasks; connections close and pending requests fail with
 //!   `BrokerDestroy`. Engine tasks should select on a child of the token.
 //! * Statistics: [`Cluster::register_stats_source`].
-//! * Errors and statistics reach the application through
-//!   [`Cluster::events`], like librdkafka's main queue: consumers deliver
-//!   them when polled, producers right away, admin clients never.
+//! * Errors and statistics for the application: [`Cluster::events`].
 //!
 //! # All brokers down
 //!
@@ -83,14 +81,12 @@ pub(crate) mod stats;
 #[allow(clippy::disallowed_methods)]
 mod tests;
 
-// Part of the engine-facing API.
-#[allow(unused_imports)]
-pub(crate) use broker::{Broker, BrokerSource};
+pub(crate) use broker::Broker;
 pub(crate) use events::EventQueue;
-#[allow(unused_imports)]
+#[cfg(test)]
+pub(crate) use metadata::PartitionMetadata;
 pub(crate) use metadata::{
-    BrokerMetadata, MetadataSnapshot, PartitionMetadata, SharedMetadata, TopicMetadata,
-    to_public as metadata_to_public,
+    MetadataSnapshot, SharedMetadata, TopicMetadata, to_public as metadata_to_public,
 };
 pub(crate) use stats::StatsSource;
 

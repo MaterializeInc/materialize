@@ -11,12 +11,8 @@
 //!
 //! The public types are generic over their context (`BaseConsumer<C>`), the
 //! engines are not: they hold an `Arc<dyn Hooks>` (or `Arc<dyn ConsumerHooks>`)
-//! obtained by coercing the client's `Arc<C>`. The threading contract of
-//! [`ClientContext`] applies: `log`, `error`, `stats` and the consumer
-//! callbacks are called inline and must not block; `resolve_broker_addr` and
-//! `generate_oauth_token` may block and must be called through
-//! [`resolve_broker_addr`] and [`generate_oauth_token`], which run them on a
-//! blocking thread.
+//! obtained by coercing the client's `Arc<C>`. Callers must uphold the
+//! threading contract of [`ClientContext`].
 
 use std::fmt;
 use std::io;
@@ -72,8 +68,7 @@ impl<C: ClientContext> Hooks for C {
     }
 }
 
-/// The [`ConsumerContext`] callbacks, object safe. Called inline; must not
-/// block.
+/// The [`ConsumerContext`] callbacks, object safe.
 pub(crate) trait ConsumerHooks: Hooks {
     fn pre_rebalance(&self, rebalance: &Rebalance<'_>);
     fn post_rebalance(&self, rebalance: &Rebalance<'_>);
@@ -181,11 +176,6 @@ impl Logger {
             self.hooks
                 .log(RDKafkaLogLevel::Debug, fac, &args.to_string());
         }
-    }
-
-    /// The hooks lines are forwarded to.
-    pub(crate) fn hooks(&self) -> &Arc<dyn Hooks> {
-        &self.hooks
     }
 }
 

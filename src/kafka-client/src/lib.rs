@@ -24,15 +24,28 @@
 //!   [`admin::AlterConfig::entries`] and [`admin::ConfigResource::entry_map`].
 //! * [`consumer::ConsumerContext`] has only `pre_rebalance`, `post_rebalance`
 //!   and `commit_callback`. There is no `NativeClient`.
+//! * There is no `BaseProducer`. [`producer::ThreadedProducer`] and
+//!   [`producer::FutureProducer`] need no polling thread, and successful
+//!   delivery reports carry the message contents only with
+//!   [`producer::ProducerContext::DELIVERY_REPORT_CONTENTS`].
 //! * [`types::RDKafkaRespErr`] is an alias of [`types::RDKafkaErrorCode`].
 //! * [`version`] replaces `rdkafka_sys::rd_kafka_version_str`.
 //! * [`ClientContext`] requires `'static`, and [`util::IntoOpaque`] is a
 //!   `'static` marker trait without pointer conversions.
 //! * [`consumer::StreamConsumer`] and [`producer::FutureProducer`] are not
 //!   generic over an async runtime; their futures work with any executor.
+//! * [`admin::AdminClient::describe_configs`] and
+//!   [`admin::AdminClient::alter_configs`] return per-resource errors, where
+//!   rust-rdkafka returns every resource as `Ok`, e.g. an unknown topic with
+//!   an empty configuration. Admin operations pending when the client shuts
+//!   down fail with [`error::KafkaError::Canceled`], where rust-rdkafka's
+//!   futures never complete.
 //! * Configuration properties outside the set this crate implements are
 //!   rejected with librdkafka's "No such configuration property" error, except
 //!   for a list of librdkafka tuning properties that are accepted and ignored.
+//!   `client.rack`, `metadata.max.age.ms`, `broker.address.ttl`,
+//!   `broker.address.family` and `api.version.request` are validated but have
+//!   no effect.
 //!
 //! # Threading
 //!
@@ -41,15 +54,17 @@
 //! default `min(4, available_parallelism)`), not on threads per client and
 //! broker as in librdkafka. Blocking APIs (`fetch_metadata`, `commit`,
 //! `flush`, transactions, `poll` with a timeout) wait on that runtime from the
-//! calling thread, so they are safe to call from any thread, including tokio
-//! worker threads, which they block. Context callbacks run on the runtime; see
-//! [`ClientContext`] for which ones may block.
+//! calling thread, so they may be called from any thread except the
+//! runtime's own, including tokio worker threads, which they block.
+//!
+//! Context callbacks are called from the runtime's threads, from blocking
+//! threads (`resolve_broker_addr`, `generate_oauth_token`), or, for a
+//! consumer's errors and statistics, from the thread that polls it.
+//! [`ClientContext`] documents the thread of each callback and which ones may
+//! block.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
-// TODO: remove once the engines use the crate-internal constructors and
-// settings.
-#![allow(dead_code)]
 
 pub mod admin;
 pub mod client;

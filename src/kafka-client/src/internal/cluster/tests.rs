@@ -794,8 +794,8 @@ impl ClientContext for Redirect {
 }
 
 /// The periodic refresh and responses that arrive after the caller's
-/// deadline update the metadata cache (a zero-deadline refresh used to drop
-/// every response that was not instantly ready).
+/// deadline, including that of a zero-deadline refresh, update the metadata
+/// cache.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // network
 fn metadata_refresh_with_latency() {

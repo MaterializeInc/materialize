@@ -41,13 +41,12 @@
 //!
 //! * Topics that fail with `NOT_CONTROLLER` are retried at the new controller
 //!   until the request timeout, like the Java admin client.
-//! * DescribeConfigs and AlterConfigs report per-resource errors.
-//!   rust-rdkafka never reads them and returns every resource as `Ok`, e.g.
-//!   an unknown topic as an empty configuration.
 //! * Config sources this client does not know map to `ConfigSource::Unknown`
 //!   instead of failing the whole result.
-//! * Shutting down the client fails pending operations with
-//!   [`KafkaError::Canceled`]. rust-rdkafka's futures never complete then.
+//!
+//! The crate docs list the deviations from rust-rdkafka: per-resource errors
+//! of DescribeConfigs and AlterConfigs, and [`KafkaError::Canceled`] for
+//! operations pending at shutdown.
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};

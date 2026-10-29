@@ -111,14 +111,6 @@ impl SaslMechanism {
     }
 }
 
-/// `broker.address.family`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AddressFamily {
-    Any,
-    V4,
-    V6,
-}
-
 /// `isolation.level`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IsolationLevel {
@@ -458,7 +450,6 @@ pub(crate) struct ClientSettings {
     /// `bootstrap.servers` (`metadata.broker.list`) entries, split on commas
     /// and whitespace, unparsed (`[proto://]host[:port]`).
     pub bootstrap_servers: Vec<String>,
-    pub client_rack: Option<String>,
     pub message_max_bytes: i32,
     /// For consumers, raised to at least `fetch.max.bytes + 512` unless set.
     pub receive_message_max_bytes: i32,
@@ -467,8 +458,6 @@ pub(crate) struct ClientSettings {
     /// `topic.metadata.refresh.interval.ms`; `None` for -1 (no periodic
     /// refresh).
     pub metadata_refresh_interval: Option<Duration>,
-    /// Defaults to three times the refresh interval.
-    pub metadata_max_age: Duration,
     /// Defaults to `retry.backoff.ms`.
     pub metadata_refresh_fast_interval: Duration,
     pub metadata_propagation_max: Duration,
@@ -485,8 +474,6 @@ pub(crate) struct ClientSettings {
     pub socket_send_buffer_bytes: Option<u32>,
     /// `None` for 0 (system default).
     pub socket_receive_buffer_bytes: Option<u32>,
-    pub broker_address_ttl: Duration,
-    pub broker_address_family: AddressFamily,
     /// `None` for 0 (never close idle connections).
     pub connections_max_idle: Option<Duration>,
     pub reconnect_backoff: Duration,
@@ -496,7 +483,6 @@ pub(crate) struct ClientSettings {
     /// `None` for 0 (statistics disabled).
     pub statistics_interval: Option<Duration>,
     pub log_connection_close: bool,
-    pub api_version_request: bool,
     pub api_version_request_timeout: Duration,
     pub security_protocol: SecurityProtocol,
     pub ssl: SslSettings,
@@ -634,6 +620,9 @@ use Scope::{Consumer as C, Global as G, Producer as P};
 
 /// The typed properties, in librdkafka's table order (which determines the
 /// order of `CONFWARN` lines).
+///
+/// NOTE: Not all of them take effect. The crate docs list those that are
+/// only validated.
 const PROPERTIES: &[Property] = &[
     prop("client.id", G, Str),
     prop("metadata.broker.list", G, Str),
@@ -1340,10 +1329,6 @@ impl ClientSettings {
         }
 
         let metadata_refresh_interval_ms = v.int("topic.metadata.refresh.interval.ms", 300_000);
-        let mut metadata_max_age_ms = v.int("metadata.max.age.ms", 900_000);
-        if !v.is_set("metadata.max.age.ms") && metadata_refresh_interval_ms > 0 {
-            metadata_max_age_ms = metadata_refresh_interval_ms.saturating_mul(3);
-        }
 
         let reconnect_backoff_ms = v.int("reconnect.backoff.ms", 100);
         let reconnect_backoff_max_ms = v.int("reconnect.backoff.max.ms", 10_000);
@@ -1537,13 +1522,11 @@ impl ClientSettings {
                 .string("client.id")
                 .unwrap_or_else(|| "rdkafka".to_string()),
             bootstrap_servers,
-            client_rack: v.string("client.rack").filter(|r| !r.is_empty()),
             message_max_bytes,
             receive_message_max_bytes,
             max_in_flight,
             metadata_refresh_interval: (metadata_refresh_interval_ms >= 0)
                 .then(|| millis(metadata_refresh_interval_ms)),
-            metadata_max_age: millis(metadata_max_age_ms),
             metadata_refresh_fast_interval: millis(metadata_refresh_fast_interval_ms),
             metadata_propagation_max: millis(v.int("topic.metadata.propagation.max.ms", 30_000)),
             allow_auto_create_topics,
@@ -1559,13 +1542,6 @@ impl ClientSettings {
             socket_receive_buffer_bytes: u32::try_from(v.int("socket.receive.buffer.bytes", 0))
                 .ok()
                 .filter(|n| *n != 0),
-            broker_address_ttl: millis(v.int("broker.address.ttl", 1000)),
-            broker_address_family: match v.enumeration("broker.address.family", "any") {
-                "any" => AddressFamily::Any,
-                "v4" => AddressFamily::V4,
-                "v6" => AddressFamily::V6,
-                other => unreachable!("validated broker.address.family {other}"),
-            },
             connections_max_idle: (connections_max_idle_ms != 0)
                 .then(|| millis(connections_max_idle_ms)),
             reconnect_backoff: millis(reconnect_backoff_ms),
@@ -1577,7 +1553,6 @@ impl ClientSettings {
                 ms => Some(millis(ms)),
             },
             log_connection_close: v.bool("log.connection.close", true),
-            api_version_request: v.bool("api.version.request", true),
             api_version_request_timeout: millis(v.int("api.version.request.timeout.ms", 10_000)),
             security_protocol,
             ssl,
@@ -1816,7 +1791,6 @@ mod tests {
         assert_eq!(s.retry_backoff, Duration::from_millis(100));
         assert_eq!(s.retry_backoff_max, Duration::from_secs(1));
         assert_eq!(s.metadata_refresh_interval, Some(Duration::from_secs(300)));
-        assert_eq!(s.metadata_max_age, Duration::from_secs(900));
         assert_eq!(s.metadata_refresh_fast_interval, Duration::from_millis(100));
         assert_eq!(s.message_max_bytes, 1_000_000);
         assert_eq!(s.statistics_interval, None);
@@ -1959,7 +1933,6 @@ mod tests {
         assert!(c.enable_partition_eof);
         assert_eq!(s.isolation_level, IsolationLevel::ReadUncommitted);
         assert_eq!(s.metadata_refresh_interval, Some(Duration::from_secs(30)));
-        assert_eq!(s.metadata_max_age, Duration::from_secs(90));
         assert!(s.debug.contains(DebugContext::Broker));
         assert!(s.debug.contains(DebugContext::Telemetry));
         assert_eq!(s.creation_log_level, RDKafkaLogLevel::Debug);
@@ -2315,14 +2288,12 @@ mod tests {
         let s = parse(ClientKind::Consumer, &[("fetch.max.bytes", "200000000")]).unwrap();
         assert_eq!(s.receive_message_max_bytes, 200_000_512);
 
-        // Disabled refresh keeps the default max age.
         let s = parse(
             ClientKind::Consumer,
             &[("topic.metadata.refresh.interval.ms", "-1")],
         )
         .unwrap();
         assert_eq!(s.metadata_refresh_interval, None);
-        assert_eq!(s.metadata_max_age, Duration::from_secs(900));
 
         let s = parse(
             ClientKind::Consumer,

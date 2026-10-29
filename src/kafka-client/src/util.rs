@@ -110,15 +110,8 @@ impl Deadline {
         self.0
     }
 
-    /// Time left until the deadline, zero once it has elapsed.
-    pub(crate) fn remaining(&self) -> Timeout {
-        match self.0 {
-            Some(at) => Timeout::After(at.saturating_duration_since(Instant::now())),
-            None => Timeout::Never,
-        }
-    }
-
-    /// Time left until the deadline, or `None` for no deadline.
+    /// Time left until the deadline, zero once it has elapsed, or `None` for
+    /// no deadline.
     pub(crate) fn remaining_duration(&self) -> Option<Duration> {
         self.0
             .map(|at| at.saturating_duration_since(Instant::now()))
@@ -137,15 +130,6 @@ impl Deadline {
             (None, None) => Deadline(None),
         }
     }
-
-    /// Remaining time in whole milliseconds clamped to `i32`, as used by Kafka
-    /// request fields. `-1` for no deadline, librdkafka's "infinite".
-    pub(crate) fn remaining_millis_i32(&self) -> i32 {
-        match self.remaining_duration() {
-            Some(d) => i32::try_from(d.as_millis()).unwrap_or(i32::MAX),
-            None => -1,
-        }
-    }
 }
 
 /// Converts a millisecond count to a [`Duration`], treating negative values as
@@ -161,11 +145,6 @@ pub(crate) fn duration_from_millis_f64(millis: f64) -> Duration {
         return Duration::ZERO;
     }
     Duration::from_nanos(u64::cast_lossy((millis * 1_000_000.0).round()))
-}
-
-/// Converts a [`Duration`] to fractional milliseconds.
-pub(crate) fn duration_to_millis_f64(d: Duration) -> f64 {
-    d.as_secs_f64() * 1000.0
 }
 
 #[cfg(test)]
@@ -203,14 +182,12 @@ mod tests {
     #[mz_ore::test]
     fn deadline() {
         let never = Deadline::new(Timeout::Never);
-        assert_eq!(never.remaining(), Timeout::Never);
-        assert_eq!(never.remaining_millis_i32(), -1);
+        assert_eq!(never.remaining_duration(), None);
         assert!(!never.is_elapsed());
 
         let zero = Deadline::new(Duration::ZERO);
         assert!(zero.is_elapsed());
-        assert_eq!(zero.remaining(), Timeout::After(Duration::ZERO));
-        assert_eq!(zero.remaining_millis_i32(), 0);
+        assert_eq!(zero.remaining_duration(), Some(Duration::ZERO));
 
         let far = Deadline::new(Duration::from_secs(3600));
         assert!(!far.is_elapsed());
@@ -234,6 +211,5 @@ mod tests {
         assert_eq!(duration_from_millis(5), Duration::from_millis(5));
         assert_eq!(duration_from_millis_f64(2.5), Duration::from_micros(2500));
         assert_eq!(duration_from_millis_f64(-1.0), Duration::ZERO);
-        assert_eq!(duration_to_millis_f64(Duration::from_micros(2500)), 2.5);
     }
 }

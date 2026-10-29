@@ -75,16 +75,18 @@ impl Partitioner {
         }
     }
 
-    /// Picks a partition for `key` among `partition_cnt` partitions, assuming
-    /// all of them are available. Returns -1 (librdkafka's unassigned
-    /// partition) if `partition_cnt` is not positive.
-    pub(crate) fn partition(&self, key: Option<&[u8]>, partition_cnt: i32) -> i32 {
+    #[cfg(test)]
+    fn partition(&self, key: Option<&[u8]>, partition_cnt: i32) -> i32 {
         self.partition_with(key, partition_cnt, |_| true)
     }
 
-    /// Like [`Partitioner::partition`]. `is_available` says whether a partition
-    /// currently has a leader. Only random choices consult it: like librdkafka,
-    /// an unavailable random pick is replaced by a second, unchecked pick.
+    /// Picks a partition for `key` among `partition_cnt` partitions. Returns
+    /// -1 (librdkafka's unassigned partition) if `partition_cnt` is not
+    /// positive.
+    ///
+    /// `is_available` says whether a partition currently has a leader. Only
+    /// random choices consult it: like librdkafka, an unavailable random pick
+    /// is replaced by a second, unchecked pick.
     pub(crate) fn partition_with(
         &self,
         key: Option<&[u8]>,

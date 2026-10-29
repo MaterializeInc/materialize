@@ -11,8 +11,9 @@
 //! formats v0 and v1).
 //!
 //! Encoding ([`BatchBuilder`]) writes each record straight into the batch
-//! buffer, behind a placeholder for the batch header that [`BatchBuilder::build`]
-//! fills in. Uncompressed batches are never copied.
+//! buffer, behind a placeholder for the batch header that
+//! [`BatchBuilder::build_reusing`] fills in. Uncompressed batches are never
+//! copied.
 //!
 //! Decoding is zero-copy: [`parse_batches`] splits a fetched record set into
 //! entries by reading only their headers, and [`FetchedBatch::records`]
@@ -125,36 +126,25 @@ pub(crate) struct BatchBuilder {
 }
 
 impl BatchBuilder {
-    /// A builder for a batch compressed with `compression` at `level` (see
-    /// [`compression::compress`]). `transactional` sets the batch's
-    /// transactional attribute.
+    #[cfg(test)]
     pub(crate) fn new(compression: Compression, level: Option<i32>, transactional: bool) -> Self {
         Self::with_capacity(compression, level, transactional, 0)
     }
 
-    /// Like [`BatchBuilder::new`], reserving room for `capacity` bytes of
-    /// encoded records.
+    #[cfg(test)]
     pub(crate) fn with_capacity(
         compression: Compression,
         level: Option<i32>,
         transactional: bool,
         capacity: usize,
     ) -> Self {
-        let mut buf = Vec::with_capacity(BATCH_HEADER_LEN + capacity);
-        buf.resize(BATCH_HEADER_LEN, 0);
-        BatchBuilder {
-            compression,
-            level,
-            transactional,
-            buf,
-            record_count: 0,
-            first_timestamp: 0,
-            max_timestamp: i64::MIN,
-        }
+        Self::with_buffer(compression, level, transactional, Vec::new(), capacity)
     }
 
-    /// Like [`BatchBuilder::with_capacity`], encoding into `buf`, whose
-    /// contents are discarded, to reuse its allocation.
+    /// A builder for a batch compressed with `compression` at `level` (see
+    /// [`compression::compress`]), encoding into `buf`, whose contents are
+    /// discarded, with room for `capacity` bytes of encoded records.
+    /// `transactional` sets the batch's transactional attribute.
     pub(crate) fn with_buffer(
         compression: Compression,
         level: Option<i32>,
@@ -177,6 +167,7 @@ impl BatchBuilder {
     }
 
     /// The number of bytes [`BatchBuilder::append`] would add for this record.
+    #[cfg(test)]
     pub(crate) fn encoded_record_size(
         &self,
         timestamp_ms: i64,
@@ -226,7 +217,7 @@ impl BatchBuilder {
         self.buf.len() - start
     }
 
-    /// The number of records appended so far.
+    #[cfg(test)]
     pub(crate) fn record_count(&self) -> i32 {
         self.record_count
     }
@@ -237,6 +228,7 @@ impl BatchBuilder {
         self.buf.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.record_count == 0
     }
@@ -255,11 +247,7 @@ impl BatchBuilder {
         }))
     }
 
-    /// Finishes the batch: compresses the records and fills in the header.
-    ///
-    /// The base offset is 0 and the partition leader epoch -1, which brokers
-    /// overwrite. Like librdkafka, the batch is sent uncompressed if compression
-    /// makes it larger. Fails for an empty batch.
+    #[cfg(test)]
     pub(crate) fn build(
         self,
         ident: ProducerIdentity,
@@ -269,10 +257,15 @@ impl BatchBuilder {
             .map(|(batch, _)| batch)
     }
 
-    /// Like [`BatchBuilder::build`], compressing into `scratch` (whose
-    /// contents are discarded) if given. Also returns the buffer the batch
-    /// does not use, for reuse: the uncompressed records, or the scratch
-    /// buffer if the batch is not compressed.
+    /// Finishes the batch: compresses the records and fills in the header.
+    ///
+    /// The base offset is 0 and the partition leader epoch -1, which brokers
+    /// overwrite. Like librdkafka, the batch is sent uncompressed if compression
+    /// makes it larger. Fails for an empty batch.
+    ///
+    /// Compresses into `scratch` (whose contents are discarded) if given, and
+    /// returns the buffer the batch does not use, for reuse: the uncompressed
+    /// records, or the scratch buffer if the batch is not compressed.
     pub(crate) fn build_reusing(
         self,
         ident: ProducerIdentity,
@@ -317,8 +310,6 @@ impl BatchBuilder {
         stamp(&mut buf, ident, base_sequence);
         let batch = EncodedBatch {
             data: Bytes::from(buf),
-            record_count: self.record_count,
-            compression,
         };
         Ok((batch, spare))
     }
@@ -387,8 +378,6 @@ fn stamp(buf: &mut [u8], ident: ProducerIdentity, base_sequence: i32) {
 #[derive(Clone, Debug)]
 pub(crate) struct EncodedBatch {
     data: Bytes,
-    record_count: i32,
-    compression: Compression,
 }
 
 impl EncodedBatch {
@@ -401,13 +390,15 @@ impl EncodedBatch {
         self.data.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn record_count(&self) -> i32 {
-        self.record_count
+        get_i32(&self.data, RECORD_COUNT)
     }
 
     /// The codec actually used, which is `None` if compression did not help.
+    #[cfg(test)]
     pub(crate) fn compression(&self) -> Compression {
-        self.compression
+        Compression::from_attributes(get_i16(&self.data, ATTRIBUTES)).expect("valid codec")
     }
 
     pub(crate) fn base_sequence(&self) -> i32 {
@@ -415,8 +406,9 @@ impl EncodedBatch {
     }
 
     /// The sequence number of the last record, wrapping like Kafka's.
+    #[cfg(test)]
     pub(crate) fn last_sequence(&self) -> i32 {
-        increment_sequence(self.base_sequence(), self.record_count - 1)
+        increment_sequence(self.base_sequence(), self.record_count() - 1)
     }
 
     pub(crate) fn producer_identity(&self) -> ProducerIdentity {
@@ -426,17 +418,17 @@ impl EncodedBatch {
         }
     }
 
-    /// Rewrites the producer id, epoch and base sequence, and the CRC,
-    /// without re-encoding the records.
-    ///
-    /// `Bytes` previously returned by [`EncodedBatch::bytes`] keep the old
-    /// contents: if any are still alive, the batch is copied first.
     /// The batch's buffer, for reuse, unless `Bytes` previously returned by
     /// [`EncodedBatch::bytes`] are still alive.
     pub(crate) fn into_buffer(self) -> Option<Vec<u8>> {
         self.data.try_into_mut().ok().map(Vec::from)
     }
 
+    /// Rewrites the producer id, epoch and base sequence, and the CRC,
+    /// without re-encoding the records.
+    ///
+    /// `Bytes` previously returned by [`EncodedBatch::bytes`] keep the old
+    /// contents: if any are still alive, the batch is copied first.
     pub(crate) fn restamp(&mut self, ident: ProducerIdentity, base_sequence: i32) {
         let data = std::mem::take(&mut self.data);
         let mut buf = data
@@ -513,6 +505,7 @@ impl FetchedBatch {
     }
 
     /// The entry's bytes as fetched.
+    #[cfg(test)]
     pub(crate) fn bytes(&self) -> &Bytes {
         &self.data
     }

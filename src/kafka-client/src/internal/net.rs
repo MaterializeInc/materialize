@@ -517,11 +517,6 @@ impl Connection {
         self.shared.closed.is_cancelled()
     }
 
-    /// Resolves when the connection has closed.
-    pub(crate) async fn closed(&self) {
-        self.shared.closed.cancelled().await
-    }
-
     /// Reports whether the SASL session is due for renewal: new requests
     /// should go to a new connection.
     pub(crate) fn needs_reauth(&self) -> bool {
@@ -556,11 +551,6 @@ impl Connection {
     /// A token cancelled when the connection closes.
     pub(crate) fn closed_token(&self) -> CancellationToken {
         self.shared.closed.clone()
-    }
-
-    /// The number of submitted requests not yet completed.
-    pub(crate) fn outstanding(&self) -> usize {
-        self.shared.outstanding.load(Ordering::Acquire)
     }
 
     /// Closes the connection, failing pending requests with `failure`.

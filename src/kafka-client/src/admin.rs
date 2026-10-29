@@ -33,7 +33,7 @@ use crate::util::Timeout;
 /// A client for the Kafka admin API.
 ///
 /// `AdminClient` provides programmatic access to managing a Kafka cluster,
-/// notably manipulating topics, partitions, and configuration paramaters.
+/// notably manipulating topics, partitions, and configuration parameters.
 pub struct AdminClient<C: ClientContext + 'static> {
     client: Client<C>,
     inner: Arc<AdminInner>,
@@ -44,11 +44,6 @@ impl<C: ClientContext> AdminClient<C> {
     pub(crate) fn from_client(client: Client<C>) -> KafkaResult<AdminClient<C>> {
         let inner = Arc::new(AdminInner::new(Arc::clone(client.cluster())));
         Ok(AdminClient { client, inner })
-    }
-
-    /// The admin engine.
-    pub(crate) fn engine(&self) -> &Arc<AdminInner> {
-        &self.inner
     }
 
     /// Creates new topics according to the provided `NewTopic` specifications.

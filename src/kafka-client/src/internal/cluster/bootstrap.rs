@@ -26,14 +26,7 @@ pub(crate) struct BootstrapServer {
     pub port: u16,
 }
 
-impl BootstrapServer {
-    /// The host for resolution and TLS: without IPv6 brackets.
-    pub(crate) fn bare_host(&self) -> &str {
-        bare_host(&self.host)
-    }
-}
-
-/// Strips IPv6 brackets.
+/// The host for resolution and TLS: without IPv6 brackets.
 pub(crate) fn bare_host(host: &str) -> &str {
     host.strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
@@ -250,13 +243,9 @@ mod tests {
             Err("Broker name \"://h\" parse error: empty protocol name".into())
         );
         let s = parse_server("sasl_ssl://b:9096", SecurityProtocol::SaslSsl).unwrap();
-        assert_eq!(s.bare_host(), "b");
-        assert_eq!(
-            parse_server("[fe80::1]:1", SecurityProtocol::Ssl)
-                .unwrap()
-                .bare_host(),
-            "fe80::1"
-        );
+        assert_eq!(bare_host(&s.host), "b");
+        let s = parse_server("[fe80::1]:1", SecurityProtocol::Ssl).unwrap();
+        assert_eq!(bare_host(&s.host), "fe80::1");
     }
 
     #[mz_ore::test]
