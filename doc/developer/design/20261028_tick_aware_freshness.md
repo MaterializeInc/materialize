@@ -164,8 +164,14 @@ End-to-end latency shows how stale an object is, but not which hop in a chain of
 Each arrival's end-to-end charge splits into three parts, which sum to it exactly:
 
 * Upstream: from the window start until the slowest direct input showed the arrival. This is that input's own end-to-end latency, so following the slowest input hop by hop walks the critical path.
-* Skew: from then until every direct input's frontier passed the timestamp the object needs for the arrival, $T(a) = \max_k \lceil a \rceil_{i_k}$ under the object's tree without its own refresh node.
+* Skew: from then until every direct input's frontier passed the timestamp the object needs for the arrival, $T(a) = \max_k \lceil a \rceil_{i_k}$ under the object's tree without its own refresh node, capped at the wait the inputs' grids alone cause, $g(a) = \max_k \lceil T(a) \rceil_{i_k} - T(a)$.
 * Local: from then until the object showed the arrival. This is what the hop itself adds.
+
+The cap keeps lateness out of skew.
+Without it, an input that shows an arrival and then stalls before its frontier passes $T(a)$ makes the object wait out the stall after every input has shown the arrival, and that stall would read as skew.
+A join of a 1 s source with a view that refreshes once a day would then charge a 5 minute source stall around the refresh as skew to a whole day of arrivals.
+With the cap, skew is the delay mismatched grids cause when every input ticks on time, and any wait beyond $g(a)$ stays upstream, where the late input's own histogram shows it.
+An input whose ticks drift from its grid moves the drift to upstream, which understates skew and never overstates it.
 
 Skew is the wait that combining inputs causes without any input being late.
 A join of a 7 s and an 11 s input shows an arrival only once the 7 s input's frontier passes the 11 s timestamp, which happens at the 7 s input's next tick.
