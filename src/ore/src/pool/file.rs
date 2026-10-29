@@ -348,7 +348,8 @@ impl FileStore {
                             "pool file store: punching a slot after a failed fallocate failed: \
                              {punch_err}"
                         );
-                        c.slots().free(index, true);
+                        let mut slots = c.slots();
+                        slots.free(index, true);
                         c.warm_bytes.fetch_add(size, Ordering::Relaxed);
                     }
                 }
