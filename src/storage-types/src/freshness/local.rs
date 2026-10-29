@@ -379,9 +379,8 @@ fn local_rows(closed: Vec<ClosedPeriod<LocalPeriod>>) -> LocalRows {
 ///
 /// Walks the windows in groups in which every input answers both readiness questions with the
 /// same entry. Local delay costs the buckets touched per group. Skew also costs a step per
-/// distinct needed timestamp in the group, at most `MAX_GRID_STEPS`. The work is thus
-/// proportional to the log entries consumed times the steps and buckets per group, and not to
-/// the number of windows beyond that.
+/// distinct needed timestamp in the group, at most `MAX_GRID_STEPS`. Work is proportional to
+/// the log entries consumed times the steps and buckets per group.
 fn add_local_part(
     tree: &ResolvedTree,
     needed: &ResolvedTree,
@@ -492,6 +491,8 @@ fn add_local_part(
                 let last = timestamp
                     .and_then(|t| needed.last_reflected(Timestamp::from(t.saturating_add(1))));
                 let (hi, wait_ms) = match (timestamp, last) {
+                    // Show times grow with the arrival, so the last arrival of the step gives
+                    // the least cap of the step.
                     (Some(t), Some(l)) => {
                         let hi = l.clamp(lo + 1, timestamp_cut);
                         (hi, on_time_skew(inputs, t, hi))
@@ -520,24 +521,20 @@ fn add_local_part(
     }
 }
 
-/// The time from the last of `inputs` showing `arrival` to all of them passing `timestamp`, the
-/// timestamp `arrival` needs, with every input on time.
-///
-/// An input shows an arrival when its frontier passes the timestamp its own tree assigns the
-/// arrival. Within a step of equal needed timestamps the show times grow with the arrival, so
-/// the last arrival of the step gives the least skew of the step.
+/// At most the time from the last of `inputs` showing `arrival` to all of them passing
+/// `timestamp`, the timestamp `arrival` needs, with every input on time and any phase of the
+/// unaligned leaves. 0 if an input never shows `arrival`.
 fn on_time_skew(inputs: &[LocalInput<'_>], timestamp: u64, arrival: u64) -> u64 {
-    let on_time_pass = |tree: &ResolvedTree, t: u64| t.saturating_add(tree.grid_wait(t));
+    // The earliest pass and the latest show bound the skew from above for every phase.
     let passed = inputs
         .iter()
-        .map(|i| on_time_pass(i.tree, timestamp))
+        .map(|i| timestamp.saturating_add(i.tree.grid_wait(timestamp)))
         .max()
         .unwrap_or(0);
     let shown = inputs
         .iter()
-        .map(|i| i.tree.assigned(arrival).map(|t| on_time_pass(i.tree, t)))
+        .map(|i| i.tree.latest_show(arrival))
         .collect::<Option<Vec<_>>>()
         .and_then(|s| s.into_iter().max());
-    // An input that never shows the arrival leaves the cap unknown, and 0 understates.
     shown.map_or(0, |shown| passed.saturating_sub(shown))
 }
