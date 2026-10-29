@@ -1479,9 +1479,13 @@ where
     pub fn remove_rollups(
         &mut self,
         remove_rollups: &[(SeqNo, PartialRollupKey)],
+        remove_finalized: bool,
     ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
         if self.is_tombstone() {
-            return Break(NoOpStateTransition(vec![]));
+            if !remove_finalized || !self.is_finalized() {
+                return Break(NoOpStateTransition(vec![]));
+            }
+            return self.remove_finalized_rollups(remove_rollups);
         }
 
         // This state transition is called at the end of the GC process, so we
@@ -1512,6 +1516,33 @@ where
             }
         }
 
+        Continue(removed)
+    }
+
+    /// NOTE: A no-op here must not commit, not even to clear `active_gc`.
+    /// `compute_next_state_locked` soft-asserts that a commit removed a rollup.
+    fn remove_finalized_rollups(
+        &mut self,
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
+        let latest = self.rollups.keys().next_back().copied();
+        let mut removed = vec![];
+        for (seqno, key) in remove_rollups {
+            if Some(*seqno) == latest {
+                mz_ore::soft_panic_or_log!("GC asked to remove a finalized shard's latest rollup");
+                continue;
+            }
+            // A miss is expected when GC redoes an already committed removal,
+            // so it isn't asserted on.
+            if self.rollups.get(seqno).is_some_and(|x| &x.key == key) {
+                self.rollups.remove(seqno);
+                removed.push(*seqno);
+            }
+        }
+        if removed.is_empty() {
+            return Break(NoOpStateTransition(vec![]));
+        }
+        self.active_gc = None;
         Continue(removed)
     }
 
@@ -2200,6 +2231,11 @@ where
             && self.critical_readers.is_empty()
     }
 
+    /// A tombstone that has shrunk to a single empty batch.
+    pub(crate) fn is_finalized(&self) -> bool {
+        self.is_tombstone() && self.is_single_empty_batch()
+    }
+
     pub(crate) fn is_single_empty_batch(&self) -> bool {
         let mut batch_count = 0;
         let mut is_empty = true;
@@ -2574,8 +2610,8 @@ where
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
         // Always assign GC work to a tombstoned shard to have the chance to
         // clean up any residual blobs. This is safe (won't cause excess gc)
-        // as the only allowed command after becoming a tombstone is to write
-        // the final rollup.
+        // as a tombstone only commits its final rollup and, once finalized,
+        // one `remove_rollups` (a no-op once the old rollups are gone).
         let tombstone_needs_gc = self.collections.is_tombstone();
         let should_gc = should_gc || tombstone_needs_gc;
         let should_gc = if use_active_gc {
@@ -2698,6 +2734,13 @@ where
         now: u64,
     ) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
+
+        // A final rollup written at X gets two more commits: linking it in
+        // (X+1) and GC's `remove_rollups` (X+2). Asking for a rollup past X+2
+        // loops, since GC removes the previous rollup with another commit.
+        if self.collections.is_finalized() {
+            return (latest_rollup_seqno.next().next() < self.seqno).then_some(self.seqno);
+        }
 
         // Tombstoned shards require one final rollup. However, because we
         // write a rollup as of SeqNo X and then link it in using a state
@@ -4552,7 +4595,7 @@ pub(crate) mod tests {
         // contains the kept rollup; the older entry is gone.
         let _ = state
             .collections
-            .remove_rollups(&[(older_seqno, older.key.clone())]);
+            .remove_rollups(&[(older_seqno, older.key.clone())], false);
         assert!(!state.collections.rollups.contains_key(&older_seqno));
         assert!(state.collections.rollups.contains_key(&newer_seqno));
 
@@ -4563,5 +4606,72 @@ pub(crate) mod tests {
         assert_eq!(add_older(&mut state.collections), Continue(false));
         assert!(!state.collections.rollups.contains_key(&older_seqno));
         assert_eq!(state.collections.rollups.len(), 1);
+    }
+
+    #[mz_ore::test]
+    fn finalized_rollups() {
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+        state.collections.trace.downgrade_since(&Antichain::new());
+        let _ = state
+            .collections
+            .trace
+            .push_batch(StateCollections::tombstone_batch());
+        assert!(state.collections.is_finalized());
+
+        let rollup = |seqno| HollowRollup {
+            key: PartialRollupKey::new(SeqNo(seqno), &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        let (old, kept) = (rollup(1), rollup(5));
+        for (seqno, rollup) in [(1, &old), (5, &kept)] {
+            assert_eq!(
+                state.collections.add_rollup((SeqNo(seqno), rollup)),
+                Continue(true)
+            );
+        }
+        let remove_old = [(SeqNo(1), old.key.clone())];
+
+        // The final rollup at v5 is added at v6, and GC removes v1 at v7.
+        for (seqno, need) in [(7, None), (8, Some(SeqNo(8)))] {
+            state.seqno = SeqNo(seqno);
+            assert_eq!(state.need_rollup(3, false, 0, 0), need);
+        }
+
+        let noop = Break(NoOpStateTransition(vec![]));
+        assert_eq!(
+            state.collections.remove_rollups(&remove_old, false),
+            noop,
+            "kill switch off"
+        );
+
+        state.collections.active_gc = Some(ActiveGc {
+            seqno: SeqNo(6),
+            start_ms: 0,
+        });
+        assert_eq!(state.collections.remove_rollups(&[], true), noop);
+        assert!(
+            state.collections.active_gc.is_some(),
+            "a no-op must not commit to clear active_gc"
+        );
+
+        assert_eq!(
+            state.collections.remove_rollups(&remove_old, true),
+            Continue(vec![SeqNo(1)])
+        );
+        assert_eq!(state.collections.active_gc, None);
+        assert_eq!(
+            state.collections.rollups.keys().collect::<Vec<_>>(),
+            vec![&SeqNo(5)]
+        );
+        assert_eq!(
+            state.collections.remove_rollups(&remove_old, true),
+            noop,
+            "replayed removal"
+        );
     }
 }

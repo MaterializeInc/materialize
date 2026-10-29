@@ -27,7 +27,7 @@ use tracing::{Instrument, Span, debug, debug_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::PartDeletes;
-use crate::cfg::GC_BLOB_DELETE_CONCURRENCY_LIMIT;
+use crate::cfg::{GC_BLOB_DELETE_CONCURRENCY_LIMIT, GC_REMOVE_FINALIZED_ROLLUPS};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
@@ -229,6 +229,7 @@ where
             step_start = now;
         };
         assert_eq!(req.shard_id, machine.shard_id());
+        let remove_finalized = GC_REMOVE_FINALIZED_ROLLUPS.get(&machine.applier.cfg);
 
         // Double check our GC req: seqno_since will never regress
         // so we can verify it's not somehow greater than the last-
@@ -260,8 +261,13 @@ where
             // If there are no rollups to remove from state (either the work has already
             // been done, or the there aren't enough rollups <= seqno_since to have any
             // to delete), we can safely exit. We still call remove_rollups to clear
-            // active_gc if it was set, so the next GC isn't suppressed.
-            let (_removed, maintenance) = machine.remove_rollups(&[]).await;
+            // active_gc if it was set, so the next GC isn't suppressed. A finalized
+            // shard leaves it set, which is harmless since it commits nothing more.
+            let (_removed, maintenance) = machine.remove_rollups(&[], remove_finalized).await;
+            if remove_finalized {
+                gc_results.rollups_deleted_from_blob +=
+                    Self::delete_finalized_rollups(machine).await;
+            }
             machine.applier.metrics.gc.noop.inc();
             return (maintenance, gc_results);
         }
@@ -373,11 +379,15 @@ where
         // In short, while this step is not incremental, it does not need
         // to be for GC to efficiently resume. And in fact, making it
         // incremental could be quite expensive (e.g. more CaS operations).
-        let (removed_rollups, maintenance) =
-            machine.remove_rollups(rollups_to_remove_from_state).await;
+        let (removed_rollups, maintenance) = machine
+            .remove_rollups(rollups_to_remove_from_state, remove_finalized)
+            .await;
         report_step_timing(&machine.applier.metrics.gc.steps.remove_rollups_from_state);
         debug!("CaS removed rollups from state: {:?}", removed_rollups);
         gc_results.rollups_removed_from_state = removed_rollups;
+        if remove_finalized {
+            gc_results.rollups_deleted_from_blob += Self::delete_finalized_rollups(machine).await;
+        }
 
         // Everything here and below is not strictly needed for GC to complete,
         // but it's a good opportunity, while we have all live states in hand,
@@ -642,17 +652,56 @@ where
         timer(&machine.applier.metrics.gc.steps.truncate_diff_seconds);
     }
 
+    /// Deletes the blobs of rollups that a finalized shard's live diffs removed.
+    ///
+    /// Truncation never gets past a finalized shard's `remove_rollups` diff, so
+    /// the usual delete path never sees it. The diff stays live, so a GC that
+    /// crashes partway just redoes the deletes.
+    async fn delete_finalized_rollups(machine: &Machine<K, V, T, D>) -> usize {
+        if !machine.applier.is_finalized() {
+            return 0;
+        }
+        let shard_id = machine.shard_id();
+        let mut states = machine
+            .applier
+            .state_versions
+            .fetch_all_live_states::<T>(shard_id)
+            .await
+            .expect("state is initialized")
+            .check_ts_codec()
+            .expect("ts codec has not changed");
+        let mut removed = BTreeSet::new();
+        while let Some(_) = states.next(|diff| {
+            if let InspectDiff::Diff(diff) = diff {
+                removed.extend(diff.rollup_deletes().map(|x| x.key.clone()));
+            }
+        }) {}
+        for live in states.state().collections.rollups.values() {
+            removed.remove(&live.key);
+        }
+        // Later GCs retry these keys, since the removal diff stays live.
+        Self::delete_all(
+            machine.applier.state_versions.blob.borrow(),
+            removed.iter().map(|key| key.complete(&shard_id)),
+            &machine.applier.metrics.retries.external.rollup_delete,
+            debug_span!("rollup::delete"),
+            &Semaphore::new(GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg)),
+        )
+        .await
+    }
+
     // There's also a bulk delete API in s3 if the performance of this
     // becomes an issue. Maybe make Blob::delete take a list of keys?
     //
     // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+    /// Returns how many of the keys existed.
     async fn delete_all(
         blob: &dyn Blob,
         keys: impl Iterator<Item = BlobKey>,
         metrics: &RetryMetrics,
         span: Span,
         semaphore: &Semaphore,
-    ) {
+    ) -> usize {
         let futures = FuturesUnordered::new();
         for key in keys {
             futures.push(
@@ -663,14 +712,15 @@ where
                             .acquire()
                             .await
                             .expect("acquiring permit from open semaphore");
-                        blob.delete(&key).await.map(|_| ())
+                        blob.delete(&key).await
                     }
                 })
                 .instrument(span.clone()),
             )
         }
 
-        futures.collect().await
+        let deleted: Vec<Option<usize>> = futures.collect().await;
+        deleted.iter().flatten().count()
     }
 }
 

@@ -340,6 +340,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPACTION_HEURISTIC_MIN_UPDATES)
         .add(&COMPACTION_MEMORY_BOUND_BYTES)
         .add(&GC_BLOB_DELETE_CONCURRENCY_LIMIT)
+        .add(&GC_REMOVE_FINALIZED_ROLLUPS)
         .add(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT)
         .add(&USAGE_STATE_FETCH_CONCURRENCY_LIMIT)
         .add(&crate::cache::STATE_UPDATE_LEASE_TIMEOUT)
@@ -613,6 +614,15 @@ pub const GC_BLOB_DELETE_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     "persist_gc_blob_delete_concurrency_limit",
     32,
     "Limit the number of concurrent deletes GC can perform to this threshold.",
+    ParameterScope::Environment,
+);
+
+/// Kill switch for removing a finalized shard's old rollups. Off, they stay in
+/// state and their blobs are never deleted.
+pub const GC_REMOVE_FINALIZED_ROLLUPS: Config<bool> = Config::new(
+    "persist_gc_remove_finalized_rollups",
+    true,
+    "Whether GC removes a finalized shard's old rollups from state and blob.",
     ParameterScope::Environment,
 );
 

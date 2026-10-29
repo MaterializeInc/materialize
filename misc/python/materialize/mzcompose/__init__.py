@@ -508,6 +508,9 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter("persist_shard_info_metric", "true", ["true", "false"]),
         VariableSystemParameter(
+            "persist_gc_remove_finalized_rollups", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
         VariableSystemParameter(
