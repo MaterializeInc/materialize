@@ -148,6 +148,8 @@ fn main() {
                 spill_threads: 2,
                 eager_backing: false,
                 rss_target_bytes: pool_rss,
+                file_release_interval: std::time::Duration::ZERO,
+                file_release_bytes: 0,
             },
             mz_timely_util::pool_config::ExtentBackend::Swap,
         );

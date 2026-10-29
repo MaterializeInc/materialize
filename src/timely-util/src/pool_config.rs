@@ -33,6 +33,7 @@ use mz_ore::cast::CastLossy;
 
 pub mod metrics;
 
+use mz_ore::cast::CastFrom;
 pub use mz_ore::pool::ExtentBackend;
 
 /// Process-wide buffer pool shared by every spill consumer in the process.
@@ -151,6 +152,10 @@ fn apply_to(
     pool.set_rss_target(cfg.rss_target_bytes);
     pool.set_spill_threads(cfg.spill_threads);
     pool.set_eager_backing(cfg.eager_backing);
+    pool.set_file_release(
+        cfg.file_release_interval,
+        u64::cast_from(cfg.file_release_bytes),
+    );
     true
 }
 
@@ -170,6 +175,11 @@ pub struct PoolPagerConfig {
     /// Ceiling on the pool's total RSS; the compressed-resident tier is the
     /// headroom above the budget and warm cap. Zero collapses the tier.
     pub rss_target_bytes: usize,
+    /// How often spill threads release free file store slots.
+    pub file_release_interval: std::time::Duration,
+    /// Bytes of free file store slots released per extent class and
+    /// interval. Zero disables the release.
+    pub file_release_bytes: usize,
 }
 
 /// Spill threads for a process with `workers` timely workers at `fraction`.
@@ -224,6 +234,8 @@ mod tests {
         spill_threads: 0,
         eager_backing: false,
         rss_target_bytes: 0,
+        file_release_interval: std::time::Duration::ZERO,
+        file_release_bytes: 0,
     };
 
     /// `apply_pool_config` installs the pool: `active_pool` resolves to it
