@@ -783,7 +783,7 @@ impl FreshnessHarness {
                 let measure = rest[0].unwrap_str().to_string();
                 let id = datums[2].unwrap_str().to_string();
                 assert!(
-                    ["end_to_end", "local"].contains(&measure.as_str()),
+                    ["end_to_end", "local", "skew"].contains(&measure.as_str()),
                     "{measure}"
                 );
                 assert_eq!(rest[1], Datum::UInt32(4));
@@ -926,6 +926,72 @@ async fn local_delay_attributes_each_hop() {
             BTreeSet::from([scheme.bucket(delay)]),
             "b waits {delay} ms for a on {replica:?}"
         );
+    }
+}
+
+/// A collection that reads two compute collections records skew, which the collections with a
+/// single input do not.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn skew_needs_two_inputs() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let (a, b, c) = (GlobalId::User(10), GlobalId::User(11), GlobalId::User(12));
+    h.add_collection_with_inputs(a, T0, &[STORAGE_INPUT]);
+    h.add_collection_with_inputs(b, T0, &[STORAGE_INPUT]);
+    h.add_collection_with_inputs(c, T0, &[a, b]);
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+
+    let config =
+        mz_storage_client::freshness::recorder_config(&h.instance.dyncfg).expect("recording on");
+    let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))
+        .resolve(&FixedTickers(1000))
+        .expect("resolves");
+    for s in 1..=120 {
+        let tick = T0 + s * 1000;
+        h.set_now(tick + 2);
+        let frontier = Antichain::from_elem(Timestamp::from(tick + 1));
+        h.storage_log.record(&tree, &frontier, tick + 2, &config);
+        h.set_now(tick + 5);
+        h.report(r1, a, tick + 1);
+        h.set_now(tick + 9);
+        h.report(r1, b, tick + 1);
+        h.set_now(tick + 30);
+        h.report(r1, c, tick + 1);
+    }
+
+    let recorded = h.recorded();
+    let scheme = BucketScheme::new(4).expect("power of two");
+    let expected = vec![
+        (T0, T0 + 60_000, 60_000),
+        (T0 + 60_000, T0 + 120_000, 60_000),
+    ];
+    for replica in [None, Some(r1)] {
+        assert_eq!(
+            recorded.measure_periods("skew", Some(c), replica),
+            expected,
+            "{replica:?}"
+        );
+        // Both inputs pass every needed timestamp when they show it, so there is no wait
+        // between them and the slower one, `b`, decides the local delay.
+        assert_eq!(
+            recorded.buckets("skew", c, replica),
+            BTreeSet::from([scheme.bucket(1)]),
+            "{replica:?}"
+        );
+        assert_eq!(
+            recorded.buckets("local", c, replica),
+            BTreeSet::from([scheme.bucket(21)]),
+            "{replica:?}"
+        );
+        for id in [a, b] {
+            assert_eq!(
+                recorded.measure_periods("skew", Some(id), replica),
+                vec![],
+                "{id} {replica:?}"
+            );
+        }
     }
 }
 

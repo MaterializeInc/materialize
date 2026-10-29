@@ -40,6 +40,11 @@ ALTER SYSTEM SET wallclock_freshness_virtual_arrival_interval = '1ms'
 
 > CREATE INDEX lg_idx IN CLUSTER freshness_compute ON lg_view (counter)
 
+# An index with two inputs, the only object here that records skew.
+> CREATE VIEW lg_join AS SELECT l.counter FROM lg_tbl l, tbl t
+
+> CREATE INDEX lg_join_idx IN CLUSTER freshness_compute ON lg_join (counter)
+
 # Every period after the first holds exactly one period of arrivals, in both
 # measures. Waits until two full periods have closed.
 > SELECT o.name, p.measure, count(*) >= 2, bool_and(p.arrivals = 60000)
@@ -106,6 +111,26 @@ lg      true
 lg_idx  true
 lg_tbl  true
 tbl     true
+
+# Only the object with two inputs records skew, and per period it counts the
+# same arrivals as the end-to-end latency.
+> SELECT o.name, bool_and(e.arrivals = k.arrivals)
+  FROM (
+    SELECT object_id, period_start, sum(count) AS arrivals
+    FROM mz_internal.mz_wallclock_global_freshness_histogram
+    WHERE measure = 'end_to_end'
+    GROUP BY object_id, period_start
+  ) e
+  JOIN (
+    SELECT object_id, period_start, sum(count) AS arrivals
+    FROM mz_internal.mz_wallclock_global_freshness_histogram
+    WHERE measure = 'skew'
+    GROUP BY object_id, period_start
+  ) k ON e.object_id = k.object_id AND e.period_start = k.period_start
+  JOIN mz_objects o ON o.id = e.object_id
+  WHERE o.name IN ('tbl', 'lg', 'lg_tbl', 'lg_idx', 'lg_join_idx')
+  GROUP BY o.name
+lg_join_idx  true
 
 # Storage-owned collections have no inputs, so their local delay is their
 # end-to-end latency, bucket by bucket.
