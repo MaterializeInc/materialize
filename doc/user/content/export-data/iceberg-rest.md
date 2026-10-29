@@ -17,12 +17,7 @@ implements the [Iceberg REST catalog
 specification](https://iceberg.apache.org/rest-catalog-spec/), with tables
 stored in Amazon S3 or S3-compatible object storage. The examples use [Apache
 Polaris](https://polaris.apache.org/) as the catalog and MinIO as the object
-store, which is the combination Materialize tests against.
-
-Materialize does not take storage credentials or a storage endpoint of its own.
-With [credential vending](/sql/create-connection/#iceberg-catalog-access-delegation),
-the catalog hands Materialize temporary credentials scoped to the table it
-writes, along with the storage endpoint to use.
+store.
 
 {{< tip >}}
 Some catalogs have their own guide: [AWS S3 Tables](/export-data/iceberg-aws/),
@@ -37,10 +32,7 @@ Catalog](/export-data/iceberg-databricks/).
 
 - Polaris configured with storage credentials that can call the object store's
   STS `AssumeRole` API, for example through the `AWS_ACCESS_KEY_ID` and
-  `AWS_SECRET_ACCESS_KEY` environment variables. Polaris uses them to mint the
-  temporary credentials it vends to Materialize. MinIO supports `AssumeRole`,
-  and Polaris needs no `roleArn` or `stsEndpoint` to call it: it sends the
-  request to the catalog's `endpoint`.
+  `AWS_SECRET_ACCESS_KEY` environment variables.
 
 - Polaris's API and the object store reachable from Materialize. Iceberg
   catalog connections cannot tunnel through [AWS
@@ -51,9 +43,7 @@ Catalog](/export-data/iceberg-databricks/).
   region.
 
 - An access token for a Polaris principal that can manage catalogs and
-  principals, such as the `root` principal created at bootstrap. `read -rs`
-  waits for you to paste the root client secret and press Enter, without
-  echoing it, which keeps it out of your shell history:
+  principals, such as the `root` principal created at bootstrap:
 
   ```bash
   POLARIS=https://<polaris_host>
