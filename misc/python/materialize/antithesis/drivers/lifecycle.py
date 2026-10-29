@@ -491,9 +491,7 @@ def ledger(db: sqlite3.Connection, tbl: str) -> tuple[int, int]:
 def read_count(
     s: Session, name: str, cluster: str
 ) -> tuple[int, sql.Classified | None]:
-    """`count(*)` of a lifecycle collection read on `cluster`, or the
-    classified error. Errors from a concurrent drop of the cluster or index the
-    read goes through are downgraded to rejections."""
+    """Return a lifecycle collection's row count or its classified read error."""
     try:
         with sql.connection(
             s.host, statement_timeout_ms=READ_TIMEOUT_MS, options={"cluster": cluster}
@@ -504,12 +502,15 @@ def read_count(
             return (row[0] if row else 0), None
     except (psycopg.Error, OSError) as e:
         c = sql.classify(e)
-        if (
-            c.outcome is sql.Outcome.VIOLATION
-            and c.sqlstate is not None
-            and any(p.search(c.template) for p in READ_RACE_REJECTIONS)
-        ):
-            c = sql.Classified(sql.Outcome.REJECTED, c.sqlstate, c.template)
+        if c.outcome is sql.Outcome.VIOLATION and c.sqlstate is not None:
+            # Replication factor zero is part of this driver's cluster menu.
+            no_replicas = (
+                c.sqlstate == "0A000"
+                and c.template
+                == 'CLUSTER "?" has no replicas available to service request'
+            )
+            if no_replicas or any(p.search(c.template) for p in READ_RACE_REJECTIONS):
+                c = sql.Classified(sql.Outcome.REJECTED, c.sqlstate, c.template)
         return 0, c
 
 
