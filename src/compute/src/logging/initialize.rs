@@ -198,6 +198,17 @@ impl LoggingContext<'_> {
                 );
                 collections.extend(resource_usage_collections);
 
+                let super::heap::Return {
+                    collections: heap_collections,
+                } = super::heap::construct(
+                    scope,
+                    self.config,
+                    self.now,
+                    self.start_offset,
+                    self.workers_per_process,
+                );
+                collections.extend(heap_collections);
+
                 let errs = scope.scoped("logging errors", |scope| {
                     let collection: KeyCollection<_, DataflowErrorSer, Diff> =
                         VecCollection::empty(scope).into();

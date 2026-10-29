@@ -167,6 +167,8 @@ struct Live {
     /// Inverse sampling probability at sample time.
     scale: f64,
     born: Instant,
+    /// The tag source's value at sample time.
+    tag: u64,
 }
 
 static SHARDS: [Mutex<BTreeMap<usize, Live>>; SHARD_COUNT] =
@@ -303,7 +305,7 @@ fn capture(buf: &mut [usize; MAX_FRAMES]) -> Option<usize> {
     Some(n)
 }
 
-pub(super) fn record_alloc(addr: usize, size: usize, space: Space, interval: u64) {
+pub(super) fn record_alloc(addr: usize, size: usize, space: Space, interval: u64, tag: u64) {
     let mut buf = [0; MAX_FRAMES];
     let Some(n) = capture(&mut buf) else {
         return;
@@ -328,6 +330,7 @@ pub(super) fn record_alloc(addr: usize, size: usize, space: Space, interval: u64
         space,
         scale,
         born: Instant::now(),
+        tag,
     };
     if lock(shard(addr)).insert(addr, live).is_some() {
         // A stale record means a free went unreported. The new record
@@ -379,6 +382,9 @@ pub struct Site {
     pub count: f64,
     /// Estimated bytes.
     pub bytes: f64,
+    /// The tag of the samples, see [`set_tag_source`](super::set_tag_source).
+    /// Always zero outside [`Snapshot::live`].
+    pub tag: u64,
 }
 
 /// Estimated frees attributed to one (allocation stack, free stack) pair.
@@ -470,9 +476,9 @@ fn snapshot_inner() -> Snapshot {
     }
 
     let mut numbering = Numbering::default();
-    let mut live: BTreeMap<(Space, u32), Totals> = BTreeMap::new();
+    let mut live: BTreeMap<(Space, u32, u64), Totals> = BTreeMap::new();
     for l in &live_records {
-        live.entry((l.space, numbering.id(&l.stack)))
+        live.entry((l.space, numbering.id(&l.stack), l.tag))
             .or_default()
             .add(l.scale, l.size);
     }
@@ -496,17 +502,21 @@ fn snapshot_inner() -> Snapshot {
     drop((live_records, allocated_records, freed_records));
     prune();
 
-    let site = |((space, stack), t): ((Space, u32), Totals)| Site {
+    let site = |((space, stack, tag), t): ((Space, u32, u64), Totals)| Site {
         space,
         stack,
         count: t.count,
         bytes: t.bytes,
+        tag,
     };
     Snapshot {
         live_samples,
         stacks: numbering.stacks,
         live: live.into_iter().map(site).collect(),
-        allocated: allocated.into_iter().map(site).collect(),
+        allocated: allocated
+            .into_iter()
+            .map(|((space, stack), t)| site(((space, stack, 0), t)))
+            .collect(),
         freed: freed
             .into_iter()
             .map(|((space, kind, alloc_stack, free_stack), f)| FreeSite {

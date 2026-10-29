@@ -11,6 +11,7 @@
 
 pub mod compute;
 mod differential;
+mod heap;
 pub(super) mod initialize;
 mod prometheus;
 mod reachability;

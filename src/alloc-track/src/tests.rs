@@ -102,10 +102,10 @@ fn suspended_unwinding_skips_samples() {
     // An address no allocator hands out, so no other test frees it.
     let addr = (1usize << 47) - (1 << 20);
     let guard = crate::suspend_unwinding();
-    registry::record_alloc(addr, 1 << 20, crate::Space::Heap, 1);
+    registry::record_alloc(addr, 1 << 20, crate::Space::Heap, 1, 0);
     assert!(!filter::maybe_contains(addr), "sampled while suspended");
     drop(guard);
-    registry::record_alloc(addr, 1 << 20, crate::Space::Heap, 1);
+    registry::record_alloc(addr, 1 << 20, crate::Space::Heap, 1, 0);
     assert!(filter::maybe_contains(addr), "not sampled after resuming");
     registry::record_free(addr, crate::FreeKind::Dealloc);
 }

@@ -186,6 +186,10 @@ pub enum ComputeLog {
     PrometheusMetrics,
     /// Resource usage observations of each replica process.
     ResourceUsage,
+    /// SPIKE: sampled live heap by operator and allocation stack.
+    HeapLive,
+    /// SPIKE: symbolized allocation stacks referenced by `HeapLive`.
+    HeapStacks,
 }
 
 impl LogVariant {
@@ -422,6 +426,24 @@ impl LogVariant {
                 .with_column("metric", SqlScalarType::String.nullable(false))
                 .with_column("value", SqlScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1, 2])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::HeapLive) => RelationDesc::builder()
+                .with_column("process_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("worker_id", SqlScalarType::UInt64.nullable(true))
+                .with_column("operator_id", SqlScalarType::UInt64.nullable(true))
+                .with_column("space", SqlScalarType::String.nullable(false))
+                .with_column("stack_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("bytes", SqlScalarType::UInt64.nullable(false))
+                .with_column("count", SqlScalarType::UInt64.nullable(false))
+                .with_key(vec![0, 1, 2, 3, 4])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::HeapStacks) => RelationDesc::builder()
+                .with_column("process_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("stack_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("frames", SqlScalarType::String.nullable(false))
+                .with_key(vec![0, 1])
                 .finish(),
         }
     }
