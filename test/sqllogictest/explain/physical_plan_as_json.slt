@@ -436,49 +436,55 @@ SELECT c + d, 1 FROM u
         "User": 2
       },
       "op": {
-        "expressions": [
-          {
-            "CallBinary": {
-              "func": {
-                "AddInt32": null
-              },
-              "expr1": {
-                "Column": [
-                  0,
-                  "c"
-                ]
-              },
-              "expr2": {
-                "Column": [
-                  1,
-                  "d"
-                ]
-              }
-            }
-          },
-          {
-            "Literal": [
+        "mfp": {
+          "mfp": {
+            "expressions": [
               {
-                "Ok": {
-                  "data": [
-                    41,
-                    1
-                  ]
+                "CallBinary": {
+                  "func": {
+                    "AddInt32": null
+                  },
+                  "expr1": {
+                    "Column": [
+                      0,
+                      "c"
+                    ]
+                  },
+                  "expr2": {
+                    "Column": [
+                      1,
+                      "d"
+                    ]
+                  }
                 }
               },
               {
-                "scalar_type": "Int32",
-                "nullable": false
+                "Literal": [
+                  {
+                    "Ok": [
+                      10,
+                      2,
+                      24,
+                      1
+                    ]
+                  },
+                  {
+                    "scalar_type": "Int32",
+                    "nullable": false
+                  }
+                ]
               }
-            ]
+            ],
+            "predicates": [],
+            "projection": [
+              2,
+              3
+            ],
+            "input_arity": 2
           }
-        ],
-        "predicates": [],
-        "projection": [
-          2,
-          3
-        ],
-        "input_arity": 2
+        },
+        "lower_bounds": [],
+        "upper_bounds": []
       }
     }
   ]
@@ -811,12 +817,18 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
         "User": 7
       },
       "op": {
-        "expressions": [],
-        "predicates": [],
-        "projection": [
-          1
-        ],
-        "input_arity": 2
+        "mfp": {
+          "mfp": {
+            "expressions": [],
+            "predicates": [],
+            "projection": [
+              1
+            ],
+            "input_arity": 2
+          }
+        },
+        "lower_bounds": [],
+        "upper_bounds": []
       }
     }
   ]
@@ -1343,12 +1355,18 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
         "User": 7
       },
       "op": {
-        "expressions": [],
-        "predicates": [],
-        "projection": [
-          1
-        ],
-        "input_arity": 2
+        "mfp": {
+          "mfp": {
+            "expressions": [],
+            "predicates": [],
+            "projection": [
+              1
+            ],
+            "input_arity": 2
+          }
+        },
+        "lower_bounds": [],
+        "upper_bounds": []
       }
     }
   ]
@@ -1699,45 +1717,51 @@ SELECT x * 5 FROM cte WHERE x = 5
         "User": 7
       },
       "op": {
-        "expressions": [],
-        "predicates": [
-          [
-            2,
-            {
-              "CallBinary": {
-                "func": {
-                  "Eq": null
-                },
-                "expr1": {
-                  "Column": [
-                    1,
-                    "x"
-                  ]
-                },
-                "expr2": {
-                  "Literal": [
-                    {
-                      "Ok": {
-                        "data": [
-                          41,
-                          5
-                        ]
-                      }
+        "mfp": {
+          "mfp": {
+            "expressions": [],
+            "predicates": [
+              [
+                2,
+                {
+                  "CallBinary": {
+                    "func": {
+                      "Eq": null
                     },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
+                    "expr1": {
+                      "Column": [
+                        1,
+                        "x"
+                      ]
+                    },
+                    "expr2": {
+                      "Literal": [
+                        {
+                          "Ok": [
+                            10,
+                            2,
+                            24,
+                            5
+                          ]
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      ]
                     }
-                  ]
+                  }
                 }
-              }
-            }
-          ]
-        ],
-        "projection": [
-          1
-        ],
-        "input_arity": 2
+              ]
+            ],
+            "projection": [
+              1
+            ],
+            "input_arity": 2
+          }
+        },
+        "lower_bounds": [],
+        "upper_bounds": []
       }
     }
   ]
@@ -9972,60 +9996,66 @@ WHERE a = c AND d = e AND b + d > 42
         "User": 2
       },
       "op": {
-        "expressions": [],
-        "predicates": [
-          [
-            1,
-            {
-              "CallUnary": {
-                "func": {
-                  "Not": null
-                },
-                "expr": {
+        "mfp": {
+          "mfp": {
+            "expressions": [],
+            "predicates": [
+              [
+                1,
+                {
                   "CallUnary": {
                     "func": {
-                      "IsNull": null
+                      "Not": null
                     },
                     "expr": {
-                      "Column": [
-                        0,
-                        "c"
-                      ]
+                      "CallUnary": {
+                        "func": {
+                          "IsNull": null
+                        },
+                        "expr": {
+                          "Column": [
+                            0,
+                            "c"
+                          ]
+                        }
+                      }
                     }
                   }
                 }
-              }
-            }
-          ],
-          [
-            2,
-            {
-              "CallUnary": {
-                "func": {
-                  "Not": null
-                },
-                "expr": {
+              ],
+              [
+                2,
+                {
                   "CallUnary": {
                     "func": {
-                      "IsNull": null
+                      "Not": null
                     },
                     "expr": {
-                      "Column": [
-                        1,
-                        "d"
-                      ]
+                      "CallUnary": {
+                        "func": {
+                          "IsNull": null
+                        },
+                        "expr": {
+                          "Column": [
+                            1,
+                            "d"
+                          ]
+                        }
+                      }
                     }
                   }
                 }
-              }
-            }
-          ]
-        ],
-        "projection": [
-          0,
-          1
-        ],
-        "input_arity": 2
+              ]
+            ],
+            "projection": [
+              0,
+              1
+            ],
+            "input_arity": 2
+          }
+        },
+        "lower_bounds": [],
+        "upper_bounds": []
       }
     },
     {
@@ -10033,36 +10063,42 @@ WHERE a = c AND d = e AND b + d > 42
         "User": 3
       },
       "op": {
-        "expressions": [],
-        "predicates": [
-          [
-            1,
-            {
-              "CallUnary": {
-                "func": {
-                  "Not": null
-                },
-                "expr": {
+        "mfp": {
+          "mfp": {
+            "expressions": [],
+            "predicates": [
+              [
+                1,
+                {
                   "CallUnary": {
                     "func": {
-                      "IsNull": null
+                      "Not": null
                     },
                     "expr": {
-                      "Column": [
-                        0,
-                        "e"
-                      ]
+                      "CallUnary": {
+                        "func": {
+                          "IsNull": null
+                        },
+                        "expr": {
+                          "Column": [
+                            0,
+                            "e"
+                          ]
+                        }
+                      }
                     }
                   }
                 }
-              }
-            }
-          ]
-        ],
-        "projection": [
-          0
-        ],
-        "input_arity": 2
+              ]
+            ],
+            "projection": [
+              0
+            ],
+            "input_arity": 2
+          }
+        },
+        "lower_bounds": [],
+        "upper_bounds": []
       }
     }
   ]

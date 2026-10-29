@@ -376,7 +376,8 @@ mz_catalog.mz_recent_storage_usage:
 
 Source mz_internal.mz_storage_usage_by_shard
   project=(#1..=#3)
-  filter=((#1{shard_id}) IS NOT NULL AND (mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#3{collection_timestamp} + 06:00:00)))))
+  filter=((#1{shard_id}) IS NOT NULL)
+  TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#3{collection_timestamp} + 06:00:00)))
 Source mz_internal.mz_storage_shards
 
 Target cluster: mz_catalog_server
@@ -563,8 +564,9 @@ mz_internal.mz_cluster_deployment_lineage:
 
 Source mz_catalog.mz_audit_events
   project=(#1..=#3, #5..=#7)
-  filter=((#2{object_type} = "cluster") AND ((#1{event_type} = "drop") OR (#1{event_type} = "create") OR ((#1{event_type} = "alter") AND (#3{details} ? "new_name"))) AND (mz_now() < timestamp_tz_to_mz_timestamp((#5{occurred_at} + 30 days))))
+  filter=((#2{object_type} = "cluster") AND ((#1{event_type} = "drop") OR (#1{event_type} = "create") OR ((#1{event_type} = "alter") AND (#3{details} ? "new_name"))))
   map=(coalesce((#3{details} ->> "id"), (#3{details} ->> "cluster_id")), coalesce((#3{details} ->> "name"), (#3{details} ->> "new_name")))
+  TemporalFilter: mz_now() < timestamp_tz_to_mz_timestamp((#5{occurred_at} + 30 days))
 
 Used Indexes:
   - mz_catalog.mz_clusters_ind (*** full scan ***)
@@ -1845,11 +1847,11 @@ mz_internal.mz_recent_activity_log_thinned:
       →Read mz_internal.mz_session_history
 
 Source mz_internal.mz_statement_execution_history
-  filter=((mz_now() < timestamp_tz_to_mz_timestamp((#14{began_at} + 1 day))))
+  TemporalFilter: mz_now() < timestamp_tz_to_mz_timestamp((#14{began_at} + 1 day))
 Source mz_internal.mz_prepared_statement_history
-  filter=((mz_now() < timestamp_tz_to_mz_timestamp((#4{prepared_at} + 1 day))))
+  TemporalFilter: mz_now() < timestamp_tz_to_mz_timestamp((#4{prepared_at} + 1 day))
 Source mz_internal.mz_session_history
-  filter=((mz_now() < timestamp_tz_to_mz_timestamp((#1{connected_at} + 2 days))))
+  TemporalFilter: mz_now() < timestamp_tz_to_mz_timestamp((#1{connected_at} + 2 days))
 
 Target cluster: mz_catalog_server
 
@@ -1868,7 +1870,7 @@ mz_internal.mz_recent_sql_text:
 
 Source mz_internal.mz_sql_text
   project=(#1..=#3)
-  filter=((mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#0{prepared_day} + 4 days)))))
+  TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#0{prepared_day} + 4 days)))
 
 Target cluster: mz_catalog_server
 
@@ -3537,7 +3539,7 @@ mz_internal.mz_wallclock_global_lag_recent_history:
 
 Source mz_internal.mz_wallclock_lag_history
   project=(#0, #2, #3)
-  filter=((mz_now() < timestamp_tz_to_mz_timestamp((date_trunc_minute_tstz(#3{occurred_at}) + 1 day))))
+  TemporalFilter: mz_now() < timestamp_tz_to_mz_timestamp((date_trunc_minute_tstz(#3{occurred_at}) + 1 day))
 
 Target cluster: mz_catalog_server
 
