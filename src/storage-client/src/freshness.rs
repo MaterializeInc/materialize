@@ -63,6 +63,14 @@ impl FreshnessRecording {
         }
     }
 
+    /// Records the arrivals after `start_ms`.
+    pub fn starting_at(start_ms: u64) -> Self {
+        FreshnessRecording {
+            start: Start::FirstObservation(start_ms),
+            end_to_end: Some(FreshnessRecorder::new(start_ms)),
+        }
+    }
+
     /// Records the arrivals after the later of the first observed frontier and `built_ms`, the
     /// wall-clock time now. The arrivals before it are not recorded, which leaves a hole in the
     /// histogram.
