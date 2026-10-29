@@ -42,8 +42,18 @@ shutdown, even after controller exit and without rebuilding. Keep Ctrl-C as
 controller-only shutdown. Follow the design's environment-scoping contract.
 
 M3 also requires an executed, user-facing local version-upgrade walkthrough in
-`doc/developer/controllerd.md`, covering compatible old/new deployments through
-prewarming, promotion and retirement. Document commands, not only test coverage.
+`doc/developer/controllerd.md`. Two different compatible versions must both serve
+SQL, DDL and table writes before and after promotion. Promotion switches active
+execution authority without retiring the previous deployment. Retirement is a
+separate explicit HTTP administrative operation, fencing only the selected
+deployment before releasing its protection and cleaning up its processes.
+Preserve surviving deployments and shared pubsub. Each external sink retains one
+authorized execution even while both versions serve writes. A brief candidate
+adapter restart at promotion is acceptable, but preserve warmed replicas.
+Read-only prewarming or build-metadata variants of one version do not satisfy
+this outcome. Keep schema/encoding/semantic compatibility checks. Document and
+execute the commands, not only test coverage. Reuse catalog admission and Persist
+protocols rather than adding a separate consensus or leadership mechanism.
 
 Include `GET /api/collections`: pretty JSON with collection ID, name and the
 catalog's committed combined since, not physical Persist since. Support SQL LIKE

@@ -18,10 +18,12 @@ queries may fail. Transparent query or session failover is out of scope.
 Table and webhook ticking and shard finalization remain adapter-owned and may
 pause while no eligible adapter is live.
 
-Active and prewarming deployments coexist as independent catalog participants.
-Their adapters and lifecycle components are cooperating catalog writers, with
-authority appropriate to each deployment. M3 separates process management into
-`controllerd` and SQL serving into independently managed `adapterd` instances.
+Compatible deployments coexist as independent catalog participants. M3 requires
+two different compatible versions concurrently serving SQL, DDL and table writes,
+with promotion separate from explicit retirement. Their adapters and lifecycle
+components cooperate under the authority of each deployment. M3 separates process
+management into `controllerd` and SQL serving into independently managed
+`adapterd` instances.
 Multiple adapters serve the same deployment without owning maintained lifecycle
 or depending on a designated serving adapter for shared management.
 
@@ -57,15 +59,21 @@ durable catalog lifecycle.
 
 ## Deployment coexistence and native prewarming
 
-Each deployment's adapter and replica realizations and read-only/output-write
+Each deployment's adapter and replica realizations and serving/output-write
 authority are durable catalog state. Identity is scoped by deployment, not binary
-version. Active and prewarming deployments use native catalog-following replicas
-throughout their lifetime. The pending deployment hydrates its own replicas while
-the active deployment serves. Promotion changes
-durable authority without switching execution models or discarding the state
-warmed for takeover. An outside signal from the upgrade orchestrator authorizes
-promotion. Neither joining the catalog nor observing hydration grants that
-authority.
+version. Deployments use native catalog-following replicas throughout their
+lifetime. A new deployment hydrates its own replicas while the existing deployment
+serves. Once admitted as compatible writers, both versions may serve SQL, DDL and
+table writes before and after promotion.
+
+Promotion selects the active deployment and transfers active execution authority,
+including external-sink ownership, without discarding warmed execution. It does
+not retire the previous deployment or revoke its authority to serve SQL and commit
+catalog and table writes.
+An outside signal authorizes promotion. Neither joining the catalog nor observing
+hydration grants that authority. Client endpoint switching is explicit, not
+transparent session migration. A brief restart of candidate adapters at promotion
+is acceptable, but warmed replicas remain running.
 
 User objects, clusters, declared configuration and explicit adapter and replica
 declarations live once in the shared catalog. There is no private durable SQL
@@ -98,11 +106,13 @@ deployment's inventory, not this public filter. Raw catalog access retains all
 deployments. [Query-relative public visibility](#future-work-deployment-relative-catalog-views)
 is deferred.
 
-Catalog participation is distinct from output-write authority. A read-only
-deployment can publish its replicas, plans and protection without gaining the
-right to write shared user data or maintained outputs. Promotion commits write
-enablement in the catalog. Restart recovers that state rather than inferring it
-from process startup or connection order.
+Authority to serve SQL and commit catalog and table writes is distinct from
+maintained output authority.
+Full-writer admission does not authorize every deployment to produce external
+sink output. Read-only prewarming may be used as a staging mode, but is not the
+final M3 coexistence outcome. Restart recovers committed authority rather than
+inferring it from process startup, connection order or active-deployment status
+alone.
 
 Compatible deployments may write the same Persist output concurrently, including
 late writes from a retired deployment. Persist compare-and-append and each
@@ -113,12 +123,14 @@ Persist writers to stop or for every output to complete a handover.
 Catalog fencing, read protection and external-sink transaction/version checks
 remain required.
 
-Protection accounts for all admitted deployments. Promotion preserves the warmed
-deployment's requirements. Durable retirement revokes the retiring deployment's
-catalog authority and releases its query and execution protection without waiting
-for physical process death. Shared declarations, maintained requirements and other
-deployments' protection remain intact. Physical cleanup may follow asynchronously.
-Cancelling an abandoned prewarm uses explicit deployment retirement, not expiry.
+Protection accounts for all admitted deployments. Promotion preserves both
+deployments' requirements and non-sink execution. Retirement is a separate explicit
+administrative operation targeting one deployment identity. It durably revokes
+that deployment's authority, authorizing release of its query/execution protection
+and removal of its processes without waiting for physical process death. Shared
+declarations, maintained requirements, surviving deployments' protection and the
+shared pubsub relay remain intact. Physical cleanup may follow asynchronously.
+Cancelling an abandoned prewarm uses the same explicit retirement, not expiry.
 
 ### Version compatibility
 
@@ -126,7 +138,8 @@ Catalog admission and retirement determine the versions that shared catalog and
 Persist state must support. Reuse deployment membership with the version
 information needed for that decision, not a separate liveness registry. Writers
 preserve all admitted participants' encodings and shared collection semantics.
-Unsupported participants are not admitted.
+This includes catalog and builtin schemas, written plans and DDL semantics, not
+only the Persist version label. Unsupported participants are not admitted.
 
 Shared Persist shards use a supported state-format target distinct from the
 actual binary identity. This covers first initialization, even through read-only
@@ -393,16 +406,19 @@ with input compaction permission.
 
 Kafka sinks run on one selected replica in the active deployment. Restart recovers
 on that replica. Moving to another replica follows catalog membership changes,
-not missed heartbeats or client-incarnation age. Prewarming replicas must not
-compete for output ownership or block the active deployment's selection.
+not missed heartbeats or client-incarnation age. Other admitted deployments must
+not compete for output ownership, even when they accept SQL and table writes.
+Promotion transfers sink authority and stops superseded sink execution without
+retiring the previous deployment's queries or other maintained execution.
 
 Producer opening and reopening check current catalog authority for the deployment,
 realization and execution. Admission is a point-in-time check, not a timed lease.
 Kafka's per-sink transactional identity, producer fencing, committed-progress
 recovery and sink-version checks preserve output correctness. An already-approved
 old attempt may fence its replacement after a pause, causing a transient restart,
-but cannot obtain fresh admission after retirement. No guarantee of
-interruption-free takeover or wait for old process death is required.
+but cannot obtain fresh admission after losing output authority, even if its
+deployment remains admitted. No guarantee of interruption-free takeover or wait
+for old process death is required.
 
 ### Index creation and reconstruction
 
@@ -420,12 +436,12 @@ permanently pinning the initial `as_of`. A past bound is not a promise to
 reconstruct history no longer required. Live execution holds continue to protect
 existing traces.
 
-### Read-only prewarming
+### Deployment prewarming
 
 Prewarming uses
 [deployment-scoped replicas](#deployment-coexistence-and-native-prewarming).
 They follow committed definitions, written plans and compaction permission for
-their deployment. Read-only bootstrap follows
+their deployment. Bootstrap follows
 [Index creation and reconstruction](#index-creation-and-reconstruction) without
 depending on the serving adapter to grant permission. A SQL savepoint or
 adapter-local read-only setting grants neither compaction permission nor
@@ -477,7 +493,7 @@ privileges. Losing or restarting controllerd leaves healthy children running.
 Provisioning and recovery of failed processes may wait for its return, but
 running SQL, maintained execution and cooperative maintenance do not depend on it.
 
-The external launcher launches controllers, authorizes promotion,
+The external launcher launches controllers, authorizes promotion and retirement,
 manages routing and completes physical teardown after durable deployment
 retirement, even if the retired controller is gone. Starting a deployment's
 controller before its children does not require upgrading the old deployment's
@@ -538,6 +554,11 @@ observed status. Mutations use the same catalog operations and validation as SQL
 respecting deployment authority. Success acknowledges the catalog commit, not
 process readiness or completed teardown. This is catalog administration, not a
 SQL proxy or a direct process-command path.
+
+The administrative HTTP API also exposes explicit deployment retirement,
+independent of promotion. It targets a deployment identity and acknowledges
+durable retirement, not completed process cleanup. It preserves the surviving
+deployments and shared relay under the retirement contract above.
 
 `GET /api/collections` lists catalog-known Persist-backed collections as
 pretty-printed JSON, including system collections. Each entry has its catalog
@@ -688,10 +709,10 @@ retain local-capability-driven compaction and epoch-fenced normal writer opens,
 including their existing migration behavior.
 
 Catalog writes validate deployment membership and the operation's authority at
-commit. Active and prewarming generations participate under their own
-identities without fencing one another by joining. Promotion revokes the
-retired generation's catalog-write authority without invalidating the warmed
-generation's protection. Persist compare-and-append is the commit authority:
+commit. Compatible admitted generations participate under their own identities
+without fencing one another by joining or promotion. Explicit retirement revokes
+only the selected generation's catalog-write authority and protection.
+Persist compare-and-append is the commit authority:
 metadata-only writes such as protection and compaction retry on contention,
 while DDL refreshes and revalidates and reports a planning conflict when
 structural changes invalidated it rather than merging. Each writer follows the
@@ -894,19 +915,26 @@ Build through these slices, preserving working outcomes as the split progresses:
    plus controllerd HTTP listing, creation and drop, with resource sizes,
    endpoints and readiness through the same catalog and reconciliation path.
    Include the filtered durable-collection inspection endpoint.
-4. **Local deployment coexistence.** Exercise old/new deployment
-   controllers with shared pubsub, externally authorized promotion and retired
-   deployment cleanup through the local-process backend and external launcher.
+4. **Local deployment coexistence.** Run different compatible versions as full
+   SQL, DDL and table writers, with deployment-local controllers and shared pubsub.
+   Promote without retiring the previous deployment, then explicitly retire it
+   through the administrative HTTP API and clean up its processes. Keep one
+   authorized execution per external sink. Use the local-process backend and
+   external launcher.
    Kubernetes backend and operator integration are not M3 completion criteria.
 
 Publish and execute a local version-upgrade walkthrough in
 `doc/developer/controllerd.md`. Include copyable commands to select two compatible
 participating versions, start the old deployment and a workload, and prewarm the
 new deployment under its own controller against the same environment and shared
-pubsub. Show readiness inspection, explicit promotion, client endpoint switching,
-old-deployment retirement and process cleanup, including relay provisioning
-handoff where needed. Verify continued ingestion and query results. Keep the
-existing compatibility exclusions. Test-harness coverage alone does not suffice.
+pubsub. Demonstrate SQL, DDL and table writes through both versions before and
+after promotion. Use distinct compatible versions, not merely different build
+metadata for one version. Show readiness inspection, explicit promotion, client
+endpoint switching, separate old-deployment retirement and process cleanup,
+including relay provisioning handoff where needed. Verify continued ingestion,
+query results and external-sink authority, and that only the retired deployment
+loses its authority and protection. Keep the existing schema compatibility checks
+and exclusions. Test-harness coverage alone does not suffice.
 
 Demonstrate SQL creation, listing, rename and drop of adapters, endpoint discovery
 and the HTTP inventory. Use two adapters concurrently, kill one, and show
