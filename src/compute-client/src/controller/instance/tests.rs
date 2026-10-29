@@ -929,6 +929,72 @@ async fn local_delay_attributes_each_hop() {
     }
 }
 
+/// An input with a tree that never recorded its visibility counts as ready at each observation,
+/// which records local delay 0 rather than the end-to-end latency.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn local_delay_without_input_entries_is_zero() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let a = GlobalId::User(10);
+    h.add_collection_with_inputs(a, T0, &[STORAGE_INPUT]);
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+    for s in 1..=60 {
+        h.set_now(T0 + s * 1000 + 5);
+        h.report(r1, a, T0 + s * 1000 + 1);
+    }
+    let recorded = h.recorded();
+    let scheme = BucketScheme::new(4).expect("power of two");
+    for replica in [None, Some(r1)] {
+        assert_eq!(
+            recorded.measure_periods("local", Some(a), replica),
+            vec![(T0, T0 + 60_000, 60_000)],
+            "{replica:?}"
+        );
+        assert_eq!(
+            recorded.buckets("local", a, replica),
+            BTreeSet::from([scheme.bucket(0)]),
+            "{replica:?}"
+        );
+    }
+}
+
+/// An input that completed is visible from its completion on, so its consumer's local delay is
+/// measured from then.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn local_delay_after_closed_input_counts_from_close() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let a = GlobalId::User(10);
+    h.add_collection_with_inputs(a, T0, &[STORAGE_INPUT]);
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+    let config =
+        mz_storage_client::freshness::recorder_config(&h.instance.dyncfg).expect("recording on");
+    let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))
+        .resolve(&FixedTickers(1000))
+        .expect("resolves");
+    // The input closes 500 ms after the consumer is created.
+    h.storage_log
+        .record(&tree, &Antichain::new(), T0 + 500, &config);
+    for s in 1..=60 {
+        h.set_now(T0 + s * 1000 + 5);
+        h.report(r1, a, T0 + s * 1000 + 1);
+    }
+    let recorded = h.recorded();
+    let scheme = BucketScheme::new(4).expect("power of two");
+    let expected: BTreeSet<_> = (1..=60).map(|s| scheme.bucket(s * 1000 - 495)).collect();
+    for replica in [None, Some(r1)] {
+        assert_eq!(
+            recorded.buckets("local", a, replica),
+            expected,
+            "{replica:?}"
+        );
+    }
+}
+
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
 async fn freshness_histograms_need_flag_and_writes() {

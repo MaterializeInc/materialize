@@ -333,9 +333,16 @@ impl Instance {
         );
         state.target_replica = target_replica;
         state.freshness_tree = freshness_tree;
-        state.freshness_inputs = freshness_inputs;
+        // Looked up once, so recording does not take the `StorageCollections` lock per input.
+        state.freshness_inputs = freshness_inputs
+            .into_iter()
+            .map(|input| (input, self.storage_collections.visibility_log(input)))
+            .collect();
         // This controller writes storage sinks, so it records their log for readers on other
-        // instances, which find it through `StorageCollections`.
+        // instances, which find it through `StorageCollections`. The compute controller checks
+        // that the storage collection exists before it creates the dataflow, so the lookup only
+        // misses if the collection was dropped since. Readers then find no entries and count the
+        // sink as ready at their observation.
         if storage_sink && let Some(log) = self.storage_collections.visibility_log(id) {
             state.visibility_log = log;
         }
@@ -2111,7 +2118,9 @@ impl Instance {
         let inputs: Vec<_> = collection
             .freshness_inputs
             .iter()
-            .filter_map(|input| self.freshness_input_log(*input, replica_id, recorded_through))
+            .map(|(input, storage_log)| {
+                self.freshness_input_log(*input, storage_log.as_ref(), replica_id, recorded_through)
+            })
             .collect();
         let inputs: Vec<_> = inputs.iter().collect();
 
@@ -2171,27 +2180,35 @@ impl Instance {
     }
 
     /// The visibility log of the input `id` that answers the arrivals above `recorded_through`,
-    /// on `replica_id` or globally, `None` if the input has no log or never recorded one.
+    /// on `replica_id` or globally. `storage_log` is the input's log in `StorageCollections`.
+    ///
+    /// An input whose log is not available, for example one not installed on the replica, gets
+    /// an empty log, which counts it as ready at the observation, see
+    /// `LocalDelayRecorder::observe`.
     fn freshness_input_log(
         &self,
         id: GlobalId,
+        storage_log: Option<&SharedVisibilityLog>,
         replica_id: Option<ReplicaId>,
         recorded_through: Option<u64>,
-    ) -> Option<VisibilityLog> {
+    ) -> VisibilityLog {
         // Collections of this instance, indexes and storage sinks, have a log here. Storage
         // sinks of other instances and storage-owned collections have theirs in
         // `StorageCollections`, recorded when their controller observed them.
         let Some(collection) = self.collections.get(&id) else {
-            let log = self.storage_collections.visibility_log(id)?;
-            return log.input_log(recorded_through);
+            return storage_log.map_or_else(VisibilityLog::default, |log| {
+                log.input_log(recorded_through)
+            });
         };
         match replica_id {
             None => collection.visibility_log.input_log(recorded_through),
-            Some(replica_id) => {
-                let replica = self.replicas.get(&replica_id)?;
-                let collection = replica.collections.get(&id)?;
-                freshness::input_log(&collection.visibility_log, recorded_through)
-            }
+            Some(replica_id) => self
+                .replicas
+                .get(&replica_id)
+                .and_then(|replica| replica.collections.get(&id))
+                .map_or_else(VisibilityLog::default, |collection| {
+                    freshness::input_log(&collection.visibility_log, recorded_through)
+                }),
         }
     }
 
@@ -2865,9 +2882,10 @@ struct CollectionState {
 
     /// How the collection's frontier follows arrival time. `None` if it has no time dependence.
     freshness_tree: Option<FreshnessTree>,
-    /// The direct inputs whose visibility local delay is measured against: the imports the
-    /// freshness tree was built from.
-    freshness_inputs: BTreeSet<GlobalId>,
+    /// The direct inputs whose visibility local delay is measured against, the imports that
+    /// contributed to the freshness tree, with their log in `StorageCollections` if they have
+    /// one.
+    freshness_inputs: BTreeMap<GlobalId, Option<SharedVisibilityLog>>,
     /// Freshness recording of the global write frontier, `None` until recording starts.
     freshness: Option<FreshnessRecording>,
     /// When the global write frontier made arrivals visible. Shared with
@@ -2930,7 +2948,7 @@ impl CollectionState {
             introspection,
             wallclock_lag_histogram_stash,
             freshness_tree: None,
-            freshness_inputs: BTreeSet::new(),
+            freshness_inputs: BTreeMap::new(),
             freshness: None,
             visibility_log: SharedVisibilityLog::default(),
         }

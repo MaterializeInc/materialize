@@ -110,11 +110,6 @@ impl VisibilityLog {
         }
     }
 
-    /// Whether nothing was ever recorded.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.floor == 0
-    }
-
     /// The observation time `visible_at(arrival)` returns, and the inclusive upper bound of the
     /// arrivals that share this answer, `None` if unbounded.
     fn segment(&self, arrival: u64) -> (Option<u64>, Option<u64>) {

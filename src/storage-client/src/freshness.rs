@@ -170,7 +170,13 @@ pub fn record_visibility(
     now_ms: u64,
     config: &RecorderConfig,
 ) {
-    if let Some(reflected) = frontier.as_option().and_then(|t| tree.last_reflected(*t)) {
+    let reflected = match frontier.as_option() {
+        Some(t) => tree.last_reflected(*t),
+        // A complete collection makes every arrival visible from now on. Without this entry its
+        // consumers would find no answer for later arrivals and record a local delay of 0.
+        None => Some(u64::MAX),
+    };
+    if let Some(reflected) = reflected {
         log.record(reflected, now_ms);
     }
     // Pruned by age, not through the least arrival its consumers recorded, because consumers in
@@ -185,16 +191,9 @@ fn visibility_retention_ms(config: &RecorderConfig) -> u64 {
     config.period_ms.saturating_mul(10).max(600_000)
 }
 
-/// A copy of `log` that answers the arrivals above `recorded_through`, `None` if `log` never
-/// recorded anything.
-///
-/// An input that never recorded, like one without a freshness tree, is no input to local delay,
-/// like it is no input to the freshness tree.
-pub fn input_log(log: &VisibilityLog, recorded_through: Option<u64>) -> Option<VisibilityLog> {
-    if log.is_empty() {
-        return None;
-    }
-    Some(log.after(recorded_through.unwrap_or(0)))
+/// A copy of `log` that answers the arrivals above `recorded_through`.
+pub fn input_log(log: &VisibilityLog, recorded_through: Option<u64>) -> VisibilityLog {
+    log.after(recorded_through.unwrap_or(0))
 }
 
 /// A visibility log shared between the controller that records it and the controllers whose
@@ -216,7 +215,7 @@ impl SharedVisibilityLog {
     }
 
     /// Like [`input_log`].
-    pub fn input_log(&self, recorded_through: Option<u64>) -> Option<VisibilityLog> {
+    pub fn input_log(&self, recorded_through: Option<u64>) -> VisibilityLog {
         input_log(&self.0.lock().expect("lock poisoned"), recorded_through)
     }
 }
@@ -309,20 +308,43 @@ mod tests {
             period_ms: 60_000,
         };
         let log = SharedVisibilityLog::default();
-        assert_eq!(log.input_log(None).map(|l| l.visible_at(1)), None);
+        assert_eq!(log.input_log(None).visible_at(1), None);
         // One advance per second for 15 minutes, observed 5 ms after each tick.
         for s in 1..=900u64 {
             let frontier = Antichain::from_elem(Timestamp::from(s * 1000 + 1));
             log.record(&tree, &frontier, s * 1000 + 5, &config);
         }
-        let copy = log.input_log(None).expect("recorded");
+        let copy = log.input_log(None);
         // Ten minutes are kept.
         assert_eq!(copy.visible_at(300_000), Some(300_005));
         assert_eq!(copy.visible_at(299_000), None);
         assert_eq!(copy.visible_at(900_000), Some(900_005));
         // A copy for a consumer answers only what it has not recorded yet.
-        let copy = log.input_log(Some(600_000)).expect("recorded");
+        let copy = log.input_log(Some(600_000));
         assert_eq!(copy.visible_at(600_000), None);
         assert_eq!(copy.visible_at(600_001), Some(601_005));
+    }
+
+    #[mz_ore::test]
+    fn closed_collection_stays_visible_from_its_close() {
+        let tree = ResolvedTree::Leaf(Ticker::Aligned { interval_ms: 1000 });
+        let config = RecorderConfig {
+            scheme: BucketScheme::new(4).expect("power of two"),
+            interval_ms: 1,
+            period_ms: 60_000,
+        };
+        let log = SharedVisibilityLog::default();
+        log.record(
+            &tree,
+            &Antichain::from_elem(Timestamp::from(1001)),
+            1005,
+            &config,
+        );
+        log.record(&tree, &Antichain::new(), 2005, &config);
+        // Later observations, which prune by age, keep the close.
+        log.record(&tree, &Antichain::new(), 10_000_000, &config);
+        let copy = log.input_log(Some(5_000_000));
+        assert_eq!(copy.visible_at(5_000_001), Some(2005));
+        assert_eq!(copy.visible_at(u64::MAX), Some(2005));
     }
 }
