@@ -1041,7 +1041,14 @@ impl<C: ProducerContext> ProducerInner<C> {
             return Some(EosWork::Pid);
         }
         if let Some(commit) = st.eos.end_txn.take() {
-            return Some(EosWork::EndTxn(commit));
+            if st.eos.req_cnt > 0 {
+                return Some(EosWork::EndTxn(commit));
+            }
+            // An abort asks for EndTxn while AddPartitionsToTxn is still
+            // outstanding. If that request then added nothing (e.g.
+            // CONCURRENT_TRANSACTIONS right after a commit), Kafka rejects
+            // the EndTxn with a fatal INVALID_TXN_STATE.
+            st.endtxn_complete(fx);
         }
         if st.eos.transactional
             && matches!(
