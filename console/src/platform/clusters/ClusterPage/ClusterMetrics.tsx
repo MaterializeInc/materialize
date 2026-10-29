@@ -7,15 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { HStack, Text, VStack } from "@chakra-ui/react";
-import { sort } from "d3";
+import { HStack, VStack } from "@chakra-ui/react";
 import React from "react";
 import { useParams } from "react-router-dom";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import ErrorBox from "~/components/ErrorBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
-import SimpleSelect from "~/components/SimpleSelect";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
 import { useTimePeriodMinutes } from "~/hooks/useTimePeriodSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
@@ -26,6 +24,7 @@ import { useAllClusters } from "~/store/allClusters";
 import { assert } from "~/util";
 
 import { MemoryByObject } from "./MemoryByObject";
+import { ReplicaSelect } from "./ReplicaSelect";
 import { ResourceUsage } from "./ResourceUsage/ResourceUsage";
 import { useSelectedReplica } from "./useSelectedReplica";
 
@@ -35,7 +34,6 @@ const ClusterMetricsContent = ({ cluster }: { cluster: Cluster }) => {
   const [timePeriodMinutes, setTimePeriodMinutes] = useTimePeriodMinutes({
     localStorageKey: "mz-cluster-graph-time-period",
   });
-  const replicaSelectId = React.useId();
 
   return (
     <MainContentContainer mt="10">
@@ -46,27 +44,12 @@ const ClusterMetricsContent = ({ cluster }: { cluster: Cluster }) => {
           flexWrap="wrap"
           spacing={4}
         >
-          <HStack spacing={2}>
-            <Text as="label" htmlFor={replicaSelectId} textStyle="text-ui-med">
-              Replica
-            </Text>
-            <SimpleSelect
-              id={replicaSelectId}
-              value={selectedReplica?.name ?? ""}
-              onChange={(event) =>
-                setSelectedReplicaName(event.target.value || undefined)
-              }
-            >
-              <option value="">All replicas</option>
-              {sort(cluster.replicas, ({ name }) => name).map(
-                ({ id, name, size }) => (
-                  <option key={id} value={name}>
-                    {size ? `${name} · ${size}` : name}
-                  </option>
-                ),
-              )}
-            </SimpleSelect>
-          </HStack>
+          <ReplicaSelect
+            replicas={cluster.replicas}
+            value={selectedReplica?.name}
+            onChange={setSelectedReplicaName}
+            includeAll
+          />
           <TimePeriodSelect
             timePeriodMinutes={timePeriodMinutes}
             setTimePeriodMinutes={setTimePeriodMinutes}

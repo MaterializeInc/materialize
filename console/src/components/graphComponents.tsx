@@ -60,6 +60,10 @@ export const GraphTooltip = ({
         boxShadow: shadows.level3,
         minWidth: 60,
         overflow: "hidden",
+        // A tooltip anchored to its mark, as the worker bars' is, can open
+        // under the pointer. Taking the pointer then fires the mark's leave,
+        // which hides the tooltip, and it flickers as the pointer moves.
+        pointerEvents: "none",
         position: "absolute",
         zIndex: MODAL_TOOLTIP_Z_INDEX,
       }}
