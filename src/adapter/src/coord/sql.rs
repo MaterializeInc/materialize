@@ -130,6 +130,13 @@ impl Coordinator {
             Some(ps) => ps,
             None => return Err(AdapterError::UnknownPreparedStatement(name.to_string())),
         };
+        let current_state_revision = StateRevision {
+            catalog_revision: catalog.transient_revision(),
+            session_state_revision: session.state_revision(),
+        };
+        if ps.state_revision == current_state_revision {
+            return Ok(());
+        }
         let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
         let revision = ps.state_revision;
@@ -155,6 +162,13 @@ impl Coordinator {
             Some(portal) => portal,
             None => return Err(AdapterError::UnknownCursor(name.to_string())),
         };
+        let current_state_revision = StateRevision {
+            catalog_revision: catalog.transient_revision(),
+            session_state_revision: session.state_revision(),
+        };
+        if portal.state_revision == current_state_revision {
+            return Ok(());
+        }
         let stmt = portal.stmt.as_deref().cloned();
         let desc = portal.desc.clone();
         let revision = portal.state_revision;
