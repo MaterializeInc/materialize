@@ -41,7 +41,8 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_client::freshness::{
-    self, AssignmentBoundCache, FreshnessRecording, Measure, SharedVisibilityLog,
+    self, AssignmentBoundCache, ConsumedVisibilityLog, FreshnessRecording, LogConsumer, Measure,
+    ResolvedTreeCache, SharedVisibilityLog,
 };
 use mz_storage_types::freshness::local::{LocalInput, VisibilityLog};
 use mz_storage_types::freshness::recorder::{PeriodRow, RecorderConfig};
@@ -345,8 +346,13 @@ impl Instance {
         state.freshness_inputs = freshness_inputs
             .into_iter()
             .map(|(input, tree)| {
-                let log = self.storage_collections.visibility_log(input);
-                (input, (tree, log))
+                let storage_log = self.storage_collections.visibility_log(input);
+                let input_state = FreshnessInput {
+                    tree,
+                    resolved: ResolvedTreeCache::default(),
+                    storage_log,
+                };
+                (input, input_state)
             })
             .collect();
         // This controller writes storage sinks, so it records their log for readers on other
@@ -395,6 +401,17 @@ impl Instance {
                 freshness,
             );
         }
+
+        self.register_freshness_consumer((id, None));
+        let replica_ids: Vec<_> = self
+            .replicas
+            .values()
+            .filter(|replica| replica.collections.contains_key(&id))
+            .map(|replica| replica.id)
+            .collect();
+        for replica_id in replica_ids {
+            self.register_freshness_consumer((id, Some(replica_id)));
+        }
     }
 
     /// The freshness recording of collection `id` installed now with `as_of`, globally or on
@@ -425,6 +442,13 @@ impl Instance {
     }
 
     fn remove_collection(&mut self, id: GlobalId) {
+        // Before removing the collection, which names the inputs to deregister from.
+        self.deregister_freshness_consumer((id, None));
+        let replica_ids: Vec<_> = self.replicas.keys().copied().collect();
+        for replica_id in replica_ids {
+            self.deregister_freshness_consumer((id, Some(replica_id)));
+        }
+
         // Remove per-replica collection state.
         for replica in self.replicas.values_mut() {
             replica.remove_collection(id);
@@ -507,7 +531,12 @@ impl Instance {
             replica.add_collection(*collection_id, as_of, input_read_holds, freshness);
         }
 
+        // After inserting the replica, whose collections' logs are inputs of others.
+        let collection_ids: Vec<_> = replica.collections.keys().copied().collect();
         self.replicas.insert(id, replica);
+        for collection_id in collection_ids {
+            self.register_freshness_consumer((collection_id, Some(id)));
+        }
 
         match shutdown_input {
             Some(input_id) => Err(read_holds::ReadHoldIssuerHungUp(input_id)),
@@ -705,17 +734,15 @@ impl Instance {
                             .entry(*id)
                             .or_insert_with(|| {
                                 let global = self.collections.get_mut(id)?;
-                                // Resolved at every sample, so a changed tick interval takes
-                                // effect at once.
-                                let tree = global
-                                    .freshness_tree
-                                    .as_ref()?
-                                    .resolve(&*self.ticker_lookup)?;
+                                let tree = global.resolved_tree.resolve(
+                                    global.freshness_tree.as_ref()?,
+                                    &*self.ticker_lookup,
+                                )?;
                                 let bound = global.assignment_bound.get(&tree)?;
                                 Some((tree, bound))
                             })
                             .as_ref()
-                            .map(|(tree, bound)| (tree, *bound)),
+                            .map(|(tree, bound)| (&**tree, *bound)),
                         false => None,
                     };
                     freshness::reported_lag(freshness, frontier, now_ms, frontier_lag(frontier))
@@ -1447,6 +1474,19 @@ impl Instance {
     /// Remove an existing instance replica, by ID.
     #[mz_ore::instrument(level = "debug")]
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
+        // Logs of this replica's collections go away with it, but its collections also read logs
+        // in `StorageCollections`.
+        let collection_ids: Vec<_> = self
+            .replicas
+            .get(&id)
+            .ok_or(ReplicaMissing(id))?
+            .collections
+            .keys()
+            .copied()
+            .collect();
+        for collection_id in collection_ids {
+            self.deregister_freshness_consumer((collection_id, Some(id)));
+        }
         let mut replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
 
         // The replica's collections go away with it, which ends their freshness recordings.
@@ -2157,21 +2197,29 @@ impl Instance {
         if id.is_transient() {
             return;
         }
-        let Some(collection) = self.collections.get(&id).filter(|c| !c.dropped) else {
+        let Some(collection) = self.collections.get_mut(&id).filter(|c| !c.dropped) else {
             return;
         };
-        // Resolved at every observation, so a changed tick interval takes effect at once.
         let Some(tree) = collection
             .freshness_tree
             .as_ref()
-            .and_then(|tree| tree.resolve(&*self.ticker_lookup))
+            .and_then(|tree| collection.resolved_tree.resolve(tree, &*self.ticker_lookup))
         else {
             return;
         };
+        let collection = self.collections.get_mut(&id).expect("checked above");
+        // An input's tree is part of the collection's tree, but a ticker lookup that changed
+        // since the collection's tree resolved can fail it, see below.
+        let input_trees: Vec<_> = collection
+            .freshness_inputs
+            .values_mut()
+            .map(|input| input.resolved.resolve(&input.tree, &*self.ticker_lookup))
+            .collect();
         let needed = match collection.freshness_own_refresh {
             true => tree.below_refresh(),
-            false => &tree,
+            false => &*tree,
         };
+        let collection = self.collections.get(&id).expect("checked above");
         let now_ms = (self.now)();
         let replica_collection = match replica_id {
             None => None,
@@ -2188,33 +2236,32 @@ impl Instance {
             Some(collection) => collection.freshness.as_ref(),
         };
         let recorded_through = recording.and_then(|r| r.recorded_through());
-        let inputs: Vec<_> = collection
-            .freshness_inputs
+        let consumer = (id, replica_id);
+        // In input order, like `input_trees`.
+        let logs = self.with_freshness_input_logs(consumer, |log| {
+            log.read(consumer, recorded_through, now_ms)
+        });
+        // NOTE: An input whose tree does not resolve counts as unanswered, like one without a
+        // log, which makes it ready at the observation and leaves its tree unused, so any tree
+        // stands in.
+        let inputs: Vec<_> = input_trees
             .iter()
-            .map(|(input, (tree, storage_log))| {
-                // NOTE: An input's tree is part of the collection's tree, but a ticker lookup
-                // that changed since the collection's tree resolved can fail it. The input then
-                // counts as unanswered, like one without a log, which makes it ready at the
-                // observation and leaves its tree unused, so any tree stands in.
-                match tree.resolve(&*self.ticker_lookup) {
-                    Some(tree) => {
-                        let log = self.freshness_input_log(
-                            *input,
-                            storage_log.as_ref(),
-                            replica_id,
-                            recorded_through,
-                        );
-                        (Some(tree), log)
-                    }
-                    None => (None, VisibilityLog::default()),
-                }
+            .map(|input_tree| input_tree.as_deref().unwrap_or(&tree))
+            .collect();
+        let logs: Vec<_> = logs
+            .into_iter()
+            .enumerate()
+            .map(|(k, log)| match input_trees[k] {
+                Some(_) => log.unwrap_or_default(),
+                None => VisibilityLog::default(),
             })
             .collect();
         let inputs: Vec<_> = inputs
-            .iter()
-            .map(|(input_tree, log)| LocalInput {
-                tree: input_tree.as_ref().unwrap_or(&tree),
-                log,
+            .into_iter()
+            .enumerate()
+            .map(|(k, tree)| LocalInput {
+                tree,
+                log: &logs[k],
             })
             .collect();
 
@@ -2239,13 +2286,9 @@ impl Instance {
                     .and_then(|r| r.collections.get_mut(&id))
                     .expect("checked above");
                 let frontier = collection.write_frontier.clone();
-                freshness::record_visibility(
-                    &mut collection.visibility_log,
-                    &tree,
-                    &frontier,
-                    now_ms,
-                    &config,
-                );
+                collection
+                    .visibility_log
+                    .record(&tree, &frontier, now_ms, &config);
                 (&mut collection.freshness, frontier)
             }
         };
@@ -2273,37 +2316,53 @@ impl Instance {
         self.deliver_introspection_updates(type_, updates);
     }
 
-    /// The visibility log of the input `id` that answers the arrivals above `recorded_through`,
-    /// on `replica_id` or globally. `storage_log` is the input's log in `StorageCollections`.
+    /// Calls `f` with the visibility log of each freshness input of `consumer`, the log its
+    /// recording reads, and returns the results in input order.
     ///
     /// An input whose log is not available, for example one not installed on the replica, gets
-    /// an empty log, which counts it as ready at the observation, see
+    /// `None`. Reading it as an empty log counts the input as ready at the observation, see
     /// `LocalDelayRecorder::observe`.
-    fn freshness_input_log(
-        &self,
-        id: GlobalId,
-        storage_log: Option<&SharedVisibilityLog>,
-        replica_id: Option<ReplicaId>,
-        recorded_through: Option<u64>,
-    ) -> VisibilityLog {
-        // Collections of this instance, indexes and storage sinks, have a log here. Storage
-        // sinks of other instances and storage-owned collections have theirs in
-        // `StorageCollections`, recorded when their controller observed them.
+    fn with_freshness_input_logs<R>(
+        &mut self,
+        consumer: LogConsumer,
+        mut f: impl FnMut(&mut ConsumedVisibilityLog) -> R,
+    ) -> Vec<Option<R>> {
+        let (id, replica_id) = consumer;
         let Some(collection) = self.collections.get(&id) else {
-            return storage_log.map_or_else(VisibilityLog::default, |log| {
-                log.input_log(recorded_through)
-            });
+            return Vec::new();
         };
-        match replica_id {
-            None => collection.visibility_log.input_log(recorded_through),
-            Some(replica_id) => self
-                .replicas
-                .get(&replica_id)
-                .and_then(|replica| replica.collections.get(&id))
-                .map_or_else(VisibilityLog::default, |collection| {
-                    freshness::input_log(&collection.visibility_log, recorded_through)
-                }),
+        let mut results = Vec::with_capacity(collection.freshness_inputs.len());
+        for (input, FreshnessInput { storage_log, .. }) in &collection.freshness_inputs {
+            // Collections of this instance, indexes and storage sinks, have a log here. Storage
+            // sinks of other instances and storage-owned collections have theirs in
+            // `StorageCollections`, recorded when their controller observed them.
+            let result = match (self.collections.get(input), replica_id) {
+                (None, _) => storage_log.as_ref().map(|log| log.with(&mut f)),
+                (Some(input), None) => Some(input.visibility_log.with(&mut f)),
+                (Some(_), Some(replica_id)) => self
+                    .replicas
+                    .get_mut(&replica_id)
+                    .and_then(|replica| replica.collections.get_mut(input))
+                    .map(|input| f(&mut input.visibility_log)),
+            };
+            results.push(result);
         }
+        results
+    }
+
+    /// Registers `consumer` with the visibility logs of its freshness inputs, so that they keep
+    /// the entries it needs before its first observation. Does nothing while recording is off.
+    fn register_freshness_consumer(&mut self, consumer: LogConsumer) {
+        if self.freshness_config.is_none() {
+            return;
+        }
+        let now_ms = (self.now)();
+        self.with_freshness_input_logs(consumer, |log| log.register(consumer, now_ms));
+    }
+
+    /// Deregisters `consumer` from the visibility logs of its freshness inputs.
+    fn deregister_freshness_consumer(&mut self, consumer: LogConsumer) {
+        self.with_freshness_input_logs(consumer, |log| log.deregister(consumer));
     }
 
     /// Reloads the freshness recording configuration and drops all recording state if recording
@@ -2895,6 +2954,17 @@ impl Instance {
     }
 }
 
+/// A direct input of a collection's freshness recording.
+#[derive(Debug)]
+struct FreshnessInput {
+    /// The input's freshness tree, one of those the collection's tree was merged from.
+    tree: FreshnessTree,
+    /// The resolution of `tree`.
+    resolved: ResolvedTreeCache,
+    /// The input's log in `StorageCollections`, if it has one.
+    storage_log: Option<SharedVisibilityLog>,
+}
+
 /// State maintained about individual compute collections.
 ///
 /// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
@@ -2980,13 +3050,14 @@ struct CollectionState {
     /// Whether the top-level node of `freshness_tree` is the collection's own refresh schedule,
     /// which the timestamps its inputs must pass do not include.
     freshness_own_refresh: bool,
+    /// The resolution of the freshness tree.
+    resolved_tree: ResolvedTreeCache,
     /// The assignment bound of the freshness tree, for the reported wallclock lag of all
     /// replicas.
     assignment_bound: AssignmentBoundCache,
     /// The direct inputs whose visibility local delay is measured against, the imports that
-    /// contributed to the freshness tree, with their tree and their log in `StorageCollections`
-    /// if they have one.
-    freshness_inputs: BTreeMap<GlobalId, (FreshnessTree, Option<SharedVisibilityLog>)>,
+    /// contributed to the freshness tree.
+    freshness_inputs: BTreeMap<GlobalId, FreshnessInput>,
     /// Freshness recording of the global write frontier, `None` until recording starts.
     freshness: Option<FreshnessRecording>,
     /// When the global write frontier made arrivals visible. Shared with
@@ -3050,6 +3121,7 @@ impl CollectionState {
             wallclock_lag_histogram_stash,
             freshness_tree: None,
             freshness_own_refresh: false,
+            resolved_tree: ResolvedTreeCache::default(),
             assignment_bound: AssignmentBoundCache::default(),
             freshness_inputs: BTreeMap::new(),
             freshness: None,
@@ -3701,7 +3773,7 @@ struct ReplicaCollectionState {
     /// Freshness recording of the replica write frontier, `None` until recording starts.
     freshness: Option<FreshnessRecording>,
     /// When the replica write frontier made arrivals visible.
-    visibility_log: VisibilityLog,
+    visibility_log: ConsumedVisibilityLog,
 }
 
 impl ReplicaCollectionState {
@@ -3721,7 +3793,7 @@ impl ReplicaCollectionState {
             input_read_holds,
             wallclock_lag_max: Some(WallclockLag::MIN),
             freshness: None,
-            visibility_log: VisibilityLog::default(),
+            visibility_log: ConsumedVisibilityLog::default(),
         }
     }
 

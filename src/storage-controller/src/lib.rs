@@ -63,7 +63,9 @@ use mz_storage_client::controller::{
     StorageMetadata, StorageTxn, StorageWriteOp, TableRegistration, WallclockLag,
     WallclockLagHistogramPeriod,
 };
-use mz_storage_client::freshness::{self, AssignmentBoundCache, FreshnessRecording};
+use mz_storage_client::freshness::{
+    self, AssignmentBoundCache, FreshnessRecording, ResolvedTreeCache, SharedVisibilityLog,
+};
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
     MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_STATUS_HISTORY_DESC,
@@ -3160,17 +3162,22 @@ where
         if matches!(collection.data_source, DataSource::Other) {
             return Vec::new();
         }
-        // Resolved at every observation, so a changed tick interval takes effect at once.
-        let Some(tree) = self
-            .storage_collections
-            .freshness_tree(id)
-            .and_then(|tree| tree.resolve(&*self.ticker_lookup))
+        let storage_collections = &self.storage_collections;
+        let Some(tree) = collection
+            .resolved_tree
+            .resolve_with(&*self.ticker_lookup, || {
+                storage_collections.freshness_tree(id)
+            })
         else {
             return Vec::new();
         };
         let now_ms = (self.now)();
-        // Read by the compute controller, as the input of indexes and materialized views.
-        if let Some(log) = self.storage_collections.visibility_log(id) {
+        // Read by the compute controller, as the input of indexes and materialized views. The
+        // log of a collection never changes, so it is looked up once.
+        if collection.visibility_log.is_none() {
+            collection.visibility_log = storage_collections.visibility_log(id);
+        }
+        if let Some(log) = &collection.visibility_log {
             log.record(&tree, frontier, now_ms, &config);
         }
         let rows = collection
@@ -3905,14 +3912,19 @@ where
                 (WallclockLag::Undefined, WallclockLag::Undefined)
             } else {
                 let today = frontier_lag(&frontiers.write_frontier);
-                // Resolved at every sample, so a changed tick interval takes effect at once.
+                let storage_collections = &self.storage_collections;
                 let tree = reporting
-                    .then(|| self.storage_collections.freshness_tree(id))
-                    .flatten()
-                    .and_then(|tree| tree.resolve(&*self.ticker_lookup));
+                    .then(|| {
+                        collection
+                            .resolved_tree
+                            .resolve_with(&*self.ticker_lookup, || {
+                                storage_collections.freshness_tree(id)
+                            })
+                    })
+                    .flatten();
                 let bound_cache = &mut collection.assignment_bound;
                 let freshness = tree
-                    .as_ref()
+                    .as_deref()
                     .and_then(|tree| Some((tree, bound_cache.get(tree)?)));
                 let lag =
                     freshness::reported_lag(freshness, &frontiers.write_frontier, now_ms, today);
@@ -4194,10 +4206,14 @@ struct CollectionState {
     >,
     /// Frontier wallclock lag metrics tracked for this collection.
     wallclock_lag_metrics: WallclockLagMetrics,
+    /// The resolution of the collection's freshness tree in [`StorageCollections`].
+    resolved_tree: ResolvedTreeCache,
     /// The assignment bound of the freshness tree, for the reported wallclock lag.
     assignment_bound: AssignmentBoundCache,
     /// Freshness recording of the write frontier, `None` until recording starts.
     freshness: Option<FreshnessRecording>,
+    /// The collection's visibility log in [`StorageCollections`], `None` until first recorded.
+    visibility_log: Option<SharedVisibilityLog>,
 }
 
 impl CollectionState {
@@ -4222,8 +4238,10 @@ impl CollectionState {
             wallclock_lag_max: WallclockLag::MIN,
             wallclock_lag_histogram_stash,
             wallclock_lag_metrics,
+            resolved_tree: ResolvedTreeCache::default(),
             assignment_bound: AssignmentBoundCache::default(),
             freshness: None,
+            visibility_log: None,
         }
     }
 }

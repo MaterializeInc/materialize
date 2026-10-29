@@ -27,12 +27,12 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::dyncfgs::WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL;
-use mz_storage_types::freshness::ResolvedTree;
 use mz_storage_types::freshness::histogram::BucketScheme;
 use mz_storage_types::freshness::local::{
     LocalDelayRecorder, LocalInput, LocalRows, VisibilityLog,
 };
 use mz_storage_types::freshness::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
+use mz_storage_types::freshness::{FreshnessTree, ResolvedTree, TickerLookup};
 use timely::progress::Antichain;
 
 use crate::controller::WallclockLag;
@@ -448,37 +448,107 @@ fn tag(end_to_end: Vec<PeriodRow>, local: LocalRows) -> Vec<(Measure, PeriodRow)
     end_to_end.chain(local).chain(skew).collect()
 }
 
-/// Records in `log` that `frontier`, and the arrivals it reflects, were visible at `now_ms`, and
-/// drops the entries older than the retention of `config`.
-pub fn record_visibility(
-    log: &mut VisibilityLog,
-    tree: &ResolvedTree,
-    frontier: &Antichain<Timestamp>,
-    now_ms: u64,
-    config: &RecorderConfig,
-) {
-    let (frontier, reflected) = match frontier.as_option() {
-        Some(t) => (u64::from(*t), tree.last_reflected(*t)),
-        // A complete collection makes every arrival visible from now on. Without this entry its
-        // consumers would find no answer for later arrivals and record a local delay of 0.
-        None => (u64::MAX, Some(u64::MAX)),
-    };
-    log.record(frontier, reflected, now_ms);
-    // Pruned by age, not through the least arrival its consumers recorded, because consumers in
-    // other controllers read the log and tracking them would need a registration protocol. A
-    // consumer that lags the input by more than the retention finds those arrivals visible when
-    // the last pruned entry was observed, which understates and never overstates.
-    log.prune_observed_before(now_ms.saturating_sub(visibility_retention_ms(config)));
+/// A reader of a visibility log: the global recording of a collection, or its recording on a
+/// replica.
+pub type LogConsumer = (GlobalId, Option<ReplicaId>);
+
+/// A collection's visibility log, and how far its consumers have recorded.
+///
+/// Entries are kept while a consumer may still need them. Consumers register when they are
+/// created and deregister when they are dropped. A consumer that has not read the log for the
+/// retention of the recorder configuration is forgotten, which bounds what a consumer in another
+/// controller, or a stalled one, keeps alive.
+#[derive(Debug, Default, Clone)]
+pub struct ConsumedVisibilityLog {
+    log: VisibilityLog,
+    consumers: BTreeMap<LogConsumer, ConsumerMark>,
+}
+
+#[derive(Debug, Clone)]
+struct ConsumerMark {
+    /// The last arrival the consumer recorded, `None` before its recording started.
+    recorded_through: Option<u64>,
+    /// When the consumer registered or last read.
+    seen_ms: u64,
+}
+
+impl ConsumedVisibilityLog {
+    /// Records that `frontier`, and the arrivals it reflects, were visible at `now_ms`, and drops
+    /// the entries no consumer needs anymore.
+    pub fn record(
+        &mut self,
+        tree: &ResolvedTree,
+        frontier: &Antichain<Timestamp>,
+        now_ms: u64,
+        config: &RecorderConfig,
+    ) {
+        let (frontier, reflected) = match frontier.as_option() {
+            Some(t) => (u64::from(*t), tree.last_reflected(*t)),
+            // A complete collection makes every arrival visible from now on. Without this entry
+            // its consumers would find no answer for later arrivals and record a local delay of 0.
+            None => (u64::MAX, Some(u64::MAX)),
+        };
+        self.log.record(frontier, reflected, now_ms);
+        let cutoff = now_ms.saturating_sub(visibility_retention_ms(config));
+        self.consumers.retain(|_, mark| mark.seen_ms >= cutoff);
+        // `None` sorts first, so a consumer whose recording has not started keeps everything.
+        match self.consumers.values().map(|m| m.recorded_through).min() {
+            Some(Some(through)) => self.log.prune_through_except_last(through),
+            Some(None) => {}
+            // The last entry stays for consumers that register later.
+            None => self.log.prune_through_except_last(u64::MAX),
+        }
+        // A consumer that lags the input by more than the retention finds no entry and records
+        // those arrivals with a local delay of 0, which understates and never overstates.
+        self.log.prune_observed_before(cutoff);
+    }
+
+    /// Registers `consumer` at `now_ms`, so that the log keeps the entries it needs before its
+    /// first read. Does nothing if it is registered already.
+    pub fn register(&mut self, consumer: LogConsumer, now_ms: u64) {
+        self.consumers.entry(consumer).or_insert(ConsumerMark {
+            recorded_through: None,
+            seen_ms: now_ms,
+        });
+    }
+
+    /// Forgets `consumer`.
+    pub fn deregister(&mut self, consumer: LogConsumer) {
+        self.consumers.remove(&consumer);
+    }
+
+    /// A copy that answers the arrivals above `recorded_through` for `consumer`, which has
+    /// recorded through `recorded_through` at `now_ms`. Registers `consumer` if needed.
+    pub fn read(
+        &mut self,
+        consumer: LogConsumer,
+        recorded_through: Option<u64>,
+        now_ms: u64,
+    ) -> VisibilityLog {
+        self.consumers.insert(
+            consumer,
+            ConsumerMark {
+                recorded_through,
+                seen_ms: now_ms,
+            },
+        );
+        self.log.after(recorded_through.unwrap_or(0))
+    }
+
+    /// The number of log entries.
+    pub fn len(&self) -> usize {
+        self.log.len()
+    }
+
+    /// Whether the log has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.log.is_empty()
+    }
 }
 
 /// How long visibility log entries are kept: ten periods, at least ten minutes.
 fn visibility_retention_ms(config: &RecorderConfig) -> u64 {
     config.period_ms.saturating_mul(10).max(600_000)
-}
-
-/// A copy of `log` that answers the arrivals above `recorded_through`.
-pub fn input_log(log: &VisibilityLog, recorded_through: Option<u64>) -> VisibilityLog {
-    log.after(recorded_through.unwrap_or(0))
 }
 
 /// Caches the assignment bound D of a collection's freshness tree.
@@ -510,6 +580,71 @@ impl AssignmentBoundCache {
     }
 }
 
+/// Caches the resolution of a collection's freshness tree.
+///
+/// Resolving looks up the ticker of every ingestion leaf, which can take a lock that other
+/// components contend on, so it only runs when the tree or the lookup's generation changed.
+#[derive(Debug, Default)]
+pub struct ResolvedTreeCache {
+    cached: Option<CachedResolution>,
+}
+
+#[derive(Debug)]
+struct CachedResolution {
+    generation: u64,
+    tree: Option<FreshnessTree>,
+    resolved: Option<Arc<ResolvedTree>>,
+}
+
+impl ResolvedTreeCache {
+    /// [`FreshnessTree::resolve`] of `tree`.
+    pub fn resolve(
+        &mut self,
+        tree: &FreshnessTree,
+        lookup: &dyn TickerLookup,
+    ) -> Option<Arc<ResolvedTree>> {
+        // Read before resolving, so that a ticker changing during resolution leaves a stale
+        // generation behind and the next call resolves again.
+        let generation = lookup.generation();
+        match &self.cached {
+            Some(c) if c.generation == generation && c.tree.as_ref() == Some(tree) => {
+                c.resolved.clone()
+            }
+            _ => self.store(generation, Some(tree.clone()), lookup),
+        }
+    }
+
+    /// Like [`Self::resolve`] for a tree that `fetch` returns, which is only called when the
+    /// lookup's generation changed. Callers must ensure that every change of the fetched tree
+    /// also changes the generation.
+    pub fn resolve_with(
+        &mut self,
+        lookup: &dyn TickerLookup,
+        fetch: impl FnOnce() -> Option<FreshnessTree>,
+    ) -> Option<Arc<ResolvedTree>> {
+        let generation = lookup.generation();
+        match &self.cached {
+            Some(c) if c.generation == generation => c.resolved.clone(),
+            _ => self.store(generation, fetch(), lookup),
+        }
+    }
+
+    fn store(
+        &mut self,
+        generation: u64,
+        tree: Option<FreshnessTree>,
+        lookup: &dyn TickerLookup,
+    ) -> Option<Arc<ResolvedTree>> {
+        let resolved = tree.as_ref().and_then(|t| t.resolve(lookup)).map(Arc::new);
+        self.cached = Some(CachedResolution {
+            generation,
+            tree,
+            resolved: resolved.clone(),
+        });
+        resolved
+    }
+}
+
 /// The wallclock lag to report for a readable write frontier `frontier` at `now_ms`.
 ///
 /// `freshness` is the collection's resolved freshness tree and its bounded D, `None` if
@@ -536,10 +671,15 @@ pub fn reported_lag(
 /// A visibility log shared between the controller that records it and the controllers whose
 /// collections read it as an input.
 #[derive(Clone, Debug, Default)]
-pub struct SharedVisibilityLog(Arc<Mutex<VisibilityLog>>);
+pub struct SharedVisibilityLog(Arc<Mutex<ConsumedVisibilityLog>>);
 
 impl SharedVisibilityLog {
-    /// Like [`record_visibility`].
+    /// Calls `f` with exclusive access to the log.
+    pub fn with<R>(&self, f: impl FnOnce(&mut ConsumedVisibilityLog) -> R) -> R {
+        f(&mut self.0.lock().expect("lock poisoned"))
+    }
+
+    /// Like [`ConsumedVisibilityLog::record`].
     pub fn record(
         &self,
         tree: &ResolvedTree,
@@ -547,13 +687,7 @@ impl SharedVisibilityLog {
         now_ms: u64,
         config: &RecorderConfig,
     ) {
-        let mut log = self.0.lock().expect("lock poisoned");
-        record_visibility(&mut log, tree, frontier, now_ms, config);
-    }
-
-    /// Like [`input_log`].
-    pub fn input_log(&self, recorded_through: Option<u64>) -> VisibilityLog {
-        input_log(&self.0.lock().expect("lock poisoned"), recorded_through)
+        self.with(|log| log.record(tree, frontier, now_ms, config));
     }
 }
 

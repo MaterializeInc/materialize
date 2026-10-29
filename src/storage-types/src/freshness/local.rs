@@ -108,6 +108,17 @@ impl VisibilityLog {
         let dead = self.entries.partition_point(|e| e.reflected <= arrival);
         self.floor = Self::raise(self.floor, &self.entries[..dead]);
         self.entries.drain(..dead);
+        // `drain` keeps the capacity, which would otherwise stay at the longest the log ever was.
+        if self.entries.capacity() > 4 * self.entries.len().max(4) {
+            self.entries.shrink_to_fit();
+        }
+    }
+
+    /// Like [`Self::prune_through`], except that the last entry stays to answer the arrivals up
+    /// to it.
+    pub fn prune_through_except_last(&mut self, arrival: u64) {
+        let old = self.entries.partition_point(|e| e.reflected <= arrival);
+        self.prune_first(old);
     }
 
     /// Drops the entries observed before `observed_ms`, except the last one, which stays to
@@ -116,10 +127,25 @@ impl VisibilityLog {
         let old = self
             .entries
             .partition_point(|e| e.observed_ms < observed_ms);
-        let dead = old.min(self.entries.len().saturating_sub(1));
+        self.prune_first(old);
+    }
+
+    /// Prunes the first `n` entries, but never the last one.
+    fn prune_first(&mut self, n: usize) {
+        let dead = n.min(self.entries.len().saturating_sub(1));
         if dead > 0 {
             self.prune_through(self.entries[dead - 1].reflected);
         }
+    }
+
+    /// The number of entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the log has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// A copy that answers like this log for every arrival above `arrival`, in both domains as

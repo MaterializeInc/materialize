@@ -374,6 +374,10 @@ impl TickerLookup for FixedTickers {
             interval_ms: self.0,
         })
     }
+
+    fn generation(&self) -> u64 {
+        0
+    }
 }
 
 /// A `StorageCollections` that only provides ticker lookups, visibility logs and restart seeds.
@@ -1148,6 +1152,81 @@ async fn local_delay_after_closed_input_counts_from_close_or_window_start() {
             "{replica:?}"
         );
     }
+}
+
+/// Visibility logs keep the entries a consumer needs while it hydrates, then only what its
+/// consumers have not recorded yet, and only the last entry once the consumers are gone.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn visibility_logs_are_pruned_through_consumers() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let (a, b) = (GlobalId::User(10), GlobalId::User(11));
+    h.add_collection_with_inputs(a, T0, &[STORAGE_INPUT]);
+    h.add_collection_with_inputs(b, T0, &[a]);
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+
+    let config =
+        mz_storage_client::freshness::recorder_config(&h.instance.dyncfg).expect("recording on");
+    let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))
+        .resolve(&FixedTickers(1000))
+        .expect("resolves");
+    let tick = |h: &mut FreshnessHarness, s: u64, report_b: bool| {
+        let tick = T0 + s * 1000;
+        h.set_now(tick + 2);
+        let frontier = Antichain::from_elem(Timestamp::from(tick + 1));
+        h.storage_log.record(&tree, &frontier, tick + 2, &config);
+        h.set_now(tick + 5);
+        h.report(r1, a, tick + 1);
+        if report_b {
+            h.set_now(tick + 13);
+            h.report(r1, b, tick + 1);
+        }
+    };
+    let log_lens = |h: &FreshnessHarness| {
+        (
+            h.storage_log.with(|log| log.len()),
+            h.instance.collections[&a]
+                .visibility_log
+                .with(|log| log.len()),
+            h.instance.replicas[&r1].collections[&a]
+                .visibility_log
+                .len(),
+        )
+    };
+
+    // `b` hydrates for 30 s, during which `a`'s logs keep every entry for it.
+    for s in 1..30 {
+        tick(&mut h, s, false);
+    }
+    assert_eq!(log_lens(&h), (2, 29, 29));
+    for s in 30..=70 {
+        tick(&mut h, s, true);
+    }
+    let recorded = h.recorded();
+    let scheme = BucketScheme::new(4).expect("power of two");
+    for replica in [None, Some(r1)] {
+        // The first arrival waited for `b` from when `a` made it visible until `b` hydrated.
+        assert_eq!(
+            recorded.buckets("local", b, replica).last(),
+            Some(&scheme.bucket(29_008)),
+            "{replica:?}"
+        );
+    }
+    // Once consumers read, the logs keep only what they have not recorded yet.
+    let (storage, global, replica) = log_lens(&h);
+    assert!(
+        storage <= 3 && global <= 3 && replica <= 3,
+        "{:?}",
+        log_lens(&h)
+    );
+
+    // Without consumers, only the last entry stays.
+    h.instance.remove_collection(b);
+    tick(&mut h, 71, false);
+    let (_, global, replica) = log_lens(&h);
+    assert_eq!((global, replica), (1, 1));
 }
 
 #[mz_ore::test(tokio::test)]
