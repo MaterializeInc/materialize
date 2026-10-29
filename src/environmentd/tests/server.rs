@@ -3783,6 +3783,57 @@ async fn test_http_metrics() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
 #[allow(clippy::disallowed_methods)]
+async fn test_session_end_does_not_force_group_commit() {
+    const SESSIONS: u64 = 100;
+    let server = test_util::TestHarness::default().start().await;
+    let watcher = server.connect().await.unwrap();
+    let live_sessions = || async {
+        watcher
+            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+    };
+    let group_commits = || {
+        server
+            .metrics_registry
+            .gather()
+            .into_iter()
+            .find(|m| m.name() == "mz_append_table_duration_seconds")
+            .map_or(0, |m| m.get_metric()[0].get_histogram().get_sample_count())
+    };
+
+    let sessions_before = live_sessions().await;
+    let commits_before = group_commits();
+    let start = Instant::now();
+    for _ in 0..SESSIONS {
+        let client = server.connect().await.unwrap();
+        client.query_one("SELECT 1", &[]).await.unwrap();
+    }
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry_async(|_| async {
+            match live_sessions().await {
+                n if n == sessions_before => Ok(()),
+                n => Err(n),
+            }
+        })
+        .await
+        .expect("closed sessions should leave mz_sessions");
+    let elapsed = start.elapsed();
+    let commits = group_commits() - commits_before;
+
+    // Tables still advance about once a second, so allow those commits plus slack.
+    let allowed = elapsed.as_secs() + 5;
+    assert!(
+        commits <= allowed,
+        "{SESSIONS} sessions ending caused {commits} group commits in {elapsed:?}, allowed {allowed}",
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_statement_metrics() {
     let server = test_util::TestHarness::default().start().await;
 
