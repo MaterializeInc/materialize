@@ -13,8 +13,8 @@
 //! An arrival's end-to-end charge splits into three parts that sum to it. Upstream runs from
 //! the window start until the slowest direct input showed the arrival, which is that input's
 //! own end-to-end latency and is not recorded. Skew runs from then until every direct input's
-//! frontier passed the timestamp the object needs for the arrival. Local runs from then until
-//! the object showed the arrival.
+//! frontier passed the timestamp the object needs for the arrival, at most as long as it would
+//! with every input on time. Local runs from then until the object showed the arrival.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -178,6 +178,13 @@ impl VisibilityLog {
     }
 }
 
+/// A direct input of an object: its tree and its log.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalInput<'a> {
+    pub tree: &'a ResolvedTree,
+    pub log: &'a VisibilityLog,
+}
+
 /// The rows of periods that closed, per measure. Rows of one period are adjacent and sorted by
 /// bucket.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -213,7 +220,7 @@ pub(super) const MAX_SHOWN: usize = 16;
 
 /// The most steps of equal needed timestamps that the skew of one group of windows is split
 /// into.
-const MAX_GRID_STEPS: usize = 1024;
+pub(super) const MAX_GRID_STEPS: usize = 1024;
 
 impl LocalDelayRecorder {
     /// Starts recording arrivals after `start_ms`, like `FreshnessRecorder::new`.
@@ -235,8 +242,8 @@ impl LocalDelayRecorder {
         self.shown.len()
     }
 
-    /// Records an advance of the object to `frontier` at `now_ms`, given its direct inputs'
-    /// logs, and returns the rows of periods that closed.
+    /// Records an advance of the object to `frontier` at `now_ms`, given its direct inputs, and
+    /// returns the rows of periods that closed.
     ///
     /// `needed` is the object's tree without its own refresh node. An arrival needs every
     /// input's frontier to pass the timestamp `needed` assigns it, so a refresh wait stays in
@@ -253,7 +260,7 @@ impl LocalDelayRecorder {
         needed: &ResolvedTree,
         frontier: &Antichain<Timestamp>,
         now_ms: u64,
-        inputs: &[&VisibilityLog],
+        inputs: &[LocalInput<'_>],
         config: &RecorderConfig,
     ) -> LocalRows {
         let closed = match frontier.as_option() {
@@ -371,15 +378,17 @@ fn local_rows(closed: Vec<ClosedPeriod<LocalPeriod>>) -> LocalRows {
 /// Adds the arrivals in `(from, to]` with their local delay and skew at `now_ms` to `period`.
 ///
 /// Walks the windows in groups in which every input answers both readiness questions with the
-/// same entry, so the work is proportional to the log entries consumed and the buckets touched,
-/// not to the number of windows.
+/// same entry. Local delay costs the buckets touched per group. Skew also costs a step per
+/// distinct needed timestamp in the group, at most `MAX_GRID_STEPS`. The work is thus
+/// proportional to the log entries consumed times the steps and buckets per group, and not to
+/// the number of windows beyond that.
 fn add_local_part(
     tree: &ResolvedTree,
     needed: &ResolvedTree,
     interval_ms: u64,
     (from, to): (u64, u64),
     now_ms: u64,
-    inputs: &[&VisibilityLog],
+    inputs: &[LocalInput<'_>],
     period: &mut LocalPeriod,
 ) {
     if interval_ms == 0 {
@@ -396,7 +405,7 @@ fn add_local_part(
         // passed the timestamp the window needs.
         let (mut arrival_ready_ms, mut timestamp_ready_ms) = (0, 0);
         let mut group_end = to;
-        for log in inputs {
+        for LocalInput { log, .. } in inputs {
             let (observed, last) = log.segment(window_end);
             arrival_ready_ms = arrival_ready_ms.max(observed.unwrap_or(now_ms));
             // The group ends where this input's answer changes. The bound is at least
@@ -465,11 +474,12 @@ fn add_local_part(
         add_from_start(&mut period.local, now_ms, (timestamp_cut, group_end));
         if inputs.len() >= 2 {
             add(&mut period.skew, 0, count(timestamp_cut, group_end));
-            // NOTE: Skew is capped at the wait the grids of `needed` cause when every input
-            // is on time, so that an input that showed an arrival and then stalls before its
-            // frontier passes the needed timestamp leaves the stall in upstream. The cap
-            // depends on the needed timestamp, so the windows are walked in steps that need the
-            // same timestamp, at most `MAX_GRID_STEPS` per group. Windows beyond that record no
+            // NOTE: Skew is capped at the skew of the arrival with every input on time, from
+            // the last input showing it to every input's frontier passing the needed timestamp,
+            // so that an input that showed an arrival and then stalls before its frontier
+            // passes the needed timestamp leaves the stall in upstream. The cap depends on the
+            // needed timestamp, so the windows are walked in steps that need the same
+            // timestamp, at most `MAX_GRID_STEPS` per group. Windows beyond that record no
             // skew, which understates.
             let mut lo = pos;
             for _ in 0..MAX_GRID_STEPS {
@@ -482,7 +492,10 @@ fn add_local_part(
                 let last = timestamp
                     .and_then(|t| needed.last_reflected(Timestamp::from(t.saturating_add(1))));
                 let (hi, wait_ms) = match (timestamp, last) {
-                    (Some(t), Some(l)) => (l.clamp(lo + 1, timestamp_cut), needed.grid_wait(t)),
+                    (Some(t), Some(l)) => {
+                        let hi = l.clamp(lo + 1, timestamp_cut);
+                        (hi, on_time_skew(inputs, t, hi))
+                    }
                     // Without a needed timestamp the cap is unknown, and 0 understates.
                     _ => (timestamp_cut, 0),
                 };
@@ -505,4 +518,26 @@ fn add_local_part(
         }
         pos = group_end;
     }
+}
+
+/// The time from the last of `inputs` showing `arrival` to all of them passing `timestamp`, the
+/// timestamp `arrival` needs, with every input on time.
+///
+/// An input shows an arrival when its frontier passes the timestamp its own tree assigns the
+/// arrival. Within a step of equal needed timestamps the show times grow with the arrival, so
+/// the last arrival of the step gives the least skew of the step.
+fn on_time_skew(inputs: &[LocalInput<'_>], timestamp: u64, arrival: u64) -> u64 {
+    let on_time_pass = |tree: &ResolvedTree, t: u64| t.saturating_add(tree.grid_wait(t));
+    let passed = inputs
+        .iter()
+        .map(|i| on_time_pass(i.tree, timestamp))
+        .max()
+        .unwrap_or(0);
+    let shown = inputs
+        .iter()
+        .map(|i| i.tree.assigned(arrival).map(|t| on_time_pass(i.tree, t)))
+        .collect::<Option<Vec<_>>>()
+        .and_then(|s| s.into_iter().max());
+    // An input that never shows the arrival leaves the cap unknown, and 0 understates.
+    shown.map_or(0, |shown| passed.saturating_sub(shown))
 }

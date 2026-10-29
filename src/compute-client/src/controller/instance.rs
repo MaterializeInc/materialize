@@ -40,7 +40,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_client::freshness::{self, FreshnessRecording, Measure, SharedVisibilityLog};
-use mz_storage_types::freshness::local::VisibilityLog;
+use mz_storage_types::freshness::local::{LocalInput, VisibilityLog};
 use mz_storage_types::freshness::recorder::{PeriodRow, RecorderConfig};
 use mz_storage_types::freshness::{FreshnessTree, TickerLookup};
 use mz_storage_types::read_holds::{self, ReadHold};
@@ -305,7 +305,7 @@ impl Instance {
         refresh_schedule: Option<RefreshSchedule>,
         target_replica: Option<ReplicaId>,
         freshness_tree: Option<FreshnessTree>,
-        freshness_inputs: BTreeSet<GlobalId>,
+        freshness_inputs: BTreeMap<GlobalId, FreshnessTree>,
     ) {
         // Add global collection state.
         let dependency_ids: Vec<GlobalId> = compute_dependencies
@@ -338,7 +338,10 @@ impl Instance {
         // Looked up once, so recording does not take the `StorageCollections` lock per input.
         state.freshness_inputs = freshness_inputs
             .into_iter()
-            .map(|input| (input, self.storage_collections.visibility_log(input)))
+            .map(|(input, tree)| {
+                let log = self.storage_collections.visibility_log(input);
+                (input, (tree, log))
+            })
             .collect();
         // This controller writes storage sinks, so it records their log for readers on other
         // instances, which find it through `StorageCollections`. The compute controller checks
@@ -1540,7 +1543,7 @@ impl Instance {
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState>,
         target_replica: Option<ReplicaId>,
         freshness_tree: Option<FreshnessTree>,
-        freshness_inputs: BTreeSet<GlobalId>,
+        freshness_inputs: BTreeMap<GlobalId, FreshnessTree>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
@@ -2124,14 +2127,28 @@ impl Instance {
             Some(collection) => collection.freshness.as_ref(),
         };
         let recorded_through = recording.and_then(|r| r.recorded_through());
-        let inputs: Vec<_> = collection
+        // An input's tree is part of the collection's tree, so it resolves if that did.
+        let Some(inputs) = collection
             .freshness_inputs
             .iter()
-            .map(|(input, storage_log)| {
-                self.freshness_input_log(*input, storage_log.as_ref(), replica_id, recorded_through)
+            .map(|(input, (tree, storage_log))| {
+                let tree = tree.resolve(&*self.ticker_lookup)?;
+                let log = self.freshness_input_log(
+                    *input,
+                    storage_log.as_ref(),
+                    replica_id,
+                    recorded_through,
+                );
+                Some((tree, log))
             })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return;
+        };
+        let inputs: Vec<_> = inputs
+            .iter()
+            .map(|(tree, log)| LocalInput { tree, log })
             .collect();
-        let inputs: Vec<_> = inputs.iter().collect();
 
         let (recording, frontier) = match replica_id {
             None => {
@@ -2895,9 +2912,9 @@ struct CollectionState {
     /// which the timestamps its inputs must pass do not include.
     freshness_own_refresh: bool,
     /// The direct inputs whose visibility local delay is measured against, the imports that
-    /// contributed to the freshness tree, with their log in `StorageCollections` if they have
-    /// one.
-    freshness_inputs: BTreeMap<GlobalId, Option<SharedVisibilityLog>>,
+    /// contributed to the freshness tree, with their tree and their log in `StorageCollections`
+    /// if they have one.
+    freshness_inputs: BTreeMap<GlobalId, (FreshnessTree, Option<SharedVisibilityLog>)>,
     /// Freshness recording of the global write frontier, `None` until recording starts.
     freshness: Option<FreshnessRecording>,
     /// When the global write frontier made arrivals visible. Shared with

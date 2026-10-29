@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
@@ -72,7 +72,7 @@ fn walk_with_inputs(
     source_ids: &[u64],
     used: &[u64],
     schedule: Option<&RefreshSchedule>,
-) -> Result<(Option<FreshnessTree>, BTreeSet<GlobalId>), TimeDependenceError> {
+) -> Result<(Option<FreshnessTree>, BTreeMap<GlobalId, FreshnessTree>), TimeDependenceError> {
     let used: BTreeSet<_> = used.iter().copied().map(gid).collect();
     walk_freshness_trees(
         index_ids.iter().copied().map(gid),
@@ -113,7 +113,14 @@ fn walk(
 fn freshness_walk_inputs_have_a_tree() {
     let (_, inputs) =
         walk_with_inputs(&[20, 22], &[10, 11, 12, 13], &[10, 12, 13, 20, 22], None).unwrap();
-    assert_eq!(inputs, BTreeSet::from([gid(10), gid(12), gid(20)]));
+    assert_eq!(
+        inputs,
+        BTreeMap::from([
+            (gid(10), ingestion(10).unwrap()),
+            (gid(12), fixed(5)),
+            (gid(20), fixed(1000)),
+        ])
+    );
 }
 
 #[mz_ore::test]

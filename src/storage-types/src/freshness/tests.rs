@@ -20,7 +20,7 @@ use proptest::sample::select;
 use proptest::strategy::Union;
 
 use super::histogram::{BucketScheme, add_span};
-use super::local::{LocalDelayRecorder, LocalRows, VisibilityLog};
+use super::local::{LocalDelayRecorder, LocalInput, LocalRows, VisibilityLog};
 use super::period::{DAY_MS, PeriodBook};
 use super::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use super::*;
@@ -173,12 +173,46 @@ fn arb_tree() -> impl Strategy<Value = ResolvedTree> {
         })
 }
 
+/// `tree` with its unaligned leaves following the wall clock, which gives them no wait.
+fn unaligned_as_continuous(tree: &ResolvedTree) -> ResolvedTree {
+    match tree {
+        ResolvedTree::Leaf(Ticker::Unaligned { .. }) => ResolvedTree::Leaf(Ticker::Continuous),
+        ResolvedTree::Leaf(t) => ResolvedTree::Leaf(*t),
+        ResolvedTree::Min(inputs) => {
+            ResolvedTree::Min(inputs.iter().map(unaligned_as_continuous).collect())
+        }
+        ResolvedTree::Refresh { schedule, input } => ResolvedTree::Refresh {
+            schedule: schedule.clone(),
+            input: Box::new(unaligned_as_continuous(input)),
+        },
+    }
+}
+
+/// The first wall clock at which the on-time frontier of `tree` satisfies `passed`, which must
+/// be monotone.
+fn on_time_first(tree: &ResolvedTree, passed: impl Fn(u64) -> bool) -> u64 {
+    let (mut lo, mut hi) = (0u64, 1u64 << 42);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if tree
+            .expected_upper(mid)
+            .is_some_and(|f| passed(u64::from(f)))
+        {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
 #[mz_ore::test]
 fn grid_wait_matches_on_time_frontier() {
     proptest!(|(tree in arb_tree(), timestamp in 0u64..400)| {
         // Brute force: the first wall clock at which the on-time frontier is past `timestamp`.
+        let model = unaligned_as_continuous(&tree);
         let passed = (timestamp..)
-            .find(|w| tree.expected_upper(*w).is_some_and(|f| u64::from(f) > timestamp))
+            .find(|w| model.expected_upper(*w).is_some_and(|f| u64::from(f) > timestamp))
             .unwrap();
         prop_assert_eq!(tree.grid_wait(timestamp), passed - timestamp);
     });
@@ -736,6 +770,11 @@ fn at(frontier: u64) -> Antichain<Timestamp> {
     Antichain::from_elem(Timestamp::from(frontier))
 }
 
+/// `logs` as inputs that all have `tree`.
+fn inputs_of<'a>(tree: &'a ResolvedTree, logs: &[&'a VisibilityLog]) -> Vec<LocalInput<'a>> {
+    logs.iter().map(|log| LocalInput { tree, log }).collect()
+}
+
 /// The summed counts of the rows of each period start.
 fn period_totals(rows: &[PeriodRow]) -> BTreeMap<u64, u64> {
     let mut totals = BTreeMap::new();
@@ -1087,9 +1126,23 @@ fn local_chain_attributes_hops() {
                 .local,
         );
         log_b.record(w + 1, Some(w), w + 3001);
-        let b = local_b.observe(&tree, &tree, &at(w + 1), w + 3001, &[&log_a], &cfg);
+        let b = local_b.observe(
+            &tree,
+            &tree,
+            &at(w + 1),
+            w + 3001,
+            &inputs_of(&tree, &[&log_a]),
+            &cfg,
+        );
         rows_b.extend(b.local);
-        let c = local_c.observe(&tree, &tree, &at(w + 1), w + 3001, &[&log_b], &cfg);
+        let c = local_c.observe(
+            &tree,
+            &tree,
+            &at(w + 1),
+            w + 3001,
+            &inputs_of(&tree, &[&log_b]),
+            &cfg,
+        );
         rows_c.extend(c.local);
         rows_e2e.extend(end_to_end_c.observe(&tree, &at(w + 1), w + 3001, &cfg));
     }
@@ -1101,12 +1154,26 @@ fn local_chain_attributes_hops() {
     );
     rows_b.extend(
         local_b
-            .observe(&tree, &tree, &empty, 300_000, &[&log_a], &cfg)
+            .observe(
+                &tree,
+                &tree,
+                &empty,
+                300_000,
+                &inputs_of(&tree, &[&log_a]),
+                &cfg,
+            )
             .local,
     );
     rows_c.extend(
         local_c
-            .observe(&tree, &tree, &empty, 300_000, &[&log_b], &cfg)
+            .observe(
+                &tree,
+                &tree,
+                &empty,
+                300_000,
+                &inputs_of(&tree, &[&log_b]),
+                &cfg,
+            )
             .local,
     );
     rows_e2e.extend(end_to_end_c.observe(&tree, &empty, 300_000, &cfg));
@@ -1135,7 +1202,8 @@ fn local_chain_attributes_hops() {
 
 #[mz_ore::test]
 fn local_join_splits_alignment_wait() {
-    let tree = ResolvedTree::Min(vec![aligned(7000), aligned(11_000)]);
+    let (l7, l11) = (aligned(7000), aligned(11_000));
+    let tree = ResolvedTree::Min(vec![l7.clone(), l11.clone()]);
     let cfg = config(4);
     for swap in [false, true] {
         // The window (0, 7000] needs timestamp 11000. The 11 s input shows it at 11010, which
@@ -1144,7 +1212,17 @@ fn local_join_splits_alignment_wait() {
         fast.record(7001, Some(7000), 7010);
         fast.record(14_001, Some(14_000), 14_010);
         slow.record(11_001, Some(11_000), 11_010);
-        let inputs = if swap { [&slow, &fast] } else { [&fast, &slow] };
+        let (fast, slow) = (
+            LocalInput {
+                tree: &l7,
+                log: &fast,
+            },
+            LocalInput {
+                tree: &l11,
+                log: &slow,
+            },
+        );
+        let inputs = if swap { [slow, fast] } else { [fast, slow] };
         let mut recorder = LocalDelayRecorder::new(0);
         let mut rows = recorder.observe(&tree, &tree, &at(11_001), 14_030, &inputs, &cfg);
         let finished = recorder.observe(&tree, &tree, &Antichain::new(), 14_030, &inputs, &cfg);
@@ -1181,13 +1259,27 @@ fn local_missing_input_entry_understates() {
         for (frontier, now) in [(1001, 1500), (2001, 2500)] {
             rows.extend(
                 recorder
-                    .observe(&tree, &tree, &at(frontier), now, &[log], &cfg)
+                    .observe(
+                        &tree,
+                        &tree,
+                        &at(frontier),
+                        now,
+                        &inputs_of(&tree, &[log]),
+                        &cfg,
+                    )
                     .local,
             );
         }
         rows.extend(
             recorder
-                .observe(&tree, &tree, &Antichain::new(), 3000, &[log], &cfg)
+                .observe(
+                    &tree,
+                    &tree,
+                    &Antichain::new(),
+                    3000,
+                    &inputs_of(&tree, &[log]),
+                    &cfg,
+                )
                 .local,
         );
         bucket_counts(&rows)
@@ -1214,11 +1306,25 @@ fn local_input_entry_inside_window_is_not_split() {
     let mut recorder = LocalDelayRecorder::new(0);
     let cfg = config(4);
     let mut rows = recorder
-        .observe(&tree, &tree, &at(21_001), 22_000, &[&log], &cfg)
+        .observe(
+            &tree,
+            &tree,
+            &at(21_001),
+            22_000,
+            &inputs_of(&tree, &[&log]),
+            &cfg,
+        )
         .local;
     rows.extend(
         recorder
-            .observe(&tree, &tree, &Antichain::new(), 22_000, &[&log], &cfg)
+            .observe(
+                &tree,
+                &tree,
+                &Antichain::new(),
+                22_000,
+                &inputs_of(&tree, &[&log]),
+                &cfg,
+            )
             .local,
     );
     let s = scheme(4);
@@ -1237,11 +1343,25 @@ fn local_negative_delay_clamps() {
     log.record(1001, Some(1000), 5000);
     let mut recorder = LocalDelayRecorder::new(0);
     let mut rows = recorder
-        .observe(&tree, &tree, &at(1001), 1500, &[&log], &cfg)
+        .observe(
+            &tree,
+            &tree,
+            &at(1001),
+            1500,
+            &inputs_of(&tree, &[&log]),
+            &cfg,
+        )
         .local;
     rows.extend(
         recorder
-            .observe(&tree, &tree, &Antichain::new(), 1500, &[&log], &cfg)
+            .observe(
+                &tree,
+                &tree,
+                &Antichain::new(),
+                1500,
+                &inputs_of(&tree, &[&log]),
+                &cfg,
+            )
             .local,
     );
     assert_eq!(
@@ -1277,16 +1397,44 @@ fn refresh_chain() -> (Vec<PeriodRow>, Vec<PeriodRow>) {
             Some(refresh_ts)
         );
         // The refresh view's own refresh is not part of what it needs from its input.
-        let refreshed = local_refreshed.observe(&tree, inner, &frontier, now, &[&log_a], &cfg);
+        let refreshed = local_refreshed.observe(
+            &tree,
+            inner,
+            &frontier,
+            now,
+            &inputs_of(inner, &[&log_a]),
+            &cfg,
+        );
         rows_refreshed.extend(refreshed.local);
         log_refreshed.record(refresh_ts + 1, Some(refresh_ts), now);
-        let plain = local_plain.observe(&tree, &tree, &frontier, now, &[&log_refreshed], &cfg);
+        let plain = local_plain.observe(
+            &tree,
+            &tree,
+            &frontier,
+            now,
+            &inputs_of(&tree, &[&log_refreshed]),
+            &cfg,
+        );
         rows_plain.extend(plain.local);
     }
     let empty = Antichain::new();
-    let refreshed = local_refreshed.observe(&tree, inner, &empty, 300_000, &[&log_a], &cfg);
+    let refreshed = local_refreshed.observe(
+        &tree,
+        inner,
+        &empty,
+        300_000,
+        &inputs_of(inner, &[&log_a]),
+        &cfg,
+    );
     rows_refreshed.extend(refreshed.local);
-    let plain = local_plain.observe(&tree, &tree, &empty, 300_000, &[&log_refreshed], &cfg);
+    let plain = local_plain.observe(
+        &tree,
+        &tree,
+        &empty,
+        300_000,
+        &inputs_of(&tree, &[&log_refreshed]),
+        &cfg,
+    );
     rows_plain.extend(plain.local);
     (rows_refreshed, rows_plain)
 }
@@ -1351,8 +1499,9 @@ fn local_counts_match_end_to_end() {
     );
     proptest!(ProptestConfig::with_cases(64), |((tree, steps, logs, interval_ms) in strategy)| {
         let cfg = RecorderConfig { interval_ms, period_ms: 10_000, ..config(4) };
-        let inputs: Vec<&VisibilityLog> = logs.iter().collect();
         let needed = tree.below_refresh();
+        let logs: Vec<&VisibilityLog> = logs.iter().collect();
+        let inputs = inputs_of(needed, &logs);
         let mut end_to_end = FreshnessRecorder::new(0);
         let mut local = LocalDelayRecorder::new(0);
         let (mut rows_e2e, mut rows_local, mut rows_skew) = (vec![], vec![], vec![]);
@@ -1395,7 +1544,14 @@ fn debug_output_stays_small() {
         let cfg = config(4);
         assert!(end_to_end.observe(&tree, &at(t + 1), t, &cfg).is_empty());
         assert_eq!(
-            local.observe(&tree, &tree, &at(t + 1), t, &[&log], &cfg),
+            local.observe(
+                &tree,
+                &tree,
+                &at(t + 1),
+                t,
+                &inputs_of(&tree, &[&log]),
+                &cfg
+            ),
             LocalRows::default()
         );
     }
@@ -1623,7 +1779,14 @@ fn local_long_input_outage_uses_last_pruned_observation() {
     log.prune_through(cutoff - 1100);
     let mut recorder = LocalDelayRecorder::new(start);
     let mut rows = recorder
-        .observe(&tree, &tree, &at(end + 1), now, &[&log], &cfg)
+        .observe(
+            &tree,
+            &tree,
+            &at(end + 1),
+            now,
+            &inputs_of(&tree, &[&log]),
+            &cfg,
+        )
         .local;
     rows.extend(recorder.finish().local);
     let counts = bucket_counts(&rows);
@@ -1912,7 +2075,11 @@ fn record_history(
 ) -> Recorded {
     let cfg = config(4);
     let logs: Vec<VisibilityLog> = inputs.iter().map(|(t, h)| log_of(t, h)).collect();
-    let logs: Vec<&VisibilityLog> = logs.iter().collect();
+    let logs: Vec<LocalInput<'_>> = inputs
+        .iter()
+        .zip_eq(logs.iter())
+        .map(|((tree, _), log)| LocalInput { tree, log })
+        .collect();
     let mut end_to_end = FreshnessRecorder::new(start_ms);
     let mut local = LocalDelayRecorder::new(start_ms);
     let mut recorded = Recorded::default();
@@ -1943,8 +2110,8 @@ struct Truth {
     advance_ms: u64,
     arrival_ready_ms: u64,
     timestamp_ready_ms: u64,
-    /// The wait for the needed timestamp that on-time inputs cause, the cap of skew.
-    grid_wait_ms: u64,
+    /// The skew with every input on time, the cap of skew.
+    cap_ms: u64,
 }
 
 impl Truth {
@@ -1953,7 +2120,7 @@ impl Truth {
         needed: &ResolvedTree,
         history: &History,
         inputs: &[(&ResolvedTree, &History)],
-        grid_wait: &dyn Fn(u64) -> u64,
+        cap: &mut dyn FnMut(u64, u64) -> u64,
         arrival: u64,
     ) -> Self {
         let reflects = |tree: &ResolvedTree, f: u64| {
@@ -1985,11 +2152,12 @@ impl Truth {
             advance_ms,
             arrival_ready_ms,
             timestamp_ready_ms,
-            grid_wait_ms: grid_wait(timestamp),
+            cap_ms: cap(arrival, timestamp),
         }
     }
 
-    /// The truths of the arrivals in `(from, to]`, with the grid wait of `needed`.
+    /// The truths of the arrivals in `(from, to]`, with the cap from each input's on-time
+    /// frontier, searched in `expected_upper` of its tree.
     fn all(
         tree: &ResolvedTree,
         needed: &ResolvedTree,
@@ -1997,27 +2165,56 @@ impl Truth {
         inputs: &[(&ResolvedTree, &History)],
         span: (u64, u64),
     ) -> Vec<Self> {
-        Truth::all_with(
-            tree,
-            needed,
-            history,
-            inputs,
-            &|t| needed.grid_wait(t),
-            span,
-        )
+        let models: Vec<ResolvedTree> = inputs
+            .iter()
+            .map(|(t, _)| unaligned_as_continuous(t))
+            .collect();
+        // The shows of an aligned input are equal within a window of the object, so they are
+        // searched once per window.
+        let per_window = models
+            .iter()
+            .all(|m| !m.tickers().contains(&Ticker::Continuous));
+        let mut shown_cache: Option<(u64, u64)> = None;
+        let mut cap = |arrival: u64, timestamp: u64| {
+            let passed = models
+                .iter()
+                .map(|m| on_time_first(m, |f| f > timestamp))
+                .max()
+                .unwrap();
+            let window = tree.prev_boundary(arrival - 1);
+            let shown = match shown_cache {
+                Some((w, shown)) if per_window && w == window => shown,
+                _ => {
+                    let shown = models
+                        .iter()
+                        .map(|m| {
+                            on_time_first(m, |f| {
+                                m.last_reflected(Timestamp::from(f))
+                                    .is_some_and(|r| r >= arrival)
+                            })
+                        })
+                        .max()
+                        .unwrap();
+                    shown_cache = Some((window, shown));
+                    shown
+                }
+            };
+            passed.saturating_sub(shown)
+        };
+        Truth::all_with(tree, needed, history, inputs, &mut cap, span)
     }
 
-    /// The truths of the arrivals in `(from, to]`, with the grid wait `grid_wait`.
+    /// The truths of the arrivals in `(from, to]`, with the cap `cap(arrival, timestamp)`.
     fn all_with(
         tree: &ResolvedTree,
         needed: &ResolvedTree,
         history: &History,
         inputs: &[(&ResolvedTree, &History)],
-        grid_wait: &dyn Fn(u64) -> u64,
+        cap: &mut dyn FnMut(u64, u64) -> u64,
         (from, to): (u64, u64),
     ) -> Vec<Self> {
         (from + 1..=to)
-            .map(|a| Truth::new(tree, needed, history, inputs, grid_wait, a))
+            .map(|a| Truth::new(tree, needed, history, inputs, cap, a))
             .collect()
     }
 
@@ -2045,7 +2242,7 @@ impl Truth {
     }
 
     fn skew_ms(&self) -> u64 {
-        self.raw_skew_ms().min(self.grid_wait_ms)
+        self.raw_skew_ms().min(self.cap_ms)
     }
 
     fn local_ms(&self) -> u64 {
@@ -2186,8 +2383,8 @@ fn split_join_input_stall_is_upstream() {
     // the stall. The cap keeps that wait in upstream.
     assert!(truths.iter().map(Truth::raw_skew_ms).max().unwrap() >= 290_000);
     for truth in &truths {
-        assert!(truth.skew_ms() <= truth.grid_wait_ms, "{truth:?}");
-        assert!(truth.grid_wait_ms <= 10_000, "{truth:?}");
+        assert!(truth.skew_ms() <= truth.cap_ms, "{truth:?}");
+        assert!(truth.cap_ms <= 10_000, "{truth:?}");
     }
     let skew_max = bucket_counts(&recorded.skew).into_keys().last().unwrap();
     assert!(skew_max <= s.bucket(10_000), "{skew_max}");
@@ -2315,7 +2512,14 @@ fn split_single_input_records_no_skew() {
     let mut rows = LocalRows::default();
     for w in (1000..=120_000u64).step_by(1000) {
         log.record(w + 1, Some(w), w + 10);
-        let new = recorder.observe(&tree, &tree, &at(w + 1), w + 20, &[&log], &cfg);
+        let new = recorder.observe(
+            &tree,
+            &tree,
+            &at(w + 1),
+            w + 20,
+            &inputs_of(&tree, &[&log]),
+            &cfg,
+        );
         rows.local.extend(new.local);
         rows.skew.extend(new.skew);
     }
@@ -2384,12 +2588,27 @@ fn split_never_exceeds_per_arrival_oracle() {
                 _ => on_time(k, t),
             }
         };
-        // The wait until every on-time input passes `timestamp`, by scanning the wall clock.
-        let grid_wait = |timestamp: u64| -> u64 {
-            (0..specs.len())
-                .map(|k| (0..).find(|w| on_time(k, timestamp + w) > timestamp).unwrap())
+        // The timestamp input `k` assigns an arrival: the latest of its leaves' next ticks,
+        // rounded up to its next refresh.
+        let assigned = |k: usize, arrival: u64| -> u64 {
+            let (leaves, refresh_ms, _, _) = &specs[k];
+            let t = leaves.iter().map(|i| ceil_to(arrival, 0, *i)).max().unwrap();
+            refresh_ms.map_or(t, |p| ceil_to(t, 0, p))
+        };
+        // The first wall clock at which on-time input `k`'s frontier is past `timestamp`.
+        let passes = |k: usize, timestamp: u64| -> u64 {
+            (0..).find(|w| on_time(k, *w) > timestamp).unwrap()
+        };
+        // The skew with every input on time: from the last input showing the arrival, when its
+        // frontier passes the timestamp it assigns the arrival, until every input passes the
+        // timestamp the object needs.
+        let mut cap = |arrival: u64, timestamp: u64| -> u64 {
+            let passed = (0..specs.len()).map(|k| passes(k, timestamp)).max().unwrap();
+            let shown = (0..specs.len())
+                .map(|k| passes(k, assigned(k, arrival)))
                 .max()
-                .unwrap()
+                .unwrap();
+            passed.saturating_sub(shown)
         };
         let mut histories: Vec<History> = vec![Vec::new(); specs.len()];
         let mut history = Vec::new();
@@ -2419,7 +2638,11 @@ fn split_never_exceeds_per_arrival_oracle() {
                 logs[k].record(f, trees[k].last_reflected(Timestamp::from(f)), o);
                 continue;
             }
-            let inputs: Vec<&VisibilityLog> = logs.iter().collect();
+            let inputs: Vec<LocalInput<'_>> = trees
+                .iter()
+                .zip_eq(logs.iter())
+                .map(|(tree, log)| LocalInput { tree, log })
+                .collect();
             recorded.end_to_end.extend(end_to_end.observe(&tree, &at(f), o, &cfg));
             let rows = local.observe(&tree, &tree, &at(f), o, &inputs, &cfg);
             recorded.local.extend(rows.local);
@@ -2433,7 +2656,7 @@ fn split_never_exceeds_per_arrival_oracle() {
 
         let inputs: Vec<_> = trees.iter().zip_eq(histories.iter()).collect();
         let truths =
-            Truth::all_with(&tree, &tree, &history, &inputs, &grid_wait, (0, high_water_ms));
+            Truth::all_with(&tree, &tree, &history, &inputs, &mut cap, (0, high_water_ms));
         for truth in &truths {
             // `upstream_ms` panics if skew and local exceed the end-to-end charge. Upstream
             // takes the time until the slowest input showed the arrival, and any excess skew.
@@ -2481,8 +2704,17 @@ fn split_merges_held_back_observations() {
         period_ms: 1000,
         ..config(4)
     };
-    let logs = [log_of(&fast, &h_fast), log_of(&slow, &h_slow)];
-    let logs: Vec<&VisibilityLog> = logs.iter().collect();
+    let (log_fast, log_slow) = (log_of(&fast, &h_fast), log_of(&slow, &h_slow));
+    let logs = [
+        LocalInput {
+            tree: &fast,
+            log: &log_fast,
+        },
+        LocalInput {
+            tree: &slow,
+            log: &log_slow,
+        },
+    ];
     let start_ms = 10_000;
     let mut local = LocalDelayRecorder::new(start_ms);
     let mut rows = LocalRows::default();
@@ -2533,7 +2765,7 @@ fn split_refresh_join_input_stall_is_not_skew() {
     let truths = Truth::all(&join, &join, &history, &inputs, span);
     let s = scheme(4);
     // Every arrival needs a refresh time, which both inputs' grids reach without waiting.
-    assert!(truths.iter().all(|t| t.grid_wait_ms == 0));
+    assert!(truths.iter().all(|t| t.cap_ms == 0));
     // Without the cap, the period before the stall would wait out the stall in skew.
     let waited = truths.iter().filter(|t| t.raw_skew_ms() >= 140_000).count();
     assert!(waited >= 400_000, "{waited}");
@@ -2545,4 +2777,128 @@ fn split_refresh_join_input_stall_is_not_skew() {
         bucket_counts(&recorded.local),
         BTreeMap::from([(s.bucket(20), span.1 - span.0)])
     );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_cap_measures_from_inner_join_showing() {
+    // A join of an inner join of a 7 s and an 11 s source with a 3 s source that stalls for 5
+    // minutes. The inner join shows an arrival only when its own inputs align, after the 3 s
+    // source passed the needed timestamp, so on time the outer join has no skew there, and
+    // the stall must not appear as skew.
+    let (inner, inner_inputs) = join_7_11(None, 600_000);
+    let h_inner = derived_history(&[&inner_inputs[0].1, &inner_inputs[1].1], 20);
+    let l3 = aligned(3000);
+    let h3 = leaf_history(3000, 10, 600_000, Some((130_000, 430_000)), 0);
+    let outer = ResolvedTree::Min(vec![inner.clone(), l3.clone()]);
+    let history = derived_history(&[&h_inner, &h3], 5);
+    let inputs = [(&inner, &h_inner), (&l3, &h3)];
+    let recorded = record_history(&outer, &outer, &history, &inputs, 120_000);
+    let span = (120_000, recorded.high_water_ms);
+    let truths = Truth::all(&outer, &outer, &history, &inputs, span);
+    let period_ms = config(4).period_ms;
+    never_exceeds(&recorded.skew, &truths, period_ms, Truth::skew_ms).unwrap();
+    never_exceeds(&recorded.local, &truths, period_ms, Truth::local_ms).unwrap();
+    // The stall makes arrivals wait after both inputs showed them, but none of that is skew
+    // where the on-time skew is 0.
+    assert!(truths.iter().map(Truth::raw_skew_ms).max().unwrap() >= 290_000);
+    let on_time_aligned = truths.iter().filter(|t| t.cap_ms == 0).count();
+    assert!(on_time_aligned > 0);
+    let s = scheme(4);
+    let zero_skew = bucket_counts(&recorded.skew)
+        .get(&s.bucket(1))
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        zero_skew >= u64::try_from(on_time_aligned).unwrap(),
+        "{zero_skew} < {on_time_aligned}"
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_unaligned_input_adds_no_skew_cap() {
+    // A table that ticks every second at a phase off the epoch grid, joined with a 300 ms
+    // source that stalls for a minute. The table's on-time wait is unknown, so only the
+    // source's grid can cause skew.
+    let table = unaligned(1000);
+    let source = aligned(300);
+    let join = ResolvedTree::Min(vec![table.clone(), source.clone()]);
+    let end = 400_000;
+    let mut h_table = Vec::new();
+    let mut tick = 437;
+    while tick <= end {
+        push_advance(&mut h_table, tick + 10, tick + 1);
+        tick += 1000;
+    }
+    let h_source = leaf_history(300, 10, end, Some((200_000, 260_000)), 0);
+    let history = derived_history(&[&h_table, &h_source], 20);
+    let inputs = [(&table, &h_table), (&source, &h_source)];
+    let recorded = record_history(&join, &join, &history, &inputs, 120_000);
+    let span = (120_000, recorded.high_water_ms);
+    let truths = Truth::all(&join, &join, &history, &inputs, span);
+    never_exceeds(&recorded.skew, &truths, config(4).period_ms, Truth::skew_ms).unwrap();
+    let skew_max = bucket_counts(&recorded.skew).into_keys().last().unwrap();
+    assert!(skew_max <= scheme(4).bucket(299), "{skew_max}");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_skew_past_the_step_budget_understates() {
+    // Both inputs of a 7 s x 11 s join answer more than four hours of arrivals with single
+    // entries. The 11 s input showed them at 20 000 s but passed their needed timestamps only
+    // 4.8 s later, so one group spans all of them, with far more needed timestamps than the
+    // step budget.
+    let (l7, l11) = (aligned(7000), aligned(11_000));
+    let join = ResolvedTree::Min(vec![l7.clone(), l11.clone()]);
+    let span_end = 15_000_000;
+    let (mut log7, mut log11) = (VisibilityLog::default(), VisibilityLog::default());
+    log7.record(u64::MAX - 1, Some(u64::MAX - 2), 20_000_000);
+    log11.record(1, Some(u64::MAX - 2), 20_000_000);
+    log11.record(u64::MAX - 1, Some(u64::MAX - 2), 20_004_800);
+    let inputs = [
+        LocalInput {
+            tree: &l7,
+            log: &log7,
+        },
+        LocalInput {
+            tree: &l11,
+            log: &log11,
+        },
+    ];
+    let cfg = config(4);
+    let now = 30_000_000;
+    let mut local = LocalDelayRecorder::new(0);
+    let mut end_to_end = FreshnessRecorder::new(0);
+    let mut rows = local.observe(&join, &join, &at(span_end + 1), now, &inputs, &cfg);
+    // The last arrival the join reflects, on both grids.
+    let reflected = local.high_water_ms();
+    let finished = local.finish();
+    rows.local.extend(finished.local);
+    rows.skew.extend(finished.skew);
+    let mut e2e = end_to_end.observe(&join, &at(span_end + 1), now, &cfg);
+    e2e.extend(end_to_end.finish());
+    let s = scheme(4);
+    // Local delay and end-to-end latency do not depend on the budget.
+    assert_eq!(
+        bucket_counts(&rows.local),
+        BTreeMap::from([(s.bucket(now - 20_004_800), reflected)])
+    );
+    assert_eq!(period_totals(&rows.skew), period_totals(&e2e));
+    // A step covers the arrivals of one needed timestamp, at most 11 s of them, so the steps
+    // within the budget cover at most that much, and the rest records 0.
+    let budgeted = u64::try_from(super::local::MAX_GRID_STEPS).unwrap() * 11_000;
+    let zero = bucket_counts(&rows.skew)
+        .get(&s.bucket(1))
+        .copied()
+        .unwrap_or(0);
+    assert!(zero >= reflected - budgeted, "{zero}");
+    // Within the budget, skew is the on-time skew where it is below the 4.8 s wait.
+    assert!(
+        bucket_counts(&rows.skew).len() > 1,
+        "{:?}",
+        bucket_counts(&rows.skew)
+    );
+    let skew_max = bucket_counts(&rows.skew).into_keys().last().unwrap();
+    assert!(skew_max <= s.bucket(4800), "{skew_max}");
 }
