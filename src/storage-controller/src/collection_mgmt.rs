@@ -86,6 +86,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, DatumVec, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
+use mz_storage_client::freshness::SeedCollector;
 use mz_storage_client::healthcheck::{
     MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
     REPLICA_WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC, WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC,
@@ -1152,6 +1153,13 @@ impl AppendOnlyWriteTask {
             | IntrospectionType::WallclockLagHistogram
             | IntrospectionType::WallclockFreshnessHistogram
             | IntrospectionType::ReplicaWallclockFreshnessHistogram => {
+                let freshness_seeds = storage_collections.freshness_seeds();
+                let per_replica = match introspection_type {
+                    IntrospectionType::WallclockFreshnessHistogram => Some(false),
+                    IntrospectionType::ReplicaWallclockFreshnessHistogram => Some(true),
+                    _ => None,
+                };
+                let mut seeds = per_replica.map(SeedCollector::new);
                 let result = partially_truncate_metrics_history(
                     self.id,
                     introspection_type,
@@ -1159,12 +1167,23 @@ impl AppendOnlyWriteTask {
                     config_set,
                     self.now.clone(),
                     storage_collections,
+                    seeds.as_mut(),
                 )
                 .await;
-                if let Err(error) = result {
+                if let Err(error) = &result {
                     soft_panic_or_log!(
                         "error truncating metrics history: {error} (type={introspection_type:?})"
                     );
+                }
+                if let (Some(per_replica), Some(seeds)) = (per_replica, seeds) {
+                    // Without a successful append right after the snapshot, rows may have been
+                    // appended after it, and their periods would be counted twice. Recordings
+                    // without seeds start at their first observation.
+                    let seeds = match result {
+                        Ok(()) => seeds.finish(),
+                        Err(_) => BTreeMap::new(),
+                    };
+                    freshness_seeds.publish(per_replica, seeds);
                 }
                 Vec::new()
             }
@@ -1465,7 +1484,7 @@ impl AppendOnlyWriteTask {
 }
 
 /// Truncates the given metrics history by removing all entries older than that history's
-/// configured retention interval.
+/// configured retention interval, and adds the entries it keeps to `seeds`.
 ///
 /// # Panics
 ///
@@ -1477,6 +1496,7 @@ async fn partially_truncate_metrics_history(
     config_set: Arc<ConfigSet>,
     now: NowFn,
     storage_collections: Arc<dyn StorageCollections + Send + Sync>,
+    mut seeds: Option<&mut SeedCollector>,
 ) -> Result<(), anyhow::Error> {
     let (keep_duration, occurred_at_col) = match introspection_type {
         IntrospectionType::ReplicaMetricsHistory => (
@@ -1550,6 +1570,9 @@ async fn partially_truncate_metrics_history(
             let datums = datum_vec.borrow_with(row);
             let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
             if *occurred_at >= keep_since {
+                if let Some(seeds) = seeds.as_deref_mut() {
+                    seeds.add(&datums, diff);
+                }
                 continue;
             }
             let diff = -diff;

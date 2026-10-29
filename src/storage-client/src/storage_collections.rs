@@ -65,7 +65,7 @@ use crate::client::TimestamplessUpdateBuilder;
 use crate::controller::{
     CollectionDescription, DataSource, PersistEpoch, StorageMetadata, StorageTxn,
 };
-use crate::freshness::SharedVisibilityLog;
+use crate::freshness::{FreshnessSeeds, SharedVisibilityLog};
 use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
 
 mod metrics;
@@ -333,6 +333,10 @@ pub trait StorageCollections: Debug + Sync {
     /// reflects later calls to [`StorageCollections::update_ingestion_timestamp_interval`].
     fn ticker_lookup(&self) -> Arc<dyn TickerLookup + Send + Sync>;
 
+    /// The restart seeds of freshness recordings, which the write tasks of the freshness
+    /// histogram relations publish when they start.
+    fn freshness_seeds(&self) -> FreshnessSeeds;
+
     /// Records the new `timestamp_interval` of an altered ingestion. Does nothing if `id` is
     /// not an ingestion known to this [StorageCollections].
     fn update_ingestion_timestamp_interval(&self, id: GlobalId, interval: Duration);
@@ -436,6 +440,8 @@ pub struct StorageCollectionsImpl {
 
     /// For sending updates about read holds to our internal task.
     holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<Timestamp>)>,
+
+    freshness_seeds: FreshnessSeeds,
 
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
@@ -588,6 +594,7 @@ impl StorageCollectionsImpl {
             persist: persist_clients,
             cmd_tx,
             holds_tx,
+            freshness_seeds: FreshnessSeeds::default(),
             _background_task: Arc::new(background_task.abort_on_drop()),
             _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
         }
@@ -2488,6 +2495,10 @@ impl StorageCollections for StorageCollectionsImpl {
         Arc::new(CollectionTickers(Arc::clone(&self.collections)))
     }
 
+    fn freshness_seeds(&self) -> FreshnessSeeds {
+        self.freshness_seeds.clone()
+    }
+
     fn update_ingestion_timestamp_interval(&self, id: GlobalId, interval: Duration) {
         let mut collections = self.collections.lock().expect("lock poisoned");
         set_timestamp_interval(&mut collections, id, interval);
@@ -2508,6 +2519,7 @@ impl StorageCollections for StorageCollectionsImpl {
             persist: _,
             cmd_tx: _,
             holds_tx: _,
+            freshness_seeds: _,
             _background_task: _,
             _finalize_shards_task: _,
         } = self;

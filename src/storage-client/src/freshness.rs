@@ -17,12 +17,14 @@ use chrono::{DateTime, Utc};
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::dyncfgs::{
     ENABLE_WALLCLOCK_FRESHNESS_RECORDING, WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE,
-    WALLCLOCK_FRESHNESS_PERIOD_INTERVAL, WALLCLOCK_FRESHNESS_VIRTUAL_ARRIVAL_INTERVAL,
+    WALLCLOCK_FRESHNESS_PERIOD_INTERVAL, WALLCLOCK_FRESHNESS_RESTART_POLICY,
+    WALLCLOCK_FRESHNESS_VIRTUAL_ARRIVAL_INTERVAL,
 };
 use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{ColumnName, Datum, Diff, GlobalId, Row, Timestamp};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::dyncfgs::WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL;
 use mz_storage_types::freshness::ResolvedTree;
 use mz_storage_types::freshness::histogram::BucketScheme;
@@ -33,9 +35,12 @@ use mz_storage_types::freshness::recorder::{FreshnessRecorder, PeriodRow, Record
 use timely::progress::Antichain;
 
 use crate::controller::WallclockLag;
+use crate::healthcheck::{
+    REPLICA_WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC, WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC,
+};
 
 /// What a freshness histogram row measures.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Measure {
     /// The delay from arrival to visibility in the output.
     EndToEnd,
@@ -58,6 +63,182 @@ impl Measure {
             Measure::Skew => "skew",
         }
     }
+
+    fn from_column(s: &str) -> Option<Self> {
+        match s {
+            "end_to_end" => Some(Measure::EndToEnd),
+            "local" => Some(Measure::Local),
+            "skew" => Some(Measure::Skew),
+            _ => None,
+        }
+    }
+}
+
+/// How the recordings of collections that existed before environmentd started begin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestartPolicy {
+    /// At the first observed frontier, but not before the recording was built. The arrivals
+    /// since the last emitted period are not recorded, which leaves a hole in the histogram.
+    Hole,
+    /// At the seed from [`FreshnessSeeds`], so the arrivals since the last emitted period count
+    /// at the first observation, with the outage as latency.
+    Charge,
+}
+
+impl RestartPolicy {
+    /// The policy `wallclock_freshness_restart_policy` selects. Unknown values select `Hole`.
+    pub fn get(dyncfg: &ConfigSet) -> Self {
+        match WALLCLOCK_FRESHNESS_RESTART_POLICY.get(dyncfg).as_str() {
+            "charge" => RestartPolicy::Charge,
+            "hole" => RestartPolicy::Hole,
+            other => {
+                tracing::warn!("unknown wallclock freshness restart policy {other:?}, using hole");
+                RestartPolicy::Hole
+            }
+        }
+    }
+}
+
+/// The recording of the global write frontier of collection `id`, or of `replica_id`'s, that
+/// existed before environmentd started, under the restart policy of `dyncfg`, built at the
+/// wall-clock time `built_ms`.
+pub fn recording_after_restart(
+    dyncfg: &ConfigSet,
+    seeds: &FreshnessSeeds,
+    id: GlobalId,
+    replica_id: Option<ReplicaId>,
+    built_ms: u64,
+) -> FreshnessRecording {
+    match RestartPolicy::get(dyncfg) {
+        RestartPolicy::Hole => FreshnessRecording::at_first_observation(built_ms),
+        RestartPolicy::Charge => {
+            FreshnessRecording::seeded(seeds.clone(), id, replica_id, built_ms)
+        }
+    }
+}
+
+/// The key of a restart seed: the object, the replica (`None` in the global histogram), and the
+/// measure.
+pub type SeedKey = (GlobalId, Option<ReplicaId>, Measure);
+
+/// The restart seeds of freshness recordings: the maximum period end in the freshness histograms
+/// per [`SeedKey`], as the histograms stood when environmentd started.
+///
+/// The write tasks of the two histogram relations publish them, and the controllers take them
+/// when recordings start. Clones share the seeds.
+#[derive(Clone, Debug, Default)]
+pub struct FreshnessSeeds(Arc<Mutex<SeedState>>);
+
+#[derive(Debug, Default)]
+struct SeedState {
+    global_loaded: bool,
+    replica_loaded: bool,
+    seeds: BTreeMap<SeedKey, u64>,
+}
+
+/// The seeds of the end-to-end and the local recorder of one recording.
+#[derive(Debug)]
+struct RecordingSeeds {
+    end_to_end: Option<u64>,
+    local: Option<u64>,
+}
+
+impl FreshnessSeeds {
+    /// Publishes the seeds of the global histogram, or of the per-replica one if `per_replica`.
+    pub fn publish(&self, per_replica: bool, seeds: BTreeMap<SeedKey, u64>) {
+        let mut state = self.0.lock().expect("lock poisoned");
+        match per_replica {
+            false => state.global_loaded = true,
+            true => state.replica_loaded = true,
+        }
+        state.seeds.extend(seeds);
+    }
+
+    /// Removes the seeds of the recording of `id` on `replica_id`, or globally, and returns them,
+    /// `None` until the histogram they come from is published.
+    fn take(&self, id: GlobalId, replica_id: Option<ReplicaId>) -> Option<RecordingSeeds> {
+        let mut state = self.0.lock().expect("lock poisoned");
+        let loaded = match replica_id {
+            None => state.global_loaded,
+            Some(_) => state.replica_loaded,
+        };
+        if !loaded {
+            return None;
+        }
+        let mut take = |measure| state.seeds.remove(&(id, replica_id, measure));
+        // Skew rows come from the local delay recorder, which the local seed starts.
+        take(Measure::Skew);
+        Some(RecordingSeeds {
+            end_to_end: take(Measure::EndToEnd),
+            local: take(Measure::Local),
+        })
+    }
+}
+
+/// Collects the restart seeds from the rows of a freshness histogram relation.
+#[derive(Debug)]
+pub struct SeedCollector {
+    period_end_col: usize,
+    object_id_col: usize,
+    replica_id_col: Option<usize>,
+    measure_col: usize,
+    seeds: BTreeMap<SeedKey, u64>,
+}
+
+impl SeedCollector {
+    /// Collects from the global histogram, or from the per-replica one if `per_replica`.
+    pub fn new(per_replica: bool) -> Self {
+        let desc = match per_replica {
+            false => &*WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC,
+            true => &*REPLICA_WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC,
+        };
+        let col = |name: &str| {
+            desc.get_by_name(&ColumnName::from(name))
+                .expect("schema has not changed")
+                .0
+        };
+        SeedCollector {
+            period_end_col: col("period_end"),
+            object_id_col: col("object_id"),
+            replica_id_col: per_replica.then(|| col("replica_id")),
+            measure_col: col("measure"),
+            seeds: BTreeMap::new(),
+        }
+    }
+
+    /// Adds a row of the relation with multiplicity `diff`. Rows with a non-positive `diff` are
+    /// not in the relation and do not seed.
+    pub fn add(&mut self, datums: &[Datum], diff: StorageDiff) {
+        if diff <= 0 {
+            return;
+        }
+        let Some(key) = self.key(datums) else {
+            soft_panic_or_log!("malformed freshness histogram row: {datums:?}");
+            return;
+        };
+        let period_end = datums[self.period_end_col].unwrap_timestamptz();
+        let Ok(period_end) = u64::try_from(period_end.timestamp_millis()) else {
+            soft_panic_or_log!("freshness period end before the epoch: {period_end}");
+            return;
+        };
+        let seed = self.seeds.entry(key).or_default();
+        *seed = (*seed).max(period_end);
+    }
+
+    fn key(&self, datums: &[Datum]) -> Option<SeedKey> {
+        let id = datums[self.object_id_col].unwrap_str().parse().ok()?;
+        let replica_id = match self.replica_id_col {
+            None => None,
+            Some(col) => Some(datums[col].unwrap_str().parse().ok()?),
+        };
+        let measure = Measure::from_column(datums[self.measure_col].unwrap_str())?;
+        Some((id, replica_id, measure))
+    }
+
+    /// The seeds of the added rows.
+    pub fn finish(self) -> BTreeMap<SeedKey, u64> {
+        self.seeds
+    }
 }
 
 /// Where a recording starts, consulted until it does.
@@ -69,6 +250,15 @@ enum Start {
     /// At the later of what the first observed frontier reflects and the wall-clock time in ms
     /// at which the recording was built.
     FirstObservation(u64),
+    /// At the seeds of the recording of `id` on `replica_id`, or globally, but no earlier than
+    /// the retention before the first observation, see [`RestartPolicy::Charge`]. A measure
+    /// without a seed starts like `FirstObservation(built_ms)`.
+    Seeded {
+        seeds: FreshnessSeeds,
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        built_ms: u64,
+    },
 }
 
 /// Freshness recording of one write frontier, the global one of a collection or a replica's.
@@ -77,8 +267,8 @@ pub struct FreshnessRecording {
     start: Start,
     /// Whether the local delay and skew are recorded, see [`Self::end_to_end_only`].
     local: bool,
-    /// The recorders of all recorded measures. They start together, so their per-period counts
-    /// agree.
+    /// The recorders of all recorded measures. They start together, and at the same arrival
+    /// unless their restart seeds differ, so their per-period counts agree.
     recorders: Option<(FreshnessRecorder, Option<LocalDelayRecorder>)>,
 }
 
@@ -108,6 +298,31 @@ impl FreshnessRecording {
         }
     }
 
+    /// Records the arrivals after the seed of each measure of `id` on `replica_id`, or globally,
+    /// but none older than the retention, and a measure without a seed like
+    /// [`Self::at_first_observation`] built at `built_ms`. Records nothing until the seeds of the
+    /// histogram are published.
+    ///
+    /// The seeds are taken when the recording starts, so a later recording of the same frontier
+    /// starts at its first observation.
+    pub fn seeded(
+        seeds: FreshnessSeeds,
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        built_ms: u64,
+    ) -> Self {
+        FreshnessRecording {
+            start: Start::Seeded {
+                seeds,
+                id,
+                replica_id,
+                built_ms,
+            },
+            local: true,
+            recorders: None,
+        }
+    }
+
     /// Records only the end-to-end latency, for a collection without inputs inside Materialize,
     /// whose local delay is its end-to-end latency.
     pub fn end_to_end_only(mut self) -> Self {
@@ -115,10 +330,14 @@ impl FreshnessRecording {
         self
     }
 
-    fn recorders(&self, start_ms: u64) -> (FreshnessRecorder, Option<LocalDelayRecorder>) {
+    fn recorders(
+        &self,
+        end_to_end_start_ms: u64,
+        local_start_ms: u64,
+    ) -> (FreshnessRecorder, Option<LocalDelayRecorder>) {
         (
-            FreshnessRecorder::new(start_ms),
-            self.local.then(|| LocalDelayRecorder::new(start_ms)),
+            FreshnessRecorder::new(end_to_end_start_ms),
+            self.local.then(|| LocalDelayRecorder::new(local_start_ms)),
         )
     }
 
@@ -149,22 +368,42 @@ impl FreshnessRecording {
         let reflected =
             |f: &Antichain<Timestamp>| f.as_option().and_then(|t| tree.last_reflected(*t));
         if self.recorders.is_none() {
+            let first = reflected(frontier);
+            let retained = now_ms.saturating_sub(config.retention_ms);
             let start = match &self.start {
                 Start::Created(as_of, created_ms) => {
-                    let retained = now_ms.saturating_sub(config.retention_ms);
                     let reflected = reflected(as_of).unwrap_or(0);
-                    Some(reflected.max(*created_ms).max(retained))
+                    let start = reflected.max(*created_ms).max(retained);
+                    Some((start, start))
                 }
                 // A first frontier near the epoch, as of a collection whose as-of is `[0]`, would
                 // otherwise charge the time since the epoch as latency.
-                Start::FirstObservation(built_ms) => {
-                    reflected(frontier).map(|first| first.max(*built_ms))
-                }
+                Start::FirstObservation(built_ms) => first.map(|first| {
+                    let start = first.max(*built_ms);
+                    (start, start)
+                }),
+                // Checks `first` before taking the seeds, which are lost if not used.
+                Start::Seeded {
+                    seeds,
+                    id,
+                    replica_id,
+                    built_ms,
+                } => first.and_then(|first| {
+                    let seeds = seeds.take(*id, *replica_id)?;
+                    // Seeds are taken at the first observation, which can come long after they
+                    // were published, for example on a cluster without replicas, so a seed can
+                    // be older than the retention.
+                    let start = |seed: Option<u64>| match seed {
+                        Some(seed) => seed.max(retained),
+                        None => first.max(*built_ms),
+                    };
+                    Some((start(seeds.end_to_end), start(seeds.local)))
+                }),
             };
-            let Some(start) = start else {
+            let Some((end_to_end, local)) = start else {
                 return Vec::new();
             };
-            self.recorders = Some(self.recorders(start));
+            self.recorders = Some(self.recorders(end_to_end, local));
         }
         let (end_to_end, local) = self.recorders.as_mut().expect("initialized above");
         let end_to_end = end_to_end.observe(tree, frontier, now_ms, config);

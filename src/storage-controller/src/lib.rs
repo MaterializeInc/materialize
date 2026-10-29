@@ -3092,14 +3092,24 @@ where
         }
     }
 
-    /// The freshness recording of a collection created now, `None` if it starts at the first
-    /// observed write frontier or is not recorded.
+    /// The freshness recording of a collection created now, `None` if it is not recorded.
     fn freshness_recording_at_creation(&self, id: GlobalId) -> Option<FreshnessRecording> {
-        // Collections created before initialization completes existed before a restart. Under the
-        // `hole` restart policy, their arrivals before the first observed frontier are not
-        // recorded.
-        if self.freshness_config.is_none() || !self.initialized {
+        if self.freshness_config.is_none() {
             return None;
+        }
+        // Collections created before initialization completes existed before a restart.
+        if !self.initialized {
+            let seeds = self.storage_collections.freshness_seeds();
+            return Some(
+                freshness::recording_after_restart(
+                    self.config.config_set(),
+                    &seeds,
+                    id,
+                    None,
+                    (self.now)(),
+                )
+                .end_to_end_only(),
+            );
         }
         // The since takes the place of the as-of. A new shard's since is the minimum timestamp,
         // which reflects no arrival, so the snapshot of a new source counts as latency from its

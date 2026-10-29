@@ -25,6 +25,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
 use mz_controller_types::dyncfgs::{
     ENABLE_WALLCLOCK_FRESHNESS_RECORDING, ENABLE_WALLCLOCK_FRESHNESS_REPORTING,
+    WALLCLOCK_FRESHNESS_RESTART_POLICY,
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
 use mz_ore::metrics::MetricsRegistry;
@@ -36,7 +37,7 @@ use mz_storage_client::client::TimestamplessUpdateBuilder;
 use mz_storage_client::controller::{
     CollectionDescription, IntrospectionType, StorageMetadata, StorageTxn, WallclockLag,
 };
-use mz_storage_client::freshness::SharedVisibilityLog;
+use mz_storage_client::freshness::{FreshnessSeeds, Measure, SharedVisibilityLog};
 use mz_storage_client::storage_collections::{
     CollectionFrontiers, SnapshotCursor, StorageCollections,
 };
@@ -375,9 +376,13 @@ impl TickerLookup for FixedTickers {
     }
 }
 
-/// A `StorageCollections` that only provides ticker lookups and visibility logs.
+/// A `StorageCollections` that only provides ticker lookups, visibility logs and restart seeds.
 #[derive(Debug)]
-struct TickerStorage(Arc<FixedTickers>, BTreeMap<GlobalId, SharedVisibilityLog>);
+struct TickerStorage(
+    Arc<FixedTickers>,
+    BTreeMap<GlobalId, SharedVisibilityLog>,
+    FreshnessSeeds,
+);
 
 #[async_trait]
 impl StorageCollections for TickerStorage {
@@ -544,6 +549,10 @@ impl StorageCollections for TickerStorage {
         Arc::<FixedTickers>::clone(&self.0)
     }
 
+    fn freshness_seeds(&self) -> FreshnessSeeds {
+        self.2.clone()
+    }
+
     fn update_ingestion_timestamp_interval(&self, _id: GlobalId, _interval: Duration) {
         unimplemented!()
     }
@@ -616,6 +625,8 @@ struct FreshnessHarness {
     clock: Arc<AtomicU64>,
     /// The visibility log of [`STORAGE_INPUT`].
     storage_log: SharedVisibilityLog,
+    /// The restart seeds the harness's `StorageCollections` serves.
+    seeds: FreshnessSeeds,
     introspection_rx: mpsc::UnboundedReceiver<IntrospectionUpdates>,
     _response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse>,
 }
@@ -659,9 +670,11 @@ impl FreshnessHarness {
         let read_hold_tx: ChangeTx = Arc::new(|_, _| Ok(()));
 
         let storage_log = SharedVisibilityLog::default();
+        let seeds = FreshnessSeeds::default();
         let storage = TickerStorage(
             Arc::new(FixedTickers(1000)),
             BTreeMap::from([(STORAGE_INPUT, storage_log.clone())]),
+            seeds.clone(),
         );
         let instance = Instance::new(
             &DUMMY_BUILD_INFO,
@@ -682,6 +695,7 @@ impl FreshnessHarness {
             instance,
             clock,
             storage_log,
+            seeds,
             introspection_rx,
             _response_rx: response_rx,
         }
@@ -1433,4 +1447,54 @@ async fn reported_lag_skips_transient_collections() {
         "{:?}",
         lag_max(user),
     );
+}
+
+/// A collection and a replica that existed before a restart, whose seeds are published after the
+/// first observation. Under `charge` the periods since the seeds are contiguous and complete,
+/// under `hole` the recording starts at the first observation.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn restart_policy_charges_outage_or_leaves_hole() {
+    let charged = vec![
+        (T0 + 60_000, T0 + 120_000, 60_000),
+        (T0 + 120_000, T0 + 180_000, 60_000),
+    ];
+    // The hole recording starts at the first observed frontier, which reflects T0 + 121_000.
+    let hole = vec![(T0 + 121_000, T0 + 180_000, 59_000)];
+    for (policy, expected) in [("charge", charged), ("hole", hole)] {
+        let mut h = FreshnessHarness::new(true, false);
+        let mut updates = ConfigUpdates::default();
+        updates.add(&WALLCLOCK_FRESHNESS_RESTART_POLICY, policy);
+        updates.apply(&h.instance.dyncfg);
+        let id = GlobalId::User(10);
+        let r1 = ReplicaId::User(1);
+        h.add_replica(r1);
+        h.add_collection(id, T0 + 60_000);
+        h.instance.initialization_complete();
+
+        let tick = |h: &mut FreshnessHarness, s: u64| {
+            h.set_now(T0 + s * 1000 + 5);
+            h.report(r1, id, T0 + s * 1000 + 1);
+        };
+        tick(&mut h, 121);
+        for replica_id in [None, Some(r1)] {
+            let seeds = [Measure::EndToEnd, Measure::Local]
+                .map(|measure| ((id, replica_id, measure), T0 + 60_000));
+            h.seeds.publish(replica_id.is_some(), seeds.into());
+        }
+        for s in 122..=180 {
+            tick(&mut h, s);
+        }
+
+        let recorded = h.recorded();
+        for replica in [None, Some(r1)] {
+            for measure in ["end_to_end", "local"] {
+                assert_eq!(
+                    recorded.measure_periods(measure, Some(id), replica),
+                    expected,
+                    "{policy} {measure} {replica:?}"
+                );
+            }
+        }
+    }
 }
