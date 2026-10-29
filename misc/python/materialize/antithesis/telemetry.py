@@ -1,0 +1,618 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""Bounded workload measurements and semantic coverage shared across commands."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import resource
+import runpy
+import sqlite3
+import sys
+import threading
+import time
+from collections import Counter
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, TypeVar
+
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+    unreachable,
+)
+
+from materialize.antithesis import ivm_model, quiet, state
+
+PROFILE_ENV = "MZ_ANTITHESIS_TEMPLATE_PROFILE"
+STATE_DB = "telemetry"
+EVENT_CAP = 4096
+EVENT_RETENTION_S = 3600.0
+PHASE_SAMPLE_S = 5.0
+ACTIVE_CAP = 256
+
+_FAMILIES = frozenset(
+    {
+        "history",
+        "counters",
+        "read_paths",
+        "ivm",
+        "postgres",
+        "postgres_sources",
+        "kafka_sources",
+        "kafka_sinks",
+        "schema_evolution",
+        "access_control",
+        "canaries",
+        "recovery",
+        "shard_audit",
+        "lifecycle",
+        "append",
+        "rmw",
+        "other",
+    }
+)
+_PATHS = frozenset(
+    {
+        "",
+        "history",
+        "counter",
+        "table",
+        "log",
+        "ledger",
+        "export",
+        "full",
+        "point",
+        "incremental",
+        "full_ledger",
+        "incremental_ledger",
+        "subscribe",
+        "snapshot",
+        "index",
+        "persist",
+        "recompute",
+        "replica",
+        "mv",
+        "view",
+        "join_mv",
+        "other",
+        *(f"P{i}" for i in range(1, 8)),
+        *ivm_model.VIEW_TAGS,
+    }
+)
+_PHASES = frozenset(
+    {
+        "",
+        "Applying",
+        "ReadyToPromote",
+        "Promoting",
+        "Applied",
+        "WaitingForApproval",
+        "FailedDeploy",
+        "RolloutTimeout",
+        "other",
+    }
+)
+_ROLES = frozenset(
+    {
+        "",
+        "environmentd",
+        "environmentd_active",
+        "environmentd_candidate",
+        "clusterd",
+        "orchestratord",
+        "other",
+    }
+)
+_OUTCOMES = frozenset({"acked", "indeterminate", "other"})
+_T = TypeVar("_T")
+
+
+@dataclass
+class Recorder:
+    profile: str
+    command: str
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    counts: Counter[tuple[str, str, str]] = field(default_factory=Counter)
+    calls: int = 0
+    metric_errors: int = 0
+    phase_sample: tuple[tuple[str, int | None, str | None], float] | None = None
+
+
+_recorder: Recorder | None = None
+_command_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class Event:
+    kind: str
+    started: float
+    completed: float
+    phase: str = ""
+    role: str = ""
+
+
+def enabled() -> bool:
+    """Whether this process is running a measured test command."""
+    return _recorder is not None
+
+
+def _label(value: str, allowed: frozenset[str]) -> str:
+    return value if value in allowed else "other"
+
+
+def _path(value: str) -> str:
+    if value.startswith("replica:"):
+        return "replica"
+    if value.startswith("canary:"):
+        value = value.removeprefix("canary:")
+    return _label(value, _PATHS)
+
+
+def _failed(operation: str, error: Exception) -> None:
+    recorder = _recorder
+    if recorder is not None:
+        with recorder.lock:
+            recorder.metric_errors += 1
+    print(
+        f"telemetry: {operation}: {type(error).__name__}", file=sys.stderr, flush=True
+    )
+    unreachable(
+        "workload telemetry records measurements without errors",
+        {"operation": operation, "error": type(error).__name__},
+    )
+
+
+def _open() -> sqlite3.Connection:
+    db = state.open_db(STATE_DB)
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS commands (
+            profile TEXT, command TEXT,
+            started INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0,
+            errors INTEGER NOT NULL DEFAULT 0, interrupted INTEGER NOT NULL DEFAULT 0,
+            no_comparison INTEGER NOT NULL DEFAULT 0, uninstrumented INTEGER NOT NULL DEFAULT 0,
+            wall_s REAL NOT NULL DEFAULT 0, cpu_s REAL NOT NULL DEFAULT 0,
+            child_cpu_s REAL NOT NULL DEFAULT 0, metric_errors INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (profile, command));
+        CREATE TABLE IF NOT EXISTS active_commands (
+            invocation TEXT PRIMARY KEY, profile TEXT, command TEXT,
+            pid INTEGER NOT NULL, token TEXT NOT NULL, started REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS comparisons (
+            profile TEXT, command TEXT, family TEXT, path TEXT, outcome TEXT,
+            units INTEGER NOT NULL, PRIMARY KEY (profile, command, family, path, outcome));
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY, profile TEXT, kind TEXT, started REAL, completed REAL,
+            phase TEXT NOT NULL, role TEXT NOT NULL, event_key TEXT NOT NULL,
+            UNIQUE (profile, kind, event_key));
+        CREATE INDEX IF NOT EXISTS event_times ON events (profile, completed, started);
+        CREATE TABLE IF NOT EXISTS coverage (
+            profile TEXT, phase TEXT, role TEXT, family TEXT, path TEXT, outcome TEXT,
+            hits INTEGER NOT NULL, PRIMARY KEY (profile, phase, role, family, path, outcome));
+    """)
+    return db
+
+
+def _db_call(
+    operation: str, fn: Callable[[sqlite3.Connection], _T], fallback: _T
+) -> _T:
+    db = None
+    try:
+        db = _open()
+        result = fn(db)
+        db.commit()
+        return result
+    except Exception as e:
+        _failed(operation, e)
+        return fallback
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception as e:
+                _failed(f"{operation} cleanup", e)
+
+
+def _process_token(pid: int) -> str | None:
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    if fields[0] == "Z":
+        return None
+    return fields[19]
+
+
+def _reap(db: sqlite3.Connection) -> None:
+    for invocation, profile, command, pid, token in db.execute(
+        "SELECT invocation, profile, command, pid, token FROM active_commands"
+    ).fetchall():
+        if _process_token(pid) == token:
+            continue
+        db.execute(
+            "UPDATE commands SET interrupted = interrupted + 1 WHERE profile = ? AND command = ?",
+            (profile, command),
+        )
+        db.execute("DELETE FROM active_commands WHERE invocation = ?", (invocation,))
+
+
+def _prune_events(db: sqlite3.Connection, now: float) -> None:
+    removed = db.execute(
+        "DELETE FROM events WHERE completed < ?", (now - EVENT_RETENTION_S,)
+    ).rowcount
+    removed += db.execute(
+        "DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)",
+        (EVENT_CAP,),
+    ).rowcount
+    if removed:
+        db.execute(
+            "INSERT INTO metadata VALUES ('events_pruned', ?)"
+            " ON CONFLICT (key) DO UPDATE SET value = value + excluded.value",
+            (removed,),
+        )
+
+
+def comparison(family: str, path: str, passed: bool | None, units: int = 1) -> None:
+    """Count evaluated and skipped comparison units within the current command."""
+    recorder = _recorder
+    if recorder is None:
+        return
+    if type(units) is not int or units < 0:
+        _failed(
+            "comparison", ValueError("comparison units must be nonnegative integers")
+        )
+        return
+    outcome = "skipped" if passed is None else "passed" if passed else "failed"
+    key = (_label(family, _FAMILIES), _path(path), outcome)
+    with recorder.lock:
+        recorder.counts[key] += units
+        recorder.calls += 1
+
+
+def phase_observed(
+    phase: str | None,
+    generation: int | None,
+    request: str | None,
+    *,
+    started: float | None = None,
+) -> None:
+    """Record an observed rollout phase, throttling repeated samples of one state."""
+    recorder = _recorder
+    if recorder is None:
+        return
+    phase = _label(phase or "", _PHASES)
+    now = time.monotonic()
+    observed_start = now if started is None else started
+    if observed_start > now:
+        _failed(
+            "phase observation",
+            ValueError("phase observation completed before it started"),
+        )
+        return
+    key = (phase, generation, request)
+    with recorder.lock:
+        previous = recorder.phase_sample
+        if (
+            previous is not None
+            and previous[0] == key
+            and now - previous[1] < PHASE_SAMPLE_S
+        ):
+            return
+        recorder.phase_sample = key, now
+    digest = hashlib.sha256(repr(key).encode()).hexdigest()
+
+    def record(db: sqlite3.Connection) -> None:
+        db.execute("BEGIN IMMEDIATE")
+        previous = db.execute(
+            "SELECT event_key, completed FROM events WHERE profile = ? AND kind = 'phase' ORDER BY id DESC LIMIT 1",
+            (recorder.profile,),
+        ).fetchone()
+        if previous is None or not (
+            previous[0].startswith(digest) and now - previous[1] < PHASE_SAMPLE_S
+        ):
+            db.execute(
+                "INSERT OR IGNORE INTO events (profile, kind, started, completed, phase, role, event_key) VALUES (?, 'phase', ?, ?, ?, '', ?)",
+                (recorder.profile, observed_start, now, phase, f"{digest}:{now.hex()}"),
+            )
+        _prune_events(db, now)
+
+    _db_call("phase observation", record, None)
+
+
+def fault_observed(role: str, started: float, completed: float, key: str) -> None:
+    """Record one acknowledged harness fault, deduplicated by its durable key."""
+    recorder = _recorder
+    if recorder is None:
+        return
+    if completed < started:
+        _failed("fault observation", ValueError("fault completed before it started"))
+        return
+    digest = hashlib.sha256(key.encode()).hexdigest()
+
+    def record(db: sqlite3.Connection) -> None:
+        db.execute(
+            "INSERT OR IGNORE INTO events (profile, kind, started, completed, phase, role, event_key) VALUES (?, 'fault', ?, ?, '', ?, ?)",
+            (recorder.profile, started, completed, _label(role, _ROLES), digest),
+        )
+        _prune_events(db, time.monotonic())
+
+    _db_call("fault observation", record, None)
+
+
+def events_between(start: float, end: float) -> list[Event]:
+    """Return retained observations that overlap the requested interval."""
+    recorder = _recorder
+    if recorder is None:
+        return []
+
+    def read(db: sqlite3.Connection) -> list[Event]:
+        _prune_events(db, time.monotonic())
+        return [
+            Event(*row)
+            for row in db.execute(
+                "SELECT kind, started, completed, phase, role FROM events"
+                " WHERE profile = ? AND started <= ? AND completed >= ? ORDER BY started, id",
+                (recorder.profile, end, start),
+            )
+        ]
+
+    return _db_call("read observations", read, [])
+
+
+def record_coverage(cases: Iterable[tuple[str, str, str, str, str]]) -> None:
+    """Aggregate verified combinations without retaining raw operation histories."""
+    recorder = _recorder
+    if recorder is None:
+        return
+    counts = Counter(
+        (
+            recorder.profile,
+            _label(phase, _PHASES),
+            _label(role, _ROLES),
+            _label(family, _FAMILIES),
+            _path(path),
+            _label(outcome, _OUTCOMES),
+        )
+        for phase, role, family, path, outcome in cases
+    )
+    if not counts:
+        return
+
+    def record(db: sqlite3.Connection) -> None:
+        db.executemany(
+            "INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (profile, phase, role, family, path, outcome)"
+            " DO UPDATE SET hits = hits + excluded.hits",
+            ((*key, n) for key, n in counts.items()),
+        )
+
+    _db_call("record coverage", record, None)
+
+
+def _begin(recorder: Recorder, started: float) -> str | None:
+    pid = os.getpid()
+    try:
+        token = _process_token(pid)
+    except Exception as e:
+        _failed("start command", e)
+        return None
+    if token is None:
+        _failed("start command", RuntimeError("current process has no start token"))
+        return None
+    invocation = f"{pid}:{token}:{started.hex()}"
+
+    def record(db: sqlite3.Connection) -> str:
+        db.execute("BEGIN IMMEDIATE")
+        _reap(db)
+        if (
+            db.execute("SELECT count(*) FROM active_commands").fetchone()[0]
+            >= ACTIVE_CAP
+        ):
+            raise RuntimeError("too many active measured commands")
+        db.execute(
+            "INSERT INTO metadata VALUES ('started', ?) ON CONFLICT (key) DO UPDATE SET value = min(value, excluded.value)",
+            (started,),
+        )
+        db.execute(
+            "INSERT INTO commands (profile, command, started) VALUES (?, ?, 1)"
+            " ON CONFLICT (profile, command) DO UPDATE SET started = started + 1",
+            (recorder.profile, recorder.command),
+        )
+        db.execute(
+            "INSERT INTO active_commands VALUES (?, ?, ?, ?, ?, ?)",
+            (invocation, recorder.profile, recorder.command, pid, token, started),
+        )
+        _prune_events(db, started)
+        return invocation
+
+    return _db_call("start command", record, None)
+
+
+def _finish(
+    recorder: Recorder,
+    invocation: str | None,
+    status: str,
+    wall_s: float,
+    cpu_s: float,
+    child_cpu_s: float,
+) -> None:
+    if invocation is None:
+        return
+    with recorder.lock:
+        counts = dict(recorder.counts)
+        calls = recorder.calls
+        metric_errors = recorder.metric_errors
+    checked = sum(n for (_, _, outcome), n in counts.items() if outcome != "skipped")
+    checker = (
+        recorder.command.startswith(("anytime_", "eventually_", "finally_"))
+        and "workload_efficiency" not in recorder.command
+    )
+
+    def record(db: sqlite3.Connection) -> None:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("DELETE FROM active_commands WHERE invocation = ?", (invocation,))
+        db.execute(
+            "UPDATE commands SET completed = completed + ?, errors = errors + ?, interrupted = interrupted + ?,"
+            " no_comparison = no_comparison + ?, uninstrumented = uninstrumented + ?,"
+            " wall_s = wall_s + ?, cpu_s = cpu_s + ?, child_cpu_s = child_cpu_s + ?, metric_errors = metric_errors + ?"
+            " WHERE profile = ? AND command = ?",
+            (
+                int(status == "completed"),
+                int(status == "error"),
+                int(status == "interrupted"),
+                int(checker and status == "completed" and checked == 0),
+                int(checker and status == "completed" and calls == 0),
+                wall_s,
+                cpu_s,
+                child_cpu_s,
+                metric_errors,
+                recorder.profile,
+                recorder.command,
+            ),
+        )
+        db.executemany(
+            "INSERT INTO comparisons VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (profile, command, family, path, outcome) DO UPDATE SET units = units + excluded.units",
+            (
+                (recorder.profile, recorder.command, *key, n)
+                for key, n in counts.items()
+            ),
+        )
+
+    _db_call("finish command", record, None)
+
+
+def _child_cpu() -> float:
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return usage.ru_utime + usage.ru_stime
+
+
+def run_command(profile: str, source: str | Path) -> int:
+    """Run an authoritative command, preserving its result and measuring its work."""
+    global _recorder
+    if not _command_lock.acquire(blocking=False):
+        raise RuntimeError("measured commands cannot nest within one process")
+    recorder = Recorder(profile, Path(source).name)
+    previous_profile = os.environ.get(PROFILE_ENV)
+    _recorder = recorder
+    os.environ[PROFILE_ENV] = profile
+    started, cpu, child_cpu = time.monotonic(), time.process_time(), _child_cpu()
+    invocation = _begin(recorder, started)
+    status = "error"
+    try:
+        try:
+            runpy.run_path(str(source), run_name="__main__")
+            code = 0
+        except SystemExit as e:
+            if e.code is None:
+                code = 0
+            elif isinstance(e.code, int):
+                code = e.code
+            else:
+                print(e.code, file=sys.stderr)
+                code = 1
+        except (KeyboardInterrupt, GeneratorExit):
+            status = "interrupted"
+            raise
+        status = "completed" if code == 0 else "error"
+        return code
+    finally:
+        try:
+            _finish(
+                recorder,
+                invocation,
+                status,
+                max(0.0, time.monotonic() - started),
+                max(0.0, time.process_time() - cpu),
+                max(0.0, _child_cpu() - child_cpu),
+            )
+        finally:
+            _recorder = None
+            if previous_profile is None:
+                os.environ.pop(PROFILE_ENV, None)
+            else:
+                os.environ[PROFILE_ENV] = previous_profile
+            _command_lock.release()
+
+
+def summary() -> dict[str, Any]:
+    """Summarize observed timeline work, excluding unmeasured SUT CPU usage."""
+    now = time.monotonic()
+
+    def read(db: sqlite3.Connection) -> dict[str, Any]:
+        db.execute("BEGIN IMMEDIATE")
+        _reap(db)
+        _prune_events(db, now)
+        start = db.execute(
+            "SELECT value FROM metadata WHERE key = 'started'"
+        ).fetchone()
+        elapsed = max(0.0, now - start[0]) if start is not None else 0.0
+
+        def rows(table: str) -> list[dict[str, Any]]:
+            cursor = db.execute(f"SELECT * FROM {table}")
+            assert cursor.description is not None
+            names = [c[0] for c in cursor.description]
+            return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+        commands, comparisons, coverage = (
+            rows("commands"),
+            rows("comparisons"),
+            rows("coverage"),
+        )
+        evaluated = sum(r["units"] for r in comparisons if r["outcome"] != "skipped")
+        successful = sum(r["units"] for r in comparisons if r["outcome"] == "passed")
+        pruned = db.execute(
+            "SELECT value FROM metadata WHERE key = 'events_pruned'"
+        ).fetchone()
+        return {
+            "observed_timeline_s": elapsed,
+            "workload_self_cpu_s": sum(r["cpu_s"] for r in commands),
+            "workload_child_cpu_s": sum(r["child_cpu_s"] for r in commands),
+            "sut_cpu_measured": False,
+            "interrupted_cpu_measured": False,
+            "interrupted_comparisons_complete": False,
+            "comparison_units_per_timeline_hour": (
+                evaluated * 3600 / elapsed if elapsed else 0.0
+            ),
+            "successful_comparison_units_per_timeline_hour": (
+                successful * 3600 / elapsed if elapsed else 0.0
+            ),
+            "active_commands": db.execute(
+                "SELECT count(*) FROM active_commands"
+            ).fetchone()[0],
+            "retained_events": db.execute("SELECT count(*) FROM events").fetchone()[0],
+            "pruned_events": int(pruned[0]) if pruned is not None else 0,
+            "event_capacity": EVENT_CAP,
+            "event_retention_s": EVENT_RETENTION_S,
+            "commands": commands,
+            "comparisons": comparisons,
+            "coverage": coverage,
+        }
+
+    result = _db_call("summarize", read, {})
+    if result:
+        try:
+            result["quiet_fraction"] = quiet.recent_quiet_fraction(
+                result["observed_timeline_s"]
+            )
+        except Exception as e:
+            _failed("quiet fraction", e)
+            result["quiet_fraction"] = None
+    return result
+
+
+def report_main() -> int:
+    print(json.dumps(summary(), sort_keys=True), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(report_main())

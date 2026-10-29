@@ -23,8 +23,8 @@ DDL for some rollouts so they can complete. There are two strengths:
 A command already past its check when a hold starts may still issue DDL, so a
 hold reduces foreign DDL but does not guarantee its absence.
 
-Holds are recorded in state database `ddl_hold`, table
-`holds(id, requested_at_monotonic, seconds, requester, strict)`.
+Command scopes renew rows in `holds`. Scenarios spanning commands use
+`owned_holds`, whose owner remains in the scenario journal until release.
 `time.monotonic()` is comparable across processes in the workload container.
 """
 
@@ -48,6 +48,10 @@ def _open() -> sqlite3.Connection:
         " id INTEGER PRIMARY KEY AUTOINCREMENT,"
         " requested_at_monotonic REAL NOT NULL, seconds REAL NOT NULL,"
         " requester TEXT NOT NULL, strict INTEGER NOT NULL)"
+    )
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS owned_holds ("
+        " requester TEXT PRIMARY KEY, expires REAL NOT NULL, strict INTEGER NOT NULL)"
     )
     db.commit()
     return db
@@ -74,14 +78,43 @@ def _covered(strict_only: bool) -> bool:
     try:
         row = db.execute(
             "SELECT 1 FROM holds WHERE requested_at_monotonic + seconds > ?"
-            " AND strict >= ? LIMIT 1",
-            (time.monotonic(), int(strict_only)),
+            " AND strict >= ? UNION ALL"
+            " SELECT 1 FROM owned_holds WHERE expires > ? AND strict >= ? LIMIT 1",
+            (time.monotonic(), int(strict_only), time.monotonic(), int(strict_only)),
         ).fetchone()
     except sqlite3.Error:
         return False
     finally:
         db.close()
     return row is not None
+
+
+def request_until(requester: str, expires: float, strict: bool = False) -> None:
+    """Hold DDL until an absolute monotonic deadline, replacing this owner's hold."""
+    db = _open()
+    try:
+        with db:
+            db.execute(
+                "DELETE FROM owned_holds WHERE expires <= ?", (time.monotonic(),)
+            )
+            db.execute(
+                "INSERT INTO owned_holds VALUES (?, ?, ?)"
+                " ON CONFLICT (requester) DO UPDATE"
+                " SET expires = excluded.expires, strict = excluded.strict",
+                (requester, expires, int(strict)),
+            )
+    finally:
+        db.close()
+
+
+def release(requester: str) -> None:
+    """Release this owner's durable DDL hold."""
+    db = _open()
+    try:
+        with db:
+            db.execute("DELETE FROM owned_holds WHERE requester = ?", (requester,))
+    finally:
+        db.close()
 
 
 def active() -> bool:

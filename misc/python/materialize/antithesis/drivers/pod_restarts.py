@@ -36,7 +36,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
-from materialize.antithesis import quiet
+from materialize.antithesis import quiet, telemetry, templates
 from materialize.antithesis.drivers import (
     kafka_sources,
     lifecycle,
@@ -127,12 +127,13 @@ def delete_recorded(
     """
     db = open_restarts(kube.env.endpoints)
     try:
+        started = time.monotonic()
         with db:
             seq = db.execute(
                 "INSERT INTO restarts"
                 " (at, origin, role, namespace, pod, uid, grace, reason, outcome)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'attempted')",
-                (time.monotonic(), origin, role, namespace, pod, uid, grace, reason),
+                (started, origin, role, namespace, pod, uid, grace, reason),
             ).lastrowid
         try:
             kube.core.delete_namespaced_pod(
@@ -157,6 +158,10 @@ def delete_recorded(
             outcome = "unknown"
         with db:
             db.execute("UPDATE restarts SET outcome = ? WHERE seq = ?", (outcome, seq))
+        if outcome == "acked":
+            telemetry.fault_observed(
+                role, started, time.monotonic(), key=f"pod_restarts:{seq}"
+            )
         return outcome == "acked"
     finally:
         db.close()
@@ -320,11 +325,35 @@ def timeline_params(db: sqlite3.Connection) -> TimelineParams:
         return TimelineParams(
             raw["act_probability"], raw["target_weights"], raw["trigger_weights"]
         )
+    rollouts_enabled = templates.enabled_driver("rollouts") or templates.enabled_driver(
+        "spec_phase"
+    )
+    available_targets = [
+        t for t in TARGETS if t != "environmentd_candidate" or rollouts_enabled
+    ]
+    available_triggers = ["now"]
+    if templates.enabled_driver("lifecycle"):
+        available_triggers.extend(("lifecycle_pending", "lifecycle_ddl"))
+    if templates.enabled_driver("postgres_sources"):
+        available_triggers.append("postgres_terminal")
+    if templates.enabled_driver("schema_evolution"):
+        available_triggers.append("schema_evo_alter")
+    sources_enabled = templates.enabled_driver(
+        "postgres_sources"
+    ) or templates.enabled_driver("kafka_sources")
+    if rollouts_enabled:
+        available_triggers.extend(("rollout_applying", "rollout_promoting"))
+    if sources_enabled:
+        available_triggers.append("source_created")
+        if rollouts_enabled:
+            available_triggers.append("source_created_applying")
     while True:
-        targets = {t: rng.choice([0, 1, 1, 4]) for t in TARGETS}
+        targets = {t: rng.choice([0, 1, 1, 4]) for t in available_targets}
         if any(targets.values()):
             break
-    triggers = {t: rng.choice([0, 1, 1, 4]) for t in TRIGGERS}
+    triggers = {
+        t: rng.choice([0, 1, 1, 4]) for t in TRIGGERS if t in available_triggers
+    }
     triggers["now"] = max(triggers["now"], 1)
     # Zero leaves the timeline without harness restarts outside rollouts.
     params = TimelineParams(rng.choice([0.0, 0.3, 0.7, 1.0]), targets, triggers)

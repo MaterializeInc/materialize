@@ -69,7 +69,7 @@ from confluent_kafka.cimpl import (
 )
 from kubernetes import client  # type: ignore
 
-from materialize.antithesis import ddl_hold, sql, state
+from materialize.antithesis import ddl_hold, sql, state, telemetry
 from materialize.antithesis import sink_oracle as oracle
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.drivers.sources_common import (
@@ -994,6 +994,7 @@ def _compare_view(
     """
     since = frontiers(conn, [view_id]).get(view_id, (None, None))[0]
     if since is None:
+        telemetry.comparison("kafka_sinks", "view", None)
         return False
     candidates = [
         r.frontier
@@ -1001,6 +1002,7 @@ def _compare_view(
         if r.frontier is not None and r.frontier - 1 >= since + SINCE_MARGIN_MS
     ]
     if not candidates:
+        telemetry.comparison("kafka_sinks", "view", None)
         log(f"{out.name}: no committed frontier above the since of {view}")
         return False
     f = rng.choice([max(candidates), rng.choice(candidates)])
@@ -1020,6 +1022,7 @@ def _compare_view(
     observed, bad = _consolidated(out, f)
     diff = oracle.bag_diff([tuple(r) for r in rows], observed.values())
     ok = not bad and diff["missing_count"] == 0 and diff["extra_count"] == 0
+    telemetry.comparison("kafka_sinks", "view", ok)
     d = {**details, "sink": out.name, "frontier": f, "since": since, **diff}
     if out.envelope == "debezium":
         always(
