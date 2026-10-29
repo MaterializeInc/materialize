@@ -87,13 +87,14 @@ const BUCKET_COUNT = 160;
 const OOM_AT_MS = FIRST_BUCKET_MS + 100 * HOUR_MS + 10 * 60_000;
 const DDL_AT_MS = FIRST_BUCKET_MS + 20 * HOUR_MS;
 const GIB = 2 ** 30;
-const HEAP_LIMIT_BYTES = 25 * GIB;
-// One 100cc process's allocation. Its heap limit is its RAM plus 5 GiB of swap.
+// One 100cc process's allocation.
 const ALLOCATION = {
   cpuNanoCores: 2e9,
   memoryBytes: 20 * GIB,
   diskBytes: 8 * GIB,
 };
+// As the controller passes `--heap-limit` to a replica with swap.
+const HEAP_LIMIT_BYTES = ALLOCATION.memoryBytes + ALLOCATION.diskBytes;
 // `CpuLimit::MAX`, which a size without a CPU limit reports.
 const UNLIMITED_CPU_NANO_CORES = "18446744073709000000";
 
@@ -140,13 +141,16 @@ const NEW_ENVIRONMENT = {
 
 const REPLICA_NAMES: Record<string, string> = { u1: "r1", u2: "r2" };
 
-const buildCluster = (replicaNames: Record<string, string>) =>
+const buildCluster = (
+  replicaNames: Record<string, string>,
+  sizeById: Record<string, string> = {},
+) =>
   buildClusterServerResponse(
     { id: "u9", name: "prod" },
     Object.entries(replicaNames).map(([id, name]) => ({
       id,
       name,
-      size: "100cc",
+      size: sizeById[id] ?? "100cc",
       disk: false,
       statuses: [],
     })),
@@ -163,11 +167,14 @@ const float8 = (name: string) =>
   buildColumn({ name, type_oid: MzDataType.float8 });
 
 type Readings = Partial<
-  Record<"maxCpuPercent" | "maxMemoryPercent" | "maxDiskPercent", number>
+  Record<
+    "maxCpuPercent" | "maxMemoryPercent" | "maxDiskPercent" | "maxHeapPercent",
+    number
+  >
 >;
 
-// With swap, a sample holds 10 GiB of RAM and 5 GiB of swap, which counts as
-// disk.
+// With swap, a sample holds 10 GiB of RAM and 4 GiB of swap, which counts as
+// disk, of a 28 GiB heap limit.
 const utilizationRows = ({
   withSwap,
   withoutHeapLimit,
@@ -194,7 +201,7 @@ const utilizationRows = ({
         replicaId,
         maxMemoryPercent: emptyReadings ? null : 0.5,
         maxMemoryAt: at,
-        maxDiskPercent: emptyReadings || !withSwap ? null : 0.625,
+        maxDiskPercent: emptyReadings || !withSwap ? null : 0.5,
         maxDiskAt: at,
         maxCpuPercent: emptyReadings
           ? null
@@ -202,7 +209,7 @@ const utilizationRows = ({
             ? 0.45
             : r2CpuPercent,
         maxCpuAt: at,
-        maxHeapPercent: emptyReadings ? null : 0.6,
+        maxHeapPercent: emptyReadings ? null : 0.5,
         maxHeapAt: at,
         maxMemoryAndDiskPercent: null,
         maxMemoryAndDiskMemoryPercent: null,
@@ -213,7 +220,7 @@ const utilizationRows = ({
         name: replicaNames[replicaId],
         clusterId: "u9",
         size: "100cc",
-        ...(withSwap ? { swapOfRamPercent: 0.25, heapLimitPercent: 1.25 } : {}),
+        ...(withSwap ? { swapOfRamPercent: 0.2, heapLimitPercent: 1.4 } : {}),
         ...(withoutHeapLimit
           ? { swapOfRamPercent: null, heapLimitPercent: null }
           : {}),
@@ -244,9 +251,11 @@ const UTILIZATION_COLUMNS = [
 
 const sizeAllocationsHandler = ({
   processes,
+  workers = 2,
   cpuNanoCores = String(ALLOCATION.cpuNanoCores),
 }: {
   processes: number;
+  workers?: number;
   cpuNanoCores?: string;
 }) =>
   buildSqlQueryHandlerV2({
@@ -254,14 +263,19 @@ const sizeAllocationsHandler = ({
     results: mapKyselyToTabular({
       columns: [
         buildColumn({ name: "size" }),
-        ...["processes", "cpuNanoCores", "memoryBytes", "diskBytes"].map(
-          float8,
-        ),
+        ...[
+          "processes",
+          "workers",
+          "cpuNanoCores",
+          "memoryBytes",
+          "diskBytes",
+        ].map(float8),
       ],
       rows: [
         {
           size: "100cc",
           processes: String(processes),
+          workers: String(workers),
           cpuNanoCores,
           memoryBytes: String(ALLOCATION.memoryBytes),
           diskBytes: String(ALLOCATION.diskBytes),
@@ -276,6 +290,7 @@ const registerHandlers = ({
   r2CpuPercent = 0.9,
   readings,
   processes = 1,
+  workers,
   cpuNanoCores,
   r2OfflineAllWindow = false,
   emptyReadings = false,
@@ -296,6 +311,8 @@ const registerHandlers = ({
   readings?: Readings;
   /** How many processes the replicas' size runs. */
   processes?: number;
+  /** How many workers each of those processes runs. */
+  workers?: number;
   cpuNanoCores?: string;
   /** r2 went offline before the window and reports no samples in it. */
   r2OfflineAllWindow?: boolean;
@@ -340,7 +357,7 @@ const registerHandlers = ({
     replicaNames,
   }).slice(0, utilizationRowCount);
   server.use(
-    sizeAllocationsHandler({ processes, cpuNanoCores }),
+    sizeAllocationsHandler({ processes, workers, cpuNanoCores }),
     buildSqlQueryHandlerV2({
       queryKey: [...utilizationKey, "deploymentLineage"],
       results: mapKyselyToTabular({
@@ -508,17 +525,20 @@ const renderResourceUsage = async ({
   environment = NEW_ENVIRONMENT,
   replicaNames = REPLICA_NAMES,
   selectedReplicaId,
+  sizeById,
   ...handlerOptions
 }: Omit<Parameters<typeof registerHandlers>[0], "replicaNames"> & {
   environment?: typeof healthyEnvironment;
   replicaNames?: Record<string, string>;
   selectedReplicaId?: string;
+  /** Sizes other than 100cc, by replica id. */
+  sizeById?: Record<string, string>;
 }) => {
   await setFakeEnvironment(getStore().set, "aws/us-east-1", environment);
   registerHandlers({ ...handlerOptions, replicaNames });
   return renderComponent(
     <ResourceUsage
-      cluster={buildCluster(replicaNames)}
+      cluster={buildCluster(replicaNames, sizeById)}
       timePeriodMinutes={TIME_PERIOD_MINUTES}
       selectedReplicaId={selectedReplicaId}
     />,
@@ -529,12 +549,25 @@ const renderResourceUsage = async ({
   );
 };
 
-const LocationSearch = () => (
-  <div data-testid="location-search">{useLocation().search}</div>
-);
+const LocationSearch = () => {
+  const location = useLocation();
+  return (
+    <>
+      <div data-testid="location-search">{location.search}</div>
+      <div data-testid="location">
+        {location.pathname}
+        {location.search}
+        {location.state ? ` ${JSON.stringify(location.state)}` : ""}
+      </div>
+    </>
+  );
+};
 
 // The whole Metrics page, whose toolbar picks the replica and time period.
-const renderClusterMetrics = async (search = "", processes = 1) => {
+const renderClusterMetrics = async (
+  search = "",
+  { processes = 1, state }: { processes?: number; state?: unknown } = {},
+) => {
   await setFakeEnvironment(getStore().set, "aws/us-east-1", NEW_ENVIRONMENT);
   registerHandlers({ withSwap: true, replicaNames: REPLICA_NAMES, processes });
   getStore().set(
@@ -552,9 +585,13 @@ const renderClusterMetrics = async (search = "", processes = 1) => {
           </>
         }
       />
+      <Route
+        path=":clusterId/:clusterName/workers"
+        element={<LocationSearch />}
+      />
     </Routes>,
     {
-      initialRouterEntries: [`/u9/prod${search}`],
+      initialRouterEntries: [{ pathname: "/u9/prod", search, state }],
       initializeState: ({ set }) =>
         setFakeEnvironment(set, "aws/us-east-1", NEW_ENVIRONMENT),
     },
@@ -590,18 +627,17 @@ describe("ResourceUsage", () => {
     setClusterObjects([CREATED_INDEX]);
   });
 
-  it("shows each replica's CPU, memory and disk for the hovered time against its own allocation, and the total against the heap limit", async () => {
+  it("shows each replica's CPU, memory and disk for the hovered time against its own allocation, and heap against the heap limit", async () => {
     await renderResourceUsage({ withSwap: true });
 
     const tooltip = await hoverAt(FIRST_BUCKET_MS + 50 * HOUR_MS);
-    // A 25 GB heap limit, 60% full: 10 GB of RAM and 5 GB of swap.
     expect(tooltip).toHaveTextContent(
-      /r1.*Running.*CPU0\.9 cores · 45\.0%.*Memory10 GB · 50\.0% of 20 GB.*Disk5 GB · 62\.5% of 8 GB.*Total15 GB · 60\.0% of heap limit/,
+      /r1.*Running.*CPU0\.9 cores · 45\.0%.*Memory10 GB · 50\.0% of 20 GB.*Disk4 GB · 50\.0% of 8 GB.*Heap14 GB · 50\.0% of heap limit/,
     );
     expect(tooltip).toHaveTextContent(/r2.*Running.*CPU1\.8 cores · 90\.0%/);
   });
 
-  it("reads a multi-process replica's memory and disk against its whole allocation, as the Clusters list does", async () => {
+  it("reads a multi-process replica's memory and disk against its whole allocation, as the Clusters list does, and heap as its fullest process's", async () => {
     // As `mz_console_cluster_utilization_overview_3h`, which the Clusters list
     // reads, computes a share: summed over processes, against one process's
     // allocation times the process count.
@@ -618,13 +654,26 @@ describe("ResourceUsage", () => {
           ALLOCATION.memoryBytes,
         ),
         maxDiskPercent: overviewShare([4 * GIB, 2 * GIB], ALLOCATION.diskBytes),
+        // The view takes the fullest process's heap: process 0's RAM and swap.
+        maxHeapPercent: (14 * GIB + 4 * GIB) / HEAP_LIMIT_BYTES,
       },
     });
 
     const tooltip = await hoverAt(FIRST_BUCKET_MS + 50 * HOUR_MS);
     expect(tooltip).toHaveTextContent(
-      /r1.*CPU1\.8 cores · 45\.0%.*Memory20 GB · 50\.0% of 40 GB.*Disk6 GB · 37\.5% of 16 GB/,
+      /r1.*CPU1\.8 cores · 45\.0%.*Memory20 GB · 50\.0% of 40 GB.*Disk6 GB · 37\.5% of 16 GB.*Fullest process18 GB · 64\.3% of process heap limit/,
     );
+    expect(tooltip).not.toHaveTextContent("Heap");
+  });
+
+  it("reads a sliver of CPU as under a hundredth of a core", async () => {
+    await renderResourceUsage({
+      withSwap: true,
+      readings: { maxCpuPercent: 0.001 },
+    });
+
+    const tooltip = await hoverAt(FIRST_BUCKET_MS + 50 * HOUR_MS);
+    expect(tooltip).toHaveTextContent(/r1.*CPU< 0\.01 cores · 0\.1%/);
   });
 
   it("reads an idle disk as empty, not missing", async () => {
@@ -659,8 +708,8 @@ describe("ResourceUsage", () => {
   it("labels the memory limits with their sizes", async () => {
     await renderResourceUsage({ withSwap: true });
 
-    expect(await screen.findByText("heap limit · 25 GB")).toBeVisible();
-    // The heap limit is 125% of memory, so memory ends at 80% of it.
+    expect(await screen.findByText("heap limit · 28 GB")).toBeVisible();
+    // The heap limit is 140% of memory, so memory ends at about 71% of it.
     expect(screen.getByText("memory limit · 20 GB")).toBeVisible();
     expect(screen.getByText("disk")).toBeVisible();
   });
@@ -675,10 +724,10 @@ describe("ResourceUsage", () => {
     expect(screen.queryByText("disk")).not.toBeInTheDocument();
     const tooltip = await hoverAt(FIRST_BUCKET_MS + 50 * HOUR_MS);
     expect(tooltip).toHaveTextContent(
-      /r1.*CPU0\.9 cores · 45\.0%.*Heap15 GB · 60\.0%/,
+      /r1.*CPU0\.9 cores · 45\.0%.*Heap14 GB · 50\.0%/,
     );
     expect(tooltip).not.toHaveTextContent("Disk");
-    expect(tooltip).not.toHaveTextContent("Total");
+    expect(tooltip).not.toHaveTextContent("of heap limit");
   });
 
   it("labels memory as a share of the allocation when no sample has a heap limit", async () => {
@@ -1335,6 +1384,17 @@ describe("ResourceUsage", () => {
       expect(tooltip).toHaveTextContent(/^(r1100cc){4}$/);
     });
 
+    it("splits their swatch into at most three stripes", async () => {
+      await renderDeployments();
+
+      const pastToggle = screen.getByRole("button", {
+        name: "+4 past replicas",
+      });
+      expect(within(pastToggle).getAllByTestId("swatch-stripe")).toHaveLength(
+        3,
+      );
+    });
+
     it("shows or hides them together", async () => {
       await renderDeployments();
       const pastToggle = screen.getByRole("button", {
@@ -1421,15 +1481,84 @@ describe("ResourceUsage", () => {
     return screen.findByRole("dialog");
   };
 
+  // Answers the per-process metrics subscribe with one sample per process,
+  // each [replica id, process id, CPU nanocores, heap bytes of 100].
+  const processMetricsSocket = (
+    atMs: number,
+    samples: Array<[string, string, number, number | null]>,
+  ) =>
+    mockSubscribeSocket((sql) =>
+      sql.includes("mz_cluster_replica_metrics_history")
+        ? {
+            columns: [
+              buildColumn({ name: "replicaId" }),
+              buildColumn({ name: "processId" }),
+              timestamptz("occurredAt"),
+              ...[
+                "cpuNanoCores",
+                "memoryBytes",
+                "diskBytes",
+                "heapBytes",
+                "heapLimit",
+              ].map(float8),
+            ],
+            rows: samples.map(([replicaId, processId, cpu, heap]) => [
+              replicaId,
+              processId,
+              String(atMs),
+              String(cpu),
+              "1",
+              null,
+              heap === null ? null : String(heap),
+              "100",
+            ]),
+          }
+        : undefined,
+    );
+
   it("has no processes button when every size runs one process", async () => {
     await renderResourceUsage({ withSwap: true, processes: 1 });
 
-    await screen.findByRole("img", { name: "CPU usage" });
-    // Give the allocations time to arrive.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Two workers on one process: the workers link shows the allocations
+    // arrived.
+    expect(await screen.findByRole("link", { name: "Workers" })).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Processes" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("links a selected replica that runs one worker to the Workers tab on it", async () => {
+    await renderResourceUsage({
+      withSwap: true,
+      processes: 1,
+      workers: 1,
+      selectedReplicaId: "u1",
+    });
+
+    expect(
+      await screen.findByRole("link", { name: "Workers" }),
+    ).toHaveAttribute("href", "/workers?replica=r1");
+  });
+
+  it("doesn't call memory even when no process reported it", async () => {
+    await setFakeEnvironment(getStore().set, "aws/us-east-1", NEW_ENVIRONMENT);
+    server.use(
+      processMetricsSocket(NOW_MS - 30 * 60_000, [
+        ["u1", "0", 900_000_000, null],
+        ["u1", "1", 300_000_000, null],
+      ]),
+    );
+    await renderResourceUsage({ withSwap: true, processes: 2 });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Processes" }),
+    );
+
+    const drawer = await screen.findByRole("dialog", { name: "Processes" });
+    expect(
+      await within(drawer).findByText("Process 0 used the most CPU."),
+    ).toBeVisible();
+    expect(within(drawer).queryByText(/Memory is spread/)).toBeNull();
   });
 
   it("shows a multi-process replica's busiest process and a selectable line per process in a drawer", async () => {
@@ -1449,12 +1578,17 @@ describe("ResourceUsage", () => {
     ).toEqual(["r1", "r2"]);
     expect(
       await within(drawer).findByText(
-        "Process 0 used the most CPU at any moment: 90.0%, 3.0× the other process (30.0%).",
+        "Process 0 used the most CPU and memory.",
       ),
     ).toBeVisible();
     expect(
       within(drawer).getByText(
-        "Process 0 used the most memory at any moment: 40.0%, 2.0× the other process (20.0%).",
+        "CPU: process 0 peaked at 90.0%, 3.0× the other process (30.0%).",
+      ),
+    ).toBeVisible();
+    expect(
+      within(drawer).getByText(
+        "Memory: process 0 peaked at 40.0%, 2.0× the other process (20.0%).",
       ),
     ).toBeVisible();
     // The card shows 7 days, more than the drawer reads.
@@ -1470,7 +1604,7 @@ describe("ResourceUsage", () => {
     await userEvent.selectOptions(statistic, "on average");
     expect(
       within(drawer).getByText(
-        "Process 0 used the most CPU on average: 90.0%, 3.0× the other process (30.0%).",
+        "CPU: process 0 averaged 90.0%, 3.0× the other process (30.0%).",
       ),
     ).toBeVisible();
     expect(within(drawer).getByText("over the last 24 hours")).toBeVisible();
@@ -1561,9 +1695,7 @@ describe("ResourceUsage", () => {
     expect(
       within(drawer).getByText("No reading right now from process 1."),
     ).toBeVisible();
-    expect(
-      within(drawer).queryByText(/used the most CPU right now/),
-    ).not.toBeInTheDocument();
+    expect(within(drawer).queryByText(/^CPU: process/)).not.toBeInTheDocument();
     expect(
       within(within(drawer).getByRole("table"))
         .getAllByRole("row")
@@ -1584,12 +1716,17 @@ describe("ResourceUsage", () => {
 
     expect(
       await within(drawer).findByText(
-        "CPU is spread evenly at any moment: process 0 read 0.0%, against 0.0% for the other process.",
+        "CPU and memory are spread evenly across the processes.",
       ),
     ).toBeVisible();
     expect(
       within(drawer).getByText(
-        "Memory is spread evenly at any moment: process 1 read 0.3%, against 0.1% for the other process.",
+        "CPU: process 0 peaked at 0.0%, against 0.0% for the other process.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(drawer).getByText(
+        "Memory: process 1 peaked at 0.3%, against 0.1% for the other process.",
       ),
     ).toBeVisible();
     expect(
@@ -1624,7 +1761,7 @@ describe("ResourceUsage", () => {
 
       expect(
         await within(drawer).findByText(
-          "Memory is spread evenly at any moment: process 3 read 0.3%, against 0.1% for the other 7 processes.",
+          "Memory: process 3 peaked at 0.3%, against 0.1% for the other 7 processes.",
         ),
       ).toBeVisible();
       expect(
@@ -1682,6 +1819,63 @@ describe("ResourceUsage", () => {
         ),
       ).toBeVisible();
     });
+  });
+
+  it("says CPU and memory are spread evenly when no process stands out", async () => {
+    await setFakeEnvironment(getStore().set, "aws/us-east-1", NEW_ENVIRONMENT);
+    server.use(
+      processMetricsSocket(NOW_MS - 30 * 60_000, [
+        ["u1", "0", 70_000_000, 20],
+        ["u1", "1", 69_000_000, 20],
+      ]),
+    );
+    // The readings are written against a one-core process.
+    await renderResourceUsage({
+      withSwap: true,
+      processes: 2,
+      cpuNanoCores: "1000000000",
+    });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Processes" }),
+    );
+
+    const drawer = await screen.findByRole("dialog", { name: "Processes" });
+    expect(
+      await within(drawer).findByText(
+        "CPU and memory are spread evenly across the processes.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(drawer).getByText(
+        "CPU: process 0 peaked at 7.0%, against 6.9% for the other process.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("links a replica's processes to the Workers tab on that replica", async () => {
+    server.use(
+      processMetricsSocket(NOW_MS - 10 * 60_000, [
+        ["u2", "0", 500_000_000, 40],
+        ["u2", "1", 500_000_000, 40],
+      ]),
+    );
+    await renderClusterMetrics("", { processes: 2 });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Processes" }),
+    );
+    const drawer = await screen.findByRole("dialog", { name: "Processes" });
+    await userEvent.click(within(drawer).getByRole("tab", { name: "r2" }));
+    await userEvent.click(
+      await within(drawer).findByRole("link", {
+        name: "Which workers did the work",
+      }),
+    );
+
+    expect(screen.getByTestId("location")).toHaveTextContent(
+      /^\/u9\/prod\/workers\?replica=r2$/,
+    );
   });
 
   it("refetches status history when a replica changes status, though the cluster's latest status update doesn't move", async () => {
@@ -1813,7 +2007,7 @@ describe("ResourceUsage", () => {
 
     it("shows only the selected replica in the processes drawer", async () => {
       server.use(processSamplesSocket([]));
-      await renderClusterMetrics("?replica=r2", 2);
+      await renderClusterMetrics("?replica=r2", { processes: 2 });
 
       await userEvent.click(
         await screen.findByRole("button", { name: "Processes" }),
@@ -1824,6 +2018,80 @@ describe("ResourceUsage", () => {
           .getAllByRole("tab")
           .map((tab) => tab.textContent),
       ).toEqual(["r2"]);
+    });
+
+    it("links the CPU chart to the Workers tab on the selected replica", async () => {
+      await setFakeEnvironment(
+        getStore().set,
+        "aws/us-east-1",
+        NEW_ENVIRONMENT,
+      );
+      await renderClusterMetrics("?replica=r2", { processes: 2 });
+
+      expect(
+        await screen.findByRole("link", { name: "Workers" }),
+      ).toHaveAttribute("href", "/u9/prod/workers?replica=r2");
+    });
+
+    it("links the CPU chart to the Workers tab without a replica when showing all", async () => {
+      await setFakeEnvironment(
+        getStore().set,
+        "aws/us-east-1",
+        NEW_ENVIRONMENT,
+      );
+      await renderClusterMetrics("", { processes: 2 });
+
+      expect(
+        await screen.findByRole("link", { name: "Workers" }),
+      ).toHaveAttribute("href", "/u9/prod/workers");
+    });
+
+    it("arrives from the Workers tab's process link with the processes drawer open", async () => {
+      await setFakeEnvironment(
+        getStore().set,
+        "aws/us-east-1",
+        NEW_ENVIRONMENT,
+      );
+      server.use(processSamplesSocket([]));
+      await renderClusterMetrics("?replica=r2", {
+        processes: 2,
+        state: { openProcesses: true },
+      });
+
+      const drawer = await screen.findByRole("dialog", { name: "Processes" });
+      expect(
+        await within(drawer).findByRole("tab", { name: "r2" }),
+      ).toBeVisible();
+      expect(within(drawer).getAllByRole("tab")).toHaveLength(1);
+    });
+
+    it("forgets the link's state once the processes drawer closes, and returns focus to its button", async () => {
+      await setFakeEnvironment(
+        getStore().set,
+        "aws/us-east-1",
+        NEW_ENVIRONMENT,
+      );
+      server.use(processSamplesSocket([]));
+      await renderClusterMetrics("?replica=r2", {
+        processes: 2,
+        state: { openProcesses: true },
+      });
+      const drawer = await screen.findByRole("dialog", { name: "Processes" });
+      await within(drawer).findByRole("tab", { name: "r2" });
+
+      await userEvent.keyboard("{Escape}");
+
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("dialog", { name: "Processes" }),
+        ).not.toBeInTheDocument(),
+      );
+      expect(screen.getByTestId("location")).toHaveTextContent(
+        /^\/u9\/prod\?replica=r2$/,
+      );
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Processes" })).toHaveFocus(),
+      );
     });
   });
 });

@@ -10,6 +10,7 @@
 import { SEARCH_PATH } from "~/api/materialize";
 import {
   executeSqlHttp,
+  explainOnCatalogServer,
   getMaterializeClient,
   QUICKSTART_CLUSTER,
 } from "~/test/sql/materializeSqlClient";
@@ -122,6 +123,32 @@ describe("buildEnvironmentStartedAtQuery", () => {
     expect(started.startedAt).toBeInstanceOf(Date);
     expect(started.startedAt.getTime()).toBeLessThanOrEqual(
       created.occurredAt.getTime(),
+    );
+  });
+});
+
+describe("hydration timeline plans for a large cluster", () => {
+  const OBJECT_IDS = Array.from({ length: 400 }, (_, i) => `u${i + 1}`);
+
+  it("looks up hydration times by replica for 400 objects", async () => {
+    const query = buildObjectHydrationTimesQuery({
+      replicaIds: ["u1", "u2"],
+      objectIds: OBJECT_IDS,
+    });
+
+    expect(await explainOnCatalogServer(query.compile())).toContain(
+      "mz_internal.mz_compute_hydration_times_ind (lookup)",
+    );
+  });
+
+  it("reads creation times by key for 400 objects", async () => {
+    const query = buildObjectCreationTimesQuery({
+      objectIds: OBJECT_IDS,
+      startDate: new Date(0).toISOString(),
+    });
+
+    expect(await explainOnCatalogServer(query.compile())).toContain(
+      "mz_internal.mz_object_lifetimes_ind (differential join)",
     );
   });
 });

@@ -21,6 +21,7 @@ use k8s_openapi::{
             IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
             NetworkPolicySpec,
         },
+        policy::v1::PodDisruptionBudget,
     },
     apimachinery::pkg::{
         apis::meta::v1::{Condition, LabelSelector, Time},
@@ -39,7 +40,10 @@ use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, get_resource, recommended_k8s_labels, replace_resource},
+    k8s::{
+        apply_resource, get_resource, pod_disruption_budget, recommended_k8s_labels,
+        replace_resource,
+    },
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -72,6 +76,8 @@ pub struct Config {
     pub default_certificate_specs: DefaultCertificateSpecs,
 
     pub console_http_port: u16,
+    /// The plain HTTP port the console's nginx serves `/metrics` on.
+    pub console_internal_http_port: u16,
     pub balancerd_http_port: u16,
 }
 
@@ -264,12 +270,28 @@ impl Context {
         pod_template_labels.insert("app".to_owned(), "console".to_string());
         pod_template_labels.insert("materialize.cloud/app".to_owned(), console.app_name());
 
-        let ports = vec![ContainerPort {
-            container_port: self.config.console_http_port.into(),
-            name: Some("http".into()),
-            protocol: Some("TCP".into()),
-            ..Default::default()
-        }];
+        let ports = vec![
+            ContainerPort {
+                container_port: self.config.console_http_port.into(),
+                name: Some("http".into()),
+                protocol: Some("TCP".into()),
+                ..Default::default()
+            },
+            ContainerPort {
+                container_port: self.config.console_internal_http_port.into(),
+                name: Some("internal-http".into()),
+                protocol: Some("TCP".into()),
+                ..Default::default()
+            },
+        ];
+        let pod_template_annotations = self.config.enable_prometheus_scrape_annotations.then(|| {
+            btreemap! {
+                "prometheus.io/scrape".to_owned() => "true".to_string(),
+                "prometheus.io/port".to_owned() => self.config.console_internal_http_port.to_string(),
+                "prometheus.io/path".to_owned() => "/metrics".to_string(),
+                "prometheus.io/scheme".to_owned() => "http".to_string(),
+            }
+        });
 
         let scheme = match console.spec.balancerd.scheme {
             HttpConnectionScheme::Http => "http",
@@ -286,6 +308,15 @@ impl Context {
             )),
             ..Default::default()
         }];
+        // Plain HTTP whether or not the console itself serves TLS.
+        env.push(EnvVar {
+            name: "MZ_NGINX_METRICS_LISTENER_CONFIG".to_string(),
+            value: Some(format!(
+                "listen {};",
+                self.config.console_internal_http_port
+            )),
+            ..Default::default()
+        });
         let mut volumes = vec![Volume {
             name: "app-config".to_string(),
             config_map: Some(ConfigMapVolumeSource {
@@ -421,6 +452,7 @@ ssl_certificate_key /nginx/tls/tls.key;",
                 // owned by the deployment, not the materialize instance
                 metadata: Some(ObjectMeta {
                     labels: Some(pod_template_labels),
+                    annotations: pod_template_annotations,
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
@@ -618,6 +650,7 @@ impl k8s_controller::Context for Context {
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
+        let pdb_api: Api<PodDisruptionBudget> = Api::namespaced(client.clone(), &namespace);
 
         let step = metadata.step("network_policies");
         trace!("creating new network policies");
@@ -645,6 +678,14 @@ impl k8s_controller::Context for Context {
         apply_resource(&deployment_api, &console_deployment).await?;
         step.finish(Outcome::Completed);
 
+        let step = metadata.step("pod_disruption_budget");
+        let pdb = pod_disruption_budget(
+            console.managed_resource_meta(console.deployment_name()),
+            &console_deployment,
+        );
+        apply_resource(&pdb_api, &pdb).await?;
+        step.finish(Outcome::Completed);
+
         let step = metadata.step("service");
         trace!("creating new console service");
         let console_service = self.create_console_service_object(console);
@@ -666,5 +707,76 @@ impl k8s_controller::Context for Context {
         step.finish(Outcome::Completed);
 
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_cloud_resources::crd::console::v1alpha1::ConsoleSpec;
+
+    use super::*;
+
+    fn test_context(enable_prometheus_scrape_annotations: bool) -> Context {
+        Context::new(Config {
+            enable_security_context: false,
+            enable_prometheus_scrape_annotations,
+            image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
+            scheduler_name: None,
+            console_node_selector: vec![],
+            console_affinity: None,
+            console_tolerations: None,
+            console_default_resources: None,
+            network_policies_ingress_enabled: false,
+            network_policies_ingress_cidrs: vec![],
+            default_certificate_specs: DefaultCertificateSpecs::default(),
+            console_http_port: 8080,
+            console_internal_http_port: 8081,
+            balancerd_http_port: 6876,
+        })
+    }
+
+    fn test_console() -> Console {
+        let mut console = Console::new(
+            "test",
+            ConsoleSpec {
+                console_image_ref: "materialize/console:v0.0.0".to_owned(),
+                ..Default::default()
+            },
+        );
+        console.metadata.namespace = Some("test".to_owned());
+        console.metadata.uid = Some("test".to_owned());
+        console.status = Some(console.status());
+        console
+    }
+
+    #[mz_ore::test]
+    fn metrics_listener_is_exposed_and_annotated_when_enabled() {
+        for annotate in [false, true] {
+            let deployment =
+                test_context(annotate).create_console_deployment_object(&test_console());
+            let template = deployment.spec.unwrap().template;
+            let container = &template.spec.unwrap().containers[0];
+
+            let port = container
+                .ports
+                .iter()
+                .flatten()
+                .find(|port| port.name.as_deref() == Some("internal-http"))
+                .expect("the metrics port is declared");
+            assert_eq!(port.container_port, 8081);
+            let listener = container
+                .env
+                .iter()
+                .flatten()
+                .find(|var| var.name == "MZ_NGINX_METRICS_LISTENER_CONFIG")
+                .expect("nginx is told where to listen");
+            assert_eq!(listener.value.as_deref(), Some("listen 8081;"));
+
+            let scrape_port = template
+                .metadata
+                .and_then(|meta| meta.annotations)
+                .and_then(|annotations| annotations.get("prometheus.io/port").cloned());
+            assert_eq!(scrape_port.as_deref(), annotate.then_some("8081"));
+        }
     }
 }

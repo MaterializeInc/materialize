@@ -64,6 +64,7 @@ check_default_workflow_references_others() {
         -not -wholename "./test/orchestratord/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/workload-replay/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/race-condition/mzcompose.py" `# rotate-keys-race workflow is run separately` \
+        -not -wholename "./test/parallel-workload/mzcompose.py" `# Catalog transaction contracts have a separate workflow` \
         -not -wholename "./test/aws-glue-schema-registry/mzcompose.py" `# 'aws' workflow runs against real AWS, opt-in via nightly only` \
         -not -wholename "./test/txn-wal-fencing/mzcompose.py" `# read-then-write workflow is run separately` \
     )

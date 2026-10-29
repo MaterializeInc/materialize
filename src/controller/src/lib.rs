@@ -166,7 +166,7 @@ pub struct Controller {
     /// Tracks the readiness of the underlying controllers.
     readiness: Readiness,
     /// Tasks for collecting replica metrics.
-    metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
+    metrics_tasks: BTreeMap<(ClusterId, ReplicaId), AbortOnDropHandle<()>>,
     /// Sender for the channel over which replica metrics are sent.
     metrics_tx: mpsc::UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.

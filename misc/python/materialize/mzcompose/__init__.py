@@ -772,6 +772,8 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    # Off by default so tests exercise the refusal to drop in-use indexes.
+    "enable_drop_in_use_index",
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
@@ -779,7 +781,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",
-    "column_paged_batcher_spill_worker_count",
+    "column_paged_batcher_spill_worker_fraction",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
     "enable_lgalloc_eager_reclamation",

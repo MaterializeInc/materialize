@@ -26,6 +26,7 @@ use k8s_openapi::{
             Affinity, ConfigMap, Probe, ResourceRequirements, Service, ServiceAccount, Toleration,
         },
         networking::v1::NetworkPolicy,
+        policy::v1::PodDisruptionBudget,
         rbac::v1::{Role, RoleBinding},
     },
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
@@ -348,6 +349,8 @@ pub struct Args {
 
     #[clap(long, default_value = "8080")]
     console_http_port: u16,
+    #[clap(long, default_value = "8081")]
+    console_internal_http_port: u16,
 
     #[clap(long, default_value = "{}")]
     default_certificate_specs: DefaultCertificateSpecs,
@@ -463,6 +466,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             metrics_registry.clone(),
         )
         .await?;
+
+    mz_alloc::register_metrics_into(&metrics_registry).await;
 
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
@@ -868,6 +873,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         watcher::Config::default()
                             .labels("materialize.cloud/mz-resource-id")
                             .timeout(29),
+                    )
+                    .owns(
+                        Api::<PodDisruptionBudget>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
                     );
                 if has_cert_manager {
                     controller.owns(
@@ -899,6 +910,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
             default_certificate_specs: args.default_certificate_specs,
             console_http_port: args.console_http_port,
+            console_internal_http_port: args.console_internal_http_port,
             balancerd_http_port: args.balancerd_http_port,
         };
         move || {
@@ -920,6 +932,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     )
                     .owns(
                         Api::<Service>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
+                    )
+                    .owns(
+                        Api::<PodDisruptionBudget>::all(client.clone()),
                         watcher::Config::default()
                             .labels("materialize.cloud/mz-resource-id")
                             .timeout(29),

@@ -32,6 +32,7 @@ export {
   type AuthActions,
   type AuthState,
   type User,
+  UserVerifiedOriginTypes,
 } from "@frontegg/redux-store";
 export {
   type ISignUpCompletePayload,

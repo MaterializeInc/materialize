@@ -433,7 +433,7 @@ cleanup() {
     # Falling through to the annotation result instead would leave the job at
     # exit 1, and Buildkite's automatic retry rule for 199 would never fire.
     CLEAR_RESULT=0
-    bin/clear-corrupted-cargo-target-dir run.log || CLEAR_RESULT=$?
+    bin/ci-builder run "$builder" bin/clear-corrupted-cargo-target-dir run.log || CLEAR_RESULT=$?
     if [[ $CLEAR_RESULT -eq 199 ]]; then
       CI_ANNOTATE_ERRORS_RESULT=199
     fi

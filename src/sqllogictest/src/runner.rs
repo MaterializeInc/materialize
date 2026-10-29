@@ -1342,6 +1342,7 @@ impl<'a> RunnerInner<'a> {
             cors_allowed_origin_list: Vec::new(),
             unsafe_mode: true,
             all_features: false,
+            restarted_in_place: false,
             metrics_registry,
             now,
             environment_id,

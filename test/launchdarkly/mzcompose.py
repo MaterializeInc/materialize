@@ -19,18 +19,17 @@ from time import monotonic, sleep
 from typing import Any
 from uuid import uuid1
 
-import launchdarkly_api  # type: ignore
+import launchdarkly_api
 import requests
-from launchdarkly_api.api import feature_flags_api  # type: ignore
-from launchdarkly_api.model.client_side_availability_post import (  # type: ignore
+from launchdarkly_api.api import feature_flags_api
+from launchdarkly_api.models.client_side_availability_post import (
     ClientSideAvailabilityPost,
 )
-from launchdarkly_api.model.defaults import Defaults  # type: ignore
-from launchdarkly_api.model.feature_flag_body import FeatureFlagBody  # type: ignore
-from launchdarkly_api.model.json_patch import JSONPatch  # type: ignore
-from launchdarkly_api.model.patch_operation import PatchOperation  # type: ignore
-from launchdarkly_api.model.patch_with_comment import PatchWithComment  # type: ignore
-from launchdarkly_api.model.variation import Variation  # type: ignore
+from launchdarkly_api.models.defaults import Defaults
+from launchdarkly_api.models.feature_flag_body import FeatureFlagBody
+from launchdarkly_api.models.patch_operation import PatchOperation
+from launchdarkly_api.models.patch_with_comment import PatchWithComment
+from launchdarkly_api.models.variation import Variation
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_ORG_ID
 from materialize.mzcompose.composition import Composition, Service
@@ -598,16 +597,16 @@ class LaunchDarklyClient:
                 feature_flag_body=FeatureFlagBody(
                     name=feature_flag_key,
                     key=feature_flag_key,
-                    client_side_availability=ClientSideAvailabilityPost(
-                        using_environment_id=True,
-                        using_mobile_key=True,
+                    clientSideAvailability=ClientSideAvailabilityPost(
+                        usingEnvironmentId=True,
+                        usingMobileKey=True,
                     ),
                     variations=variations,
                     temporary=False,
                     tags=tags,
                     defaults=Defaults(
-                        off_variation=off_variation,
-                        on_variation=on_variation,
+                        offVariation=off_variation,
+                        onVariation=on_variation,
                     ),
                 ),
             )
@@ -625,47 +624,48 @@ class LaunchDarklyClient:
                 project_key=self.project_key,
                 feature_flag_key=feature_flag_key,
                 patch_with_comment=PatchWithComment(
-                    patch=JSONPatch(
-                        list(
-                            chain(
-                                (
-                                    [
-                                        PatchOperation(
-                                            op="replace",
-                                            path=f"/environments/{self.environment_key}/on",
-                                            value=on,
-                                        )
-                                    ]
-                                    if on is not None
-                                    else []
-                                ),
-                                (
-                                    [
-                                        PatchOperation(
-                                            op="replace",
-                                            path=f"/environments/{self.environment_key}/contextTargets",
-                                            value=contextTargets,
-                                        ),
-                                    ]
-                                    if contextTargets is not None
-                                    else []
-                                ),
-                                (
-                                    [
-                                        PatchOperation(
-                                            op="replace",
-                                            path=f"/environments/{self.environment_key}/rules",
-                                            value=rules,
-                                        ),
-                                    ]
-                                    if rules is not None
-                                    else []
-                                ),
-                            )
+                    patch=list(
+                        chain(
+                            (
+                                [
+                                    PatchOperation(
+                                        op="replace",
+                                        path=f"/environments/{self.environment_key}/on",
+                                        value=on,
+                                    )
+                                ]
+                                if on is not None
+                                else []
+                            ),
+                            (
+                                [
+                                    PatchOperation(
+                                        op="replace",
+                                        path=f"/environments/{self.environment_key}/contextTargets",
+                                        value=contextTargets,
+                                    ),
+                                ]
+                                if contextTargets is not None
+                                else []
+                            ),
+                            (
+                                [
+                                    PatchOperation(
+                                        op="replace",
+                                        path=f"/environments/{self.environment_key}/rules",
+                                        value=rules,
+                                    ),
+                                ]
+                                if rules is not None
+                                else []
+                            ),
                         )
                     )
                 ),
             )
+        # `environments` is optional in the response model, but the patched flag
+        # always carries its environment configurations.
+        assert flag.environments is not None
         self.wait_for_propagation(
             feature_flag_key, flag.environments[self.environment_key].version
         )

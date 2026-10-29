@@ -68,6 +68,7 @@ use crate::frontend_read_then_write::{
     validate_selection_dependencies,
 };
 use crate::metrics::Metrics;
+use crate::notice::ExecutionTimeKind;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
 use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
@@ -78,7 +79,10 @@ use crate::session::{
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
+use crate::{
+    AdapterNotice, AppendWebhookError, ExecutionTime, PeekClient, PeekResponseUnary,
+    StartupResponse,
+};
 
 /// A handle to a running coordinator.
 ///
@@ -1071,6 +1075,28 @@ impl SessionClient {
         // any data that the Coordinator must act on for correctness.
         let _ = self.session().clear_transaction();
         res
+    }
+
+    /// Settles a statement whose result is about to be reported. If `commit_implicit_transaction`
+    /// and the session is in an implicit transaction, commits it first, which clears the session's
+    /// transaction state, portals included. Returns the parameters the commit reverted, or the
+    /// commit's error.
+    ///
+    /// Committing before the result means that a client sees the statement's success or the
+    /// commit's failure, never both, as with the last statement of a simple query in PostgreSQL
+    /// (`exec_simple_query`).
+    pub async fn settle_statement(
+        &mut self,
+        commit_implicit_transaction: bool,
+    ) -> Result<SettledStatement, AdapterError> {
+        let mut reverted = BTreeMap::new();
+        if commit_implicit_transaction && self.session().transaction().is_implicit() {
+            let response = self.end_transaction(EndTransactionAction::Commit).await?;
+            if let ExecuteResponse::TransactionCommitted { params } = response {
+                reverted = params;
+            }
+        }
+        Ok(SettledStatement { reverted })
     }
 
     /// Fails a transaction.
@@ -2120,6 +2146,15 @@ impl Timeout {
     }
 }
 
+/// Additions to a statement's result that are known only after any commit that the result waits
+/// for, such as the session parameters that the commit reverted.
+#[derive(Debug)]
+pub struct SettledStatement {
+    /// Session parameters that committing the statement's implicit transaction reverted, if any,
+    /// such as a value set with `SET LOCAL`.
+    pub reverted: BTreeMap<&'static str, String>,
+}
+
 /// A wrapper around a Stream of PeekResponseUnary that records when it sees the
 /// first row data in the given histogram. It also keeps track of whether we have already observed
 /// the end of the underlying stream.
@@ -2142,6 +2177,8 @@ pub struct RecordFirstRowStream {
     pub no_more_rows: bool,
     /// Whether the first-to-last-byte metric has already been recorded for this stream.
     pub metric_recorded: bool,
+    execution_time: Option<ExecutionTime>,
+    execution_time_reported: bool,
 }
 
 impl RecordFirstRowStream {
@@ -2162,6 +2199,8 @@ impl RecordFirstRowStream {
             recorded_first_row_instant: None,
             no_more_rows: false,
             metric_recorded: false,
+            execution_time: None,
+            execution_time_reported: false,
         }
     }
 
@@ -2194,7 +2233,7 @@ impl RecordFirstRowStream {
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
-        let msg = self.rows.next().await;
+        let mut msg = self.rows.next().await;
         if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) {
             self.saw_rows = true;
             self.time_to_first_row_seconds
@@ -2204,7 +2243,36 @@ impl RecordFirstRowStream {
         if msg.is_none() {
             self.no_more_rows = true;
         }
+        if self.execution_time.is_none() && !self.execution_time_reported {
+            let kind = match &mut msg {
+                // An empty batch does not end the interval. A stashed result can start with an
+                // empty inline batch, and an `OFFSET` can empty whole stashed batches.
+                Some(PeekResponseUnary::Rows(rows)) => {
+                    rows.peek().is_some().then_some(ExecutionTimeKind::FirstRow)
+                }
+                None => Some(ExecutionTimeKind::EmptyResult),
+                _ => None,
+            };
+            self.execution_time = kind.map(|kind| ExecutionTime {
+                kind,
+                elapsed: self.execute_started.elapsed(),
+            });
+        }
         msg
+    }
+
+    /// Disables execution time notices for an unbounded subscription.
+    pub fn without_execution_time(mut self) -> Self {
+        self.execution_time = None;
+        self.execution_time_reported = true;
+        self
+    }
+
+    /// Takes the timing on the first execution step only, if a row or EOF was observed.
+    /// Later steps must not include a client's pause, even if the first step was `FETCH 0`.
+    pub fn take_execution_time(&mut self) -> Option<ExecutionTime> {
+        self.execution_time_reported = true;
+        self.execution_time.take()
     }
 }
 

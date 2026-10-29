@@ -25,6 +25,10 @@ skip = [
     # Materialize uses serde-saphyr 2.0.0. kube-client 4.2.0 still requires
     # 0.0.29. Remove this exception once kube-client moves to serde-saphyr 2.
     { name = "serde-saphyr", version = "=0.0.29" },
+    # Materialize uses lru 0.19. aws-sdk-s3 (through 1.155.0), launchdarkly-server-sdk
+    # (through 3.3.2), and mysql_async (through 0.37.1) still require ^0.18.2.
+    # Remove this exception once those crates release with lru 0.19.
+    { name = "lru", version = "=0.18.5" },
 
     # arrayvec had a significant API change in 0.7
     { name = "arrayvec", version = "0.5.2" },
@@ -322,6 +326,22 @@ ignore = [
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
+    # `basic-toml` is unmaintained with no safe upgrade. It is only used by the
+    # askama_derive proc macro, at compile time.
+    "RUSTSEC-2026-0374",
+    # zstd stream contexts leak data between streams when reused through the
+    # `with_context` constructors. No dependency calls them. The fix needs zstd
+    # 0.14, which parquet, iceberg, apache-avro, async-compression and
+    # mysql_common do not accept yet.
+    "RUSTSEC-2026-0391",
+    # zstd-safe `Seekable::decompress` sets a `Vec` length past its capacity.
+    # The `seekable` feature is not enabled. The fix needs zstd-safe 8.2.
+    "RUSTSEC-2026-0398",
+    # zstd-safe exposes uninitialized memory when streaming decompression of a
+    # legacy frame into a `Vec` fails. No dependency uses
+    # `zstd::stream::write::Decoder`, and async-compression decodes into slices
+    # and returns the error before advancing. The fix needs zstd-safe 8.2.
+    "RUSTSEC-2026-0403",
 ]
 
 # Must be manually kept in sync with about.toml.

@@ -245,7 +245,7 @@ about one minute per minute, means the cluster has stopped making progress.
 Sources go through an additional
 [snapshotting](/fundamentals/concepts/snapshotting/) step the first time they run, reading the
 initial state of the upstream system before the states above apply. See
-[Troubleshooting](/transform-data/freshness-troubleshooting/) for how to
+[Troubleshooting](/transform-data/freshness/troubleshoot-freshness/) for how to
 diagnose a cluster that is not progressing through these states.
 {{< /note >}}
 

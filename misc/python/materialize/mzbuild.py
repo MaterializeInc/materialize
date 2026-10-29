@@ -40,7 +40,7 @@ from functools import cache
 from pathlib import Path
 from tempfile import TemporaryFile
 from threading import Lock
-from typing import IO, Any, cast
+from typing import IO, Any, NoReturn, cast
 
 import requests
 import yaml
@@ -62,6 +62,58 @@ class RustIncrementalBuildFailure(Exception):
 class CargoRegistryFetchFailure(Exception):
     """A crates.io fetch that failed for transport reasons. Retrying recovers,
     and the target directories must be kept: nothing in them is corrupted."""
+
+
+def raise_if_retryable_build_failure(output: str) -> None:
+    """Raises `RustIncrementalBuildFailure` or `CargoRegistryFetchFailure` if
+    the output of a failed cargo invocation matches a known signature."""
+    incremental_build_failure_msgs = [
+        "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
+        "Found unstable fingerprints for",
+        "ld.lld: error: undefined symbol",
+        "truncated or malformed archive",
+        "signal: 11, SIGSEGV",
+    ]
+    registry_fetch_failure_msgs = [
+        "unable to update registry",
+    ]
+    # A cached build-script binary poisoned by cargo cache corruption dies
+    # with a bare ENOENT before doing any work. Both halves are required,
+    # and the error must be the exact bare line: "failed to run custom
+    # build command" alone is any build-script bug, which a retry cannot
+    # fix, and a build script that fails on a missing file with an error
+    # context of its own produces the ENOENT in a "Caused by:" detail line
+    # instead of the bare "Error:" line.
+    custom_build_script_enoent = "failed to run custom build command" in output and any(
+        line.strip() == "Error: No such file or directory (os error 2)"
+        for line in output.splitlines()
+    )
+    if custom_build_script_enoent or any(
+        msg in output for msg in incremental_build_failure_msgs
+    ):
+        raise RustIncrementalBuildFailure()
+    if any(msg in output for msg in registry_fetch_failure_msgs):
+        raise CargoRegistryFetchFailure()
+
+
+def exit_for_retryable_build_failure(
+    e: RustIncrementalBuildFailure | CargoRegistryFetchFailure,
+) -> NoReturn:
+    """Exits with 199, which Buildkite retries automatically (see
+    mkpipeline.py), after clearing the cargo target directories if they are
+    corrupted."""
+    if isinstance(e, RustIncrementalBuildFailure):
+        print(
+            "--- Detected incremental build failure, clearing cargo target directories"
+        )
+        for dir in ["target", "target-xcompile"]:
+            shutil.rmtree(MZ_ROOT / dir, ignore_errors=True)
+    else:
+        # Nothing on disk is corrupted, so keep the target directories. Wiping
+        # them would turn a network blip into a full rebuild of the workspace,
+        # here and in every later job that shares the agent's target directory.
+        print("--- Detected transient cargo registry failure, retrying")
+    sys.exit(199)
 
 
 def run_and_detect_retryable_build_failure(
@@ -131,38 +183,7 @@ def run_and_detect_retryable_build_failure(
     stderr_contents = stderr_result.getvalue()
     stderr_result.close()
     if retcode:
-        # Keep these signatures in sync with bin/clear-corrupted-cargo-target-dir.
-        incremental_build_failure_msgs = [
-            "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
-            "Found unstable fingerprints for",
-            "ld.lld: error: undefined symbol",
-            "signal: 11, SIGSEGV",
-        ]
-        registry_fetch_failure_msgs = [
-            "unable to update registry",
-        ]
-        combined = stdout_contents + stderr_contents
-        # A cached build-script binary poisoned by cargo cache corruption dies
-        # with a bare ENOENT before doing any work. Both halves are required,
-        # and the error must be the exact bare line: "failed to run custom
-        # build command" alone is any build-script bug, which a retry cannot
-        # fix, and a build script that fails on a missing file with an error
-        # context of its own produces the ENOENT in a "Caused by:" detail line
-        # instead of the bare "Error:" line.
-        custom_build_script_enoent = (
-            "failed to run custom build command" in combined
-            and any(
-                line.strip() == "Error: No such file or directory (os error 2)"
-                for line in combined.splitlines()
-            )
-        )
-        if custom_build_script_enoent or any(
-            msg in combined for msg in incremental_build_failure_msgs
-        ):
-            raise RustIncrementalBuildFailure()
-        if any(msg in combined for msg in registry_fetch_failure_msgs):
-            raise CargoRegistryFetchFailure()
-
+        raise_if_retryable_build_failure(stdout_contents + stderr_contents)
         raise subprocess.CalledProcessError(
             retcode, p.args, output=stdout_contents, stderr=stderr_contents
         )

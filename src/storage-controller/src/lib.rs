@@ -40,7 +40,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
+use mz_ore::{assert_none, halt, instrument, restart_in_place, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
@@ -1028,13 +1028,22 @@ impl StorageController for Controller {
                 // halting on it would wedge bootstrap forever instead of
                 // resolving on the next attempt.
                 if dependency_since.is_empty() && !write_frontier.is_empty() {
-                    halt!(
+                    let reason = format!(
                         "dependency since frontier is empty while dependent upper \
                         is not empty (dependent id={id}, write_frontier={:?}, dependency_read_holds={:?}), \
                         this indicates concurrent deletion of a collection",
-                        write_frontier,
-                        dependency_read_holds,
+                        write_frontier, dependency_read_holds,
                     );
+                    // A read-only controller can restart without Kubernetes
+                    // crash backoff. If its generation has been promoted
+                    // meanwhile, by a replacement pod or by this process after
+                    // a skipped catch-up, `preflight_0dt` halts the restarted
+                    // process.
+                    if self.read_only {
+                        restart_in_place!("{}", reason);
+                    } else {
+                        halt!("{}", reason);
+                    }
                 }
 
                 // If the dependency is between a remap shard and a source (and

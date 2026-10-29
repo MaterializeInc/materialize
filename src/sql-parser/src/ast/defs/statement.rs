@@ -202,6 +202,87 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
 impl_display_t!(Statement);
 
 impl StatementKind {
+    /// Whether this statement explains a query or catalog object.
+    pub fn is_explain(&self) -> bool {
+        match self {
+            Self::ExplainPlan
+            | Self::ExplainPushdown
+            | Self::ExplainTimestamp
+            | Self::ExplainSinkSchema
+            | Self::ExplainAnalyzeObject
+            | Self::ExplainAnalyzeCluster => true,
+            Self::Select
+            | Self::Insert
+            | Self::Copy
+            | Self::Update
+            | Self::Delete
+            | Self::CreateConnection
+            | Self::CreateDatabase
+            | Self::CreateSchema
+            | Self::CreateWebhookSource
+            | Self::CreateSource
+            | Self::CreateSubsource
+            | Self::CreateSink
+            | Self::CreateMetricSink
+            | Self::CreateView
+            | Self::CreateMaterializedView
+            | Self::CreateTable
+            | Self::CreateTableFromSource
+            | Self::CreateIndex
+            | Self::CreateType
+            | Self::CreateRole
+            | Self::CreateCluster
+            | Self::CreateClusterReplica
+            | Self::CreateSecret
+            | Self::CreateNetworkPolicy
+            | Self::AlterCluster
+            | Self::AlterOwner
+            | Self::AlterObjectRename
+            | Self::AlterObjectSwap
+            | Self::AlterRetainHistory
+            | Self::AlterIndex
+            | Self::AlterSecret
+            | Self::AlterSetCluster
+            | Self::AlterSink
+            | Self::AlterSource
+            | Self::AlterSystemSet
+            | Self::AlterSystemReset
+            | Self::AlterSystemResetAll
+            | Self::AlterConnection
+            | Self::AlterNetworkPolicy
+            | Self::AlterRole
+            | Self::AlterTableAddColumn
+            | Self::AlterMaterializedViewApplyReplacement
+            | Self::Discard
+            | Self::DropObjects
+            | Self::DropOwned
+            | Self::SetVariable
+            | Self::ResetVariable
+            | Self::Show
+            | Self::StartTransaction
+            | Self::SetTransaction
+            | Self::Commit
+            | Self::Rollback
+            | Self::Subscribe
+            | Self::Declare
+            | Self::Fetch
+            | Self::Close
+            | Self::Prepare
+            | Self::Execute
+            | Self::ExecuteUnitTest
+            | Self::Deallocate
+            | Self::Raise
+            | Self::GrantRole
+            | Self::RevokeRole
+            | Self::GrantPrivileges
+            | Self::RevokePrivileges
+            | Self::AlterDefaultPrivileges
+            | Self::ReassignOwned
+            | Self::ValidateConnection
+            | Self::Comment => false,
+        }
+    }
+
     /// Whether this kind of statement can carry secret values, i.e. `CREATE
     /// SECRET` or `ALTER SECRET`. Such secret material must never be persisted
     /// verbatim (e.g. in `mz_statement_execution_history`), not even in error

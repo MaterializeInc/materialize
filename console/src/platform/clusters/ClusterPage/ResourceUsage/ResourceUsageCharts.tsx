@@ -81,7 +81,7 @@ const CHANGE_TICK_MIN_HEIGHT_PX = 6;
 const CHANGE_TICK_STEP_PX = 2;
 // The most objects a change tick's tooltip names before summarizing the rest.
 const CHANGE_TOOLTIP_OBJECT_LIMIT = 5;
-const TIME_TICK_COUNT = 8;
+export const TIME_TICK_COUNT = 8;
 // Replicas' bars at one time overlap by this share of a bar, so each group
 // reads as one point in time.
 const BAR_OVERLAP = 0.5;
@@ -97,20 +97,34 @@ const STATUS_LABEL_MAX_CHARS = Math.floor(
   (CHART_MARGIN.left - STATUS_LABEL_GAP_PX) / (STATUS_LABEL_FONT_PX * 0.6),
 );
 
+// The square swatch is 8px wide, so more stripes are too thin to tell apart.
+const MAX_SWATCH_STRIPES = 3;
+
 interface LegendSwatchProps {
-  /** Several colors split the swatch, one stripe per replica it stands for. */
+  /**
+   * Several colors split the swatch, one stripe per replica it stands for, up
+   * to the first `MAX_SWATCH_STRIPES`.
+   */
   color: string | string[];
   variant: "square" | "line" | "dashed" | "diamond" | "tick";
 }
 
 export const LegendSwatch = ({ color, variant }: LegendSwatchProps) => {
-  const palette = typeof color === "string" ? [color] : color;
+  const palette = (typeof color === "string" ? [color] : color).slice(
+    0,
+    MAX_SWATCH_STRIPES,
+  );
   if (variant === "square") {
     if (palette.length === 1) return <TooltipColorSwatch color={palette[0]} />;
     return (
       <Flex width="2" height="2" borderRadius="sm" overflow="hidden">
         {palette.map((stripe, stripeIndex) => (
-          <Box key={stripeIndex} flex="1" background={stripe} />
+          <Box
+            key={stripeIndex}
+            flex="1"
+            background={stripe}
+            data-testid="swatch-stripe"
+          />
         ))}
       </Flex>
     );
@@ -261,7 +275,7 @@ export const PercentAxis = ({
   );
 };
 
-const ThresholdLine = ({
+export const ThresholdLine = ({
   layout,
   y,
   color,
@@ -735,18 +749,25 @@ export const MemoryChart = ({
 export interface TimeAxisProps {
   width: number;
   xScale: TimeScale;
+  /** Labels each tick. Defaults to the time before the window's end. */
+  tickFormat?: (ms: number) => string;
 }
 
-export const TimeAxis = ({ width, xScale }: TimeAxisProps) => {
+export const TimeAxis = ({ width, xScale, tickFormat }: TimeAxisProps) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
   const [startDate, endDate] = xScale.domain();
   // Evenly spaced and labeled by time before now, matching `UtilizationGraph`.
-  const tickValues = Array.from(
-    { length: TIME_TICK_COUNT },
-    (_, tickIndex) =>
-      startDate.getTime() +
-      (tickIndex * (endDate.getTime() - startDate.getTime())) / TIME_TICK_COUNT,
-  );
+  // Clock labels take the scale's round times instead, which stay put as the
+  // window slides.
+  const tickValues = tickFormat
+    ? xScale.ticks(TIME_TICK_COUNT).map((date) => date.getTime())
+    : Array.from(
+        { length: TIME_TICK_COUNT },
+        (_, tickIndex) =>
+          startDate.getTime() +
+          (tickIndex * (endDate.getTime() - startDate.getTime())) /
+            TIME_TICK_COUNT,
+      );
   return (
     // Visible overflow keeps the edge labels, centered on the plot's ends, from
     // being clipped. The card's padding leaves room for them.
@@ -759,7 +780,9 @@ export const TimeAxis = ({ width, xScale }: TimeAxisProps) => {
         stroke={colors.border.secondary}
         strokeWidth={2}
         tickFormat={(value) =>
-          relativeTimeTickFormat(value.valueOf(), startDate, endDate)
+          tickFormat
+            ? tickFormat(value.valueOf())
+            : relativeTimeTickFormat(value.valueOf(), startDate, endDate)
         }
         tickLabelProps={() => ({
           fill: colors.foreground.secondary,

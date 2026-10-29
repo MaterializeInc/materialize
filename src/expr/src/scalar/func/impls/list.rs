@@ -32,7 +32,7 @@ pub struct CastListToString {
 }
 
 // TODO? if typeconv was in expr, we could determine the inverse of this cast
-#[sqlfunc(CastListToString, sqlname = "listtostr", preserves_uniqueness = true)]
+#[sqlfunc(CastListToString, sqlname = "listtostr", preserves_uniqueness = super::text_preserves_uniqueness(&self.ty))]
 fn cast_list_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError> {
     let mut buf = String::new();
     stringify_datum(&mut buf, *a, &self.ty)?;
@@ -92,7 +92,11 @@ impl<E: Eval> LazyUnaryFunc for CastListToJsonb<E> {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        true
+        // NOTE: `to_jsonb` maps distinct elements to the same JSONB value, for
+        // example `time` and timestamp elements through their text form, which
+        // rounds nanoseconds away. This cast is therefore not
+        // uniqueness-preserving.
+        false
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {

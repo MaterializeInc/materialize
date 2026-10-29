@@ -52,8 +52,13 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Copy nginx configuration
 COPY misc/docker/nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY misc/docker/metrics.js /etc/nginx/njs/metrics.js
+# The metrics need the njs module, and `load_module` only works in the main
+# context, ahead of the `http` block that includes the template.
+RUN sed -i '1i load_module modules/ngx_http_js_module.so;' /etc/nginx/nginx.conf
 
 ENV MZ_NGINX_LISTENER_CONFIG="listen 8080;"
+ENV MZ_NGINX_METRICS_LISTENER_CONFIG="listen 8081;"
 # This value has to just be set in order for the entrpoint to auto-detect the local resolvers
 # and put them in NGINX_LOCAL_RESOLVERS
 ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS='true'

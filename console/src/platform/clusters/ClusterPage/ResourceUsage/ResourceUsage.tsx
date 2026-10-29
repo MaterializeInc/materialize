@@ -25,6 +25,7 @@ import { useParentSize } from "@visx/responsive";
 import { scaleTime } from "@visx/scale";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import React from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import { SizeAllocation } from "~/api/materialize/cluster/replicaProcessMetrics";
@@ -51,7 +52,9 @@ import { capitalizeSentence, pluralize } from "~/util";
 import { formatBytesShort, formatPercentage } from "~/utils/format";
 import { buildXYGraphLayoutProps } from "~/utils/graph";
 
-import { ProcessesDrawer, ProcessReplica } from "./ProcessesDrawer";
+import { opensProcesses, workersTabLink } from "../tabLinks";
+import { useSizedReplicas } from "../useSizedReplicas";
+import { ProcessesDrawer } from "./ProcessesDrawer";
 import {
   ChangesLane,
   ChangeTooltipContent,
@@ -101,11 +104,16 @@ const formatBytes = (bytes: number) =>
 const isCpuLimited = (allocation: SizeAllocation) =>
   allocation.cpuNanoCores <= Number.MAX_SAFE_INTEGER;
 
+const formatCores = (cores: number) =>
+  cores > 0 && cores < 0.01
+    ? "< 0.01 cores"
+    : `${cores.toFixed(cores < 0.1 ? 2 : 1)} cores`;
+
 /**
  * A replica's readings at one time, in percent, 0 to 100. CPU, memory and disk
  * are shares of the replica's allocation of each, summed over its processes,
- * as the Clusters list shows them. Heap and the total are shares of one
- * process's heap limit, `heapLimitBytes`, as the memory bar draws them.
+ * as the Clusters list shows them. Heap is its fullest process's share of one
+ * process's heap limit, `heapLimitBytes`, as the memory bar draws it.
  */
 const readingRows = (
   point: DataPoint,
@@ -159,23 +167,34 @@ const readingRows = (
     point.diskPercent ??
     (point.swapPercent !== null && allocation?.diskBytes ? 0 : null);
   const bar = memoryBar(point);
+  // Memory and disk sum over processes and heap doesn't, so on a multi-process
+  // replica the label says whose heap it is.
+  const isMultiProcess = (allocation?.processes ?? 1) > 1;
+  const heapLabel = isMultiProcess ? "Fullest process" : "Heap";
   return [
     {
       label: "CPU",
       percent: point.cpuPercent,
-      amount:
-        cores === undefined
-          ? undefined
-          : `${cores.toFixed(cores < 0.1 ? 2 : 1)} cores`,
+      amount: cores === undefined ? undefined : formatCores(cores),
     },
     point.swapPercent === null && hasHeapLimit
-      ? ofHeapLimit("Heap", point.heapPercent)
+      ? ofHeapLimit(
+          heapLabel,
+          point.heapPercent,
+          isMultiProcess ? "process heap limit" : undefined,
+        )
       : ofAllocation("Memory", point.memoryPercent, allocation?.memoryBytes),
     ...(canSwap(point) || diskPercent !== null
       ? [ofAllocation("Disk", diskPercent, allocation?.diskBytes)]
       : []),
     ...(canSwap(point)
-      ? [ofHeapLimit("Total", bar?.heap ?? null, "heap limit")]
+      ? [
+          ofHeapLimit(
+            heapLabel,
+            bar?.heap ?? null,
+            isMultiProcess ? "process heap limit" : "heap limit",
+          ),
+        ]
       : []),
   ];
 };
@@ -795,6 +814,8 @@ export const ResourceUsage = ({
   selectedReplicaId,
 }: ResourceUsageProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const location = useLocation();
+  const navigate = useNavigate();
   const {
     history,
     replicasById,
@@ -870,7 +891,18 @@ export const ResourceUsage = ({
     ),
   );
 
-  const [isProcessesOpen, setIsProcessesOpen] = React.useState(false);
+  const [isProcessesOpen, setIsProcessesOpen] = React.useState(() =>
+    opensProcesses(location.state),
+  );
+  const processesButtonRef = React.useRef<HTMLButtonElement>(null);
+  const closeProcesses = () => {
+    setIsProcessesOpen(false);
+    // The state that opened the drawer would otherwise reopen it on back or
+    // reload.
+    if (opensProcesses(location.state)) {
+      navigate({ search: location.search }, { replace: true, state: null });
+    }
+  };
   // Past replicas' sizes too, for their tooltip readings.
   const { data: allocationsBySize } = useReplicaSizeAllocations(
     [
@@ -879,17 +911,19 @@ export const ResourceUsage = ({
       ),
     ].sort(),
   );
+  const { replicas: sizedReplicas } = useSizedReplicas(cluster);
+  // A selected replica narrows the drawer and the Workers link to it.
+  const shownReplicas =
+    selectedReplicaId === undefined
+      ? sizedReplicas
+      : sizedReplicas.filter(({ id }) => id === selectedReplicaId);
   // Only a size that runs more than one process has processes to compare.
-  const processReplicas = cluster.replicas.flatMap(
-    ({ id, name, size }): ProcessReplica[] => {
-      if (selectedReplicaId !== undefined && id !== selectedReplicaId) {
-        return [];
-      }
-      const allocation = size ? allocationsBySize?.get(size) : undefined;
-      return size && allocation && allocation.processes > 1
-        ? [{ id, name, size, allocation }]
-        : [];
-    },
+  const processReplicas = shownReplicas.filter(
+    ({ allocation }) => allocation.processes > 1,
+  );
+  const hasWorkers = shownReplicas.length > 0;
+  const workersLink = workersTabLink(
+    cluster.replicas.find(({ id }) => id === selectedReplicaId)?.name,
   );
 
   let body: React.ReactNode;
@@ -934,14 +968,29 @@ export const ResourceUsage = ({
             isStatusError={isStatusError}
             isHydrationError={isHydrationError}
             cpuHeaderAction={
-              processReplicas.length > 0 && (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setIsProcessesOpen(true)}
-                >
-                  Processes
-                </Button>
+              (processReplicas.length > 0 || hasWorkers) && (
+                <HStack spacing={2}>
+                  {processReplicas.length > 0 && (
+                    <Button
+                      ref={processesButtonRef}
+                      size="xs"
+                      variant="outline"
+                      onClick={() => setIsProcessesOpen(true)}
+                    >
+                      Processes
+                    </Button>
+                  )}
+                  {hasWorkers && (
+                    <Button
+                      as={Link}
+                      to={workersLink}
+                      size="xs"
+                      variant="outline"
+                    >
+                      Workers
+                    </Button>
+                  )}
+                </HStack>
               )
             }
           />
@@ -969,8 +1018,10 @@ export const ResourceUsage = ({
           <Text as="h3" textStyle="heading-sm" whiteSpace="nowrap">
             Resource Usage
           </Text>
+          {/* NOTE: a basis of 0, as `flex="1"` sets, never wraps this below
+              the title, so long toggles overlap it on a narrow card. */}
           <Flex
-            flex="1"
+            flex="1 1 auto"
             minWidth={0}
             justifyContent="flex-end"
             alignItems="center"
@@ -994,9 +1045,12 @@ export const ResourceUsage = ({
       </VStack>
       <ProcessesDrawer
         isOpen={isProcessesOpen}
-        onClose={() => setIsProcessesOpen(false)}
+        onClose={closeProcesses}
+        // Opened from a link, the drawer has no opener to return focus to.
+        finalFocusRef={processesButtonRef}
         replicas={processReplicas}
         timePeriodMinutes={timePeriodMinutes}
+        workersLink={workersTabLink}
       />
     </Card>
   );

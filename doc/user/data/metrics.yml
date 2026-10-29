@@ -3251,6 +3251,12 @@ metrics:
   help: count of when hostname diffs needed to be force applied
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_state_hollow_run_missing_on_delete
+  help: >-
+    count of hollow run blobs found already missing while deleting the parts they
+    reference
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_rollup_at_seqno_migration
   help: count of fetch_rollup_at_seqno calls that only worked because of the migration
   source: src/persist-client/src/internal/metrics.rs
@@ -4553,6 +4559,15 @@ metrics:
     The batch size, of getting values into the upsert state for this source.
     Specific implementations of upsert state may have more detailed metrics about
     sub-batches.
+  labels:
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_upsert_restashed_total
+  help: >-
+    The number of updates the upsert v2 operator extracted from its stash before
+    the persist feedback frontier reached their time, and pushed back.
   labels:
   - source_id
   - worker_id

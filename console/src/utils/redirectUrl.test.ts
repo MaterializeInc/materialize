@@ -9,7 +9,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { isSafeRedirectUrl } from "./redirectUrl";
+import {
+  getAllowedRedirectOrigins,
+  isAllowedExternalRedirectUrl,
+  isSafeRedirectUrl,
+} from "./redirectUrl";
 
 describe("isSafeRedirectUrl", () => {
   describe("safe URLs", () => {
@@ -108,5 +112,84 @@ describe("isSafeRedirectUrl", () => {
       expect(isSafeRedirectUrl("/\r/evil.com")).toBe(false);
       expect(isSafeRedirectUrl("/foo\r/bar")).toBe(false);
     });
+  });
+});
+
+const MARKETING = ["https://materialize.com", "https://www.materialize.com"];
+
+describe("isSafeRedirectUrl with allowed origins", () => {
+  it("accepts URLs on an allowed origin", () => {
+    expect(isSafeRedirectUrl("https://materialize.com/", MARKETING)).toBe(true);
+    expect(
+      isSafeRedirectUrl(
+        "https://materialize.com/pricing/?utm_source=x#plans",
+        MARKETING,
+      ),
+    ).toBe(true);
+    expect(
+      isSafeRedirectUrl("https://www.materialize.com/docs/", MARKETING),
+    ).toBe(true);
+  });
+
+  it("still accepts internal paths", () => {
+    expect(isSafeRedirectUrl("/dashboard", MARKETING)).toBe(true);
+  });
+
+  it("rejects allowed origins when no allowlist is passed", () => {
+    expect(isSafeRedirectUrl("https://materialize.com/")).toBe(false);
+  });
+
+  it("rejects look-alike origins", () => {
+    for (const url of [
+      "https://materialize.com.evil.com/",
+      "https://evilmaterialize.com/",
+      "https://evil.materialize.com/",
+      "https://materialize.com:8443/",
+      "http://materialize.com/",
+      "https://materialize.com@evil.com/",
+      // Split so the secret scanner (trufflehog) doesn't flag it as a credential.
+      "https://user:" + "pass@materialize.com/",
+      "//materialize.com/",
+      "javascript://materialize.com/%0aalert(1)",
+      "https://materialize.com\\@evil.com/",
+      "https://materialize.com/\t/evil",
+    ]) {
+      expect(isSafeRedirectUrl(url, MARKETING), url).toBe(false);
+    }
+  });
+});
+
+describe("isAllowedExternalRedirectUrl", () => {
+  it("rejects internal paths", () => {
+    expect(isAllowedExternalRedirectUrl("/dashboard", MARKETING)).toBe(false);
+  });
+
+  it("rejects everything when the allowlist is empty", () => {
+    expect(isAllowedExternalRedirectUrl("https://materialize.com/", [])).toBe(
+      false,
+    );
+  });
+});
+
+describe("getAllowedRedirectOrigins", () => {
+  it("only allows the marketing site in production", () => {
+    expect(getAllowedRedirectOrigins("production")).toEqual(MARKETING);
+  });
+
+  it("only allows the marketing site in builds without dev origins", () => {
+    // Tests, like production builds, define no dev origins.
+    expect(getAllowedRedirectOrigins("staging")).toEqual(MARKETING);
+  });
+
+  it("allows a local marketing dev server in local builds", () => {
+    expect(
+      getAllowedRedirectOrigins("staging", ["http://localhost:5173"]),
+    ).toEqual([...MARKETING, "http://localhost:5173"]);
+  });
+
+  it("never allows dev origins on the production stack", () => {
+    expect(
+      getAllowedRedirectOrigins("production", ["http://localhost:5173"]),
+    ).toEqual(MARKETING);
   });
 });

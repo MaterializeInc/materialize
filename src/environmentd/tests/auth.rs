@@ -2427,7 +2427,7 @@ async fn test_auth_base_disable_tls() {
                     // a graceful error message. This could plausibly change
                     // due to OpenSSL or Hyper refactorings.
                     assert_none!(code);
-                    assert_contains!(message, "packet length too long");
+                    assert_contains!(message, "wrong version number");
                 })),
             },
             // System user cannot login via external ports.

@@ -56,6 +56,9 @@ operator:
     statementLoggingTargetDataRate:
     # Newer versions ignore this setting and always enforce license key checks.
     enableLicenseKeyChecks: false
+    # -- Root-signed intermediate certificates whose keys may also sign
+    # license keys. Requires an operator built from v26.49.0-dev.0 or later.
+    licenseKeyIntermediateCerts: []
     # -- Whether to allow `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY`
     # in environmentd. Network policies match on client IP, which self-managed
     # deployments generally do not preserve (port-forwards and most ingress

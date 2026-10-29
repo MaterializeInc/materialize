@@ -5079,7 +5079,8 @@ SELECT
     -- https://github.com/MaterializeInc/materialize/pull/34649#issuecomment-3714291409
     0::int2 as attndims,
     NOT nullable as attnotnull,
-    mz_columns.default IS NOT NULL as atthasdef,
+    -- The string NULL is a table column without a default.
+    coalesce(mz_columns.default <> 'NULL', false) as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
     -- MZ doesn't support generated columns so attgenerated is filled with ''
     ''::pg_catalog.\"char\" as attgenerated,
@@ -5144,7 +5145,8 @@ SELECT
     mz_columns.default AS adsrc
 FROM mz_catalog.mz_columns
     JOIN mz_catalog.mz_objects ON mz_columns.id = mz_objects.id
-WHERE default IS NOT NULL",
+-- The string NULL is a table column without a default, see mz_columns.
+WHERE default <> 'NULL'",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });
