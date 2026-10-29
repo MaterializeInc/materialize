@@ -29,8 +29,10 @@ import Alert from "~/components/Alert";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import ErrorBox from "~/components/ErrorBox";
 import { DataPoint } from "~/components/FreshnessGraph/types";
+import LabeledSelect from "~/components/LabeledSelect";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import SchemaSelect, { SchemaOption } from "~/components/SchemaSelect";
+import ScopedSelect from "~/components/ScopedSelect";
 import SearchableSelect, {
   SelectOption,
 } from "~/components/SearchableSelect/SearchableSelect";
@@ -40,9 +42,7 @@ import {
   ThresholdControl,
   useThresholdControl,
 } from "~/components/ThresholdLineGraph/useThresholdControl";
-import TimePeriodSelect from "~/components/TimePeriodSelect";
 import { useNow } from "~/hooks/useNow";
-import { ClustersIcon, SchemaIcon } from "~/icons";
 import {
   MainContentContainer,
   PageHeader,
@@ -85,7 +85,7 @@ import {
 } from "./queries";
 import {
   parsePredicate,
-  parseScope,
+  parseTimePeriod,
   useFreshnessParams,
 } from "./useFreshnessParams";
 import { useFreshnessRows } from "./useFreshnessRows";
@@ -142,17 +142,9 @@ const HighlightControls = ({
 }: HighlightControlsProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   return (
-    <HStack
-      spacing="2"
-      alignItems="center"
-      flexWrap="wrap"
-      borderWidth="1px"
-      borderColor={colors.border.primary}
-      borderRadius="lg"
-      padding="3"
-    >
+    <HStack spacing="2" alignItems="center" flexWrap="wrap">
       <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-        Highlight objects whose
+        Highlight objects with
       </Text>
       <Select
         size="sm"
@@ -170,8 +162,7 @@ const HighlightControls = ({
         ))}
       </Select>
       <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-        {/* "Current" is this minute; the others summarize the range. */}
-        freshness {predicate === "current" ? "exceeds" : "exceeded"}
+        lag ≥
       </Text>
       <ThresholdInput
         {...thresholdControl.inputProps}
@@ -258,29 +249,39 @@ const FreshnessContent = ({
           </AccordionPanel>
         </AccordionItem>
       </Accordion>
-      <HighlightControls
-        thresholdControl={thresholdControl}
-        predicate={predicate}
-        setPredicate={setPredicate}
-      />
-      {graphData && latest.data && percentiles.data && objects.length > 0 ? (
-        // A failed hydration request leaves the column at "—" rather than
-        // taking the page down: the lag readings are what the page is for.
-        <FreshnessView
-          data={graphData}
-          latestByObjectId={latest.data}
-          percentilesByObjectId={percentiles.data}
-          hydrationByObjectId={hydration.data ?? NO_HYDRATION}
-          scope={scope}
-          {...viewOptions}
+      {/* One frame for the highlight controls and everything they act on. */}
+      <VStack
+        alignItems="stretch"
+        spacing="4"
+        borderWidth="1px"
+        borderColor={colors.border.primary}
+        borderRadius="lg"
+        padding="3"
+      >
+        <HighlightControls
+          thresholdControl={thresholdControl}
+          predicate={predicate}
+          setPredicate={setPredicate}
         />
-      ) : freshness.isError || latest.isError || percentiles.isError ? (
-        <ErrorBox message="An error occurred fetching freshness data." />
-      ) : (
-        <Box height="320px" width="100%">
-          <LoadingContainer />
-        </Box>
-      )}
+        {graphData && latest.data && percentiles.data && objects.length > 0 ? (
+          // A failed hydration request leaves the column at "—" rather than
+          // taking the page down: the lag readings are what the page is for.
+          <FreshnessView
+            data={graphData}
+            latestByObjectId={latest.data}
+            percentilesByObjectId={percentiles.data}
+            hydrationByObjectId={hydration.data ?? NO_HYDRATION}
+            scope={scope}
+            {...viewOptions}
+          />
+        ) : freshness.isError || latest.isError || percentiles.isError ? (
+          <ErrorBox message="An error occurred fetching freshness data." />
+        ) : (
+          <Box height="320px" width="100%">
+            <LoadingContainer />
+          </Box>
+        )}
+      </VStack>
     </VStack>
   );
 };
@@ -437,7 +438,6 @@ const FreshnessPage = () => {
     ? options.find((option) => option.id === selectedId)
     : undefined;
   const notFound = Boolean(selectedId) && selected === undefined;
-  const ScopeIcon = scope === "cluster" ? ClustersIcon : SchemaIcon;
   const pickerProps = {
     ariaLabel: scopeLabels.menu,
     placeholder: `Select a ${scopeLabels.noun}`,
@@ -448,9 +448,8 @@ const FreshnessPage = () => {
     // control.
     containerWidth: "max-content",
     menuWidth: "240px",
-    leftIcon: (
-      <ScopeIcon height="4" width="4" color={colors.foreground.secondary} />
-    ),
+    // `ScopedSelect` frames it together with the scope menu.
+    frameless: true,
   };
   const scopeError = scope === "cluster" ? clustersError : schemasError;
   const scopeReady = scope === "cluster" ? clustersReady : schemasReady;
@@ -496,11 +495,53 @@ const FreshnessPage = () => {
           padding="3"
         >
           <HStack spacing="2" alignItems="center" flexWrap="wrap">
+            <ScopedSelect<FreshnessScope>
+              scopeLabel="Show objects by"
+              scope={scope}
+              scopes={(Object.keys(SCOPE_LABELS) as FreshnessScope[]).map(
+                (key) => ({ value: key, label: SCOPE_LABELS[key].menu }),
+              )}
+              onScopeChange={setScope}
+            >
+              {scope === "cluster" ? (
+                <SearchableSelect<SchemaOption, false>
+                  {...pickerProps}
+                  options={options}
+                  value={selected ?? null}
+                  onChange={(option) => option && setClusterId(option.id)}
+                />
+              ) : (
+                <SchemaSelect
+                  {...pickerProps}
+                  schemas={options}
+                  value={selected ?? null}
+                  onChange={(option) => option && setSchemaId(option.id)}
+                />
+              )}
+            </ScopedSelect>
+            <LabeledSelect
+              label="Time range"
+              aria-label="Time range"
+              width="auto"
+              value={timePeriodMinutes}
+              onChange={(e) =>
+                setTimePeriodMinutes(
+                  parseTimePeriod(e.target.value) ?? timePeriodMinutes,
+                )
+              }
+            >
+              {Object.entries(TIME_PERIOD_OPTIONS).map(([value, text]) => (
+                <option key={value} value={value}>
+                  {text}
+                </option>
+              ))}
+            </LabeledSelect>
             <Box minWidth="60">
               <SearchableSelect<SelectOption, true>
                 isMulti
+                label="Object types"
                 ariaLabel="Object types"
-                placeholder="All object types"
+                placeholder="All"
                 options={OBJECT_TYPE_FILTERS[scope].map((filter) => ({
                   id: filter.value,
                   name: filter.label,
@@ -513,45 +554,6 @@ const FreshnessPage = () => {
                 }
               />
             </Box>
-            <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-              within
-            </Text>
-            <Select
-              size="sm"
-              width="auto"
-              aria-label="Show objects by"
-              value={scope}
-              onChange={(e) => setScope(parseScope(e.target.value) ?? scope)}
-            >
-              {(Object.keys(SCOPE_LABELS) as FreshnessScope[]).map((key) => (
-                <option key={key} value={key}>
-                  {SCOPE_LABELS[key].menu}
-                </option>
-              ))}
-            </Select>
-            {scope === "cluster" ? (
-              <SearchableSelect<SchemaOption, false>
-                {...pickerProps}
-                options={options}
-                value={selected ?? null}
-                onChange={(option) => option && setClusterId(option.id)}
-              />
-            ) : (
-              <SchemaSelect
-                {...pickerProps}
-                schemas={options}
-                value={selected ?? null}
-                onChange={(option) => option && setSchemaId(option.id)}
-              />
-            )}
-            <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-              over the last
-            </Text>
-            <TimePeriodSelect
-              timePeriodMinutes={timePeriodMinutes}
-              setTimePeriodMinutes={setTimePeriodMinutes}
-              options={TIME_PERIOD_OPTIONS}
-            />
           </HStack>
         </VStack>
       </PageHeader>

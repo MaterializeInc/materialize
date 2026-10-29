@@ -164,17 +164,21 @@ describe("FreshnessPage cluster selection", () => {
     expect(within(summary).queryByText(NO_VALUE)).not.toBeInTheDocument();
   });
 
-  it.each([
-    ["current", "whose", "freshness exceeds"],
-    ["p90", "whose", "freshness exceeded"],
-    ["peak", "whose", "freshness exceeded"],
-  ])("words the threshold sentence for %s", async (predicate, lead, verb) => {
-    // "current" is now, so its verb is present; the rest span the range.
+  it("words the threshold sentence the same for every statistic", async () => {
     recordRequests();
-    await renderAt(`/?cluster=u1&exceeded=${predicate}`);
+    await renderAt("/?cluster=u1&exceeded=current");
 
-    expect(await screen.findByText(`Highlight objects ${lead}`)).toBeVisible();
-    expect(screen.getByText(verb)).toBeVisible();
+    expect(await screen.findByText("Highlight objects with")).toBeVisible();
+    expect(screen.getByText("lag ≥")).toBeVisible();
+  });
+
+  it("labels the time range and object type menus", async () => {
+    recordRequests();
+    await renderAt("/?cluster=u1");
+
+    expect(await screen.findByText("Time range")).toBeVisible();
+    expect(screen.getByText("Object types")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Time range" })).toBeVisible();
   });
 
   it("loads a cluster a link names", async () => {
