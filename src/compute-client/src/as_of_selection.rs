@@ -1057,7 +1057,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn set_freshness_tree(&self, _id: GlobalId, _tree: FreshnessTree) {
+        fn set_freshness_tree(&self, _id: GlobalId, _tree: Option<FreshnessTree>) {
             unimplemented!()
         }
 
