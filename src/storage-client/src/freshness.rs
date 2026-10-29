@@ -10,6 +10,7 @@
 //! Recording of wallclock freshness histograms, shared by the compute and storage controllers.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -126,8 +127,24 @@ pub type SeedKey = (GlobalId, Option<ReplicaId>, Measure);
 ///
 /// The write tasks of the two histogram relations publish them, and the controllers take them
 /// when recordings start. Clones share the seeds.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct FreshnessSeeds(Arc<Mutex<SeedState>>);
+
+// NOTE: Summarizes instead of deriving, because every recording started with the seeds holds a
+// clone, and controller state dumps would otherwise print all seeds once per recording.
+impl fmt::Debug for FreshnessSeeds {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d = f.debug_struct("FreshnessSeeds");
+        match self.0.try_lock() {
+            Ok(state) => d
+                .field("global_loaded", &state.global_loaded)
+                .field("replica_loaded", &state.replica_loaded)
+                .field("seeds", &state.seeds.len()),
+            Err(_) => d.field("state", &"<unavailable>"),
+        };
+        d.finish()
+    }
+}
 
 #[derive(Debug, Default)]
 struct SeedState {
