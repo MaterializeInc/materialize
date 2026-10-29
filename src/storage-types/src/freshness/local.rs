@@ -202,12 +202,14 @@ struct LocalPeriod {
 #[derive(Debug)]
 pub struct LocalDelayRecorder {
     book: PeriodBook<LocalPeriod>,
-    /// `(reflected, observed_ms)` of the first observations that reflected arrivals above the
-    /// high-water mark, ascending in both. The book defers arrivals of a frontier ahead of the
-    /// wall clock past the next period boundary to a later observation, which would charge
-    /// them the time until then as local delay.
+    /// `(reflected, observed_ms)`, ascending in both: the arrivals above the high-water mark up
+    /// to `reflected` were reflected at or before `observed_ms`. At most [`MAX_SHOWN`] entries.
     shown: Vec<(u64, u64)>,
 }
+
+/// The most entries [`LocalDelayRecorder`] keeps of observations whose arrivals the period book
+/// deferred.
+const MAX_SHOWN: usize = 16;
 
 impl LocalDelayRecorder {
     /// Starts recording arrivals after `start_ms`, like `FreshnessRecorder::new`.
@@ -252,10 +254,26 @@ impl LocalDelayRecorder {
                     return LocalRows::default();
                 };
                 let advance_ms = now_ms.max(last_reflected);
+                // The book defers the arrivals of a frontier ahead of the wall clock past the
+                // next period boundary to a later observation. Charging them at that one would
+                // add the time until then to their local delay, so the first observation that
+                // reflected them is kept.
                 if last_reflected > self.book.high_water_ms()
                     && self.shown.last().is_none_or(|(r, _)| last_reflected > *r)
                 {
                     self.shown.push((last_reflected, now_ms));
+                    if self.shown.len() > MAX_SHOWN {
+                        // A frontier that leads the wall clock by many observations would grow
+                        // the list without bound. Merging the neighbours `(r1, o1), (r2, o2)`
+                        // into `(r2, o1)` charges `(r1, r2]` at the earlier `o1`, which
+                        // understates their delays by at most `o2 - o1`, so the pair with the
+                        // closest observations is merged.
+                        let i = (1..self.shown.len())
+                            .min_by_key(|i| self.shown[*i].1.saturating_sub(self.shown[*i - 1].1))
+                            .expect("more than one entry");
+                        let (reflected, _) = self.shown.remove(i);
+                        self.shown[i - 1].0 = reflected;
+                    }
                 }
                 let shown = &self.shown;
                 let histogram = || PeriodHistogram {
@@ -396,6 +414,13 @@ fn add_local_part(
             // trees disagree. Every input then counts as unanswered, which records 0 for both.
             (arrival_ready_ms, timestamp_ready_ms) = (now_ms, now_ms);
         }
+        // NOTE: An input observed after the object, which separately observed frontiers allow,
+        // and an input entry observed between a deferred observation and the call that charges
+        // it, answer after `now_ms`. Such an input counts as ready at `now_ms`, like one that
+        // cannot answer, which records 0 for local and keeps skew from exceeding the time
+        // until `now_ms`.
+        arrival_ready_ms = arrival_ready_ms.min(now_ms);
+        timestamp_ready_ms = timestamp_ready_ms.min(now_ms);
         // NOTE: A frontier past the needed timestamp reflects the window if the input's tree is
         // part of `needed`, so the timestamp readiness is at least the arrival readiness. A tick
         // interval that changed between the input's observation and this one breaks that, and
@@ -404,10 +429,8 @@ fn add_local_part(
         debug_assert!(group_end > pos, "group_end={group_end} pos={pos}");
         let n = group_end / interval_ms - pos / interval_ms;
         if n > 0 {
-            // NOTE: An input observed after the object, which separately observed frontiers
-            // allow, makes the delay negative. It is clamped to 0, and a latency of 0 ms has no
-            // bucket of its own, so it takes the bucket of 1 ms.
-            let local_ms = now_ms.saturating_sub(timestamp_ready_ms).max(1);
+            // A latency of 0 ms has no bucket of its own, so it takes the bucket of 1 ms.
+            let local_ms = (now_ms - timestamp_ready_ms).max(1);
             *period
                 .local
                 .counts
