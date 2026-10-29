@@ -575,6 +575,9 @@ impl ComputeState {
                         spill_threads,
                         eager_backing,
                         rss_target_bytes: rss_target,
+                        file_release_interval: COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL
+                            .get(config),
+                        file_release_bytes: COLUMN_PAGED_BATCHER_FILE_RELEASE_BYTES.get(config),
                     },
                     backend,
                 );
