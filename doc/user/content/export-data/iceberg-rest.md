@@ -38,7 +38,9 @@ Catalog](/export-data/iceberg-databricks/).
 - Polaris configured with storage credentials that can call the object store's
   STS `AssumeRole` API, for example through the `AWS_ACCESS_KEY_ID` and
   `AWS_SECRET_ACCESS_KEY` environment variables. Polaris uses them to mint the
-  temporary credentials it vends to Materialize. MinIO supports `AssumeRole`.
+  temporary credentials it vends to Materialize. MinIO supports `AssumeRole`,
+  and Polaris needs no `roleArn` or `stsEndpoint` to call it: it sends the
+  request to the catalog's `endpoint`.
 
 - Polaris's API and the object store reachable from Materialize. Iceberg
   catalog connections cannot tunnel through [AWS
@@ -49,15 +51,18 @@ Catalog](/export-data/iceberg-databricks/).
   region.
 
 - An access token for a Polaris principal that can manage catalogs and
-  principals, such as the `root` principal created at bootstrap:
+  principals, such as the `root` principal created at bootstrap. `read -rs`
+  waits for you to paste the root client secret and press Enter, without
+  echoing it, which keeps it out of your shell history:
 
   ```bash
   POLARIS=https://<polaris_host>
+  read -rs ROOT_CLIENT_SECRET
 
   TOKEN=$(curl -sS "$POLARIS/api/catalog/v1/oauth/tokens" \
     -d grant_type=client_credentials \
     -d client_id=<root_client_id> \
-    -d client_secret=<root_client_secret> \
+    --data-urlencode "client_secret=$ROOT_CLIENT_SECRET" \
     -d scope=PRINCIPAL_ROLE:ALL | jq -r .access_token)
   ```
 
@@ -175,10 +180,28 @@ CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
 | `WAREHOUSE` | The catalog name. |
 | `SCOPE` | `PRINCIPAL_ROLE:ALL`, or `PRINCIPAL_ROLE:<name>` to activate a single principal role. Required: Polaris rejects the token request without it. |
 | `ACCESS DELEGATION` | `'vended-credentials'`, so that Materialize writes with the credentials Polaris vends. |
+| `STORAGE PROVIDER` | Omit it for S3 and S3-compatible storage such as MinIO, the default. Set it to `'gcs'` or `'adls'` if the catalog stores its tables in Google Cloud Storage or Azure Data Lake Storage Gen2. |
 
 `CREATE CONNECTION` validates the connection by listing the catalog's
 namespaces, so a wrong URL, scope, or credential fails here. For all options,
 see [`CREATE CONNECTION`](/sql/create-connection/#iceberg-catalog).
+
+## Other REST catalogs
+
+The same connection works with other Iceberg REST catalogs, with these
+differences:
+
+- Without `ACCESS DELEGATION`, Materialize uses the storage properties the
+  catalog returns: `s3.endpoint`, `s3.region`, `s3.path-style-access`,
+  `s3.access-key-id`, and `s3.secret-access-key`. Materialize adds nothing to
+  them, so they must describe the store completely.
+- Materialize exchanges `CREDENTIAL` at `<URL>/v1/oauth/tokens` and ignores the
+  token endpoint the catalog advertises. Set `OAUTH2 SERVER URL` if the catalog
+  serves it elsewhere.
+- Materialize refreshes vended credentials through the catalog's
+  `loadCredentials` endpoint. Sinks on a catalog that vends credentials but does
+  not implement `loadCredentials` fail once the first credential expires.
+- For storage other than S3, set `STORAGE PROVIDER`.
 
 ## Create the Iceberg sink in Materialize
 
@@ -243,9 +266,6 @@ ALTER SECRET polaris_credential AS '<client_id>:<new_client_secret>';
   CONNECTION`](/sql/alter-connection). To change any option, drop the connection
   and the sinks that depend on it, then recreate them.
 
-- Only S3 and S3-compatible storage is supported with `CATALOG TYPE = 'rest'`
-  and `CREDENTIAL`.
-
 {{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
 
 ## Troubleshooting
@@ -254,7 +274,7 @@ ALTER SECRET polaris_credential AS '<client_id>:<new_client_secret>';
 | --- | --- |
 | `CREATE CONNECTION` fails with `invalid_scope` | `SCOPE` is missing. |
 | `CREATE CONNECTION` fails with `401 Unauthorized` | The credential is wrong, or `SCOPE` names a principal role that is not assigned to the principal. |
-| The sink stalls with `403 Forbidden` and `is not authorized for op CREATE_TABLE_DIRECT_WITH_WRITE_DELEGATION` | The principal's catalog role lacks `CATALOG_MANAGE_CONTENT`, or `TABLE_READ_DATA` and `TABLE_WRITE_DATA`, so Polaris refuses to vend credentials. |
+| The sink stalls with `403 Forbidden` and `is not authorized for op CREATE_TABLE_DIRECT_WITH_WRITE_DELEGATION` | The principal's catalog role lacks either `CATALOG_MANAGE_CONTENT` or both `TABLE_READ_DATA` and `TABLE_WRITE_DATA`, so Polaris refuses to vend credentials. |
 | The sink stalls with `500 Internal Server Error` from Polaris | Polaris cannot reach the object store, or its storage credentials cannot call `AssumeRole`. Check the Polaris logs. |
 | The sink stalls with `Failed to close batch writer` and `signing http request` | Materialize has no storage credentials. Set `ACCESS DELEGATION = 'vended-credentials'` on the connection. |
 | The sink stalls with `Failed to close batch writer` for another reason | The `endpoint` in the catalog's `storageConfigInfo` is not reachable from Materialize. |
