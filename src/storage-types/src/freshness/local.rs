@@ -536,5 +536,6 @@ fn on_time_skew(inputs: &[LocalInput<'_>], timestamp: u64, arrival: u64) -> u64 
         .map(|i| i.tree.latest_show(arrival))
         .collect::<Option<Vec<_>>>()
         .and_then(|s| s.into_iter().max());
+    // An input that never shows the arrival leaves the cap unknown, and 0 understates.
     shown.map_or(0, |shown| passed.saturating_sub(shown))
 }

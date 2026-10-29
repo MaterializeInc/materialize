@@ -2304,64 +2304,86 @@ fn dominated_by(low: &BTreeMap<i32, u64>, high: &BTreeMap<i32, u64>) -> bool {
         && at_or_above(low, i32::MIN) == at_or_above(high, i32::MIN)
 }
 
-/// An input that ticks on time: a join of leaves `(interval_ms, phase_ms)`, aligned to the epoch
-/// without a phase, optionally under a refresh every `refresh_ms`. Independent of the
-/// recorder's model, it knows the phase of its unaligned leaves.
+/// A tree that ticks on time. Independent of the recorder's model, it knows the phase of its
+/// unaligned leaves.
 #[derive(Debug, Clone)]
-struct OnTimeInput {
-    leaves: Vec<(u64, Option<u64>)>,
-    refresh_ms: Option<u64>,
+enum OnTimeInput {
+    /// Ticks every `interval_ms` at `phase_ms`, aligned to the epoch without a phase.
+    Leaf {
+        interval_ms: u64,
+        phase_ms: Option<u64>,
+    },
+    Min(Vec<OnTimeInput>),
+    /// Refreshes every `refresh_ms`.
+    Refresh(u64, Box<OnTimeInput>),
 }
 
 impl OnTimeInput {
-    fn tree(&self) -> ResolvedTree {
-        let mut leaves: Vec<ResolvedTree> = self
-            .leaves
+    /// A join of leaves `(interval_ms, phase_ms)`, optionally under a refresh every
+    /// `refresh_ms`.
+    fn join(leaves: &[(u64, Option<u64>)], refresh_ms: Option<u64>) -> Self {
+        let mut leaves: Vec<_> = leaves
             .iter()
-            .map(|(i, phase)| match phase {
-                None => aligned(*i),
-                Some(_) => unaligned(*i),
+            .map(|(interval_ms, phase_ms)| OnTimeInput::Leaf {
+                interval_ms: *interval_ms,
+                phase_ms: *phase_ms,
             })
             .collect();
         let inner = match leaves.len() {
             1 => leaves.pop().unwrap(),
-            _ => ResolvedTree::Min(leaves),
+            _ => OnTimeInput::Min(leaves),
         };
-        match self.refresh_ms {
+        match refresh_ms {
             None => inner,
-            Some(p) => refresh(every(p), inner),
+            Some(p) => OnTimeInput::Refresh(p, Box::new(inner)),
+        }
+    }
+
+    fn tree(&self) -> ResolvedTree {
+        match self {
+            OnTimeInput::Leaf {
+                interval_ms,
+                phase_ms: None,
+            } => aligned(*interval_ms),
+            OnTimeInput::Leaf { interval_ms, .. } => unaligned(*interval_ms),
+            OnTimeInput::Min(inputs) => {
+                ResolvedTree::Min(inputs.iter().map(OnTimeInput::tree).collect())
+            }
+            OnTimeInput::Refresh(p, input) => refresh(every(*p), input.tree()),
         }
     }
 
     /// The frontier at wall clock `w`. A leaf's tick at `t` leaves it at `t + 1`, and a refresh
     /// advances to its next refresh once its input passed the previous one.
     fn frontier(&self, w: u64) -> u64 {
-        let f = self
-            .leaves
-            .iter()
-            .map(|(i, phase)| {
-                let phase = phase.unwrap_or(0);
+        match self {
+            OnTimeInput::Leaf {
+                interval_ms,
+                phase_ms,
+            } => {
+                let phase = phase_ms.unwrap_or(0);
                 if w >= phase {
-                    phase + (w - phase) / i * i + 1
+                    phase + (w - phase) / interval_ms * interval_ms + 1
                 } else {
                     1
                 }
-            })
-            .min()
-            .unwrap();
-        self.refresh_ms.map_or(f, |p| ceil_to(f, 0, p))
+            }
+            OnTimeInput::Min(inputs) => inputs.iter().map(|i| i.frontier(w)).min().unwrap(),
+            OnTimeInput::Refresh(p, input) => ceil_to(input.frontier(w), 0, *p),
+        }
     }
 
     /// The timestamp `arrival` gets: the latest of the leaves' next ticks, rounded up to the
-    /// next refresh.
+    /// next refresh of every refresh above them.
     fn assigned(&self, arrival: u64) -> u64 {
-        let t = self
-            .leaves
-            .iter()
-            .map(|(i, phase)| ceil_to(arrival, phase.unwrap_or(0), *i))
-            .max()
-            .unwrap();
-        self.refresh_ms.map_or(t, |p| ceil_to(t, 0, p))
+        match self {
+            OnTimeInput::Leaf {
+                interval_ms,
+                phase_ms,
+            } => ceil_to(arrival, phase_ms.unwrap_or(0), *interval_ms),
+            OnTimeInput::Min(inputs) => inputs.iter().map(|i| i.assigned(arrival)).max().unwrap(),
+            OnTimeInput::Refresh(p, input) => ceil_to(input.assigned(arrival), 0, *p),
+        }
     }
 
     /// The first wall clock at which the frontier is past `timestamp`.
@@ -2383,17 +2405,29 @@ impl OnTimeInput {
         self.passes(self.assigned(arrival))
     }
 
+    /// Adds the tick times of the leaves up to `end` to `ticks`.
+    fn ticks(&self, end: u64, ticks: &mut Vec<u64>) {
+        match self {
+            OnTimeInput::Leaf {
+                interval_ms,
+                phase_ms,
+            } => {
+                let mut t = phase_ms.unwrap_or(0);
+                while t <= end {
+                    ticks.push(t);
+                    t += interval_ms;
+                }
+            }
+            OnTimeInput::Min(inputs) => inputs.iter().for_each(|i| i.ticks(end, ticks)),
+            OnTimeInput::Refresh(_, input) => input.ticks(end, ticks),
+        }
+    }
+
     /// The frontier history up to `end`, each advance observed `delay` ms after it, held in
     /// `stall` until its end.
     fn history(&self, end: u64, delay: u64, stall: Option<(u64, u64)>) -> History {
         let mut ticks = Vec::new();
-        for (i, phase) in &self.leaves {
-            let mut t = phase.unwrap_or(0);
-            while t <= end {
-                ticks.push(t);
-                t += i;
-            }
-        }
+        self.ticks(end, &mut ticks);
         ticks.sort();
         ticks.dedup();
         let mut history = Vec::new();
@@ -2686,13 +2720,27 @@ fn split_never_exceeds_per_arrival_oracle() {
         select(vec![1u64, 2, 3, 5, 7, 11, 13, 20]),
         proptest::option::of(0u64..1000),
     )
-        .prop_map(|(interval, phase)| (interval, phase.map(|p| p % interval)));
+        .prop_map(|(interval_ms, phase)| OnTimeInput::Leaf {
+            interval_ms,
+            phase_ms: phase.map(|p| p % interval_ms),
+        });
+    // Joins and refreshes nest in any order, so an input can be a join that reads a refresh
+    // view or another join, and the object joins such inputs.
+    let shape = leaf.prop_recursive(2, 6, 3, |inner| {
+        Union::new([
+            proptest::collection::vec(inner.clone(), 2..=3)
+                .prop_map(OnTimeInput::Min)
+                .boxed(),
+            (select(vec![20u64, 30, 50]), inner)
+                .prop_map(|(p, input)| OnTimeInput::Refresh(p, Box::new(input)))
+                .boxed(),
+        ])
+    });
     // Leads above about 550 ms with leaves of a few ms defer more observations than the
     // recorder keeps, which makes it merge them.
     let lead = select(vec![0u64, 100, 400, 600, 900, 1500]);
     let input = (
-        proptest::collection::vec(leaf, 1..=2),
-        proptest::option::of(select(vec![20u64, 30, 50])),
+        shape,
         proptest::option::of((1u64..END, 0u64..300)),
         lead.clone(),
     );
@@ -2711,18 +2759,12 @@ fn split_never_exceeds_per_arrival_oracle() {
             state % (max_delay + 1)
         };
         let cfg = RecorderConfig { period_ms: 500, ..config(4) };
-        let models: Vec<OnTimeInput> = specs
-            .iter()
-            .map(|(leaves, refresh_ms, _, _)| OnTimeInput {
-                leaves: leaves.clone(),
-                refresh_ms: *refresh_ms,
-            })
-            .collect();
+        let models: Vec<OnTimeInput> = specs.iter().map(|(model, _, _)| model.clone()).collect();
         let trees: Vec<ResolvedTree> = models.iter().map(OnTimeInput::tree).collect();
         let tree = ResolvedTree::Min(trees.clone());
         // The true frontier, held during the input's stall.
         let frontier = |k: usize, t: u64| -> u64 {
-            match specs[k].2 {
+            match specs[k].1 {
                 Some((from, len)) if (from..from + len).contains(&t) => {
                     models[k].frontier(from - 1)
                 }
@@ -2734,7 +2776,7 @@ fn split_never_exceeds_per_arrival_oracle() {
         let mut history = Vec::new();
         for t in 0..END {
             for (k, h) in histories.iter_mut().enumerate() {
-                let observed = (t + delay()).saturating_sub(specs[k].3);
+                let observed = (t + delay()).saturating_sub(specs[k].2);
                 push_advance(h, observed, frontier(k, t));
             }
             let f = (0..specs.len()).map(|k| frontier(k, t)).min().unwrap();
@@ -2941,14 +2983,8 @@ fn split_unaligned_input_adds_no_skew_cap() {
     // A table that ticks every second at a phase off the epoch grid, joined with a 300 ms
     // source that stalls for a minute. The table's phase is unknown to the recorder, so only
     // the source's grid can cause skew.
-    let table = OnTimeInput {
-        leaves: vec![(1000, Some(437))],
-        refresh_ms: None,
-    };
-    let source = OnTimeInput {
-        leaves: vec![(300, None)],
-        refresh_ms: None,
-    };
+    let table = OnTimeInput::join(&[(1000, Some(437))], None);
+    let source = OnTimeInput::join(&[(300, None)], None);
     let (t_table, t_source) = (table.tree(), source.tree());
     let join = ResolvedTree::Min(vec![t_table.clone(), t_source.clone()]);
     let end = 400_000;
@@ -2973,14 +3009,8 @@ fn split_cap_bounds_nested_unaligned_leaf() {
     // A join of `x`, a join of a 3 s table at an unknown phase with a 7 s source, with a 2 s
     // source that stalls for 5 minutes. `x` shows an arrival only once its table passes the
     // 7 s timestamp, which takes up to 3 s, so the cap must allow for the latest such tick.
-    let x = OnTimeInput {
-        leaves: vec![(3000, Some(1234)), (7000, None)],
-        refresh_ms: None,
-    };
-    let y = OnTimeInput {
-        leaves: vec![(2000, None)],
-        refresh_ms: None,
-    };
+    let x = OnTimeInput::join(&[(3000, Some(1234)), (7000, None)], None);
+    let y = OnTimeInput::join(&[(2000, None)], None);
     let (t_x, t_y) = (x.tree(), y.tree());
     let outer = ResolvedTree::Min(vec![t_x.clone(), t_y.clone()]);
     let end = 600_000;
