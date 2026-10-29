@@ -1026,11 +1026,11 @@ async fn local_delay_without_input_entries_is_zero() {
     }
 }
 
-/// An input that completed is visible from its completion on, so its consumer's local delay is
-/// measured from then.
+/// An input that completed is visible from its completion on, but a window is ready no earlier
+/// than it starts, so its consumer's local delay is measured from the later of the two.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
-async fn local_delay_after_closed_input_counts_from_close() {
+async fn local_delay_after_closed_input_counts_from_close_or_window_start() {
     let mut h = FreshnessHarness::new(true, false);
     h.instance.initialization_complete();
     let a = GlobalId::User(10);
@@ -1051,7 +1051,8 @@ async fn local_delay_after_closed_input_counts_from_close() {
     }
     let recorded = h.recorded();
     let scheme = BucketScheme::new(4).expect("power of two");
-    let expected: BTreeSet<_> = (1..=60).map(|s| scheme.bucket(s * 1000 - 495)).collect();
+    // The first window starts before the close, every later one after it.
+    let expected = BTreeSet::from([scheme.bucket(505), scheme.bucket(1005)]);
     for replica in [None, Some(r1)] {
         assert_eq!(
             recorded.buckets("local", a, replica),

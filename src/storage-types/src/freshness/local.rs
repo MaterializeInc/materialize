@@ -209,7 +209,7 @@ pub struct LocalDelayRecorder {
 
 /// The most entries [`LocalDelayRecorder`] keeps of observations whose arrivals the period book
 /// deferred.
-const MAX_SHOWN: usize = 16;
+pub(super) const MAX_SHOWN: usize = 16;
 
 impl LocalDelayRecorder {
     /// Starts recording arrivals after `start_ms`, like `FreshnessRecorder::new`.
@@ -224,6 +224,11 @@ impl LocalDelayRecorder {
     /// arrivals above it.
     pub fn high_water_ms(&self) -> u64 {
         self.book.high_water_ms()
+    }
+
+    #[cfg(test)]
+    pub(super) fn shown_len(&self) -> usize {
+        self.shown.len()
     }
 
     /// Records an advance of the object to `frontier` at `now_ms`, given its direct inputs'
@@ -427,23 +432,42 @@ fn add_local_part(
         // the clamp then charges the difference to neither measure.
         timestamp_ready_ms = timestamp_ready_ms.max(arrival_ready_ms);
         debug_assert!(group_end > pos, "group_end={group_end} pos={pos}");
-        let n = group_end / interval_ms - pos / interval_ms;
-        if n > 0 {
-            // A latency of 0 ms has no bucket of its own, so it takes the bucket of 1 ms.
-            let local_ms = (now_ms - timestamp_ready_ms).max(1);
-            *period
-                .local
-                .counts
-                .entry(period.local.scheme.bucket(local_ms))
-                .or_default() += n;
-            if inputs.len() >= 2 {
-                let skew_ms = (timestamp_ready_ms - arrival_ready_ms).max(1);
-                *period
-                    .skew
-                    .counts
-                    .entry(period.skew.scheme.bucket(skew_ms))
-                    .or_default() += n;
+        // NOTE: A frontier ahead of the wall clock lets an input show an arrival before the
+        // arrival's window starts. Both ready times are clamped up to the window start, because
+        // otherwise local delay and skew together exceed the end-to-end charge. The clamped
+        // latencies vary by window. Windows that start by the arrival readiness keep both
+        // latencies. Windows that start by the timestamp readiness have skew from their start.
+        // Later windows have no skew and local delay from their start.
+        let arrival_cut = tree
+            .next_boundary(arrival_ready_ms + 1)
+            .clamp(pos, group_end);
+        let timestamp_cut = tree
+            .next_boundary(timestamp_ready_ms + 1)
+            .clamp(arrival_cut, group_end);
+        let count = |lo: u64, hi: u64| hi / interval_ms - lo / interval_ms;
+        let add = |histogram: &mut PeriodHistogram, latency_ms: u64, n: u64| {
+            if n > 0 {
+                // A latency of 0 ms has no bucket of its own, so it takes the bucket of 1 ms.
+                let bucket = histogram.scheme.bucket(latency_ms.max(1));
+                *histogram.counts.entry(bucket).or_default() += n;
             }
+        };
+        let add_from_start = |histogram: &mut PeriodHistogram, x: u64, (lo, hi): (u64, u64)| {
+            let scheme = histogram.scheme;
+            add_part(tree, &scheme, interval_ms, lo, hi, x, &mut histogram.counts);
+        };
+        let local_ms = now_ms - timestamp_ready_ms;
+        add(&mut period.local, local_ms, count(pos, timestamp_cut));
+        add_from_start(&mut period.local, now_ms, (timestamp_cut, group_end));
+        if inputs.len() >= 2 {
+            let skew_ms = timestamp_ready_ms - arrival_ready_ms;
+            add(&mut period.skew, skew_ms, count(pos, arrival_cut));
+            add_from_start(
+                &mut period.skew,
+                timestamp_ready_ms,
+                (arrival_cut, timestamp_cut),
+            );
+            add(&mut period.skew, 0, count(timestamp_cut, group_end));
         }
         pos = group_end;
     }
