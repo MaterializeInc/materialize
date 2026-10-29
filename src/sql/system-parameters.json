@@ -1987,7 +1987,7 @@
     {
       "name": "kafka_reconnect_backoff",
       "typeName": "duration",
-      "default": "100 ms",
+      "default": "500 ms",
       "description": "Sets reconnect.backoff.ms in librdkafka for sources and sinks.",
       "scope": "replica",
       "userVisible": false,
