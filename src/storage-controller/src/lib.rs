@@ -77,8 +77,8 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::errors::CollectionMissing;
+use mz_storage_types::freshness::TickerLookup;
 use mz_storage_types::freshness::recorder::RecorderConfig;
-use mz_storage_types::freshness::{ResolvedTree, TickerLookup};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
@@ -2067,12 +2067,14 @@ impl StorageController for Controller {
         }
 
         // Remove collection state
+        let mut freshness_updates = Vec::new();
         for id in ingestions_to_drop.iter().chain(collections_to_drop.iter()) {
             tracing::info!(%id, "dropping collection state");
-            let collection = self
+            let mut collection = self
                 .collections
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
+            freshness_updates.extend(self.finish_freshness(*id, &mut collection));
 
             let instance = match &collection.extra_state {
                 CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
@@ -2109,6 +2111,7 @@ impl StorageController for Controller {
                 }
             }
         }
+        self.append_freshness_updates(freshness_updates);
 
         // Also let StorageCollections know!
         self.storage_collections
@@ -2179,12 +2182,14 @@ impl StorageController for Controller {
         }
 
         // Remove collection/export state
+        let mut freshness_updates = Vec::new();
         for id in sinks_to_drop.iter() {
             tracing::info!(%id, "dropping export state");
-            let collection = self
+            let mut collection = self
                 .collections
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
+            freshness_updates.extend(self.finish_freshness(*id, &mut collection));
 
             let instance = match &collection.extra_state {
                 CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
@@ -2203,6 +2208,7 @@ impl StorageController for Controller {
                 }
             }
         }
+        self.append_freshness_updates(freshness_updates);
 
         // Also let StorageCollections know!
         self.storage_collections
@@ -3094,17 +3100,25 @@ where
         if self.freshness_config.is_none() || !self.initialized {
             return None;
         }
-        let tree = self
-            .storage_collections
-            .freshness_tree(id)?
-            .resolve(&*self.ticker_lookup)?;
+        // The since takes the place of the as-of. A new shard's since is the minimum timestamp,
+        // which reflects no arrival, so the snapshot of a new source counts as latency from its
+        // creation.
         let since = self
             .storage_collections
             .collection_frontiers(id)
-            .ok()?
-            .implied_capability;
-        let start_ms = freshness_start_ms(&tree, &since, (self.now)());
-        Some(FreshnessRecording::starting_at(start_ms))
+            .map(|frontiers| frontiers.implied_capability)
+            .unwrap_or_else(|_| Antichain::from_elem(Timestamp::MIN));
+        Some(FreshnessRecording::created(since, (self.now)()))
+    }
+
+    /// Ends the freshness recording of a collection that is dropped and returns the
+    /// introspection updates of its open periods.
+    fn finish_freshness(&self, id: GlobalId, collection: &mut CollectionState) -> Vec<(Row, Diff)> {
+        let Some(mut recording) = collection.freshness.take() else {
+            return Vec::new();
+        };
+        let labels = histogram_labels(&self.instances, &collection.extra_state);
+        freshness::pack_rows(recording.finish(), id, None, &labels)
     }
 
     /// Records the freshness of a collection's write frontier `frontier` and returns the
@@ -4085,17 +4099,6 @@ async fn read_handle_for_snapshot(
     Ok(read_handle)
 }
 
-/// The start of the freshness recording of a collection with `since` created at `created_ms`, the
-/// later of the last arrival `since` reflects and `created_ms`.
-fn freshness_start_ms(tree: &ResolvedTree, since: &Antichain<Timestamp>, created_ms: u64) -> u64 {
-    // A new shard's since is the minimum timestamp, which reflects no arrival. Starting at the
-    // creation time then counts the snapshot of a new source as latency.
-    since
-        .as_option()
-        .and_then(|t| tree.last_reflected(*t))
-        .map_or(created_ms, |reflected| reflected.max(created_ms))
-}
-
 /// The labels of wallclock lag and freshness histogram rows of a collection.
 fn histogram_labels(
     instances: &BTreeMap<StorageInstanceId, Instance>,
@@ -4342,34 +4345,35 @@ fn swap_updates(
 #[cfg(test)]
 mod tests {
     use mz_repr::Timestamp;
+    use mz_storage_client::freshness::FreshnessRecording;
+    use mz_storage_types::freshness::histogram::BucketScheme;
+    use mz_storage_types::freshness::recorder::RecorderConfig;
     use mz_storage_types::freshness::{ResolvedTree, Ticker};
     use timely::progress::Antichain;
-
-    use super::freshness_start_ms;
 
     #[mz_ore::test]
     fn freshness_start_is_later_of_since_and_creation() {
         let tree = ResolvedTree::Leaf(Ticker::Unaligned { interval_ms: 1000 });
+        let config = RecorderConfig {
+            scheme: BucketScheme::new(4).expect("power of two"),
+            interval_ms: 1,
+            period_ms: 60_000,
+            retention_ms: 30 * 24 * 60 * 60 * 1000,
+        };
         let since = |t: u64| Antichain::from_elem(Timestamp::from(t));
-        assert_eq!(
-            freshness_start_ms(&tree, &since(0), 3000),
-            3000,
-            "new shard"
-        );
-        assert_eq!(
-            freshness_start_ms(&tree, &Antichain::new(), 3000),
-            3000,
-            "empty since"
-        );
-        assert_eq!(
-            freshness_start_ms(&tree, &since(5001), 3000),
-            5000,
-            "since ahead"
-        );
-        assert_eq!(
-            freshness_start_ms(&tree, &since(5001), 7000),
-            7000,
-            "since behind"
-        );
+        // The arrivals recorded through 60 s, which start after the returned start.
+        let start = |since: Antichain<Timestamp>, created_ms: u64| {
+            let mut recording = FreshnessRecording::created(since, created_ms);
+            let rows = recording.observe(&tree, &since_frontier(60_001), 61_000, &config);
+            60_000 - rows.iter().map(|r| r.count).sum::<u64>()
+        };
+        assert_eq!(start(since(0), 3000), 3000, "new shard");
+        assert_eq!(start(Antichain::new(), 3000), 3000, "empty since");
+        assert_eq!(start(since(5001), 3000), 5000, "since ahead");
+        assert_eq!(start(since(5001), 7000), 7000, "since behind");
+    }
+
+    fn since_frontier(t: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(Timestamp::from(t))
     }
 }
