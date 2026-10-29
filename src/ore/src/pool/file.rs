@@ -694,7 +694,7 @@ impl FileStore {
             let mut slots = c.slots();
             let mut popped = Vec::new();
             while u64::cast_from(popped.len()).saturating_mul(class_size) < want {
-                let Some(index) = slots.pop_warm() else {
+                let Some(index) = slots.pop_oldest_warm() else {
                     break;
                 };
                 c.warm_bytes.fetch_sub(class_size, Ordering::Relaxed);
