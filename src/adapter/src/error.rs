@@ -1509,9 +1509,9 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLTransactionRace => f.write_str(
                 "another session modified the catalog while this DDL transaction was open",
             ),
-            AdapterError::DDLTransactionOutcomeChanged => {
-                f.write_str("a DDL statement would produce a different outcome at commit")
-            }
+            AdapterError::DDLTransactionOutcomeChanged => f.write_str(
+                "a statement in this transaction would produce a different result at commit",
+            ),
             AdapterError::ClusterStateChanged { cluster_id } => {
                 write!(f, "cluster {cluster_id} was concurrently modified")
             }
