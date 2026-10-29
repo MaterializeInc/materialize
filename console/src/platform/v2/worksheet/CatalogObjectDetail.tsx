@@ -8,19 +8,22 @@
 // by the Apache License, Version 2.0.
 
 import {
-  Badge,
   Box,
   Button,
   Divider,
+  Flex,
   HStack,
+  IconButton,
   Link,
+  MenuItem,
   Text,
+  TextProps,
   Tooltip,
   useTheme,
   VStack,
 } from "@chakra-ui/react";
 import { prettyStr } from "@materializeinc/sql-pretty";
-import React, { useCallback } from "react";
+import React, { useCallback, useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 
 import { useSqlLazy } from "~/api/materialize";
@@ -34,10 +37,17 @@ import { Source } from "~/api/materialize/source/sourceList";
 import type { SupportedObjectType } from "~/api/materialize-v2/types";
 import { MzDataType } from "~/api/materialize-v2/types";
 import { objectIcon } from "~/components/objectIcons";
+import OverflowMenu from "~/components/OverflowMenu";
 import { ConnectorStatusPill } from "~/components/StatusPill";
 import { CommentText } from "~/components-v2/CommentText";
 import { useFlags } from "~/hooks/useFlags";
-import { ClustersIcon } from "~/icons";
+import {
+  ClustersIcon,
+  CommandIcon,
+  EyeOpenIcon,
+  MonitorIcon,
+  WorkflowIcon,
+} from "~/icons";
 import { NULL_DATABASE_NAME } from "~/platform/constants";
 import { useSinkList } from "~/platform/sinks/queries";
 import { useSourcesList } from "~/platform/sources/queries";
@@ -83,6 +93,9 @@ const COLUMN_TYPES = new Set(["table", "view", "materialized-view", "source"]);
 
 /** Object types that can have indexes. */
 const INDEX_TYPES = new Set(["materialized-view", "table", "view", "source"]);
+
+/** Columns shown before the list collapses behind "Show all". */
+const COLUMN_PREVIEW_COUNT = 8;
 
 /** Line width for SQL pretty-printing in SHOW CREATE results. */
 const SQL_PRETTY_LINE_WIDTH = 100;
@@ -199,395 +212,337 @@ const CatalogDetailViewContent = ({
     },
   });
 
+  const showCreate = useCallback(
+    (target: ShowCreateTarget) => {
+      const qualifiedName = [
+        target.databaseName,
+        target.schemaName,
+        target.name,
+      ]
+        .filter(Boolean)
+        .join(".");
+      runShowCreate(
+        {
+          objectType: target.objectType,
+          object: {
+            databaseName: target.databaseName,
+            schemaName: target.schemaName,
+            name: target.name,
+          },
+        },
+        {
+          onSuccess: (data) => {
+            if (!data || data.length === 0) return;
+            const rawSql = String(data[0].rows[0]?.[0] ?? "");
+            let formattedSql: string;
+            try {
+              formattedSql = prettyStr(rawSql, SQL_PRETTY_LINE_WIDTH);
+            } catch {
+              formattedSql = rawSql;
+            }
+            showResult({
+              columns: [
+                {
+                  name: "sql",
+                  type_oid: MzDataType.text,
+                  type_len: -1,
+                  type_mod: -1,
+                },
+              ],
+              rows: [[formattedSql]],
+              commandComplete: "SHOW CREATE",
+              durationMs: 0,
+              displayMode: "sql",
+              kind: SHOW_CREATE_TYPE_TO_KIND[target.objectType],
+              objectName: qualifiedName,
+              clusterName: target.clusterName,
+              clusterId: target.clusterId,
+            });
+          },
+        },
+      );
+    },
+    [runShowCreate, showResult],
+  );
+
   const handleShowSql = useCallback(() => {
     if (!supportsShowCreate) return;
-    const dbName = databaseName === NULL_DATABASE_NAME ? null : databaseName;
-    const qualifiedName = [dbName, schemaName, objectName]
-      .filter(Boolean)
-      .join(".");
-    const kind = SHOW_CREATE_TYPE_TO_KIND[objectType];
-    runShowCreate(
-      {
-        objectType: objectType as ShowCreateObjectType,
-        object: { databaseName: dbName, schemaName, name: objectName },
-      },
-      {
-        onSuccess: (data) => {
-          if (!data || data.length === 0) return;
-          const result = data[0];
-          const rawSql = String(result.rows[0]?.[0] ?? "");
-          let formattedSql: string;
-          try {
-            formattedSql = prettyStr(rawSql, SQL_PRETTY_LINE_WIDTH);
-          } catch {
-            formattedSql = rawSql;
-          }
-          const queryResult: QueryResult = {
-            columns: [
-              {
-                name: "sql",
-                type_oid: MzDataType.text,
-                type_len: -1,
-                type_mod: -1,
-              },
-            ],
-            rows: [[formattedSql]],
-            commandComplete: "SHOW CREATE",
-            durationMs: 0,
-            displayMode: "sql",
-            kind,
-            objectName: qualifiedName,
-            clusterName: clusterName ?? undefined,
-            clusterId: clusterId ?? undefined,
-          };
-          showResult(queryResult);
-        },
-      },
-    );
+    showCreate({
+      objectType: objectType as ShowCreateObjectType,
+      databaseName: databaseName === NULL_DATABASE_NAME ? null : databaseName,
+      schemaName,
+      name: objectName,
+      clusterId,
+      clusterName,
+    });
   }, [
     supportsShowCreate,
-    runShowCreate,
+    showCreate,
     objectType,
     databaseName,
     schemaName,
     objectName,
     clusterId,
     clusterName,
-    showResult,
   ]);
 
-  const handleOpenMonitor = useCallback(() => {
-    navigate(monitorPath(regionSlug, id));
-  }, [navigate, regionSlug, id]);
-
-  const handleOpenWorkflow = useCallback(() => {
-    navigate(workflowPath(regionSlug, id));
-  }, [navigate, regionSlug, id]);
-
-  const handleOpenDataflow = useCallback(() => {
-    navigate(dataflowPath(regionSlug, id));
-  }, [navigate, regionSlug, id]);
+  const [expandedColumnsFor, setExpandedColumnsFor] = useState<string>();
 
   const { columns, description, indexes, owner, dependencies, referencedBy } =
     useCatalogObject(id);
 
+  const visibleColumns =
+    expandedColumnsFor === id
+      ? columns
+      : columns.slice(0, COLUMN_PREVIEW_COUNT);
+
   return (
-    <VStack align="stretch" spacing="0" px="4" pb="4">
-      {/* Header */}
+    <VStack align="stretch" spacing="0" px="4" pb="4" minW="0">
       <Box py="3">
-        <HStack spacing="2">
+        <HStack spacing="2" align="flex-start" minW="0">
           <Tooltip
             label={TYPE_LABELS[objectType] ?? objectType.toUpperCase()}
             placement="top"
             hasArrow
           >
-            <Box as="span" display="inline-flex">
+            <Box as="span" display="inline-flex" pt="1.5">
               {objectIcon(objectType)}
             </Box>
           </Tooltip>
-          <Text fontWeight="bold" fontSize="lg">
+          <Text fontWeight="bold" fontSize="lg" minW="0" wordBreak="break-word">
             {objectName}
           </Text>
-          {isConnector && (
-            <React.Suspense fallback={null}>
-              <ConnectorStatus
-                objectType={objectType as "source" | "sink"}
-                databaseName={databaseName}
-                schemaName={schemaName}
-                objectName={objectName}
-              />
-            </React.Suspense>
-          )}
         </HStack>
-        {(clusterName ||
-          supportsShowCreate ||
-          isConnector ||
-          hasWorkflow ||
-          hasDataflow) && (
-          <HStack mt="1" spacing="2">
+        {(clusterName || owner) && (
+          <Flex
+            mt="1"
+            wrap="wrap"
+            columnGap="1"
+            fontSize="xs"
+            color={colors.foreground.secondary}
+          >
             {clusterId && clusterName && (
               <Tooltip label="Cluster" placement="top" hasArrow>
-                <Badge
+                <Link
                   as={RouterLink}
                   to={absoluteClusterPath(regionSlug, {
                     id: clusterId,
                     name: clusterName,
                   })}
-                  fontSize="xx-small"
-                  colorScheme="gray"
-                  variant="subtle"
-                  cursor="pointer"
-                  _hover={{ textDecoration: "none", opacity: 0.8 }}
+                  display="inline-flex"
+                  alignItems="center"
+                  gap="1"
                 >
                   <ClustersIcon width="10px" height="10px" />
-                  &nbsp;{clusterName}
-                </Badge>
+                  {clusterName}
+                </Link>
               </Tooltip>
             )}
-            {supportsShowCreate && (
-              <Tooltip
-                label="Cannot show create for system objects"
-                placement="top"
-                hasArrow
-                isDisabled={!isSystemObject}
-              >
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={handleShowSql}
-                  isDisabled={isSystemObject}
-                >
-                  SQL
-                </Button>
+            {clusterName && owner && <Text as="span">·</Text>}
+            {owner && (
+              <Tooltip label="Owner" placement="top" hasArrow>
+                <Text as="span">{owner}</Text>
               </Tooltip>
             )}
-            {isConnector && (
-              <Button size="xs" variant="outline" onClick={handleOpenMonitor}>
-                Monitor
-              </Button>
-            )}
-            {hasWorkflow && (
-              <Tooltip
-                label="Not available for system objects"
-                placement="top"
-                hasArrow
-                isDisabled={!isSystemSchema}
-              >
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={handleOpenWorkflow}
-                  isDisabled={isSystemSchema}
-                >
-                  Workflow
-                </Button>
-              </Tooltip>
-            )}
-            {hasDataflow && (
-              <Button size="xs" variant="outline" onClick={handleOpenDataflow}>
-                Visualize
-              </Button>
-            )}
-          </HStack>
+          </Flex>
         )}
+        <Flex mt="1" wrap="wrap" align="center" gap="1">
+          {supportsShowCreate && (
+            <ActionButton
+              label={
+                isSystemObject
+                  ? "Cannot show create for system objects"
+                  : "Show SQL"
+              }
+              icon={<CommandIcon />}
+              onClick={handleShowSql}
+              isDisabled={isSystemObject}
+            />
+          )}
+          {isConnector && (
+            <ActionButton
+              label="Monitor"
+              icon={<MonitorIcon />}
+              onClick={() => navigate(monitorPath(regionSlug, id))}
+            />
+          )}
+          {hasWorkflow && (
+            <ActionButton
+              label={
+                isSystemSchema
+                  ? "Workflow is not available for system objects"
+                  : "Workflow"
+              }
+              icon={<WorkflowIcon />}
+              onClick={() => navigate(workflowPath(regionSlug, id))}
+              isDisabled={isSystemSchema}
+            />
+          )}
+          {hasDataflow && (
+            <ActionButton
+              label="Visualize dataflow"
+              icon={<EyeOpenIcon />}
+              onClick={() => navigate(dataflowPath(regionSlug, id))}
+            />
+          )}
+          {isConnector && (
+            <Box ml="auto">
+              <React.Suspense fallback={null}>
+                <ConnectorStatus
+                  objectType={objectType as "source" | "sink"}
+                  databaseName={databaseName}
+                  schemaName={schemaName}
+                  objectName={objectName}
+                />
+              </React.Suspense>
+            </Box>
+          )}
+        </Flex>
         {description && (
           <CommentText fontSize="sm" color={colors.foreground.secondary} mt="1">
             {description}
           </CommentText>
         )}
-        {owner && (
-          <Text fontSize="xs" color={colors.foreground.secondary} mt="1">
-            Owner: {owner}
-          </Text>
-        )}
       </Box>
 
-      {/* Columns */}
       {showColumns && columns.length > 0 && (
-        <>
-          <Divider />
-          <Box py="3">
-            <Text
-              fontSize="xs"
-              fontWeight="bold"
-              textTransform="uppercase"
-              letterSpacing="wide"
-              mb="2"
-            >
-              Columns
-            </Text>
-            <VStack align="stretch" spacing="0">
-              {columns.map((col) => (
-                <Box
-                  key={col.name}
-                  py="1.5"
-                  borderBottomWidth="1px"
-                  borderColor={colors.border.secondary}
+        <DetailSection title="Columns">
+          {visibleColumns.map((col) => (
+            <Box key={col.name} py="0.5">
+              <HStack spacing="2" minW="0">
+                <TruncatedText fontSize="sm" flex="1">
+                  {col.name}
+                </TruncatedText>
+                <TruncatedText
+                  fontSize="sm"
+                  color={colors.foreground.secondary}
+                  maxW="50%"
+                  title={col.nullable ? `${col.type} (nullable)` : col.type}
                 >
-                  <HStack justifyContent="space-between">
-                    <Text fontSize="sm">{col.name}</Text>
-                    <Text fontSize="sm" color={colors.foreground.secondary}>
-                      {col.type}
-                    </Text>
-                  </HStack>
-                  {!col.nullable && (
-                    <Badge
-                      fontSize="xx-small"
-                      colorScheme="gray"
-                      variant="subtle"
-                      mt="0.5"
-                    >
-                      NOT NULL
-                    </Badge>
-                  )}
-                  {col.columnComment && (
-                    <CommentText
-                      fontSize="xs"
-                      color={colors.foreground.secondary}
-                      mt="0.5"
-                    >
-                      {col.columnComment}
-                    </CommentText>
-                  )}
-                </Box>
-              ))}
-            </VStack>
-          </Box>
-        </>
+                  {col.nullable ? `${col.type}?` : col.type}
+                </TruncatedText>
+              </HStack>
+              {col.columnComment && (
+                <CommentText fontSize="xs" color={colors.foreground.secondary}>
+                  {col.columnComment}
+                </CommentText>
+              )}
+            </Box>
+          ))}
+          {columns.length > COLUMN_PREVIEW_COUNT && (
+            <Button
+              variant="link"
+              size="xs"
+              alignSelf="flex-start"
+              mt="1"
+              color={colors.accent.brightPurple}
+              onClick={() =>
+                setExpandedColumnsFor(
+                  expandedColumnsFor === id ? undefined : id,
+                )
+              }
+            >
+              {expandedColumnsFor === id
+                ? "Show fewer"
+                : `Show all ${columns.length}`}
+            </Button>
+          )}
+        </DetailSection>
       )}
 
-      {/* Indexes */}
       {showIndexes && indexes.length > 0 && (
-        <>
-          <Divider />
-          <Box py="3">
-            <Text
-              fontSize="xs"
-              fontWeight="bold"
-              textTransform="uppercase"
-              letterSpacing="wide"
-              mb="2"
-            >
-              Indexes
-            </Text>
-            <VStack align="stretch" spacing="1">
-              {indexes.map((idx) => (
-                <HStack key={idx.id} justifyContent="space-between">
-                  <Box>
-                    <Text fontSize="sm" fontWeight="medium">
-                      {idx.name}
-                    </Text>
-                    <Text fontSize="xs" color={colors.foreground.secondary}>
-                      ({idx.indexedColumns})
-                    </Text>
-                  </Box>
-                  <VStack spacing="1" align="flex-end">
-                    <HStack spacing="1">
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => {
-                          const idxQualifiedName = [
-                            idx.databaseName,
-                            idx.schemaName,
-                            idx.name,
-                          ]
-                            .filter(Boolean)
-                            .join(".");
-                          runShowCreate(
-                            {
+        <DetailSection title="Indexes">
+          {indexes.map((idx) => {
+            const isSystemIndex = SYSTEM_SCHEMAS.has(idx.schemaName);
+            return (
+              <HStack key={idx.id} spacing="1" minW="0" py="0.5">
+                <Box flex="1" minW="0">
+                  <TruncatedText fontSize="sm" fontWeight="medium">
+                    {idx.name}
+                  </TruncatedText>
+                  <TruncatedText
+                    fontSize="xs"
+                    color={colors.foreground.secondary}
+                  >
+                    ({idx.indexedColumns})
+                  </TruncatedText>
+                </Box>
+                <OverflowMenu
+                  placement="bottom-end"
+                  items={[
+                    {
+                      visible: true,
+                      render: () => (
+                        <MenuItem
+                          onClick={() =>
+                            showCreate({
                               objectType: "index",
-                              object: {
-                                databaseName: idx.databaseName,
-                                schemaName: idx.schemaName,
-                                name: idx.name,
-                              },
-                            },
-                            {
-                              onSuccess: (data) => {
-                                if (!data || data.length === 0) return;
-                                const res = data[0];
-                                const rawSql = String(res.rows[0]?.[0] ?? "");
-                                let formattedSql: string;
-                                try {
-                                  formattedSql = prettyStr(
-                                    rawSql,
-                                    SQL_PRETTY_LINE_WIDTH,
-                                  );
-                                } catch {
-                                  formattedSql = rawSql;
-                                }
-                                showResult({
-                                  columns: [
-                                    {
-                                      name: "sql",
-                                      type_oid: MzDataType.text,
-                                      type_len: -1,
-                                      type_mod: -1,
-                                    },
-                                  ],
-                                  rows: [[formattedSql]],
-                                  commandComplete: "SHOW CREATE",
-                                  durationMs: 0,
-                                  displayMode: "sql",
-                                  kind: "show_create_index",
-                                  objectName: idxQualifiedName,
-                                  clusterName: idx.clusterName ?? undefined,
-                                  clusterId: idx.clusterId ?? undefined,
-                                });
-                              },
-                            },
-                          );
-                        }}
-                      >
-                        SQL
-                      </Button>
-                      {idx.clusterId && idx.clusterName && (
-                        <Tooltip label="Cluster" placement="top" hasArrow>
-                          <Badge
-                            as={RouterLink}
-                            to={absoluteClusterPath(regionSlug, {
-                              id: idx.clusterId,
-                              name: idx.clusterName,
-                            })}
-                            fontSize="xx-small"
-                            colorScheme="gray"
-                            variant="subtle"
-                            cursor="pointer"
-                            _hover={{ textDecoration: "none", opacity: 0.8 }}
-                          >
-                            <ClustersIcon width="10px" height="10px" />
-                            &nbsp;{idx.clusterName}
-                          </Badge>
-                        </Tooltip>
-                      )}
-                    </HStack>
-                    <HStack spacing="1">
-                      <Tooltip
-                        label="Not available for system objects"
-                        placement="top"
-                        hasArrow
-                        isDisabled={!SYSTEM_SCHEMAS.has(idx.schemaName)}
-                      >
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          isDisabled={SYSTEM_SCHEMAS.has(idx.schemaName)}
+                              databaseName: idx.databaseName,
+                              schemaName: idx.schemaName,
+                              name: idx.name,
+                              clusterId: idx.clusterId ?? undefined,
+                              clusterName: idx.clusterName ?? undefined,
+                            })
+                          }
+                        >
+                          Show SQL
+                        </MenuItem>
+                      ),
+                    },
+                    {
+                      visible: true,
+                      render: () => (
+                        <MenuItem
+                          isDisabled={isSystemIndex}
                           onClick={() =>
                             navigate(workflowPath(regionSlug, idx.id))
                           }
                         >
                           Workflow
-                        </Button>
-                      </Tooltip>
-                      {flags["visualization-features"] && (
-                        <Button
-                          size="xs"
-                          variant="outline"
+                        </MenuItem>
+                      ),
+                    },
+                    {
+                      visible: flags["visualization-features"],
+                      render: () => (
+                        <MenuItem
                           onClick={() =>
                             navigate(dataflowPath(regionSlug, idx.id))
                           }
                         >
-                          Visualize
-                        </Button>
-                      )}
-                    </HStack>
-                  </VStack>
-                </HStack>
-              ))}
-            </VStack>
-          </Box>
-        </>
+                          Visualize dataflow
+                        </MenuItem>
+                      ),
+                    },
+                    {
+                      visible: Boolean(idx.clusterId && idx.clusterName),
+                      render: () =>
+                        idx.clusterId &&
+                        idx.clusterName && (
+                          <MenuItem
+                            as={RouterLink}
+                            to={absoluteClusterPath(regionSlug, {
+                              id: idx.clusterId,
+                              name: idx.clusterName,
+                            })}
+                          >
+                            Open cluster {idx.clusterName}
+                          </MenuItem>
+                        ),
+                    },
+                  ]}
+                />
+              </HStack>
+            );
+          })}
+        </DetailSection>
       )}
 
-      {/* Dependencies */}
       <DependenciesSection
         deps={dependencies}
         direction="depends_on"
         onNavigate={onNavigate}
       />
-
-      {/* Referenced By */}
       <DependenciesSection
         deps={referencedBy}
         direction="referenced_by"
@@ -596,6 +551,86 @@ const CatalogDetailViewContent = ({
     </VStack>
   );
 };
+
+/** Object that a SHOW CREATE result is rendered for. */
+interface ShowCreateTarget {
+  objectType: ShowCreateObjectType;
+  databaseName: string | null;
+  schemaName: string;
+  name: string;
+  clusterId?: string;
+  clusterName?: string;
+}
+
+/** Icon-only header action. The label doubles as tooltip and accessible name. */
+const ActionButton = ({
+  label,
+  icon,
+  onClick,
+  isDisabled,
+}: {
+  label: string;
+  icon: React.ReactElement;
+  onClick: () => void;
+  isDisabled?: boolean;
+}) => (
+  <Tooltip label={label} placement="top" hasArrow>
+    <IconButton
+      aria-label={label}
+      icon={icon}
+      size="xs"
+      variant="ghost"
+      onClick={onClick}
+      isDisabled={isDisabled}
+    />
+  </Tooltip>
+);
+
+/** Single-line text that ellipsizes and shows its full value on hover. */
+const TruncatedText = ({
+  children,
+  title,
+  ...props
+}: TextProps & { children: string | string[] }) => {
+  const text = Array.isArray(children) ? children.join("") : children;
+  return (
+    <Text
+      minW="0"
+      noOfLines={1}
+      wordBreak="break-all"
+      title={title ?? text}
+      {...props}
+    >
+      {text}
+    </Text>
+  );
+};
+
+/** Divider plus small heading above one section of the detail view. */
+const DetailSection = ({
+  title,
+  color,
+  children,
+}: React.PropsWithChildren<{ title: string; color?: string }>) => (
+  <>
+    <Divider />
+    <Box py="3">
+      <Text
+        fontSize="xs"
+        fontWeight="bold"
+        textTransform="uppercase"
+        letterSpacing="wide"
+        mb="2"
+        color={color}
+      >
+        {title}
+      </Text>
+      <VStack align="stretch" spacing="0">
+        {children}
+      </VStack>
+    </Box>
+  </>
+);
 
 /**
  * Displays upstream dependencies ("depends on") or downstream dependents
@@ -613,61 +648,57 @@ const DependenciesSection = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
 
-  // Filter out indexes from REFERENCED BY — they have their own section
   const deps = rawDeps.filter(
     (dep) => !(direction === "referenced_by" && dep.objectType === "index"),
   );
 
   if (deps.length === 0) return null;
 
-  const title = direction === "depends_on" ? "DEPENDS ON" : "REFERENCED BY";
-  const headerColor =
-    direction === "depends_on"
-      ? colors.accent.darkYellow
-      : colors.accent.orange;
-
   return (
-    <>
-      <Divider />
-      <Box py="3">
-        <Text
-          fontSize="xs"
-          fontWeight="bold"
-          textTransform="uppercase"
-          letterSpacing="wide"
-          mb="2"
-          color={headerColor}
-        >
-          {title}
-        </Text>
-        <VStack align="stretch" spacing="1">
-          {deps.map((dep) => (
-            <HStack key={dep.id} justifyContent="space-between">
-              <Link
-                fontSize="sm"
-                color={colors.accent.brightPurple}
-                onClick={() =>
-                  onNavigate({
-                    id: dep.id,
-                    databaseName: dep.databaseName ?? NULL_DATABASE_NAME,
-                    schemaName: dep.schemaName ?? "",
-                    objectName: dep.name,
-                    objectType: dep.objectType as SupportedObjectType,
-                  })
-                }
-                textDecoration="underline"
-                _hover={{ textDecoration: "none" }}
-              >
-                {dep.name}
-              </Link>
-              <Text fontSize="xs" color={colors.foreground.secondary}>
-                {dep.objectType}
-              </Text>
-            </HStack>
-          ))}
-        </VStack>
-      </Box>
-    </>
+    <DetailSection
+      title={direction === "depends_on" ? "Depends on" : "Referenced by"}
+      color={
+        direction === "depends_on"
+          ? colors.accent.darkYellow
+          : colors.accent.orange
+      }
+    >
+      {deps.map((dep) => (
+        <HStack key={dep.id} spacing="2" minW="0" py="0.5">
+          <Tooltip label={dep.objectType} placement="top" hasArrow>
+            <Box
+              as="span"
+              display="inline-flex"
+              flexShrink={0}
+              color={colors.foreground.secondary}
+            >
+              {objectIcon(dep.objectType)}
+            </Box>
+          </Tooltip>
+          <Link
+            fontSize="sm"
+            minW="0"
+            noOfLines={1}
+            wordBreak="break-all"
+            title={dep.name}
+            color={colors.accent.brightPurple}
+            onClick={() =>
+              onNavigate({
+                id: dep.id,
+                databaseName: dep.databaseName ?? NULL_DATABASE_NAME,
+                schemaName: dep.schemaName ?? "",
+                objectName: dep.name,
+                objectType: dep.objectType as SupportedObjectType,
+              })
+            }
+            textDecoration="underline"
+            _hover={{ textDecoration: "none" }}
+          >
+            {dep.name}
+          </Link>
+        </HStack>
+      ))}
+    </DetailSection>
   );
 };
 
