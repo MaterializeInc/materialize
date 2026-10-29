@@ -27,19 +27,9 @@
 //! ## Differential collections
 //!
 //! These are very similar to the self-correcting persist_sink. We have an
-//! in-memory desired state and continually make it so that persist matches
-//! desired. As described below (in the task implementation), we could do this
-//! in a memory efficient way by keeping open a persist read handle and
-//! continually updating/consolidating our desired collection. This way, we
-//! would be memory-efficient even in read-only mode.
-//!
-//! This is an evolution of the current design where, on startup, we bring the
-//! persist collection into a known state (mostly by retracting everything) and
-//! then assume that this `envd` is the only writer. We panic when that is ever
-//! not the case, which we notice when the upper of a collection changes
-//! unexpectedly. With this new design we can instead continually update our
-//! view of the persist shard and emit updates when needed, when desired
-//! changed.
+//! in-memory desired state and reconcile it against a retained snapshot plus
+//! incremental Persist subscription. Upper conflicts return to the command
+//! loop with a bounded backoff before refreshing and preparing another append.
 //!
 //! NOTE: As it is, we always keep all of desired in memory. Only when told to
 //! go out of read-only mode would we start attempting to write.
@@ -70,18 +60,15 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
-use differential_dataflow::consolidation;
 use futures::future::BoxFuture;
-use futures::stream::StreamExt;
 use futures::{Future, FutureExt};
 use mz_cluster_client::ReplicaId;
 use mz_dyncfg::ConfigSet;
 use mz_ore::now::NowFn;
-use mz_ore::retry::Retry;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::batch::{Added, Batch};
-use mz_persist_client::read::ReadHandle;
+use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
@@ -619,10 +606,6 @@ pub(crate) struct DifferentialIntrospectionConfig {
 
 /// A task that will make it so that the state in persist matches the desired
 /// state and continuously bump the upper for the specified collection.
-///
-/// NOTE: This implementation is a bit clunky, and could be optimized by not keeping
-/// all of desired in memory (see commend below). It is meant to showcase the
-/// general approach.
 struct DifferentialWriteTask<R>
 where
     R: FnMut() -> Pin<
@@ -659,25 +642,20 @@ where
 
     /// The contents of the collection as it should be according to whoever is
     /// driving us around.
-    // This is memory inefficient: we always keep a full copy of
-    // desired, so that we can re-derive a to_write if/when someone else
-    // writes to persist and we notice because of an upper conflict.
-    // This is optimized for the case where we rarely have more than one
-    // writer.
-    //
-    // We can optimize for a multi-writer case by keeping an open
-    // ReadHandle and continually reading updates from persist, updating
-    // a desired in place. Similar to the self-correcting persist_sink.
-    desired: Vec<(Row, Diff)>,
+    desired: BTreeMap<Row, Diff>,
 
-    /// Updates that we have to write when next writing to persist. This is
-    /// determined by looking at what is desired and what is in persist.
-    to_write: Vec<(Row, Diff)>,
+    /// One snapshot followed by incremental updates, including our own writes.
+    /// The observed map is complete through `observed_upper`, not necessarily
+    /// through the write handle's most recently observed upper.
+    observed: BTreeMap<Row, Diff>,
+    observed_upper: Timestamp,
+    // The listen retains a leased since and advances it as progress is consumed.
+    // Lease expiry follows Persist's normal reader recovery contract.
+    subscription: Option<Subscribe<SourceData, (), Timestamp, StorageDiff>>,
 
     /// Current upper of the persist shard. We keep track of this so that we
     /// realize when someone else writes to the shard, in which case we have to
-    /// update our state of the world, that is update our `to_write` based on
-    /// `desired` and the contents of the persist shard.
+    /// refresh the incremental observation before preparing another append.
     current_upper: Timestamp,
 }
 
@@ -717,8 +695,10 @@ where
             upper_tick_interval,
             cmd_rx: rx,
             shutdown_rx,
-            desired: Vec::new(),
-            to_write: Vec::new(),
+            desired: BTreeMap::new(),
+            observed: BTreeMap::new(),
+            observed_upper: Timestamp::MIN,
+            subscription: None,
             current_upper: Timestamp::MIN,
         };
 
@@ -865,333 +845,321 @@ where
     }
 
     async fn run(mut self) -> ControlFlow<String> {
-        let mut updates = Vec::new();
+        let mut responders = Vec::new();
+        let mut retry_at = None;
+        let mut attempts = 0u32;
+        let mut next_write = Instant::now();
+        let mut commands_open = true;
         loop {
+            if !commands_open && responders.is_empty() {
+                return ControlFlow::Break("sender has been dropped".to_string());
+            }
             tokio::select! {
-                // Prefer sending actual updates over just bumping the upper,
-                // because sending updates also bump the upper.
                 biased;
-
-                // Listen for a shutdown signal so we can gracefully cleanup.
                 _ = &mut self.shutdown_rx => {
-                    self.handle_shutdown();
-
+                    self.handle_shutdown(responders);
                     return ControlFlow::Break("graceful shutdown".to_string());
                 }
-
-                // Pull a chunk of queued updates off the channel.
-                () = recv_all_commands(&mut self.cmd_rx, &mut updates) => {
-                    if updates.is_empty() {
-                        // Sender has been dropped, which means the collection
-                        // should have been unregistered, break out of the run
-                        // loop if we weren't already aborted.
-                        return ControlFlow::Break("sender has been dropped".to_string());
+                _ = async {
+                    match retry_at {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
                     }
-                    self.handle_updates(&mut updates).await?;
-                }
+                } => {
+                    // Refresh AFTER the backoff, not at the upper from the old
+                    // mismatch. A peer can advance many times while we sleep.
+                    let upper = self.write_handle.fetch_recent_upper().await.clone();
+                    let Some(target) = upper.as_option().copied() else {
+                        self.handle_shutdown(responders);
+                        return ControlFlow::Break("upper is the empty antichain".to_string());
+                    };
+                    let mut commands = Vec::new();
+                    let stopped = {
+                        let refresh = Self::sync_to_persist(
+                            &mut self.read_handle_fn,
+                            &mut self.subscription,
+                            &mut self.observed,
+                            &mut self.observed_upper,
+                            target,
+                            self.row_scope,
+                            self.owned,
+                        );
+                        tokio::pin!(refresh);
+                        loop {
+                            tokio::select! {
+                                biased;
+                                _ = &mut self.shutdown_rx => break true,
+                                // Keep the SAME read future alive across command
+                                // arrivals. Subscribe::next and fetching leased
+                                // parts must not be cancelled and restarted.
+                                open = &mut refresh => break !open,
+                                Some(command) = self.cmd_rx.recv() => commands.push(command),
+                            }
+                        }
+                    };
+                    if stopped {
+                        responders.extend(commands.into_iter().map(|(_, tx)| tx));
+                        self.handle_shutdown(responders);
+                        return ControlFlow::Break("graceful shutdown".to_string());
+                    }
+                    self.current_upper = std::cmp::max(target, self.observed_upper);
+                    for (op, tx) in commands {
+                        self.apply_write_op(op).await;
+                        responders.push(tx);
+                    }
 
-                // If we haven't received any updates, then we'll move the upper forward.
-                _ = self.upper_tick_interval.tick() => {
-                    if self.read_only {
-                        // Not bumping uppers while in read-only mode.
+                    // A peer can satisfy a timer's empty advancement. It cannot
+                    // acknowledge commands, even when their net delta is empty.
+                    if responders.is_empty()
+                        && Timestamp::from((self.now)()) <= self.current_upper
+                    {
+                        retry_at = None;
+                        attempts = 0;
                         continue;
                     }
-                    self.tick_upper().await?;
-                },
+                    let started = Instant::now();
+                    match self.write_to_persist().await {
+                        Ok(()) => {
+                            notify_listeners(std::mem::take(&mut responders), || Ok(()));
+                            retry_at = None;
+                            attempts = 0;
+                            next_write =
+                                started + STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
+                        }
+                        Err(current_upper) => {
+                            attempts += 1;
+                            tracing::debug!(
+                                id = %self.id, attempts,
+                                expected_upper = %self.current_upper,
+                                ?current_upper, "differential append contended"
+                            );
+                            if current_upper.is_empty() {
+                                self.handle_shutdown(responders);
+                                return ControlFlow::Break("upper is the empty antichain".to_string());
+                            }
+                            if attempts >= 20 {
+                                let invalid_upper = InvalidUpper { id: self.id, current_upper };
+                                notify_listeners(std::mem::take(&mut responders), || {
+                                    Err(StorageError::InvalidUppers(vec![invalid_upper.clone()]))
+                                });
+                                error!("exhausted retries when appending to managed collection {}", self.id);
+                                retry_at = None;
+                                attempts = 0;
+                            } else {
+                                let seconds = 1.25_f64
+                                    .powi(i32::try_from(attempts - 1).unwrap())
+                                    .min(3.0);
+                                retry_at = Some(Instant::now() + Duration::from_secs_f64(seconds));
+                            }
+                        }
+                    }
+                }
+                command = self.cmd_rx.recv(), if commands_open => {
+                    let Some((op, tx)) = command else {
+                        // Accepted commands still need a definitive outcome,
+                        // even if their producer has dropped the send channel.
+                        commands_open = false;
+                        continue;
+                    };
+                    let mut commands = vec![(op, tx)];
+                    for _ in 1..1024 {
+                        let Ok(command) = self.cmd_rx.try_recv() else { break };
+                        commands.push(command);
+                    }
+                    for (op, tx) in commands {
+                        self.apply_write_op(op).await;
+                        if !self.read_only {
+                            responders.push(tx);
+                        }
+                    }
+                    if !self.read_only {
+                        retry_at.get_or_insert(next_write);
+                        self.upper_tick_interval.reset();
+                    }
+                }
+                _ = self.upper_tick_interval.tick() => {
+                    if !self.read_only && Timestamp::from((self.now)()) > self.current_upper {
+                        retry_at.get_or_insert(next_write);
+                    }
+                }
             }
+            // Ready command channels and in-memory Persist can otherwise keep
+            // this loop on the executor indefinitely.
+            tokio::task::yield_now().await;
         }
     }
 
-    async fn tick_upper(&mut self) -> ControlFlow<String> {
-        let now = Timestamp::from((self.now)());
-
-        if now <= self.current_upper {
-            // Upper is already further along than current wall-clock time, no
-            // need to bump it.
-            return ControlFlow::Continue(());
-        }
-
-        assert!(!self.read_only);
-        let res = self
-            .write_handle
-            .compare_and_append_batch(
-                &mut [],
-                Antichain::from_elem(self.current_upper),
-                Antichain::from_elem(now),
-                true,
-            )
-            .await
-            .expect("valid usage");
-        match res {
-            // All good!
-            Ok(()) => {
-                tracing::debug!(%self.id, "bumped upper of differential collection");
-                self.current_upper = now;
-            }
-            Err(err) => {
-                // Someone else wrote to the collection or bumped the upper. We
-                // need to sync to latest persist state and potentially patch up
-                // our `to_write`, based on what we learn and `desired`.
-
-                let actual_upper = if let Some(ts) = err.current.as_option() {
-                    *ts
-                } else {
-                    return ControlFlow::Break("upper is the empty antichain".to_string());
-                };
-
-                tracing::info!(%self.id, ?actual_upper, expected_upper = ?self.current_upper, "upper mismatch while bumping upper, syncing to persist state");
-
-                self.current_upper = actual_upper;
-
-                self.sync_to_persist().await;
-            }
-        }
-
-        ControlFlow::Continue(())
-    }
-
-    fn handle_shutdown(&mut self) {
-        let mut senders = Vec::new();
-
-        // Prevent new messages from being sent.
+    fn handle_shutdown(&mut self, mut senders: Vec<oneshot::Sender<Result<(), StorageError>>>) {
         self.cmd_rx.close();
-
-        // Get as many waiting senders as possible.
         while let Ok((_batch, sender)) = self.cmd_rx.try_recv() {
             senders.push(sender);
         }
-
-        // Notify them that this collection is closed.
-        //
-        // Note: if a task is shutting down, that indicates the source has been
-        // dropped, at which point the identifier is invalid. Returning this
-        // error provides a better user experience.
         notify_listeners(senders, || Err(StorageError::IdentifierInvalid(self.id)));
     }
 
-    async fn handle_updates(
-        &mut self,
-        batch: &mut Vec<(StorageWriteOp, oneshot::Sender<Result<(), StorageError>>)>,
-    ) -> ControlFlow<String> {
-        // Put in place _some_ rate limiting.
-        let batch_duration_ms = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
-
-        let use_batch_now = Instant::now();
-        let min_time_to_complete = use_batch_now + batch_duration_ms;
-
-        tracing::debug!(
-            ?use_batch_now,
-            ?batch_duration_ms,
-            ?min_time_to_complete,
-            "batch duration",
-        );
-
-        let mut responders = Vec::with_capacity(batch.len());
-        for (op, tx) in batch.drain(..) {
-            self.apply_write_op(op);
-            responders.push(tx);
-        }
-
-        // TODO: Maybe don't do it every time?
-        consolidation::consolidate(&mut self.desired);
-        consolidation::consolidate(&mut self.to_write);
-
-        // Reset the interval which is used to periodically bump the uppers
-        // because the uppers will get bumped with the following update.
-        // This makes it such that we will write at most once every
-        // `interval`.
-        //
-        // For example, let's say our `DEFAULT_TICK` interval is 10, so at
-        // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
-        // update at `t + 3` we want to shift this window so we bump the
-        // uppers at `t + 13`, `t + 23`, ... which resetting the interval
-        // accomplishes.
-        self.upper_tick_interval.reset();
-
-        self.write_to_persist(responders).await?;
-
-        // Wait until our artificial latency has completed.
-        //
-        // Note: if writing to persist took longer than `DEFAULT_TICK` this
-        // await will resolve immediately.
-        tokio::time::sleep_until(min_time_to_complete).await;
-
-        ControlFlow::Continue(())
-    }
-
-    /// Apply the given write operation to the `desired`/`to_write` state.
-    fn apply_write_op(&mut self, op: StorageWriteOp) {
+    async fn apply_write_op(&mut self, op: StorageWriteOp) {
         match op {
             StorageWriteOp::Append { updates } => {
-                assert!(
-                    updates.iter().all(|(row, _)| (self.owned)(row)),
-                    "appended row outside differential writer partition"
-                );
-                let updates: Vec<_> = updates
-                    .into_iter()
-                    .map(|(row, diff)| (self.row_scope.encode(row), diff))
-                    .collect();
-                self.desired.extend_from_slice(&updates);
-                self.to_write.extend(updates);
+                for (index, (row, diff)) in updates.into_iter().enumerate() {
+                    assert!(
+                        (self.owned)(&row),
+                        "appended row outside differential writer partition"
+                    );
+                    Self::update_state(&mut self.desired, self.row_scope.encode(row), diff);
+                    if index % 1024 == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                }
             }
             StorageWriteOp::Delete { filter } => {
-                let to_delete = self
-                    .desired
-                    .extract_if(.., |(row, _)| filter(&self.row_scope.producer_row(row)));
-                let retractions = to_delete.map(|(row, diff)| (row, -diff));
-                self.to_write.extend(retractions);
+                // Walk all entries cooperatively, including rows the filter
+                // does not match. Producers still see their unencoded rows.
+                let desired = std::mem::take(&mut self.desired);
+                for (index, (row, diff)) in desired.into_iter().enumerate() {
+                    if !filter(&self.row_scope.producer_row(&row)) {
+                        self.desired.insert(row, diff);
+                    }
+                    if index % 1024 == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                }
             }
         }
     }
 
-    /// Attempt to write what is currently in [Self::to_write] to persist,
-    /// retrying and re-syncing to persist when necessary, that is when the
-    /// upper was not what we expected.
-    async fn write_to_persist(
-        &mut self,
-        responders: Vec<oneshot::Sender<Result<(), StorageError>>>,
-    ) -> ControlFlow<String> {
-        if self.read_only {
-            tracing::debug!(%self.id, "not writing to differential collection: read-only");
-            // Not attempting to write while in read-only mode.
-            return ControlFlow::Continue(());
+    fn update_state(state: &mut BTreeMap<Row, Diff>, row: Row, diff: Diff) {
+        use std::collections::btree_map::Entry;
+        match state.entry(row) {
+            Entry::Vacant(entry) => {
+                if diff != Diff::ZERO {
+                    entry.insert(diff);
+                }
+            }
+            Entry::Occupied(mut entry) => {
+                *entry.get_mut() += diff;
+                if *entry.get() == Diff::ZERO {
+                    entry.remove();
+                }
+            }
         }
+    }
 
-        // We'll try really hard to succeed, but eventually stop.
-        //
-        // Note: it's very rare we should ever need to retry, and if we need to
-        // retry it should only take 1 or 2 attempts. We set `max_tries` to be
-        // high though because if we hit some edge case we want to try hard to
-        // commit the data.
-        let retries = Retry::default()
-            .initial_backoff(Duration::from_secs(1))
-            .clamp_backoff(Duration::from_secs(3))
-            .factor(1.25)
-            .max_tries(20)
-            .into_retry_stream();
-        let mut retries = Box::pin(retries);
-
+    /// Submit one attempt. Once submitted, an append is never selected against
+    /// commands or shutdown: its definitive result determines acknowledgements.
+    async fn write_to_persist(&mut self) -> Result<(), Antichain<Timestamp>> {
+        assert!(!self.read_only);
+        let mut updates = Vec::new();
+        // Both states are ordered. Merge rather than doing a tree lookup for
+        // every row on each retry, including large frontier collections.
+        let mut desired = self.desired.iter().peekable();
+        let mut observed = self.observed.iter().peekable();
+        let mut processed = 0usize;
         loop {
-            // Append updates to persist!
-            let now = Timestamp::from((self.now)());
-            let new_upper = std::cmp::max(now, self.current_upper.step_forward());
-
-            let updates_to_write = self
-                .to_write
-                .iter()
-                .map(|(row, diff)| {
-                    (
-                        (SourceData(Ok(row.clone())), ()),
-                        self.current_upper,
-                        diff.into_inner(),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            assert!(!self.read_only);
-            let res = self
-                .write_handle
-                .compare_and_append(
-                    updates_to_write,
-                    Antichain::from_elem(self.current_upper),
-                    Antichain::from_elem(new_upper),
-                )
-                .await
-                .expect("valid usage");
-            match res {
-                // Everything was successful!
-                Ok(()) => {
-                    // Notify all of our listeners.
-                    notify_listeners(responders, || Ok(()));
-
-                    self.current_upper = new_upper;
-
-                    // Very important! This is empty at steady state, while
-                    // desired keeps an in-memory copy of desired state.
-                    self.to_write.clear();
-
-                    tracing::debug!(%self.id, "appended to differential collection");
-
-                    // Break out of the retry loop so we can wait for more data.
-                    break;
+            let (row, diff) = match (desired.peek(), observed.peek()) {
+                (Some((left, _)), Some((right, _))) if left == right => {
+                    let (row, want) = desired.next().expect("peeked desired row");
+                    let (_, have) = observed.next().expect("peeked observed row");
+                    (row, *want - *have)
                 }
-                // Failed to write to some collections,
-                Err(err) => {
-                    // Someone else wrote to the collection. We need to read
-                    // from persist and update to_write based on that and the
-                    // desired state.
-                    let actual_upper = if let Some(ts) = err.current.as_option() {
-                        *ts
-                    } else {
-                        return ControlFlow::Break("upper is the empty antichain".to_string());
-                    };
-
-                    tracing::info!(%self.id, ?actual_upper, expected_upper = ?self.current_upper, "retrying append for differential collection");
-
-                    // We've exhausted all of our retries, notify listeners and
-                    // break out of the retry loop so we can wait for more data.
-                    if retries.next().await.is_none() {
-                        let invalid_upper = InvalidUpper {
-                            id: self.id,
-                            current_upper: err.current,
-                        };
-                        notify_listeners(responders, || {
-                            Err(StorageError::InvalidUppers(vec![invalid_upper.clone()]))
-                        });
-                        error!(
-                            "exhausted retries when appending to managed collection {}",
-                            self.id
-                        );
-                        break;
-                    }
-
-                    self.current_upper = actual_upper;
-
-                    self.sync_to_persist().await;
-
-                    debug!(
-                        "Retrying invalid-uppers error while appending to differential collection {}",
-                        self.id
-                    );
+                (Some((left, _)), Some((right, _))) if left > right => {
+                    let (row, diff) = observed.next().expect("peeked observed row");
+                    (row, -*diff)
                 }
+                (Some(_), _) => {
+                    let (row, diff) = desired.next().expect("peeked desired row");
+                    (row, *diff)
+                }
+                (None, Some(_)) => {
+                    let (row, diff) = observed.next().expect("peeked observed row");
+                    (row, -*diff)
+                }
+                (None, None) => break,
+            };
+            if diff != Diff::ZERO {
+                updates.push((
+                    (SourceData(Ok(row.clone())), ()),
+                    self.current_upper,
+                    diff.into_inner(),
+                ));
+            }
+            processed += 1;
+            if processed % 1024 == 0 {
+                tokio::task::yield_now().await;
             }
         }
-
-        ControlFlow::Continue(())
+        let new_upper = std::cmp::max(
+            Timestamp::from((self.now)()),
+            self.current_upper.step_forward(),
+        );
+        self.write_handle
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(self.current_upper),
+                Antichain::from_elem(new_upper),
+            )
+            .await
+            .expect("valid usage")
+            .map_err(|err| err.current)?;
+        self.current_upper = new_upper;
+        Ok(())
     }
 
-    /// Re-derives [Self::to_write] by looking at [Self::desired] and the
-    /// current state in persist. We want to insert everything in desired and
-    /// retract owned rows in persist. But ideally most of that cancels out in
-    /// consolidation.
-    ///
-    /// To be called when a `compare_and_append` failed because the upper didn't
-    /// match what we expected.
-    async fn sync_to_persist(&mut self) {
-        let mut read_handle = (self.read_handle_fn)().await;
-        let as_of = self.current_upper.step_back().unwrap_or(Timestamp::MIN);
-        let as_of = Antichain::from_elem(as_of);
-        let snapshot = read_handle.snapshot_and_fetch(as_of).await;
-
-        let mut negated_oks = match snapshot {
-            Ok(contents) => {
-                let mut snapshot = Vec::with_capacity(contents.len());
-                for ((data, _), _, diff) in contents {
-                    let row = data.0.unwrap();
-                    if self.row_scope.owns(&row) && (self.owned)(&self.row_scope.producer_row(&row))
-                    {
-                        snapshot.push((row, -Diff::from(diff)));
+    /// Retain a single snapshot plus listen across attempts. Read all events
+    /// through a progress frontier before using the observed state for a write.
+    /// Callers must retain this future across command selection, or drop the
+    /// whole task, because Persist reads are not cancellation safe.
+    async fn sync_to_persist(
+        read_handle_fn: &mut R,
+        subscription: &mut Option<Subscribe<SourceData, (), Timestamp, StorageDiff>>,
+        observed: &mut BTreeMap<Row, Diff>,
+        observed_upper: &mut Timestamp,
+        target: Timestamp,
+        row_scope: RowScope,
+        owned: fn(&Row) -> bool,
+    ) -> bool {
+        if target <= *observed_upper {
+            return true;
+        }
+        if subscription.is_none() {
+            let reader = read_handle_fn().await;
+            let as_of = target.step_back().expect("non-minimum target");
+            *subscription = Some(
+                reader
+                    .subscribe(Antichain::from_elem(as_of))
+                    .await
+                    .expect("read before since"),
+            );
+        }
+        let subscription = subscription.as_mut().expect("initialized above");
+        while *observed_upper < target {
+            for event in subscription.next(None).await {
+                match event {
+                    ListenEvent::Updates(parts) => {
+                        for part in parts {
+                            let fetched = subscription.fetch_batch_part(part).await;
+                            for (index, ((data, ()), _, diff)) in fetched.enumerate() {
+                                let row = data.0.expect("valid introspection row");
+                                if row_scope.owns(&row) && owned(&row_scope.producer_row(&row)) {
+                                    Self::update_state(observed, row, Diff::from(diff));
+                                }
+                                if index % 1024 == 0 {
+                                    tokio::task::yield_now().await;
+                                }
+                            }
+                            tokio::task::yield_now().await;
+                        }
+                    }
+                    ListenEvent::Progress(upper) => {
+                        let Some(upper) = upper.as_option() else {
+                            return false;
+                        };
+                        *observed_upper = *upper;
                     }
                 }
-                snapshot
             }
-            Err(e) => panic!("read before since: {e:?}"),
-        };
-
-        self.to_write.clear();
-        self.to_write.extend(self.desired.iter().cloned());
-        self.to_write.append(&mut negated_oks);
-        consolidation::consolidate(&mut self.to_write);
+            tokio::task::yield_now().await;
+        }
+        true
     }
 }
 
@@ -2017,6 +1985,329 @@ mod tests {
     use mz_storage_client::healthcheck::{
         MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
     };
+
+    type TestReadFactory = Box<
+        dyn FnMut() -> BoxFuture<'static, ReadHandle<SourceData, (), Timestamp, StorageDiff>>
+            + Send
+            + Sync,
+    >;
+
+    struct DifferentialFixture {
+        task: DifferentialWriteTask<TestReadFactory>,
+        commands: DifferentialWriteChannel,
+        shutdown: ShutdownSender,
+        peer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        reader: ReadHandle<SourceData, (), Timestamp, StorageDiff>,
+        readers_opened: Arc<AtomicU64>,
+    }
+
+    impl DifferentialFixture {
+        async fn new(read_gate: Option<Arc<tokio::sync::Notify>>) -> Self {
+            use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+            use mz_persist_types::codec_impls::UnitSchema;
+            use mz_repr::{RelationDesc, SqlScalarType};
+
+            let client = PersistClient::new_for_tests().await;
+            let shard = ShardId::new();
+            let schema = Arc::new(
+                RelationDesc::builder()
+                    .with_column("v", SqlScalarType::Int64.nullable(false))
+                    .finish(),
+            );
+            let (peer, reader) = client
+                .open::<SourceData, (), Timestamp, StorageDiff>(
+                    shard,
+                    Arc::clone(&schema),
+                    Arc::new(UnitSchema),
+                    Diagnostics::for_tests(),
+                    false,
+                )
+                .await
+                .unwrap();
+            let write_handle = client
+                .open_writer(
+                    shard,
+                    Arc::clone(&schema),
+                    Arc::new(UnitSchema),
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .unwrap();
+            let readers_opened = Arc::new(AtomicU64::new(0));
+            let opened = Arc::clone(&readers_opened);
+            let read_handle_fn: TestReadFactory = Box::new(move || {
+                let client = client.clone();
+                let schema = Arc::clone(&schema);
+                let read_gate = read_gate.clone();
+                opened.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if let Some(gate) = read_gate {
+                        gate.notified().await;
+                    }
+                    client
+                        .open_leased_reader(
+                            shard,
+                            schema,
+                            Arc::new(UnitSchema),
+                            Diagnostics::for_tests(),
+                            false,
+                        )
+                        .await
+                        .unwrap()
+                }
+                .boxed()
+            });
+            let (commands, cmd_rx) = mpsc::unbounded_channel();
+            let (shutdown, shutdown_rx) = oneshot::channel();
+            let task = DifferentialWriteTask {
+                id: GlobalId::System(1),
+                write_handle,
+                read_handle_fn,
+                owned: |_| true,
+                row_scope: RowScope::Unscoped,
+                read_only: false,
+                now: NowFn::from(|| 100),
+                upper_tick_interval: tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS)),
+                cmd_rx,
+                shutdown_rx,
+                desired: BTreeMap::new(),
+                observed: BTreeMap::new(),
+                observed_upper: Timestamp::MIN,
+                subscription: None,
+                current_upper: Timestamp::MIN,
+            };
+            Self {
+                task,
+                commands,
+                shutdown,
+                peer,
+                reader,
+                readers_opened,
+            }
+        }
+    }
+
+    async fn refresh_test_writer(task: &mut DifferentialWriteTask<TestReadFactory>) {
+        let target = *task
+            .write_handle
+            .fetch_recent_upper()
+            .await
+            .as_option()
+            .unwrap();
+        assert!(
+            DifferentialWriteTask::<TestReadFactory>::sync_to_persist(
+                &mut task.read_handle_fn,
+                &mut task.subscription,
+                &mut task.observed,
+                &mut task.observed_upper,
+                target,
+                task.row_scope,
+                task.owned,
+            )
+            .await
+        );
+        task.current_upper = std::cmp::max(target, task.observed_upper);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn differential_contention_retains_incremental_observation() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let mut fixture = DifferentialFixture::new(None).await;
+            let row = |value| Row::pack_slice(&[Datum::Int64(value)]);
+            fixture
+                .task
+                .apply_write_op(StorageWriteOp::Append {
+                    updates: vec![(row(1), Diff::ONE)],
+                })
+                .await;
+            fixture
+                .peer
+                .compare_and_append(
+                    vec![((SourceData(Ok(row(2))), ()), Timestamp::MIN, 1)],
+                    Antichain::from_elem(Timestamp::MIN),
+                    Antichain::from_elem(Timestamp::from(10)),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                fixture.task.write_to_persist().await,
+                Err(Antichain::from_elem(Timestamp::from(10)))
+            );
+
+            // A peer advances again during the retry delay. Refresh must use
+            // that new upper, rather than the mismatch's upper of 10.
+            fixture
+                .peer
+                .compare_and_append(
+                    vec![
+                        ((SourceData(Ok(row(2))), ()), Timestamp::from(10), -1),
+                        ((SourceData(Ok(row(3))), ()), Timestamp::from(10), 1),
+                    ],
+                    Antichain::from_elem(Timestamp::from(10)),
+                    Antichain::from_elem(Timestamp::from(20)),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            refresh_test_writer(&mut fixture.task).await;
+            assert_eq!(fixture.task.current_upper, Timestamp::from(20));
+            assert_eq!(fixture.task.observed, BTreeMap::from([(row(3), Diff::ONE)]));
+            fixture.task.write_to_persist().await.unwrap();
+
+            // Listening must include our own successful write as well as the
+            // peer's next write, without reopening a reader or duplicating rows.
+            fixture
+                .peer
+                .compare_and_append(
+                    vec![((SourceData(Ok(row(4))), ()), Timestamp::from(100), 1)],
+                    Antichain::from_elem(Timestamp::from(100)),
+                    Antichain::from_elem(Timestamp::from(110)),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            refresh_test_writer(&mut fixture.task).await;
+            assert_eq!(
+                fixture.task.observed,
+                BTreeMap::from([(row(1), Diff::ONE), (row(4), Diff::ONE)])
+            );
+            fixture.task.write_to_persist().await.unwrap();
+            let actual = fixture
+                .reader
+                .snapshot_and_fetch(Antichain::from_elem(Timestamp::from(110)))
+                .await
+                .unwrap();
+            assert_eq!(
+                actual
+                    .into_iter()
+                    .map(|((data, ()), _, diff)| (data.0.unwrap(), diff))
+                    .collect::<Vec<_>>(),
+                vec![(row(1), 1)]
+            );
+            assert_eq!(fixture.readers_opened.load(Ordering::Relaxed), 1);
+        })
+        .await
+        .expect("bounded incremental reconciliation");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn differential_peer_tick_does_not_ack_pending_data() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let mut fixture = DifferentialFixture::new(None).await;
+            fixture
+                .peer
+                .compare_and_append(
+                    Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                    Antichain::from_elem(Timestamp::MIN),
+                    Antichain::from_elem(Timestamp::from(100)),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let refreshed = Arc::new(tokio::sync::Notify::new());
+            let signal = Arc::clone(&refreshed);
+            let calls = AtomicU64::new(0);
+            fixture.task.now = NowFn::from(move || {
+                if calls.fetch_add(1, Ordering::Relaxed) > 0 {
+                    signal.notify_one();
+                }
+                100
+            });
+            let task = mz_ore::task::spawn(|| "differential-writer-test", fixture.task.run());
+            refreshed.notified().await;
+            assert_eq!(
+                fixture.peer.fetch_recent_upper().await,
+                &Antichain::from_elem(Timestamp::from(100))
+            );
+
+            let row = Row::pack_slice(&[Datum::Int64(1)]);
+            let (tx, rx) = oneshot::channel();
+            fixture
+                .commands
+                .send((
+                    StorageWriteOp::Append {
+                        updates: vec![(row.clone(), Diff::ONE)],
+                    },
+                    tx,
+                ))
+                .unwrap();
+            rx.await.unwrap().unwrap();
+            let upper = *fixture.peer.fetch_recent_upper().await.as_option().unwrap();
+            assert!(upper > Timestamp::from(100));
+            let actual = fixture
+                .reader
+                .snapshot_and_fetch(Antichain::from_elem(upper.step_back().unwrap()))
+                .await
+                .unwrap();
+            assert_eq!(
+                actual
+                    .into_iter()
+                    .map(|((data, ()), _, diff)| (data.0.unwrap(), diff))
+                    .collect::<Vec<_>>(),
+                vec![(row, 1)]
+            );
+            fixture.shutdown.send(()).unwrap();
+            assert!(task.await.is_break());
+        })
+        .await
+        .expect("peer advancement is not a data acknowledgement");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn differential_shutdown_during_refresh_rejects_all_commands() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let mut fixture = DifferentialFixture::new(Some(gate)).await;
+            fixture
+                .peer
+                .compare_and_append(
+                    Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                    Antichain::from_elem(Timestamp::MIN),
+                    Antichain::from_elem(Timestamp::from(100)),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let send = || {
+                let (tx, rx) = oneshot::channel();
+                fixture
+                    .commands
+                    .send((
+                        StorageWriteOp::Append {
+                            updates: vec![(Row::pack_slice(&[Datum::Int64(1)]), Diff::ONE)],
+                        },
+                        tx,
+                    ))
+                    .unwrap();
+                rx
+            };
+            let mut first = send();
+            let task = mz_ore::task::spawn(|| "differential-writer-test", fixture.task.run());
+            while fixture.readers_opened.load(Ordering::Relaxed) == 0 {
+                tokio::task::yield_now().await;
+            }
+            let second = send();
+            assert!(matches!(
+                first.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            fixture.shutdown.send(()).unwrap();
+            for response in [first, second] {
+                assert!(matches!(
+                    response.await.unwrap(),
+                    Err(StorageError::IdentifierInvalid(_))
+                ));
+            }
+            assert!(task.await.is_break());
+            assert_eq!(
+                fixture.peer.fetch_recent_upper().await,
+                &Antichain::from_elem(Timestamp::from(100))
+            );
+        })
+        .await
+        .expect("shutdown does not wait for a blocked Persist read");
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn metrics_retention_does_not_rebase_after_competing_writes() {
