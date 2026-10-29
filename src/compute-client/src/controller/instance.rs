@@ -1990,6 +1990,8 @@ impl Instance {
                 if let Some(mut recording) = recording {
                     self.deliver_freshness_rows(*id, replica_id, recording.finish());
                 }
+                // The recording ended, so it reads its inputs' logs no more.
+                self.deregister_freshness_consumer((*id, replica_id));
             }
         }
 
@@ -2238,9 +2240,8 @@ impl Instance {
         let recorded_through = recording.and_then(|r| r.recorded_through());
         let consumer = (id, replica_id);
         // In input order, like `input_trees`.
-        let logs = self.with_freshness_input_logs(consumer, |log| {
-            log.read(consumer, recorded_through, now_ms)
-        });
+        let logs =
+            self.with_freshness_input_logs(consumer, |log| log.read(consumer, recorded_through));
         // NOTE: An input whose tree does not resolve counts as unanswered, like one without a
         // log, which makes it ready at the observation and leaves its tree unused, so any tree
         // stands in.
@@ -2292,9 +2293,14 @@ impl Instance {
                 (&mut collection.freshness, frontier)
             }
         };
-        let rows = recording
-            .get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms))
-            .observe(&tree, needed, &frontier, now_ms, &inputs, &config);
+        let recording =
+            recording.get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms));
+        let rows = recording.observe(&tree, needed, &frontier, now_ms, &inputs, &config);
+        let recorded_through = recording.recorded_through();
+        // NOTE: The read above marked what the recording had recorded before this observation.
+        // Left there, the mark keeps an entry that this observation recorded, and thinning keeps
+        // that entry as the oldest of its age in place of the first one the consumer needs.
+        self.with_freshness_input_logs(consumer, |log| log.mark(consumer, recorded_through));
         self.deliver_freshness_rows(id, replica_id, rows);
     }
 
@@ -2356,8 +2362,7 @@ impl Instance {
         if self.freshness_config.is_none() {
             return;
         }
-        let now_ms = (self.now)();
-        self.with_freshness_input_logs(consumer, |log| log.register(consumer, now_ms));
+        self.with_freshness_input_logs(consumer, |log| log.register(consumer));
     }
 
     /// Deregisters `consumer` from the visibility logs of its freshness inputs.
@@ -2381,6 +2386,19 @@ impl Instance {
             for collection in replica.collections.values_mut() {
                 collection.freshness = None;
             }
+        }
+        // Stopped recordings read no logs, and a recording that starts again registers at its
+        // first read.
+        let consumers: Vec<LogConsumer> =
+            self.collections
+                .keys()
+                .map(|id| (*id, None))
+                .chain(self.replicas.values().flat_map(|replica| {
+                    replica.collections.keys().map(|id| (*id, Some(replica.id)))
+                }))
+                .collect();
+        for consumer in consumers {
+            self.deregister_freshness_consumer(consumer);
         }
     }
 

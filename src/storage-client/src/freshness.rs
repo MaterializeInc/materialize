@@ -454,22 +454,17 @@ pub type LogConsumer = (GlobalId, Option<ReplicaId>);
 
 /// A collection's visibility log, and how far its consumers have recorded.
 ///
-/// Entries are kept while a consumer may still need them. Consumers register when they are
-/// created and deregister when they are dropped. A consumer that has not read the log for the
-/// retention of the recorder configuration is forgotten, which bounds what a consumer in another
-/// controller, or a stalled one, keeps alive.
+/// Entries are kept while a consumer may still need them, for as long as the consumer is
+/// registered, which it is from its creation until it is dropped or its recording stops.
+/// Entries older than one period are thinned geometrically by age, see [`VisibilityLog::thin`],
+/// and entries older than the histogram retention are dropped. So a log holds about
+/// `log2(retention / period)` old entries plus those of the last period, however long a
+/// consumer lags.
 #[derive(Debug, Default, Clone)]
 pub struct ConsumedVisibilityLog {
     log: VisibilityLog,
-    consumers: BTreeMap<LogConsumer, ConsumerMark>,
-}
-
-#[derive(Debug, Clone)]
-struct ConsumerMark {
-    /// The last arrival the consumer recorded, `None` before its recording started.
-    recorded_through: Option<u64>,
-    /// When the consumer registered or last read.
-    seen_ms: u64,
+    /// The last arrival each consumer recorded, `None` before its recording started.
+    consumers: BTreeMap<LogConsumer, Option<u64>>,
 }
 
 impl ConsumedVisibilityLog {
@@ -489,27 +484,24 @@ impl ConsumedVisibilityLog {
             None => (u64::MAX, Some(u64::MAX)),
         };
         self.log.record(frontier, reflected, now_ms);
-        let cutoff = now_ms.saturating_sub(visibility_retention_ms(config));
-        self.consumers.retain(|_, mark| mark.seen_ms >= cutoff);
-        // `None` sorts first, so a consumer whose recording has not started keeps everything.
-        match self.consumers.values().map(|m| m.recorded_through).min() {
-            Some(Some(through)) => self.log.prune_through_except_last(through),
+        // `None` sorts first, so a consumer whose recording has not started keeps everything,
+        // subject to thinning.
+        match self.consumers.values().min() {
+            Some(Some(through)) => self.log.prune_through_except_last(*through),
             Some(None) => {}
             // The last entry stays for consumers that register later.
             None => self.log.prune_through_except_last(u64::MAX),
         }
-        // A consumer that lags the input by more than the retention finds those arrivals visible
-        // when the last pruned entry was observed, which understates and never overstates.
-        self.log.prune_observed_before(cutoff);
+        self.log.thin(now_ms, config.period_ms);
+        // Recorders skip arrivals older than the retention, so no consumer reads these.
+        self.log
+            .prune_observed_before(now_ms.saturating_sub(config.retention_ms));
     }
 
-    /// Registers `consumer` at `now_ms`, so that the log keeps the entries it needs before its
-    /// first read. Does nothing if it is registered already.
-    pub fn register(&mut self, consumer: LogConsumer, now_ms: u64) {
-        self.consumers.entry(consumer).or_insert(ConsumerMark {
-            recorded_through: None,
-            seen_ms: now_ms,
-        });
+    /// Registers `consumer`, so that the log keeps the entries it needs before its first read.
+    /// Does nothing if it is registered already.
+    pub fn register(&mut self, consumer: LogConsumer) {
+        self.consumers.entry(consumer).or_insert(None);
     }
 
     /// Forgets `consumer`.
@@ -517,21 +509,17 @@ impl ConsumedVisibilityLog {
         self.consumers.remove(&consumer);
     }
 
+    /// Notes that `consumer` has recorded through `recorded_through`, if it is registered.
+    pub fn mark(&mut self, consumer: LogConsumer, recorded_through: Option<u64>) {
+        if let Some(mark) = self.consumers.get_mut(&consumer) {
+            *mark = recorded_through;
+        }
+    }
+
     /// A copy that answers the arrivals above `recorded_through` for `consumer`, which has
-    /// recorded through `recorded_through` at `now_ms`. Registers `consumer` if needed.
-    pub fn read(
-        &mut self,
-        consumer: LogConsumer,
-        recorded_through: Option<u64>,
-        now_ms: u64,
-    ) -> VisibilityLog {
-        self.consumers.insert(
-            consumer,
-            ConsumerMark {
-                recorded_through,
-                seen_ms: now_ms,
-            },
-        );
+    /// recorded through `recorded_through`. Registers `consumer` if needed.
+    pub fn read(&mut self, consumer: LogConsumer, recorded_through: Option<u64>) -> VisibilityLog {
+        self.consumers.insert(consumer, recorded_through);
         self.log.after(recorded_through.unwrap_or(0))
     }
 
@@ -544,11 +532,6 @@ impl ConsumedVisibilityLog {
     pub fn is_empty(&self) -> bool {
         self.log.is_empty()
     }
-}
-
-/// How long visibility log entries are kept: ten periods, at least ten minutes.
-fn visibility_retention_ms(config: &RecorderConfig) -> u64 {
-    config.period_ms.saturating_mul(10).max(600_000)
 }
 
 /// Caches the assignment bound D of a collection's freshness tree.

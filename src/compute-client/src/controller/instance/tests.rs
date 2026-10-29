@@ -1200,7 +1200,8 @@ async fn visibility_logs_are_pruned_through_consumers() {
     for s in 1..30 {
         tick(&mut h, s, false);
     }
-    assert_eq!(log_lens(&h), (2, 29, 29));
+    // `a` recorded the storage input's ticks, so only its last entry stays.
+    assert_eq!(log_lens(&h), (1, 29, 29));
     for s in 30..=70 {
         tick(&mut h, s, true);
     }
@@ -1582,4 +1583,121 @@ async fn restart_policy_charges_outage_or_leaves_hole() {
             }
         }
     }
+}
+
+/// Records a storage input tick at `s` seconds, observed 2 ms after it.
+fn storage_tick(h: &FreshnessHarness, s: u64) {
+    let config =
+        mz_storage_client::freshness::recorder_config(&h.instance.dyncfg).expect("recording on");
+    let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))
+        .resolve(&FixedTickers(1000))
+        .expect("resolves");
+    let tick = T0 + s * 1000;
+    h.set_now(tick + 2);
+    let frontier = Antichain::from_elem(Timestamp::from(tick + 1));
+    h.storage_log.record(&tree, &frontier, tick + 2, &config);
+}
+
+/// An hour-long outage of a collection's only replica, while its input keeps ticking, records
+/// the outage as the local delay of the arrivals it held up.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn local_delay_spans_a_long_replica_outage() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let a = GlobalId::User(10);
+    h.add_collection_with_inputs(a, T0, &[STORAGE_INPUT]);
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+    let report = |h: &mut FreshnessHarness, s: u64| {
+        let tick = T0 + s * 1000;
+        h.set_now(tick + 5);
+        h.report(r1, a, tick + 1);
+    };
+    for s in 1..=60 {
+        storage_tick(&h, s);
+        report(&mut h, s);
+    }
+    for s in 61..=3660 {
+        storage_tick(&h, s);
+    }
+    report(&mut h, 3660);
+    let recorded = h.recorded();
+    let scheme = BucketScheme::new(4).expect("power of two");
+    // The first held-up arrival was visible in the input at tick 61 + 2 ms, and in `a` at tick
+    // 3660 + 5 ms.
+    let outage = scheme.bucket(3_600_003);
+    for replica in [None, Some(r1)] {
+        let buckets = recorded.buckets("local", a, replica);
+        assert_eq!(buckets.last(), Some(&outage), "{replica:?}: {buckets:?}");
+    }
+}
+
+/// A collection whose only replica is dropped and replaced 15 minutes later records the outage
+/// as the local delay of its global recording, also though the new replica's recording starts
+/// later.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn local_delay_spans_a_recreated_replica() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let a = GlobalId::User(10);
+    h.add_collection_with_inputs(a, T0, &[STORAGE_INPUT]);
+    let (r1, r2) = (ReplicaId::User(1), ReplicaId::User(2));
+    h.add_replica(r1);
+    for s in 1..=60 {
+        storage_tick(&h, s);
+        h.set_now(T0 + s * 1000 + 5);
+        h.report(r1, a, T0 + s * 1000 + 1);
+    }
+    h.instance.remove_replica(r1).expect("replica exists");
+    for s in 61..=960 {
+        storage_tick(&h, s);
+    }
+    h.add_replica(r2);
+    // The new replica hydrates for 5 s.
+    for s in 961..=970 {
+        storage_tick(&h, s);
+        if s >= 965 {
+            h.set_now(T0 + s * 1000 + 5);
+            h.report(r2, a, T0 + s * 1000 + 1);
+        }
+    }
+    let recorded = h.recorded();
+    let scheme = BucketScheme::new(4).expect("power of two");
+    // The first held-up arrival was visible in the input at tick 61 + 2 ms, and in `a` at tick
+    // 965 + 5 ms.
+    let buckets = recorded.buckets("local", a, None);
+    assert_eq!(buckets.last(), Some(&scheme.bucket(904_003)), "{buckets:?}");
+}
+
+/// A consumer that is dropped, or whose recording stops, stops keeping its input's log.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn visibility_log_is_released_by_its_consumers() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let a = GlobalId::User(10);
+    // `a`'s recording never starts, so it keeps every entry of its input.
+    h.add_collection_with_inputs(a, T0, &[STORAGE_INPUT]);
+    for s in 1..=20 {
+        storage_tick(&h, s);
+    }
+    assert_eq!(h.storage_log.with(|log| log.len()), 20);
+    h.set_recording(false);
+    h.set_recording(true);
+    storage_tick(&h, 21);
+    assert_eq!(h.storage_log.with(|log| log.len()), 1);
+
+    let b = GlobalId::User(11);
+    h.add_collection_with_inputs(b, T0, &[STORAGE_INPUT]);
+    for s in 22..=31 {
+        storage_tick(&h, s);
+    }
+    assert_eq!(h.storage_log.with(|log| log.len()), 11);
+    h.instance
+        .drop_collections(vec![b])
+        .expect("collection exists");
+    storage_tick(&h, 32);
+    assert_eq!(h.storage_log.with(|log| log.len()), 1);
 }

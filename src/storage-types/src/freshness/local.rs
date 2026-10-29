@@ -34,6 +34,9 @@ struct Entry {
     /// The largest arrival the frontier reflects under the collection's own tree, 0 if none.
     reflected: u64,
     observed_ms: u64,
+    /// Whether entries right before this one were thinned out, so that it answers timestamps
+    /// that an earlier observation passed.
+    after_gap: bool,
 }
 
 /// Observation times of a collection's frontier advances, kept while a consumer may still need
@@ -78,6 +81,7 @@ impl VisibilityLog {
                 frontier: frontier.max(last_frontier),
                 reflected: reflected.max(last_reflected),
                 observed_ms,
+                after_gap: false,
             });
         }
     }
@@ -92,7 +96,7 @@ impl VisibilityLog {
 
     /// The earliest observation time at which the frontier was past `timestamp`, if known.
     ///
-    /// Pruned entries answer like for [`Self::visible_at`].
+    /// Pruned and thinned entries answer like for [`Self::visible_at`].
     pub fn passed_at(&self, timestamp: u64) -> Option<u64> {
         self.frontier_segment(timestamp).0
     }
@@ -138,6 +142,43 @@ impl VisibilityLog {
         }
     }
 
+    /// Thins the entries observed more than `period_ms` before `now_ms` geometrically by age.
+    ///
+    /// Of the entries whose age lies in `[period_ms * 2^k, period_ms * 2^(k+1))`, only the
+    /// oldest stays, and so does the last entry. The log then holds at most one old entry per
+    /// doubling of the age, about `log2(age / period_ms)` for the oldest age, plus the entries of
+    /// the last period. A thinned entry's arrivals and timestamps are answered by the next kept
+    /// entry, a later observation, which understates by less than the gap between kept entries.
+    pub fn thin(&mut self, now_ms: u64, period_ms: u64) {
+        let period_ms = period_ms.max(1);
+        let old = self
+            .entries
+            .partition_point(|e| now_ms.saturating_sub(e.observed_ms) > period_ms);
+        let last = self.entries.len().saturating_sub(1);
+        // Entries are ascending in observation time, so ages, and with them the intervals,
+        // descend.
+        let mut interval = None;
+        let mut gap = false;
+        let mut kept = Vec::with_capacity(self.entries.len());
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if idx < old && idx != last {
+                let age = now_ms.saturating_sub(entry.observed_ms) / period_ms;
+                let this = age.ilog2();
+                if interval == Some(this) {
+                    gap = true;
+                    continue;
+                }
+                interval = Some(this);
+            }
+            kept.push(Entry {
+                after_gap: entry.after_gap || gap,
+                ..*entry
+            });
+            gap = false;
+        }
+        self.entries = kept;
+    }
+
     /// The number of entries.
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -169,6 +210,7 @@ impl VisibilityLog {
                 frontier: floor.frontier.max(last.frontier),
                 reflected: floor.reflected.max(last.reflected),
                 observed_ms: floor.observed_ms.max(last.observed_ms),
+                after_gap: true,
             },
         })
     }
@@ -188,18 +230,20 @@ impl VisibilityLog {
         }
     }
 
-    /// The observation time `passed_at(timestamp)` returns, and the exclusive upper bound of
-    /// the timestamps that share this answer, `None` if unbounded.
-    fn frontier_segment(&self, timestamp: u64) -> (Option<u64>, Option<u64>) {
+    /// The observation time `passed_at(timestamp)` returns, the exclusive upper bound of the
+    /// timestamps that share this answer, `None` if unbounded, and whether the answer can be
+    /// later than the first observation that passed `timestamp`, because entries before it
+    /// were pruned or thinned.
+    fn frontier_segment(&self, timestamp: u64) -> (Option<u64>, Option<u64>, bool) {
         if let Some(floor) = &self.floor
             && timestamp < floor.frontier
         {
-            return (Some(floor.observed_ms), Some(floor.frontier));
+            return (Some(floor.observed_ms), Some(floor.frontier), true);
         }
         let idx = self.entries.partition_point(|e| e.frontier <= timestamp);
         match self.entries.get(idx) {
-            Some(e) => (Some(e.observed_ms), Some(e.frontier)),
-            None => (None, None),
+            Some(e) => (Some(e.observed_ms), Some(e.frontier), e.after_gap),
+            None => (None, None, false),
         }
     }
 }
@@ -432,7 +476,7 @@ fn add_local_part(
         let mut group_end = to;
         for LocalInput { log, .. } in inputs {
             let (observed, last) = log.segment(window_end);
-            arrival_ready_ms = arrival_ready_ms.max(observed.unwrap_or(now_ms));
+            let mut input_arrival_ms = observed.unwrap_or(now_ms);
             // The group ends where this input's answer changes. The bound is at least
             // `window_end` because the entry answers it.
             if let Some(last) = last {
@@ -442,8 +486,16 @@ fn add_local_part(
                 group_end = group_end.min(tree.prev_boundary(last));
             }
             if let Some(timestamp) = timestamp {
-                let (observed, passed) = log.frontier_segment(timestamp);
-                timestamp_ready_ms = timestamp_ready_ms.max(observed.unwrap_or(now_ms));
+                let (observed, passed, late) = log.frontier_segment(timestamp);
+                let input_timestamp_ms = observed.unwrap_or(now_ms);
+                timestamp_ready_ms = timestamp_ready_ms.max(input_timestamp_ms);
+                // NOTE: A frontier answer from after pruned or thinned entries can be later
+                // than the first observation that passed the timestamp, which would lengthen
+                // skew. Moving the same input's arrival readiness along shortens skew instead
+                // and keeps local delay.
+                if late {
+                    input_arrival_ms = input_arrival_ms.max(input_timestamp_ms);
+                }
                 // The entry answers the arrivals that need a timestamp below `passed`, the
                 // arrivals `passed` reflects. They include `window_end`.
                 if let Some(passed) = passed.filter(|f| *f < u64::MAX) {
@@ -451,6 +503,7 @@ fn add_local_part(
                     group_end = group_end.min(last.map_or(window_end, |l| tree.prev_boundary(l)));
                 }
             }
+            arrival_ready_ms = arrival_ready_ms.max(input_arrival_ms);
         }
         if timestamp.is_none() {
             // The object reflects the window, so `needed` assigns it a timestamp unless the
