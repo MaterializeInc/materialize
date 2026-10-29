@@ -575,15 +575,17 @@ fn make_builtin_columns_sql(
     generated: [&BuiltinView; 7],
     columns: &mut BuiltinView,
 ) {
-    // Map to (schema, relation, desc)
+    // Map to (schema, relation, desc, is_table)
     let relations = builtin_items
         .iter()
         .filter_map(|b| match b {
-            Builtin::Table(t) => Some((t.schema, t.name, Cow::Borrowed(&t.desc))),
-            Builtin::Source(s) => Some((s.schema, s.name, Cow::Borrowed(&s.desc))),
-            Builtin::Log(l) => Some((l.schema, l.name, Cow::Owned(l.variant.desc()))),
-            Builtin::View(v) => Some((v.schema, v.name, Cow::Borrowed(&v.desc))),
-            Builtin::MaterializedView(mv) => Some((mv.schema, mv.name, Cow::Borrowed(&mv.desc))),
+            Builtin::Table(t) => Some((t.schema, t.name, Cow::Borrowed(&t.desc), true)),
+            Builtin::Source(s) => Some((s.schema, s.name, Cow::Borrowed(&s.desc), false)),
+            Builtin::Log(l) => Some((l.schema, l.name, Cow::Owned(l.variant.desc()), false)),
+            Builtin::View(v) => Some((v.schema, v.name, Cow::Borrowed(&v.desc), false)),
+            Builtin::MaterializedView(mv) => {
+                Some((mv.schema, mv.name, Cow::Borrowed(&mv.desc), false))
+            }
             Builtin::Type(_) | Builtin::Func(_) | Builtin::Index(_) | Builtin::Connection(_) => {
                 None
             }
@@ -593,10 +595,10 @@ fn make_builtin_columns_sql(
                 .iter()
                 .copied()
                 .chain([&*columns])
-                .map(|v| (v.schema, v.name, Cow::Borrowed(&v.desc))),
+                .map(|v| (v.schema, v.name, Cow::Borrowed(&v.desc), false)),
         );
     let values = relations
-        .flat_map(|(schema, relation, desc)| {
+        .flat_map(|(schema, relation, desc, is_table)| {
             let schema = escaped_string_literal(schema);
             let relation = escaped_string_literal(relation);
             desc.iter()
@@ -611,8 +613,9 @@ fn make_builtin_columns_sql(
                         i + 1,
                         typ.nullable,
                         escaped_string_literal(pg_type.name()),
-                        // No builtin relation has column defaults.
-                        "NULL",
+                        // A builtin table's columns have no defaults, which reads as the
+                        // string NULL, see the `default` column of `mz_columns`.
+                        if is_table { "'NULL'" } else { "NULL" },
                         pg_type.oid(),
                         pg_type.typmod(),
                     )
