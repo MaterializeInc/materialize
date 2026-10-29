@@ -32,11 +32,19 @@ Upsert sources that spill to disk now hydrate up to 48% faster, with up to 66% l
 
 Materialize now uses its own buffer pool to keep hot data in memory and serve sequential work from disk. Previously, this was left to the operating system's swap. In addition, we now apply LZ4 compression to in-progress data while building an upsert source. See our [blog post](https://materialize.com/blog/materialize-out-of-core/) for details on how it works.
 
-We ran our performance tests on Materialize Cloud. We setup a Kafka topic, with a single partition, of about 1.5B messages (roughly 100 GB), holding 956M distinct keys, with records around 100 bytes. We ingested this data into Materialize, using a Kafka Upsert source, on an M.1-1.5xlarge cluster. This cluster size has 98 GB of memory, and 586 GB of Disk. We measured hydration times as how long it took from `CREATE SOURCE` until every key is indexed, and the source is keeping up with the topic. We ran the test four times, and observed that hydration times dropped from 206 minutes to between 108 and 113 minutes. Peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB. 
+We ran our performance tests on Materialize Cloud. We setup a Kafka topic, with a single partition, of about 1.5B messages (roughly 100 GB), holding 956M distinct keys, with records around 100 bytes. We ingested this data into Materialize, using a Kafka Upsert source, on an M.1-1.5xlarge cluster. This cluster size has 98 GB of memory, and 586 GB of Disk. We measured hydration times as how long it took from `CREATE SOURCE` until every key is indexed, and the source is keeping up with the topic. We ran the test four times, and observed that hydration times dropped from 206 minutes to between 108 and 113 minutes. Peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
 
-Note that the improved hydration times are most impactful for workloads that spill heavily to disk. Workloads that are fully resident in memory won't see a speedup. Regardless, all upsert workloads should require less heap moving forward 
+Note that the improved hydration times are most impactful for workloads that spill heavily to disk. Workloads that are fully resident in memory won't see a speedup. Regardless, all upsert workloads should require less heap moving forward
 
 This change has been rolled out to all Materialize Cloud environments and applies to all existing and new clusters. It will be enabled by default in Materialize Self-Managed in the coming weeks.
+
+### Improved Freshness page in the Console {#v26.48-freshness-page}
+
+<red>*Materialize Cloud only*</red>
+
+The Console's redesigned **Freshness** page, under **Monitoring**, shows how far behind wall-clock time your objects are. Filter by cluster, time range, and object type to see p90, p99, p99.9, and maximum lag across the objects in scope, chart each object's lag over time, and list the objects whose lag exceeds a threshold you set, along with their hydration status. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
+
+![Freshness page filtered to the materialized views on one cluster over 6 hours, showing p90, p99, p99.9, and pMAX lag, a lag over time chart with a 2-second threshold line, and a table of the objects that exceeded it](/images/releases/v2648_freshness.png)
 
 ### Kafka sink headers are generally available {#v26.48-kafka-sink-headers-ga}
 
