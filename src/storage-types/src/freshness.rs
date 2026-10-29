@@ -374,7 +374,7 @@ impl ResolvedTree {
             .iter()
             .flat_map(|s| s.everies.iter().map(|e| duration_ms(e.interval)))
             .collect();
-        if periods.iter().any(|p| *p == 0) {
+        if periods.contains(&0) {
             return None;
         }
         let all: Vec<u64> = grids.iter().chain(periods.iter()).copied().collect();

@@ -14,6 +14,8 @@ use mz_ore::cast::CastLossy;
 use mz_repr::Timestamp;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use proptest::prelude::*;
+use proptest::sample::select;
+use proptest::strategy::Union;
 
 use super::histogram::{BucketScheme, add_span};
 use super::local::{LocalDelayRecorder, VisibilityLog};
@@ -149,11 +151,15 @@ fn assigned(tree: &ResolvedTree, t: u64) -> Option<u64> {
 }
 
 fn arb_tree() -> impl Strategy<Value = ResolvedTree> {
-    let ticker = prop_oneof![
-        (1u64..=50).prop_map(|interval_ms| Ticker::Aligned { interval_ms }),
-        (1u64..=50).prop_map(|interval_ms| Ticker::Unaligned { interval_ms }),
-        Just(Ticker::Continuous),
-    ];
+    let ticker = Union::new([
+        (1u64..=50)
+            .prop_map(|interval_ms| Ticker::Aligned { interval_ms })
+            .boxed(),
+        (1u64..=50)
+            .prop_map(|interval_ms| Ticker::Unaligned { interval_ms })
+            .boxed(),
+        Just(Ticker::Continuous).boxed(),
+    ]);
     (
         proptest::collection::vec(ticker, 1..=4),
         proptest::option::of((1u64..=60, 0u64..=30)),
@@ -425,18 +431,23 @@ fn ceil_to(x: u64, phase: u64, interval: u64) -> u64 {
 }
 
 fn arb_spec() -> impl Strategy<Value = Spec> {
-    let leaf = prop_oneof![
-        (1u64..=8).prop_map(Spec::Aligned),
+    let leaf = Union::new([
+        (1u64..=8).prop_map(Spec::Aligned).boxed(),
         (1u64..=5)
             .prop_flat_map(|u| (Just(u), 0..u))
-            .prop_map(|(u, phase)| Spec::Unaligned(u, phase)),
-        Just(Spec::Continuous),
-    ];
+            .prop_map(|(u, phase)| Spec::Unaligned(u, phase))
+            .boxed(),
+        Just(Spec::Continuous).boxed(),
+    ]);
     leaf.prop_recursive(2, 8, 3, |inner| {
-        prop_oneof![
-            proptest::collection::vec(inner.clone(), 2..=3).prop_map(Spec::Min),
-            (1u64..=10, inner).prop_map(|(p, input)| Spec::Refresh(p, Box::new(input))),
-        ]
+        Union::new([
+            proptest::collection::vec(inner.clone(), 2..=3)
+                .prop_map(Spec::Min)
+                .boxed(),
+            (1u64..=10, inner)
+                .prop_map(|(p, input)| Spec::Refresh(p, Box::new(input)))
+                .boxed(),
+        ])
     })
 }
 
@@ -592,8 +603,8 @@ fn span_conserves_counts() {
     proptest!(|(
         (tree, from, to) in arb_span(),
         extra in 0u64..500,
-        interval in prop_oneof![Just(1u64), Just(7u64), Just(10u64)],
-        b in prop_oneof![Just(1u32), Just(4u32), Just(16u32)],
+        interval in select(vec![1u64, 7, 10]),
+        b in select(vec![1u32, 4, 16]),
     )| {
         let mut counts = BTreeMap::new();
         add_span(&tree, &scheme(b), interval, from, to, to + extra, &mut counts);
@@ -607,8 +618,8 @@ fn span_matches_window_walk() {
     proptest!(|(
         (tree, from, to) in arb_span(),
         extra in 0u64..500,
-        interval in prop_oneof![Just(1u64), Just(3u64), Just(7u64)],
-        b in prop_oneof![Just(1u32), Just(4u32), Just(16u32)],
+        interval in select(vec![1u64, 3, 7]),
+        b in select(vec![1u32, 4, 16]),
     )| {
         let s = scheme(b);
         let mut actual = BTreeMap::new();
