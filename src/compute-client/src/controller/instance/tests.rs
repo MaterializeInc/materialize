@@ -1227,3 +1227,30 @@ async fn freshness_rehydration_restarts_log_collection_recordings() {
         "replica"
     );
 }
+
+/// A replica collection whose recording was dropped by switching recording off has none to keep
+/// when its replica rehydrates, so it keeps the recording the new replica collection starts with.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn freshness_rehydration_keeps_a_new_recording() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let id = GlobalId::User(10);
+    h.add_collection(id, T0);
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+    h.set_recording(false);
+    h.set_recording(true);
+    h.set_now(T0 + 1000);
+    h.instance.rehydrate_replica(r1);
+    h.set_now(T0 + 61_005);
+    h.report(r1, id, T0 + 61_001);
+    // The new replica collection records from its creation at the rehydration, instead of from
+    // its first observation.
+    let recorded = h.recorded();
+    assert_eq!(
+        recorded.periods(Some(r1)),
+        vec![(T0 + 1000, T0 + 60_000, 59_000)],
+        "replica"
+    );
+}

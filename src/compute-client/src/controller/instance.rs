@@ -1504,7 +1504,10 @@ impl Instance {
         if let Some(replica) = self.replicas.get_mut(&id) {
             for (collection_id, (recording, visibility_log)) in freshness {
                 if let Some(collection) = replica.collections.get_mut(&collection_id) {
-                    collection.freshness = recording;
+                    // Without a kept recording, the new one starts by the creation rule.
+                    if recording.is_some() {
+                        collection.freshness = recording;
+                    }
                     collection.visibility_log = visibility_log;
                 }
             }
