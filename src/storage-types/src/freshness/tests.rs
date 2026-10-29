@@ -112,6 +112,9 @@ fn resolve_unknown_ingestion_is_none() {
         fn ingestion_ticker(&self, _: GlobalId) -> Option<Ticker> {
             None
         }
+        fn generation(&self) -> u64 {
+            0
+        }
     }
     let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(GlobalId::User(1)));
     assert!(tree.resolve(&Empty).is_none());
