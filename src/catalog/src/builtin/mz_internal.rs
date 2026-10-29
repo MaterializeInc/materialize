@@ -3383,7 +3383,6 @@ pub static MZ_WALLCLOCK_FRESHNESS_PROGRESS: LazyLock<BuiltinView> = LazyLock::ne
             "covered_until",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
