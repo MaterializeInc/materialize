@@ -1016,6 +1016,7 @@ impl ComputeController {
                 shared_collection_state,
                 target_replica,
                 freshness_tree,
+                used_imports,
             )
             .expect("validated")
         });

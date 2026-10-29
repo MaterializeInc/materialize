@@ -3146,10 +3146,16 @@ where
             return Vec::new();
         };
         let now_ms = (self.now)();
+        // Read by the compute controller, as the input of indexes and materialized views.
+        if let Some(log) = self.storage_collections.visibility_log(id) {
+            log.record(&tree, frontier, now_ms, &config);
+        }
+        // Storage collections have no direct inputs, so their local delay is their end-to-end
+        // latency.
         let rows = collection
             .freshness
             .get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms))
-            .observe(&tree, frontier, now_ms, &config);
+            .observe(&tree, frontier, now_ms, &[], &config);
         if rows.is_empty() {
             return Vec::new();
         }

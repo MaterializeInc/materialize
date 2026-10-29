@@ -218,6 +218,11 @@ impl<S> PeriodBook<S> {
         add(&mut period.state, from, to);
     }
 
+    /// The last arrival accounted for, or the start.
+    pub fn high_water_ms(&self) -> u64 {
+        self.high_water_ms
+    }
+
     /// Returns every open period, including those that extend past the high-water mark, and
     /// stops accepting arrivals. The last arrival of the object is the high-water mark.
     pub fn finish(&mut self) -> Vec<ClosedPeriod<S>> {

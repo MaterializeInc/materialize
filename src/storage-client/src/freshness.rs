@@ -10,6 +10,7 @@
 //! Recording of wallclock freshness histograms, shared by the compute and storage controllers.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -25,11 +26,28 @@ use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::dyncfgs::WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL;
 use mz_storage_types::freshness::ResolvedTree;
 use mz_storage_types::freshness::histogram::BucketScheme;
+use mz_storage_types::freshness::local::{LocalDelayRecorder, VisibilityLog};
 use mz_storage_types::freshness::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use timely::progress::Antichain;
 
-/// The `measure` of rows that count the delay from arrival to visibility in the output.
-const END_TO_END: &str = "end_to_end";
+/// What a freshness histogram row measures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Measure {
+    /// The delay from arrival to visibility in the output.
+    EndToEnd,
+    /// The delay from visibility in the slowest direct input to visibility in the output.
+    Local,
+}
+
+impl Measure {
+    /// The value of the `measure` column.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Measure::EndToEnd => "end_to_end",
+            Measure::Local => "local",
+        }
+    }
+}
 
 /// Where a recording starts, consulted until it does.
 #[derive(Debug)]
@@ -46,7 +64,8 @@ enum Start {
 #[derive(Debug)]
 pub struct FreshnessRecording {
     start: Start,
-    end_to_end: Option<FreshnessRecorder>,
+    /// The recorders of both measures. They start together, so their per-period counts agree.
+    recorders: Option<(FreshnessRecorder, LocalDelayRecorder)>,
 }
 
 impl FreshnessRecording {
@@ -59,7 +78,7 @@ impl FreshnessRecording {
     pub fn created(as_of: Antichain<Timestamp>, created_ms: u64) -> Self {
         FreshnessRecording {
             start: Start::Created(as_of, created_ms),
-            end_to_end: None,
+            recorders: None,
         }
     }
 
@@ -69,21 +88,40 @@ impl FreshnessRecording {
     pub fn at_first_observation(built_ms: u64) -> Self {
         FreshnessRecording {
             start: Start::FirstObservation(built_ms),
-            end_to_end: None,
+            recorders: None,
         }
     }
 
-    /// Records a write frontier observed at `now_ms` and returns the rows of closed periods.
+    fn recorders(start_ms: u64) -> (FreshnessRecorder, LocalDelayRecorder) {
+        (
+            FreshnessRecorder::new(start_ms),
+            LocalDelayRecorder::new(start_ms),
+        )
+    }
+
+    /// The last arrival recorded so far, `None` before the recording starts. The input logs
+    /// passed to [`Self::observe`] need to answer only the arrivals above it.
+    pub fn recorded_through(&self) -> Option<u64> {
+        let (_, local) = self.recorders.as_ref()?;
+        Some(local.high_water_ms())
+    }
+
+    /// Records a write frontier observed at `now_ms` and returns the rows of closed periods of
+    /// both measures.
+    ///
+    /// `inputs` are the visibility logs of the direct inputs, as for
+    /// [`LocalDelayRecorder::observe`].
     pub fn observe(
         &mut self,
         tree: &ResolvedTree,
         frontier: &Antichain<Timestamp>,
         now_ms: u64,
+        inputs: &[&VisibilityLog],
         config: &RecorderConfig,
-    ) -> Vec<PeriodRow> {
+    ) -> Vec<(Measure, PeriodRow)> {
         let reflected =
             |f: &Antichain<Timestamp>| f.as_option().and_then(|t| tree.last_reflected(*t));
-        if self.end_to_end.is_none() {
+        if self.recorders.is_none() {
             let start = match &self.start {
                 Start::Created(as_of, created_ms) => {
                     let retained = now_ms.saturating_sub(config.retention_ms);
@@ -99,19 +137,87 @@ impl FreshnessRecording {
             let Some(start) = start else {
                 return Vec::new();
             };
-            self.end_to_end = Some(FreshnessRecorder::new(start));
+            self.recorders = Some(Self::recorders(start));
         }
-        let recorder = self.end_to_end.as_mut().expect("initialized above");
-        recorder.observe(tree, frontier, now_ms, config)
+        let (end_to_end, local) = self.recorders.as_mut().expect("initialized above");
+        let end_to_end = end_to_end.observe(tree, frontier, now_ms, config);
+        let local = local.observe(tree, frontier, now_ms, inputs, config);
+        let end_to_end = end_to_end.into_iter().map(|row| (Measure::EndToEnd, row));
+        let local = local.into_iter().map(|row| (Measure::Local, row));
+        end_to_end.chain(local).collect()
     }
 
-    /// Ends the recording of a collection that goes away and returns the rows of its open
-    /// periods, which hold the arrivals up to the last observed frontier.
-    pub fn finish(&mut self) -> Vec<PeriodRow> {
-        self.end_to_end
-            .as_mut()
-            .map(FreshnessRecorder::finish)
-            .unwrap_or_default()
+    /// Ends the recording of a collection that goes away and returns the rows of the open
+    /// periods of both measures, which hold the arrivals up to the last observed frontier.
+    pub fn finish(&mut self) -> Vec<(Measure, PeriodRow)> {
+        let Some((end_to_end, local)) = self.recorders.as_mut() else {
+            return Vec::new();
+        };
+        let end_to_end = end_to_end.finish().into_iter();
+        let local = local.finish().into_iter();
+        let end_to_end = end_to_end.map(|row| (Measure::EndToEnd, row));
+        let local = local.map(|row| (Measure::Local, row));
+        end_to_end.chain(local).collect()
+    }
+}
+
+/// Records in `log` that the arrivals `frontier` reflects were visible at `now_ms`, and drops the
+/// entries older than the retention of `config`.
+pub fn record_visibility(
+    log: &mut VisibilityLog,
+    tree: &ResolvedTree,
+    frontier: &Antichain<Timestamp>,
+    now_ms: u64,
+    config: &RecorderConfig,
+) {
+    if let Some(reflected) = frontier.as_option().and_then(|t| tree.last_reflected(*t)) {
+        log.record(reflected, now_ms);
+    }
+    // Pruned by age, not through the least arrival its consumers recorded, because consumers in
+    // other controllers read the log and tracking them would need a registration protocol. A
+    // consumer that lags the input by more than the retention finds no entry and records those
+    // arrivals with a local delay of 0, which understates and never overstates.
+    log.prune_observed_before(now_ms.saturating_sub(visibility_retention_ms(config)));
+}
+
+/// How long visibility log entries are kept: ten periods, at least ten minutes.
+fn visibility_retention_ms(config: &RecorderConfig) -> u64 {
+    config.period_ms.saturating_mul(10).max(600_000)
+}
+
+/// A copy of `log` that answers the arrivals above `recorded_through`, `None` if `log` never
+/// recorded anything.
+///
+/// An input that never recorded, like one without a freshness tree, is no input to local delay,
+/// like it is no input to the freshness tree.
+pub fn input_log(log: &VisibilityLog, recorded_through: Option<u64>) -> Option<VisibilityLog> {
+    if log.is_empty() {
+        return None;
+    }
+    Some(log.after(recorded_through.unwrap_or(0)))
+}
+
+/// A visibility log shared between the controller that records it and the controllers whose
+/// collections read it as an input.
+#[derive(Clone, Debug, Default)]
+pub struct SharedVisibilityLog(Arc<Mutex<VisibilityLog>>);
+
+impl SharedVisibilityLog {
+    /// Like [`record_visibility`].
+    pub fn record(
+        &self,
+        tree: &ResolvedTree,
+        frontier: &Antichain<Timestamp>,
+        now_ms: u64,
+        config: &RecorderConfig,
+    ) {
+        let mut log = self.0.lock().expect("lock poisoned");
+        record_visibility(&mut log, tree, frontier, now_ms, config);
+    }
+
+    /// Like [`input_log`].
+    pub fn input_log(&self, recorded_through: Option<u64>) -> Option<VisibilityLog> {
+        input_log(&self.0.lock().expect("lock poisoned"), recorded_through)
     }
 }
 
@@ -140,7 +246,7 @@ fn millis(d: Duration) -> u64 {
 
 /// Packs `rows` of a collection's global histogram, or of a replica's if `replica_id` is set.
 pub fn pack_rows(
-    rows: Vec<PeriodRow>,
+    rows: Vec<(Measure, PeriodRow)>,
     collection_id: GlobalId,
     replica_id: Option<ReplicaId>,
     labels: &BTreeMap<&'static str, String>,
@@ -149,7 +255,7 @@ pub fn pack_rows(
     let replica_id = replica_id.map(|id| id.to_string());
     let mut row_buf = Row::default();
     let mut updates = Vec::with_capacity(rows.len());
-    for row in rows {
+    for (measure, row) in rows {
         let (Some(start), Some(end)) =
             (timestamp(row.period_start_ms), timestamp(row.period_end_ms))
         else {
@@ -168,7 +274,7 @@ pub fn pack_rows(
             packer.push(Datum::String(replica_id));
         }
         packer.extend([
-            Datum::String(END_TO_END),
+            Datum::String(measure.as_str()),
             Datum::UInt32(row.buckets_per_octave),
             Datum::Int32(row.bucket),
         ]);
@@ -182,4 +288,41 @@ pub fn pack_rows(
 fn timestamp(ms: u64) -> Option<CheckedTimestamp<DateTime<Utc>>> {
     let datetime = DateTime::from_timestamp_millis(i64::try_from(ms).ok()?)?;
     CheckedTimestamp::try_from(datetime).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::Timestamp;
+    use mz_storage_types::freshness::histogram::BucketScheme;
+    use mz_storage_types::freshness::recorder::RecorderConfig;
+    use mz_storage_types::freshness::{ResolvedTree, Ticker};
+    use timely::progress::Antichain;
+
+    use super::SharedVisibilityLog;
+
+    #[mz_ore::test]
+    fn visibility_log_is_pruned_by_age() {
+        let tree = ResolvedTree::Leaf(Ticker::Aligned { interval_ms: 1000 });
+        let config = RecorderConfig {
+            scheme: BucketScheme::new(4).expect("power of two"),
+            interval_ms: 1,
+            period_ms: 60_000,
+        };
+        let log = SharedVisibilityLog::default();
+        assert_eq!(log.input_log(None).map(|l| l.visible_at(1)), None);
+        // One advance per second for 15 minutes, observed 5 ms after each tick.
+        for s in 1..=900u64 {
+            let frontier = Antichain::from_elem(Timestamp::from(s * 1000 + 1));
+            log.record(&tree, &frontier, s * 1000 + 5, &config);
+        }
+        let copy = log.input_log(None).expect("recorded");
+        // Ten minutes are kept.
+        assert_eq!(copy.visible_at(300_000), Some(300_005));
+        assert_eq!(copy.visible_at(299_000), None);
+        assert_eq!(copy.visible_at(900_000), Some(900_005));
+        // A copy for a consumer answers only what it has not recorded yet.
+        let copy = log.input_log(Some(600_000)).expect("recorded");
+        assert_eq!(copy.visible_at(600_000), None);
+        assert_eq!(copy.visible_at(600_001), Some(601_005));
+    }
 }

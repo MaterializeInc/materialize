@@ -26,7 +26,7 @@ use super::recorder::{PeriodHistogram, PeriodRow, RecorderConfig, add_part, rows
 ///
 /// Visibility is measured in arrival time, the collection's own `last_reflected`, so a refresh
 /// collection is visible when its data is, not when its frontier passes.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct VisibilityLog {
     /// `(reflected, observed_ms)`, ascending in both.
     entries: Vec<(u64, u64)>,
@@ -80,6 +80,41 @@ impl VisibilityLog {
         self.entries.drain(..dead);
     }
 
+    /// Drops the entries observed before `observed_ms`, except the last one, which stays to
+    /// answer the arrivals up to it.
+    pub fn prune_observed_before(&mut self, observed_ms: u64) {
+        let old = self.entries.partition_point(|(_, o)| *o < observed_ms);
+        let dead = old.min(self.entries.len().saturating_sub(1));
+        if dead > 0 {
+            self.prune_through(self.entries[dead - 1].0);
+        }
+    }
+
+    /// A copy that answers `visible_at` like this log for every arrival above `arrival`.
+    pub fn after(&self, arrival: u64) -> Self {
+        let dead = self.entries.partition_point(|(r, _)| *r <= arrival);
+        let (floor, floor_observed_ms) = match dead.checked_sub(1) {
+            Some(last_dead) => {
+                let (reflected, observed_ms) = self.entries[last_dead];
+                (
+                    self.floor.max(reflected),
+                    self.floor_observed_ms.max(Some(observed_ms)),
+                )
+            }
+            None => (self.floor, self.floor_observed_ms),
+        };
+        VisibilityLog {
+            entries: self.entries[dead..].to_vec(),
+            floor,
+            floor_observed_ms,
+        }
+    }
+
+    /// Whether nothing was ever recorded.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty() && self.floor == 0
+    }
+
     /// The observation time `visible_at(arrival)` returns, and the inclusive upper bound of the
     /// arrivals that share this answer, `None` if unbounded.
     fn segment(&self, arrival: u64) -> (Option<u64>, Option<u64>) {
@@ -110,6 +145,12 @@ impl LocalDelayRecorder {
         LocalDelayRecorder {
             book: PeriodBook::new(start_ms),
         }
+    }
+
+    /// The last arrival recorded so far, or the start. Input logs need to answer only the
+    /// arrivals above it.
+    pub fn high_water_ms(&self) -> u64 {
+        self.book.high_water_ms()
     }
 
     /// Records an advance of the object to `frontier` at `now_ms`, given its direct inputs'

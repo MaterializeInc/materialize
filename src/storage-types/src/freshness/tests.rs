@@ -1674,3 +1674,45 @@ fn period_book_starts_at_an_off_grid_start() {
         vec![(30_500, 60_000, 29_500), (60_000, 120_000, 60_000)]
     );
 }
+
+#[mz_ore::test]
+fn visibility_log_retention_keeps_the_last_entry() {
+    let mut log = VisibilityLog::default();
+    assert!(log.is_empty());
+    log.record(1000, 1010);
+    log.record(2000, 2020);
+    log.record(3000, 3030);
+    log.prune_observed_before(2500);
+    assert!(!log.is_empty());
+    // Pruned arrivals are answered by the last pruned entry.
+    assert_eq!(log.visible_at(1000), Some(2020));
+    assert_eq!(log.visible_at(1001), Some(2020));
+    assert_eq!(log.visible_at(2001), Some(3030));
+    // Everything is older than the bound, but the last entry stays.
+    log.prune_observed_before(10_000);
+    assert_eq!(log.visible_at(2001), Some(3030));
+    assert!(!log.is_empty());
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn visibility_log_after_answers_later_arrivals() {
+    let strategy = (arb_log(), 0u64..300_000, 0u64..300_000);
+    proptest!(|((log, after, arrival) in strategy)| {
+        let copy = log.after(after);
+        if arrival > after {
+            prop_assert_eq!(copy.visible_at(arrival), log.visible_at(arrival));
+        }
+        prop_assert_eq!(copy.is_empty(), log.is_empty());
+    });
+}
+
+#[mz_ore::test]
+fn local_recorder_reports_high_water() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut local = LocalDelayRecorder::new(500);
+    assert_eq!(local.high_water_ms(), 500);
+    local.observe(&tree, &at(3001), 3005, &[], &cfg);
+    assert_eq!(local.high_water_ms(), 3000);
+}

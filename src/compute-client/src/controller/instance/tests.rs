@@ -34,6 +34,7 @@ use mz_storage_client::client::TimestamplessUpdateBuilder;
 use mz_storage_client::controller::{
     CollectionDescription, IntrospectionType, StorageMetadata, StorageTxn,
 };
+use mz_storage_client::freshness::SharedVisibilityLog;
 use mz_storage_client::storage_collections::{
     CollectionFrontiers, SnapshotCursor, StorageCollections,
 };
@@ -369,9 +370,9 @@ impl TickerLookup for FixedTickers {
     }
 }
 
-/// A `StorageCollections` that only provides ticker lookups.
+/// A `StorageCollections` that only provides ticker lookups and visibility logs.
 #[derive(Debug)]
-struct TickerStorage(Arc<FixedTickers>);
+struct TickerStorage(Arc<FixedTickers>, BTreeMap<GlobalId, SharedVisibilityLog>);
 
 #[async_trait]
 impl StorageCollections for TickerStorage {
@@ -527,6 +528,10 @@ impl StorageCollections for TickerStorage {
         unimplemented!()
     }
 
+    fn visibility_log(&self, id: GlobalId) -> Option<SharedVisibilityLog> {
+        self.1.get(&id).cloned()
+    }
+
     fn ticker_lookup(&self) -> Arc<dyn TickerLookup + Send + Sync> {
         Arc::<FixedTickers>::clone(&self.0)
     }
@@ -543,23 +548,53 @@ impl StorageCollections for TickerStorage {
 /// A minute-aligned wall-clock time in ms.
 const T0: u64 = 1_800_000_000_000;
 
-/// Sent freshness histogram counts keyed by replica (`None` for global) and period
-/// `(start, end]`, with the set of buckets seen.
+/// The storage collection whose visibility log the harness's `StorageCollections` serves.
+const STORAGE_INPUT: GlobalId = GlobalId::User(1);
+
+/// A sent freshness histogram row: measure, collection, replica (`None` for global), and period
+/// `(start, end]`.
+type RecordedKey = (String, String, Option<String>, u64, u64);
+
+/// Sent freshness histogram counts, with the buckets seen per measure, collection and replica.
 #[derive(Debug, Default)]
 struct Recorded {
-    counts: BTreeMap<(Option<String>, u64, u64), i64>,
-    buckets: BTreeSet<i32>,
+    counts: BTreeMap<RecordedKey, i64>,
+    buckets: BTreeMap<(String, String, Option<String>), BTreeSet<i32>>,
 }
 
 impl Recorded {
-    /// The `(start, end, count)` of every period recorded for `replica`, or globally.
+    /// The `(start, end, count)` of every end-to-end period recorded for `replica`, or globally.
     fn periods(&self, replica: Option<ReplicaId>) -> Vec<(u64, u64, i64)> {
+        self.measure_periods("end_to_end", None, replica)
+    }
+
+    /// The `(start, end, count)` of every period of `measure` recorded for `id`, or any
+    /// collection, on `replica`, or globally.
+    fn measure_periods(
+        &self,
+        measure: &str,
+        id: Option<GlobalId>,
+        replica: Option<ReplicaId>,
+    ) -> Vec<(u64, u64, i64)> {
+        let id = id.map(|id| id.to_string());
         let replica = replica.map(|r| r.to_string());
         self.counts
             .iter()
-            .filter(|((r, _, _), _)| *r == replica)
-            .map(|((_, start, end), count)| (*start, *end, *count))
+            .filter(|((m, c, r, _, _), _)| {
+                m == measure && id.as_ref().is_none_or(|id| id == c) && *r == replica
+            })
+            .map(|((_, _, _, start, end), count)| (*start, *end, *count))
             .collect()
+    }
+
+    /// The buckets of `measure` recorded for `id` on `replica`, or globally.
+    fn buckets(&self, measure: &str, id: GlobalId, replica: Option<ReplicaId>) -> BTreeSet<i32> {
+        let key = (
+            measure.to_string(),
+            id.to_string(),
+            replica.map(|r| r.to_string()),
+        );
+        self.buckets.get(&key).cloned().unwrap_or_default()
     }
 }
 
@@ -571,6 +606,8 @@ const LOG_VARIANT: LogVariant = LogVariant::Timely(TimelyLog::Operates);
 struct FreshnessHarness {
     instance: Instance,
     clock: Arc<AtomicU64>,
+    /// The visibility log of [`STORAGE_INPUT`].
+    storage_log: SharedVisibilityLog,
     introspection_rx: mpsc::UnboundedReceiver<IntrospectionUpdates>,
     _response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse>,
 }
@@ -613,9 +650,14 @@ impl FreshnessHarness {
         let (introspection_tx, introspection_rx) = mpsc::unbounded_channel();
         let read_hold_tx: ChangeTx = Arc::new(|_, _| Ok(()));
 
+        let storage_log = SharedVisibilityLog::default();
+        let storage = TickerStorage(
+            Arc::new(FixedTickers(1000)),
+            BTreeMap::from([(STORAGE_INPUT, storage_log.clone())]),
+        );
         let instance = Instance::new(
             &DUMMY_BUILD_INFO,
-            Arc::new(TickerStorage(Arc::new(FixedTickers(1000)))),
+            Arc::new(storage),
             PersistLocation::new_in_mem(),
             logs,
             metrics,
@@ -631,6 +673,7 @@ impl FreshnessHarness {
         FreshnessHarness {
             instance,
             clock,
+            storage_log,
             introspection_rx,
             _response_rx: response_rx,
         }
@@ -671,8 +714,13 @@ impl FreshnessHarness {
             .expect("new replica");
     }
 
-    /// Adds a collection with a 1 s ingestion leaf.
+    /// Adds a collection with a 1 s ingestion leaf and no inputs.
     fn add_collection(&mut self, id: GlobalId, as_of: u64) {
+        self.add_collection_with_inputs(id, as_of, &[]);
+    }
+
+    /// Adds a collection with a 1 s ingestion leaf that reads `inputs`.
+    fn add_collection_with_inputs(&mut self, id: GlobalId, as_of: u64, inputs: &[GlobalId]) {
         let as_of = Antichain::from_elem(Timestamp::from(as_of));
         self.instance.add_collection(
             id,
@@ -686,9 +734,8 @@ impl FreshnessHarness {
             None,
             None,
             None,
-            Some(FreshnessTree::Leaf(FreshnessLeaf::Ingestion(
-                GlobalId::User(1),
-            ))),
+            Some(FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))),
+            inputs.iter().copied().collect(),
         );
     }
 
@@ -733,11 +780,20 @@ impl FreshnessHarness {
                     true => (Some(datums[3].unwrap_str().to_string()), &datums[4..]),
                     false => (None, &datums[3..]),
                 };
-                assert_eq!(rest[0], Datum::String("end_to_end"));
+                let measure = rest[0].unwrap_str().to_string();
+                let id = datums[2].unwrap_str().to_string();
+                assert!(
+                    ["end_to_end", "local"].contains(&measure.as_str()),
+                    "{measure}"
+                );
                 assert_eq!(rest[1], Datum::UInt32(4));
-                recorded.buckets.insert(rest[2].unwrap_int32());
+                recorded
+                    .buckets
+                    .entry((measure.clone(), id.clone(), replica.clone()))
+                    .or_default()
+                    .insert(rest[2].unwrap_int32());
                 assert_eq!(rest[3].unwrap_map().iter().count(), 0, "no workload class");
-                let key = (replica, ms(datums[0]), ms(datums[1]));
+                let key = (measure, id, replica, ms(datums[0]), ms(datums[1]));
                 *recorded.counts.entry(key).or_insert(0) += diff.into_inner();
             }
         }
@@ -782,9 +838,95 @@ async fn freshness_histograms_count_each_arrival_once() {
     assert_eq!(recorded.periods(None), expected, "global");
     assert_eq!(recorded.periods(Some(r1)), expected, "replica 1");
     assert_eq!(recorded.periods(Some(r2)), expected, "replica 2");
-    assert_eq!(recorded.counts.len(), 9, "{:?}", recorded.counts);
+    // Without inputs, local delay is the end-to-end latency.
+    for replica in [None, Some(r1), Some(r2)] {
+        assert_eq!(
+            recorded.measure_periods("local", None, replica),
+            expected,
+            "local {replica:?}"
+        );
+    }
+    assert_eq!(recorded.counts.len(), 18, "{:?}", recorded.counts);
     let bucket = BucketScheme::new(4).expect("power of two").bucket(1005);
-    assert_eq!(recorded.buckets, BTreeSet::from([bucket]));
+    for replica in [None, Some(r1), Some(r2)] {
+        for measure in ["end_to_end", "local"] {
+            assert_eq!(
+                recorded.buckets(measure, id, replica),
+                BTreeSet::from([bucket]),
+                "{measure} {replica:?}"
+            );
+        }
+    }
+}
+
+/// A chain from a storage collection, whose log the compute controller reads through
+/// `StorageCollections`, through two compute collections, each observed a few ms after its
+/// input, on two replicas. The second replica is slower for the last collection.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn local_delay_attributes_each_hop() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let (a, b) = (GlobalId::User(10), GlobalId::User(11));
+    h.add_collection_with_inputs(a, T0, &[STORAGE_INPUT]);
+    h.add_collection_with_inputs(b, T0, &[a]);
+    let (r1, r2) = (ReplicaId::User(1), ReplicaId::User(2));
+    h.add_replica(r1);
+    h.add_replica(r2);
+
+    let config =
+        mz_storage_client::freshness::recorder_config(&h.instance.dyncfg).expect("recording on");
+    let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))
+        .resolve(&FixedTickers(1000))
+        .expect("resolves");
+    for s in 1..=120 {
+        let tick = T0 + s * 1000;
+        // The storage controller observes the input 2 ms after the tick.
+        h.set_now(tick + 2);
+        let frontier = Antichain::from_elem(Timestamp::from(tick + 1));
+        h.storage_log.record(&tree, &frontier, tick + 2, &config);
+        h.set_now(tick + 5);
+        h.report(r1, a, tick + 1);
+        h.report(r2, a, tick + 1);
+        h.set_now(tick + 13);
+        h.report(r1, b, tick + 1);
+        h.set_now(tick + 40);
+        h.report(r2, b, tick + 1);
+    }
+
+    let recorded = h.recorded();
+    let scheme = BucketScheme::new(4).expect("power of two");
+    let expected = vec![
+        (T0, T0 + 60_000, 60_000),
+        (T0 + 60_000, T0 + 120_000, 60_000),
+    ];
+    for id in [a, b] {
+        for replica in [None, Some(r1), Some(r2)] {
+            for measure in ["end_to_end", "local"] {
+                assert_eq!(
+                    recorded.measure_periods(measure, Some(id), replica),
+                    expected,
+                    "{measure} {id} {replica:?}"
+                );
+            }
+        }
+    }
+    // A replica's collection waits for its input on the same replica. The global frontier of `b`
+    // advances with the faster replica.
+    for replica in [None, Some(r1), Some(r2)] {
+        assert_eq!(
+            recorded.buckets("local", a, replica),
+            BTreeSet::from([scheme.bucket(3)]),
+            "a waits 3 ms for the storage input on {replica:?}"
+        );
+    }
+    for (replica, delay) in [(None, 8), (Some(r1), 8), (Some(r2), 35)] {
+        assert_eq!(
+            recorded.buckets("local", b, replica),
+            BTreeSet::from([scheme.bucket(delay)]),
+            "b waits {delay} ms for a on {replica:?}"
+        );
+    }
 }
 
 #[mz_ore::test(tokio::test)]

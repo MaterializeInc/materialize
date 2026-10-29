@@ -39,7 +39,8 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
-use mz_storage_client::freshness::{self, FreshnessRecording};
+use mz_storage_client::freshness::{self, FreshnessRecording, Measure, SharedVisibilityLog};
+use mz_storage_types::freshness::local::VisibilityLog;
 use mz_storage_types::freshness::recorder::{PeriodRow, RecorderConfig};
 use mz_storage_types::freshness::{FreshnessTree, TickerLookup};
 use mz_storage_types::read_holds::{self, ReadHold};
@@ -304,6 +305,7 @@ impl Instance {
         refresh_schedule: Option<RefreshSchedule>,
         target_replica: Option<ReplicaId>,
         freshness_tree: Option<FreshnessTree>,
+        freshness_inputs: BTreeSet<GlobalId>,
     ) {
         // Add global collection state.
         let dependency_ids: Vec<GlobalId> = compute_dependencies
@@ -331,6 +333,12 @@ impl Instance {
         );
         state.target_replica = target_replica;
         state.freshness_tree = freshness_tree;
+        state.freshness_inputs = freshness_inputs;
+        // This controller writes storage sinks, so it records their log for readers on other
+        // instances, which find it through `StorageCollections`.
+        if storage_sink && let Some(log) = self.storage_collections.visibility_log(id) {
+            state.visibility_log = log;
+        }
         let freshness_created_ms = self.freshness_created_ms(id);
         state.freshness =
             freshness_created_ms.map(|ms| FreshnessRecording::created(as_of.clone(), ms));
@@ -1461,15 +1469,21 @@ impl Instance {
         let epoch = replica.epoch + 1;
         let dyncfg_override = replica.dyncfg_override.clone();
         // The rehydrated replica reports frontiers from the as-of again, so keeping the
-        // recordings, with their high-water marks, keeps it from counting arrivals twice. The
-        // logs of the rehydrated replica start over, so `remove_replica` ends the recordings of
-        // log collections and new ones start at the replica's creation.
+        // recordings, with their high-water marks, keeps it from counting arrivals twice. Keeping
+        // the visibility logs keeps the earlier observations for its consumers. The introspection
+        // logs of the rehydrated replica start over, so log collections keep neither:
+        // `remove_replica` ends their recordings and new ones start at the replica's creation.
         let collections = &self.collections;
         let freshness: BTreeMap<_, _> = replica
             .collections
             .iter_mut()
             .filter(|(id, _)| collections.get(id).is_none_or(|c| !c.log_collection))
-            .filter_map(|(id, c)| Some((*id, c.freshness.take()?)))
+            .map(|(id, c)| {
+                (
+                    *id,
+                    (c.freshness.take(), std::mem::take(&mut c.visibility_log)),
+                )
+            })
             .collect();
 
         self.remove_replica(id).expect("replica must exist");
@@ -1481,9 +1495,10 @@ impl Instance {
         }
 
         if let Some(replica) = self.replicas.get_mut(&id) {
-            for (collection_id, recording) in freshness {
+            for (collection_id, (recording, visibility_log)) in freshness {
                 if let Some(collection) = replica.collections.get_mut(&collection_id) {
-                    collection.freshness = Some(recording);
+                    collection.freshness = recording;
+                    collection.visibility_log = visibility_log;
                 }
             }
         }
@@ -1513,6 +1528,7 @@ impl Instance {
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState>,
         target_replica: Option<ReplicaId>,
         freshness_tree: Option<FreshnessTree>,
+        freshness_inputs: BTreeSet<GlobalId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
@@ -1592,6 +1608,7 @@ impl Instance {
                 dataflow.refresh_schedule.clone(),
                 target_replica,
                 freshness_tree.clone(),
+                freshness_inputs.clone(),
             );
 
             // If the export is a storage sink, we can advance its write frontier to the write
@@ -2064,14 +2081,9 @@ impl Instance {
         if id.is_transient() {
             return;
         }
-        let Some(collection) = self.collections.get_mut(&id).filter(|c| !c.dropped) else {
+        let Some(collection) = self.collections.get(&id).filter(|c| !c.dropped) else {
             return;
         };
-        // A log collection logs one replica, so its contents differ between replicas and a
-        // global histogram of it would mix unrelated frontiers.
-        if replica_id.is_none() && collection.log_collection {
-            return;
-        }
         // Resolved at every observation, so a changed tick interval takes effect at once.
         let Some(tree) = collection
             .freshness_tree
@@ -2081,25 +2093,62 @@ impl Instance {
             return;
         };
         let now_ms = (self.now)();
+        let replica_collection = match replica_id {
+            None => None,
+            Some(replica_id) => {
+                let replica = self.replicas.get(&replica_id);
+                let Some(collection) = replica.and_then(|r| r.collections.get(&id)) else {
+                    return;
+                };
+                Some(collection)
+            }
+        };
+        let recording = match replica_collection {
+            None => collection.freshness.as_ref(),
+            Some(collection) => collection.freshness.as_ref(),
+        };
+        let recorded_through = recording.and_then(|r| r.recorded_through());
+        let inputs: Vec<_> = collection
+            .freshness_inputs
+            .iter()
+            .filter_map(|input| self.freshness_input_log(*input, replica_id, recorded_through))
+            .collect();
+        let inputs: Vec<_> = inputs.iter().collect();
+
         let (recording, frontier) = match replica_id {
             None => {
+                let collection = self.collections.get_mut(&id).expect("checked above");
                 let frontier = collection.write_frontier();
+                collection
+                    .visibility_log
+                    .record(&tree, &frontier, now_ms, &config);
+                // A log collection logs one replica, so its contents differ between replicas and
+                // a global histogram of it would mix unrelated frontiers. Its consumers still
+                // read its visibility log.
+                if collection.log_collection {
+                    return;
+                }
                 (&mut collection.freshness, frontier)
             }
             Some(replica_id) => {
-                let Some(collection) = self
-                    .replicas
-                    .get_mut(&replica_id)
+                let replica = self.replicas.get_mut(&replica_id);
+                let collection = replica
                     .and_then(|r| r.collections.get_mut(&id))
-                else {
-                    return;
-                };
-                (&mut collection.freshness, collection.write_frontier.clone())
+                    .expect("checked above");
+                let frontier = collection.write_frontier.clone();
+                freshness::record_visibility(
+                    &mut collection.visibility_log,
+                    &tree,
+                    &frontier,
+                    now_ms,
+                    &config,
+                );
+                (&mut collection.freshness, frontier)
             }
         };
         let rows = recording
             .get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms))
-            .observe(&tree, &frontier, now_ms, &config);
+            .observe(&tree, &frontier, now_ms, &inputs, &config);
         self.deliver_freshness_rows(id, replica_id, rows);
     }
 
@@ -2108,7 +2157,7 @@ impl Instance {
         &self,
         id: GlobalId,
         replica_id: Option<ReplicaId>,
-        rows: Vec<PeriodRow>,
+        rows: Vec<(Measure, PeriodRow)>,
     ) {
         if rows.is_empty() {
             return;
@@ -2119,6 +2168,31 @@ impl Instance {
             Some(_) => IntrospectionType::ReplicaWallclockFreshnessHistogram,
         };
         self.deliver_introspection_updates(type_, updates);
+    }
+
+    /// The visibility log of the input `id` that answers the arrivals above `recorded_through`,
+    /// on `replica_id` or globally, `None` if the input has no log or never recorded one.
+    fn freshness_input_log(
+        &self,
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        recorded_through: Option<u64>,
+    ) -> Option<VisibilityLog> {
+        // Collections of this instance, indexes and storage sinks, have a log here. Storage
+        // sinks of other instances and storage-owned collections have theirs in
+        // `StorageCollections`, recorded when their controller observed them.
+        let Some(collection) = self.collections.get(&id) else {
+            let log = self.storage_collections.visibility_log(id)?;
+            return log.input_log(recorded_through);
+        };
+        match replica_id {
+            None => collection.visibility_log.input_log(recorded_through),
+            Some(replica_id) => {
+                let replica = self.replicas.get(&replica_id)?;
+                let collection = replica.collections.get(&id)?;
+                freshness::input_log(&collection.visibility_log, recorded_through)
+            }
+        }
     }
 
     /// Reloads the freshness recording configuration and drops all recording state if recording
@@ -2791,8 +2865,14 @@ struct CollectionState {
 
     /// How the collection's frontier follows arrival time. `None` if it has no time dependence.
     freshness_tree: Option<FreshnessTree>,
+    /// The direct inputs whose visibility local delay is measured against: the imports the
+    /// freshness tree was built from.
+    freshness_inputs: BTreeSet<GlobalId>,
     /// Freshness recording of the global write frontier, `None` until recording starts.
     freshness: Option<FreshnessRecording>,
+    /// When the global write frontier made arrivals visible. Shared with
+    /// [`StorageCollections`] for storage sinks, whose readers may live on other instances.
+    visibility_log: SharedVisibilityLog,
 }
 
 impl CollectionState {
@@ -2850,7 +2930,9 @@ impl CollectionState {
             introspection,
             wallclock_lag_histogram_stash,
             freshness_tree: None,
+            freshness_inputs: BTreeSet::new(),
             freshness: None,
+            visibility_log: SharedVisibilityLog::default(),
         }
     }
 
@@ -3497,6 +3579,8 @@ struct ReplicaCollectionState {
     wallclock_lag_max: Option<WallclockLag>,
     /// Freshness recording of the replica write frontier, `None` until recording starts.
     freshness: Option<FreshnessRecording>,
+    /// When the replica write frontier made arrivals visible.
+    visibility_log: VisibilityLog,
 }
 
 impl ReplicaCollectionState {
@@ -3516,6 +3600,7 @@ impl ReplicaCollectionState {
             input_read_holds,
             wallclock_lag_max: Some(WallclockLag::MIN),
             freshness: None,
+            visibility_log: VisibilityLog::default(),
         }
     }
 
