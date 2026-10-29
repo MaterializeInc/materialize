@@ -22,8 +22,11 @@ Rust integration tests use `TestHarness::with_system_parameter_default`.
 A value listed there overrides the compiled-in default in CI, so changing a
 default means changing both. `bin/lint-test-flags` fails unless every new
 dyncfg is registered for parallel workload and mzcompose (see the mz-debug-ci
-skill). A compiled-in default is not evidence of the production value: check
-whether `test/launchdarkly-flag-consistency/mzcompose.py` lists the flag in
+skill). Any change to a system parameter or dyncfg, including its default or
+description, needs `bin/gen-system-parameter-catalog` and the regenerated
+`src/sql/system-parameters.json` in the same commit. A compiled-in default is
+not evidence of the production value: check whether
+`test/launchdarkly-flag-consistency/mzcompose.py` lists the flag in
 `INTENTIONAL_LD_OVERRIDES` or `KNOWN_CROSS_ENV_DIVERGENCES`. A session
 variable takes a system default only if `SESSION_SYSTEM_VARS` in
 `src/sql/src/session/vars.rs` lists it. Otherwise `--system-parameter-default`

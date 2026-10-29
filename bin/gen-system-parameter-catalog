@@ -14,8 +14,8 @@
 #
 # Instantiates the default system variables and writes every parameter that the
 # config sync can set to src/sql/system-parameters.json, or to the file given as
-# the first argument. CI runs this through check-generation.sh and fails on any
-# resulting diff.
+# the first argument. The `checked_in_catalog_is_current` test in
+# mz-system-parameter-catalog fails when the checked-in file is stale.
 
 set -euo pipefail
 

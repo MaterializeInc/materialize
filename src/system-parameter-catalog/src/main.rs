@@ -245,6 +245,18 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn checked_in_catalog_is_current() {
+        let checked_in = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../sql/system-parameters.json"
+        ));
+        assert!(
+            checked_in == render_catalog().unwrap(),
+            "src/sql/system-parameters.json is stale, regenerate it with bin/gen-system-parameter-catalog",
+        );
+    }
+
+    #[mz_ore::test]
     fn known_parameters() {
         let params = parameters();
 

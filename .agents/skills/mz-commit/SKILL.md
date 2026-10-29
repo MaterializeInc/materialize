@@ -23,6 +23,10 @@ doc comments, run the Doctests check on the changed crates (command in the
 mz-debug-ci skill). When a `metric!` definition changed, `bin/lint`
 regenerates `doc/user/data/metrics.yml`. Commit the result, or the "Lint and
 rustfmt" job fails on the diff.
+When a system parameter or dyncfg was added, removed, or changed (name,
+default, description, scope, constraint), run `bin/gen-system-parameter-catalog`
+and commit `src/sql/system-parameters.json`, or the
+`checked_in_catalog_is_current` test in `mz-system-parameter-catalog` fails.
 
 After rebasing onto upstream/main, run `cargo check --workspace --all-targets`
 even when the rebase had no conflicts. Upstream changes can still break the
