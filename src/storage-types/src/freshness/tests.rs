@@ -969,7 +969,7 @@ fn period_length_change_keeps_arrivals_in_their_period() {
     let mut rows = Vec::new();
     let mut covered = 0;
     // Open (0, 10 s], then switch to 60 s periods, whose grid starts at 0 as well. The later
-    // steps change the length again, including to one that nests the open periods.
+    // steps change the length again, to shorter and longer ones.
     for (frontier, period_ms) in [
         (5_001, 10_000),
         (40_001, 60_000),
@@ -1397,10 +1397,14 @@ fn period_book_catch_up_cuts_day_pieces() {
 #[mz_ore::test]
 fn period_book_short_span_keeps_periods() {
     let cfg = config(4);
-    let mut book = PeriodBook::new(NOW_MS - 3_600_000);
+    let start = NOW_MS - 3_600_000;
+    let mut book = PeriodBook::new(start);
     let (closed, _, _) = advance_counted(&mut book, NOW_MS, NOW_MS, &cfg);
-    // One hour is not a catch-up yet, so every closed period has the configured length.
-    assert!(closed.iter().all(|(s, e, _)| e - s == cfg.period_ms));
+    // One hour is not a catch-up yet, so every closed period after the first, which starts at
+    // the recording start, has the configured length.
+    assert_eq!(closed[0].0, start);
+    assert_eq!(closed[0].1 % cfg.period_ms, 0);
+    assert!(closed[1..].iter().all(|(s, e, _)| e - s == cfg.period_ms));
     assert_eq!(closed.len(), 60);
 }
 
@@ -1606,29 +1610,67 @@ fn period_book_cuts_short_periods_before_long_ones() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn period_book_tiles_in_order_across_length_changes() {
+    const HOUR_MS: u64 = 60 * 60 * 1000;
     let step = (
-        1u64..200_000,
+        // Mostly short advances, some long enough to be accounted as a catch-up.
+        Union::new([(1u64..200_000).boxed(), (HOUR_MS..30 * HOUR_MS).boxed()]),
         select(vec![1_000u64, 7_000, 10_000, 60_000, 300_000]),
+        // The wall clock behind or ahead of the frontier, which caps the high-water mark.
+        -400_000i64..400_000,
+        select(vec![RETENTION_MS, 2 * HOUR_MS, 10 * 60 * 1000]),
     );
-    proptest!(|(steps in proptest::collection::vec(step, 1..20))| {
-        let mut book = PeriodBook::new(0);
+    let strategy = (0u64..10 * DAY_MS, proptest::collection::vec(step, 1..20));
+    proptest!(|((start, steps) in strategy)| {
+        let mut book = PeriodBook::new(start);
         let mut handed_out = Vec::new();
-        let mut to = 0;
-        for (advance, period_ms) in steps {
+        // The arrival spans `(from, to]` the book must count.
+        let mut counted: Vec<(u64, u64)> = Vec::new();
+        let (mut to, mut high_water) = (start, start);
+        for (advance, period_ms, now_delta, retention_ms) in steps {
             to += advance;
-            let cfg = RecorderConfig { period_ms, ..config(4) };
-            let (closed, _, _) = advance_counted(&mut book, to, to, &cfg);
+            let now = to.saturating_add_signed(now_delta);
+            let cfg = RecorderConfig { period_ms, retention_ms, ..config(4) };
+            let cap = now + period_ms;
+            let reached = to.min(cap - cap % period_ms);
+            if reached > high_water {
+                let from = high_water.max(now.saturating_sub(retention_ms));
+                if from < reached {
+                    counted.push((from, reached));
+                }
+                high_water = reached;
+            }
+            let (closed, _, _) = advance_counted(&mut book, to, now, &cfg);
             handed_out.extend(closed);
         }
         handed_out.extend(book.finish().into_iter().map(|p| (p.start_ms, p.end_ms, p.state)));
-        // In order, without gaps or overlap, every arrival in the period it falls into.
-        let mut end = 0;
-        for (start, period_end, count) in &handed_out {
-            prop_assert_eq!(*start, end, "{:?}", handed_out);
-            prop_assert!(*period_end > *start, "{:?}", handed_out);
-            prop_assert_eq!(*count, period_end.min(&to) - start, "{:?}", handed_out);
+        // In order, without overlap, starting at the recording start, and every counted
+        // arrival in the period it falls into.
+        let mut end = start;
+        for (period_start, period_end, count) in &handed_out {
+            prop_assert!(*period_start >= end, "{:?}", handed_out);
+            prop_assert!(*period_end > *period_start, "{:?}", handed_out);
+            let expected: u64 = counted
+                .iter()
+                .map(|(from, to)| {
+                    to.min(period_end).saturating_sub(*from.max(period_start))
+                })
+                .sum();
+            prop_assert_eq!(*count, expected, "({}, {}] {:?}", period_start, period_end, counted);
             end = *period_end;
         }
-        prop_assert!(end >= to);
+        let total: u64 = handed_out.iter().map(|(_, _, count)| count).sum();
+        let expected: u64 = counted.iter().map(|(from, to)| to - from).sum();
+        prop_assert_eq!(total, expected);
     });
+}
+
+#[mz_ore::test]
+fn period_book_starts_at_an_off_grid_start() {
+    // A restart seeded at the end of a cut period, off the grid of 60 s periods.
+    let mut book = PeriodBook::new(30_500);
+    let (closed, _, _) = advance_counted(&mut book, 130_000, 130_001, &config(4));
+    assert_eq!(
+        closed,
+        vec![(30_500, 60_000, 29_500), (60_000, 120_000, 60_000)]
+    );
 }

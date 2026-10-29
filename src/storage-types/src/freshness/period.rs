@@ -38,8 +38,9 @@ struct OpenPeriod<S> {
 /// Arrivals up to a high-water mark, charged to the periods in which they arrived.
 ///
 /// Periods are half-open `(start, end]` on arrival time and start at multiples of the period
-/// length, except for the pieces of a catch-up and the periods around a change of the period
-/// length, so every arrival time belongs to exactly one period. A period is handed out once,
+/// length, except for the pieces of a catch-up, the first period, which starts at the recording
+/// start, and the periods around a change of the period length, so every arrival time belongs to
+/// exactly one period. A period is handed out once,
 /// when its end is at most the high-water mark, which makes everything handed out final.
 /// Periods are handed out in order, each ending no earlier than the one before, so the largest
 /// end handed out bounds every arrival counted so far.
@@ -49,8 +50,8 @@ pub(super) struct PeriodBook<S> {
     open: BTreeMap<u64, OpenPeriod<S>>,
     /// The period length of the open periods, `None` before the first advance.
     period_ms: Option<u64>,
-    /// No period starts before this, the high-water mark at the last change of the period
-    /// length.
+    /// No period starts before this, the recording start or the high-water mark at the last
+    /// change of the period length.
     cut_ms: u64,
     /// The end of the last handed-out period.
     handed_out_ms: u64,
@@ -71,14 +72,16 @@ impl<S> fmt::Debug for PeriodBook<S> {
 }
 
 impl<S> PeriodBook<S> {
-    /// Starts accounting arrivals after `start_ms`.
+    /// Starts accounting arrivals after `start_ms`, in a first period that starts there.
     pub fn new(start_ms: u64) -> Self {
+        // NOTE: A restart can seed `start_ms` at the end of a period cut off the grid. A first
+        // period on the grid would start before it and overlap the periods handed out before.
         PeriodBook {
             high_water_ms: start_ms,
             open: BTreeMap::new(),
             period_ms: None,
-            cut_ms: 0,
-            handed_out_ms: 0,
+            cut_ms: start_ms,
+            handed_out_ms: start_ms,
             finished: false,
         }
     }
@@ -168,7 +171,7 @@ impl<S> PeriodBook<S> {
     /// Notes that `closed` are handed out, and returns them.
     fn hand_out(&mut self, closed: Vec<ClosedPeriod<S>>) -> Vec<ClosedPeriod<S>> {
         for p in &closed {
-            let in_order = p.end_ms >= self.handed_out_ms;
+            let in_order = p.start_ms >= self.handed_out_ms && p.end_ms > p.start_ms;
             debug_assert!(
                 in_order,
                 "period ({}, {}] after one ending at {}",
