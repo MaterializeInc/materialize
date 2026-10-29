@@ -69,6 +69,7 @@ For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/mysql/)
 ### Guides {#v26.48-guides}
 - [Fine tune for sub-second freshness](/transform-data/freshness/subsecond-freshness/)
 - [Troubleshooting Iceberg sinks](/export-data/iceberg-troubleshooting/)
+- [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/)
 
 ### Bug Fixes {#v26.48-bug-fixes}
 - Fixed a PostgreSQL source's replica growing until it was killed for running out of memory when upstream schema validation kept failing while the replication stream was silent; the validator retried without pausing and filled an unbounded error queue that is drained only on a keepalive, and it now reports each failure once.
