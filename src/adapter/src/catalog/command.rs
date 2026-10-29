@@ -14,6 +14,10 @@
 //! output we might have sent to the client (aka. the "promise"), so commit can
 //! "assert" on that output when re-checking catalog commands against the
 //! current catalog.
+//!
+//! Pending external work abandons the candidate. A continuation rebuilds the
+//! prefix before consuming its indexed response, so successful preparation and
+//! preparation errors are accepted only when their inputs still match.
 
 pub(crate) mod source;
 pub(crate) mod source_statement;
