@@ -147,9 +147,9 @@ Rows store b, so a configuration change does not mix incompatible rows within a 
 All relations live in `mz_internal` next to the existing wallclock lag relations, which stay unchanged.
 Implementer's call: follow the pattern of `mz_wallclock_global_lag_histogram_raw`, a raw builtin source whose update diff is the count in virtual arrivals, plus a view that exposes `count`.
 
-* A global histogram, written from the global write frontier: `period_start`, `period_end`, `object_id`, `buckets_per_octave`, `bucket`, `labels`, and `count` in the view.
+* A global histogram, written from the global write frontier: `period_start`, `period_end`, `object_id`, `measure` (`'end_to_end'` or `'local'`), `buckets_per_octave`, `bucket`, `labels`, and `count` in the view.
 * A per-replica histogram with the same columns plus `replica_id`, as a diagnostic.
-* A progress view with `object_id`, nullable `replica_id` (null for global) and `covered_until`, the largest emitted period end, computed from the histograms. If the view is expensive for the Console, it can become a maintained index.
+* A progress view with `object_id`, nullable `replica_id` (null for global) and `covered_until`, the largest emitted end-to-end period end, computed from the histograms. If the view is expensive for the Console, it can become a maintained index.
 
 Histograms are retained for a configurable interval, 30 days by default like the existing relations, and truncated on `period_start` by the existing metrics-history truncation.
 That truncation runs only when the collection's write task starts (`partially_truncate_metrics_history` in `src/storage-controller/src/collection_mgmt.rs`), so between restarts the relation grows past the retention interval, as the existing relations do.
@@ -157,6 +157,19 @@ As today, exactly one controller writes the global rows of an object: the comput
 
 The recorder hooks every `Frontiers` response, not the 1s maintenance tick, and the advance time is when the controller observes the response.
 The measured latency therefore includes the protocol hop to the controller, which the reported value includes today as well.
+
+### Local delay
+
+End-to-end latency shows how stale an object is, but not which hop in a chain of sources, views and indexes adds the lag.
+Local delay answers that: for each arrival, the time the object made it visible minus the time its slowest direct input had made it visible.
+It uses the same virtual arrivals, windows, periods and finality as the end-to-end histogram and is stored in the same relations with `measure = 'local'`, so per period the local and end-to-end counts are equal.
+Each collection keeps a visibility log of its own reflected arrival time and the time the controller observed it, and a consumer reads its inputs' logs.
+Logging reflected arrival time instead of raw frontiers keeps a refresh wait on the refreshing view, because a REFRESH view's frontier passes leaf timestamps before its data is visible.
+
+Local delay may understate and never overstates.
+An input without a freshness tree is skipped, an input whose log cannot answer an arrival counts as ready at the observation (local delay 0), and an input with an empty frontier logs that it is complete from then on.
+Storage-owned collections have no inputs inside Materialize, so their local delay equals their end-to-end latency.
+Logs are pruned through what their consumers have recorded, with an age cap as a backstop, and are not restored across restarts.
 
 ### Cost
 
@@ -195,6 +208,16 @@ The recorder's parameters are dyncfgs:
 * Period interval, default 1 minute.
 * Retention interval, default 30 days.
 * Restart policy, `hole` or `charge`, default `hole`.
+
+## Decisions made during implementation
+
+* D is unbounded (`None`) for refresh schedules without `REFRESH EVERY`, and `REFRESH AT` points next to `REFRESH EVERY` are ignored. Such objects keep today's reported value.
+* When the scan for D is infeasible, the fallback is the refresh period plus the largest assignment and frontier-lag terms of its input, about 62 s for a 1 minute refresh over a table.
+* A recorder starts at the later of its as-of and its creation time. Collections that exist when the controller starts (a restart) start at their first observed frontier under policy `hole`.
+* Materialized views hand their freshness tree to the storage side for reporting, but only the compute controller writes their histogram rows.
+* Resolved trees are cached behind a generation counter, and D is cached per collection.
+
+The implementation is the stack #40330 to #40338.
 
 ## Left to the implementer
 

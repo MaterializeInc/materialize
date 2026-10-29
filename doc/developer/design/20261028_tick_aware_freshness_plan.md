@@ -201,7 +201,7 @@ impl FreshnessRecorder {
 
 **Interfaces:**
 - Produces:
-  * Raw relations `mz_internal.mz_wallclock_global_freshness_histogram_raw` with columns `period_start timestamptz`, `period_end timestamptz`, `object_id text`, `buckets_per_octave uint4`, `bucket int4`, `labels jsonb`; the update diff is the count. Views `mz_internal.mz_wallclock_global_freshness_histogram` adding `count` by `GROUP BY` with `sum` over the diff (as the existing `count(*)` view does). The replica variants add `replica_id text`.
+  * Raw relations `mz_internal.mz_wallclock_global_freshness_histogram_raw` with columns `period_start timestamptz`, `period_end timestamptz`, `object_id text`, `measure text` (`'end_to_end'` or `'local'`, see Tasks 11 and 12), `buckets_per_octave uint4`, `bucket int4`, `labels jsonb`; the update diff is the count. Views `mz_internal.mz_wallclock_global_freshness_histogram` adding `count` by `GROUP BY` with `sum` over the diff (as the existing `count(*)` view does). The replica variants add `replica_id text`.
   * View `mz_internal.mz_wallclock_freshness_progress` (`object_id`, `replica_id` nullable, `covered_until` = max `period_end`), unioning the global (null replica) and replica histograms.
   * Dyncfgs in `controller-types`: `enable_wallclock_freshness_reporting` (bool), `enable_wallclock_freshness_recording` (bool), `wallclock_freshness_buckets_per_octave` (u32, 4), `wallclock_freshness_virtual_arrival_interval` (Duration, 1 ms), `wallclock_freshness_period_interval` (Duration, 60 s), `wallclock_freshness_restart_policy` (String, `"hole"`). In `storage-types`: `wallclock_freshness_histogram_retention_interval` (Duration, 30 days). Flag defaults per the `mz-feature-flags` skill: off in code, on in CI.
 
@@ -299,3 +299,67 @@ Keep one `FreshnessRecorder` per collection, driven from the global write fronti
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4:** Run it. Expected: PASS.
 - [ ] **Step 5: Commit** `controllers: charge restart policy for freshness histograms`.
+
+## PR 2b: local delay logic (Task 11, executed after Task 4)
+
+### Task 11: Local delay recorder
+
+Local delay attributes latency to hops. For an object C, the local delay of an arrival is the time C made it visible minus the time the slowest direct input of C had made it visible. A source has no inputs, so its local delay equals its end-to-end latency. Local delay uses the same virtual arrivals, windows, periods and finality rules as the end-to-end recorder, so its counts per period equal the end-to-end counts.
+
+**Files:**
+- Create: `src/storage-types/src/freshness/local.rs`
+- Modify: `src/storage-types/src/freshness.rs` (module wiring), `src/storage-types/src/freshness/tests.rs`
+
+**Interfaces:**
+- Consumes: `ResolvedTree`, `BucketScheme`, `RecorderConfig`, `PeriodRow`, the period splitting of `FreshnessRecorder`.
+- Produces:
+
+```rust
+/// Observation times of a collection's write frontier advances, kept while a consumer may still need them.
+pub struct FrontierLog { /* (frontier, observed_ms), ascending */ }
+impl FrontierLog {
+    pub fn record(&mut self, frontier: Timestamp, observed_ms: u64);
+    /// The earliest observation time at which the frontier exceeded `ts`, if observed.
+    pub fn passed_at(&self, ts: Timestamp) -> Option<u64>;
+    pub fn prune_through(&mut self, ts: Timestamp);
+}
+pub struct LocalDelayRecorder { /* like FreshnessRecorder */ }
+impl LocalDelayRecorder {
+    pub fn new(start_ms: u64) -> Self;
+    /// Records an advance of the object to `frontier` at `now_ms`, given its direct inputs' logs.
+    pub fn observe(&mut self, tree: &ResolvedTree, frontier: &Antichain<Timestamp>, now_ms: u64,
+        inputs: &[&FrontierLog], config: &RecorderConfig) -> Vec<PeriodRow>;
+}
+```
+
+All arrivals in one window share their output timestamp $T = \max_k \lceil e \rceil_{i_k}$ for window end $e$. Their ready time is the maximum over inputs of `passed_at(T)`, and their local delay is `now_ms` minus the ready time, at least 0. Group windows by input log segments, so work per advance is proportional to the input advances consumed, each consumed once. An input whose log no longer covers `T` (pruned or never observed) counts as ready at the object's own previous advance time, which understates and never overstates local delay. With no inputs, local delay equals the end-to-end latency.
+
+- [ ] **Step 1: Write the failing tests:**
+  * `local_chain_attributes_hops`: A (1 s source) -> B -> C, where B adds 3 s and C adds 0: C's local rows sit in the bucket of about 0 ms, B's in the bucket of 3000 ms, and C's end-to-end rows include both.
+  * `local_counts_match_end_to_end`: for random advances, per period the local counts sum to the end-to-end counts of the same object.
+  * `local_join_uses_slowest_input`.
+  * `frontier_log_passed_at`: earliest observation strictly above `ts`, `None` before.
+  * `local_missing_input_entry_understates`.
+- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -p mz-storage-types --lib freshness`. Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4:** Run them. Expected: PASS.
+- [ ] **Step 5: Commit** `storage-types: local delay recorder for freshness attribution`.
+
+## PR 5b: local delay recording (Task 12, executed after Task 8)
+
+### Task 12: Record local delay in both controllers
+
+**Files:**
+- Modify: `src/compute-client/src/controller/instance.rs`, `src/storage-controller/src/lib.rs`
+
+**Interfaces:**
+- Consumes: Task 11 `FrontierLog`, `LocalDelayRecorder`; Task 5 relations with `measure`; Tasks 7 and 8 recorders.
+- Produces: rows with `measure = 'local'` next to `measure = 'end_to_end'` (which Tasks 7 and 8 write) in the global and per-replica histograms.
+
+Keep a `FrontierLog` per collection in each controller, recorded at the same point the end-to-end recorder observes advances. A compute collection's direct inputs are its dataflow's imports (indexes on the same instance and storage collections). The compute controller reads storage inputs' logs through `StorageCollections` (add `fn frontier_log(&self, id: GlobalId) -> Option<FrontierLog>` returning a clone of the recent entries, or an equivalent accessor), so a storage input's observation time is when its controller saw it. Prune a log through the minimum frontier its consumers have recorded.
+
+- [ ] **Step 1: Write the failing test:** testdrive in `test/testdrive/wallclock-freshness.td`: a load generator with `TIMESTAMP INTERVAL '1s'`, a view over it and an index on the view. After two periods, the index's `local` rows sit below 1 s, the source's `local` rows equal its `end_to_end` rows, and per period the `local` and `end_to_end` counts of each object match.
+- [ ] **Step 2:** Run `bin/mzcompose --find testdrive run default -- wallclock-freshness.td`. Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4:** Run it. Expected: PASS.
+- [ ] **Step 5: Commit** `controllers: record local delay for freshness attribution`.
