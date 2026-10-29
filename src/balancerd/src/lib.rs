@@ -58,7 +58,7 @@ use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ErrorResponse, FrontendMessage,
     FrontendStartupMessage, MAX_STARTUP_FRAME_SIZE, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
-    VERSION_3, decode_startup,
+    TlsStream, VERSION_3, decode_startup,
 };
 use mz_server_core::{
     Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
@@ -1114,7 +1114,7 @@ impl PgwireBalancer {
                             let _ = ssl_stream.get_mut().shutdown().await;
                             return Err(e.into());
                         }
-                        Conn::Ssl(ssl_stream)
+                        Conn::Ssl(TlsStream::Openssl(ssl_stream))
                     }
                     (mut conn, _) => {
                         conn.write_all(&[REJECT_ENCRYPTION]).await?;
@@ -1294,7 +1294,7 @@ impl PgwireBalancer {
                 // do a TLS handshake
                 let mut ssl = internal_tls.configure()?.into_ssl(&envd_addr.to_string())?;
                 ssl.set_connect_state();
-                Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+                Conn::Ssl(TlsStream::Openssl(SslStream::new(ssl, mz_stream)?))
             } else {
                 Conn::Unencrypted(mz_stream)
             }
@@ -1802,7 +1802,7 @@ impl mz_server_core::Server for HttpsBalancer {
                         .configure()?
                         .into_ssl(&resolved.addr.to_string())?;
                     ssl.set_connect_state();
-                    Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+                    Conn::Ssl(TlsStream::Openssl(SslStream::new(ssl, mz_stream)?))
                 } else {
                     Conn::Unencrypted(mz_stream)
                 };
@@ -1920,12 +1920,10 @@ impl BalancerResolver {
                 sni: sni_resolver,
             } => {
                 let servername = match conn.inner() {
-                    Conn::Ssl(ssl_stream) => {
-                        ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                            match sn.split_once('.') {
-                                Some((left, _right)) => left,
-                                None => sn,
-                            }
+                    Conn::Ssl(tls_stream) => {
+                        tls_stream.server_name().map(|sn| match sn.split_once('.') {
+                            Some((left, _right)) => left,
+                            None => sn,
                         })
                     }
                     Conn::Unencrypted(_) => None,
