@@ -20,7 +20,7 @@ steps:
         env:
           # Compose bind mount paths must match those on the host.
           CI_BUILDER_FIXED_WORKDIR: "0"
-        depends_on: []
+        depends_on: devel-docker-tags
         if: build.tag != ""
         timeout_in_minutes: 150
         agents:
@@ -32,7 +32,7 @@ steps:
         command: bin/ci-builder run stable ci/test/terraform-provider.sh integration
         env:
           CI_BUILDER_FIXED_WORKDIR: "0"
-        depends_on: []
+        depends_on: devel-docker-tags
         if: build.tag != ""
         timeout_in_minutes: 90
         agents:
@@ -67,6 +67,24 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
+
+      - id: devel-docker-tags
+        label: Tag development docker images
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.dev_tag
+        inputs:
+          - "*"
+        depends_on:
+          - build-x86_64
+          - build-aarch64
+        timeout_in_minutes: 20
+        agents:
+          queue: linux-aarch64-small
+        coverage: skip
+        # Fortify against intermittent DockerHub/GHCR issues
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 2
 
 
   - id: testdrive-in-cloudtest

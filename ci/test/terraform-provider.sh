@@ -19,8 +19,7 @@ esac
 cd "$(dirname "$0")/../.."
 python="$PWD/bin/pyactivate"
 
-# Release qualification starts after devel-docker-tags, before the release tag
-# is necessarily published. Use the same tag calculation as the publisher.
+# The release-tagged image may still be publishing when qualification starts.
 image="${MATERIALIZED_IMAGE:-materialize/materialized:$("$python" -c 'from materialize.ci_util import dev_docker_tag; print(dev_docker_tag())')}"
 # The host Docker daemon must see fixture files created inside ci-builder.
 workdir=$(mktemp -d "$PWD/.terraform-provider.XXXXXX")
