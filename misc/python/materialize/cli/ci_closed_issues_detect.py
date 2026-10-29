@@ -103,7 +103,7 @@ COMMENT_RE = re.compile(r"#|//")
 
 IGNORE_FILENAME_RE = re.compile(
     r"""
-    ( .*\.(svg|png|jpg|jpeg|avif|avro|ico|woff)
+    ( .*\.(svg|png|jpg|jpeg|avif|avro|bin|ico|woff)
     | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
     | \.(agents|claude)/skills/.*
     | test/sqllogictest/cockroach/.*
