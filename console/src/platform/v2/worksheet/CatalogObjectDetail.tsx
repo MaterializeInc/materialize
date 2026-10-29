@@ -16,6 +16,7 @@ import {
   IconButton,
   Link,
   MenuItem,
+  Spacer,
   Text,
   TextProps,
   Tooltip,
@@ -48,6 +49,7 @@ import {
   MonitorIcon,
   WorkflowIcon,
 } from "~/icons";
+import type { LagMap } from "~/platform/clusters/queries";
 import { NULL_DATABASE_NAME } from "~/platform/constants";
 import { useSinkList } from "~/platform/sinks/queries";
 import { useSourcesList } from "~/platform/sources/queries";
@@ -62,6 +64,8 @@ import type { DepRow } from "~/store/catalogDependencies";
 import { useRegionSlug } from "~/store/environments";
 import type { MaterializeTheme } from "~/theme";
 
+import { FreshnessSummary, LagDot } from "./CatalogFreshness";
+import { reportsLag, useCatalogLag } from "./catalogLag";
 import type { CatalogSelection } from "./CatalogPanel";
 import { type QueryResult, useShowResult } from "./store";
 
@@ -291,6 +295,16 @@ const CatalogDetailViewContent = ({
   const { columns, description, indexes, owner, dependencies, referencedBy } =
     useCatalogObject(id);
 
+  const lagMap = useCatalogLag(
+    [
+      ...(reportsLag(objectType) ? [id] : []),
+      ...indexes.map((idx) => idx.id),
+      ...[...dependencies, ...referencedBy]
+        .filter((dep) => reportsLag(dep.objectType))
+        .map((dep) => dep.id),
+    ].sort(),
+  );
+
   const visibleColumns =
     expandedColumnsFor === id
       ? columns
@@ -398,6 +412,9 @@ const CatalogDetailViewContent = ({
             </Box>
           )}
         </Flex>
+        {reportsLag(objectType) && (
+          <FreshnessSummary objectId={id} lagInfo={lagMap?.get(id)} />
+        )}
         {description && (
           <CommentText fontSize="sm" color={colors.foreground.secondary} mt="1">
             {description}
@@ -467,6 +484,10 @@ const CatalogDetailViewContent = ({
                     ({idx.indexedColumns})
                   </TruncatedText>
                 </Box>
+                <LagDot
+                  lagInfo={lagMap?.get(idx.id)}
+                  clusterName={idx.clusterName}
+                />
                 <OverflowMenu
                   placement="bottom-end"
                   items={[
@@ -541,11 +562,13 @@ const CatalogDetailViewContent = ({
       <DependenciesSection
         deps={dependencies}
         direction="depends_on"
+        lagMap={lagMap}
         onNavigate={onNavigate}
       />
       <DependenciesSection
         deps={referencedBy}
         direction="referenced_by"
+        lagMap={lagMap}
         onNavigate={onNavigate}
       />
     </VStack>
@@ -640,10 +663,12 @@ const DetailSection = ({
 const DependenciesSection = ({
   deps: rawDeps,
   direction,
+  lagMap,
   onNavigate,
 }: {
   deps: DepRow[];
   direction: "depends_on" | "referenced_by";
+  lagMap: LagMap | undefined;
   onNavigate: (obj: CatalogSelection) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -696,6 +721,8 @@ const DependenciesSection = ({
           >
             {dep.name}
           </Link>
+          <Spacer />
+          <LagDot lagInfo={lagMap?.get(dep.id)} />
         </HStack>
       ))}
     </DetailSection>
