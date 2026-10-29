@@ -180,27 +180,11 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         return TargetCluster::Active;
     }
 
-    // These dependencies are just existing dataflows that are referenced in the plan.
-    let mut depends_on = depends_on
-        .into_iter()
-        .map(|gid| catalog.resolve_item_id(&gid))
-        .peekable();
-    let has_dependencies = depends_on.peek().is_some();
-
-    // Make sure we only depend on the system catalog, and nothing we depend on is a
-    // per-replica object, that requires being run a specific replica.
-    let valid_dependencies = depends_on.all(|id| {
-        let entry = catalog.state().get_entry(&id);
-        let schema = entry.name().qualifiers.schema_spec;
-
-        let system_only = catalog.state().is_system_schema_specifier(schema);
-        let non_replica = catalog.state().introspection_dependencies(id).is_empty();
-
-        system_only && non_replica
-    });
-
-    if (has_dependencies && valid_dependencies)
-        || (!has_dependencies && !could_run_expensive_function)
+    // Only queries over the system catalog can move, and not those that read
+    // per-replica introspection data, which only the active cluster has.
+    let dependencies = SystemDependencies::of(catalog.state(), depends_on);
+    if (dependencies.any && dependencies.only_system && !dependencies.replica_introspection)
+        || (!dependencies.any && !could_run_expensive_function)
     {
         let intros_cluster = catalog
             .state()
@@ -287,13 +271,54 @@ pub fn check_cluster_restrictions(
     }
 }
 
+/// How the objects a statement depends on relate to the system catalog.
+struct SystemDependencies {
+    /// Whether the statement depends on any object.
+    any: bool,
+    /// Whether every dependency is in a system schema.
+    only_system: bool,
+    /// Whether any dependency reads per-replica introspection data, which only
+    /// the replicas of the target cluster have.
+    replica_introspection: bool,
+}
+
+impl SystemDependencies {
+    fn of(state: &CatalogState, depends_on: impl IntoIterator<Item = GlobalId>) -> Self {
+        let mut dependencies = SystemDependencies {
+            any: false,
+            only_system: true,
+            replica_introspection: false,
+        };
+        for gid in depends_on {
+            let id = state.get_entry_by_global_id(&gid).id();
+            let schema = state.get_entry(&id).name().qualifiers.schema_spec;
+            dependencies.any = true;
+            dependencies.only_system &= state.is_system_schema_specifier(schema);
+            dependencies.replica_introspection |= !state.introspection_dependencies(id).is_empty();
+        }
+        dependencies
+    }
+
+    /// Whether a query with these dependencies only inspects the replicas of
+    /// its target cluster.
+    fn only_replica_introspection(&self) -> bool {
+        self.only_system && self.replica_introspection
+    }
+}
+
 /// The workload class of the work `plan` runs on its target cluster, with a
 /// description of it for errors, or `None` if it runs no work there.
 ///
 /// NOTE: The match is exhaustive so that a new plan kind cannot run on a
 /// restricted cluster without being classified.
-pub fn plan_workload(plan: &Plan) -> Option<(WorkloadClass, &'static str)> {
+pub fn plan_workload(state: &CatalogState, plan: &Plan) -> Option<(WorkloadClass, &'static str)> {
     match plan {
+        Plan::Select(plan)
+            if SystemDependencies::of(state, plan.source.depends_on())
+                .only_replica_introspection() =>
+        {
+            Some((WorkloadClass::ComputeIntrospection, "run SELECT"))
+        }
         Plan::Select(_) | Plan::ShowColumns(_) => {
             Some((WorkloadClass::ComputeInteractive, "run SELECT"))
         }
@@ -303,6 +328,11 @@ pub fn plan_workload(plan: &Plan) -> Option<(WorkloadClass, &'static str)> {
         // optimization, since even a VALUES list is not constant before it, so
         // every INSERT counts as interactive compute.
         Plan::Insert(_) => Some((WorkloadClass::ComputeInteractive, "run INSERT")),
+        Plan::Subscribe(plan)
+            if SystemDependencies::of(state, plan.from.depends_on()).only_replica_introspection() =>
+        {
+            Some((WorkloadClass::ComputeIntrospection, "run SUBSCRIBE"))
+        }
         Plan::Subscribe(_) => Some((WorkloadClass::ComputeMaintained, "run SUBSCRIBE")),
         Plan::CopyFrom(_) => Some((WorkloadClass::Ingest, "run COPY FROM")),
         // Objects created by these plans are checked when the catalog
@@ -394,7 +424,7 @@ pub fn check_cluster_workload_restrictions(
     session: &Session,
     plan: &Plan,
 ) -> Result<(), AdapterError> {
-    let Some((class, action)) = plan_workload(plan) else {
+    let Some((class, action)) = plan_workload(catalog, plan) else {
         return Ok(());
     };
     catalog.ensure_cluster_allows_workload(

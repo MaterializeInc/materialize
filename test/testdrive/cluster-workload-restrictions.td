@@ -16,8 +16,8 @@ ALTER SYSTEM SET enable_auto_scaling_strategy = true
 ALTER SYSTEM SET enable_hydration_burst = false
 
 > SELECT size, allowed_workloads::text FROM mz_cluster_replica_sizes WHERE size IN ('scale=1,workers=1', 'scale=1,workers=1,legacy', 'scale=1,workers=1,ingest-only', 'scale=1,workers=1,no-ingest')
-"scale=1,workers=1" "{ingest,sink,compute_maintained,compute_interactive}"
-"scale=1,workers=1,legacy" "{ingest,sink,compute_maintained,compute_interactive}"
+"scale=1,workers=1" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
+"scale=1,workers=1,legacy" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
 "scale=1,workers=1,ingest-only" "{ingest}"
 "scale=1,workers=1,no-ingest" "{sink,compute_maintained,compute_interactive}"
 
@@ -71,6 +71,9 @@ contains:cluster "ingest" cannot run INSERT because its replica sizes do not all
 
 ! UPDATE t SET a = 2
 contains:cluster "ingest" cannot run UPDATE or DELETE because its replica sizes do not allow compute_interactive workloads
+
+! SELECT count(*) >= 0 FROM mz_introspection.mz_dataflow_operators
+contains:cluster "ingest" cannot run SELECT because its replica sizes do not allow compute_introspection workloads
 
 # Internal users are exempt.
 $ postgres-execute connection=mz_system
@@ -136,11 +139,11 @@ contains:cluster "burst" cannot host index "burst_idx" because its replica sizes
 # `cluster_family_allowed_workloads` restricts every size of a family.
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET cluster_family_allowed_workloads = '{"legacy": ["ingest"]}'
+ALTER SYSTEM SET cluster_family_allowed_workloads = '{"legacy": ["ingest", "compute_introspection"]}'
 
 > SELECT size, allowed_workloads::text FROM mz_cluster_replica_sizes WHERE size IN ('scale=1,workers=1', 'scale=1,workers=1,legacy')
-"scale=1,workers=1" "{ingest,sink,compute_maintained,compute_interactive}"
-"scale=1,workers=1,legacy" "{ingest}"
+"scale=1,workers=1" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
+"scale=1,workers=1,legacy" "{ingest,compute_introspection}"
 
 > CREATE CLUSTER legacy SIZE 'scale=1,workers=1,legacy'
 
@@ -154,12 +157,28 @@ contains:cluster "legacy" cannot host materialized view "mv_legacy" because its 
 ! SELECT * FROM t
 contains:cluster "legacy" cannot run SELECT because its replica sizes do not allow compute_interactive workloads
 
+# Queries that only inspect the cluster's own replicas are compute_introspection.
+
+> SELECT count(*) >= 0 FROM mz_introspection.mz_dataflow_operators
+true
+
+! SELECT count(*) >= 0 FROM mz_introspection.mz_dataflow_operators, t
+contains:cluster "legacy" cannot run SELECT because its replica sizes do not allow compute_interactive workloads
+
+$ set-regex match=\d{13,20} replacement=<TIMESTAMP>
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT count(*) >= 0 AS ok FROM mz_introspection.mz_dataflow_operators)
+> FETCH 1 c
+<TIMESTAMP> 1 true
+> COMMIT
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET cluster_family_allowed_workloads
 
 > SELECT size, allowed_workloads::text FROM mz_cluster_replica_sizes WHERE size IN ('scale=1,workers=1', 'scale=1,workers=1,legacy')
-"scale=1,workers=1" "{ingest,sink,compute_maintained,compute_interactive}"
-"scale=1,workers=1,legacy" "{ingest,sink,compute_maintained,compute_interactive}"
+"scale=1,workers=1" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
+"scale=1,workers=1,legacy" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
 
 > SELECT * FROM t
 1
