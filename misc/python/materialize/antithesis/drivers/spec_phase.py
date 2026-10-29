@@ -13,11 +13,9 @@ Two commands share this module:
 
 - `driver_main` (`parallel_driver_spec_phase`) draws one cell
   (`spec_model.Cell`): a spec field, a rollout phase, a request mode, and an
-  optional pod kill. It drives the CR into the phase with a setup patch,
-  watches the CR so the patch lands on the version that shows the phase, then
-  follows the CR until it settles and judges the status claim against the
-  active StatefulSet. It writes the spec only while holding the rollouts
-  driver's CR lease, so the workload stays the single spec writer.
+  optional pod kill. Durable steps prepare the phase, patch when its watch
+  observes it, follow settlement, and judge the status claim against the
+  active StatefulSet. Each command releases the shared CR lease after its step.
 - `eventually_main` (`eventually_spec_phase_settles`) checks that, once faults
   stop, the CR settles and its status claim holds.
 
@@ -51,15 +49,12 @@ from materialize.antithesis.drivers.rollouts import (
     Snapshot,
 )
 from materialize.antithesis.environment import Environment
-from materialize.antithesis.rng import rng
 
 # Server-side timeout of one phase-wait watch window. The window ends as soon
 # as the awaited version arrives, so this only bounds how long the lease goes
 # unrenewed while nothing changes. Must stay well below
 # `rollouts.CR_LEASE_RENEW_SECONDS`.
 PHASE_WATCH_WINDOW_SECONDS = 5
-# How long the driver waits for the CR lease before giving up.
-LEASE_WAIT_SECONDS = 60.0
 # Delays between seeing an in-progress phase and patching. Zero patches on the
 # watch event that showed the phase.
 ACT_DELAY_MENU = (0, 0, 0, 1, 5)
@@ -106,41 +101,6 @@ def cr_watch(kube: Kube) -> kube_watch.ResourceWatch:
     )
 
 
-def watch_until(
-    ctx: Ctx, predicate: Callable[[Snapshot], bool], timeout: float
-) -> Snapshot | None:
-    """The first CR version, current or later, for which `predicate` holds, or
-    None after `timeout`. Every stored version is seen, unless a relist skips
-    some, so a phase that lasts a single version is still caught."""
-    watch = cr_watch(ctx.kube)
-    found: list[Snapshot] = []
-
-    def until(item: kube_watch.Item) -> bool:
-        if isinstance(item, kube_watch.Relist):
-            objs = item.items[:1]
-        else:
-            objs = [] if item.type == "DELETED" else [item.obj]
-        for obj in objs:
-            snap = Snapshot(obj)
-            if predicate(snap):
-                found.append(snap)
-                return True
-        return False
-
-    rv: str | None = None
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if ctx.lease is not None:
-            ctx.lease.renew()
-        window = watch.window(rv, until)
-        if window.error is not None:
-            log(f"CR watch: {window.error}")
-        if found:
-            return found[0]
-        rv = window.resource_version
-    return None
-
-
 def phase_predicate(
     phase: str, request: str | None, min_generation: int | None
 ) -> Callable[[Snapshot], bool]:
@@ -156,37 +116,6 @@ def phase_predicate(
         return settled(snap, min_generation)
 
     return predicate
-
-
-def setup(ctx: Ctx, cell: spec_model.Cell) -> tuple[Snapshot, Snapshot] | None:
-    """Drives the CR into the cell's phase. Returns the CR before the setup
-    patch and the version where the phase was seen, which may show another
-    phase if the setup missed it."""
-    prior = ctx.kube.try_snapshot()
-    if prior is None:
-        return None
-    if cell.phase == "Applied" and prior.reason == "Applied" and settled(prior, None):
-        return prior, prior
-    changes: dict[str, Any]
-    if cell.phase == "WaitingForApproval":
-        changes = {"forceRollout": rollouts.new_uuid()}
-    elif cell.phase == "ReadyToPromote":
-        changes = {**rollouts.new_request(), "rolloutStrategy": "ManuallyPromote"}
-    else:
-        changes = rollouts.new_request()
-    request, stored = rollouts.submit_patch(
-        ctx, f"spec_phase_setup_{cell.phase}", changes
-    )
-    if stored is None:
-        return None
-    reached = watch_until(
-        ctx,
-        phase_predicate(cell.phase, request, stored.generation),
-        rollouts.FOLLOW_TIMEOUT_SECONDS,
-    )
-    if reached is None:
-        return None
-    return prior, reached
 
 
 def follow_until_settled(
@@ -235,22 +164,15 @@ def judge_claim(
     the generation that promotion produced.
     """
 
-    def cause(claim: rollouts.EvaluatedClaim) -> str:
-        mode = None
-        if promoting is not None and claim.snap.active == promoting[0] + 1:
-            mode = promoting[1]
-        return spec_model.claim_cause(
-            claim.check,
-            promoting_request_mode=mode,
-            promoted_across=claim.snap.active
-            in rollouts.promoted_across_spec_change(observer),
-        )
-
     first = rollouts.read_claim(ctx.kube)
     if first is None:
         return
     if not first.check.violated:
-        rollouts.assert_status_claim(cause(first), True, {**first.details(), **details})
+        rollouts.assert_status_claim(
+            claim_cause(observer, promoting, first),
+            True,
+            {**first.details(), **details},
+        )
         return
     log(f"status claim violated, re-checking: {first.check.mismatches}")
     ctx.sleep(rollouts.STATUS_SETTLE_SECONDS)
@@ -258,9 +180,28 @@ def judge_claim(
     if second is None or second.check.key != first.check.key:
         return
     rollouts.assert_status_claim(
-        cause(second),
+        claim_cause(observer, promoting, second),
         not second.check.violated,
         {**second.details(), **details, "first_mismatches": first.check.mismatches},
+    )
+
+
+def claim_cause(
+    observer: sqlite3.Connection,
+    promoting: tuple[int, str] | None,
+    claim: rollouts.EvaluatedClaim,
+) -> str:
+    """Attribute a status claim to the generation its promotion produced."""
+    mode = (
+        promoting[1]
+        if promoting is not None and claim.snap.active == promoting[0] + 1
+        else None
+    )
+    return spec_model.claim_cause(
+        claim.check,
+        promoting_request_mode=mode,
+        promoted_across=claim.snap.active
+        in rollouts.promoted_across_spec_change(observer),
     )
 
 
@@ -279,114 +220,20 @@ def note_coverage(cell: spec_model.Cell, patched_in: str | None) -> None:
     )
 
 
-def run_cell(ctx: Ctx, cell: spec_model.Cell) -> None:
-    started = setup(ctx, cell)
-    if started is None:
-        log(f"{cell}: setup did not reach a usable state")
-        return
-    prior, reached = started
-    if cell.phase in spec_model.IN_PROGRESS_PHASES and reached.reason == cell.phase:
-        ctx.sleep(rng.choice(ACT_DELAY_MENU))
-    current = ctx.kube.try_snapshot() or reached
-    endpoints = ctx.env.endpoints
-    images = spec_model.Images(
-        initial=endpoints.initial_environmentd_image,
-        target=endpoints.upgrade_pending_image,
-        last_completed=current.last_completed_image,
-    )
-    changes = spec_model.cell_changes(
-        cell, rng, current.spec, prior.spec, images, rollouts.new_uuid
-    )
-    _, stored = rollouts.submit_patch(
-        ctx, f"spec_phase_{cell.field}_{cell.request_mode}", changes
-    )
-    if stored is None:
-        return
-    # A spec patch leaves the status alone, so the stored status is the one
-    # the patch landed on.
-    patched_in = stored.reason
-    note_coverage(cell, patched_in)
-    promoting = None
-    if (
-        patched_in == "Promoting"
-        and stored.active is not None
-        and spec_model.changes_deployed_fields(current.spec, changes)
-    ):
-        promoting = (stored.active, cell.request_mode)
-    if cell.kill is not None and patched_in is not None:
-        plan = rollouts.KillPlan(patched_in, cell.kill, rng.choice(rollouts.GRACE_MENU))
-        try:
-            rollouts.execute_kill(ctx, plan, stored)
-        except TRANSIENT_ERRORS as e:
-            log(f"kill failed: {e}")
-    final, phases = follow_until_settled(
-        ctx, stored.generation, rollouts.FOLLOW_TIMEOUT_SECONDS
-    )
-    details = {
-        "cell": cell.key(),
-        "request_mode": cell.request_mode,
-        "kill": cell.kill,
-        "patched_in": patched_in,
-        "changes": changes,
-        "phases_after_patch": phases,
-    }
-    sometimes(
-        final is not None and final.reason == "Applied",
-        "Spec-phase cell settled at Applied",
-        details,
-    )
-    if final is None:
-        log(f"{cell}: did not settle; phases {phases}")
-        return
-    observer = rollouts.observer_db(ctx.env)
-    # Generation numbers are reused when a candidate is torn down, so only a
-    # generation seen active after the patch is attributed.
-    if promoting is not None and final.active == promoting[0] + 1:
-        rollouts.mark_promoted_across_spec_change(observer, promoting[0] + 1)
-    judge_claim(ctx, observer, promoting, details)
-
-
-def acquire_lease(lease: CrLease) -> bool:
-    deadline = time.monotonic() + LEASE_WAIT_SECONDS
-    while True:
-        try:
-            if lease.acquire():
-                return True
-        except sqlite3.OperationalError as e:
-            log(f"taking the CR lease failed: {e}")
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(5)
-
-
 def driver_main() -> int:
+    from materialize.antithesis import spec_phase_steps
+
     env = Environment()
     kube = Kube(env)
     db = rollouts.requests_db(env)
     ctx = Ctx(env, kube, db, rollouts.timeline_params(db))
     lease = CrLease(env)
-    if not acquire_lease(lease):
-        log("another invocation holds the CR lease")
-        return 0
-    ctx.lease = lease
     try:
-        rollouts.normalize(ctx, "spec_phase_normalize")
-        # A cell starts from a settled CR, so its setup patch is the only
-        # rollout in flight.
-        snap = kube.try_snapshot()
-        if snap is not None and not settled(snap, None):
-            snap, _ = follow_until_settled(
-                ctx, snap.generation, rollouts.PHASE_WAIT_SECONDS
-            )
-            if snap is None:
-                log("the CR did not settle; skipping")
-                return 0
-        cell = spec_model.choose_cell(rng)
-        log(f"cell {cell}")
-        try:
-            run_cell(ctx, cell)
-        finally:
-            rollouts.normalize(ctx, "spec_phase_restore")
+        if not lease.acquire():
+            log("another invocation holds the CR lease")
+            return 0
+        ctx.lease = lease
+        spec_phase_steps.step(ctx)
     except LeaseLost as e:
         log(f"stopping: {e}")
     except TRANSIENT_ERRORS as e:

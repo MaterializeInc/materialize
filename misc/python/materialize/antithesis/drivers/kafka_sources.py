@@ -69,7 +69,7 @@ from confluent_kafka.cimpl import (
     TopicPartition,
 )
 
-from materialize.antithesis import ddl_hold, remap_frontiers, sql, state
+from materialize.antithesis import ddl_hold, remap_frontiers, sql, state, telemetry
 from materialize.antithesis.drivers.source_status import Export, observe
 from materialize.antithesis.drivers.sources_common import (
     LAZY_SETUP_BUDGET_S,
@@ -880,6 +880,7 @@ def _check(
     observed_none = [(text, int(p), int(o)) for text, p, o in none_rows]
     none_diff = bag_diff(expected_none, observed_none)
     none_ok = none_diff["missing_count"] == 0 and none_diff["extra_count"] == 0
+    telemetry.comparison("kafka_sources", "full", none_ok)
     if none_remap_past:
         always_or_unreachable(
             none_ok,
@@ -900,6 +901,7 @@ def _check(
         upsert_ok = (
             upsert_diff["missing_count"] == 0 and upsert_diff["extra_count"] == 0
         )
+        telemetry.comparison("kafka_sources", "point", upsert_ok)
         if up_remap_past:
             always_or_unreachable(
                 upsert_ok,
@@ -923,6 +925,7 @@ def _check(
             details,
         )
     else:
+        telemetry.comparison("kafka_sources", "point", None)
         log(f"{s.topic}: a key appears in several partitions, upsert check skipped")
 
     sometimes(

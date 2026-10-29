@@ -54,7 +54,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 )
 
 from materialize.antithesis import ivm_model as model
-from materialize.antithesis import quiet, sql, state
+from materialize.antithesis import quiet, sql, state, telemetry, telemetry_coverage
 from materialize.antithesis.drivers import configure, history, pod_restarts
 from materialize.antithesis.drivers.recovery import observe_pods
 from materialize.antithesis.drivers.rollouts import (
@@ -628,6 +628,8 @@ class Window:
         self.checker = model.ViewChecker()
         self.stream: model.Stream | None = None
         self.seen_ids: dict[int, set[int | None]] = {}
+        self.closed_ids: dict[int, tuple[float, float]] = {}
+        self.fetch_started: float | None = None
         self.snapshot: dict[str, model.Bag] | None = None
         """Accumulated state at `as_of`, once the stream closed it."""
         self.peek: dict[str, model.Bag] | None = None
@@ -637,7 +639,22 @@ class Window:
 
     def on_step(self, step: model.Step) -> None:
         assert self.stream is not None
+        skipped = self.checker.skipped_negative_base
         self.checker.check(self.stream.state, step)
+        if (
+            telemetry.enabled()
+            and self.fetch_started is not None
+            and self.checker.first_mismatch_time is None
+            and self.checker.skipped_negative_base == skipped
+        ):
+            observed = time.monotonic()
+            for tag in step.changed & model.TABLE_NAMES:
+                for row, n in self.stream.state.get(tag, {}).items():
+                    op_id = model.written_ids(tag, row)
+                    if n > 0 and op_id is not None:
+                        self.closed_ids.setdefault(
+                            op_id, (self.fetch_started, observed)
+                        )
         if self.snapshot is None and step.time == self.stream.as_of:
             self.snapshot = {t: Counter(b) for t, b in self.stream.state.items() if b}
 
@@ -714,6 +731,7 @@ class Window:
                     f" WITH (PROGRESS) AS OF {as_of}".encode()
                 )
                 while time.monotonic() - start < self.budget:
+                    self.fetch_started = time.monotonic()
                     rows = conn.execute(
                         f"FETCH ALL c WITH (timeout = '{FETCH_TIMEOUT}')"
                     ).fetchall()
@@ -810,6 +828,7 @@ def _report(w: Window, db: sqlite3.Connection) -> None:
     stream = w.stream
     checker = w.checker
     if stream is None or checker.steps == 0:
+        telemetry.comparison("ivm", "subscribe", None)
         return
     w.snapshot_checks()
     details = {
@@ -856,6 +875,17 @@ def _report_views(checker: model.ViewChecker, details: dict[str, Any]) -> None:
     for view in model.VIEWS:
         tags = [model.tag(view.kind, v) for v in model.VARIANTS]
         stats = {t: checker.stats[t] for t in tags}
+        for tag, stat in stats.items():
+            telemetry.comparison(
+                "ivm",
+                tag,
+                (
+                    stat.mismatch is None and stat.negative is None
+                    if stat.compared
+                    else None
+                ),
+                stat.compared or 1,
+            )
         if not any(s.compared for s in stats.values()):
             continue
         mismatches = {t: s.mismatch for t, s in stats.items() if s.mismatch is not None}
@@ -895,6 +925,15 @@ def _report_views(checker: model.ViewChecker, details: dict[str, Any]) -> None:
 def _check_writes(w: Window, db: sqlite3.Connection, details: dict[str, Any]) -> None:
     ledger = _load_write_ledger(sorted(w.seen_ids), db)
     _report_write_ids(w.seen_ids, ledger, details)
+    if w.stream is not None:
+        passed = (
+            not w.stream.late
+            and not w.stream.regressions
+            and w.checker.first_mismatch_time is None
+            and all(s.negative is None for s in w.checker.stats.values())
+            and not any(model.write_id_violations(w.seen_ids, ledger).values())
+        )
+        telemetry_coverage.ivm_checked(list(ledger.values()), w.closed_ids, passed)
     with db:
         for op_id, times in w.seen_ids.items():
             exact = sorted(t for t in times if t is not None)

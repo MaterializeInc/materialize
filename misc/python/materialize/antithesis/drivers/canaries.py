@@ -53,7 +53,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     unreachable,
 )
 
-from materialize.antithesis import ddl_hold, quiet, sql, state
+from materialize.antithesis import ddl_hold, quiet, sql, state, telemetry
 from materialize.antithesis.drivers import counters, history
 from materialize.antithesis.drivers.sources_common import (
     SOURCE_ERROR_MARKERS,
@@ -574,6 +574,9 @@ def _run_probes(host: str) -> list[ProbeResult]:
         results = list(pool.map(lambda name: run_probe(host, name), PROBES))
     for r in results:
         name = r.name
+        telemetry.comparison(
+            "canaries", name, None if r.status == "skipped" else r.answered
+        )
         log(f"{name}: {r.status} in {r.elapsed_s:.1f}s {r.details}")
         sometimes(
             r.answered and not r.answered_in_time,

@@ -46,7 +46,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     unreachable,
 )
 
-from materialize.antithesis import ddl_hold, sql, state
+from materialize.antithesis import ddl_hold, sql, state, telemetry
 from materialize.antithesis.drivers.history import (
     WATCHDOG_GRACE_S,
     current_generation,
@@ -376,6 +376,7 @@ def _read_counters(
             continue
         v = values[0]
         lower, upper, unknown = _bounds(db, gen, k, invoke, complete)
+        telemetry.comparison("counters", "counter", lower <= v <= upper)
         details = {"gen": gen, "k": k, "v": v, "lower": lower, "upper": upper}
         always(
             v >= lower,
