@@ -11,6 +11,34 @@
 priority: 40
 
 steps:
+  - group: Terraform repo tests
+    key: terraform-repo-tests
+    steps:
+      - id: terraform-acceptance
+        label: "Terraform Acceptance tests"
+        command: bin/ci-builder run stable ci/test/terraform-provider.sh acceptance
+        env:
+          # Compose bind mount paths must match those on the host.
+          CI_BUILDER_FIXED_WORKDIR: "0"
+        depends_on: []
+        if: build.tag != ""
+        timeout_in_minutes: 150
+        agents:
+          queue: hetzner-x86-64-8cpu-16gb
+        sanitizer: skip
+
+      - id: terraform-integration
+        label: "Terraform Integration tests"
+        command: bin/ci-builder run stable ci/test/terraform-provider.sh integration
+        env:
+          CI_BUILDER_FIXED_WORKDIR: "0"
+        depends_on: []
+        if: build.tag != ""
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-x86-64-8cpu-16gb
+        sanitizer: skip
+
   - group: Builds
     key: builds
     steps:
