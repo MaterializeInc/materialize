@@ -15,6 +15,11 @@ changelog into a [Slowly Changing Dimension (SCD) Type
 table: one row per version of each key, with the interval during which that
 version was valid.
 
+Use this pattern when consumers need the history of each key. The query reads
+the full changelog, which grows with every change. If consumers need only
+current state, create the sink with
+[`MODE UPSERT`](/sql/create-sink/iceberg/#creating-an-upsert-sink) instead.
+
 ## Before you begin
 
 - Set up an Iceberg catalog connection. See [Apache
@@ -26,7 +31,8 @@ version was valid.
 ## Step 1. Sink the relation in append mode
 
 Create the sink with `MODE APPEND`. For example, to sink a `customers` table
-with the unique key `customer_id`:
+from Materialize into an Iceberg table called `customers_log`, with the unique
+key `customer_id`, run the following:
 
 ```mzsql
 CREATE SINK customers_sink
@@ -126,7 +132,9 @@ Two details make the query correct:
 
 To find the version valid at a point in time `t`, filter on
 `valid_from <= t AND (valid_to IS NULL OR valid_to > t)`. To use the history
-in other queries, wrap the query in a view.
+in other queries, store the result as a table in your query engine and refresh
+it on a schedule. Running the query directly, or through a view, reads the
+full changelog every time.
 
 ## Considerations
 
@@ -136,12 +144,17 @@ When you create the sink, Materialize writes the relation's current contents
 with the timestamp of sink creation. The `valid_from` of those rows is when the
 sink was created, not when the rows were originally inserted.
 
+If you drop the sink and create a new one that writes to a different table,
+the new table's history starts with a new initial snapshot. Its `valid_from`
+values begin at the new sink's creation time, and it has none of the changes
+in the earlier table.
+
 ### Converting timestamps
 
 `_mz_timestamp` is a `long` holding milliseconds since the Unix epoch. Convert
 it with your query engine's epoch function, for example
-`to_timestamp(_mz_timestamp / 1000)` in DuckDB or
-`TO_TIMESTAMP(_mz_timestamp, 3)` in Snowflake.
+`epoch_ms(_mz_timestamp)` in DuckDB or `TO_TIMESTAMP(_mz_timestamp, 3)` in
+Snowflake.
 
 ### Changes at the same timestamp
 
