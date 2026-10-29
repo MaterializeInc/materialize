@@ -211,6 +211,10 @@ pub struct LocalDelayRecorder {
 /// deferred.
 pub(super) const MAX_SHOWN: usize = 16;
 
+/// The most steps of equal needed timestamps that the skew of one group of windows is split
+/// into.
+const MAX_GRID_STEPS: usize = 1024;
+
 impl LocalDelayRecorder {
     /// Starts recording arrivals after `start_ms`, like `FreshnessRecorder::new`.
     pub fn new(start_ms: u64) -> Self {
@@ -460,14 +464,44 @@ fn add_local_part(
         add(&mut period.local, local_ms, count(pos, timestamp_cut));
         add_from_start(&mut period.local, now_ms, (timestamp_cut, group_end));
         if inputs.len() >= 2 {
-            let skew_ms = timestamp_ready_ms - arrival_ready_ms;
-            add(&mut period.skew, skew_ms, count(pos, arrival_cut));
-            add_from_start(
-                &mut period.skew,
-                timestamp_ready_ms,
-                (arrival_cut, timestamp_cut),
-            );
             add(&mut period.skew, 0, count(timestamp_cut, group_end));
+            // NOTE: Skew is capped at the wait the grids of `needed` cause when every input
+            // is on time, so that an input that showed an arrival and then stalls before its
+            // frontier passes the needed timestamp leaves the stall in upstream. The cap
+            // depends on the needed timestamp, so the windows are walked in steps that need the
+            // same timestamp, at most `MAX_GRID_STEPS` per group. Windows beyond that record no
+            // skew, which understates.
+            let mut lo = pos;
+            for _ in 0..MAX_GRID_STEPS {
+                if lo >= timestamp_cut {
+                    break;
+                }
+                // The arrivals up to `last` need the same timestamp as `lo + 1`, which makes
+                // `last` at least `lo + 1`.
+                let timestamp = needed.assigned(lo + 1);
+                let last = timestamp
+                    .and_then(|t| needed.last_reflected(Timestamp::from(t.saturating_add(1))));
+                let (hi, wait_ms) = match (timestamp, last) {
+                    (Some(t), Some(l)) => (l.clamp(lo + 1, timestamp_cut), needed.grid_wait(t)),
+                    // Without a needed timestamp the cap is unknown, and 0 understates.
+                    _ => (timestamp_cut, 0),
+                };
+                let mid = arrival_cut.clamp(lo, hi);
+                let raw_ms = timestamp_ready_ms - arrival_ready_ms;
+                add(&mut period.skew, raw_ms.min(wait_ms), count(lo, mid));
+                // Windows that start after the arrival readiness wait `timestamp_ready_ms - s`
+                // from their start `s`, which exceeds the cap for `s` below `capped_from`.
+                let capped_from = timestamp_ready_ms.saturating_sub(wait_ms);
+                let cut = tree.next_boundary(capped_from).clamp(mid, hi);
+                add(&mut period.skew, wait_ms, count(mid, cut));
+                add_from_start(&mut period.skew, timestamp_ready_ms, (cut, hi));
+                lo = hi;
+            }
+            add(
+                &mut period.skew,
+                0,
+                count(lo.min(timestamp_cut), timestamp_cut),
+            );
         }
         pos = group_end;
     }
