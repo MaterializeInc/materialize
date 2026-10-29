@@ -61,6 +61,17 @@ rules:
   - get
   - list
   - watch
+- apiGroups: ["policy"]
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources:
   - roles

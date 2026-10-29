@@ -26,6 +26,7 @@ use k8s_openapi::{
             Affinity, ConfigMap, Probe, ResourceRequirements, Service, ServiceAccount, Toleration,
         },
         networking::v1::NetworkPolicy,
+        policy::v1::PodDisruptionBudget,
         rbac::v1::{Role, RoleBinding},
     },
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
@@ -872,6 +873,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         watcher::Config::default()
                             .labels("materialize.cloud/mz-resource-id")
                             .timeout(29),
+                    )
+                    .owns(
+                        Api::<PodDisruptionBudget>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
                     );
                 if has_cert_manager {
                     controller.owns(
@@ -925,6 +932,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     )
                     .owns(
                         Api::<Service>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
+                    )
+                    .owns(
+                        Api::<PodDisruptionBudget>::all(client.clone()),
                         watcher::Config::default()
                             .labels("materialize.cloud/mz-resource-id")
                             .timeout(29),
