@@ -50,17 +50,15 @@ const replicaCountLabel = (count: number) =>
     ? "No replicas"
     : `${count} ${pluralize(count, "replica", "replicas")}`;
 
-// The all-clusters subscribe updates on any cluster's replica status change.
-// Looking the cluster up here keeps those updates from re-rendering the page.
-const ClusterTitle = ({
-  name,
-  clusterId,
-  onConfigure,
-}: {
+interface ClusterTitleProps {
   name: string;
   clusterId: string;
   onConfigure: () => void;
-}) => {
+}
+
+// The all-clusters subscribe updates on any cluster's replica status change.
+// Looking the cluster up here keeps those updates from re-rendering the page.
+const ClusterTitle = ({ name, clusterId, onConfigure }: ClusterTitleProps) => {
   const { getClusterById } = useAllClusters();
   const cluster = getClusterById(clusterId);
   return (
@@ -104,16 +102,18 @@ const useConfigurationSection = () => {
   return [searchParams.get(CONFIGURE_PARAM), setSection] as const;
 };
 
+interface ConfigurationDrawerProps {
+  clusterId: string;
+  section: string | null;
+  onSectionChange: (section: ConfigurationSection | undefined) => void;
+}
+
 // Looks the cluster up itself, as the title does, for the same reason.
 const ConfigurationDrawer = ({
   clusterId,
   section,
   onSectionChange,
-}: {
-  clusterId: string;
-  section: string | null;
-  onSectionChange: (section: ConfigurationSection | undefined) => void;
-}) => {
+}: ConfigurationDrawerProps) => {
   const { getClusterById } = useAllClusters();
   const cluster = getClusterById(clusterId);
   if (!cluster) return null;

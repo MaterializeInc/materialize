@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { quoteIdentifier } from "~/api/materialize";
+import {
+  escapedLiteral,
+  queryBuilder,
+  quoteIdentifier,
+} from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import { formatDurationExact } from "~/utils/format";
 
@@ -114,7 +118,9 @@ export const setAutoScalingStatement = (
   [
     `ALTER CLUSTER ${quoteIdentifier(clusterName)} SET (`,
     "  AUTO SCALING STRATEGY = (",
-    `    ON HYDRATION (HYDRATION SIZE = '${hydrationSize}'${
+    `    ON HYDRATION (HYDRATION SIZE = ${
+      escapedLiteral(hydrationSize).compile(queryBuilder).sql
+    }${
       lingerMs === undefined
         ? ""
         : `, LINGER DURATION = ${lingerLiteral(lingerMs)}`

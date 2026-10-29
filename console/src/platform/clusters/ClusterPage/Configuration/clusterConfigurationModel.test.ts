@@ -107,6 +107,12 @@ describe("auto-scaling statements", () => {
     );
   });
 
+  it("escapes a quote in the size", () => {
+    expect(setAutoScalingStatement("prod", "it's", undefined)).toContain(
+      "HYDRATION SIZE = 'it''s')",
+    );
+  });
+
   it("keeps a zero or sub-second linger as it is", () => {
     const linger = (lingerMs: number) =>
       setAutoScalingStatement("prod", "800cc", lingerMs).match(

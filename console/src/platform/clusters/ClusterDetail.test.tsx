@@ -69,9 +69,16 @@ vi.mock("~/platform/clusters/MaterializedViewsList", () => ({
 vi.mock("~/platform/clusters/IndexList", () => ({
   default: () => <div>IndexList component</div>,
 }));
-vi.mock("~/platform/clusters/Sources", () => ({
-  default: () => <div>Sources component</div>,
-}));
+vi.mock("~/platform/clusters/Sources", async () => {
+  const { useConnectorListSortOptions } =
+    await import("~/platform/connectors/useConnectorListSortOptions");
+  // Syncs its sort to the query string, as the real list does.
+  const Sources = () => {
+    useConnectorListSortOptions();
+    return <div>Sources component</div>;
+  };
+  return { default: Sources };
+});
 vi.mock("~/platform/clusters/Sinks", () => ({
   default: () => <div>Sinks component</div>,
 }));
@@ -234,6 +241,20 @@ describe("ClusterDetail redesign preview", () => {
         "aria-pressed",
         "true",
       );
+    });
+
+    it("opens the configuration drawer over a list that syncs its sort to the URL", async () => {
+      const user = userEvent.setup();
+      await renderClusterDetail("/u1/default/objects/sources");
+      await screen.findByText("Sources component");
+
+      await user.click(
+        await screen.findByRole("button", { name: "Configure cluster" }),
+      );
+
+      expect(
+        await screen.findByRole("dialog", { name: "Configure default" }),
+      ).toBeVisible();
     });
 
     it("opens the classic Replicas tab's links on the drawer's replicas", async () => {

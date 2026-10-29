@@ -73,11 +73,16 @@ type Configuration = ReturnType<typeof useClusterConfiguration>["data"];
 const formatCreatedAt = (date: Date | undefined) =>
   date ? formatDate(date, FRIENDLY_DATETIME_FORMAT_NO_SECONDS) : "-";
 
+interface DetailProps {
+  label: string;
+  tooltip?: string;
+}
+
 const Detail = ({
   label,
   tooltip,
   children,
-}: React.PropsWithChildren<{ label: string; tooltip?: string }>) => {
+}: React.PropsWithChildren<DetailProps>) => {
   const { colors } = useTheme<MaterializeTheme>();
   return (
     <VStack spacing={1} alignItems="flex-start" minWidth={0}>
@@ -98,28 +103,29 @@ const Detail = ({
   );
 };
 
-const PanelHeader = ({
-  title,
-  action,
-}: {
+interface PanelHeaderProps {
   title: React.ReactNode;
   action?: React.ReactNode;
-}) => (
+}
+
+const PanelHeader = ({ title, action }: PanelHeaderProps) => (
   <Flex justifyContent="space-between" alignItems="center" gap={3}>
     <Text textStyle="heading-xs">{title}</Text>
     {action}
   </Flex>
 );
 
+interface EditClusterButtonProps {
+  cluster: Cluster;
+  clusterSizes: string[] | null | undefined;
+  maxReplicas: number | null | undefined;
+}
+
 const EditClusterButton = ({
   cluster,
   clusterSizes,
   maxReplicas,
-}: {
-  cluster: Cluster;
-  clusterSizes: string[] | null | undefined;
-  maxReplicas: number | null | undefined;
-}) => {
+}: EditClusterButtonProps) => {
   const { isOpen, onOpen, onClose } = useDisclosure();
   return (
     <>
@@ -144,13 +150,12 @@ const EditClusterButton = ({
   );
 };
 
-const DropClusterCard = ({
-  cluster,
-  onDropped,
-}: {
+interface DropClusterCardProps {
   cluster: Cluster;
   onDropped: () => void;
-}) => {
+}
+
+const DropClusterCard = ({ cluster, onDropped }: DropClusterCardProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { isOpen, onOpen, onClose } = useDisclosure();
   return (
@@ -191,6 +196,17 @@ const DropClusterCard = ({
   );
 };
 
+interface OverviewPanelProps {
+  cluster: Cluster;
+  configuration: Configuration;
+  ownerName: string | undefined;
+  isClusterOwner: boolean;
+  canEdit: boolean;
+  clusterSizes: string[] | null | undefined;
+  maxReplicas: number | null | undefined;
+  onDropped: () => void;
+}
+
 const OverviewPanel = ({
   cluster,
   configuration,
@@ -200,16 +216,7 @@ const OverviewPanel = ({
   clusterSizes,
   maxReplicas,
   onDropped,
-}: {
-  cluster: Cluster;
-  configuration: Configuration;
-  ownerName: string | undefined;
-  isClusterOwner: boolean;
-  canEdit: boolean;
-  clusterSizes: string[] | null | undefined;
-  maxReplicas: number | null | undefined;
-  onDropped: () => void;
-}) => {
+}: OverviewPanelProps) => {
   const isUserCluster = !isSystemCluster(cluster.id);
   const createdAt = configuration?.creationTimes.find(
     ({ id, objectType }) => objectType === "cluster" && id === cluster.id,
@@ -260,7 +267,11 @@ interface ReplicaRow {
   canDrop: boolean;
 }
 
-const ReplicaStatusCell = ({ row }: { row: ReplicaRow }) => {
+interface ReplicaStatusCellProps {
+  row: ReplicaRow;
+}
+
+const ReplicaStatusCell = ({ row }: ReplicaStatusCellProps) => {
   const { status } = row;
   if (status.kind === "online") {
     return <StatusPill status="online" colorScheme="green" />;
@@ -326,17 +337,19 @@ const replicaColumns = [
   }),
 ];
 
+interface ReplicasPanelProps {
+  cluster: Cluster;
+  configuration: Configuration;
+  isClusterOwner: boolean;
+  maxReplicas: number | null | undefined;
+}
+
 const ReplicasPanel = ({
   cluster,
   configuration,
   isClusterOwner,
   maxReplicas,
-}: {
-  cluster: Cluster;
-  configuration: Configuration;
-  isClusterOwner: boolean;
-  maxReplicas: number | null | undefined;
-}) => {
+}: ReplicasPanelProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { track } = useSegment();
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -431,16 +444,18 @@ const ReplicasPanel = ({
   );
 };
 
-const AutoScalingPanel = ({
-  cluster,
-  autoScaling,
-  isError,
-}: {
+interface AutoScalingPanelProps {
   cluster: Cluster;
   /** Undefined until read. */
   autoScaling: AutoScaling | undefined;
   isError: boolean;
-}) => {
+}
+
+const AutoScalingPanel = ({
+  cluster,
+  autoScaling,
+  isError,
+}: AutoScalingPanelProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   // System clusters can't be altered, so they get no statements to copy.
   const isUserCluster = !isSystemCluster(cluster.id);
@@ -590,17 +605,19 @@ export const ClusterConfigurationDrawer = ({
   </SideDrawer>
 );
 
+interface ConfigurationContentProps {
+  cluster: Cluster;
+  section: ConfigurationSection;
+  onSectionChange: (section: ConfigurationSection) => void;
+  onDropped: () => void;
+}
+
 const ConfigurationContent = ({
   cluster,
   section,
   onSectionChange,
   onDropped,
-}: {
-  cluster: Cluster;
-  section: ConfigurationSection;
-  onSectionChange: (section: ConfigurationSection) => void;
-  onDropped: () => void;
-}) => {
+}: ConfigurationContentProps) => {
   const {
     data: configuration,
     isError,

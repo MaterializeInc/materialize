@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { hashKey } from "@tanstack/react-query";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import React from "react";
 
 import { ErrorCode } from "~/api/materialize/types";
@@ -61,6 +63,74 @@ describe("ClusterOverview", () => {
     );
 
     expect(await screen.findByLabelText("Replicas")).toHaveDisplayValue("1");
+  });
+
+  describe("sends only the settings that changed, since resending the current ones cancels a resize in flight", () => {
+    // Answers each alter with success, and records the statements it sent.
+    const recordAlterStatements = () => {
+      const sent: string[][] = [];
+      server.use(
+        http.post("*/api/sql", async ({ request }) => {
+          const queryKey = new URL(request.url).searchParams.get("query_key");
+          if (queryKey !== hashKey(clusterQueryKeys.alter())) return undefined;
+          const body = (await request.json()) as {
+            queries: Array<{ query: string }>;
+          };
+          sent.push(body.queries.map(({ query }) => query));
+          return HttpResponse.json({
+            results: body.queries.map(() => ({
+              ok: "ALTER CLUSTER",
+              notices: [],
+            })),
+          });
+        }),
+      );
+      return sent;
+    };
+
+    const renderModal = () =>
+      renderComponent(
+        <AlterClusterModal
+          cluster={buildCluster({ name: "prod", size: "100cc" })}
+          clusterSizes={["100cc", "800cc"]}
+          isOpen={true}
+          maxReplicas={5}
+          onClose={mockOnClose}
+        />,
+      );
+
+    it("renames without a SET", async () => {
+      const sent = recordAlterStatements();
+      const user = userEvent.setup();
+      renderModal();
+
+      const name = await screen.findByLabelText("Name");
+      await user.clear(name);
+      await user.type(name, "prod_v2");
+      await user.click(screen.getByRole("button", { name: "Alter cluster" }));
+
+      await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
+      expect(sent).toEqual([[expect.stringMatching(/RENAME TO "prod_v2"/)]]);
+    });
+
+    it("sets the replication factor without the size", async () => {
+      const sent = recordAlterStatements();
+      const user = userEvent.setup();
+      renderModal();
+
+      const replicas = await screen.findByLabelText("Replicas");
+      await user.clear(replicas);
+      await user.type(replicas, "2");
+      await user.click(screen.getByRole("button", { name: "Alter cluster" }));
+
+      await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
+      expect(sent).toEqual([
+        [
+          expect.stringMatching(/SET \(\s*REPLICATION FACTOR = 2\s*\)/),
+          expect.stringMatching(/RENAME TO "prod"/),
+        ],
+      ]);
+    });
   });
 
   it("Displays validation errors", async () => {

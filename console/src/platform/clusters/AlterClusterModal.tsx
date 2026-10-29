@@ -66,8 +66,8 @@ export const AlterClusterModal = ({
   >(undefined);
   const toast = useToast();
   const { shadows } = useTheme<MaterializeTheme>();
-  // Not the replica count, which also counts a hydration burst's or a graceful
-  // resize's extra replicas, so submitting it while one runs would keep them.
+  // Not the replica count, which also counts a hydration burst's or a resize's
+  // extra replicas.
   const currentReplicas = cluster.replicationFactor ?? cluster.replicas.length;
 
   const {
@@ -92,10 +92,16 @@ export const AlterClusterModal = ({
 
   const handleValidSubmit = async (values: FormState) => {
     setGeneralFormError(undefined);
+    const { defaultValues } = formState;
+    const replicationFactor = parseInt(values.replicas, 10);
     alterCluster(
       {
-        ...values,
-        replicas: parseInt(values.replicas, 10),
+        name: values.name,
+        size: values.size === defaultValues?.size ? undefined : values.size,
+        replicas:
+          replicationFactor === parseInt(defaultValues?.replicas ?? "", 10)
+            ? undefined
+            : replicationFactor,
         clusterName: cluster.name,
       },
       {

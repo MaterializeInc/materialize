@@ -351,6 +351,7 @@ export interface MzBaseTypes {
   id: Generated<string>;
 }
 
+// TODO: hand-added for mz >= 26.34. Keep through `yarn gen:types` until every environment has it.
 export interface MzClusterAutoScalingStrategies {
   /**
    * The ID of the cluster. Corresponds to `mz_clusters.id`.
