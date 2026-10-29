@@ -839,6 +839,60 @@ describe("Verdict", () => {
       expect(screen.queryByText(/spread evenly/)).not.toBeInTheDocument();
     });
 
+    it("leads with the workers at their limit, and the objects busying them, when none leads by SKEW_RATIO", async () => {
+      await renderVerdict({
+        measurement: buildMeasurement([1, 1, 0.3, 0.3], {
+          u5: [50, 2, 5, 5],
+          u6: [2, 50, 5, 5],
+        }),
+      });
+
+      expect(heading("2 of 4 workers are at their core's limit")).toBeVisible();
+      expect(
+        screen.getByText(
+          "w0 and w1 are at their core's limit, and the least busy, w3, is at 30%. orders_idx and payments_mv take the most of their time. Work routed to them waits, though none leads the others by the 2× that counts as skew.",
+        ),
+      ).toBeVisible();
+      expect(screen.queryByText(/their work\./)).not.toBeInTheDocument();
+    });
+
+    it("names the object that busies every worker at its limit, without a skew EXPLAIN for evenly spread work", async () => {
+      await renderVerdict({
+        measurement: buildMeasurement([1, 1, 1, 0.3], {
+          u5: [50, 50, 50, 15],
+        }),
+      });
+
+      expect(
+        heading(
+          "3 of 4 workers are at their core's limit, and most of their time goes to orders_idx",
+        ),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          "w0, w1, and w2 are at their core's limit, and the least busy, w3, is at 30%. Work routed to them waits, though none leads the others by the 2× that counts as skew.",
+        ),
+      ).toBeVisible();
+      expect(screen.queryByText(/EXPLAIN ANALYZE/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/hot key|cross join/)).not.toBeInTheDocument();
+    });
+
+    it("names another overloaded worker beside the one the finding is about", async () => {
+      await renderVerdict({
+        measurement: buildMeasurement([1, 1, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2], {
+          u5: [50, 2, 10, 10, 10, 10, 10, 10],
+          u6: [2, 50, 1, 1, 1, 1, 1, 1],
+        }),
+      });
+
+      expect(heading(/^w0 is overloaded/)).toBeVisible();
+      expect(
+        screen.getByText(
+          /w1 is also at its core's limit, and payments_mv takes the most of its time\./,
+        ),
+      ).toBeVisible();
+    });
+
     it("says a pegged worker at 1.9× and at 2.1× is at its limit, without the story flipping to even", async () => {
       await renderVerdict({
         measurement: buildMeasurement([0.95, 0.5, 0.5, 0.5]),

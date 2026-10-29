@@ -84,6 +84,16 @@ const LOW_CPU_FRACTION = 0.5;
 // An object with this much of a worker's time is what the worker is doing.
 const MOST_OF_WORKER = 0.5;
 const EXPLAINABLE_TYPES = new Set(["index", "materialized-view"]);
+// Past this many, a list of workers or objects ends in "and N more".
+const LISTED_MAX = 3;
+const LIST_FORMAT = new Intl.ListFormat("en", { type: "conjunction" });
+
+const listNames = (names: string[]) =>
+  LIST_FORMAT.format(
+    names.length > LISTED_MAX
+      ? [...names.slice(0, LISTED_MAX), `${names.length - LISTED_MAX} more`]
+      : names,
+  );
 
 type ObjectCpu = ReturnType<typeof objectCpuRows>;
 
@@ -545,8 +555,29 @@ export const Verdict = ({
     const isMostlyOne = top !== undefined && top.share >= MOST_OF_WORKER;
     const isQueries = top?.objectId === ADHOC_ROW_ID;
     const topObject = top && objectsById.get(top.objectId);
+    // Several workers at their limit, short of skew, make one finding about
+    // all of them, since the busiest leads by a tie-break or a hair.
+    const group =
+      isPegged && verdict.atLimit.length > 1 ? verdict.atLimit : undefined;
+    const atLimitTops = verdict.atLimit.map(({ workerId }) =>
+      topObjectOnWorker(rows, workerTotalsNs, workerId),
+    );
+    const isGroupOnTop =
+      group !== undefined &&
+      top !== undefined &&
+      atLimitTops.every(
+        (atLimitTop) =>
+          atLimitTop !== undefined &&
+          atLimitTop.objectId === top.objectId &&
+          atLimitTop.share >= MOST_OF_WORKER,
+      );
+    // A pegged worker's top object may not lean, and then neither a skew
+    // cause nor the skew EXPLAIN fits it.
+    const isLeaning =
+      !isPegged || (topRatio !== undefined && topRatio >= SKEW_RATIO);
     const statement =
       isMostlyOne &&
+      isLeaning &&
       topObject &&
       explainStatement(topObject, clusterName, replica.name);
     // NOTE: a replica with missing metrics reads 0% of its CPU. CPU under half
@@ -562,17 +593,19 @@ export const Verdict = ({
       hasCpuMetrics &&
       replicaCpuFraction !== undefined &&
       replicaCpuFraction < LOW_CPU_FRACTION;
-    const label = isMostlyOne
-      ? isSaturated
-        ? `${worker} is overloaded, and most of its time goes to ${topName}`
-        : isPegged
-          ? `${worker} is at its core's limit, and most of its time goes to ${topName}`
-          : `Work leans on ${worker}, mostly from ${topName}`
-      : isSaturated
-        ? `${worker} is overloaded, with no single object behind it`
-        : isPegged
-          ? `${worker} is at its core's limit`
-          : `Work leans on ${worker}`;
+    const label = group
+      ? `${group.length} of ${workerCount} workers are at their core's limit${isGroupOnTop ? `, and most of their time goes to ${topName}` : ""}`
+      : isMostlyOne
+        ? isSaturated
+          ? `${worker} is overloaded, and most of its time goes to ${topName}`
+          : isPegged
+            ? `${worker} is at its core's limit, and most of its time goes to ${topName}`
+            : `Work leans on ${worker}, mostly from ${topName}`
+        : isSaturated
+          ? `${worker} is overloaded, with no single object behind it`
+          : isPegged
+            ? `${worker} is at its core's limit`
+            : `Work leans on ${worker}`;
     const isCpuHigh =
       hasCpuMetrics &&
       replicaCpuFraction !== undefined &&
@@ -589,22 +622,55 @@ export const Verdict = ({
       busiestProcess &&
       (!standsOut(busiestProcess)
         ? `The processes used CPU about evenly, ${processPercent(busiestProcess.value)} at most against ${processPercent(busiestProcess.othersMean)} for the others, so the skew is between workers, not processes.`
-        : busiestProcess.processId === workerProcess
+        : busiestProcess.processId === workerProcess && !group
           ? `Its process, process ${workerProcess}, used the most CPU: ${processPercent(busiestProcess.value)} against ${processPercent(busiestProcess.othersMean)} for ${otherProcessesLabel(busiestProcess.otherCount)}.`
           : `Process ${busiestProcess.processId} used the most CPU, ${processPercent(busiestProcess.value)} against ${processPercent(busiestProcess.othersMean)} for ${otherProcessesLabel(busiestProcess.otherCount)}.`);
     // Queries and subscribes pool many dataflows, so no one plan's join or
-    // key explains their lean, and a pegged worker's top object may not lean.
+    // key explains their lean.
     const cause =
       topRatio !== undefined &&
       !isQueries &&
-      (!isPegged || topRatio >= SKEW_RATIO) &&
+      isLeaning &&
       (topRatio >= ONE_WORKER_RATIO
         ? "Nearly all of an object's work on one worker is what a cross join does, since it has no key to split the work by. A key value that almost every row shares does the same."
         : "That pattern usually means a hot key: one value in a join or GROUP BY key holds most of the rows, so all of them land on one worker.");
+    const topNamesOf = (tops: typeof atLimitTops, exceptId?: string) =>
+      [
+        ...new Set(
+          tops
+            .map((atLimitTop) => atLimitTop?.objectId)
+            .filter(
+              (objectId): objectId is string =>
+                objectId !== undefined && objectId !== exceptId,
+            ),
+        ),
+      ].map(objectName);
+    const least = measurement.workers.at(-1);
+    const groupNames = group && topNamesOf(atLimitTops);
+    const groupSentence =
+      group &&
+      least &&
+      `${listNames(group.map(({ workerId }) => `w${workerId}`))} are at their core's limit, and the least busy, w${least.workerId}, is at ${formatPercentage(least.busyFraction, 0)}.${
+        !isGroupOnTop && groupNames && groupNames.length > 0
+          ? ` ${listNames(groupNames)} ${groupNames.length === 1 ? "takes" : "take"} the most of their time.`
+          : ""
+      } Work routed to them waits, though none leads the others by the ${SKEW_RATIO}× that counts as skew.`;
+    // A finding about the busiest worker names the others at their limit
+    // here, with any object busying them other than the finding's.
+    const othersAtLimit = group ? [] : verdict.atLimit.slice(1);
+    const otherTopNames = topNamesOf(atLimitTops.slice(1), top?.objectId);
+    const isOneOther = othersAtLimit.length === 1;
+    const alsoAtLimit =
+      othersAtLimit.length > 0 &&
+      `${listNames(othersAtLimit.map(({ workerId }) => `w${workerId}`))} ${isOneOther ? "is also at its core's limit" : "are also at their core's limit"}${
+        otherTopNames.length > 0
+          ? `, and ${listNames(otherTopNames)} ${otherTopNames.length === 1 ? "takes" : "take"} the most of ${isOneOther ? "its" : "their"} time`
+          : ""
+      }.`;
     const freshness = [
       top && behind(top.objectId),
       isCpuLow &&
-        `Replica CPU reads only ${formatPercentage(replicaCpuFraction, 0)}, because the average across workers hides ${worker}.`,
+        `Replica CPU reads only ${formatPercentage(replicaCpuFraction, 0)}, because the average across workers hides ${group ? "them" : worker}.`,
       isCpuHigh &&
         `${replica.name} is also at ${formatPercentage(replicaCpuFraction, 0)} of its CPU.`,
     ]
@@ -616,25 +682,30 @@ export const Verdict = ({
         label={label}
         message={
           <VStack spacing={2} alignItems="stretch">
-            <Text>
-              {workerIntro} is {busyText} busy.{" "}
-              {workerCount === 2
-                ? `The other worker is at ${othersText}`
-                : `The other ${workerCount - 1} workers average ${othersText}`}
-              , so {worker} does{" "}
-              {othersBusyFraction > 0
-                ? `${formatMultiple(busiest.busyFraction / othersBusyFraction)} ${workerCount === 2 ? "its" : "their"} work.`
-                : "nearly all of the work."}
-              {top &&
-                topRatio !== undefined &&
-                (isMostlyOne
-                  ? ` ${formatPercentage(top.share, 0)} of ${worker}'s time goes to ${topName}, which ${spreadPhrase(topRatio, worker)}.`
-                  : ` Its time is split across several objects. The largest, ${topName}, takes ${formatPercentage(top.share, 0)} of it.`)}
-              {isPegged
-                ? ` That's short of the ${SKEW_RATIO}× that counts as skew, but work routed to ${worker} waits on it.`
-                : !isSaturated &&
-                  " No worker is at its limit yet, so results aren't waiting on it."}
-            </Text>
+            {groupSentence ? (
+              <Text>{groupSentence}</Text>
+            ) : (
+              <Text>
+                {workerIntro} is {busyText} busy.{" "}
+                {workerCount === 2
+                  ? `The other worker is at ${othersText}`
+                  : `The other ${workerCount - 1} workers average ${othersText}`}
+                , so {worker} does{" "}
+                {othersBusyFraction > 0
+                  ? `${formatMultiple(busiest.busyFraction / othersBusyFraction)} ${workerCount === 2 ? "its" : "their"} work.`
+                  : "nearly all of the work."}
+                {top &&
+                  topRatio !== undefined &&
+                  (isMostlyOne
+                    ? ` ${formatPercentage(top.share, 0)} of ${worker}'s time goes to ${topName}, which ${spreadPhrase(topRatio, worker)}.`
+                    : ` Its time is split across several objects. The largest, ${topName}, takes ${formatPercentage(top.share, 0)} of it.`)}
+                {isPegged
+                  ? ` That's short of the ${SKEW_RATIO}× that counts as skew, but work routed to ${worker} waits on it.`
+                  : !isSaturated &&
+                    " No worker is at its limit yet, so results aren't waiting on it."}
+                {alsoAtLimit && ` ${alsoAtLimit}`}
+              </Text>
+            )}
             {isMostlyOne && cause && <Text>{cause}</Text>}
             {isQueries && (
               <Text>

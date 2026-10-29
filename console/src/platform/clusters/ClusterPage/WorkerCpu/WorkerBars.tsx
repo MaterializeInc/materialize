@@ -54,8 +54,8 @@ export interface WorkerBarsProps {
   measurement: Measurement;
   /** The object whose part of each worker's time is drawn darker. */
   picked: { name: string; perWorkerNs: number[] } | undefined;
-  /** The worker to call out, with its legend label, from `markedWorker`. */
-  hotWorker: { workerId: number; label: string } | undefined;
+  /** The workers to call out, with their legend label, from `markedWorkers`. */
+  hotWorkers: { workerIds: number[]; label: string } | undefined;
   /** The worker whose time the objects table breaks down. */
   selectedWorkerId: number;
   onSelectWorker: (workerId: number) => void;
@@ -78,7 +78,7 @@ interface BarsProps {
   busy: number[];
   /** Each worker's busy share that went to the picked object. */
   pickedBusy: number[];
-  hotWorkerId: number | undefined;
+  hotWorkerIds: Set<number>;
   labeled: Set<number>;
   othersAverage: number | undefined;
 }
@@ -92,7 +92,7 @@ const BarMarks = React.memo(
     slots,
     busy,
     pickedBusy,
-    hotWorkerId,
+    hotWorkerIds,
     labeled,
     othersAverage,
   }: BarsProps) => {
@@ -103,7 +103,7 @@ const BarMarks = React.memo(
       <g pointerEvents="none">
         <PercentAxis layout={layout} yScale={yScale} ticks={PERCENT_TICKS} />
         {busy.map((fraction, workerId) => {
-          const isHot = workerId === hotWorkerId;
+          const isHot = hotWorkerIds.has(workerId);
           const x = slots.x(workerId) + (slots.slot - slots.barWidth) / 2;
           const top = yScale(fraction * 100);
           const pickedTop = yScale(pickedBusy[workerId] * 100);
@@ -166,13 +166,19 @@ export const WorkerBars = ({
   width,
   measurement,
   picked,
-  hotWorker,
+  hotWorkers,
   selectedWorkerId,
   onSelectWorker,
   replica,
 }: WorkerBarsProps) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
-  const hotWorkerId = hotWorker?.workerId;
+  // Keyed by the ids, since the caller builds `hotWorkers` on every render.
+  const hotWorkerIdsKey = hotWorkers?.workerIds.join(",") ?? "";
+  const hotWorkerIds = React.useMemo(
+    () =>
+      new Set(hotWorkerIdsKey ? hotWorkerIdsKey.split(",").map(Number) : []),
+    [hotWorkerIdsKey],
+  );
   const {
     tooltipData: hoveredWorkerId,
     tooltipLeft,
@@ -251,11 +257,9 @@ export const WorkerBars = ({
   }, [workerCount, plotLeft, plotRight, processCount, perProcess]);
 
   // These always get a label, and the spaced labels near them give way.
-  const labeledAlways = [
-    busiest?.workerId,
-    hotWorkerId,
-    selectedWorkerId,
-  ].filter((workerId): workerId is number => workerId !== undefined);
+  const labeledAlways = [busiest?.workerId, selectedWorkerId].filter(
+    (workerId): workerId is number => workerId !== undefined,
+  );
   const labeledAlwaysKey = labeledAlways.join(",");
   const valueLabeled = React.useMemo(
     () => new Set(labeledAlwaysKey.split(",").map(Number)),
@@ -324,10 +328,10 @@ export const WorkerBars = ({
             color: barColors.rest,
             variant: "square",
           },
-          ...(hotWorker
+          ...(hotWorkers
             ? [
                 {
-                  label: hotWorker.label,
+                  label: hotWorkers.label,
                   color: barColors.hotPicked,
                   variant: "square" as const,
                 },
@@ -378,7 +382,7 @@ export const WorkerBars = ({
             slots={slots}
             busy={busy}
             pickedBusy={pickedBusy}
-            hotWorkerId={hotWorkerId}
+            hotWorkerIds={hotWorkerIds}
             labeled={valueLabeled}
             othersAverage={othersAverage}
           />
@@ -419,7 +423,7 @@ export const WorkerBars = ({
                   (labeled) => Math.abs(labeled - workerId) >= labelEvery,
                 ));
             if (!show) return null;
-            const isHot = workerId === hotWorkerId;
+            const isHot = hotWorkerIds.has(workerId);
             const isSelected = workerId === selectedWorkerId;
             return (
               <text

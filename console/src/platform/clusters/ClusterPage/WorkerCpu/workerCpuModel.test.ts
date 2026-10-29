@@ -23,7 +23,7 @@ import {
   hasDataflowCounterReset,
   largestShare,
   lifetimeWorkerSkew,
-  markedWorker,
+  markedWorkers,
   measureLatest,
   Measurement,
   ObjectCpuRead,
@@ -1172,7 +1172,7 @@ describe("verdictObjectId", () => {
   });
 });
 
-describe("markedWorker", () => {
+describe("markedWorkers", () => {
   it("calls the busiest worker overloaded only when the verdict does", () => {
     expect(
       [
@@ -1180,12 +1180,26 @@ describe("markedWorker", () => {
         busy([1, 0.55, 0.55, 0.55]),
         busy([0.5, 0.1, 0.1, 0.1]),
         busy([0.21, 0.17, 0.16, 0.18]),
-      ].map((workers) => markedWorker(workerVerdict(workers))?.label),
+      ].map((workers) => markedWorkers(workerVerdict(workers))),
     ).toEqual([
-      "Overloaded worker",
-      "Worker at its core's limit",
-      "Busiest worker",
+      { workerIds: [0], label: "Overloaded worker" },
+      { workerIds: [0], label: "Worker at its core's limit" },
+      { workerIds: [0], label: "Busiest worker" },
       undefined,
+    ]);
+  });
+
+  it("calls out every worker at its limit, not only the busiest", () => {
+    expect(
+      [
+        busy([1, 1, 0.3, 0.3]),
+        busy([1, 1, 1, 0.3]),
+        busy([1, 1, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]),
+      ].map((workers) => markedWorkers(workerVerdict(workers))),
+    ).toEqual([
+      { workerIds: [0, 1], label: "Workers at their core's limit" },
+      { workerIds: [0, 1, 2], label: "Workers at their core's limit" },
+      { workerIds: [0, 1], label: "Overloaded workers" },
     ]);
   });
 });

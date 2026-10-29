@@ -955,20 +955,32 @@ export function verdictObjectId(
 }
 
 /**
- * The worker the bars call out, named as the verdict names it: overloaded
- * only when it's at its limit with skewed work.
+ * The workers the bars call out, named as the verdict names them: overloaded
+ * only when the busiest is at its limit with skewed work. A worker at its
+ * limit beside the busiest is called out with it.
  */
-export function markedWorker(verdict: CpuVerdict | undefined) {
+export function markedWorkers(
+  verdict: CpuVerdict | undefined,
+): { workerIds: number[]; label: string } | undefined {
   switch (verdict?.kind) {
     case "saturated":
-      return { workerId: verdict.busiest.workerId, label: "Overloaded worker" };
-    case "pegged":
+    case "pegged": {
+      const workerIds = verdict.atLimit.map(({ workerId }) => workerId);
+      const isOne = workerIds.length === 1;
       return {
-        workerId: verdict.busiest.workerId,
-        label: "Worker at its core's limit",
+        workerIds,
+        label:
+          verdict.kind === "saturated"
+            ? isOne
+              ? "Overloaded worker"
+              : "Overloaded workers"
+            : isOne
+              ? "Worker at its core's limit"
+              : "Workers at their core's limit",
       };
+    }
     case "uneven":
-      return { workerId: verdict.busiest.workerId, label: "Busiest worker" };
+      return { workerIds: [verdict.busiest.workerId], label: "Busiest worker" };
     default:
       return undefined;
   }

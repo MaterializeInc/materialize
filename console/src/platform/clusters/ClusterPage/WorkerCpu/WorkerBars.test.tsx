@@ -56,7 +56,7 @@ const renderBars = (props: Partial<WorkerBarsProps> = {}) =>
       width={800}
       measurement={SKEWED}
       picked={undefined}
-      hotWorker={undefined}
+      hotWorkers={undefined}
       selectedWorkerId={0}
       onSelectWorker={() => {}}
       replica={REPLICA}
@@ -162,12 +162,24 @@ describe("WorkerBars", () => {
 
   it("colors the called-out worker apart from the others, under the verdict's name for it", async () => {
     await renderBars({
-      hotWorker: { workerId: 0, label: "Worker at its core's limit" },
+      hotWorkers: { workerIds: [0], label: "Worker at its core's limit" },
     });
 
     expect(fills(barRects(0))).not.toEqual(fills(barRects(1)));
     expect(screen.getByText("Worker at its core's limit")).toBeInTheDocument();
     expect(screen.queryByText("Overloaded worker")).not.toBeInTheDocument();
+  });
+
+  it("colors every called-out worker alike, apart from the rest", async () => {
+    await renderBars({
+      hotWorkers: { workerIds: [0, 2], label: "Workers at their core's limit" },
+    });
+
+    expect(fills(barRects(2))).toEqual(fills(barRects(0)));
+    expect(fills(barRects(2))).not.toEqual(fills(barRects(1)));
+    expect(
+      screen.getByText("Workers at their core's limit"),
+    ).toBeInTheDocument();
   });
 
   it("colors every worker alike without an overloaded one", async () => {
