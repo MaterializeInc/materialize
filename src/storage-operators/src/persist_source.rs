@@ -390,7 +390,7 @@ where
 /// Fetch the parts of a persist shard a dataflow needs, distributing the work of reading them
 /// across all timely workers.
 #[allow(clippy::needless_borrow)]
-fn fetch_parts<'g, 'outer, X>(
+fn fetch_parts<'g, 'outer, X: PlanExpr>(
     outer: Scope<'outer, mz_repr::Timestamp>,
     scope: RefinedScope<'g, mz_repr::Timestamp>,
     source_id: GlobalId,
