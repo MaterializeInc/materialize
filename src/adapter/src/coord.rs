@@ -166,7 +166,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{S3SinkFormat, StorageSinkDesc};
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
-use mz_timestamp_oracle::{TimestampOracleConfig, WriteTimestamp};
+use mz_timestamp_oracle::TimestampOracleConfig;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use opentelemetry::trace::TraceContextExt;
@@ -3700,30 +3700,52 @@ impl Coordinator {
             })
             .collect();
 
-        // Append empty batches to advance the timestamp of all tables.
+        // Establish completed WAL progress, not exclusive table ownership.
+        // Peers may advance the WAL between allocation and append. Retry with a
+        // fresh allocation and repeat the catalog retirement check each time.
         debug!("coordinator init: advancing all tables to current timestamp");
-        let WriteTimestamp {
-            timestamp: write_ts,
-            advance_to,
-        } = self.get_local_write_ts().await;
-        let appends = table_metas
-            .iter()
-            .map(|meta| (meta.table.global_id_writes(), Vec::new()))
-            .collect();
-        // Append the tables in the background. Snapshots at the fence timestamp
-        // block until the WAL passes that timestamp.
-        let table_fence_rx = self
-            .table_write_handle
-            .append(write_ts.clone(), advance_to, appends);
+        let mut lower_bound = Timestamp::MIN;
+        let read_ts = loop {
+            let timestamp = self.get_local_write_ts().await;
+            if timestamp.timestamp < lower_bound {
+                tokio::task::yield_now().await;
+                continue;
+            }
+            self.catalog()
+                .upper_handle()
+                .advance_upper(timestamp.advance_to)
+                .await
+                .unwrap_or_terminate("unable to advance catalog upper for bootstrap snapshot");
+            let appends = table_metas
+                .iter()
+                .map(|meta| (meta.table.global_id_writes(), Vec::new()))
+                .collect();
+            match self
+                .table_write_handle
+                .append(timestamp.timestamp, timestamp.advance_to, appends)
+                .await
+                .expect("bootstrap owns the table write outcome")
+            {
+                Ok(()) => {
+                    self.apply_local_write(timestamp.timestamp).await;
+                    break timestamp.timestamp;
+                }
+                Err(mz_storage_types::controller::StorageError::InvalidUppers(uppers)) => {
+                    lower_bound = uppers
+                        .iter()
+                        .flat_map(|upper| upper.current_upper.elements().iter().copied())
+                        .max()
+                        .unwrap_or(timestamp.advance_to);
+                    tokio::task::yield_now().await;
+                }
+                Err(error) => Err::<(), _>(error)
+                    .unwrap_or_terminate("cannot establish bootstrap table progress"),
+            }
+        };
 
-        self.apply_local_write(write_ts).await;
-
-        // Add builtin table updates the clear the contents of all system tables
+        // Snapshot at the completed barrier, never a later oracle read: catalog
+        // publishers can advance the oracle without advancing the table WAL.
         debug!("coordinator init: resetting system tables");
-        // Catalog publishers can advance the shared oracle without advancing the
-        // table WAL. Reading that newer time here could wait for table progress
-        // that only starts after bootstrap finishes.
-        let read_ts = write_ts;
 
         let retained_across_restarts = BTreeSet::from([
             self.catalog()
@@ -3824,13 +3846,6 @@ impl Coordinator {
         for retractions in retractions_res {
             builtin_table_updates.push(retractions);
         }
-
-        // Snapshot completion establishes WAL progress past the fence timestamp.
-        // Check that our fence append itself succeeded before resetting the tables.
-        table_fence_rx
-            .await
-            .expect("One-shot shouldn't be dropped during bootstrap")
-            .unwrap_or_terminate("cannot fail to append");
 
         self.reconcile_builtin_configuration(builtin_configuration, &reader, txns_shard, read_ts)
             .await;

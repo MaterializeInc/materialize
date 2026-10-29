@@ -546,6 +546,12 @@ catalog fence -> set up and register tables -> txns write advances table uppers
               -> snapshot and reset system tables -> start serving
 ```
 
+The bootstrap table fence establishes completed WAL progress, not exclusive
+ownership. Same-deployment peers may keep writing. An InvalidUppers response
+requires a fresh timestamp and another catalog retirement check, not termination
+as a fenced adapter. Complete the WAL append before applying its timestamp to
+the oracle or using it for snapshots.
+
 Bootstrap snapshots use the table-fence timestamp, not a subsequent oracle read.
 Catalog publishers can advance the shared oracle without advancing the table WAL.
 Waiting for that newer timestamp can deadlock bootstrap before normal table
