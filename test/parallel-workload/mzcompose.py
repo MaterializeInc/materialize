@@ -48,6 +48,7 @@ from materialize.parallel_workload.catalog_transactions import (
     late_binding,
     rename_noop,
     schema_swap,
+    source_noop,
 )
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import (
@@ -196,6 +197,7 @@ def workflow_catalog_transactions(
         "destination",
         "authorization",
         "rename-noop",
+        "source-noop-boundary",
         "show-create",
         "explain-rejection",
         "description",
@@ -244,6 +246,8 @@ def workflow_catalog_transactions(
                     hammer(c, args.workers, args.rounds)
                 elif case == "rename-noop":
                     rename_noop(c)
+                elif case == "source-noop-boundary":
+                    source_noop(c)
                 elif case == "explain-rejection":
                     explain_ddl_rejection(c)
                 elif case == "show-create":

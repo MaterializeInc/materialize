@@ -363,6 +363,7 @@ impl Coordinator {
                 TransactionOps::DDL {
                     ops: txn_ops,
                     revision: txn_revision,
+                    revision_fenced,
                     state: txn_state,
                     snapshot: txn_snapshot,
                     side_effects: _,
@@ -380,16 +381,17 @@ impl Coordinator {
             return result;
         };
 
-        // Precomputed writes require their original catalog revision.
+        // Statements without replay require their original catalog revision.
         if self.catalog().transient_revision() != *txn_revision
-            && !txn_ops.iter().chain(&ops).all(|op| {
-                matches!(
-                    op,
-                    catalog::Op::RenameCommand(_)
-                        | catalog::Op::CatalogResult(_)
-                        | catalog::Op::Description(_)
-                )
-            })
+            && (*revision_fenced
+                || !txn_ops.iter().chain(&ops).all(|op| {
+                    matches!(
+                        op,
+                        catalog::Op::RenameCommand(_)
+                            | catalog::Op::CatalogResult(_)
+                            | catalog::Op::Description(_)
+                    )
+                }))
         {
             self.metrics
                 .catalog_transact_seconds
@@ -408,6 +410,7 @@ impl Coordinator {
         let clone_start = Instant::now();
         let txn_ops_clone = txn_ops.clone();
         let txn_revision = *txn_revision;
+        let revision_fenced = *revision_fenced;
         let txn_state_clone = txn_state.clone();
         // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
         // O(catalog size) in allocations, once per statement. `txn_state` next to
@@ -479,6 +482,7 @@ impl Coordinator {
                 state: new_state,
                 side_effects: vec![Box::new(side_effect)],
                 revision: txn_revision,
+                revision_fenced,
                 snapshot: Some(new_snapshot),
             });
 

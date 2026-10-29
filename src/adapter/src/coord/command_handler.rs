@@ -1432,10 +1432,37 @@ impl Coordinator {
                                 ops: vec![],
                                 state,
                                 revision,
+                                revision_fenced: false,
                                 side_effects: vec![],
                                 snapshot: None,
                             }) {
                                 return ctx.retire(Err(err));
+                            }
+                        }
+                        if matches!(
+                            &*stmt,
+                            Statement::CreateTableFromSource(_) | Statement::CreateSource(_)
+                        ) {
+                            let revision = self.catalog().transient_revision();
+                            let TransactionOps::DDL {
+                                revision: txn_revision,
+                                revision_fenced,
+                                ops: _,
+                                state: _,
+                                side_effects: _,
+                                snapshot: _,
+                            } = &mut ctx
+                                .session_mut()
+                                .transaction_mut()
+                                .inner_mut()
+                                .expect("active transaction")
+                                .ops
+                            else {
+                                unreachable!("DDL mode initialized above");
+                            };
+                            *revision_fenced = true;
+                            if *txn_revision != revision {
+                                return ctx.retire(Err(AdapterError::DDLTransactionRace));
                             }
                         }
                     }

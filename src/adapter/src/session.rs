@@ -1524,6 +1524,7 @@ impl TransactionStatus {
                     TransactionOps::DDL {
                         ops: og_ops,
                         revision: og_revision,
+                        revision_fenced: og_revision_fenced,
                         state: og_state,
                         side_effects,
                         snapshot: og_snapshot,
@@ -1531,6 +1532,7 @@ impl TransactionStatus {
                         TransactionOps::DDL {
                             ops: new_ops,
                             revision: new_revision,
+                            revision_fenced: new_revision_fenced,
                             side_effects: mut net_new_side_effects,
                             state: new_state,
                             snapshot: new_snapshot,
@@ -1538,6 +1540,7 @@ impl TransactionStatus {
                             if *og_revision != new_revision {
                                 return Err(AdapterError::DDLTransactionRace);
                             }
+                            *og_revision_fenced |= new_revision_fenced;
                             // The old og_ops are overwritten, not extended.
                             if !new_ops.is_empty() {
                                 *og_ops = new_ops;
@@ -1743,6 +1746,9 @@ pub enum TransactionOps {
         >,
         /// Transient revision of the `Catalog` when this transaction started.
         revision: u64,
+        /// A statement without commit-time replay has executed. Even a no-op
+        /// exposes an outcome that requires the original catalog revision.
+        revision_fenced: bool,
         /// Snapshot of the durable transaction state after the last dry run.
         /// Used to initialize the next dry run's transaction so it starts
         /// in sync with the accumulated `state`. `None` for the first

@@ -574,6 +574,96 @@ def rename_noop(c: Composition) -> None:
             assert [n for n in notices if n == missing_notices[0]] == missing_notices
 
 
+def source_noop(c: Composition) -> None:
+    schedules = ["rename", "swap"] + [
+        f"drop_{order}_{continuation}"
+        for order in ("before", "after")
+        for continuation in ("staging", "commit")
+    ]
+    for kind in ("source", "table"):
+        for schedule in schedules:
+            prefix = f"ddl_noop_{kind}_{schedule}"
+            left, right = f"{prefix}_left", f"{prefix}_right"
+            away, final = f"{prefix}_away", f"{prefix}_final"
+            with c.sql_connection() as txn, c.sql_connection() as other:
+                for schema in (left, right):
+                    execute(other, f"CREATE SCHEMA {schema}")
+                    execute(other, f"CREATE VIEW {schema}.sentinel AS SELECT 7")
+                if kind == "source":
+                    definition = "FROM LOAD GENERATOR COUNTER (UP TO 1)"
+                else:
+                    # Keep the input name valid across the schema rotation.
+                    execute(
+                        other,
+                        f"CREATE SOURCE public.{prefix}_input "
+                        "FROM LOAD GENERATOR COUNTER (UP TO 1)",
+                    )
+                    definition = (
+                        f"FROM SOURCE public.{prefix}_input (REFERENCE counter)"
+                    )
+                execute(other, f"CREATE {kind} {left}.collided {definition}")
+                noop = f"CREATE {kind} IF NOT EXISTS {left}.collided {definition}"
+
+                def published_state() -> (
+                    tuple[list[tuple[str, str]], list[tuple[str, str, str]]]
+                ):
+                    schemas = f"('{left}', '{right}', '{away}', '{final}')"
+                    return (
+                        execute(
+                            other,
+                            "SELECT name, id FROM mz_schemas "
+                            f"WHERE name IN {schemas} ORDER BY name",
+                        ).fetchall(),
+                        execute(
+                            other,
+                            "SELECT s.name, o.name, o.id FROM mz_objects o "
+                            "JOIN mz_schemas s ON s.id = o.schema_id "
+                            f"WHERE s.name IN {schemas} ORDER BY s.name, o.name",
+                        ).fetchall(),
+                    )
+
+                notices = []
+                txn.add_notice_handler(
+                    lambda notice: notices.append(notice.message_primary)
+                )
+                execute(txn, "BEGIN")
+                rename = f"ALTER VIEW {left}.sentinel RENAME TO pending"
+                if schedule.startswith("drop_after_"):
+                    execute(txn, rename)
+                execute(txn, noop)
+                assert len(notices) == 1, (prefix, notices)
+                assert "already exists" in (notices[0] or ""), (prefix, notices)
+                assert "collided" in (notices[0] or ""), (prefix, notices)
+                if schedule.startswith("drop_before_"):
+                    execute(txn, rename)
+
+                if schedule in ("rename", "swap"):
+                    # Both schema names survive, but replaying the acknowledged
+                    # no-op would create the now-absent collided object.
+                    execute(other, f"ALTER SCHEMA {left} RENAME TO {away}")
+                    execute(other, f"ALTER SCHEMA {right} RENAME TO {left}")
+                    execute(other, f"ALTER SCHEMA {away} RENAME TO {right}")
+                    statements = [
+                        (
+                            f"ALTER SCHEMA {left} RENAME TO {final}"
+                            if schedule == "rename"
+                            else f"ALTER SCHEMA {left} SWAP WITH {right}"
+                        )
+                    ]
+                else:
+                    execute(other, f"DROP {kind} {left}.collided")
+                    statements = (
+                        [f"ALTER VIEW {left}.pending RENAME TO final"]
+                        if schedule.endswith("_staging")
+                        else []
+                    )
+                before = published_state()
+                state = outcome(txn, [*statements, "COMMIT"])
+                assert state is not None and state[0] == "40001", (prefix, state)
+                after = published_state()
+                assert after == before, (prefix, before, after)
+
+
 def schema_swap(c: Composition) -> None:
     results = []
     for concurrent in (False, True):

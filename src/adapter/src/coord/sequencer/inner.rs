@@ -2252,18 +2252,20 @@ impl Coordinator {
                         state: _,
                         side_effects,
                         revision,
+                        revision_fenced,
                         snapshot: _,
                     } => {
-                        // Precomputed writes require their original catalog revision.
+                        // Statements without replay require their original catalog revision.
                         if *revision != self.catalog().transient_revision()
-                            && !ops.iter().all(|op| {
-                                matches!(
-                                    op,
-                                    catalog::Op::RenameCommand(_)
-                                        | catalog::Op::CatalogResult(_)
-                                        | catalog::Op::Description(_)
-                                )
-                            })
+                            && (*revision_fenced
+                                || !ops.iter().all(|op| {
+                                    matches!(
+                                        op,
+                                        catalog::Op::RenameCommand(_)
+                                            | catalog::Op::CatalogResult(_)
+                                            | catalog::Op::Description(_)
+                                    )
+                                }))
                         {
                             return Err(AdapterError::DDLTransactionRace);
                         }
