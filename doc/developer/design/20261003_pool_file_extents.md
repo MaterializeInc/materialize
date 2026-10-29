@@ -30,7 +30,7 @@ The swap backend's behavior stays the same, and the rest of the pool (slots, bud
   The compressed cap is `rss target - budget - insert slack - warm cap`, and the inline backstop engages only above twice the cap (see Where I/O runs), so the compressed tier can sit between its cap and twice its cap while the device lags evictions.
   The bound does not hold while the store is full or has writes disabled, since the tier then stays in RAM, counted by `extent_file_full`.
   Measured by the existing pool gauges plus new `extent_file_bytes` and `extent_file_allocated_bytes` gauges, under the upsert-v2 hydration workload used for the parent design's staging measurement.
-* Steady-state chunk turnover performs no filesystem metadata operations.
+* Steady-state chunk turnover opens, unlinks, and truncates no files.
   The open file count stays equal to the number of extent classes, and `openat`, `unlink`, and `ftruncate` counts stay at zero after warm-up (checked with `strace -c` on a running `clusterd`).
 * Extent I/O bypasses the page cache.
   The cgroup's `memory.stat` `file` and `file_dirty` fields stay flat while `extent_file_bytes` grows.
@@ -196,10 +196,14 @@ The file store is a small userspace extent allocator over a fixed set of files.
   `f_bavail` already excludes root-reserved blocks, and the headroom covers filesystem metadata for the preallocated extents plus incidental writers such as logs and core dumps.
   Tests pass an absolute override through `capacity_bytes`.
 * **Space return.**
-  Freed slots keep their blocks, so reuse never re-allocates and steady state performs no metadata operations.
-  Space is returned only on demand: when an allocation fails for capacity while other classes hold free allocated slots, the store punches holes with `FALLOC_FL_PUNCH_HOLE` over free slots of the class with the most free bytes until the allocation fits.
-  This handles a shift in the class mix, for example after a hydration completes, exactly when stranded space would block a demotion.
+  Freed slots keep their blocks, so a slot reused before it is released needs no `fallocate`.
+  Two paths punch free slots with `FALLOC_FL_PUNCH_HOLE`, and both pop the slots under the class mutex and punch after releasing it.
+  A background release, modeled on lgalloc's background worker, runs on the spill threads: every `column_paged_batcher_file_release_interval` (default 1 s), it punches up to `column_paged_batcher_file_release_bytes` (default 128 MiB) of free slots per class, longest-free first.
+  Allocation reuses the most recently freed slot, so the slots likeliest to be reused keep their blocks.
+  While frees stay under that limit, the release keeps `extent_file_allocated_bytes` within one interval's frees of the live data, so disk usage is meaningful, and it returns space freed in one class to the filesystem for any other.
+  On demand, when an allocation fails for capacity while other classes hold free allocated slots, the store punches free slots of the class with the most free bytes until the allocation fits, which covers a release that is disabled or lags a shift in the class mix.
   Punched slots go to the cold side of their class's free list, and the next allocation from one re-grows its blocks with `fallocate`.
+  A slot the release punched pays an `fallocate` when allocated again, as lgalloc pays page faults after its background clear.
 * **Alignment.**
   `O_DIRECT` requires the buffer address, file offset, and length to be multiples of the device's direct-I/O alignment.
   The store aligns everything to the page size and probes once at open with a page-aligned write and read, which covers devices with 512-byte and 4 KiB logical blocks (both observed working in phase 0).
@@ -375,7 +379,7 @@ Capacity has no dyncfg, since the pool owns the volume.
    Residency is unchanged.
 5. **Admit:** a probe's admitting read decodes into a slot under the lock, and the chunk becomes `BackedResident` with its extent still on file.
    Evicting it again is a page release with no write.
-6. **Free:** the file slot returns to its class's free list with no filesystem call, and its blocks stay allocated until an allocation of another class needs the space and punches them.
+6. **Free:** the file slot returns to its class's free list with no filesystem call, and its blocks stay allocated until the background release or an allocation of another class punches them.
 
 ## Testing and measurement
 
@@ -389,6 +393,7 @@ Capacity has no dyncfg, since the pool owns the volume.
   * a store-full pass stopping without losing accounting and resuming after frees,
   * a write error disabling writes and keeping the extent readable,
   * the capacity override, and on-demand hole punching letting a full store serve an allocation of another class,
+  * the background release punching at most its byte limit per class once per interval, from the spill threads,
   * failed punches and `fallocate` calls keeping their blocks counted, and concurrent allocations racing for punched room,
   * the `O_TMPFILE` fallback path.
 
@@ -608,7 +613,8 @@ Environments, in order: a local NVMe machine, the emulator, self-managed, and st
   If `extent_file_repeat_reads` dominates `extent_file_reads` on the probe workload, wire admission on the probe paths, which is the parent design's pending consumer work.
 * **Stranded space.**
   After a hydration followed by steady state, compare `extent_file_allocated_bytes` with `extent_file_bytes`.
-  Stranded space below the headroom confirms that on-demand punching rarely fires.
+  With the background release on, the gap stays within one interval's frees unless frees outpace the per-class limit, and on-demand punching rarely fires.
+  If `fallocate` on the allocation path shows up in demotion latency, keep a reserve of free slots per class out of the release.
 * **Capacity headroom.**
   Fill the store to capacity and confirm that `ENOSPC` appears only on the `fallocate` growth path, never on `pwrite`, and that `ENOSPC` never lowers the capacity.
   If it does, raise the headroom.
