@@ -10,7 +10,9 @@
 //! Catalog commands retain intent, not the writes derived from a speculative catalog.
 //!
 //! Final execution resolves and authorizes each command against the candidate produced
-//! by its predecessors.
+//! by its predecessors. Pending external work abandons that candidate. A continuation
+//! rebuilds the prefix before consuming its indexed response, so successful preparation
+//! and preparation errors are accepted only when their inputs still match.
 
 pub(crate) mod source;
 pub(crate) mod source_statement;
