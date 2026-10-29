@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+import urllib3
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 from kubernetes.config.config_exception import ConfigException
@@ -35,6 +36,7 @@ VERSION = "v1alpha1"
 PLURAL = "materializes"
 CRD_NAME = f"{PLURAL}.{GROUP}"
 LEADER_STATUS_PORT = 6878
+K8S_TIMEOUT_SECONDS = 10
 
 
 def load_config() -> None:
@@ -78,7 +80,12 @@ class Materialize:
     def get(self) -> dict[str, Any] | None:
         try:
             return self.custom.get_namespaced_custom_object(
-                GROUP, VERSION, self.namespace, PLURAL, self.name
+                GROUP,
+                VERSION,
+                self.namespace,
+                PLURAL,
+                self.name,
+                _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
             )
         except ApiException as e:
             if e.status == 404:
@@ -87,13 +94,24 @@ class Materialize:
 
     def create(self, body: dict[str, Any]) -> None:
         self.custom.create_namespaced_custom_object(
-            GROUP, VERSION, self.namespace, PLURAL, body
+            GROUP,
+            VERSION,
+            self.namespace,
+            PLURAL,
+            body,
+            _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
         )
 
     def patch_spec(self, spec: dict[str, Any]) -> dict[str, Any]:
         """Merge-patch the spec and return the resulting object."""
         return self.custom.patch_namespaced_custom_object(
-            GROUP, VERSION, self.namespace, PLURAL, self.name, {"spec": spec}
+            GROUP,
+            VERSION,
+            self.namespace,
+            PLURAL,
+            self.name,
+            {"spec": spec},
+            _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
         )
 
     def request_rollout(
@@ -152,7 +170,10 @@ class Materialize:
             return []
         prefix = f"mz{rid}-environmentd-"
         result = []
-        for sts in self.apps.list_namespaced_stateful_set(self.namespace).items:
+        for sts in self.apps.list_namespaced_stateful_set(
+            self.namespace,
+            _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        ).items:
             assert sts.metadata is not None
             name = sts.metadata.name
             assert name is not None
@@ -178,7 +199,9 @@ class Materialize:
 
     def environmentd_pods(self) -> list[EnvironmentdPod]:
         pods = self.core.list_namespaced_pod(
-            self.namespace, label_selector="materialize.cloud/app=environmentd"
+            self.namespace,
+            label_selector="materialize.cloud/app=environmentd",
+            _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
         ).items
         result = []
         for pod in pods:
@@ -207,7 +230,10 @@ class Materialize:
     def clusterd_statefulset_generations(self) -> dict[str, int]:
         """clusterd StatefulSet name to the deploy generation in its name."""
         result = {}
-        for sts in self.apps.list_namespaced_stateful_set(self.namespace).items:
+        for sts in self.apps.list_namespaced_stateful_set(
+            self.namespace,
+            _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        ).items:
             assert sts.metadata is not None
             name = sts.metadata.name
             assert name is not None
@@ -237,7 +263,10 @@ def leader_status(pod_ip: str, timeout: float = 5.0) -> str | None:
 
 def crd_established() -> bool:
     try:
-        crd = client.ApiextensionsV1Api().read_custom_resource_definition(CRD_NAME)
+        crd = client.ApiextensionsV1Api().read_custom_resource_definition(
+            CRD_NAME,
+            _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        )
     except ApiException as e:
         if e.status == 404:
             return False
@@ -261,7 +290,12 @@ def wait_until(
         try:
             if predicate():
                 return
-        except (ApiException, requests.RequestException, OSError):
+        except (
+            ApiException,
+            urllib3.exceptions.HTTPError,
+            requests.RequestException,
+            OSError,
+        ):
             pass
         if time.monotonic() >= deadline:
             raise TimeoutError(f"timed out after {timeout}s waiting for {description}")

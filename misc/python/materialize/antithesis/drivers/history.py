@@ -953,8 +953,13 @@ def _assert_report(report: sz.Report, epoch: int, scope: str) -> None:
     )
     always(
         not report.internal,
-        "client history: one read observes one set per key on every read path",
+        "client history: one read observes consistent values and counts on every read path",
         details(report.internal),
+    )
+    always(
+        not report.invalid_rmw_counts,
+        "client history: read-modify-write counts stay within the bounds of writes that could have preceded them",
+        details(report.invalid_rmw_counts),
     )
     always(
         not report.incompatible_orders,

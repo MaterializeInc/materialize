@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+import pytest
+
 from materialize.antithesis import ivm_model as m
 
 
@@ -333,3 +335,23 @@ def test_written_ids() -> None:
     assert m.written_ids("t", m.pad((1, 2, 3, 44))) == 44
     assert m.written_ids("d", m.pad((1, 55))) == 55
     assert m.written_ids("ev", m.pad((1, 2))) is None
+
+
+def test_diff_samples_without_expanding_corrupt_multiplicities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elements = Counter.elements
+
+    def bounded_elements(bag: Counter):
+        for i, row in enumerate(elements(bag)):
+            assert i < 3, "diagnostics must not expand the complete multiset"
+            yield row
+
+    monkeypatch.setattr(Counter, "elements", bounded_elements)
+    diff = m.bag_diff(Counter({(1,): 10**12}), Counter({(2,): 10**12}), limit=3)
+    assert diff == {
+        "missing_count": 10**12,
+        "extra_count": 10**12,
+        "missing": [[1]] * 3,
+        "extra": [[2]] * 3,
+    }

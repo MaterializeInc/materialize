@@ -50,6 +50,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     always_or_unreachable,
     reachable,
     sometimes,
+    unreachable,
 )
 
 from materialize.antithesis import ddl_hold, sql, state
@@ -115,6 +116,16 @@ CLUSTER_SQL = "SELECT size FROM mz_catalog.mz_clusters WHERE name = 'acl_c'"
 
 def log(message: str) -> None:
     print(f"access_control[{os.getpid()}]: {message}", flush=True)
+
+
+def classify(error: BaseException, phase: str) -> sql.Classified:
+    c = sql.classify(error)
+    if c.outcome is sql.Outcome.VIOLATION:
+        unreachable(
+            "access control: catalog operations return only classified errors",
+            {"phase": phase, "sqlstate": c.sqlstate, "template": c.template},
+        )
+    return c
 
 
 def owner_key(name: str) -> str:
@@ -203,11 +214,12 @@ class Driver:
                     try:
                         conn.execute(statement.encode())
                     except psycopg.Error as e:
-                        c = sql.classify(e)
-                        if c.outcome != sql.Outcome.REJECTED:
+                        c = classify(e, "setup")
+                        if c.race is not sql.CatalogRace.EXISTS:
                             log(f"setup: {statement}: {c.template}")
                             return False
         except (psycopg.Error, OSError) as e:
+            classify(e, "setup")
             log(f"setup: cannot connect: {e}")
             return False
         kv_set(self.db, "setup_done", True)
@@ -223,11 +235,18 @@ class Driver:
                 }
                 size = conn.execute(CLUSTER_SQL.encode()).fetchone()
         except (psycopg.Error, OSError) as e:
-            log(f"observation skipped: {sql.classify(e).template}")
+            log(f"observation skipped: {classify(e, 'observe').template}")
             return None
-        if set(owners) != set(OBJECTS) or size is None:
+        complete = set(owners) == set(OBJECTS) and size is not None
+        always_or_unreachable(
+            complete,
+            "access control: every owned object remains present after setup",
+            {"owners": owners, "size": size},
+        )
+        if not complete:
             log(f"observation incomplete: owners {owners}, size {size}")
             return None
+        assert size is not None
         observed: dict[str, Any] = {owner_key(n): r for n, r in owners.items()}
         for name, (_, _, privileges) in OBJECTS.items():
             for grantee in GRANTEES:
@@ -313,7 +332,7 @@ class Driver:
             with self.connect() as conn:
                 conn.execute(statement.encode())
         except (psycopg.Error, OSError) as e:
-            c = sql.classify(e)
+            c = classify(e, "step")
             log(f"{statement}: {c.outcome.value} {c.sqlstate} {c.template}")
             if c.outcome == sql.Outcome.REJECTED:
                 self.model.rejected(key, value, sent_at)

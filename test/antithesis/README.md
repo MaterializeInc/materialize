@@ -7,9 +7,34 @@ race, or in a timing window: 0dt rollouts, persist leases and finalization,
 controller and catalog state rebuilt at boot, and source ingestion across
 restarts.
 
-Research, the property catalog, and the reasoning behind every check live in
-`antithesis/scratchbook/` at the repository root. Start with
-`property-catalog.md`.
+The workload commands under `workload/test/main/` select independent drivers
+and checks from `misc/python/materialize/antithesis/drivers/`.
+
+## Coverage
+
+| Scenario | Drivers and checks |
+|---|---|
+| Concurrent reads and writes | Client histories check isolation and read-modify-write counts. Contended counters check conservation and duplicate writes. |
+| Queries racing DDL and replica replacement | Session mix exercises peeks, COPY, SUBSCRIBE, real-time recency, and replica targeting while changing indexes and replicas. |
+| Generation handoff | Rollouts and spec-phase changes overlap writes, source creation, catalog changes, and targeted pod restarts. Isolation checks observe candidate generations directly. |
+| Temporary and permanent hangs | Coordinator canaries probe independent paths concurrently, record recovery beyond the tight deadline, and fail unanswered probes at the wedge bound. Recovery checks require progress after faults stop. |
+| Wrong results after faults | Read paths compare indexes, persist reads, recomputation, replicas, and SUBSCRIBE at a common timestamp. IVM checks maintained views against Python reference results, including current reads after faults stop for completed and interrupted workloads. |
+| External data | Postgres transaction ledgers, Kafka source histories, and sink progress and envelopes check ingestion, replay, atomicity, and output contents. |
+| Panics and persistent damage | Process instrumentation reports panics and unexpected halts. Pod history detects crash loops. Shard audits inspect persist state and remap frontiers. |
+
+Harness pod kills respect quiet periods and record the targeted pod UID, so a
+restart can be distinguished from a spontaneous crash. Paced-DDL and canary
+quiet periods renew in short chunks, allowing faults to resume soon after an
+interrupted command. Read-path rounds limit issued work, and shard audits share
+a time budget across persistcli commands. Final checks report incomplete work.
+
+Timing bounds still need calibration on Antithesis's simulated core. Local
+unit tests validate the oracles and driver control flow, including their
+failure paths. They do not establish fault coverage or throughput under the
+simulator. Postgres source history also grows with the timeline, so long runs
+should track ledger size and check latency. The IVM reference derives views
+from the observed base tables. Consistent corruption of both base rows and
+views requires the independent client-history and external-source oracles.
 
 ## Layout
 
@@ -75,6 +100,16 @@ dead pod as a Materialize bug:
   examples list the largest processes, which shows whose growth to look at.
 
 ## Running locally
+
+Run the harness unit tests without a Kubernetes cluster:
+
+```
+bin/pyactivate -m pip install antithesis==0.4.0
+bin/pyactivate -m pytest -q misc/python/materialize/antithesis
+```
+
+The SDK version matches the workload Dockerfile. Driver tests skip when this
+optional SDK is absent. Pure model tests remain available without it.
 
 ```
 bin/pyactivate -m materialize.antithesis.local up --build-dir <git checkout>

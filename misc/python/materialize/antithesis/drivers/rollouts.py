@@ -61,12 +61,11 @@ from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
 from materialize import orchestratord
-from materialize.antithesis import ddl_hold, kube_watch, spec_model, sql
+from materialize.antithesis import ddl_hold, kube_watch, quiet, spec_model, sql
 from materialize.antithesis.drivers import counters, history, lifecycle
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
 from materialize.antithesis.kube_watch import ObjectChain
-from materialize.antithesis.quiet import request_quiet_period
 from materialize.antithesis.rng import rng
 from materialize.antithesis.state import open_db
 from materialize.mz_version import MzVersion
@@ -906,6 +905,8 @@ def execute_kill(ctx: Ctx, plan: KillPlan, snap: Snapshot) -> bool:
     # `pod_restarts` imports this module for `Kube`.
     from materialize.antithesis.drivers import pod_restarts
 
+    if pod_restarts.quiet_period_active(ctx.env.endpoints):
+        return False
     reason = f"rollout {snap.request} at {snap.reason}"
     if plan.target == "orchestratord":
         holder = ctx.kube.lease_holder()
@@ -1480,17 +1481,20 @@ def action_paced_ddl(ctx: Ctx) -> None:
     candidate, so the action runs inside a quiet period and asserts only when
     the audit log shows no other catalog change since the request.
     """
+    with quiet.held("rollouts:paced_ddl", 60, exclusive=True) as paused:
+        if paused is None:
+            log("paced_ddl: another quiet period is active; skipping")
+            return
+        _paced_ddl(ctx)
+
+
+def _paced_ddl(ctx: Ctx) -> None:
     host = ctx.env.sql_host()
     interval = ddl_check_interval_seconds(host)
     q = READ_ONLY_BOOTSTRAP_SECONDS + interval
     bound = PACED_DDL_K * q + T_ROLLOUT_SECONDS
     wedged_bound = PACED_DDL_WEDGED_FACTOR * bound
     gap_menu = [q, q + 1, 1.5 * q, 2 * q]
-    bursts_window = q + (PACED_DDL_BURSTS - 1) * max(gap_menu)
-    # Covers the SQL recovery wait, the settle wait, the bursts, and the
-    # performance bound. The wedge bound's tail gets its own request below,
-    # only if the rollout is still in flight.
-    request_quiet_period(int(2 * RECOVERY_SECONDS + bursts_window + bound + 60))
     if not wait_for_sql(host, RECOVERY_SECONDS):
         log("paced_ddl: environment did not recover; skipping")
         return
@@ -1523,16 +1527,8 @@ def action_paced_ddl(ctx: Ctx) -> None:
     bursts = 0
     last_burst = start
     reached_after: float | None = None
-    tail_quiet_requested = False
     last: Snapshot | None = None
     while bursts < PACED_DDL_BURSTS or time.monotonic() - last_burst < wedged_bound:
-        if (
-            not tail_quiet_requested
-            and bursts >= PACED_DDL_BURSTS
-            and time.monotonic() - last_burst >= bound
-        ):
-            request_quiet_period(int(wedged_bound - bound + 60))
-            tail_quiet_requested = True
         snap = ctx.poll()
         if snap is not None:
             last = snap
@@ -1618,15 +1614,17 @@ ACTION_FNS = {
 }
 
 
-def normalize(ctx: Ctx, action: str) -> None:
+def normalize(ctx: Ctx, action: str) -> bool:
     """Undo strategy and timeout overrides a killed invocation may have left behind.
 
     Neither field is part of the generated resources, so restoring them
     neither starts nor cancels a rollout.
+
+    Returns whether the defaults were observed or their patch acknowledged.
     """
     snap = ctx.kube.try_snapshot()
     if snap is None:
-        return
+        return False
     changes: dict[str, Any] = {}
     if (
         snap.spec.get("rolloutStrategy", DEFAULT_ROLLOUT_STRATEGY)
@@ -1639,7 +1637,9 @@ def normalize(ctx: Ctx, action: str) -> None:
     ):
         changes["rolloutRequestTimeout"] = DEFAULT_ROLLOUT_REQUEST_TIMEOUT
     if changes:
-        submit(ctx, action, changes)
+        _, stored = submit_patch(ctx, action, changes)
+        return stored is not None
+    return True
 
 
 def watch_overlap(ctx: Ctx, seconds: float) -> None:
@@ -2700,6 +2700,7 @@ class OperatorUnstick:
     origin: str
     normalized: bool = False
     fresh_requested: bool = False
+    fresh_request_id: str | None = None
 
     def step(self) -> tuple[Snapshot, bool]:
         """A fresh snapshot, and whether this step requested a fresh rollout.
@@ -2707,22 +2708,38 @@ class OperatorUnstick:
         Raises `TRANSIENT_ERRORS`.
         """
         if not self.normalized:
-            normalize(self.ctx, f"{self.origin}_normalize")
+            if not normalize(self.ctx, f"{self.origin}_normalize"):
+                return self.ctx.kube.snapshot(), False
             snap = self.ctx.kube.snapshot()
             if snap.reason == "ReadyToPromote" and snap.request is not None:
-                submit(
+                _, stored = submit_patch(
                     self.ctx, f"{self.origin}_promote", {"forcePromote": snap.request}
                 )
+                if stored is None:
+                    return snap, False
             self.normalized = True
         snap = self.ctx.kube.snapshot()
+        if self.fresh_request_id is not None and snap.request == self.fresh_request_id:
+            self.fresh_requested = True
         if (
             not self.fresh_requested
             and snap.condition_status == "False"
             and snap.reason in ("RolloutTimeout", "FailedDeploy", "WaitingForApproval")
         ):
-            submit(self.ctx, f"{self.origin}_fresh_request", new_request())
-            self.fresh_requested = True
-            return snap, True
+            if self.fresh_request_id is None:
+                self.fresh_request_id = new_request()["requestRollout"]
+            # Retry the same request after an indeterminate response, so a
+            # patch that landed cannot be superseded by its own retry.
+            _, stored = submit_patch(
+                self.ctx,
+                f"{self.origin}_fresh_request",
+                {
+                    "requestRollout": self.fresh_request_id,
+                    "forceRollout": self.fresh_request_id,
+                },
+            )
+            self.fresh_requested = stored is not None
+            return snap, self.fresh_requested
         return snap, False
 
 

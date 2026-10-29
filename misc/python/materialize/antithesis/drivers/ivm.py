@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -108,6 +109,7 @@ LOAD_BUDGET_S = (10.0, 60.0)
 LOAD_OPS_MENU = (10, 50, 200)
 SETUP_OPS = 40
 WATCHDOG_GRACE_S = 120.0
+FINAL_CHECK_BUDGET_S = 300.0
 
 KIND_EQUAL = {
     "filter_map": "ivm: the filter_map view equals the reference at every closed timestamp",
@@ -815,6 +817,7 @@ def _report(w: Window, db: sqlite3.Connection) -> None:
         "frontier": stream.frontier,
         "steps": checker.steps,
         "clean": w.clean,
+        "replica_kill_step": w.steps_at_kill,
     }
     always(
         not stream.late,
@@ -826,12 +829,28 @@ def _report(w: Window, db: sqlite3.Connection) -> None:
         "ivm: SUBSCRIBE progress timestamps never go backwards",
         {**details, "regressions": stream.regressions[:10]},
     )
+    _report_views(checker, details)
+    gen = w.gen
+    if gen is not None:
+        row = db.execute(
+            "SELECT max(ts) FROM generations_seen WHERE gen < ?", (gen,)
+        ).fetchone()
+        earlier = None if row is None or row[0] is None else int(row[0])
+        sometimes(
+            earlier is not None and earlier >= stream.as_of,
+            "ivm: a SUBSCRIBE window replayed history from before an environmentd generation change",
+            {**details, "gen": gen, "earlier_gen_served_through": earlier},
+        )
+    _check_writes(w, db, details)
+
+
+def _report_views(checker: model.ViewChecker, details: dict[str, Any]) -> None:
     negative = {
         t: s.negative for t, s in checker.stats.items() if s.negative is not None
     }
     always(
         not negative,
-        "ivm: consolidated SUBSCRIBE state never has a negative multiplicity",
+        "ivm: consolidated checked state never has a negative multiplicity",
         {**details, "negative": negative},
     )
     for view in model.VIEWS:
@@ -848,7 +867,6 @@ def _report(w: Window, db: sqlite3.Connection) -> None:
                 "kind": view.kind,
                 "mismatches": mismatches,
                 "first_mismatch_time": checker.first_mismatch_time,
-                "replica_kill_step": w.steps_at_kill,
             },
         )
         sometimes(
@@ -872,45 +890,11 @@ def _report(w: Window, db: sqlite3.Connection) -> None:
         "ivm: an outer join view held a NULL-extended row at a compared timestamp",
         details,
     )
-    gen = w.gen
-    if gen is not None:
-        row = db.execute(
-            "SELECT max(ts) FROM generations_seen WHERE gen < ?", (gen,)
-        ).fetchone()
-        earlier = None if row is None or row[0] is None else int(row[0])
-        sometimes(
-            earlier is not None and earlier >= stream.as_of,
-            "ivm: a SUBSCRIBE window replayed history from before an environmentd generation change",
-            {**details, "gen": gen, "earlier_gen_served_through": earlier},
-        )
-    _check_writes(w, db, details)
 
 
 def _check_writes(w: Window, db: sqlite3.Connection, details: dict[str, Any]) -> None:
-    ids = sorted(w.seen_ids)
-    ledger: dict[int, model.WriteOp] = {}
-    for chunk in range(0, len(ids), 500):
-        part = ids[chunk : chunk + 500]
-        marks = ", ".join("?" * len(part))
-        for r in db.execute(
-            "SELECT op_id, outcome, invoke_rt, complete_rt, commit_ts FROM writes"
-            f" WHERE op_id IN ({marks})",
-            part,
-        ):
-            ledger[int(r[0])] = model.WriteOp(
-                int(r[0]), str(r[1]), float(r[2]), r[3], r[4]
-            )
-    violations = model.write_id_violations(w.seen_ids, ledger)
-    always(
-        not violations["rejected"] and not violations["unknown"],
-        "ivm: every base row carries the id of a write that was attempted and not definitely rejected",
-        {**details, **violations},
-    )
-    always(
-        not violations["commit_ts_conflicts"],
-        "ivm: every SUBSCRIBE sees a write's rows inserted at one commit timestamp",
-        {**details, "conflicts": violations["commit_ts_conflicts"]},
-    )
+    ledger = _load_write_ledger(sorted(w.seen_ids), db)
+    _report_write_ids(w.seen_ids, ledger, details)
     with db:
         for op_id, times in w.seen_ids.items():
             exact = sorted(t for t in times if t is not None)
@@ -931,6 +915,42 @@ def _check_writes(w: Window, db: sqlite3.Connection, details: dict[str, Any]) ->
         not order,
         "ivm: a write acknowledged before another began never commits at a later timestamp",
         {"violations": order, "writes_with_commit_ts": len(ops)},
+    )
+
+
+def _load_write_ledger(
+    ids: list[int], db: sqlite3.Connection
+) -> dict[int, model.WriteOp]:
+    ledger: dict[int, model.WriteOp] = {}
+    for chunk in range(0, len(ids), 500):
+        part = ids[chunk : chunk + 500]
+        marks = ", ".join("?" * len(part))
+        for r in db.execute(
+            "SELECT op_id, outcome, invoke_rt, complete_rt, commit_ts FROM writes"
+            f" WHERE op_id IN ({marks})",
+            part,
+        ):
+            ledger[int(r[0])] = model.WriteOp(
+                int(r[0]), str(r[1]), float(r[2]), r[3], r[4]
+            )
+    return ledger
+
+
+def _report_write_ids(
+    seen_ids: dict[int, set[int | None]],
+    ledger: dict[int, model.WriteOp],
+    details: dict[str, Any],
+) -> None:
+    violations = model.write_id_violations(seen_ids, ledger)
+    always(
+        not violations["rejected"] and not violations["unknown"],
+        "ivm: every base row carries the id of a write that was attempted and not definitely rejected",
+        {**details, **violations},
+    )
+    always(
+        not violations["commit_ts_conflicts"],
+        "ivm: every SUBSCRIBE sees a write's rows inserted at one commit timestamp",
+        {**details, "conflicts": violations["commit_ts_conflicts"]},
     )
 
 
@@ -976,4 +996,89 @@ def check_main() -> int:
             _maybe_save_resume(w, db)
         if not w.clean:
             time.sleep(1.0)
+    return 0
+
+
+def _final_snapshot(host: str) -> bool:
+    with _connect(host, CLUSTER) as conn:
+        conn.execute("SET transaction_isolation = 'strict serializable'")
+        rows = conn.execute(
+            "SELECT mz_now()::text, tag, c1, c2, c3, c4, c5"
+            f" FROM ({model.subscribe_query()}) AS q".encode()
+        ).fetchall()
+    # The global reduce always emits one row, even with empty inputs.
+    if not rows:
+        return False
+    timestamps = {int(r[0]) for r in rows}
+    always(
+        len(timestamps) == 1,
+        "ivm: a final strict read observes one timestamp across all inputs and maintained views",
+        {"timestamps": sorted(timestamps)},
+    )
+    contents: dict[str, model.Bag] = {}
+    for row in rows:
+        contents.setdefault(str(row[1]), Counter())[_row(row[2:])] += 1
+    checker = model.ViewChecker()
+    timestamp = min(timestamps)
+    checker.check(contents, model.Step(timestamp, frozenset(contents)))
+    details = {"scope": "finally", "timestamp": timestamp}
+    _report_views(checker, details)
+    seen_ids: dict[int, set[int | None]] = {}
+    for tag_name, bag in contents.items():
+        for row in bag:
+            op_id = model.written_ids(tag_name, row)
+            if op_id is not None:
+                seen_ids[op_id] = {None}
+    db = open_state()
+    try:
+        _report_write_ids(seen_ids, _load_write_ledger(sorted(seen_ids), db), details)
+    finally:
+        db.close()
+    return True
+
+
+def final_main() -> int:
+    """Compare a current cut after drivers and faults stop, bounded at the client."""
+    db = open_state()
+    try:
+        initialized = db.execute("SELECT 1 FROM writes LIMIT 1").fetchone() is not None
+    finally:
+        db.close()
+    if not initialized:
+        log("no IVM writes were attempted")
+        return 0
+    result: dict[str, Any] = {"compared": False, "error": None}
+    stop = threading.Event()
+    end = time.monotonic() + FINAL_CHECK_BUDGET_S
+
+    def compare() -> None:
+        try:
+            host = Environment().sql_host()
+            while time.monotonic() < end and not stop.is_set():
+                try:
+                    if _final_snapshot(host):
+                        result["compared"] = True
+                        return
+                except (psycopg.Error, OSError) as e:
+                    _note_read_error(e, "final snapshot", None)
+                    result["error"] = str(e)
+                stop.wait(1.0)
+        except Exception as e:
+            result["error"] = str(e)
+
+    worker = threading.Thread(target=compare, name="ivm-final", daemon=True)
+    worker.start()
+    worker.join(FINAL_CHECK_BUDGET_S)
+    compared = not worker.is_alive() and result["compared"]
+    stop.set()
+    always(
+        compared,
+        "ivm: every maintained view can be compared with a current reference after faults stop",
+        {"budget_s": FINAL_CHECK_BUDGET_S, "error": result["error"]},
+    )
+    sometimes(
+        compared,
+        "ivm: a final current read checked every maintained view after faults stopped",
+        {},
+    )
     return 0

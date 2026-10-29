@@ -207,6 +207,8 @@ class Report:
     internal: list[dict[str, Any]] = field(default_factory=list)
     """One operation saw two different sets for a key, or two counts for one
     read-modify-write."""
+    invalid_rmw_counts: list[dict[str, Any]] = field(default_factory=list)
+    """Counts outside the range of writes that could have preceded the read."""
     incompatible_orders: list[dict[str, Any]] = field(default_factory=list)
     rmw_self_reads: list[dict[str, Any]] = field(default_factory=list)
     stale_reads: list[dict[str, Any]] = field(default_factory=list)
@@ -443,6 +445,7 @@ class _Analysis:
         self.reads: dict[int, dict[int, frozenset[int]]] = {}
         """Read op id to the set it observed per key, valid values only."""
         self.rmw_counts: dict[int, int] = {}
+        self.rmw_observed_by: dict[int, float] = {}
         self.key_reads: dict[int, list[tuple[int, frozenset[int]]]] = defaultdict(list)
         self.bad_keys: set[int] = set()
         self.layers: dict[int, list[list[int]]] = {}
@@ -457,6 +460,7 @@ class _Analysis:
 
     def run(self) -> Report:
         self._collect_reads()
+        self._rmw_count_bounds()
         self._infer_orders()
         self._data_edges()
         self._rmw_edges()
@@ -513,10 +517,34 @@ class _Analysis:
                         )
                     else:
                         kept.add(v)
+                expected_counts = {v for v in kept if self.writers[v].kind is Kind.RMW}
+                count_ids = Counter(v for v, _ in obs.counts)
+                if set(count_ids) != expected_counts or any(
+                    n != 1 for n in count_ids.values()
+                ):
+                    r.internal.append(
+                        {
+                            "read": op.op_id,
+                            "key": obs.key,
+                            "path": obs.path,
+                            "missing_counts": _sample(
+                                expected_counts - count_ids.keys()
+                            ),
+                            "unexpected_counts": _sample(
+                                count_ids.keys() - expected_counts
+                            ),
+                            "repeated_counts": _sample(
+                                v for v, n in count_ids.items() if n != 1
+                            ),
+                        }
+                    )
                 for v, count in obs.counts:
                     w = self.writers.get(v)
                     if w is None or w.kind is not Kind.RMW or v not in kept:
                         continue
+                    self.rmw_observed_by[v] = min(
+                        self.rmw_observed_by.get(v, op.complete), op.complete
+                    )
                     prior = self.rmw_counts.setdefault(v, count)
                     if prior != count:
                         r.internal.append(
@@ -547,6 +575,42 @@ class _Analysis:
                 self.reads[op.op_id] = per_key
                 for k, s in per_key.items():
                     self.key_reads[k].append((op.op_id, s))
+
+    def _rmw_count_bounds(self) -> None:
+        invoked: dict[int, list[float]] = defaultdict(list)
+        acked: dict[int, list[float]] = defaultdict(list)
+        for w in self.writers.values():
+            if w.write_key is None or w.outcome is Outcome.FAIL:
+                continue
+            invoked[w.write_key].append(w.invoke)
+            if w.acked:
+                assert w.complete is not None
+                acked[w.write_key].append(w.complete)
+        for times in (*invoked.values(), *acked.values()):
+            times.sort()
+        for rmw_id, n in sorted(self.rmw_counts.items()):
+            w = self.writers[rmw_id]
+            k = w.read_key
+            if k is None:
+                continue
+            # An error does not bound an indeterminate write's commit. Its
+            # first observation does, including a write abandoned by a driver.
+            end = w.complete if w.acked else self.rmw_observed_by[rmw_id]
+            assert end is not None
+            maximum = bisect.bisect_left(invoked[k], end) - (w.write_key == k)
+            minimum = (
+                bisect.bisect_left(acked[k], w.invoke) if w.isolation == STRICT else 0
+            )
+            if not minimum <= n <= maximum:
+                self.report.invalid_rmw_counts.append(
+                    {
+                        "rmw": rmw_id,
+                        "key": k,
+                        "count": n,
+                        "minimum": minimum,
+                        "maximum": maximum,
+                    }
+                )
 
     def _infer_orders(self) -> None:
         keys = set(self.key_reads) | {
@@ -629,6 +693,8 @@ class _Analysis:
 
     def _rmw_edges(self) -> None:
         for rmw_id, n in sorted(self.rmw_counts.items()):
+            if n < 0:
+                continue
             w = self.writers[rmw_id]
             k = w.read_key
             if k is None or k in self.bad_keys or k not in self.layers:
