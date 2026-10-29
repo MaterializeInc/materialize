@@ -66,13 +66,13 @@ fn fixed(interval_ms: u64) -> FreshnessTree {
 
 /// The tree of the walk over `index_ids` and `source_ids`, where source 10 is an ingestion in
 /// storage, source 11 an ingestion in storage, source 12 a compute object, and index 20 a
-/// compute introspection collection.
-fn walk(
+/// compute introspection collection. Source 13 and index 22 have no tree.
+fn walk_with_inputs(
     index_ids: &[u64],
     source_ids: &[u64],
     used: &[u64],
     schedule: Option<&RefreshSchedule>,
-) -> Result<Option<FreshnessTree>, TimeDependenceError> {
+) -> Result<(Option<FreshnessTree>, BTreeSet<GlobalId>), TimeDependenceError> {
     let used: BTreeSet<_> = used.iter().copied().map(gid).collect();
     walk_freshness_trees(
         index_ids.iter().copied().map(gid),
@@ -81,6 +81,7 @@ fn walk(
         schedule,
         |id| match id {
             GlobalId::User(20) => Ok(Some(fixed(1000))),
+            GlobalId::User(22) => Ok(None),
             id => Err(CollectionMissing(id)),
         },
         |id| match id {
@@ -96,6 +97,23 @@ fn walk(
             _ => None,
         },
     )
+}
+
+/// The tree of [`walk_with_inputs`].
+fn walk(
+    index_ids: &[u64],
+    source_ids: &[u64],
+    used: &[u64],
+    schedule: Option<&RefreshSchedule>,
+) -> Result<Option<FreshnessTree>, TimeDependenceError> {
+    walk_with_inputs(index_ids, source_ids, used, schedule).map(|(tree, _)| tree)
+}
+
+#[mz_ore::test]
+fn freshness_walk_inputs_have_a_tree() {
+    let (_, inputs) =
+        walk_with_inputs(&[20, 22], &[10, 11, 12, 13], &[10, 12, 13, 20, 22], None).unwrap();
+    assert_eq!(inputs, BTreeSet::from([gid(10), gid(12), gid(20)]));
 }
 
 #[mz_ore::test]
