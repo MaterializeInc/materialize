@@ -500,8 +500,46 @@ mz_probe  r1  scale=1,workers=2
 mz_system  r1  scale=1,workers=2
 quickstart  r1  scale=1,workers=2
 
+# Chained replica renames must be staged together for rollback and commit.
 statement ok
 CREATE CLUSTER REPLICA quickstart.foo_bar SIZE 'scale=1,workers=1'
+
+statement ok
+BEGIN
+
+statement ok
+ALTER CLUSTER REPLICA quickstart.foo_bar RENAME TO txn_intermediate
+
+statement ok
+ALTER CLUSTER REPLICA quickstart.txn_intermediate RENAME TO txn_final
+
+statement ok
+ROLLBACK
+
+query T
+SELECT r.name FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'quickstart' AND r.name <> 'r1'
+----
+foo_bar
+
+statement ok
+BEGIN
+
+statement ok
+ALTER CLUSTER REPLICA quickstart.foo_bar RENAME TO txn_intermediate
+
+statement ok
+ALTER CLUSTER REPLICA quickstart.txn_intermediate RENAME TO txn_final
+
+statement ok
+COMMIT
+
+query T
+SELECT r.name FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'quickstart' AND r.name <> 'r1'
+----
+txn_final
+
+statement ok
+ALTER CLUSTER REPLICA quickstart.txn_final RENAME TO foo_bar
 
 statement error Expected dot, found RENAME
 ALTER CLUSTER REPLICA quickstart RENAME TO bar_foo
