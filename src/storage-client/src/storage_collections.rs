@@ -2105,8 +2105,9 @@ impl StorageCollections for StorageCollectionsImpl {
                 DataSource::Progress | DataSource::Other => {
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Ingestion(_) => {
+                DataSource::Ingestion(ingestion) => {
                     self_collections.insert(id, collection_state);
+                    link_remap_freshness(&mut self_collections, id, ingestion.remap_collection_id);
                 }
                 DataSource::Sink { .. } => {
                     self_collections.insert(id, collection_state);
@@ -2666,7 +2667,8 @@ fn set_timestamp_interval(
 /// Determines how the frontier of the new collection `id` follows arrival time.
 ///
 /// Mirrors the filtering of `time_dependence`, except that load generators are ingestions with
-/// a known tick interval and therefore have a tree.
+/// a known tick interval and therefore have a tree, and that progress collections get their tree
+/// from `link_remap_freshness`.
 fn freshness_tree_for(id: GlobalId, description: &CollectionDescription) -> Option<FreshnessTree> {
     use DataSource::*;
     if let Some(timeline) = &description.timeline
@@ -2680,13 +2682,38 @@ fn freshness_tree_for(id: GlobalId, description: &CollectionDescription) -> Opti
         IngestionExport { ingestion_id, .. } => FreshnessLeaf::Ingestion(*ingestion_id),
         // Tables, webhooks, and storage-managed collections tick once per second at an
         // unknown phase.
-        Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
+        Introspection(_) | Table { .. } | Webhook { .. } => {
             FreshnessLeaf::Fixed(Ticker::Unaligned { interval_ms: 1000 })
         }
+        // A progress collection follows the timestamp interval of its ingestion, which its own
+        // description does not name. `link_remap_freshness` sets its tree.
+        Progress => return None,
         // Materialized views, etc, aren't managed by storage.
         Other | Sink { .. } => return None,
     };
     Some(FreshnessTree::Leaf(leaf))
+}
+
+/// Gives the remap collection `remap_id` of the just registered ingestion `id` the ingestion's
+/// ticker, if the ingestion has a freshness tree.
+///
+/// NOTE: The remap collection is always registered before its ingestion, because the ingestion's
+/// initial since and read holds require it.
+fn link_remap_freshness(
+    collections: &mut BTreeMap<GlobalId, CollectionState>,
+    id: GlobalId,
+    remap_id: GlobalId,
+) {
+    if remap_id == id
+        || collections
+            .get(&id)
+            .map_or(true, |c| c.freshness_tree.is_none())
+    {
+        return;
+    }
+    if let Some(remap) = collections.get_mut(&remap_id) {
+        remap.freshness_tree = Some(FreshnessTree::Leaf(FreshnessLeaf::Ingestion(id)));
+    }
 }
 
 /// State maintained about individual collections.
@@ -3473,6 +3500,76 @@ mod tests {
             Some(Ticker::Aligned { interval_ms: 250 })
         );
         assert_eq!(lookup.ingestion_ticker(table), None);
+    }
+
+    #[mz_ore::test]
+    fn freshness_tree_skips_non_storage_collections() {
+        let id = GlobalId::User(1);
+        let mv = CollectionDescription::for_other(RelationDesc::empty(), None);
+        assert_eq!(freshness_tree_for(id, &mv), None, "materialized view");
+        let progress = CollectionDescription {
+            data_source: DataSource::Progress,
+            timeline: Some(Timeline::EpochMilliseconds),
+            ..mv.clone()
+        };
+        assert_eq!(freshness_tree_for(id, &progress), None, "progress");
+        assert_eq!(
+            freshness_tree_for(id, &CollectionDescription::for_table(RelationDesc::empty())),
+            Some(FreshnessTree::Leaf(FreshnessLeaf::Fixed(
+                Ticker::Unaligned { interval_ms: 1000 }
+            ))),
+            "table",
+        );
+    }
+
+    #[mz_ore::test]
+    fn remap_collection_follows_its_ingestion() {
+        let metadata = CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            },
+            data_shard: ShardId::new(),
+            relation_desc: RelationDesc::empty(),
+            txns_shard: None,
+        };
+        let state = |tree| {
+            CollectionState::new(
+                None,
+                None,
+                tree,
+                None,
+                None,
+                Antichain::from_elem(Timestamp::MIN),
+                Antichain::from_elem(Timestamp::MIN),
+                Vec::new(),
+                metadata.clone(),
+            )
+        };
+        let ingestion = GlobalId::User(2);
+        let remap = GlobalId::User(1);
+        let ingestion_tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(ingestion));
+
+        let mut collections = BTreeMap::from([
+            (remap, state(None)),
+            (ingestion, state(Some(ingestion_tree.clone()))),
+        ]);
+        link_remap_freshness(&mut collections, ingestion, remap);
+        assert_eq!(
+            collections[&remap].freshness_tree,
+            Some(ingestion_tree.clone())
+        );
+
+        // An ingestion without a tree, for example outside the epoch timeline, leaves its remap
+        // collection without one.
+        let mut collections = BTreeMap::from([(remap, state(None)), (ingestion, state(None))]);
+        link_remap_freshness(&mut collections, ingestion, remap);
+        assert_eq!(collections[&remap].freshness_tree, None);
+
+        // An ingestion that is its own remap collection keeps its tree.
+        let mut collections = BTreeMap::from([(ingestion, state(Some(ingestion_tree.clone())))]);
+        link_remap_freshness(&mut collections, ingestion, ingestion);
+        assert_eq!(collections[&ingestion].freshness_tree, Some(ingestion_tree));
     }
 
     #[mz_ore::test(tokio::test)]
