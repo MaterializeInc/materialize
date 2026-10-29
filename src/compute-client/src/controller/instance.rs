@@ -39,7 +39,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
-use mz_storage_types::freshness::recorder::RecorderConfig;
+use mz_storage_types::freshness::recorder::{PeriodRow, RecorderConfig};
 use mz_storage_types::freshness::{FreshnessTree, TickerLookup};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -1369,7 +1369,14 @@ impl Instance {
     /// Remove an existing instance replica, by ID.
     #[mz_ore::instrument(level = "debug")]
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        let replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
+        let mut replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
+
+        // The replica's collections go away with it, which ends their freshness recordings.
+        for (collection_id, collection) in &mut replica.collections {
+            if let Some(mut recording) = collection.freshness.take() {
+                self.deliver_freshness_rows(*collection_id, Some(id), recording.finish());
+            }
+        }
 
         // Before dropping the replica state (and the contained input read holds), log read holds
         // that are the last line of defense against compaction of a dataflow's storage inputs. If
@@ -1822,9 +1829,10 @@ impl Instance {
 
             // Mark the collection as dropped to allow it to be removed from the controller state.
             collection.dropped = true;
-            // The frontiers of a dropped collection become empty, which must not close its open
-            // periods as if the collection were complete.
-            collection.freshness = None;
+            // The frontiers of a dropped collection are not recorded anymore, so its recordings
+            // end here, with their open periods holding the arrivals up to the last observed
+            // frontier.
+            let recording = collection.freshness.take();
 
             // Drop the implied and warmup read holds to announce that clients are not
             // interested in the collection anymore.
@@ -1838,9 +1846,15 @@ impl Instance {
             // ceases to produce `CopyToResponse`s` for this copy to.
             self.copy_tos.remove(id);
 
+            let mut recordings = vec![(None, recording)];
             for replica in self.replicas.values_mut() {
                 if let Some(collection) = replica.collections.get_mut(id) {
-                    collection.freshness = None;
+                    recordings.push((Some(replica.id), collection.freshness.take()));
+                }
+            }
+            for (replica_id, recording) in recordings {
+                if let Some(mut recording) = recording {
+                    self.deliver_freshness_rows(*id, replica_id, recording.finish());
                 }
             }
         }
@@ -2078,12 +2092,21 @@ impl Instance {
             }
         };
         let rows = recording
-            .get_or_insert_with(FreshnessRecording::at_first_observation)
+            .get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms))
             .observe(&tree, &frontier, now_ms, &config);
+        self.deliver_freshness_rows(id, replica_id, rows);
+    }
+
+    /// Delivers freshness histogram `rows` of collection `id`, globally or on `replica_id`.
+    fn deliver_freshness_rows(
+        &self,
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        rows: Vec<PeriodRow>,
+    ) {
         if rows.is_empty() {
             return;
         }
-
         let updates = freshness::pack_rows(rows, id, replica_id, &self.histogram_labels());
         let type_ = match replica_id {
             None => IntrospectionType::WallclockFreshnessHistogram,
