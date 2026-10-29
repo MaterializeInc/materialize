@@ -38,7 +38,7 @@ use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{
     CLUSTER, CLUSTER_REPLICA, IsolationLevel, TRANSACTION_ISOLATION, Var, VarInput,
 };
-use mz_sql_parser::ast::{CopyDirection, ExplainStage, ShowStatement, Statement};
+use mz_sql_parser::ast::{CopyDirection, ExplainStage, ShowStatement, Statement, StatementKind};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
@@ -120,15 +120,7 @@ impl PeekClient {
         // Before planning, check if this is a statement type we can handle.
         // This must happen BEFORE statement logging setup to avoid orphaned execution records.
         if let Some(ref stmt) = stmt {
-            if matches!(
-                &**stmt,
-                Statement::ExplainPlan(_)
-                    | Statement::ExplainPushdown(_)
-                    | Statement::ExplainAnalyzeObject(_)
-                    | Statement::ExplainAnalyzeCluster(_)
-                    | Statement::ExplainSinkSchema(_)
-                    | Statement::ExplainTimestamp(_)
-            ) {
+            if StatementKind::from(&**stmt).is_explain() {
                 session.transaction_mut().record_explain()?;
             }
             match &**stmt {

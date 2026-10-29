@@ -1325,6 +1325,12 @@ impl Coordinator {
         //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
         //    awaits dequeuing caused by the lock being released.
 
+        if StatementKind::from(&*stmt).is_explain() {
+            if let Err(error) = ctx.session_mut().transaction_mut().record_explain() {
+                return ctx.retire(Err(error));
+            }
+        }
+
         // For `Started`, this separates the first statement of an extended-protocol
         // pipeline from a later one that joins the ops staged before it.
         let txn_contains_ops = ctx.session().transaction().contains_ops();
@@ -1394,19 +1400,14 @@ impl Coordinator {
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
                     | Statement::Subscribe(_)
-                    | Statement::Raise(_) => {
-                        // Always safe.
-                    }
-
-                    Statement::ExplainPlan(_)
+                    | Statement::Raise(_)
+                    | Statement::ExplainPlan(_)
                     | Statement::ExplainPushdown(_)
                     | Statement::ExplainAnalyzeObject(_)
                     | Statement::ExplainAnalyzeCluster(_)
                     | Statement::ExplainSinkSchema(_)
                     | Statement::ExplainTimestamp(_) => {
-                        if let Err(error) = ctx.session_mut().transaction_mut().record_explain() {
-                            return ctx.retire(Err(error));
-                        }
+                        // Always safe.
                     }
 
                     Statement::Insert(InsertStatement {
