@@ -147,7 +147,7 @@ Rows store b, so a configuration change does not mix incompatible rows within a 
 All relations live in `mz_internal` next to the existing wallclock lag relations, which stay unchanged.
 Implementer's call: follow the pattern of `mz_wallclock_global_lag_histogram_raw`, a raw builtin source whose update diff is the count in virtual arrivals, plus a view that exposes `count`.
 
-* A global histogram, written from the global write frontier: `period_start`, `period_end`, `object_id`, `measure` (`'end_to_end'` or `'local'`), `buckets_per_octave`, `bucket`, `labels`, and `count` in the view.
+* A global histogram, written from the global write frontier: `period_start`, `period_end`, `object_id`, `measure` (`'end_to_end'`, `'local'` or `'skew'`), `buckets_per_octave`, `bucket`, `labels`, and `count` in the view.
 * A per-replica histogram with the same columns plus `replica_id`, as a diagnostic.
 * A progress view with `object_id`, nullable `replica_id` (null for global) and `covered_until`, the largest emitted end-to-end period end, computed from the histograms. If the view is expensive for the Console, it can become a maintained index.
 
@@ -158,18 +158,37 @@ As today, exactly one controller writes the global rows of an object: the comput
 The recorder hooks every `Frontiers` response, not the 1s maintenance tick, and the advance time is when the controller observes the response.
 The measured latency therefore includes the protocol hop to the controller, which the reported value includes today as well.
 
-### Local delay
+### Local delay and skew
 
 End-to-end latency shows how stale an object is, but not which hop in a chain of sources, views and indexes adds the lag.
-Local delay answers that: for each arrival, the time the object made it visible minus the time its slowest direct input had made it visible.
-It uses the same virtual arrivals, windows, periods and finality as the end-to-end histogram and is stored in the same relations with `measure = 'local'`, so per period the local and end-to-end counts are equal.
-Each collection keeps a visibility log of its own reflected arrival time and the time the controller observed it, and a consumer reads its inputs' logs.
-Logging reflected arrival time instead of raw frontiers keeps a refresh wait on the refreshing view, because a REFRESH view's frontier passes leaf timestamps before its data is visible.
+Each arrival's end-to-end charge splits into three parts, which sum to it exactly:
 
-Local delay may understate and never overstates.
-An input without a freshness tree is skipped, an input whose log cannot answer an arrival counts as ready at the observation (local delay 0), and an input with an empty frontier logs that it is complete from then on.
-Storage-owned collections have no inputs inside Materialize, so their local delay equals their end-to-end latency.
-Logs are pruned through what their consumers have recorded, with an age cap as a backstop, and are not restored across restarts.
+* Upstream: from the window start until the slowest direct input showed the arrival. This is that input's own end-to-end latency, so following the slowest input hop by hop walks the critical path.
+* Skew: from then until every direct input's frontier passed the timestamp the object needs for the arrival, $T(a) = \max_k \lceil a \rceil_{i_k}$ under the object's tree without its own refresh node.
+* Local: from then until the object showed the arrival. This is what the hop itself adds.
+
+Skew is the wait that combining inputs causes without any input being late.
+A join of a 7 s and an 11 s input shows an arrival only once the 7 s input's frontier passes the 11 s timestamp, which happens at the 7 s input's next tick.
+On staging this wait was 1 s to 10 s per arrival for such a join, while the join's own processing took 30 to 130 ms.
+Charging the wait to local made healthy joins look like slow hops, and charging it to upstream would claim a delay that no input has.
+A join with one stalled input records the stall as upstream, and its local stays at its processing time.
+
+Local and skew use the same virtual arrivals, windows, periods and finality as the end-to-end histogram and are stored in the same relations with `measure = 'local'` and `measure = 'skew'`, so per period the counts of all three measures are equal.
+Upstream is not stored, because it is the slowest input's end-to-end latency for the same arrivals.
+Each collection keeps a visibility log of entries (frontier timestamp, reflected arrival time, observation time), and a consumer reads its inputs' logs.
+Upstream readiness uses the reflected arrival time, which keeps a refresh wait on the refreshing view, because a REFRESH view's frontier passes leaf timestamps before its data is visible.
+Skew readiness uses the frontier timestamp.
+All three use the controller's observation time, not the advance time clamped to the frontier, which overstated local when a frontier ran ahead of the wall clock.
+
+Local delay and skew may understate and never overstate.
+An input without a freshness tree is skipped, an input whose log cannot answer an arrival counts as ready at the observation, and an input with an empty frontier logs that it is complete from then on.
+Storage-owned collections have no inputs inside Materialize, so their local delay equals their end-to-end latency and their skew is 0.
+
+A log keeps what its consumers have not recorded yet, for as long as the consumer exists, including a consumer whose recording has not started.
+Expiring consumers by age lost the outage it was meant to measure: on staging, a view's replica was dropped for 10.5 minutes, its claim on its input's log expired at 10 minutes, and every arrival of the outage recorded the 5 s the new replica took to hydrate as its local delay.
+Instead, entries older than one period are thinned geometrically by age, keeping one entry per interval that doubles with age, so a log holds about $\log_2(\text{age} / \text{period})$ old entries plus the recent ones.
+A thinned entry answers with a later observation time, so thinning understates by less than the gap between kept entries and never overstates.
+Entries older than the histogram retention are dropped, consumer marks are cleared when their recording stops, and logs are not restored across restarts.
 
 ### Cost
 
@@ -216,6 +235,7 @@ The recorder's parameters are dyncfgs:
 * A recorder starts at the later of its as-of and its creation time. Collections that exist when the controller starts (a restart) start at their first observed frontier under policy `hole`.
 * Materialized views hand their freshness tree to the storage side for reporting, but only the compute controller writes their histogram rows.
 * Resolved trees are cached behind a generation counter, and D is cached per collection.
+* Each assignment window is charged its worst case, so a 1 s source records about 1 s plus processing for every arrival, not a spread from 0 to 1 s. Staging confirmed this, with a 100 ms source at 108 to 128 ms and a 1 s source at 1.0 to 1.2 s.
 
 The implementation is the stack #40330 to #40338.
 
