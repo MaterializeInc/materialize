@@ -42,7 +42,7 @@ This change has been rolled out to all Materialize Cloud environments and applie
 
 <red>*Materialize Cloud only*</red>
 
-The Console's redesigned **Freshness** page, under **Monitoring**, shows how far behind wall-clock time your objects are. Filter by cluster, time range, and object type to see p90, p99, p99.9, and maximum lag across the objects in scope, chart each object's lag over time, and list the objects whose lag exceeds a threshold you set, along with their hydration status. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
+The Console's new **Freshness** page lets you track aggregate freshness across your environment. Filter by cluster, time range, and object type to see p90, p99, p99.9, and pMax freshness across the objects. If you're not meeting your freshness target, use the page to find the lagging objects, and start to debug why. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
 
 ![Freshness page filtered to the materialized views on one cluster over 6 hours, showing p90, p99, p99.9, and pMAX lag, a lag over time chart with a 2-second threshold line, and a table of the objects that exceeded it](/images/releases/v2648_freshness.png)
 
