@@ -17,12 +17,12 @@ use std::collections::BTreeMap;
 use mz_expr::explain::{ExplainContext, ExplainMultiPlan, ExplainSource, enforce_linear_chains};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 
-use crate::plan::scalar::mfp_plan_lir_to_mir;
 use mz_repr::GlobalId;
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
 use crate::dataflows::{DataflowDescription, LirDataflowDescription};
 use crate::plan::LirRelationExpr;
+use crate::plan::scalar::mfp_plan_lir_to_mir;
 
 impl<'a> Explain<'a> for LirDataflowDescription {
     type Context = ExplainContext<'a>;
