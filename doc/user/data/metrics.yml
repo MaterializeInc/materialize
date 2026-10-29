@@ -3170,6 +3170,12 @@ metrics:
   help: count of when hostname diffs needed to be force applied
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_state_hollow_run_missing_on_delete
+  help: >-
+    count of hollow run blobs found already missing while deleting the parts they
+    reference
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_rollup_at_seqno_migration
   help: count of fetch_rollup_at_seqno calls that only worked because of the migration
   source: src/persist-client/src/internal/metrics.rs
