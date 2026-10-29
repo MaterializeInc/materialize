@@ -726,3 +726,20 @@ fn release_warm_keeps_a_slot_whose_punch_failed_warm() {
     );
     assert_eq!(s.alloc(class).unwrap(), slot, "the slot is still warm");
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn release_warm_takes_the_oldest_free_slots() {
+    let (_dir, s) = store(64 << 20);
+    let class = s.class_for(10_000).unwrap();
+    let size = u64::cast_from(s.class_size(class));
+    let slots: Vec<_> = (0..3).map(|_| s.alloc(class).unwrap()).collect();
+    for &slot in &slots {
+        s.free(slot);
+    }
+    assert_eq!(s.release_warm(size), size);
+    assert_eq!(s.alloc(class).unwrap(), slots[2], "the newest stays warm");
+    assert_eq!(s.alloc(class).unwrap(), slots[1]);
+    assert_eq!(s.allocated_bytes(), 2 * size, "the oldest was punched");
+}
