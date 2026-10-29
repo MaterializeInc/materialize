@@ -405,6 +405,12 @@ const renderWorkers = async (
 const findReplicaSelect = () =>
   screen.findByRole("combobox", { name: "Replica" });
 
+/** Reading waits for this click, so every test that reads starts here. */
+const startMeasuring = async () =>
+  userEvent.click(
+    await screen.findByRole("button", { name: "Start measuring" }),
+  );
+
 const optionsOf = (select: HTMLElement) =>
   within(select)
     .getAllByRole("option")
@@ -449,6 +455,7 @@ describe("ClusterWorkers", () => {
       r2: "100cc",
       r3: "200cc",
     });
+    await startMeasuring();
 
     const select = await findReplicaSelect();
     await waitFor(() => expect(select).toHaveValue("r1"));
@@ -465,6 +472,7 @@ describe("ClusterWorkers", () => {
       { r1: "25cc", r2: "100cc" },
       "?replica=r1",
     );
+    await startMeasuring();
 
     expect(await screen.findByText("1 worker")).toBeVisible();
     expect(await findReplicaSelect()).toHaveValue("r1");
@@ -487,6 +495,7 @@ describe("ClusterWorkers", () => {
       { r2: "100cc", r3: "200cc" },
       "?replica=r3",
     );
+    await startMeasuring();
     await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
 
     getStore().set(
@@ -498,8 +507,9 @@ describe("ClusterWorkers", () => {
     await waitFor(() => expect(openSessions(sessions)).toEqual([]));
   });
 
-  it("keeps a picked replica in the URL, and reads that replica", async () => {
+  it("keeps a picked replica in the URL, and reads that replica once asked", async () => {
     const { sessions } = await renderWorkers({ r2: "100cc", r3: "200cc" });
+    await startMeasuring();
     const select = await findReplicaSelect();
     await waitFor(() => expect(select).toHaveValue("r2"));
 
@@ -508,6 +518,9 @@ describe("ClusterWorkers", () => {
     expect(screen.getByTestId("location")).toHaveTextContent(
       "/u9/prod/workers?replica=r3",
     );
+    // Another replica's reads add load to it, so they wait to be asked too.
+    await waitFor(() => expect(openSessions(sessions)).toEqual([]));
+    await startMeasuring();
     await waitFor(() =>
       expect(
         openSessions(sessions).map(({ replicaName }) => replicaName),
@@ -575,6 +588,7 @@ describe("ClusterWorkers", () => {
     await renderWorkers({ r1: "100cc" }, "?replica=r1", {
       failing: "workerCpu",
     });
+    await startMeasuring();
 
     expect(
       await screen.findAllByText(/^Couldn't read worker CPU on r1:/),
@@ -597,12 +611,14 @@ describe("ClusterWorkers", () => {
     await renderWorkers({ r2: "100cc" }, "?replica=r2", {
       holdSnapshot: true,
     });
+    await startMeasuring();
 
     expect(await screen.findByText("Waiting for r2's counters.")).toBeVisible();
   });
 
   it("pauses and resumes its reads, closing its session while paused", async () => {
     const { sessions } = await renderWorkers({ r2: "100cc" }, "?replica=r2");
+    await startMeasuring();
     await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
     expect(
       await screen.findByText(/^Reading worker CPU on r2 every 5s/),
@@ -634,6 +650,7 @@ describe("ClusterWorkers", () => {
 
     it("closes its session, and reads again once the tab is shown", async () => {
       const { sessions } = await renderWorkers({ r2: "100cc" }, "?replica=r2");
+      await startMeasuring();
       await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
 
       act(() => setVisibility("hidden"));
@@ -653,11 +670,26 @@ describe("ClusterWorkers", () => {
     });
   });
 
+  it("reads nothing from the replica until asked to start measuring", async () => {
+    const { sessions } = await renderWorkers({ r2: "100cc" }, "?replica=r2");
+
+    expect(
+      await screen.findByText("Measure r2's 2 workers for a minute"),
+    ).toBeVisible();
+    expect(sessions).toEqual([]);
+    expect(screen.queryByText(/^Reading worker CPU/)).not.toBeInTheDocument();
+
+    await startMeasuring();
+
+    await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
+  });
+
   it("stops reading when the tab closes", async () => {
     const { sessions, unmount } = await renderWorkers(
       { r2: "100cc" },
       "?replica=r2",
     );
+    await startMeasuring();
     await waitFor(() => expect(sessions).toHaveLength(1));
 
     unmount();
@@ -717,6 +749,12 @@ describe("ClusterWorkers", () => {
       });
       await advanceUntil(() =>
         expect(
+          screen.getByRole("button", { name: "Start measuring" }),
+        ).toBeVisible(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Start measuring" }));
+      await advanceUntil(() =>
+        expect(
           screen.getByText(
             new RegExp(
               `^Reading worker CPU on ${name} every 5s since ${clockTime(0)}`,
@@ -748,8 +786,8 @@ describe("ClusterWorkers", () => {
         screen.getByText("Measuring r2's 2 workers for a minute (30s of 60s)"),
       ).toBeVisible();
       expect(
-        screen.getByRole("button", { name: "Measure again" }),
-      ).toBeDisabled();
+        screen.queryByRole("button", { name: "Measure again" }),
+      ).not.toBeInTheDocument();
       expect(screen.queryByText("Workers")).not.toBeInTheDocument();
       expect(screen.queryByText("Objects")).not.toBeInTheDocument();
 

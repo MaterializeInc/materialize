@@ -625,6 +625,24 @@ describe("createWorkerCpuSampler", () => {
     expect(replica.open()).toEqual([]);
   });
 
+  it("stays idle until started, even when the tab is hidden and shown", async () => {
+    const replica = createFakeReplica();
+    const sampler = createSampler(createStores());
+    sampler.setHidden(true);
+    sampler.setHidden(false);
+    await advance(10_000);
+
+    expect(sampler.getState().status).toBe("idle");
+    expect(replica.sessions).toEqual([]);
+
+    sampler.start();
+    sampler.start();
+    await advance(0);
+
+    expect(sampler.getState().status).toBe("reading");
+    expect(replica.sessions).toHaveLength(1);
+  });
+
   it("doesn't subscribe when it starts in a hidden tab", async () => {
     const replica = createFakeReplica();
     const sampler = createSampler(createStores());

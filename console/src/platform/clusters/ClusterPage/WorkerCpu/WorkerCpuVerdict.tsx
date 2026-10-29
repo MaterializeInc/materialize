@@ -7,7 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { HStack, Spinner, Text, useTheme, VStack } from "@chakra-ui/react";
+import {
+  Button,
+  HStack,
+  Spinner,
+  Text,
+  useTheme,
+  VStack,
+} from "@chakra-ui/react";
 import { greatest, mean } from "d3";
 import { millisecondsInMinute } from "date-fns/constants";
 import React from "react";
@@ -62,7 +69,11 @@ import {
   WorkerReplica,
   workersPerCore,
 } from "./workerCpuModel";
-import { WorkerCpuState } from "./workerCpuSampler";
+import {
+  READ_INTERVAL_MS,
+  SAMPLING_LIMIT_MS,
+  WorkerCpuState,
+} from "./workerCpuSampler";
 
 // Below this share of the replica's CPU, work outside the workers' dataflows
 // goes unmentioned.
@@ -176,6 +187,8 @@ export interface FirstLookProps {
   lastReading: WorkerCpuReading | undefined;
   lifetimeObjects: ObjectCpu | undefined;
   objectName: (objectId: string) => string;
+  /** Starts reading, for an `idle` sampler. */
+  onStart: (() => void) | undefined;
 }
 
 /** What's known before the first minute is measured. */
@@ -188,6 +201,7 @@ export const FirstLook = ({
   lastReading,
   lifetimeObjects,
   objectName,
+  onStart,
 }: FirstLookProps) => {
   // Metrics land about once a minute, so an older point is stale.
   const isCpuCurrent =
@@ -198,6 +212,41 @@ export const FirstLook = ({
     largestShare(lifetimeObjects.rows, lifetimeObjects.workerTotalsNs);
   const workers = `${replica.name}'s ${workerCount} ${pluralize(workerCount, "worker", "workers")}`;
   const progress = `${Math.floor(Math.min(measuredMs, MEASUREMENT_MS) / 1000)}s of ${MEASUREMENT_MS / 1000}s`;
+  if (status === "idle") {
+    return (
+      <Alert
+        variant="info"
+        label={`Measure ${workers} for a minute`}
+        message={
+          <VStack spacing={2} alignItems="stretch">
+            {isCpuCurrent && (
+              <Text>
+                {replica.name} is at{" "}
+                {formatPercentage(latestCpu.percent / 100, 0)} of its CPU.
+              </Text>
+            )}
+            <Text>
+              Measuring reads each worker&apos;s time on each object every{" "}
+              {READ_INTERVAL_MS / 1000}s, from a session on {replica.name}{" "}
+              itself, so it adds a little load there. It stops when you leave
+              the Workers tab, and pauses while the browser tab is hidden or
+              after {SAMPLING_LIMIT_MS / millisecondsInMinute} minutes.
+            </Text>
+            <HStack>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={onStart}
+                isDisabled={!onStart}
+              >
+                Start measuring
+              </Button>
+            </HStack>
+          </VStack>
+        }
+      />
+    );
+  }
   return (
     <Alert
       variant={status === "error" ? "warning" : "info"}
@@ -338,7 +387,7 @@ export const Verdict = ({
                 ` Less than ${formatPercentage(1 - ALL_BUSY_FRACTION, 0)} of its core is left idle.`}
               {highCpu &&
                 highCpu.outsideFraction >= NOTABLE_OUTSIDE_FRACTION &&
-                ` Another ${formatPercentage(highCpu.outsideFraction, 0)} of the replica's CPU went to work outside its worker's dataflows.`}
+                ` Another ${formatPercentage(highCpu.outsideFraction, 0)} of the replica's CPU went to overhead, work outside its worker's dataflows.`}
             </Text>
             {outdated && <Note>{behind(outdated.objectId)}</Note>}
             {(isBusy || highCpu) && (
@@ -398,14 +447,14 @@ export const Verdict = ({
       return (
         <Alert
           variant="warning"
-          label={`Not skew: ${replica.name} is at ${cpu} of its CPU, mostly outside dataflows`}
+          label={`Not skew: ${replica.name} is at ${cpu} of its CPU, mostly overhead`}
           message={
             <VStack spacing={2} alignItems="stretch">
               <Text>
                 {workersSentence}
                 {limitSentence && ` ${limitSentence}`} The other{" "}
-                {formatPercentage(outsideFraction, 0)} went to work outside the
-                workers&apos; dataflows:{" "}
+                {formatPercentage(outsideFraction, 0)} went to overhead, work
+                outside the workers&apos; dataflows:{" "}
                 {hasSourcesOrSinks &&
                   "reading from sources and writing to sinks, "}
                 answering SELECTs straight from indexes, queries that started
@@ -414,9 +463,9 @@ export const Verdict = ({
               </Text>
               <Note>
                 {startThere ? `${startThere} ` : ""}
-                Work outside dataflows grows with the number of operators on
-                every worker, so sizing up doesn&apos;t always lower it.
-                Splitting objects across smaller clusters can.
+                Overhead grows with the number of operators on every worker, so
+                sizing up doesn&apos;t always lower it. Splitting objects across
+                smaller clusters can.
               </Note>
               <HStack spacing={4} flexWrap="wrap">
                 {hasSourcesOrSinks && (
@@ -453,7 +502,7 @@ export const Verdict = ({
               {workersSentence}
               {limitSentence && ` ${limitSentence}`}
               {outsideFraction >= NOTABLE_OUTSIDE_FRACTION &&
-                ` Another ${formatPercentage(outsideFraction, 0)} went to work outside the workers' dataflows.`}
+                ` Another ${formatPercentage(outsideFraction, 0)} went to overhead, work outside the workers' dataflows.`}
             </Text>
             {startThere && <Note>{startThere}</Note>}
             {outdated && <Note>{behind(outdated.objectId)}</Note>}

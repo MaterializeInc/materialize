@@ -20,6 +20,7 @@ import { useUniversalTable } from "~/components/Table/useUniversalTable";
 import TextLink from "~/components/TextLink";
 import { formatLagInfoDetailed } from "~/platform/clusters/format";
 import { MaterializeTheme } from "~/theme";
+import { truncateMaxWidth } from "~/theme/components/Table";
 import { kebabToTitleCase, pluralize } from "~/util";
 import { formatPercentage } from "~/utils/format";
 
@@ -81,19 +82,28 @@ const ObjectNameCell = ({ row }: { row: ObjectTableRow }) => {
       justifyContent="center"
       minHeight={11}
     >
+      {/* Without `break-all`, a name with no spaces overflows the column
+          instead of clamping to an ellipsis. */}
       {row.path ? (
         <TextLink
           as={RouterLink}
           to={row.path}
           textStyle="text-ui-med"
           noOfLines={1}
+          wordBreak="break-all"
+          title={row.name}
           // Clicking the row picks the object, so following its link doesn't.
           onClick={(event: React.MouseEvent) => event.stopPropagation()}
         >
           {row.name}
         </TextLink>
       ) : (
-        <Text textStyle="text-ui-med" noOfLines={1}>
+        <Text
+          textStyle="text-ui-med"
+          noOfLines={1}
+          wordBreak="break-all"
+          title={row.name}
+        >
           {row.name}
         </Text>
       )}
@@ -255,7 +265,7 @@ const columns = [
     sortingFn: "alphanumeric",
     cell: ({ row }) => <ObjectNameCell row={row.original} />,
     footer: () => <OtherDataflowsName />,
-    meta: { cellProps: { maxWidth: "260px" } },
+    meta: { cellProps: truncateMaxWidth },
   }),
   columnHelper.accessor("onWorker", {
     id: "onWorker",
@@ -290,7 +300,7 @@ const columns = [
     cell: (info) => <SpreadCell row={info.row.original} />,
     meta: {
       tooltip:
-        "Whether the object's work is split evenly across the workers, or leans on one: how many times the other workers' average time its busiest worker spent on it.",
+        "How many times longer the object's busiest worker spent on it than the other workers did on average. Under 2× reads as even.",
     },
   }),
   columnHelper.accessor("lag", {

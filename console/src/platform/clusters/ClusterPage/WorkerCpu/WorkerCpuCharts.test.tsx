@@ -92,7 +92,7 @@ describe("WorkerCpuCharts", () => {
 
     expect(
       screen.getAllByRole("listitem").map((item) => item.textContent),
-    ).toEqual(["Replica CPU", "Workers' time", "Other CPU"]);
+    ).toEqual(["Replica CPU", "Workers' time", "Overhead"]);
   });
 
   it("shades the measured span", async () => {
@@ -143,6 +143,16 @@ describe("WorkerCpuCharts", () => {
 
     expect(tooltip).toHaveTextContent(/Replica CPU\s*50% of allocation/);
     expect(tooltip).toHaveTextContent(/Workers' time\s*40% of allocation/);
+  });
+
+  it("shows the overhead between the replica's CPU and the workers' time", async () => {
+    await renderCharts();
+
+    const tooltip = await hoverAt(SERIES[1].atMs);
+
+    expect(tooltip).toHaveTextContent(/Replica CPU\s*50% of allocation/);
+    expect(tooltip).toHaveTextContent(/Workers' time\s*40% of allocation/);
+    expect(tooltip).toHaveTextContent(/Overhead\s*10% of allocation/);
   });
 
   it("counts the workers' time against the allocation, at two workers to a core", async () => {

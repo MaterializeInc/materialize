@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { millisecondsInMinute } from "date-fns/constants";
 import parsePostgresInterval from "postgres-interval";
 import React from "react";
@@ -527,11 +528,11 @@ describe("Verdict", () => {
       });
 
       expect(
-        heading("Not skew: r1 is at 90% of its CPU, mostly outside dataflows"),
+        heading("Not skew: r1 is at 90% of its CPU, mostly overhead"),
       ).toBeVisible();
       expect(
         screen.getByText(
-          /^Its workers spent 20% of the allocation running work, and the busiest, w0, 25% of its core, so this isn't skew\. The other 70% went to work outside the workers' dataflows: answering SELECTs straight from indexes, queries that started and ended between readings,/,
+          /^Its workers spent 20% of the allocation running work, and the busiest, w0, 25% of its core, so this isn't skew\. The other 70% went to overhead, work outside the workers' dataflows: answering SELECTs straight from indexes, queries that started and ended between readings,/,
         ),
       ).toBeVisible();
       expect(
@@ -585,7 +586,7 @@ describe("Verdict", () => {
       ).toBeVisible();
       expect(
         screen.getByText(
-          /Another 19% went to work outside the workers' dataflows\./,
+          /Another 19% went to overhead, work outside the workers' dataflows\./,
         ),
       ).toBeVisible();
       expect(
@@ -689,7 +690,7 @@ describe("Verdict", () => {
       expect(heading("Not skew: r1 is at 90% of its CPU")).toBeVisible();
       expect(
         screen.getByText(
-          "w0 was 60% busy, and orders_idx took the most of its time, 67%. Another 30% of the replica's CPU went to work outside its worker's dataflows.",
+          "w0 was 60% busy, and orders_idx took the most of its time, 67%. Another 30% of the replica's CPU went to overhead, work outside its worker's dataflows.",
         ),
       ).toBeVisible();
       expect(
@@ -948,6 +949,7 @@ const renderFirstLook = (props: Partial<FirstLookProps>) =>
       status="reading"
       latestCpu={undefined}
       lastReading={undefined}
+      onStart={undefined}
       lifetimeObjects={undefined}
       objectName={objectName}
       {...props}
@@ -962,6 +964,20 @@ const lifetimeReading = (seconds: number[]) => ({
 });
 
 describe("FirstLook", () => {
+  it("asks to start measuring, and says what reading costs the replica, before it reads", async () => {
+    const onStart = vi.fn();
+    await renderFirstLook({ status: "idle", onStart });
+
+    expect(heading("Measure r1's 4 workers for a minute")).toBeVisible();
+    expect(
+      screen.getByText(/from a session on r1 itself, so it adds a little load/),
+    ).toBeVisible();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Start measuring" }),
+    );
+    expect(onStart).toHaveBeenCalledOnce();
+  });
+
   it("names the worker that has done more than twice the others' average since each object started", async () => {
     await renderFirstLook({ lastReading: lifetimeReading([300, 50, 50, 0]) });
 

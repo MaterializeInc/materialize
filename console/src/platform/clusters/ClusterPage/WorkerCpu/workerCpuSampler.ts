@@ -124,7 +124,11 @@ const applyRows = <T extends object>(
 export type PauseReason = "user" | "limit" | "hidden";
 
 export interface WorkerCpuState {
-  status: "reading" | "paused" | "error";
+  /**
+   * `idle` until `start` or `measure`: reading runs on the replica itself, so
+   * it waits to be asked.
+   */
+  status: "idle" | "reading" | "paused" | "error";
   pauseReason?: PauseReason;
   readings: WorkerCpuReading[];
   /** Per-object reads, oldest first, back `OBJECT_READS_RETENTION_MS`. */
@@ -148,7 +152,7 @@ export interface WorkerCpuState {
 }
 
 const INITIAL_WORKER_CPU_STATE: WorkerCpuState = {
-  status: "reading",
+  status: "idle",
   readings: [],
   objectReads: [],
   isMeasuring: true,
@@ -564,11 +568,12 @@ export function createWorkerCpuSampler({
       return () => listeners.delete(listener);
     },
     start: () => {
+      if (stopped || state.status !== "idle") return;
       if (isHidden) {
         setState({ status: "paused", pauseReason: "hidden" });
         return;
       }
-      setState({ waitingMs: 0 });
+      setState({ status: "reading", waitingMs: 0 });
       open();
     },
     pause: () => {
@@ -635,8 +640,8 @@ const registerVisibilityPause = (sampler: WorkerCpuSampler) => {
 };
 
 /**
- * Samples one replica's worker CPU while the calling component is mounted,
- * continuing from the readings of an earlier session in the last
+ * Samples one replica's worker CPU, once started, while the calling component
+ * is mounted, continuing from the readings of an earlier session in the last
  * `READINGS_RETENTION_MS`.
  */
 export function useWorkerCpuSampler({
@@ -668,7 +673,6 @@ export function useWorkerCpuSampler({
     });
     setSampler(next);
     const unregisterVisibility = registerVisibilityPause(next);
-    next.start();
     return () => {
       unregisterVisibility();
       next.stop();
@@ -684,6 +688,7 @@ export function useWorkerCpuSampler({
       scope.state === "hasError"
         ? { ...state, status: "error" as const, error: "Couldn't load." }
         : state,
+    start: sampler?.start,
     pause: sampler?.pause,
     resume: sampler?.resume,
     measure: sampler?.measure,

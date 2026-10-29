@@ -237,7 +237,7 @@ export const WorkerCpuPanel = ({
   const chart = useParentSize({ debounceTime: 10 });
   const { processes, workers: workersPerProcess } = replica.allocation;
   const workerCount = processes * workersPerProcess;
-  const { state, pause, resume, measure, annotateMeasurement } =
+  const { state, start, pause, resume, measure, annotateMeasurement } =
     useWorkerCpuSampler({
       clusterName,
       replicaId: replica.id,
@@ -454,14 +454,17 @@ export const WorkerCpuPanel = ({
                 ? `Measuring a new minute…${secondsLeft ? ` ${secondsLeft}s left` : ""}`
                 : `Measured ${clockTime(measurement.startMs)} to ${clockTime(measurement.endMs)}`)}
           </Text>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={measure}
-            isDisabled={!measure || isMeasuringAgain}
-          >
-            Measure again
-          </Button>
+          {/* Before the first measurement, the first look starts it. */}
+          {measurement && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={measure}
+              isDisabled={!measure || isMeasuringAgain}
+            >
+              Measure again
+            </Button>
+          )}
         </HStack>
       </Flex>
       {unhydratedCount !== undefined && unhydratedCount > 0 && (
@@ -513,6 +516,7 @@ export const WorkerCpuPanel = ({
           lastReading={last}
           lifetimeObjects={lifetimeObjects}
           objectName={objectName}
+          onStart={start}
         />
       )}
       {measurement && (
@@ -585,13 +589,15 @@ export const WorkerCpuPanel = ({
             `Couldn't load ${clusterName}'s objects, so rows show ids instead of names.`}
         </Text>
       )}
-      <SamplingStatus
-        replicaName={replica.name}
-        state={state}
-        sinceMs={first?.atMs}
-        onPause={pause}
-        onResume={resume}
-      />
+      {state.status !== "idle" && (
+        <SamplingStatus
+          replicaName={replica.name}
+          state={state}
+          sinceMs={first?.atMs}
+          onPause={pause}
+          onResume={resume}
+        />
+      )}
     </VStack>
   );
 };
@@ -637,7 +643,7 @@ const SamplingStatus = ({
       sinceMs !== undefined
         ? ` since ${formatDate(new Date(sinceMs), TIME_FORMAT)}`
         : ""
-    }. Stops when you leave this tab, and pauses while the browser tab is hidden or after ${SAMPLING_LIMIT_MS / millisecondsInMinute} minutes.`;
+    }. Stops when you leave the Workers tab, and pauses while the browser tab is hidden or after ${SAMPLING_LIMIT_MS / millisecondsInMinute} minutes.`;
   }
   const isReading = state.status === "reading";
   return (

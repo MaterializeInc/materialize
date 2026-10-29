@@ -196,7 +196,7 @@ const CpuMarks = React.memo(
         <BeforeOpen
           layout={layout}
           x={openedX}
-          label="The workers' time starts when you open this"
+          label="The workers' time starts when you start measuring"
         />
         {measuredLeft !== undefined && measuredRight !== undefined && (
           <rect
@@ -399,7 +399,7 @@ export const WorkerCpuCharts = ({
               variant: "line",
             },
             {
-              label: "Other CPU",
+              label: "Overhead",
               color: gapFill(colors.foreground.secondary),
               variant: "square",
             },
@@ -448,10 +448,18 @@ export const WorkerCpuCharts = ({
                 />
               )}
               {hoverPoint ? (
-                <TooltipRow
-                  label="Workers' time"
-                  value={`${formatPercentage(hoverPoint.dataflowPercent / 100, 0)} of allocation`}
-                />
+                <>
+                  <TooltipRow
+                    label="Workers' time"
+                    value={`${formatPercentage(hoverPoint.dataflowPercent / 100, 0)} of allocation`}
+                  />
+                  {hoverReplica !== undefined && (
+                    <TooltipRow
+                      label="Overhead"
+                      value={`${formatPercentage(Math.max(0, hoverReplica - hoverPoint.dataflowPercent) / 100, 0)} of allocation`}
+                    />
+                  )}
+                </>
               ) : (
                 <Text
                   textStyle="text-small"
