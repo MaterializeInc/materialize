@@ -1485,12 +1485,14 @@ where
                 self.send_parameter_statuses(params).await?;
             }
             Ok(_) => {}
-            Err(err) => {
+            Err(err) if action == EndTransactionAction::Commit => {
                 self.send(BackendMessage::ErrorResponse(
                     err.into_response(Severity::Error),
                 ))
                 .await?;
             }
+            // Only one error can be reported, ignore.
+            Err(_) => {}
         }
         Ok(())
     }
