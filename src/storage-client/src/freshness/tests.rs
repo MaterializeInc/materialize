@@ -508,6 +508,17 @@ fn restart_policy_selects_the_recording() {
 }
 
 #[mz_ore::test]
+fn seeded_recording_debug_stays_small() {
+    let seeds = FreshnessSeeds::default();
+    let many = (0..10_000).map(|i| ((GlobalId::User(i), None, Measure::EndToEnd), T0));
+    seeds.publish(false, many.collect());
+    let recording = FreshnessRecording::seeded(seeds, GlobalId::User(0), None);
+    let debug = format!("{recording:?}");
+    assert!(debug.contains("seeds: 10000"), "{debug}");
+    assert!(debug.len() < 1024, "{} bytes: {debug}", debug.len());
+}
+
+#[mz_ore::test]
 fn end_to_end_only_recording_needs_no_local_seed() {
     let tree = aligned(1000);
     let config = recorder_config();
