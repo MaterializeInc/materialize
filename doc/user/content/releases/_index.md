@@ -36,7 +36,7 @@ Materialize now uses its own buffer pool to keep hot data in memory and serve se
 
 We ran our performance tests on Materialize Cloud. We setup a Kafka topic, with a single partition, of about 1.5B messages (roughly 100 GB), holding 956M distinct keys, with records around 100 bytes. We ingested this data into Materialize, using a Kafka Upsert source, on an M.1-1.5xlarge cluster. This cluster size has 98 GB of memory, and 586 GB of Disk. We measured hydration times as how long it took from `CREATE SOURCE` until every key is indexed, and the source is keeping up with the topic. We ran the test four times, and observed that hydration times dropped from 206 minutes to between 108 and 113 minutes. Peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
 
-In real world usage, we observed that hydration times improved by 49%-88%. Real world memory usage improved by 13-64%. 
+In real world usage, we observed that hydration times improved by 49%-88%. Real world memory usage improved by 13-64%.
 
 Note that the improved hydration times are most impactful for workloads that spill heavily to disk. Workloads that are fully resident in memory won't see a speedup.
 
