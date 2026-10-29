@@ -1072,6 +1072,10 @@ mod tests {
             unimplemented!()
         }
 
+        fn freshness_seeds(&self) -> mz_storage_client::freshness::FreshnessSeeds {
+            unimplemented!()
+        }
+
         fn update_ingestion_timestamp_interval(&self, _id: GlobalId, _interval: Duration) {
             unimplemented!()
         }
