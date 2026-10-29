@@ -39,7 +39,9 @@ RUN grep -v -e '\[' -e '^--' /usr/local/share/materialize/misc/python/requiremen
 RUN mkdir -p /opt/antithesis/catalog \
     && ln -s /usr/local/share/materialize/misc/python/materialize/antithesis /opt/antithesis/catalog/materialize-antithesis
 
-COPY test /opt/antithesis/test/v1
+COPY test /opt/antithesis/commands
+RUN python3 -m materialize.antithesis.templates \
+    --source /opt/antithesis/commands/main --output /opt/antithesis/test/v1
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

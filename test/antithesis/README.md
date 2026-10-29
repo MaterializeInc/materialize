@@ -31,17 +31,120 @@ a time budget across persistcli commands. Final checks report incomplete work.
 Timing bounds still need calibration on Antithesis's simulated core. Local
 unit tests validate the oracles and driver control flow, including their
 failure paths. They do not establish fault coverage or throughput under the
-simulator. Postgres source history also grows with the timeline, so long runs
-should track ledger size and check latency. The IVM reference derives views
-from the observed base tables. Consistent corruption of both base rows and
-views requires the independent client-history and external-source oracles.
+simulator. The IVM reference derives views from the observed base tables.
+Consistent corruption of both base rows and views requires the independent
+client-history and external-source oracles.
+
+## Workload templates
+
+The image generates four templates from the authoritative commands in
+`workload/test/main/`:
+
+| Template | Workloads | Initial bulk setup |
+|---|---|---|
+| `main` | Full mixed workload, including interactions between subsystems | Postgres, Kafka sources, Kafka sinks, IVM |
+| `transactions` | Client histories, contended counters, session mix, read paths, access control | None. Session mix creates its own RTR source when needed. |
+| `cdc` | Postgres and Kafka sources, Kafka sinks, source progress, shard audits | Postgres, Kafka sources, Kafka sinks |
+| `rollouts` | Deployment scenarios, spec-phase changes, histories, counters, access control, Postgres, IVM, generation isolation | Postgres, IVM |
+
+Health checks, resource checks, and pod restarts remain available in each
+template. Restart triggers are restricted to workloads that template can
+schedule. For example, the transaction template does not wait for a bulk
+source creation or select a candidate generation that no driver creates.
+
+`templates.py` discovers executable commands and derives profile membership
+from their driver imports. Adding a command for an existing driver includes
+it in the corresponding focused templates. The full `main` template keeps
+every command. Generated wrappers call the original source through the
+measurement runner, and the original sources live outside the runtime test
+directory. To inspect the generated templates locally:
+
+```
+bin/pyactivate -m materialize.antithesis.templates \
+    --source test/antithesis/workload/test/main --output /tmp/mz-antithesis-templates
+```
+
+## Resumable rollouts
+
+Ordinary rollout invocations advance one persisted scenario step. Request
+intent, phase waits, delays, absolute deadlines, targeted kills, checks, and
+cleanup survive command interruption. Lost responses retry the same request.
+The CR lease is released between invocations. A scenario's DDL hold survives
+scheduler gaps and expires at the scenario deadline if it is never resumed.
+
+Spec-phase cells share that journal ownership. Their watch resource version,
+cell choice, targeted patch, promotion, claim recheck, and cleanup also resume
+in bounded steps. A zero-delay patch still runs immediately when the watched
+phase arrives, preserving short promotion windows.
+
+The paced-DDL scenario needs a continuous quiet interval to measure its
+timing property. The ordinary driver selects it through the same swarm
+weights as the other scenarios, then a dedicated command claims and runs
+that trial. Its quiet period still renews in short chunks.
+
+## Efficiency and interleaving measurements
+
+Every generated command records wall time, workload process CPU, reaped child
+CPU, completion status, and comparison outcomes in `telemetry.sqlite`.
+Checks distinguish passed, failed, skipped, and uninstrumented invocations.
+Dead command processes, including watchdog exits, are counted as interrupted.
+Interrupted CPU and Materialize CPU are outside these measurements.
+Comparison totals are batched until command exit, so abruptly killed commands
+can leave comparison work unreported. The summary marks this limitation.
+
+`anytime_workload_efficiency` and `finally_workload_efficiency` print a JSON
+summary with command costs, comparison units per timeline hour, quiet-time
+fraction, and a verified exposure matrix. The quiet fraction measures the
+union of requested intervals, so overlapping requests are counted once.
+Comparison units differ by oracle. Compare costs within the same workload
+and read path, and inspect coverage combinations alongside throughput.
+
+A history exposure is credited only when a later checked read contains the
+write's id and the history checks pass. SUBSCRIBE witnesses require a correct
+closed timestamp from a fetch requested after the observed exposure. The full
+phase-GET or acknowledged pod-delete interval must fit within the write's
+unresolved interval. The matrix records observed phase, kill role, write
+family, read path, and outcome.
+A phase and a kill can occur at different points of that same interval.
+Dedicated `sometimes` assertions expose witnessed combinations to Antithesis.
+
+Raw observations are capped at 4096 events and one hour of history. The
+summary reports pruned events, making missing measurement history visible.
+Aggregate costs and coverage counts survive pruning. These limits affect
+measurement witnesses, while the correctness oracles retain their own data.
+
+## Incremental Postgres oracle
+
+The Postgres checker replays a bounded transaction suffix from an independent
+reference checkpoint. Checkpoints are built from recorded upstream plans
+after validating the visible ledger. Multiple exports retain their own
+pre-terminal reference state, including across TRUNCATE, DROP, and schema
+changes. Expected rows are never adopted from Materialize query results.
+
+Before retiring a batch, the checker performs a full ledger comparison and
+requires independent upstream commit evidence. The exact retiring batch
+survives until a full read confirms its atomic upstream deletion against
+persisted LSN bounds. Additional periodic full reads detect corruption below a checkpoint,
+including reappearing retired rows. Terminal and restart attribution remains
+in indexed cold evidence, outside the hot replay suffix.
+Live-export terminal summaries and active-export indexes keep that cold
+evidence out of repeated hot lookups. Durable transaction and export counters
+prevent identifier reuse after compaction.
+
+Normal writers defer when retained transactions and admitted writers reach
+1024 per slot. `MZ_ANTITHESIS_PG_HISTORY_TXNS_CAP` overrides that budget. One
+additional slot is reserved for a progress heartbeat. Admission is atomic
+across concurrent commands. Uncertain transactions are retained until ledger
+evidence or upstream counter-lock fencing resolves them. This applies
+backpressure during long ingestion stalls while preserving the evidence the
+oracles need.
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `manifests/` | Kubernetes manifest templates and the orchestratord Helm values |
-| `workload/` | mzbuild image `antithesis-workload`: the Python workload, its entrypoint, and the test template under `test/main/` |
+| `workload/` | mzbuild image `antithesis-workload`: the Python workload, its entrypoint, and authoritative commands under `test/main/` |
 | `config/manifests/` | Rendered manifests (gitignored: they embed the license key) |
 | `misc/python/materialize/antithesis/` | Workload library and drivers (importable outside Antithesis) |
 | `misc/python/materialize/orchestratord/` | Kubernetes client for an orchestratord-managed environment |

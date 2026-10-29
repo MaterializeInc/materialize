@@ -32,16 +32,16 @@ recorded in the state database, with its operations, before COMMIT.
 
 The oracle at a sampled mz time T with progress LSN F:
 
-- The ledger rows visible in `pg_ledger_{i}` `AS OF T` are exactly the
-  transactions Materialize claims are below F. Per table they must be a
-  gap-free prefix of seq order, a transaction's rows appear together, and they
+- Unretired ledger rows visible in `pg_ledger_{i}` `AS OF T` are exactly the
+  transactions Materialize claims are below F. Per table they extend the
+  verified checkpoint without gaps, a transaction's rows appear together, and they
   must agree with the LSNs bracketing each transaction: committed with
   `pg_current_wal_lsn()` after COMMIT below F means visible, and
   `pg_current_wal_insert_lsn()` at the start of the transaction above F means
   not visible.
-- Replaying the visible transactions of a table in seq order gives the
-  expected contents of each export of it, and whether the export must be
-  errored.
+- Replaying the visible suffix from an independent reference checkpoint gives
+  each export's expected contents and whether it must be errored. Periodic
+  full ledger reads also validate retirement of the checkpointed prefix.
 
 An export binds to the upstream table as of its creation. `s1` is the table's
 committed seq read before `CREATE TABLE .. FROM SOURCE`, and `s3` the seq read
@@ -69,11 +69,15 @@ set `pg_terminal_upstream_ops` to `off` issue no terminal ops at all.
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import sqlite3
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -84,7 +88,14 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     sometimes,
 )
 
-from materialize.antithesis import ddl_hold, remap_frontiers, sql, state
+from materialize.antithesis import (
+    ddl_hold,
+    pg_checkpoint,
+    remap_frontiers,
+    sql,
+    state,
+    telemetry,
+)
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.drivers.recovery import mark_expected_unhealthy
 from materialize.antithesis.drivers.source_status import (
@@ -167,15 +178,25 @@ SETUP_LOCK_KEY = 727_274
 # It runs without faults, so this only has to cover a slow environmentd.
 FIRST_SETUP_BUDGET_S = 180.0
 SEED_TXNS_PER_TABLE = 2
+CHECKPOINT_TXNS = 128
+HISTORY_TXNS_CAP = 1024
+"""Per-slot normal-traffic budget for retained transactions plus admitted writers, overridden by
+`MZ_ANTITHESIS_PG_HISTORY_TXNS_CAP`. Writers defer at the cap while checks and
+fault/recovery commands continue. One extra slot lets the eventual liveness
+check commit a heartbeat. Unresolved outcomes are never pruned by age."""
+FULL_LEDGER_EVERY = 8
 # Upstream Postgres `lock_not_available`, raised by `lock_timeout` when
 # concurrent setups or transactions hold the advisory lock or a table lock.
 LOCK_NOT_AVAILABLE = "55P03"
 TERMINAL_EXPORTS_QUERY = (
     "SELECT count(*) FROM exports e"
-    " JOIN ops o ON o.tbl = 's' || e.slot || '.t' || e.j"
+    " WHERE e.state != 'dropped' AND (EXISTS (SELECT 1 FROM ops o"
     " JOIN txns t ON t.txn_id = o.txn_id"
-    " WHERE e.state != 'dropped' AND o.seq > e.s1"
-    " AND o.kind IN ('truncate', 'drop') AND t.status = 'acked'"
+    " WHERE o.tbl = 's' || e.slot || '.t' || e.j AND o.seq > e.s1"
+    " AND o.kind IN ('truncate', 'drop') AND t.status = 'acked')"
+    " OR EXISTS (SELECT 1 FROM terminal_archive o"
+    " WHERE o.tbl = 's' || e.slot || '.t' || e.j AND o.seq > e.s1"
+    " AND o.kind IN ('truncate', 'drop') AND o.status = 'acked'))"
 )
 """Live exports whose upstream table had an acknowledged TRUNCATE or DROP after
 the export bound to it. Read-only, for other drivers' triggers."""
@@ -256,6 +277,17 @@ def open_state() -> sqlite3.Connection:
             " first_epoch REAL NOT NULL, baseline INTEGER)"
         )
         db.execute("CREATE TABLE IF NOT EXISTS ready (name TEXT PRIMARY KEY)")
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS txns_slot ON txns (slot, status, lsn_after)"
+        )
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS exports_current ON exports (slot, created_epoch)"
+            " WHERE state IN ('creating', 'live', 'ambiguous')"
+        )
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS exports_slot_created ON exports (slot, created_epoch)"
+        )
+    pg_checkpoint.ensure_tables(db)
     return db
 
 
@@ -455,8 +487,8 @@ def _counter(up: psycopg.Connection, tbl: str) -> int:
 
 def _exports(db: sqlite3.Connection, slot: int | None = None) -> list[ExportRow]:
     query = (
-        "SELECT name, slot, j, s1, s3, state, created_epoch FROM exports"
-        " WHERE state != 'dropped'"
+        "SELECT name, slot, j, s1, s3, state, created_epoch FROM exports INDEXED BY exports_current"
+        " WHERE state IN ('creating', 'live', 'ambiguous')"
     )
     params: tuple = ()
     if slot is not None:
@@ -490,7 +522,23 @@ def _terminal_in(
     if not include_aborted:
         query += " AND t.status != 'aborted'"
     row = db.execute(query, params).fetchone()
-    return int(row[0]) if row[0] is not None else None
+    candidates = [row[0]] if row is not None and row[0] is not None else []
+    summary = pg_checkpoint.terminal_summary(db, tbl, lo)
+    if summary is not None:
+        value = summary[0 if include_aborted else 1]
+        if value is not None and (hi is None or value <= hi):
+            candidates.append(value)
+    else:
+        archived = "SELECT seq FROM terminal_archive WHERE tbl = ? AND seq > ?"
+        if hi is not None:
+            archived += " AND seq <= ?"
+        if not include_aborted:
+            archived += " AND status != 'aborted'"
+        archived += " ORDER BY seq LIMIT 1"
+        cold = db.execute(archived, params).fetchone()
+        if cold is not None:
+            candidates.append(cold[0])
+    return int(min(candidates)) if candidates else None
 
 
 def terminal_before_restart(
@@ -514,15 +562,28 @@ def terminal_before_restart(
     `_check_terminal_permanence`: status events after the op, or a sibling
     export created after it (which reissues the ingestion).
     """
-    for kind in ("truncate", "drop"):
+    summary = pg_checkpoint.terminal_summary(db, tbl, s1)
+    for i, kind in enumerate(("truncate", "drop")):
         row = db.execute(
             "SELECT min(t.started_epoch) FROM ops o JOIN txns t ON o.txn_id = t.txn_id"
             " WHERE o.tbl = ? AND o.seq > ? AND o.kind = ? AND t.status != 'aborted'",
             (tbl, s1, kind),
         ).fetchone()
-        if row is None or row[0] is None:
+        epochs = [row[0]] if row is not None and row[0] is not None else []
+        if summary is not None:
+            cold_epoch = summary[2 + i]
+        else:
+            cold = db.execute(
+                "SELECT min(started_epoch) FROM terminal_archive"
+                " WHERE tbl = ? AND seq > ? AND kind = ? AND status != 'aborted'",
+                (tbl, s1, kind),
+            ).fetchone()
+            cold_epoch = cold[0] if cold is not None else None
+        if cold_epoch is not None:
+            epochs.append(cold_epoch)
+        if not epochs:
             continue
-        first = float(row[0])
+        first = float(min(epochs))
         if (
             db.execute(
                 "SELECT 1 FROM exports WHERE slot = ? AND name != ? AND created_epoch > ?",
@@ -612,22 +673,17 @@ def _create_export(
     slot: int,
     j: int,
 ) -> None:
-    n = int(
-        db.execute(
-            "SELECT count(*) FROM exports WHERE slot = ? AND j = ?", (slot, j)
-        ).fetchone()[0]
-    )
+    if ddl_hold.active():
+        return
+    existing = [e for e in _exports(db, slot) if e.j == j]
+    if len(existing) >= MAX_EXPORTS_PER_TABLE:
+        candidates = [e for e in existing if e.state != "creating"]
+        if not candidates or not _drop_export(host, db, candidates[0]):
+            return
     s1 = _counter(up, _tbl(slot, j))
-    while True:
-        name = f"pg_s{slot}_t{j}_e{n}"
-        with db:
-            cur = db.execute(
-                "INSERT OR IGNORE INTO exports VALUES (?, ?, ?, ?, NULL, 'creating', ?)",
-                (name, slot, j, s1, time.time()),
-            )
-        if cur.rowcount:
-            break
-        n += 1
+    name = _reserve_export(db, slot, j, s1)
+    if name is None:
+        return
     try:
         with mz_connect(host) as conn:
             conn.execute(
@@ -657,16 +713,71 @@ def _create_export(
         log(f"creating export {name} did not complete: {e}")
 
 
-def _drop_export(host: str, db: sqlite3.Connection, e: ExportRow) -> None:
+def _next_export_id(db: sqlite3.Connection, slot: int, j: int) -> int:
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        value = _allocate_export_id(db, slot, j)
+        db.commit()
+        return value
+    except BaseException:
+        db.rollback()
+        raise
+
+
+def _allocate_export_id(db: sqlite3.Connection, slot: int, j: int) -> int:
+    row = db.execute(
+        "SELECT next_id FROM pg_export_ids WHERE slot = ? AND j = ?", (slot, j)
+    ).fetchone()
+    if row is None:
+        seed = db.execute(
+            "SELECT coalesce(max(CAST(substr(name, instr(name, '_e') + 2) AS INTEGER)), -1) + 1"
+            " FROM exports WHERE slot = ? AND j = ?",
+            (slot, j),
+        ).fetchone()[0]
+        db.execute("INSERT INTO pg_export_ids VALUES (?, ?, ?)", (slot, j, seed))
+    value = db.execute(
+        "UPDATE pg_export_ids SET next_id = next_id + 1 WHERE slot = ? AND j = ? RETURNING next_id - 1",
+        (slot, j),
+    ).fetchone()[0]
+    return int(value)
+
+
+def _reserve_export(db: sqlite3.Connection, slot: int, j: int, s1: int) -> str | None:
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        count = db.execute(
+            "SELECT count(*) FROM exports INDEXED BY exports_current WHERE slot = ? AND j = ? AND state IN ('creating','live','ambiguous')",
+            (slot, j),
+        ).fetchone()[0]
+        if count >= MAX_EXPORTS_PER_TABLE:
+            db.commit()
+            return None
+        n = _allocate_export_id(db, slot, j)
+        name = f"pg_s{slot}_t{j}_e{n}"
+        db.execute(
+            "INSERT INTO exports VALUES (?, ?, ?, ?, NULL, 'creating', ?)",
+            (name, slot, j, s1, time.time()),
+        )
+        db.commit()
+        return name
+    except BaseException:
+        db.rollback()
+        raise
+
+
+def _drop_export(host: str, db: sqlite3.Connection, e: ExportRow) -> bool:
+    if e.state == "creating":
+        return False
     try:
         with mz_connect(host) as conn:
             conn.execute(f"DROP TABLE IF EXISTS {e.name}".encode())
     except (psycopg.Error, OSError) as err:
         log(f"dropping export {e.name} failed: {err}")
-        return
+        return False
     with db:
         db.execute("UPDATE exports SET state = 'dropped' WHERE name = ?", (e.name,))
         db.execute("DELETE FROM terminal WHERE name = ?", (e.name,))
+    return True
 
 
 def _maintain_exports(
@@ -691,7 +802,9 @@ def _maintain_exports(
             _create_export(endpoints, host, db, up, slot, j)
             exports = [e for e in _exports(db, slot) if e.j == j]
         while len(exports) > MAX_EXPORTS_PER_TABLE:
-            _drop_export(host, db, exports.pop(0))
+            if not _drop_export(host, db, exports[0]):
+                break
+            exports.pop(0)
 
 
 def _value() -> str | None:
@@ -747,23 +860,7 @@ def _apply_upstream(up: psycopg.Connection, tbl: str, op: list[Any]) -> None:
 
 def replay(entries: list[tuple[int, str, list[list[Any]]]]) -> dict[int, str | None]:
     """Table contents after `(seq, kind, ops)` entries applied in seq order."""
-    rows: dict[int, str | None] = {}
-    for _, kind, ops in sorted(entries, key=lambda e: e[0]):
-        if kind in TERMINAL_KINDS:
-            rows.clear()
-            continue
-        for op in ops:
-            if op[0] == "upsert":
-                rows[op[1]] = op[2]
-            elif op[0] == "update":
-                if op[1] in rows:
-                    rows[op[1]] = op[2]
-            elif op[0] == "delete":
-                rows.pop(op[1], None)
-            elif op[0] == "delete_range":
-                for k in [k for k in rows if op[1] <= k < op[2]]:
-                    del rows[k]
-    return rows
+    return pg_checkpoint.replay(entries)
 
 
 def _is_ambiguous_commit(e: psycopg.Error) -> bool:
@@ -782,7 +879,87 @@ def run_txn(
     are recorded before COMMIT so that a commit with a lost acknowledgment can
     still be replayed once Materialize shows it in the ledger.
     """
-    txn_id = f"{rng.getrandbits(64):016x}"
+    with db:
+        row = db.execute(
+            "UPDATE pg_txn_sequence SET next_id = next_id + 1 WHERE singleton = 0 RETURNING next_id"
+        ).fetchone()
+    assert row is not None
+    # Resolved transaction rows retire, so their primary keys cannot prevent
+    # an SDK entropy value from reusing a previous transaction's identity.
+    txn_id = f"{int(row[0]):016x}-{rng.getrandbits(64):016x}"
+    heartbeat = set(plan) == {_hb(slot)} and plan[_hb(slot)][0] == "heartbeat"
+    if not _claim_writer(db, slot, txn_id, heartbeat):
+        log(
+            f"slot {slot}: waiting for a verified checkpoint before more upstream writes"
+        )
+        return txn_id, "deferred"
+    try:
+        return _run_txn(up, db, slot, plan, txn_id)
+    finally:
+        with db:
+            db.execute("DELETE FROM pg_writers WHERE txn_id = ?", (txn_id,))
+
+
+def _history_cap() -> int:
+    cap = int(
+        os.environ.get("MZ_ANTITHESIS_PG_HISTORY_TXNS_CAP", str(HISTORY_TXNS_CAP))
+    )
+    if cap <= 0:
+        raise ValueError("Postgres history transaction cap must be positive")
+    return cap
+
+
+def _process_marker(pid: int) -> str | None:
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return None if fields[0] == "Z" else fields[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _claim_writer(
+    db: sqlite3.Connection, slot: int, txn_id: str, heartbeat: bool = False
+) -> bool:
+    pid = os.getpid()
+    incarnation = _process_marker(pid)
+    if incarnation is None:
+        raise RuntimeError("cannot identify the workload process incarnation")
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        for token, owner, marker in list(
+            db.execute(
+                "SELECT txn_id, pid, incarnation FROM pg_writers WHERE slot = ?",
+                (slot,),
+            )
+        ):
+            if _process_marker(owner) != marker:
+                db.execute("DELETE FROM pg_writers WHERE txn_id = ?", (token,))
+        count = db.execute(
+            "SELECT count(*) FROM (SELECT txn_id FROM txns WHERE slot = ?"
+            " UNION SELECT txn_id FROM pg_writers WHERE slot = ?)",
+            (slot, slot),
+        ).fetchone()[0]
+        if count >= _history_cap() + int(heartbeat):
+            db.commit()
+            return False
+        db.execute(
+            "INSERT INTO pg_writers VALUES (?, ?, ?, ?)",
+            (txn_id, slot, pid, incarnation),
+        )
+        db.commit()
+        return True
+    except BaseException:
+        db.rollback()
+        raise
+
+
+def _run_txn(
+    up: psycopg.Connection,
+    db: sqlite3.Connection,
+    slot: int,
+    plan: dict[str, tuple[str, list[list[Any]]]],
+    txn_id: str,
+) -> tuple[str, str]:
     recorded = False
     try:
         lsn_row = up.execute("SELECT pg_current_wal_insert_lsn()::text").fetchone()
@@ -882,6 +1059,13 @@ def run_txn(
             "UPDATE txns SET status = 'acked', lsn_after = ? WHERE txn_id = ?",
             (lsn_after, txn_id),
         )
+        for tbl, (kind, _) in plan.items():
+            if kind == "dml":
+                db.execute(
+                    "INSERT INTO pg_history_summary VALUES (?, ?)"
+                    " ON CONFLICT(tbl) DO UPDATE SET last_acked_dml_seq = max(last_acked_dml_seq, excluded.last_acked_dml_seq)",
+                    (tbl, seqs[tbl]),
+                )
     return txn_id, "acked"
 
 
@@ -1064,10 +1248,35 @@ def _updates_committed(conn: psycopg.Connection, export_id: str) -> int | None:
     return int(row[0]) if row and row[0] is not None else None
 
 
+@contextmanager
+def _check_lock(endpoints: Endpoints, slot: int) -> Iterator[bool]:
+    path = endpoints.state_dir / f"pg-check-slot{slot}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def check_main() -> int:
     endpoints = Endpoints.from_env()
     db = open_state()
     slot = rng.randrange(SLOTS)
+    # Serializing only checkers keeps a ledger read's workload records alive
+    # until its validation and checkpoint finish. Upstream writers still race it.
+    with _check_lock(endpoints, slot) as held:
+        if not held:
+            return 0
+        return _check_main(endpoints, db, slot)
+
+
+def _check_main(endpoints: Endpoints, db: sqlite3.Connection, slot: int) -> int:
     try:
         host = mz_host()
     except Exception as e:
@@ -1114,6 +1323,8 @@ class _Ledger:
     by_tbl: dict[str, list[tuple[int, str, str]]]
     """Per table, `(seq, txn_id, kind)` in seq order."""
     tables_of: dict[str, set[str]]
+    checkpoint: pg_checkpoint.Checkpoint | None = None
+    plans: dict[tuple[str, str], list[list[Any]]] = field(default_factory=dict)
 
 
 def _check(
@@ -1123,6 +1334,21 @@ def _check(
     slot: int,
     deadline: Deadline,
 ) -> None:
+    retained = db.execute(
+        "SELECT count(*) FROM txns WHERE slot = ?", (slot,)
+    ).fetchone()[0]
+    checkpoint_txns = min(CHECKPOINT_TXNS, _history_cap())
+    if retained >= max(1, _history_cap() // 2):
+        _resolve_transactions(db, up, slot)
+    checkpoint = pg_checkpoint.load(db, slot)
+    next_round = checkpoint.rounds + 1
+    _retire_ledger(db, up, checkpoint)
+    full = (
+        not checkpoint.tables
+        or bool(checkpoint.retiring)
+        or retained >= checkpoint_txns
+        or next_round % FULL_LEDGER_EVERY == 0
+    )
     src_name, ledger_name = _source(slot), _ledger(slot)
     exports = _exports(db, slot)
     ids = lookup_ids(conn, [src_name, ledger_name] + [e.name for e in exports])
@@ -1151,22 +1377,30 @@ def _check(
     if src not in fronts or ledger not in fronts:
         return
     t = pick_as_of(
-        (fronts[src][0], fronts[ledger][0]), (fronts[src][1], fronts[ledger][1])
+        (fronts[src][0], fronts[ledger][0], checkpoint.as_of),
+        (fronts[src][1], fronts[ledger][1]),
     )
     if t is None:
         return
-    details: dict[str, Any] = {"slot": slot, "as_of": t}
+    if t < checkpoint.as_of:
+        log(f"slot {slot}: sampled timestamp precedes the verified checkpoint")
+        return
+    details: dict[str, Any] = {"slot": slot, "as_of": t, "full_ledger": full}
+
+    predicate, params = _ledger_predicate(checkpoint, full)
 
     try:
         lsn_rows = conn.execute(
             f"SELECT lsn::text FROM {src_name} AS OF {t}".encode()
         ).fetchall()
         ledger_rows = conn.execute(
-            f"SELECT txn_id, tbl, seq, kind FROM {ledger_name} AS OF {t}".encode()
+            f"SELECT txn_id, tbl, seq, kind FROM {ledger_name} {predicate} AS OF {t}".encode(),
+            params,
         ).fetchall()
         ledger_dups = conn.execute(
-            f"SELECT txn_id, tbl, count(*) FROM {ledger_name}"
-            f" GROUP BY txn_id, tbl HAVING count(*) > 1 LIMIT 10 AS OF {t}".encode()
+            f"SELECT txn_id, tbl, count(*) FROM {ledger_name} {predicate}"
+            f" GROUP BY txn_id, tbl HAVING count(*) > 1 LIMIT 10 AS OF {t}".encode(),
+            params,
         ).fetchall()
     except psycopg.Error as e:
         _report_query_error(e, details)
@@ -1202,9 +1436,55 @@ def _check(
             ledger_dup_details,
         )
 
-    led = _check_ledger(db, slot, f, ledger_rows, details)
+    normalized = [
+        (str(txn), str(tbl), int(seq), str(kind)) for txn, tbl, seq, kind in ledger_rows
+    ]
+    suffix, prefix_errors, retired = pg_checkpoint.partition(
+        checkpoint, normalized, f, full
+    )
+    always(
+        not prefix_errors,
+        "postgres source: checkpointed ledger rows change only by the acknowledged atomic retirement",
+        {**details, "errors": prefix_errors, "retiring_rows": len(checkpoint.retiring)},
+    )
+    if prefix_errors:
+        telemetry.comparison("postgres", "full_ledger", False)
+        return
+    if retired:
+        checkpoint.retiring = []
+        checkpoint.delete_lsn = None
+        checkpoint.delete_before = None
+        checkpoint.as_of = t
+        with db:
+            pg_checkpoint.save(db, checkpoint)
+
+    led = _check_ledger(db, slot, f, suffix, details, checkpoint)
+    unresolved_retirement = bool(checkpoint.retiring) and not any(
+        row[2] <= checkpoint.floor(row[1]) for row in normalized
+    )
+    telemetry.comparison(
+        "postgres",
+        "full_ledger" if full else "incremental_ledger",
+        (
+            None
+            if unresolved_retirement
+            else led is not None and not ledger_dups and not regressions
+        ),
+    )
     if led is None:
         return
+    if not ledger_dups and not regressions:
+        checkpoint.rounds = next_round
+        with db:
+            pg_checkpoint.save(db, checkpoint)
+    led.plans = {
+        (str(txn), str(tbl)): json.loads(ops)
+        for txn, tbl, ops in db.execute(
+            "SELECT o.txn_id, o.tbl, o.ops FROM ops o JOIN txns t ON o.txn_id = t.txn_id"
+            " WHERE t.slot = ?",
+            (slot,),
+        )
+    }
 
     for e in exports:
         if deadline.expired():
@@ -1214,6 +1494,174 @@ def _check(
             continue
         _check_export(db, conn, up, e, ids[e.name], src, t, led, details)
 
+    if (
+        not checkpoint.retiring
+        and max(len(led.tables_of), retained) >= checkpoint_txns
+        and not ledger_dups
+        and not regressions
+    ):
+        if not _checkpoint_outcomes_resolved(
+            db, up, slot, f, suffix, details, checkpoint
+        ):
+            telemetry.comparison("postgres", "full_ledger", None)
+            return
+        current_exports = _exports(db, slot)
+        references = {
+            e.name: pg_checkpoint.reference(
+                checkpoint, e.name, e.tbl, e.s3, led.by_tbl.get(e.tbl, []), led.plans
+            )
+            for e in current_exports
+            if e.s3 is not None
+            and e.state != "ambiguous"
+            and max(
+                checkpoint.floor(e.tbl),
+                max((s for s, _, _ in led.by_tbl.get(e.tbl, [])), default=0),
+            )
+            >= e.s3
+        }
+        bounds: dict[str, set[int]] = {}
+        for e in current_exports:
+            bounds.setdefault(e.tbl, set()).add(e.s1)
+            if e.s3 is not None:
+                bounds[e.tbl].add(e.s3)
+        checkpoint = pg_checkpoint.prepare(
+            db, checkpoint, t, f, suffix, references, bounds
+        )
+        _retire_ledger(db, up, checkpoint)
+
+
+def _checkpoint_outcomes_resolved(
+    db: sqlite3.Connection,
+    up: psycopg.Connection,
+    slot: int,
+    f: int,
+    rows: list[pg_checkpoint.LedgerRow],
+    details: dict[str, Any],
+    cp: pg_checkpoint.Checkpoint,
+) -> bool:
+    visible = {row[0] for row in rows}
+
+    def unresolved() -> bool:
+        return any(
+            txn in visible and status != "acked"
+            for txn, status in db.execute(
+                "SELECT txn_id, status FROM txns WHERE slot = ?", (slot,)
+            )
+        )
+
+    if not unresolved():
+        return True
+    # The source may expose a transaction that later aborts. Only independent
+    # upstream evidence lets us retire the record of its eventual outcome.
+    _resolve_transactions(db, up, slot)
+    return (
+        _check_ledger(db, slot, f, rows, details, cp) is not None and not unresolved()
+    )
+
+
+def _resolve_transactions(
+    db: sqlite3.Connection, up: psycopg.Connection, slot: int
+) -> None:
+    unresolved = [
+        r[0]
+        for r in db.execute(
+            "SELECT txn_id FROM txns WHERE slot = ? AND status IN ('pending', 'unknown')",
+            (slot,),
+        )
+    ]
+    if not unresolved:
+        return
+    tables = [_tbl(slot, j) for j in range(TABLES_PER_SLOT)] + [_hb(slot)]
+    try:
+        up.rollback()
+        # Recorded plans still hold these counter locks until their commit or
+        # rollback. Acquiring all of them fences every recorded unknown outcome.
+        locked = up.execute(
+            "SELECT tbl FROM antithesis_meta.counters WHERE tbl = ANY(%s) ORDER BY tbl FOR UPDATE",
+            (tables,),
+        ).fetchall()
+        if {r[0] for r in locked} != set(tables):
+            up.rollback()
+            return
+        visible: set[str] = set()
+        for start in range(0, len(unresolved), 200):
+            visible.update(
+                str(r[0])
+                for r in up.execute(
+                    f"SELECT DISTINCT txn_id FROM s{slot}.ledger WHERE txn_id = ANY(%s)".encode(),
+                    (unresolved[start : start + 200],),
+                ).fetchall()
+            )
+        row = up.execute("SELECT pg_current_wal_lsn()::text").fetchone()
+        if row is None:
+            up.rollback()
+            return
+        lsn = parse_lsn(row[0])
+        up.rollback()
+        with db:
+            for txn in unresolved:
+                db.execute(
+                    "UPDATE txns SET status = ?, lsn_after = ? WHERE txn_id = ?"
+                    " AND status IN ('pending', 'unknown')",
+                    (
+                        "acked" if txn in visible else "aborted",
+                        lsn if txn in visible else None,
+                        txn,
+                    ),
+                )
+    except (psycopg.Error, OSError) as e:
+        log(f"slot {slot}: unresolved transaction fence will retry: {e}")
+        try:
+            up.rollback()
+        except psycopg.Error:
+            pass
+
+
+def _ledger_predicate(cp: pg_checkpoint.Checkpoint, full: bool) -> tuple[str, tuple]:
+    if full or not cp.tables:
+        return "", ()
+    terms = []
+    params: list[Any] = []
+    for tbl, table in sorted(cp.tables.items()):
+        terms.append("(tbl = %s AND seq <= %s)")
+        params.extend([tbl, table.seq])
+    return "WHERE NOT (" + " OR ".join(terms) + ")", tuple(params)
+
+
+def _retire_ledger(
+    db: sqlite3.Connection, up: psycopg.Connection, cp: pg_checkpoint.Checkpoint
+) -> None:
+    if not cp.retiring or cp.delete_lsn is not None:
+        return
+    try:
+        up.rollback()
+        if cp.delete_before is None:
+            row = up.execute("SELECT pg_current_wal_insert_lsn()::text").fetchone()
+            if row is None:
+                up.rollback()
+                return
+            cp.delete_before = parse_lsn(row[0])
+            with db:
+                pg_checkpoint.save(db, cp)
+        for tbl, table in sorted(cp.tables.items()):
+            up.execute(
+                f"DELETE FROM s{cp.slot}.ledger WHERE tbl = %s AND seq <= %s".encode(),
+                (tbl, table.seq),
+            )
+        up.commit()
+        row = up.execute("SELECT pg_current_wal_lsn()::text").fetchone()
+        up.rollback()
+        if row is not None:
+            cp.delete_lsn = parse_lsn(row[0])
+            with db:
+                pg_checkpoint.save(db, cp)
+    except (psycopg.Error, OSError) as e:
+        log(f"slot {cp.slot}: ledger retirement will retry: {e}")
+        try:
+            up.rollback()
+        except psycopg.Error:
+            pass
+
 
 def _check_ledger(
     db: sqlite3.Connection,
@@ -1221,10 +1669,12 @@ def _check_ledger(
     f: int,
     ledger_rows: list[tuple[Any, ...]],
     details: dict[str, Any],
+    checkpoint: pg_checkpoint.Checkpoint | None = None,
 ) -> _Ledger | None:
     # A whole-source definite error writes at `u64::MAX`, beyond SQLite's
     # signed 64-bit integers. Every recorded LSN is far below the clamp.
     f_db = min(f, 2**63 - 1)
+    cp = checkpoint or pg_checkpoint.Checkpoint(slot)
     by_tbl: dict[str, list[tuple[int, str, str]]] = {}
     tables_of: dict[str, set[str]] = {}
     for txn_id, tbl, seq, kind in ledger_rows:
@@ -1282,7 +1732,8 @@ def _check_ledger(
     gaps = {
         tbl: [s for s, _, _ in entries][:20]
         for tbl, entries in by_tbl.items()
-        if [s for s, _, _ in entries] != list(range(1, len(entries) + 1))
+        if [s for s, _, _ in entries]
+        != list(range(cp.floor(tbl) + 1, cp.floor(tbl) + len(entries) + 1))
     }
     always(
         not gaps,
@@ -1299,6 +1750,15 @@ def _check_ledger(
         )
     ]
     missing = [t for t in committed_below if t not in tables_of]
+    missing_order = {
+        txn
+        for (txn, tbl), (seq, _, status) in metadata.items()
+        if status == "acked"
+        and txn not in tables_of
+        and seq
+        <= max(cp.floor(tbl), max((s for s, _, _ in by_tbl.get(tbl, [])), default=0))
+    }
+    missing = sorted(set(missing) | missing_order)
     always(
         not missing,
         "postgres source: transactions committed below the mapped LSN are visible in the ledger",
@@ -1321,9 +1781,9 @@ def _check_ledger(
         "postgres source: transactions begun above the mapped LSN are not visible in the ledger",
         {**details, "early": early[:10], "early_count": len(early)},
     )
-    if phantoms or torn or gaps or mismatches:
+    if phantoms or torn or gaps or mismatches or missing or early:
         return None
-    return _Ledger(by_tbl, tables_of)
+    return _Ledger(by_tbl, tables_of, cp)
 
 
 def _check_export(
@@ -1397,12 +1857,14 @@ def _check_export(
     if e.state == "ambiguous" or e.s3 is None:
         return
     entries = led.by_tbl.get(e.tbl, [])
-    if not entries or entries[-1][0] < e.s3:
+    checkpoint = led.checkpoint or pg_checkpoint.Checkpoint(e.slot)
+    if max(checkpoint.floor(e.tbl), max((s for s, _, _ in entries), default=0)) < e.s3:
         return
 
-    terminal = next(
-        ((s, k) for s, _, k in entries if s > e.s3 and k in TERMINAL_KINDS), None
+    reference = pg_checkpoint.reference(
+        checkpoint, e.name, e.tbl, e.s3, entries, led.plans
     )
+    terminal = reference.terminal
     details["terminal"] = terminal
     if terminal is None:
         if tag == "truncate":
@@ -1451,24 +1913,19 @@ def _check_export(
     if errored is not None:
         return
 
-    cutoff = terminal[0] if terminal is not None else None
-    replayed = []
-    for seq, txn_id, kind in entries:
-        if cutoff is not None and seq >= cutoff:
-            break
-        row = db.execute(
-            "SELECT ops FROM ops WHERE txn_id = ? AND tbl = ?", (txn_id, e.tbl)
-        ).fetchone()
-        if row is None:
-            return
-        replayed.append((seq, kind, json.loads(row[0])))
-    expected = replay(replayed)
+    expected = reference.rows
     diff = bag_diff(expected.items(), [(int(k), v) for k, v in rows])
     matched = diff["missing_count"] == 0 and diff["extra_count"] == 0
+    telemetry.comparison("postgres", "export", matched)
     sometimes(
         bool(expected),
         "postgres source: a check compared an export with a non-empty replayed upstream table",
-        {**details, "replayed_txns": len(replayed), "expected_rows": len(expected)},
+        {
+            **details,
+            "replayed_txns": len(entries),
+            "expected_rows": len(expected),
+            "checkpoint_seq": checkpoint.floor(e.tbl),
+        },
     )
     if tag == "truncate":
         always_or_unreachable(
@@ -1495,7 +1952,7 @@ def _check_export(
             {**details, **diff},
         )
     sometimes(
-        matched and any(s > e.s3 and k == "add_column" for s, _, k in entries),
+        matched and reference.added_column,
         "postgres source: an export matched upstream across an ADD COLUMN below the mapped LSN",
         details,
     )
@@ -1602,11 +2059,15 @@ def _check_terminal_permanence(
     first_terminal = _terminal_in(
         db, e.tbl, e.s3 if e.s3 is not None else e.s1, None, include_aborted=False
     )
-    later_dml = (
-        first_terminal is not None
-        and db.execute(
+    later_dml = first_terminal is not None and (
+        db.execute(
             "SELECT 1 FROM ops o JOIN txns t ON o.txn_id = t.txn_id"
             " WHERE o.tbl = ? AND o.seq > ? AND o.kind = 'dml' AND t.status = 'acked'",
+            (e.tbl, first_terminal),
+        ).fetchone()
+        is not None
+        or db.execute(
+            "SELECT 1 FROM pg_history_summary WHERE tbl = ? AND last_acked_dml_seq > ?",
             (e.tbl, first_terminal),
         ).fetchone()
         is not None

@@ -9,15 +9,17 @@
 
 """0dt deployments driven through the real orchestratord, and their oracles.
 
-Three commands share this module:
+Four commands share this module:
 
-- `driver_main` (`parallel_driver_rollouts`) patches the Materialize CR to run
-  one or two deploy actions per invocation, optionally deleting an environmentd
-  or orchestratord pod at a chosen phase. It is a parallel driver so that
+- `driver_main` (`parallel_driver_rollouts`) advances one durable scenario
+  step per invocation, optionally deleting an environmentd or orchestratord
+  pod at a chosen phase. It is a parallel driver so that
   client writes, DDL, and ingestion from the other drivers overlap catch-up,
   promotion, and the candidate's reboot. Only the invocation holding the CR
-  lease (`CrLease`) writes the spec. Invocations that cannot take it watch the
-  CR for a short while to evaluate the overlap anchors, then exit.
+  lease (`CrLease`) writes the spec. The lease is released between steps, and
+  interrupted steps reconcile their recorded intent before retrying it.
+- `paced_ddl_main` runs the paced-DDL scenario with continuous quiet and DDL
+  holds. Its long elapsed windows are part of the property being tested.
 - `observer_main` (`anytime_rollout_observer`) watches the CR and the
   StatefulSets, samples the environmentd pods and each incarnation's leader
   status, and checks the deploy safety properties against history kept in
@@ -44,7 +46,6 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,7 +62,14 @@ from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
 from materialize import orchestratord
-from materialize.antithesis import ddl_hold, kube_watch, quiet, spec_model, sql
+from materialize.antithesis import (
+    ddl_hold,
+    kube_watch,
+    quiet,
+    spec_model,
+    sql,
+    telemetry,
+)
 from materialize.antithesis.drivers import counters, history, lifecycle
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
@@ -124,8 +132,6 @@ PACED_DDL_WEDGED_FACTOR = 2
 CR_LEASE_SECONDS = 2 * RECOVERY_SECONDS
 # The holder rewrites the lease row at most this often.
 CR_LEASE_RENEW_SECONDS = 30.0
-# How long an invocation without the lease watches the CR.
-NON_HOLDER_WATCH_SECONDS = 60.0
 # How many of the most recent rows of another driver's `ops` table the overlap
 # anchors scan. Drivers append an op when they invoke it and complete it within
 # a statement timeout, so recent acknowledgements are among the latest rows.
@@ -312,7 +318,8 @@ class Kube:
         self.coordination = client.CoordinationV1Api()
 
     def snapshot(self) -> Snapshot:
-        return Snapshot(
+        started = time.monotonic()
+        snap = Snapshot(
             self.custom.get_namespaced_custom_object(
                 orchestratord.GROUP,
                 orchestratord.VERSION,
@@ -322,6 +329,10 @@ class Kube:
                 _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
             )
         )
+        telemetry.phase_observed(
+            snap.reason, snap.active, snap.request, started=started
+        )
+        return snap
 
     def try_snapshot(self) -> Snapshot | None:
         try:
@@ -779,9 +790,11 @@ class Ctx:
         """Renew the lease, then read the CR, evaluating the overlap anchors."""
         if self.lease is not None:
             self.lease.renew()
-        if self.overlap is not None:
-            return self.overlap.poll(self.kube)
-        return self.kube.try_snapshot()
+        return (
+            self.overlap.poll(self.kube)
+            if self.overlap is not None
+            else self.kube.try_snapshot()
+        )
 
     def sleep(self, seconds: float) -> None:
         """Sleep, renewing the lease."""
@@ -901,7 +914,13 @@ def kill_due(ctx: Ctx, plan: KillPlan, snap: Snapshot) -> bool:
     )
 
 
-def execute_kill(ctx: Ctx, plan: KillPlan, snap: Snapshot) -> bool:
+def execute_kill(
+    ctx: Ctx,
+    plan: KillPlan,
+    snap: Snapshot,
+    *,
+    before_delete: Callable[[], None] | None = None,
+) -> bool:
     # `pod_restarts` imports this module for `Kube`.
     from materialize.antithesis.drivers import pod_restarts
 
@@ -910,7 +929,11 @@ def execute_kill(ctx: Ctx, plan: KillPlan, snap: Snapshot) -> bool:
     reason = f"rollout {snap.request} at {snap.reason}"
     if plan.target == "orchestratord":
         holder = ctx.kube.lease_holder()
-        if holder is None or not pod_restarts.delete_recorded(
+        if holder is None:
+            return False
+        if before_delete is not None:
+            before_delete()
+        if not pod_restarts.delete_recorded(
             ctx.kube,
             origin="rollouts",
             role="orchestratord",
@@ -932,6 +955,8 @@ def execute_kill(ctx: Ctx, plan: KillPlan, snap: Snapshot) -> bool:
         pods = [p for p in ctx.kube.envd_pods() if p.generation == generation]
         if not pods:
             return False
+        if before_delete is not None:
+            before_delete()
         deleted = [
             p.name
             for p in pods
@@ -978,38 +1003,6 @@ class Followed:
 TERMINAL_FOR_REQUEST = ("Applied", "RolloutTimeout", "WaitingForApproval")
 
 
-def follow(
-    ctx: Ctx,
-    request: str | None,
-    timeout: float = FOLLOW_TIMEOUT_SECONDS,
-    kill: KillPlan | None = None,
-) -> Followed:
-    """Poll the CR until `request` completes, is replaced, or `timeout` passes."""
-    result = Followed()
-    if request is None:
-        return result
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        snap = ctx.poll()
-        if snap is not None:
-            if snap.request != request:
-                result.outcome = "Superseded"
-                return result
-            if snap.reason and (not result.phases or result.phases[-1] != snap.reason):
-                result.phases.append(snap.reason)
-            if snap.last_completed == request and snap.reason in TERMINAL_FOR_REQUEST:
-                result.outcome = snap.reason
-                return result
-            if kill is not None and result.killed_phase is None:
-                try:
-                    if kill_due(ctx, kill, snap) and execute_kill(ctx, kill, snap):
-                        result.killed_phase = snap.reason
-                except TRANSIENT_ERRORS as e:
-                    log(f"kill attempt failed: {e}")
-        time.sleep(POLL_SECONDS)
-    return result
-
-
 def wait_for_phase(
     ctx: Ctx, request: str | None, phases: tuple[str, ...], timeout: float
 ) -> Snapshot | None:
@@ -1045,272 +1038,10 @@ ACT_DELAY_MENU = (0, 1, 5, 30)
 MANUAL_WAIT_MENU = (0, 5, 30, 120)
 
 
-def action_same_version(ctx: Ctx) -> None:
-    request = submit(ctx, "same_version", new_request())
-    res = follow(ctx, request, kill=maybe_kill_plan(ctx))
-    if res.outcome == "Applied":
-        reachable("Same-version deploy reached Applied", {"phases": res.phases})
-    note_kill_outcome(res)
-
-
-def action_forced_migration(ctx: Ctx) -> None:
-    snap = ctx.kube.try_snapshot()
-    if snap is None:
-        return
-    args = toggled_migration_args(snap.spec)
-    request = submit(
-        ctx, "forced_migration", {**new_request(), "environmentdExtraArgs": args}
-    )
-    res = follow(ctx, request, kill=maybe_kill_plan(ctx))
-    if res.outcome == "Applied" and args:
-        reachable(
-            "Deploy with forced builtin schema migration reached Applied",
-            {"args": args, "phases": res.phases},
-        )
-    note_kill_outcome(res)
-
-
 def maybe_toggle(snap: Snapshot | None) -> dict[str, Any]:
     if snap is None or rng.random() < 0.5:
         return {}
     return {"environmentdExtraArgs": toggled_migration_args(snap.spec)}
-
-
-def action_supersede(ctx: Ctx) -> None:
-    first = submit(
-        ctx,
-        "supersede_first",
-        {**new_request(), **maybe_toggle(ctx.kube.try_snapshot())},
-    )
-    wait_for_phase(ctx, first, ("Applying",), PHASE_WAIT_SECONDS)
-    ctx.sleep(rng.choice(ACT_DELAY_MENU))
-    snap = ctx.kube.try_snapshot()
-    sometimes(
-        snap is not None and snap.request == first and snap.reason == "Applying",
-        "Rollout driver superseded a rollout while it was Applying",
-        snap.summary() if snap else {},
-    )
-    second = submit(ctx, "supersede_second", {**new_request(), **maybe_toggle(snap)})
-    note_kill_outcome(follow(ctx, second, kill=maybe_kill_plan(ctx)))
-
-
-def action_revert(ctx: Ctx) -> None:
-    prior = ctx.kube.try_snapshot()
-    if prior is None:
-        return
-    first = submit(ctx, "revert_forward", {**new_request(), **maybe_toggle(prior)})
-    wait_for_phase(ctx, first, ("Applying",), PHASE_WAIT_SECONDS)
-    ctx.sleep(rng.choice(ACT_DELAY_MENU))
-    snap = ctx.kube.try_snapshot()
-    sometimes(
-        snap is not None and snap.request == first and snap.reason == "Applying",
-        "Rollout driver reverted a rollout while it was Applying",
-        snap.summary() if snap else {},
-    )
-    changes: dict[str, Any] = {
-        "forceRollout": prior.spec.get("forceRollout"),
-        "environmentdExtraArgs": prior.spec.get("environmentdExtraArgs"),
-    }
-    # Reverting with the previous request id completes nothing new; with the
-    # forward id or a fresh one, `Applied` records that id.
-    variant = rng.choice(["restore_request", "keep_request", "fresh_request"])
-    if variant == "restore_request" and prior.request is not None:
-        changes["requestRollout"] = prior.request
-    elif variant == "fresh_request":
-        changes["requestRollout"] = new_uuid()
-    request = submit(ctx, f"revert_{variant}", changes)
-    note_kill_outcome(follow(ctx, request, kill=maybe_kill_plan(ctx)))
-
-
-def action_patch_during_promoting(ctx: Ctx) -> None:
-    prior = ctx.kube.try_snapshot()
-    if prior is None:
-        return
-    first = submit(ctx, "promoting_forward", {**new_request(), **maybe_toggle(prior)})
-    snap = wait_for_phase(ctx, first, ("Promoting",), FOLLOW_TIMEOUT_SECONDS)
-    sometimes(
-        snap is not None and snap.request == first and snap.reason == "Promoting",
-        "Rollout driver patched the spec while the rollout was Promoting",
-        snap.summary() if snap else {},
-    )
-    variant = rng.choice(["new_request", "same_request", "revert"])
-    changes: dict[str, Any]
-    if variant == "new_request":
-        changes = {
-            **new_request(),
-            "environmentdExtraArgs": toggled_migration_args(
-                snap.spec if snap else prior.spec
-            ),
-        }
-    elif variant == "same_request":
-        changes = rng.choice(
-            [
-                {"forceRollout": new_uuid()},
-                {
-                    "environmentdExtraArgs": toggled_migration_args(
-                        snap.spec if snap else prior.spec
-                    )
-                },
-            ]
-        )
-    else:
-        changes = {
-            "forceRollout": prior.spec.get("forceRollout"),
-            "environmentdExtraArgs": prior.spec.get("environmentdExtraArgs"),
-        }
-    request = submit(ctx, f"promoting_{variant}", changes)
-    note_kill_outcome(follow(ctx, request, kill=maybe_kill_plan(ctx)))
-
-
-def action_force_promote(ctx: Ctx) -> None:
-    changes = new_request()
-    request = changes["requestRollout"]
-    if rng.random() < 0.5:
-        submit(ctx, "force_promote_same_patch", {**changes, "forcePromote": request})
-    else:
-        submit(ctx, "force_promote_forward", changes)
-        wait_for_phase(ctx, request, ("Applying",), PHASE_WAIT_SECONDS)
-        ctx.sleep(rng.choice(ACT_DELAY_MENU))
-        submit(ctx, "force_promote_later", {"forcePromote": request})
-    res = follow(ctx, request, kill=maybe_kill_plan(ctx))
-    if res.outcome == "Applied":
-        reachable("Force-promoted rollout reached Applied", {"phases": res.phases})
-    note_kill_outcome(res)
-
-
-def action_manual_promote(ctx: Ctx) -> None:
-    request = submit(
-        ctx, "manual_promote", {**new_request(), "rolloutStrategy": "ManuallyPromote"}
-    )
-    try:
-        snap = wait_for_phase(ctx, request, ("ReadyToPromote",), FOLLOW_TIMEOUT_SECONDS)
-        waited = (
-            snap is not None
-            and snap.request == request
-            and snap.reason == "ReadyToPromote"
-        )
-        if waited:
-            ctx.sleep(rng.choice(MANUAL_WAIT_MENU))
-        submit(ctx, "manual_promote_approve", {"forcePromote": request})
-        res = follow(ctx, request, kill=maybe_kill_plan(ctx))
-        if waited and res.outcome == "Applied":
-            reachable(
-                "ManuallyPromote rollout reached Applied after a force promote from ReadyToPromote",
-                {"phases": res.phases},
-            )
-        note_kill_outcome(res)
-    finally:
-        submit(
-            ctx, "manual_promote_restore", {"rolloutStrategy": DEFAULT_ROLLOUT_STRATEGY}
-        )
-
-
-def action_upgrade(ctx: Ctx) -> None:
-    """Roll out the image under test over an environment on an older release.
-
-    Once the spec names the target image, every other action keeps it, so an
-    upgrade that times out or is superseded is retried by whatever rolls out
-    next. Without a pending upgrade this is a same-version deploy.
-    """
-    target = ctx.env.endpoints.upgrade_pending_image
-    snap = ctx.kube.try_snapshot()
-    if (
-        target is None
-        or snap is None
-        or snap.spec.get("environmentdImageRef") == target
-    ):
-        action_same_version(ctx)
-        return
-    if rng.random() < 0.3:
-        action_upgrade_cancelled(ctx, snap, target)
-        return
-    request = submit(ctx, "upgrade", {**new_request(), "environmentdImageRef": target})
-    res = follow(ctx, request, kill=maybe_kill_plan(ctx))
-    if res.outcome == "Applied":
-        reachable(
-            "Cross-version upgrade reached Applied",
-            {"from": snap.spec.get("environmentdImageRef"), "phases": res.phases},
-        )
-    note_kill_outcome(res)
-
-
-def action_upgrade_cancelled(ctx: Ctx, prior: Snapshot, target: str) -> None:
-    """Start an upgrade under ManuallyPromote, then cancel it before promotion.
-
-    ManuallyPromote never promotes without `forcePromote`, so the old release
-    stays the leader throughout, and reverting the image is a cancellation
-    rather than a downgrade. The old release must keep serving afterwards:
-    nothing the read-only candidate did may have left state it cannot read.
-    """
-    prior_image = prior.spec.get("environmentdImageRef")
-    request = submit(
-        ctx,
-        "upgrade_manual",
-        {
-            **new_request(),
-            "environmentdImageRef": target,
-            "rolloutStrategy": "ManuallyPromote",
-        },
-    )
-    try:
-        snap = wait_for_phase(ctx, request, ("ReadyToPromote",), FOLLOW_TIMEOUT_SECONDS)
-        parked = (
-            snap is not None
-            and snap.request == request
-            and snap.reason == "ReadyToPromote"
-        )
-        if parked:
-            reachable(
-                "Cross-version upgrade candidate reached ReadyToPromote",
-                {"from": prior_image},
-            )
-            ctx.sleep(rng.choice(MANUAL_WAIT_MENU))
-        # Restoring the previous request id completes nothing new; a fresh one
-        # rolls the old release out again, which must not park in turn, so the
-        # strategy is restored in the same patch.
-        variant = rng.choice(["restore_request", "fresh_request"])
-        changes: dict[str, Any] = {
-            "environmentdImageRef": prior_image,
-            "forceRollout": prior.spec.get("forceRollout"),
-            "rolloutStrategy": DEFAULT_ROLLOUT_STRATEGY,
-        }
-        if variant == "restore_request" and prior.request is not None:
-            changes["requestRollout"] = prior.request
-        else:
-            changes["requestRollout"] = new_uuid()
-        cancel = submit(ctx, f"upgrade_cancel_{variant}", changes)
-        res = follow(ctx, cancel, kill=maybe_kill_plan(ctx))
-        after = ctx.kube.try_snapshot()
-        # Settled means the cancel request completed. The condition is not
-        # checked: a revert that restores the completed request id settles as
-        # `WaitingForApproval` rather than `Applied`.
-        if (
-            after is not None
-            and after.request == cancel
-            and after.last_completed == cancel
-            and after.last_completed_image is not None
-        ):
-            always(
-                after.last_completed_image == prior_image
-                and (variant == "fresh_request" or after.active == prior.active),
-                "A cancelled cross-version upgrade leaves the old release serving",
-                {
-                    "prior_image": prior_image,
-                    "prior_active": prior.active,
-                    "variant": variant,
-                    "parked": parked,
-                    "phases": res.phases,
-                    **after.summary(),
-                },
-            )
-            reachable(
-                "Cross-version upgrade cancelled before promotion",
-                {"variant": variant, "parked": parked},
-            )
-    finally:
-        submit(
-            ctx, "upgrade_manual_restore", {"rolloutStrategy": DEFAULT_ROLLOUT_STRATEGY}
-        )
 
 
 # rolloutRequestTimeout values: the humantime boundary, and the family around
@@ -1318,37 +1049,6 @@ def action_upgrade_cancelled(ctx: Ctx, prior: Snapshot, target: str) -> None:
 def timeout_menu() -> list[str]:
     t = T_ROLLOUT_SECONDS
     return ["1s", f"{t // 4}s", f"{t - 1}s", f"{t}s", f"{t + 1}s"]
-
-
-def action_short_timeout(ctx: Ctx) -> None:
-    timeout = rng.choice(timeout_menu())
-    request = submit(
-        ctx, "short_timeout", {**new_request(), "rolloutRequestTimeout": timeout}
-    )
-    try:
-        res = follow(ctx, request, kill=maybe_kill_plan(ctx))
-    finally:
-        submit(
-            ctx,
-            "short_timeout_restore",
-            {"rolloutRequestTimeout": DEFAULT_ROLLOUT_REQUEST_TIMEOUT},
-        )
-    note_kill_outcome(res)
-    # A cancelled request is marked completed, and the next pass reports
-    # WaitingForApproval because the spec still differs from the active one.
-    if res.outcome not in ("RolloutTimeout", "WaitingForApproval"):
-        return
-    reachable(
-        "Short rolloutRequestTimeout cancelled a rollout",
-        {"timeout": timeout, "phases": res.phases},
-    )
-    retry = submit(ctx, "short_timeout_retry", new_request())
-    res = follow(ctx, retry)
-    sometimes(
-        res.outcome == "Applied",
-        "Rollout reached Applied after a RolloutTimeout and a fresh request",
-        {"phases": res.phases, "outcome": res.outcome},
-    )
 
 
 def parse_duration_seconds(text: str) -> float | None:
@@ -1470,7 +1170,7 @@ def foreign_ddl_since(host: str, after_id: int | None) -> int | None:
         return None
 
 
-def action_paced_ddl(ctx: Ctx) -> None:
+def action_paced_ddl(ctx: Ctx) -> bool:
     """A rollout with `PACED_DDL_BURSTS` DDL bursts at least Q apart reaches
     promotion within `K * Q + T_ROLLOUT_SECONDS` of the last burst.
 
@@ -1484,11 +1184,11 @@ def action_paced_ddl(ctx: Ctx) -> None:
     with quiet.held("rollouts:paced_ddl", 60, exclusive=True) as paused:
         if paused is None:
             log("paced_ddl: another quiet period is active; skipping")
-            return
-        _paced_ddl(ctx)
+            return False
+        return _paced_ddl(ctx)
 
 
-def _paced_ddl(ctx: Ctx) -> None:
+def _paced_ddl(ctx: Ctx) -> bool:
     host = ctx.env.sql_host()
     interval = ddl_check_interval_seconds(host)
     q = READ_ONLY_BOOTSTRAP_SECONDS + interval
@@ -1497,7 +1197,7 @@ def _paced_ddl(ctx: Ctx) -> None:
     gap_menu = [q, q + 1, 1.5 * q, 2 * q]
     if not wait_for_sql(host, RECOVERY_SECONDS):
         log("paced_ddl: environment did not recover; skipping")
-        return
+        return False
     # A promotion left in flight by an earlier invocation would complete the
     # new request without a candidate, so wait it out.
     settle_deadline = time.monotonic() + RECOVERY_SECONDS
@@ -1507,7 +1207,7 @@ def _paced_ddl(ctx: Ctx) -> None:
             break
         if time.monotonic() >= settle_deadline:
             log("paced_ddl: a previous promotion is still in flight; skipping")
-            return
+            return False
         time.sleep(POLL_SECONDS)
     audit_start = audit_high_water(host)
     request = submit(
@@ -1520,7 +1220,7 @@ def _paced_ddl(ctx: Ctx) -> None:
         },
     )
     if request is None:
-        return
+        return False
     start = time.monotonic()
     next_burst = start + rng.choice([0.0, q / 2, q])
     restarts: dict[str, tuple[int, int]] = {}
@@ -1534,7 +1234,7 @@ def _paced_ddl(ctx: Ctx) -> None:
             last = snap
             if snap.request != request:
                 log("paced_ddl: request replaced; abandoning the check")
-                return
+                return False
             if snap.reason == "Promoting" or (
                 snap.last_completed == request and snap.reason == "Applied"
             ):
@@ -1598,20 +1298,7 @@ def _paced_ddl(ctx: Ctx) -> None:
         "Rollout under paced DDL completed after at least two candidate restarts",
         details,
     )
-
-
-ACTION_FNS = {
-    "same_version": action_same_version,
-    "forced_migration": action_forced_migration,
-    "supersede": action_supersede,
-    "revert": action_revert,
-    "patch_during_promoting": action_patch_during_promoting,
-    "force_promote": action_force_promote,
-    "manual_promote": action_manual_promote,
-    "short_timeout": action_short_timeout,
-    "paced_ddl": action_paced_ddl,
-    "upgrade": action_upgrade,
-}
+    return True
 
 
 def normalize(ctx: Ctx, action: str) -> bool:
@@ -1642,14 +1329,9 @@ def normalize(ctx: Ctx, action: str) -> bool:
     return True
 
 
-def watch_overlap(ctx: Ctx, seconds: float) -> None:
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        ctx.poll()
-        time.sleep(POLL_SECONDS)
-
-
 def driver_main() -> int:
+    from materialize.antithesis import rollout_steps
+
     env = Environment()
     kube = Kube(env)
     db = requests_db(env)
@@ -1661,41 +1343,51 @@ def driver_main() -> int:
         log(f"taking the CR lease failed: {e}")
         acquired = False
     if not acquired:
-        log("another invocation holds the CR lease; watching only")
-        watch_overlap(ctx, NON_HOLDER_WATCH_SECONDS)
+        log("another invocation holds the CR lease")
+        ctx.poll()
         return 0
     ctx.lease = lease
     try:
-        try:
-            normalize(ctx, "normalize")
-        except TRANSIENT_ERRORS as e:
-            log(f"normalize failed: {e}")
-        names = [a for a in ACTIONS if ctx.params.weights.get(a)]
-        weights = [ctx.params.weights[a] for a in names]
-        start = time.monotonic()
-        for i in range(rng.choice([1, 2])):
-            # Bounds the invocation: a second action starts only within one
-            # follow of the start.
-            if i > 0 and time.monotonic() - start > FOLLOW_TIMEOUT_SECONDS:
-                break
-            action = rng.choices(names, weights=weights)[0]
-            # paced_ddl measures convergence under its own DDL only.
-            hold = (
-                action == "paced_ddl" or rng.random() < ctx.params.ddl_hold_probability
-            )
-            log(f"action {action}{' holding discretionary DDL' if hold else ''}")
-            try:
-                with (
-                    ddl_hold.held(f"rollouts:{action}", strict=action == "paced_ddl")
-                    if hold
-                    else nullcontext()
-                ):
-                    ACTION_FNS[action](ctx)
-            except TRANSIENT_ERRORS as e:
-                log(f"action {action} interrupted: {e}")
+        rollout_steps.step(ctx)
     except LeaseLost as e:
         log(f"stopping: {e}")
         return 0
+    except TRANSIENT_ERRORS as e:
+        log(f"step interrupted: {e}")
+    finally:
+        try:
+            lease.release()
+        except sqlite3.Error as e:
+            log(f"releasing the CR lease failed: {e}")
+    return 0
+
+
+def paced_ddl_main() -> int:
+    """Run the paced-DDL scenario while its quiet and strict DDL holds stay live."""
+    from materialize.antithesis import rollout_steps
+
+    env = Environment()
+    kube = Kube(env)
+    db = requests_db(env)
+    params = timeline_params(db)
+    ctx = Ctx(env, kube, db, params, overlap=PhaseOverlap(env.endpoints))
+    lease = CrLease(env)
+    try:
+        if not lease.acquire():
+            return 0
+        ctx.lease = lease
+        pending = rollout_steps.load(db)
+        if pending is None or pending.action != "paced_ddl" or pending.stage != "paced":
+            return 0
+        if not normalize(ctx, "paced_ddl_normalize"):
+            return 0
+        with ddl_hold.held("rollouts:paced_ddl", strict=True):
+            if action_paced_ddl(ctx):
+                rollout_steps.finish_paced(ctx, pending)
+    except LeaseLost as e:
+        log(f"stopping: {e}")
+    except TRANSIENT_ERRORS as e:
+        log(f"paced DDL interrupted: {e}")
     finally:
         try:
             lease.release()

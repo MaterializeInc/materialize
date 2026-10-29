@@ -96,7 +96,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 )
 from kubernetes.client.rest import ApiException  # type: ignore
 
-from materialize.antithesis import remap_frontiers, sql, state
+from materialize.antithesis import remap_frontiers, sql, state, telemetry
 from materialize.antithesis.drivers import lifecycle, postgres_sources
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
@@ -475,6 +475,20 @@ class Auditor:
         result = self._run(user_count, system_count, unmapped_count, remap_count)
         elapsed = time.monotonic() - self.started
         complete = self.enumerated and self.incomplete == 0 and elapsed <= self.budget_s
+        telemetry.comparison(
+            "shard_audit",
+            "full",
+            (
+                None
+                if not self.completed
+                else (
+                    complete
+                    if self.origin == "finally"
+                    else (True if complete else None)
+                )
+            ),
+            self.completed or 1,
+        )
         details = {
             "origin": self.origin,
             "budget_s": self.budget_s,

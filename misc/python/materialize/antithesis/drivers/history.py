@@ -72,7 +72,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     unreachable,
 )
 
-from materialize.antithesis import ddl_hold, sql, state
+from materialize.antithesis import ddl_hold, sql, state, telemetry, telemetry_coverage
 from materialize.antithesis import serializability as sz
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.environment import Environment
@@ -1103,6 +1103,15 @@ def _check_epoch(db: sqlite3.Connection, epoch: int, scope: str) -> list[int]:
         f" {report.stats.graph_edges} edges in {time.monotonic() - started:.1f}s"
     )
     _assert_report(report, epoch, scope)
+    new_reads = {
+        int(r[0])
+        for r in db.execute(
+            "SELECT op_id FROM ops WHERE epoch = ? AND checked = 0"
+            " AND kind = 'r' AND outcome = 'ok'",
+            (epoch,),
+        )
+    }
+    telemetry_coverage.history_checked(ops, report, new_reads)
     return [op.op_id for op in ops if op.complete is not None]
 
 
@@ -1127,6 +1136,7 @@ def client_history_check() -> int:
         )
     ]
     if not epochs:
+        telemetry.comparison("history", "history", None)
         log("no new operations to check")
         return 0
     new_reads = {
