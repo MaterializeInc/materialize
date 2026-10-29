@@ -3100,10 +3100,10 @@ fn thinning_bounds_log_size_over_a_day() {
     // An advance per second for a day, thinned at every observation.
     for s in 1..=DAY_MS / 1000 {
         log.record(s * 1000 + 1, Some(s * 1000), s * 1000 + 5);
-        log.thin(s * 1000 + 5, period_ms);
-        // The entries of the last period, one per doubling of the age beyond it, the last one.
+        log.thin(s * 1000 + 5, period_ms, &scheme(4));
+        // The entries of the last period, two per bucket of the age beyond it, the last one.
         let doublings = u64::from((s * 1000 / period_ms).max(1).ilog2()) + 1;
-        let bound = 61 + doublings + 1;
+        let bound = 61 + 2 * 4 * doublings + 1;
         assert!(
             u64::try_from(log.len()).unwrap() <= bound,
             "{s}: {} > {bound}",
@@ -3148,8 +3148,8 @@ fn thinning_never_overstates() {
             rows_full.skew.extend(rows.skew);
             // The logs as thinned when this observation reads them.
             let (mut thin1, mut thin2) = (full1.clone(), full2.clone());
-            thin1.thin(*o, period);
-            thin2.thin(*o, period);
+            thin1.thin(*o, period, &cfg.scheme);
+            thin2.thin(*o, period, &cfg.scheme);
             let inputs = [
                 LocalInput { tree: &t1, log: &thin1 },
                 LocalInput { tree: &t2, log: &thin2 },
@@ -3181,13 +3181,12 @@ fn thinned_frontier_answer_does_not_lengthen_skew() {
     }
     let mut log11 = VisibilityLog::default();
     log11.record(11_001, Some(11_000), 13_000);
-    // The join reads at 60 s, when the entries observed at 7010, 14010 and 21010 are of the
-    // same age octave for 1 s periods, so thinning keeps only the first of them, and 14010
-    // is answered by 28010.
-    let now = 60_000;
+    // The join reads at 200 s, when the entries observed at 7010 and 14010 are of the same age
+    // bucket, so thinning keeps only the first of them, and 14010 is answered by 21010.
+    let now = 200_000;
     let mut thinned7 = log7.clone();
-    thinned7.thin(now, 1000);
-    assert_eq!(thinned7.passed_at(11_000), Some(28_010));
+    thinned7.thin(now, 1000, &scheme(4));
+    assert_eq!(thinned7.passed_at(11_000), Some(21_010));
     assert_eq!(thinned7.visible_at(7000), Some(7010));
     let cfg = config(4);
     let skew = |log7: &VisibilityLog| {

@@ -581,6 +581,8 @@ type RecordedKey = (String, String, Option<String>, u64, u64);
 struct Recorded {
     counts: BTreeMap<RecordedKey, i64>,
     buckets: BTreeMap<(String, String, Option<String>), BTreeSet<i32>>,
+    /// The arrivals per bucket over all periods.
+    bucket_counts: BTreeMap<(String, String, Option<String>), BTreeMap<i32, i64>>,
 }
 
 impl Recorded {
@@ -831,6 +833,12 @@ impl FreshnessHarness {
                     .entry((measure.clone(), id.clone(), replica.clone()))
                     .or_default()
                     .insert(rest[2].unwrap_int32());
+                *recorded
+                    .bucket_counts
+                    .entry((measure.clone(), id.clone(), replica.clone()))
+                    .or_default()
+                    .entry(rest[2].unwrap_int32())
+                    .or_default() += diff.into_inner();
                 assert_eq!(rest[3].unwrap_map().iter().count(), 0, "no workload class");
                 let key = (measure, id, replica, ms(datums[0]), ms(datums[1]));
                 *recorded.counts.entry(key).or_insert(0) += diff.into_inner();
@@ -1630,6 +1638,35 @@ async fn local_delay_spans_a_long_replica_outage() {
     for replica in [None, Some(r1)] {
         let buckets = recorded.buckets("local", a, replica);
         assert_eq!(buckets.last(), Some(&outage), "{replica:?}: {buckets:?}");
+    }
+    // Every arrival of the window ending at tick `s` was visible in the input at tick `s` +
+    // 2 ms, and in `a` at tick 60 + 5 ms before the outage, or at tick 3660 + 5 ms after it.
+    let mut truth: BTreeMap<i32, i64> = BTreeMap::new();
+    for s in 1..=3660u64 {
+        let shown = if s <= 60 { s } else { 3660 };
+        *truth
+            .entry(scheme.bucket((shown - s) * 1000 + 3))
+            .or_default() += 1000;
+    }
+    let at_or_above = |m: &BTreeMap<i32, i64>, b: i32| m.range(b..).map(|(_, c)| *c).sum::<i64>();
+    for replica in [None, Some(r1)] {
+        let key = (
+            "local".to_string(),
+            a.to_string(),
+            replica.map(|r| r.to_string()),
+        );
+        let counts = &recorded.bucket_counts[&key];
+        for b in truth.keys().copied().chain(counts.keys().copied()) {
+            // Never above the true delay, and at most one bucket below it.
+            assert!(
+                at_or_above(counts, b) <= at_or_above(&truth, b),
+                "{replica:?} {b}: {counts:?} > {truth:?}"
+            );
+            assert!(
+                at_or_above(counts, b - 1) >= at_or_above(&truth, b),
+                "{replica:?} {b}: {counts:?} more than a bucket below {truth:?}"
+            );
+        }
     }
 }
 

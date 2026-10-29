@@ -60,8 +60,9 @@ fn visibility_log_thins_what_a_waiting_consumer_keeps() {
         record_tick(&mut log, s);
         log.read(consumer, None);
     }
-    // The last minute, and one entry per doubling of the age beyond it.
-    assert!(log.len() <= 60 + 4 + 1, "{}", log.len());
+    // The last minute, and two entries per bucket of the age beyond it, four buckets per
+    // doubling.
+    assert!(log.len() <= 61 + 2 * 4 * 4 + 1, "{}", log.len());
     let copy = log.read(consumer, None);
     // The oldest entry stays, recent arrivals are answered exactly, and thinned ones by a later
     // observation.
@@ -127,7 +128,7 @@ fn visibility_log_is_pruned_through_consumers() {
     for s in 24..=700 {
         record_tick(&mut log, s);
     }
-    assert!(log.len() <= 60 + 4 + 1, "{}", log.len());
+    assert!(log.len() <= 61 + 2 * 4 * 4 + 1, "{}", log.len());
     let late = log.read(a, Some(23_000));
     assert_eq!(late.visible_at(24_000), Some(24_005));
     assert_eq!(late.visible_at(700_000), Some(700_005));

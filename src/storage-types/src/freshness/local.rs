@@ -23,6 +23,7 @@ use mz_repr::Timestamp;
 use timely::progress::Antichain;
 
 use super::ResolvedTree;
+use super::histogram::BucketScheme;
 use super::period::{ClosedPeriod, PeriodBook};
 use super::recorder::{PeriodHistogram, PeriodRow, RecorderConfig, add_part, rows};
 
@@ -144,26 +145,30 @@ impl VisibilityLog {
 
     /// Thins the entries observed more than `period_ms` before `now_ms` geometrically by age.
     ///
-    /// Of the entries whose age lies in `[period_ms * 2^k, period_ms * 2^(k+1))`, only the
-    /// oldest stays, and so does the last entry. The log then holds at most one old entry per
-    /// doubling of the age, about `log2(age / period_ms)` for the oldest age, plus the entries of
-    /// the last period. A thinned entry's arrivals and timestamps are answered by the next kept
-    /// entry, a later observation, which understates by less than the gap between kept entries.
-    pub fn thin(&mut self, now_ms: u64, period_ms: u64) {
+    /// Of the entries whose ages fall into one half of a bucket of `scheme`, only the oldest
+    /// stays, and so does the last entry. The log then holds at most two old entries per bucket,
+    /// about `2 * scheme.per_octave() * log2(age / period_ms)` for the oldest age, plus the
+    /// entries of the last period. A thinned entry's arrivals and timestamps are answered by the
+    /// next kept entry, a later observation at most one bucket younger, so a delay measured from
+    /// it is understated by at most one bucket.
+    pub fn thin(&mut self, now_ms: u64, period_ms: u64, scheme: &BucketScheme) {
+        // NOTE: Kept neighbours only merge once their ages fall into one interval, so kept
+        // entries end up between one and two intervals apart. Half buckets keep that within one
+        // bucket.
+        let halves = BucketScheme::new(scheme.per_octave().saturating_mul(2)).unwrap_or(*scheme);
         let period_ms = period_ms.max(1);
         let old = self
             .entries
             .partition_point(|e| now_ms.saturating_sub(e.observed_ms) > period_ms);
         let last = self.entries.len().saturating_sub(1);
-        // Entries are ascending in observation time, so ages, and with them the intervals,
+        // Entries are ascending in observation time, so ages, and with them the buckets,
         // descend.
         let mut interval = None;
         let mut gap = false;
         let mut kept = Vec::with_capacity(self.entries.len());
         for (idx, entry) in self.entries.iter().enumerate() {
             if idx < old && idx != last {
-                let age = now_ms.saturating_sub(entry.observed_ms) / period_ms;
-                let this = age.ilog2();
+                let this = halves.bucket(now_ms.saturating_sub(entry.observed_ms));
                 if interval == Some(this) {
                     gap = true;
                     continue;

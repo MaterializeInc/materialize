@@ -458,8 +458,8 @@ pub type LogConsumer = (GlobalId, Option<ReplicaId>);
 /// registered, which it is from its creation until it is dropped or its recording stops.
 /// Entries older than one period are thinned geometrically by age, see [`VisibilityLog::thin`],
 /// and entries older than the histogram retention are dropped. So a log holds about
-/// `log2(retention / period)` old entries plus those of the last period, however long a
-/// consumer lags.
+/// `2 * buckets_per_octave * log2(retention / period)` old entries plus those of the last period,
+/// however long a consumer lags.
 #[derive(Debug, Default, Clone)]
 pub struct ConsumedVisibilityLog {
     log: VisibilityLog,
@@ -492,7 +492,7 @@ impl ConsumedVisibilityLog {
             // The last entry stays for consumers that register later.
             None => self.log.prune_through_except_last(u64::MAX),
         }
-        self.log.thin(now_ms, config.period_ms);
+        self.log.thin(now_ms, config.period_ms, &config.scheme);
         // Recorders skip arrivals older than the retention, so no consumer reads these.
         self.log
             .prune_observed_before(now_ms.saturating_sub(config.retention_ms));
