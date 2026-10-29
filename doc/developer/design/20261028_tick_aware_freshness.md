@@ -195,8 +195,9 @@ Storage-owned collections have no inputs inside Materialize, so their local dela
 
 A log keeps what its consumers have not recorded yet, for as long as the consumer exists, including a consumer whose recording has not started.
 Expiring consumers by age lost the outage it was meant to measure: on staging, a view's replica was dropped for 10.5 minutes, its claim on its input's log expired at 10 minutes, and every arrival of the outage recorded the 5 s the new replica took to hydrate as its local delay.
-Instead, entries older than one period are thinned geometrically by age, keeping one entry per interval that doubles with age, so a log holds about $\log_2(\text{age} / \text{period})$ old entries plus the recent ones.
-A thinned entry answers with a later observation time, so thinning understates by less than the gap between kept entries and never overstates.
+Instead, entries older than one period are thinned geometrically by age, keeping one entry per half histogram bucket of age, so a log holds about $2 b \log_2(\text{age} / \text{period})$ old entries plus the recent ones, about 125 for 30 days at 4 buckets per octave and one minute periods.
+A thinned entry answers with a later observation time, so thinning never overstates and understates by at most one bucket.
+One entry per bucket is not enough, because two kept entries only merge once their ages share a bucket, which leaves gaps of up to two buckets.
 Entries older than the histogram retention are dropped, consumer marks are cleared when their recording stops, and logs are not restored across restarts.
 
 ### Cost
