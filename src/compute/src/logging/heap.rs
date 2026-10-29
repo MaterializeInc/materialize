@@ -243,8 +243,9 @@ fn symbolize(frames: &[usize]) -> (u64, Rc<str>) {
         // `resolve` reports the innermost inlined frame first.
         names.extend(inlined.into_iter().rev());
     }
-    while names.last().is_some_and(|n| is_allocator_frame(n)) {
-        names.pop();
+    // Everything from the first allocator entry onwards is the allocator and tracker.
+    if let Some(cut) = names.iter().position(|n| is_allocator_frame(n)) {
+        names.truncate(cut);
     }
     let folded = names.join(";");
     let mut hasher = std::hash::DefaultHasher::new();
@@ -254,16 +255,15 @@ fn symbolize(frames: &[usize]) -> (u64, Rc<str>) {
 
 fn is_allocator_frame(name: &str) -> bool {
     const PREFIXES: &[&str] = &[
-        "mz_alloc",
-        "<mz_alloc",
-        "__rust",
-        "alloc::alloc::",
-        "<alloc::alloc::",
-        "std::alloc::",
-        "backtrace::",
+        "__rustc::__rust_",
+        "__rust_",
+        "<mz_alloc_track::TrackingAlloc",
+        "mz_alloc::c_malloc",
         "malloc",
         "calloc",
         "realloc",
+        "posix_memalign",
+        "aligned_alloc",
     ];
     PREFIXES.iter().any(|p| name.starts_with(p))
 }
