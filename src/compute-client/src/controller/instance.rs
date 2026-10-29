@@ -395,7 +395,7 @@ impl Instance {
     }
 
     /// The freshness recording of collection `id` installed now with `as_of`, globally or on
-    /// `replica_id`. `None` if it is not recorded or starts at its first observed frontier.
+    /// `replica_id`, started by the rules of [`FreshnessRecording`]. `None` if it is not recorded.
     fn freshness_recording(
         &self,
         id: GlobalId,
