@@ -51,7 +51,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     unreachable,
 )
 
-from materialize.antithesis import quiet, sql, state
+from materialize.antithesis import quiet, sql, state, telemetry
 from materialize.antithesis.drivers import configure, history, pod_restarts
 from materialize.antithesis.drivers.recovery import observe_pods
 from materialize.antithesis.drivers.rollouts import (
@@ -478,6 +478,8 @@ class Round:
 
         ok = {p: r.rows for p, r in reads.items() if r.rows is not None}
         if len(ok) < 2:
+            for path in reads:
+                telemetry.comparison("read_paths", path, None)
             return len(ok)
         ref_path = "index" if "index" in ok else next(iter(ok))
         ref = ok[ref_path]
@@ -486,6 +488,12 @@ class Round:
             for p, rows in ok.items()
             if p != ref_path and rows != ref
         }
+        for path in reads:
+            telemetry.comparison(
+                "read_paths",
+                path,
+                None if path not in ok else not diffs and not sub.negatives,
+            )
         details = {
             "t": self.t,
             "reference": ref_path,
