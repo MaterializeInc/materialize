@@ -37,6 +37,7 @@ from materialize.workload_replay.ingest import (
     ingest_webhook,
     make_kafka_producer,
     produce_json,
+    reuse_reference_connections,
 )
 from materialize.workload_replay.util import (
     get_kafka_topic,
@@ -620,6 +621,7 @@ def create_ingestions(
                         f"({batch_size} every {period_s:.2f}s)"
                     )
 
+                    @reuse_reference_connections()
                     def continuous_ingestion_source(
                         source: dict[str, Any],
                         pretty_name: str,
@@ -705,6 +707,7 @@ def create_ingestions(
                             f"({batch_size} every {period_s:.2f}s)"
                         )
 
+                        @reuse_reference_connections()
                         def continuous_ingestion_child(
                             source: dict[str, Any],
                             child: dict[str, Any],
