@@ -9124,7 +9124,6 @@ dependencies = [
  "mz-ssh-util",
  "mz-storage-types",
  "mz-timely-util",
- "mz-tls-util",
  "mz-tracing",
  "proptest",
  "proptest-derive",
