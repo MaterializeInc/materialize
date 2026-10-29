@@ -93,45 +93,7 @@ class ItemColumns(Check):
 
     def validate(self) -> Testdrive:
         return Testdrive(dedent("""
-                # On releases before 26.49 mz_columns is a table the adapter packs,
-                # which reports the string NULL for a table column without a default.
-                # From 26.49 on it is a materialized view over the stored CREATE TABLE,
-                # where no default reads as SQL NULL. Upgrade scenarios validate on
-                # both sides of that line.
-                >[version<2604900] SELECT r.name, c.position, c.name, c.nullable, c.type, c.default, t.name, c.type_mod
-                  FROM mz_columns c
-                  JOIN mz_relations r ON r.id = c.id
-                  JOIN mz_types t ON t.oid = c.type_oid
-                  WHERE r.name LIKE 'item_columns_%'
-                  ORDER BY r.name, c.position
-                item_columns_final_view 1 a true integer <null> int4 -1
-                item_columns_final_view 2 b true item_columns_list <null> item_columns_list -1
-                item_columns_final_view 3 c true text <null> text -1
-                item_columns_initial_mv 1 a false integer <null> int4 -1
-                item_columns_initial_mv 2 b true text <null> text -1
-                item_columns_initial_mv 3 c1 true numeric <null> numeric -1
-                item_columns_initial_table 1 a false integer NULL int4 -1
-                item_columns_initial_table 2 b true text 'b' text -1
-                item_columns_initial_table 3 c true numeric NULL numeric 2555910
-                item_columns_initial_table 4 d true item_columns_list NULL item_columns_list -1
-                item_columns_initial_table 5 e true item_columns_record NULL item_columns_record -1
-                item_columns_initial_table 6 f true "timestamp without time zone" NULL timestamp 3
-                item_columns_initial_table 7 g true integer[] NULL _int4 -1
-                item_columns_initial_table 8 i true integer NULL int4 -1
-                item_columns_initial_view 1 a false integer <null> int4 -1
-                item_columns_initial_view 2 b true text <null> text -1
-                item_columns_initial_view 3 c1 true numeric <null> numeric -1
-                item_columns_initial_view 4 d true item_columns_list <null> item_columns_list -1
-                item_columns_initial_view 5 e true item_columns_record <null> item_columns_record -1
-                item_columns_initial_view 6 f true "timestamp without time zone" <null> timestamp 3
-                item_columns_initial_view 7 g true integer[] <null> _int4 -1
-                item_columns_middle_mv 1 a true integer <null> int4 -1
-                item_columns_middle_mv 2 b true item_columns_list <null> item_columns_list -1
-                item_columns_middle_table 1 a true integer NULL int4 -1
-                item_columns_middle_table 2 b true item_columns_list NULL item_columns_list -1
-                item_columns_middle_table 3 c true text NULL text -1
-
-                >[version>=2604900] SELECT r.name, c.position, c.name, c.nullable, c.type, c.default, t.name, c.type_mod
+                > SELECT r.name, c.position, c.name, c.nullable, c.type, c.default, t.name, c.type_mod
                   FROM mz_columns c
                   JOIN mz_relations r ON r.id = c.id
                   JOIN mz_types t ON t.oid = c.type_oid
