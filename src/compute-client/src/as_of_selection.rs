@@ -1057,6 +1057,13 @@ mod tests {
             unimplemented!()
         }
 
+        fn visibility_log(
+            &self,
+            _id: GlobalId,
+        ) -> Option<mz_storage_client::freshness::SharedVisibilityLog> {
+            unimplemented!()
+        }
+
         fn ticker_lookup(&self) -> Arc<dyn TickerLookup + Send + Sync> {
             unimplemented!()
         }
