@@ -482,6 +482,9 @@ struct PoolInner {
     /// next free, commit, or enqueue of a placeable extent, or the next spill
     /// thread retry.
     full_hint: AtomicBool,
+    /// File mode: the schedule on which spill threads release warm file
+    /// store slots. See [`Pool::set_file_release`].
+    file_release: Mutex<FileRelease>,
     /// Second-chance FIFOs of eviction candidates, one per depth band; a
     /// chunk joins the band of its [`ChunkHints`] depth at insert and again
     /// on re-admission. Entries for freed chunks go stale in place and are
@@ -549,6 +552,16 @@ struct Spill {
     /// binary exiting with live threads, so tests stop and join them.
     stop: std::sync::atomic::AtomicBool,
     handles: Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+
+/// The schedule of the file store's warm-slot release.
+#[derive(Debug)]
+struct FileRelease {
+    interval: std::time::Duration,
+    /// Bytes each class releases per interval. Zero disables the release.
+    bytes_per_class: u64,
+    /// When the next release is due.
+    due: std::time::Instant,
 }
 
 /// Beyond this many queued or in-flight spill entries, eviction degrades to
@@ -790,6 +803,11 @@ impl Pool {
             extent_arena,
             store,
             full_hint: AtomicBool::new(false),
+            file_release: Mutex::new(FileRelease {
+                interval: std::time::Duration::ZERO,
+                bytes_per_class: 0,
+                due: std::time::Instant::now(),
+            }),
             queues: std::array::from_fn(|_| Mutex::new(VecDeque::new())),
             extent_queue: Mutex::new(VecDeque::new()),
             live_chunks: AtomicU64::new(0),
@@ -1086,6 +1104,21 @@ impl Pool {
         if eager {
             self.0.spill.cv.notify_all();
         }
+    }
+
+    /// Retunes the file store's warm-slot release: every `interval`, a spill
+    /// thread punches up to `bytes_per_class` of each extent class's free
+    /// slots that still hold blocks, so the store's disk usage follows its
+    /// live extents. Zero bytes disables the release. No effect on a
+    /// swap-backed pool or one without spill threads.
+    pub fn set_file_release(&self, interval: std::time::Duration, bytes_per_class: u64) {
+        let mut release = self.0.file_release();
+        release.interval = interval;
+        release.bytes_per_class = bytes_per_class;
+        // A shortened interval takes effect now rather than after the
+        // current one. Taking the minimum keeps the per-tick reapplication
+        // of an unchanged config from postponing the release.
+        release.due = release.due.min(std::time::Instant::now() + interval);
     }
 
     /// Retunes the resident-bytes budget in place and enforces it. Live
@@ -1439,6 +1472,7 @@ impl PoolInner {
                 return;
             }
             self.spill_trim(&mut hinted_retry);
+            self.spill_release_file();
             let popped = self.spill_queue().pop_front();
             if let Some(meta) = popped {
                 self.spill_process(&meta, SpillKind::Evict);
@@ -1482,6 +1516,28 @@ impl PoolInner {
             *hinted_retry = now + SPILL_PARK_TIMEOUT;
         }
         self.enforce_compressed_cap(Pass::Background);
+    }
+
+    /// Releases warm file store slots if the release is enabled and due.
+    /// The first spill thread to see it due claims the interval.
+    fn spill_release_file(&self) {
+        let ExtentStore::File(store) = &self.store else {
+            return;
+        };
+        let bytes_per_class = {
+            let mut release = self.file_release();
+            let now = std::time::Instant::now();
+            if release.bytes_per_class == 0 || now < release.due {
+                return;
+            }
+            release.due = now + release.interval;
+            release.bytes_per_class
+        };
+        store.release_warm(bytes_per_class);
+    }
+
+    fn file_release(&self) -> MutexGuard<'_, FileRelease> {
+        self.file_release.lock().expect("file release poisoned")
     }
 
     /// Eagerly compresses one unbacked chunk from the eviction queues into

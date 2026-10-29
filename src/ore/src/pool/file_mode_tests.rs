@@ -955,7 +955,8 @@ fn free_during_enospc_write_returns_the_file_slot_once() {
 
 /// Races demotions and their commits, frees during writes, file reads, and
 /// admissions across worker threads, an enforcer, and two spill threads
-/// doing eviction, eager backing, and compressed-tier trims. Every read is
+/// doing eviction, eager backing, compressed-tier trims, and file store
+/// releases. Every read is
 /// verified, and the pool must drain to zero in both stores.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
@@ -968,6 +969,7 @@ fn concurrent_file_mode_churn() {
     let (_dir, pool) = file_pool(4 * (64 << 10), 2 << 20);
     pool.set_spill_threads(2);
     pool.set_eager_backing(true);
+    pool.set_file_release(std::time::Duration::from_millis(1), 1 << 20);
     let store = pool.file_store().expect("file mode");
     let shared: Arc<Vec<(Vec<u64>, ChunkHandle)>> = Arc::new(
         (0..8u64)
@@ -1236,4 +1238,74 @@ fn budget_pass_trims_the_tier_between_evictions() {
     }
     drop(handles);
     assert_drained(&pool);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn file_release_punches_freed_slots_once_per_interval() {
+    use std::time::Duration;
+
+    let (_dir, pool) = file_pool(256 << 20, 64 << 20);
+    let store = pool.file_store().expect("file mode");
+    let demote_and_free = |seed| {
+        let handle = insert(&pool, &payload(SMALL, seed));
+        pool.evict(&handle);
+        assert!(handle.file_slot().is_some(), "demoted");
+    };
+    demote_and_free(1);
+    assert!(store.allocated_bytes() > 0, "a freed slot keeps its blocks");
+    pool.0.spill_release_file();
+    assert!(store.allocated_bytes() > 0, "the release is off by default");
+
+    pool.set_file_release(Duration::from_secs(3600), u64::MAX);
+    pool.0.spill_release_file();
+    assert_eq!(
+        store.allocated_bytes(),
+        0,
+        "the first release is due at once"
+    );
+    demote_and_free(2);
+    pool.0.spill_release_file();
+    assert!(
+        store.allocated_bytes() > 0,
+        "the next release waits out the interval"
+    );
+    pool.set_file_release(Duration::from_secs(3600), u64::MAX);
+    pool.0.spill_release_file();
+    assert!(
+        store.allocated_bytes() > 0,
+        "reapplying the config does not move the release up"
+    );
+    pool.set_file_release(Duration::ZERO, u64::MAX);
+    pool.0.spill_release_file();
+    assert_eq!(
+        store.allocated_bytes(),
+        0,
+        "a shortened interval takes effect now"
+    );
+    assert_drained(&pool);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn spill_threads_run_the_file_release() {
+    use std::time::{Duration, Instant};
+
+    let (_dir, pool) = file_pool(256 << 20, 64 << 20);
+    let store = pool.file_store().expect("file mode");
+    let handle = insert(&pool, &payload(SMALL, 1));
+    pool.evict(&handle);
+    drop(handle);
+    assert!(store.allocated_bytes() > 0);
+    pool.set_file_release(Duration::from_millis(1), u64::MAX);
+    pool.set_spill_threads(1);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while store.allocated_bytes() > 0 {
+        assert!(
+            Instant::now() < deadline,
+            "no spill thread released the slot"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    pool.join_spill_threads();
 }
