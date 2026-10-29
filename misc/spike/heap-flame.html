@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live heap flame graph</title>
+<!-- SPIKE: throwaway. Streams a SUBSCRIBE over the Materialize WebSocket SQL API and renders the
+     sampled live heap as a flame graph, applying each update's diffs in place. -->
+<style>
+  :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --line:#ddd; --panel:#f6f6f4; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16171a; --fg:#e6e6e6; --muted:#999; --line:#333; --panel:#1f2024; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; }
+  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; }
+  header h1 { font-size:15px; margin:0 8px 0 0; }
+  .stat { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .stat b { color:var(--fg); font-weight:600; }
+  label { display:inline-flex; gap:4px; align-items:center; }
+  input[type=search] { width:220px; }
+  #crumbs { padding:6px 16px; color:var(--muted); min-height:18px; font-family:ui-monospace, monospace; font-size:12px; overflow-wrap:anywhere; }
+  #crumbs a { color:inherit; cursor:pointer; text-decoration:underline; }
+  #wrap { position:relative; padding:0 16px 16px; }
+  canvas { display:block; width:100%; }
+  #tip { position:fixed; pointer-events:none; background:var(--panel); border:1px solid var(--line); padding:6px 8px; max-width:640px;
+         font:12px ui-monospace, monospace; overflow-wrap:anywhere; display:none; z-index:2; box-shadow:0 2px 8px rgba(0,0,0,.15); }
+  #dot { width:8px; height:8px; border-radius:50%; background:#c33; display:inline-block; }
+  #dot.live { background:#2a2; }
+  details { padding:0 16px 8px; }
+  textarea { width:100%; height:180px; font:12px ui-monospace, monospace; background:var(--panel); color:var(--fg); border:1px solid var(--line); }
+  .legend span { display:inline-block; width:10px; height:10px; margin:0 3px 0 8px; vertical-align:-1px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Live heap</h1>
+  <span><span id="dot"></span> <span id="status" class="stat">connecting</span></span>
+  <span class="stat">sampled live <b id="total">0</b></span>
+  <span class="stat">rows <b id="rows">0</b></span>
+  <span class="stat">updates <b id="updates">0</b></span>
+  <span class="stat">as of <b id="ts">-</b></span>
+  <label>group
+    <select id="group">
+      <option value="dop">dataflow, operator, stack</option>
+      <option value="op">operator, stack</option>
+      <option value="s">stack only</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="trim" checked> trim scheduler frames</label>
+  <label><input type="checkbox" id="short" checked> short names</label>
+  <input type="search" id="search" placeholder="highlight frames (regex)">
+  <span class="legend stat"><span style="background:hsl(140 60% 45%)"></span>grew <span style="background:hsl(210 60% 55%)"></span>shrank (last update)</span>
+</header>
+<details>
+  <summary class="stat">query (edit and reconnect)</summary>
+  <textarea id="sql"></textarea>
+  <label>cluster <input id="cluster" value="c" size="8"></label>
+  <label>ws <input id="url" size="40"></label>
+  <button id="reconnect">reconnect</button>
+</details>
+<div id="crumbs"></div>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<div id="tip"></div>
+<script>
+"use strict";
+const DEFAULT_SQL = `SUBSCRIBE (
+  SELECT
+    CASE WHEN h.operator_id IS NULL THEN '[unattributed]'
+         WHEN o.id IS NULL THEN '[unlisted operators]'
+         ELSE o.dataflow_name END AS dataflow,
+    CASE WHEN o.id IS NULL THEN NULL ELSE o.id || ' ' || o.name END AS operator,
+    s.frames,
+    sum(h.bytes)::int8 AS bytes
+  FROM mz_introspection.mz_heap_live_per_operator h
+  JOIN mz_introspection.mz_heap_stacks s USING (process_id, stack_id)
+  LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows o ON h.operator_id = o.id
+  GROUP BY 1, 2, 3
+) WITH (PROGRESS)`;
+
+const $ = id => document.getElementById(id);
+$("sql").value = DEFAULT_SQL;
+$("url").value = `ws://${location.hostname || "localhost"}:6976/api/experimental/sql`;
+
+// Accumulated collection: key -> {dataflow, operator, frames, bytes}. Rows arrive as diffs.
+let coll = new Map();
+let pending = false, updates = 0, lastTs = "-";
+let ws = null;
+
+function connect() {
+  if (ws) { ws.onclose = null; ws.close(); }
+  coll = new Map(); prevValues = new Map(); updates = 0;
+  setStatus("connecting", false);
+  ws = new WebSocket($("url").value);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ user: "materialize", password: "", options: { cluster: $("cluster").value } }));
+    ws.send(JSON.stringify({ query: $("sql").value }));
+  };
+  let cols = null;
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    switch (msg.type) {
+      case "Rows": cols = msg.payload.columns.map(c => c.name); setStatus("live", true); break;
+      case "Row": onRow(cols, msg.payload); break;
+      case "Error": setStatus("error: " + msg.payload.message, false); break;
+      case "Notice": console.log(msg.payload.message); break;
+    }
+  };
+  ws.onclose = () => setStatus("disconnected", false);
+}
+
+function onRow(cols, r) {
+  const ts = r[0], progressed = r[1];
+  if (progressed) {
+    lastTs = ts;
+    if (pending) { pending = false; updates++; rebuild(); }
+    return;
+  }
+  const diff = Number(r[2]);
+  const [dataflow, operator, frames, bytes] = r.slice(3);
+  const key = dataflow + "\u0000" + operator + "\u0000" + frames;
+  let e = coll.get(key);
+  if (!e) { e = { dataflow, operator, frames, bytes: 0, n: 0 }; coll.set(key, e); }
+  e.bytes += diff * Number(bytes);
+  e.n += diff;
+  if (e.n === 0) coll.delete(key);
+  pending = true;
+}
+
+function setStatus(s, live) { $("status").textContent = s; $("dot").className = live ? "live" : ""; }
+
+// Folded frames are joined with ';' but symbols such as `[T; 2]` contain "; ", so only split on a
+// ';' that is not followed by a space.
+const splitFrames = f => f.split(/;(?! )/);
+// Frames up to the innermost scheduler frame repeat under every operator node. Cut them.
+const SCHED = /PerOperatorState<.*>>::schedule$|as timely::scheduling::Schedule>::schedule$|<timely::worker::Worker>::step_or_park$|<mz_compute::server::Worker>::handle_command$/;
+function stripGenerics(s) {
+  let out = "", depth = 0;
+  for (const ch of s) {
+    if (ch === "<") { depth++; continue; }
+    if (ch === ">") { depth = Math.max(0, depth - 1); continue; }
+    if (depth === 0) out += ch;
+  }
+  return out;
+}
+const lastSegment = p => p.split("::").filter(Boolean).pop() || p;
+function shortName(s) {
+  // `<Type as Trait>::method` and `<Type>::method` become `Type::method`.
+  if (s.startsWith("<")) {
+    let depth = 0, end = -1;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "<") depth++;
+      else if (s[i] === ">" && --depth === 0) { end = i; break; }
+    }
+    if (end > 0) {
+      const inner = s.slice(1, end), rest = stripGenerics(s.slice(end + 1));
+      let d = 0, as = -1;
+      for (let i = 0; i < inner.length; i++) {
+        if (inner[i] === "<") d++; else if (inner[i] === ">") d--;
+        else if (d === 0 && inner.startsWith(" as ", i)) { as = i; break; }
+      }
+      const ty = lastSegment(stripGenerics(as >= 0 ? inner.slice(0, as) : inner));
+      return ty + rest;
+    }
+  }
+  const parts = stripGenerics(s).split("::").filter(Boolean);
+  return parts.length > 2 ? parts.slice(-2).join("::") : parts.join("::") || s;
+}
+// Sampling jitters every node a little between snapshots. Only flag changes that matter.
+const significant = (d, v) => Math.abs(d) >= Math.max(1 << 20, 0.02 * v);
+
+// Tree: {name, full, value, children: Map}
+let root = null, zoom = [], prevValues = new Map(), deltas = new Map();
+function rebuild() {
+  const group = $("group").value, trim = $("trim").checked;
+  const r = { name: "all", full: "all", value: 0, children: new Map(), path: "all" };
+  let total = 0;
+  for (const e of coll.values()) {
+    if (e.bytes <= 0) continue;
+    total += e.bytes;
+    let frames = splitFrames(e.frames);
+    if (trim) {
+      let cut = -1;
+      frames.forEach((f, i) => { if (SCHED.test(f)) cut = i; });
+      frames = frames.slice(cut + 1);
+    }
+    const head = [];
+    if (group === "dop") head.push("◆ " + e.dataflow);
+    if (group !== "s" && e.operator) head.push("● " + e.operator);
+    if (group === "op" && !e.operator) head.push("◆ " + e.dataflow);
+    let n = r; n.value += e.bytes;
+    for (const f of head.concat(frames)) {
+      let c = n.children.get(f);
+      if (!c) { c = { name: f, full: f, value: 0, children: new Map(), path: n.path + "\u0001" + f }; n.children.set(f, c); }
+      c.value += e.bytes; n = c;
+    }
+  }
+  // Delta against the previous update, keyed by path, so changed boxes can be colored.
+  const next = new Map(); deltas = new Map();
+  (function walk(n) { next.set(n.path, n.value); const p = prevValues.get(n.path) ?? 0; if (significant(n.value - p, Math.max(p, n.value))) deltas.set(n.path, n.value - p); n.children.forEach(walk); })(r);
+  if (prevValues.size === 0) deltas = new Map();
+  prevValues = next;
+  root = r;
+  // Re-resolve the zoom path against the new tree.
+  zoom = zoom.map(z => z.path);
+  zoom = resolveZoom(zoom);
+  $("total").textContent = fmt(total);
+  $("rows").textContent = coll.size;
+  $("updates").textContent = updates;
+  $("ts").textContent = lastTs;
+  draw();
+}
+function resolveZoom(paths) {
+  const out = []; let n = root;
+  for (const p of paths) {
+    const name = p.split("\u0001").pop();
+    const c = n.children.get(name);
+    if (!c) break;
+    out.push(c); n = c;
+  }
+  return out;
+}
+
+const fmt = b => b >= 1 << 30 ? (b / 2 ** 30).toFixed(2) + " GiB" : b >= 1 << 20 ? (b / 2 ** 20).toFixed(1) + " MiB" : (b / 1024).toFixed(0) + " KiB";
+
+const cv = $("cv"), ctx = cv.getContext("2d");
+const ROW = 18;
+let boxes = [];
+function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
+function color(n, dark) {
+  const d = deltas.get(n.path);
+  const re = searchRe();
+  if (re && re.test(n.full)) return "hsl(300 70% 55%)";
+  if (d > 0) return "hsl(140 60% 45%)";
+  if (d < 0) return "hsl(210 60% 55%)";
+  const h = hash(n.name);
+  if (n.name.startsWith("◆")) return dark ? "hsl(35 25% 35%)" : "hsl(35 35% 75%)";
+  if (n.name.startsWith("●")) return dark ? "hsl(20 45% 38%)" : "hsl(20 70% 70%)";
+  return `hsl(${10 + (Math.abs(h) % 40)} ${dark ? 55 : 75}% ${dark ? 38 + (Math.abs(h >> 8) % 10) : 58 + (Math.abs(h >> 8) % 12)}%)`;
+}
+let reCache = [null, null];
+function searchRe() {
+  const s = $("search").value;
+  if (s === reCache[0]) return reCache[1];
+  let re = null; try { re = s ? new RegExp(s, "i") : null; } catch (_) {}
+  reCache = [s, re]; return re;
+}
+
+function draw() {
+  if (!root) return;
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const W = cv.clientWidth, dpr = devicePixelRatio || 1;
+  const top = zoom.length ? zoom[zoom.length - 1] : root;
+  let depth = 0;
+  (function d(n, k) { depth = Math.max(depth, k); n.children.forEach(c => d(c, k + 1)); })(top, 1);
+  const H = (depth + zoom.length) * ROW + 4;
+  cv.style.height = H + "px"; cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.font = "11px ui-monospace, monospace"; ctx.textBaseline = "middle";
+  boxes = [];
+  const short = $("short").checked;
+  const box = (n, x, y, w) => {
+    ctx.fillStyle = color(n, dark); ctx.fillRect(x, y, Math.max(w - 1, 0.5), ROW - 1);
+    boxes.push({ n, x, y, w });
+    if (w > 30) {
+      const label = (short && !/^[◆●]/.test(n.name) ? shortName(n.name) : n.name) + " " + fmt(n.value);
+      ctx.fillStyle = dark ? "#eee" : "#111";
+      ctx.save(); ctx.beginPath(); ctx.rect(x, y, w - 3, ROW); ctx.clip();
+      ctx.fillText(label, x + 3, y + ROW / 2); ctx.restore();
+    }
+  };
+  // Ancestors of the zoom target span full width above it.
+  let y = 0;
+  [root, ...zoom.slice(0, -1)].forEach(a => { if (zoom.length) { box(a, 0, y, W); y += ROW; } });
+  (function layout(n, x, y, w) {
+    box(n, x, y, w);
+    const kids = [...n.children.values()].sort((a, b) => b.value - a.value);
+    let cx = x;
+    for (const c of kids) {
+      const cw = w * c.value / n.value;
+      if (cw >= 0.5) layout(c, cx, y + ROW, cw);
+      cx += cw;
+    }
+  })(top, 0, y, W);
+  renderCrumbs();
+}
+
+function renderCrumbs() {
+  const el = $("crumbs"); el.textContent = "";
+  const all = [root, ...zoom];
+  all.forEach((n, i) => {
+    if (i) el.append(" › ");
+    const a = document.createElement("a");
+    a.textContent = n === root ? "all" : shortName(n.name);
+    a.onclick = () => { zoom = zoom.slice(0, i); draw(); };
+    el.append(a);
+  });
+}
+
+function hit(ev) {
+  const r = cv.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+  for (let i = boxes.length - 1; i >= 0; i--) { const b = boxes[i]; if (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + ROW) return b; }
+  return null;
+}
+cv.onmousemove = ev => {
+  const b = hit(ev), tip = $("tip");
+  if (!b) { tip.style.display = "none"; return; }
+  const top = root.value, d = deltas.get(b.n.path);
+  tip.textContent = `${b.n.full}\n${fmt(b.n.value)}  (${(100 * b.n.value / top).toFixed(2)}% of sampled live)` + (d ? `\nlast update ${d > 0 ? "+" : "-"}${fmt(Math.abs(d))}` : "");
+  tip.style.whiteSpace = "pre-wrap";
+  tip.style.display = "block";
+  tip.style.left = Math.min(ev.clientX + 12, innerWidth - 660) + "px";
+  tip.style.top = ev.clientY + 14 + "px";
+};
+cv.onmouseleave = () => $("tip").style.display = "none";
+cv.onclick = ev => {
+  const b = hit(ev); if (!b) return;
+  if (b.n === root) { zoom = []; draw(); return; }
+  // Rebuild the chain from root to the clicked node by its path.
+  const names = b.n.path.split("\u0001").slice(1);
+  const out = []; let n = root;
+  for (const nm of names) { n = n.children.get(nm); out.push(n); }
+  zoom = out; draw();
+};
+["group", "trim"].forEach(id => $(id).onchange = () => { prevValues = new Map(); zoom = []; rebuild(); });
+$("short").onchange = draw;
+$("search").oninput = draw;
+$("reconnect").onclick = connect;
+addEventListener("resize", draw);
+connect();
+</script>
+</body>
+</html>
