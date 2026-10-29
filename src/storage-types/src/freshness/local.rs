@@ -11,6 +11,7 @@
 //! slowest direct input had.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use mz_repr::Timestamp;
 use timely::progress::Antichain;
@@ -25,12 +26,25 @@ use super::recorder::{PeriodHistogram, PeriodRow, RecorderConfig, add_part, rows
 ///
 /// Visibility is measured in arrival time, the collection's own `last_reflected`, so a refresh
 /// collection is visible when its data is, not when its frontier passes.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct VisibilityLog {
     /// `(reflected, observed_ms)`, ascending in both.
     entries: Vec<(u64, u64)>,
     /// Arrivals at or below this are no longer answerable because their entries were pruned.
     floor: u64,
+}
+
+// NOTE: Summarizes instead of deriving, because controller state dumps format every log, and
+// a log can hold an entry per observed frontier advance.
+impl fmt::Debug for VisibilityLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VisibilityLog")
+            .field("len", &self.entries.len())
+            .field("first", &self.entries.first())
+            .field("last", &self.entries.last())
+            .field("floor", &self.floor)
+            .finish()
+    }
 }
 
 impl VisibilityLog {

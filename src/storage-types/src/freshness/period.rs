@@ -10,6 +10,7 @@
 //! Bookkeeping of open recording periods shared by the freshness recorders.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// A period `(start, end]` that will not change anymore, with the state accumulated for it.
 #[derive(Debug)]
@@ -30,11 +31,22 @@ struct OpenPeriod<S> {
 /// Periods are half-open `(start, end]` on arrival time and start at multiples of the period
 /// length, so every arrival time belongs to exactly one period. A period is handed out once,
 /// when its end is at most the high-water mark, which makes everything handed out final.
-#[derive(Debug)]
 pub(super) struct PeriodBook<S> {
     high_water_ms: u64,
     open: BTreeMap<(u64, u64), OpenPeriod<S>>,
     finished: bool,
+}
+
+// NOTE: Summarizes instead of deriving, because controller state dumps format every
+// collection's recorders and a dump must stay small.
+impl<S> fmt::Debug for PeriodBook<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PeriodBook")
+            .field("high_water_ms", &self.high_water_ms)
+            .field("open_periods", &self.open.len())
+            .field("finished", &self.finished)
+            .finish()
+    }
 }
 
 impl<S> PeriodBook<S> {

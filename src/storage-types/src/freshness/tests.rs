@@ -1285,3 +1285,34 @@ fn local_counts_match_end_to_end() {
         }
     });
 }
+
+#[mz_ore::test]
+fn debug_output_stays_small() {
+    let tree = ResolvedTree::Leaf(Ticker::Continuous);
+    let mut log = VisibilityLog::default();
+    for t in 1..10_000 {
+        log.record(t, t);
+    }
+    let mut end_to_end = FreshnessRecorder::new(0);
+    let mut local = LocalDelayRecorder::new(0);
+    // Each period length opens its own period `(0, length]`, which stays open below 1000.
+    for t in 1..1_000 {
+        let cfg = RecorderConfig {
+            period_ms: 1_000 * t,
+            ..config(4)
+        };
+        assert!(end_to_end.observe(&tree, &at(t + 1), t, &cfg).is_empty());
+        assert!(
+            local
+                .observe(&tree, &at(t + 1), t, &[&log], &cfg)
+                .is_empty()
+        );
+    }
+    let end_to_end = format!("{end_to_end:?}");
+    assert!(end_to_end.contains("open_periods: 999"), "{end_to_end}");
+    let log = format!("{log:?}");
+    assert!(log.contains("len: 9999"), "{log}");
+    for debug in [end_to_end, format!("{local:?}"), log] {
+        assert!(debug.len() < 1024, "{} bytes: {debug}", debug.len());
+    }
+}
