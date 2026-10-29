@@ -3151,11 +3151,11 @@ where
             log.record(&tree, frontier, now_ms, &config);
         }
         // Storage collections have no direct inputs, so their local delay is their end-to-end
-        // latency.
+        // latency and they have no skew.
         let rows = collection
             .freshness
             .get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms))
-            .observe(&tree, frontier, now_ms, &[], &config);
+            .observe(&tree, &tree, frontier, now_ms, &[], &config);
         if rows.is_empty() {
             return Vec::new();
         }
@@ -4370,7 +4370,8 @@ mod tests {
         // The arrivals recorded through 60 s, which start after the returned start.
         let start = |since: Antichain<Timestamp>, created_ms: u64| {
             let mut recording = FreshnessRecording::created(since, created_ms);
-            let rows = recording.observe(&tree, &since_frontier(60_001), 61_000, &[], &config);
+            let rows =
+                recording.observe(&tree, &tree, &since_frontier(60_001), 61_000, &[], &config);
             let end_to_end = rows.iter().filter(|(m, _)| *m == Measure::EndToEnd);
             60_000 - end_to_end.map(|(_, r)| r.count).sum::<u64>()
         };

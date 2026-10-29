@@ -313,6 +313,7 @@ impl Instance {
             .chain(storage_dependencies.keys())
             .copied()
             .collect();
+        let freshness_own_refresh = refresh_schedule.is_some();
         let introspection = CollectionIntrospection::new(
             id,
             self.introspection_tx.clone(),
@@ -333,6 +334,7 @@ impl Instance {
         );
         state.target_replica = target_replica;
         state.freshness_tree = freshness_tree;
+        state.freshness_own_refresh = freshness_own_refresh;
         // Looked up once, so recording does not take the `StorageCollections` lock per input.
         state.freshness_inputs = freshness_inputs
             .into_iter()
@@ -2102,6 +2104,10 @@ impl Instance {
         else {
             return;
         };
+        let needed = match collection.freshness_own_refresh {
+            true => tree.below_refresh(),
+            false => &tree,
+        };
         let now_ms = (self.now)();
         let replica_collection = match replica_id {
             None => None,
@@ -2160,7 +2166,7 @@ impl Instance {
         };
         let rows = recording
             .get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms))
-            .observe(&tree, &frontier, now_ms, &inputs, &config);
+            .observe(&tree, needed, &frontier, now_ms, &inputs, &config);
         self.deliver_freshness_rows(id, replica_id, rows);
     }
 
@@ -2885,6 +2891,9 @@ struct CollectionState {
 
     /// How the collection's frontier follows arrival time. `None` if it has no time dependence.
     freshness_tree: Option<FreshnessTree>,
+    /// Whether `freshness_tree` ends in the collection's own refresh node, which the timestamps
+    /// its inputs must pass do not include.
+    freshness_own_refresh: bool,
     /// The direct inputs whose visibility local delay is measured against, the imports that
     /// contributed to the freshness tree, with their log in `StorageCollections` if they have
     /// one.
@@ -2951,6 +2960,7 @@ impl CollectionState {
             introspection,
             wallclock_lag_histogram_stash,
             freshness_tree: None,
+            freshness_own_refresh: false,
             freshness_inputs: BTreeMap::new(),
             freshness: None,
             visibility_log: SharedVisibilityLog::default(),

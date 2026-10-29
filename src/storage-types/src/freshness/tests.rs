@@ -11,6 +11,7 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use itertools::Itertools;
 use mz_ore::cast::CastLossy;
 use mz_repr::Timestamp;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
@@ -19,7 +20,7 @@ use proptest::sample::select;
 use proptest::strategy::Union;
 
 use super::histogram::{BucketScheme, add_span};
-use super::local::{LocalDelayRecorder, VisibilityLog};
+use super::local::{LocalDelayRecorder, LocalRows, VisibilityLog};
 use super::period::{DAY_MS, PeriodBook};
 use super::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use super::*;
@@ -130,28 +131,6 @@ fn continuous_and_unaligned_boundaries() {
     assert_eq!(tree.last_reflected(Timestamp::from(16u64)), Some(14));
 }
 
-/// The timestamp at which an arrival at `t` becomes visible.
-fn assigned(tree: &ResolvedTree, t: u64) -> Option<u64> {
-    match tree {
-        ResolvedTree::Leaf(Ticker::Continuous) => Some(t),
-        ResolvedTree::Leaf(Ticker::Aligned { interval_ms } | Ticker::Unaligned { interval_ms }) => {
-            Some(t.div_ceil(*interval_ms) * interval_ms)
-        }
-        ResolvedTree::Min(inputs) => inputs
-            .iter()
-            .map(|i| assigned(i, t))
-            .collect::<Option<Vec<_>>>()?
-            .into_iter()
-            .max(),
-        ResolvedTree::Refresh { schedule, input } => {
-            let a = assigned(input, t)?;
-            schedule
-                .round_up_timestamp(Timestamp::from(a))
-                .map(u64::from)
-        }
-    }
-}
-
 fn arb_tree() -> impl Strategy<Value = ResolvedTree> {
     let ticker = Union::new([
         (1u64..=50)
@@ -190,7 +169,7 @@ fn last_reflected_matches_oracle() {
         // Brute force: the largest arrival whose assigned timestamp is below the frontier.
         let mut expected = None;
         for t in 0..=frontier {
-            if let Some(a) = assigned(&tree, t) {
+            if let Some(a) = tree.assigned(t) {
                 if a < frontier {
                     expected = Some(t);
                 }
@@ -1023,26 +1002,49 @@ fn bucket_counts(rows: &[PeriodRow]) -> BTreeMap<i32, u64> {
 fn visibility_log_visible_at() {
     let mut log = VisibilityLog::default();
     assert_eq!(log.visible_at(1), None);
-    log.record(1000, 1010);
-    log.record(2000, 2020);
+    log.record(1001, Some(1000), 1010);
+    log.record(2001, Some(2000), 2020);
     // A regressing or repeated value is ignored.
-    log.record(2000, 2500);
-    log.record(1500, 2600);
+    log.record(2001, Some(2000), 2500);
+    log.record(1501, Some(1500), 2600);
     // The earliest observation with `reflected >= arrival`.
     assert_eq!(log.visible_at(1), Some(1010));
     assert_eq!(log.visible_at(1000), Some(1010));
     assert_eq!(log.visible_at(1001), Some(2020));
     assert_eq!(log.visible_at(2000), Some(2020));
     assert_eq!(log.visible_at(2001), None);
+    // The earliest observation with `frontier > timestamp`.
+    assert_eq!(log.passed_at(0), Some(1010));
+    assert_eq!(log.passed_at(1000), Some(1010));
+    assert_eq!(log.passed_at(1001), Some(2020));
+    assert_eq!(log.passed_at(2001), None);
     // Pruned entries answer with the observation of the last pruned entry, and the rest stay
     // correct.
     log.prune_through(1000);
     assert_eq!(log.visible_at(1000), Some(1010));
     assert_eq!(log.visible_at(1001), Some(2020));
+    assert_eq!(log.passed_at(1000), Some(1010));
+    assert_eq!(log.passed_at(1001), Some(2020));
     log.prune_through(5000);
     assert_eq!(log.visible_at(1), Some(2020));
     assert_eq!(log.visible_at(2000), Some(2020));
     assert_eq!(log.visible_at(6000), None);
+    assert_eq!(log.passed_at(2000), Some(2020));
+    assert_eq!(log.passed_at(2001), None);
+}
+
+#[mz_ore::test]
+fn visibility_log_records_frontier_without_reflected_arrivals() {
+    let mut log = VisibilityLog::default();
+    // A frontier that reflects nothing, as a refresh view's before its first refresh, still
+    // answers timestamps.
+    log.record(10_000, None, 50);
+    log.record(10_000, Some(9_000), 60);
+    log.record(20_000, Some(9_000), 70);
+    assert_eq!(log.visible_at(1), Some(60));
+    assert_eq!(log.visible_at(9_001), None);
+    assert_eq!(log.passed_at(9_999), Some(50));
+    assert_eq!(log.passed_at(10_000), Some(70));
 }
 
 #[mz_ore::test]
@@ -1057,17 +1059,35 @@ fn local_chain_attributes_hops() {
     let (mut rows_a, mut rows_b, mut rows_c, mut rows_e2e) = (vec![], vec![], vec![], vec![]);
     for w in (1000..=200_000u64).step_by(1000) {
         // A is a 1 s source, B shows each tick 3 s later, and C shows it as B does.
-        log_a.record(w, w + 1);
-        rows_a.extend(local_a.observe(&tree, &at(w + 1), w + 1, &[], &cfg));
-        log_b.record(w, w + 3001);
-        rows_b.extend(local_b.observe(&tree, &at(w + 1), w + 3001, &[&log_a], &cfg));
-        rows_c.extend(local_c.observe(&tree, &at(w + 1), w + 3001, &[&log_b], &cfg));
+        log_a.record(w + 1, Some(w), w + 1);
+        rows_a.extend(
+            local_a
+                .observe(&tree, &tree, &at(w + 1), w + 1, &[], &cfg)
+                .local,
+        );
+        log_b.record(w + 1, Some(w), w + 3001);
+        let b = local_b.observe(&tree, &tree, &at(w + 1), w + 3001, &[&log_a], &cfg);
+        rows_b.extend(b.local);
+        let c = local_c.observe(&tree, &tree, &at(w + 1), w + 3001, &[&log_b], &cfg);
+        rows_c.extend(c.local);
         rows_e2e.extend(end_to_end_c.observe(&tree, &at(w + 1), w + 3001, &cfg));
     }
     let empty = Antichain::new();
-    rows_a.extend(local_a.observe(&tree, &empty, 300_000, &[], &cfg));
-    rows_b.extend(local_b.observe(&tree, &empty, 300_000, &[&log_a], &cfg));
-    rows_c.extend(local_c.observe(&tree, &empty, 300_000, &[&log_b], &cfg));
+    rows_a.extend(
+        local_a
+            .observe(&tree, &tree, &empty, 300_000, &[], &cfg)
+            .local,
+    );
+    rows_b.extend(
+        local_b
+            .observe(&tree, &tree, &empty, 300_000, &[&log_a], &cfg)
+            .local,
+    );
+    rows_c.extend(
+        local_c
+            .observe(&tree, &tree, &empty, 300_000, &[&log_b], &cfg)
+            .local,
+    );
     rows_e2e.extend(end_to_end_c.observe(&tree, &empty, 300_000, &cfg));
 
     let s = scheme(4);
@@ -1093,21 +1113,30 @@ fn local_chain_attributes_hops() {
 }
 
 #[mz_ore::test]
-fn local_join_uses_slowest_input() {
-    let tree = ResolvedTree::Min(vec![aligned(7000), aligned(11000)]);
+fn local_join_splits_alignment_wait() {
+    let tree = ResolvedTree::Min(vec![aligned(7000), aligned(11_000)]);
     let cfg = config(4);
     for swap in [false, true] {
+        // The window (0, 7000] needs timestamp 11000. The 11 s input shows it at 11010, which
+        // makes it the slowest to show it, but the 7 s input stays below 11000 until 14010.
         let (mut fast, mut slow) = (VisibilityLog::default(), VisibilityLog::default());
-        fast.record(7000, 7100);
-        slow.record(7000, 7500);
+        fast.record(7001, Some(7000), 7010);
+        fast.record(14_001, Some(14_000), 14_010);
+        slow.record(11_001, Some(11_000), 11_010);
         let inputs = if swap { [&slow, &fast] } else { [&fast, &slow] };
         let mut recorder = LocalDelayRecorder::new(0);
-        let mut rows = recorder.observe(&tree, &at(11_001), 8000, &inputs, &cfg);
-        rows.extend(recorder.observe(&tree, &Antichain::new(), 8000, &inputs, &cfg));
-        // The slow input, observed at 7500, decides.
+        let mut rows = recorder.observe(&tree, &tree, &at(11_001), 14_030, &inputs, &cfg);
+        let finished = recorder.observe(&tree, &tree, &Antichain::new(), 14_030, &inputs, &cfg);
+        rows.local.extend(finished.local);
+        rows.skew.extend(finished.skew);
+        let s = scheme(4);
         assert_eq!(
-            bucket_counts(&rows),
-            BTreeMap::from([(scheme(4).bucket(500), 7000)])
+            bucket_counts(&rows.local),
+            BTreeMap::from([(s.bucket(20), 7000)])
+        );
+        assert_eq!(
+            bucket_counts(&rows.skew),
+            BTreeMap::from([(s.bucket(3000), 7000)])
         );
     }
 }
@@ -1117,21 +1146,29 @@ fn local_missing_input_entry_understates() {
     let tree = aligned(1000);
     let cfg = config(4);
     let mut observed = VisibilityLog::default();
-    observed.record(1000, 1100);
-    observed.record(2000, 2200);
+    observed.record(1001, Some(1000), 1100);
+    observed.record(2001, Some(2000), 2200);
     let missing = VisibilityLog::default();
     let mut pruned = VisibilityLog::default();
-    pruned.record(1000, 1100);
-    pruned.record(2000, 2200);
+    pruned.record(1001, Some(1000), 1100);
+    pruned.record(2001, Some(2000), 2200);
     pruned.prune_through(1000);
     let s = scheme(4);
     let run = |log: &VisibilityLog| {
         let mut recorder = LocalDelayRecorder::new(0);
         let mut rows = Vec::new();
         for (frontier, now) in [(1001, 1500), (2001, 2500)] {
-            rows.extend(recorder.observe(&tree, &at(frontier), now, &[log], &cfg));
+            rows.extend(
+                recorder
+                    .observe(&tree, &tree, &at(frontier), now, &[log], &cfg)
+                    .local,
+            );
         }
-        rows.extend(recorder.observe(&tree, &Antichain::new(), 3000, &[log], &cfg));
+        rows.extend(
+            recorder
+                .observe(&tree, &tree, &Antichain::new(), 3000, &[log], &cfg)
+                .local,
+        );
         bucket_counts(&rows)
     };
     // With entries the delays are 400 ms and 300 ms.
@@ -1151,11 +1188,18 @@ fn local_input_entry_inside_window_is_not_split() {
     // inside the last one, which is only visible in the input with the entry at 21000.
     let tree = aligned(7000);
     let mut log = VisibilityLog::default();
-    log.record(15_000, 21_100);
-    log.record(21_000, 21_500);
+    log.record(15_001, Some(15_000), 21_100);
+    log.record(21_001, Some(21_000), 21_500);
     let mut recorder = LocalDelayRecorder::new(0);
-    let mut rows = recorder.observe(&tree, &at(21_001), 22_000, &[&log], &config(4));
-    rows.extend(recorder.observe(&tree, &Antichain::new(), 22_000, &[&log], &config(4)));
+    let cfg = config(4);
+    let mut rows = recorder
+        .observe(&tree, &tree, &at(21_001), 22_000, &[&log], &cfg)
+        .local;
+    rows.extend(
+        recorder
+            .observe(&tree, &tree, &Antichain::new(), 22_000, &[&log], &cfg)
+            .local,
+    );
     let s = scheme(4);
     // The first two windows are ready at 21100, the last at 21500.
     assert_eq!(
@@ -1169,10 +1213,16 @@ fn local_negative_delay_clamps() {
     let tree = aligned(1000);
     let cfg = config(4);
     let mut log = VisibilityLog::default();
-    log.record(1000, 5000);
+    log.record(1001, Some(1000), 5000);
     let mut recorder = LocalDelayRecorder::new(0);
-    let mut rows = recorder.observe(&tree, &at(1001), 1500, &[&log], &cfg);
-    rows.extend(recorder.observe(&tree, &Antichain::new(), 1500, &[&log], &cfg));
+    let mut rows = recorder
+        .observe(&tree, &tree, &at(1001), 1500, &[&log], &cfg)
+        .local;
+    rows.extend(
+        recorder
+            .observe(&tree, &tree, &Antichain::new(), 1500, &[&log], &cfg)
+            .local,
+    );
     assert_eq!(
         bucket_counts(&rows),
         BTreeMap::from([(scheme(4).bucket(1), 1000)])
@@ -1184,6 +1234,7 @@ fn local_negative_delay_clamps() {
 /// rows of `refreshed` and of `plain`.
 fn refresh_chain() -> (Vec<PeriodRow>, Vec<PeriodRow>) {
     let tree = refresh(every(10_000), aligned(1000));
+    let inner = tree.below_refresh();
     let cfg = config(4);
     let mut log_a = VisibilityLog::default();
     let mut log_refreshed = VisibilityLog::default();
@@ -1196,7 +1247,7 @@ fn refresh_chain() -> (Vec<PeriodRow>, Vec<PeriodRow>) {
         let now = refresh_ts + 2000;
         // The source ticks every second up to the refresh and a bit beyond.
         while next_a <= now {
-            log_a.record(next_a, next_a + 1);
+            log_a.record(next_a + 1, Some(next_a), next_a + 1);
             next_a += 1000;
         }
         let frontier = at(refresh_ts + 1);
@@ -1204,13 +1255,18 @@ fn refresh_chain() -> (Vec<PeriodRow>, Vec<PeriodRow>) {
             tree.last_reflected(Timestamp::from(refresh_ts + 1)),
             Some(refresh_ts)
         );
-        rows_refreshed.extend(local_refreshed.observe(&tree, &frontier, now, &[&log_a], &cfg));
-        log_refreshed.record(refresh_ts, now);
-        rows_plain.extend(local_plain.observe(&tree, &frontier, now, &[&log_refreshed], &cfg));
+        // The refresh view's own refresh is not part of what it needs from its input.
+        let refreshed = local_refreshed.observe(&tree, inner, &frontier, now, &[&log_a], &cfg);
+        rows_refreshed.extend(refreshed.local);
+        log_refreshed.record(refresh_ts + 1, Some(refresh_ts), now);
+        let plain = local_plain.observe(&tree, &tree, &frontier, now, &[&log_refreshed], &cfg);
+        rows_plain.extend(plain.local);
     }
     let empty = Antichain::new();
-    rows_refreshed.extend(local_refreshed.observe(&tree, &empty, 300_000, &[&log_a], &cfg));
-    rows_plain.extend(local_plain.observe(&tree, &empty, 300_000, &[&log_refreshed], &cfg));
+    let refreshed = local_refreshed.observe(&tree, inner, &empty, 300_000, &[&log_a], &cfg);
+    rows_refreshed.extend(refreshed.local);
+    let plain = local_plain.observe(&tree, &tree, &empty, 300_000, &[&log_refreshed], &cfg);
+    rows_plain.extend(plain.local);
     (rows_refreshed, rows_plain)
 }
 
@@ -1252,13 +1308,13 @@ fn arb_local_tree() -> impl Strategy<Value = ResolvedTree> {
 }
 
 fn arb_log() -> impl Strategy<Value = VisibilityLog> {
-    proptest::collection::vec((1u64..30_000, 0u64..40_000), 0..12).prop_map(|steps| {
+    proptest::collection::vec((1u64..30_000, 0u64..5_000, 0u64..40_000), 0..12).prop_map(|steps| {
         let (mut reflected, mut observed) = (0, 0);
         let mut log = VisibilityLog::default();
-        for (dr, dt) in steps {
+        for (dr, ahead, dt) in steps {
             reflected += dr;
             observed += dt;
-            log.record(reflected, observed);
+            log.record(reflected + 1 + ahead, Some(reflected), observed);
         }
         log
     })
@@ -1275,19 +1331,29 @@ fn local_counts_match_end_to_end() {
     proptest!(ProptestConfig::with_cases(64), |((tree, steps, logs, interval_ms) in strategy)| {
         let cfg = RecorderConfig { interval_ms, period_ms: 10_000, ..config(4) };
         let inputs: Vec<&VisibilityLog> = logs.iter().collect();
+        let needed = tree.below_refresh();
         let mut end_to_end = FreshnessRecorder::new(0);
         let mut local = LocalDelayRecorder::new(0);
-        let (mut rows_e2e, mut rows_local) = (vec![], vec![]);
+        let (mut rows_e2e, mut rows_local, mut rows_skew) = (vec![], vec![], vec![]);
         let (mut frontier, mut now) = (1, 0);
+        let mut observe = |frontier: &Antichain<Timestamp>, now: u64| {
+            rows_e2e.extend(end_to_end.observe(&tree, frontier, now, &cfg));
+            let rows = local.observe(&tree, needed, frontier, now, &inputs, &cfg);
+            rows_local.extend(rows.local);
+            rows_skew.extend(rows.skew);
+        };
         for (df, dt) in steps {
             frontier += df;
             now += dt;
-            rows_e2e.extend(end_to_end.observe(&tree, &at(frontier), now, &cfg));
-            rows_local.extend(local.observe(&tree, &at(frontier), now, &inputs, &cfg));
+            observe(&at(frontier), now);
         }
-        rows_e2e.extend(end_to_end.observe(&tree, &Antichain::new(), now, &cfg));
-        rows_local.extend(local.observe(&tree, &Antichain::new(), now, &inputs, &cfg));
+        observe(&Antichain::new(), now);
         prop_assert_eq!(period_totals(&rows_local), period_totals(&rows_e2e));
+        if inputs.len() >= 2 {
+            prop_assert_eq!(period_totals(&rows_skew), period_totals(&rows_e2e));
+        } else {
+            prop_assert!(rows_skew.is_empty());
+        }
         if inputs.is_empty() {
             // Without inputs, local delay is the end-to-end latency.
             prop_assert_eq!(rows_local, rows_e2e);
@@ -1300,17 +1366,16 @@ fn debug_output_stays_small() {
     let tree = ResolvedTree::Leaf(Ticker::Continuous);
     let mut log = VisibilityLog::default();
     for t in 1..10_000 {
-        log.record(t, t);
+        log.record(t + 1, Some(t), t);
     }
     let mut end_to_end = FreshnessRecorder::new(0);
     let mut local = LocalDelayRecorder::new(0);
     for t in 1..1_000 {
         let cfg = config(4);
         assert!(end_to_end.observe(&tree, &at(t + 1), t, &cfg).is_empty());
-        assert!(
-            local
-                .observe(&tree, &at(t + 1), t, &[&log], &cfg)
-                .is_empty()
+        assert_eq!(
+            local.observe(&tree, &tree, &at(t + 1), t, &[&log], &cfg),
+            LocalRows::default()
         );
     }
     let end_to_end = format!("{end_to_end:?}");
@@ -1499,14 +1564,19 @@ fn finish_emits_open_periods() {
             .observe(&tree, &at(30_001), 30_001, &cfg)
             .is_empty()
     );
-    assert!(
-        local
-            .observe(&tree, &at(30_001), 30_001, &[], &cfg)
-            .is_empty()
+    assert_eq!(
+        local.observe(&tree, &tree, &at(30_001), 30_001, &[], &cfg),
+        LocalRows::default()
     );
     let rows = recorder.finish();
     assert_eq!(period_totals(&rows), BTreeMap::from([(0, 30_000)]));
-    assert_eq!(local.finish(), rows);
+    assert_eq!(
+        local.finish(),
+        LocalRows {
+            local: rows,
+            skew: vec![]
+        }
+    );
     assert!(
         recorder
             .observe(&tree, &at(90_001), 90_001, &cfg)
@@ -1525,14 +1595,16 @@ fn local_long_input_outage_uses_last_pruned_observation() {
     // at `start`. The input's log keeps the entries of the last ten minutes.
     let mut log = VisibilityLog::default();
     for w in (start + 1000..=end).step_by(1000) {
-        log.record(w, w + 100);
+        log.record(w + 1, Some(w), w + 100);
     }
     let now = end + 100;
     let cutoff = now - 600_000;
     log.prune_through(cutoff - 1100);
     let mut recorder = LocalDelayRecorder::new(start);
-    let mut rows = recorder.observe(&tree, &at(end + 1), now, &[&log], &cfg);
-    rows.extend(recorder.finish());
+    let mut rows = recorder
+        .observe(&tree, &tree, &at(end + 1), now, &[&log], &cfg)
+        .local;
+    rows.extend(recorder.finish().local);
     let counts = bucket_counts(&rows);
     let total: u64 = counts.values().sum();
     assert_eq!(total, end - start);
@@ -1678,9 +1750,9 @@ fn period_book_starts_at_an_off_grid_start() {
 #[mz_ore::test]
 fn visibility_log_retention_keeps_the_last_entry() {
     let mut log = VisibilityLog::default();
-    log.record(1000, 1010);
-    log.record(2000, 2020);
-    log.record(3000, 3030);
+    log.record(1001, Some(1000), 1010);
+    log.record(2001, Some(2000), 2020);
+    log.record(3001, Some(3000), 3030);
     log.prune_observed_before(2500);
     // Pruned arrivals are answered by the last pruned entry.
     assert_eq!(log.visible_at(1000), Some(2020));
@@ -1700,6 +1772,10 @@ fn visibility_log_after_answers_later_arrivals() {
         if arrival > after {
             prop_assert_eq!(copy.visible_at(arrival), log.visible_at(arrival));
         }
+        // A timestamp is never answered earlier than by the full log.
+        if let (Some(copied), Some(full)) = (copy.passed_at(arrival), log.passed_at(arrival)) {
+            prop_assert!(copied >= full, "{copied} < {full}");
+        }
     });
 }
 
@@ -1709,6 +1785,563 @@ fn local_recorder_reports_high_water() {
     let cfg = config(4);
     let mut local = LocalDelayRecorder::new(500);
     assert_eq!(local.high_water_ms(), 500);
-    local.observe(&tree, &at(3001), 3005, &[], &cfg);
+    local.observe(&tree, &tree, &at(3001), 3005, &[], &cfg);
     assert_eq!(local.high_water_ms(), 3000);
+}
+
+/// A frontier history of one collection, `(observed_ms, frontier)` ascending in both.
+type History = Vec<(u64, u64)>;
+
+/// Appends an observation. An observation before the last one is moved to it, and one that does
+/// not advance the frontier is dropped.
+fn push_advance(history: &mut History, observed_ms: u64, frontier: u64) {
+    match history.last_mut() {
+        Some((_, f)) if frontier <= *f => {}
+        Some((o, f)) if observed_ms <= *o => *f = frontier,
+        _ => history.push((observed_ms, frontier)),
+    }
+}
+
+/// A leaf that ticks every `interval` ms through `end`, observed `delay` ms after each tick and
+/// `ahead` ms early against the wall clock. Observations that fall into `stall` wait for its end.
+fn leaf_history(
+    interval: u64,
+    delay: u64,
+    end: u64,
+    stall: Option<(u64, u64)>,
+    ahead: u64,
+) -> History {
+    let mut history = Vec::new();
+    let mut tick = interval;
+    while tick <= end {
+        let mut observed = tick + delay;
+        if let Some((from, to)) = stall
+            && (from..to).contains(&observed)
+        {
+            observed = to + delay;
+        }
+        push_advance(&mut history, observed.saturating_sub(ahead), tick + 1);
+        tick += interval;
+    }
+    history
+}
+
+/// The frontier of `history` at wall clock `w`, 0 before its first observation.
+fn frontier_at(history: &History, w: u64) -> u64 {
+    match history.partition_point(|(o, _)| *o <= w) {
+        0 => 0,
+        idx => history[idx - 1].1,
+    }
+}
+
+/// An object whose frontier is the least of its inputs' frontiers, observed `delay` ms after the
+/// input observation that advanced it.
+fn derived_history(inputs: &[&History], delay: u64) -> History {
+    let mut times: Vec<u64> = inputs
+        .iter()
+        .flat_map(|h| h.iter().map(|(o, _)| *o))
+        .collect();
+    times.sort();
+    times.dedup();
+    let mut history = Vec::new();
+    for t in times {
+        let frontier = inputs.iter().map(|h| frontier_at(h, t)).min().unwrap();
+        if frontier > 0 {
+            push_advance(&mut history, t + delay, frontier);
+        }
+    }
+    history
+}
+
+/// `history` with the observations in `[from, to)` held back until `to`.
+fn held(history: &History, (from, to): (u64, u64)) -> History {
+    let mut out = Vec::new();
+    for (o, f) in history {
+        let o = if (from..to).contains(o) { to } else { *o };
+        push_advance(&mut out, o, *f);
+    }
+    out
+}
+
+fn log_of(tree: &ResolvedTree, history: &History) -> VisibilityLog {
+    let mut log = VisibilityLog::default();
+    for (o, f) in history {
+        log.record(*f, tree.last_reflected(Timestamp::from(*f)), *o);
+    }
+    log
+}
+
+#[derive(Debug, Default)]
+struct Recorded {
+    end_to_end: Vec<PeriodRow>,
+    local: Vec<PeriodRow>,
+    skew: Vec<PeriodRow>,
+    /// The last recorded arrival.
+    high_water_ms: u64,
+}
+
+/// Records an object with `tree` and `needed` from `start_ms` on over its `history`, with inputs
+/// whose logs hold all their observations up front.
+fn record_history(
+    tree: &ResolvedTree,
+    needed: &ResolvedTree,
+    history: &History,
+    inputs: &[(&ResolvedTree, &History)],
+    start_ms: u64,
+) -> Recorded {
+    let cfg = config(4);
+    let logs: Vec<VisibilityLog> = inputs.iter().map(|(t, h)| log_of(t, h)).collect();
+    let logs: Vec<&VisibilityLog> = logs.iter().collect();
+    let mut end_to_end = FreshnessRecorder::new(start_ms);
+    let mut local = LocalDelayRecorder::new(start_ms);
+    let mut recorded = Recorded::default();
+    for (o, f) in history {
+        recorded
+            .end_to_end
+            .extend(end_to_end.observe(tree, &at(*f), *o, &cfg));
+        let rows = local.observe(tree, needed, &at(*f), *o, &logs, &cfg);
+        recorded.local.extend(rows.local);
+        recorded.skew.extend(rows.skew);
+    }
+    recorded.high_water_ms = local.high_water_ms();
+    recorded.end_to_end.extend(end_to_end.finish());
+    let rows = local.finish();
+    recorded.local.extend(rows.local);
+    recorded.skew.extend(rows.skew);
+    recorded
+}
+
+/// The split of one arrival's end-to-end charge, from complete histories.
+#[derive(Debug)]
+struct Truth {
+    arrival: u64,
+    window_start: u64,
+    /// The first observation of the object that reflects the arrival.
+    observed_ms: u64,
+    /// Its time as the end-to-end latency charges it.
+    advance_ms: u64,
+    arrival_ready_ms: u64,
+    timestamp_ready_ms: u64,
+}
+
+impl Truth {
+    fn new(
+        tree: &ResolvedTree,
+        needed: &ResolvedTree,
+        history: &History,
+        inputs: &[(&ResolvedTree, &History)],
+        arrival: u64,
+    ) -> Self {
+        let reflects = |tree: &ResolvedTree, f: u64| {
+            tree.last_reflected(Timestamp::from(f))
+                .is_some_and(|r| r >= arrival)
+        };
+        let (observed_ms, frontier) =
+            history[history.partition_point(|(_, f)| !reflects(tree, *f))];
+        let advance_ms = observed_ms.max(tree.last_reflected(Timestamp::from(frontier)).unwrap());
+        let timestamp = needed.assigned(arrival).unwrap();
+        let (mut arrival_ready_ms, mut timestamp_ready_ms) = (0, 0);
+        for (input, h) in inputs {
+            let shown = h.partition_point(|(_, f)| !reflects(input, *f));
+            arrival_ready_ms = arrival_ready_ms.max(h.get(shown).map_or(observed_ms, |(o, _)| *o));
+            let passed = h.partition_point(|(_, f)| *f <= timestamp);
+            timestamp_ready_ms =
+                timestamp_ready_ms.max(h.get(passed).map_or(observed_ms, |(o, _)| *o));
+        }
+        Truth {
+            arrival,
+            window_start: tree.prev_boundary(arrival - 1),
+            observed_ms,
+            advance_ms,
+            arrival_ready_ms,
+            timestamp_ready_ms,
+        }
+    }
+
+    /// The truths of the arrivals in `(from, to]`.
+    fn all(
+        tree: &ResolvedTree,
+        needed: &ResolvedTree,
+        history: &History,
+        inputs: &[(&ResolvedTree, &History)],
+        (from, to): (u64, u64),
+    ) -> Vec<Self> {
+        (from + 1..=to)
+            .map(|a| Truth::new(tree, needed, history, inputs, a))
+            .collect()
+    }
+
+    fn end_to_end_ms(&self) -> u64 {
+        self.advance_ms - self.window_start
+    }
+
+    fn upstream_ms(&self) -> u64 {
+        self.arrival_ready_ms.saturating_sub(self.window_start)
+    }
+
+    fn skew_ms(&self) -> u64 {
+        self.timestamp_ready_ms
+            .saturating_sub(self.arrival_ready_ms)
+    }
+
+    fn local_ms(&self) -> u64 {
+        let ready = self.timestamp_ready_ms.max(self.arrival_ready_ms);
+        self.observed_ms.saturating_sub(ready)
+    }
+}
+
+/// The histogram of `latencies`, with 0 in the bucket of 1 ms as the recorders count it.
+fn histogram(latencies: impl Iterator<Item = u64>) -> BTreeMap<i32, u64> {
+    let s = scheme(4);
+    let mut counts = BTreeMap::new();
+    for latency in latencies {
+        *counts.entry(s.bucket(latency.max(1))).or_default() += 1;
+    }
+    counts
+}
+
+/// Whether `low` counts as many latencies as `high` and at most as many at or above every
+/// bucket, which holds if every latency of `low` is at most its counterpart in `high`.
+fn dominated_by(low: &BTreeMap<i32, u64>, high: &BTreeMap<i32, u64>) -> bool {
+    let at_or_above = |m: &BTreeMap<i32, u64>, b: i32| m.range(b..).map(|(_, c)| *c).sum::<u64>();
+    low.keys()
+        .chain(high.keys())
+        .chain([&i32::MIN])
+        .all(|b| at_or_above(low, *b) <= at_or_above(high, *b))
+        && at_or_above(low, i32::MIN) == at_or_above(high, i32::MIN)
+}
+
+/// A join of a 7 s and an 11 s source, each observed 10 ms after its tick, which the join shows
+/// 20 ms after the input observation that advances it. Returns the trees and histories.
+fn join_7_11(
+    stall_11: Option<(u64, u64)>,
+    end: u64,
+) -> (ResolvedTree, [(ResolvedTree, History); 2]) {
+    let (l7, l11) = (aligned(7000), aligned(11_000));
+    let join = ResolvedTree::Min(vec![l7.clone(), l11.clone()]);
+    let h7 = leaf_history(7000, 10, end, None, 0);
+    let h11 = leaf_history(11_000, 10, end, stall_11, 0);
+    (join, [(l7, h7), (l11, h11)])
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_join_charges_alignment_to_skew() {
+    let (join, inputs) = join_7_11(None, 400_000);
+    let inputs: Vec<_> = inputs.iter().map(|(t, h)| (t, h)).collect();
+    let history = derived_history(&[inputs[0].1, inputs[1].1], 20);
+    let recorded = record_history(&join, &join, &history, &inputs, 120_000);
+    let span = (120_000, recorded.high_water_ms);
+    let truths = Truth::all(&join, &join, &history, &inputs, span);
+    let s = scheme(4);
+    // The join adds its 20 ms to every arrival.
+    assert_eq!(
+        bucket_counts(&recorded.local),
+        BTreeMap::from([(s.bucket(20), span.1 - span.0)])
+    );
+    // The wait for the inputs' frontiers to align is skew, up to 11 s - gcd(7 s, 11 s).
+    assert_eq!(
+        bucket_counts(&recorded.skew),
+        histogram(truths.iter().map(Truth::skew_ms))
+    );
+    assert_eq!(truths.iter().map(Truth::skew_ms).max(), Some(10_000));
+    assert!(bucket_counts(&recorded.skew).len() >= 4, "{recorded:?}");
+    assert_eq!(
+        bucket_counts(&recorded.end_to_end),
+        histogram(truths.iter().map(Truth::end_to_end_ms))
+    );
+    for truth in &truths {
+        assert_eq!(
+            truth.upstream_ms() + truth.skew_ms() + truth.local_ms(),
+            truth.end_to_end_ms(),
+            "{truth:?}"
+        );
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_join_input_stall_is_upstream() {
+    // The 11 s input's observations stall for 5 minutes.
+    let (join, inputs) = join_7_11(Some((130_000, 430_000)), 600_000);
+    let inputs: Vec<_> = inputs.iter().map(|(t, h)| (t, h)).collect();
+    let history = derived_history(&[inputs[0].1, inputs[1].1], 20);
+    let recorded = record_history(&join, &join, &history, &inputs, 120_000);
+    let span = (120_000, recorded.high_water_ms);
+    let truths = Truth::all(&join, &join, &history, &inputs, span);
+    let s = scheme(4);
+    assert_eq!(
+        bucket_counts(&recorded.local),
+        BTreeMap::from([(s.bucket(20), span.1 - span.0)])
+    );
+    assert_eq!(
+        bucket_counts(&recorded.skew),
+        histogram(truths.iter().map(Truth::skew_ms))
+    );
+    // An arrival that the 11 s input showed before its stall, but that needs a timestamp of the
+    // 7 s grid past the input's last tick before the stall, waits for that input's frontier
+    // through the stall. That is at most one window of the 11 s input.
+    let long_skew: u64 = bucket_counts(&recorded.skew)
+        .range(s.bucket(10_000) + 1..)
+        .map(|(_, c)| c)
+        .sum();
+    assert!(long_skew <= 11_000, "{long_skew}");
+    // The arrivals during the stall wait for the input to show them, its own latency, and
+    // little else.
+    assert!(truths.iter().map(Truth::upstream_ms).max().unwrap() >= 290_000);
+    for truth in truths
+        .iter()
+        .filter(|t| (125_000..425_000).contains(&t.arrival))
+    {
+        assert!(
+            truth.upstream_ms() + 10_020 >= truth.end_to_end_ms(),
+            "{truth:?}"
+        );
+    }
+    let e2e_max = bucket_counts(&recorded.end_to_end)
+        .into_keys()
+        .last()
+        .unwrap();
+    assert!(e2e_max >= s.bucket(290_000), "{e2e_max}");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_object_stall_is_local() {
+    // The join stalls for 10 minutes while its inputs keep ticking.
+    let (join, inputs) = join_7_11(None, 900_000);
+    let inputs: Vec<_> = inputs.iter().map(|(t, h)| (t, h)).collect();
+    let history = held(
+        &derived_history(&[inputs[0].1, inputs[1].1], 20),
+        (200_000, 800_000),
+    );
+    let recorded = record_history(&join, &join, &history, &inputs, 120_000);
+    let span = (120_000, recorded.high_water_ms);
+    let truths = Truth::all(&join, &join, &history, &inputs, span);
+    let s = scheme(4);
+    assert_eq!(
+        bucket_counts(&recorded.local),
+        histogram(truths.iter().map(Truth::local_ms))
+    );
+    assert!(truths.iter().map(Truth::local_ms).max().unwrap() >= 590_000);
+    let skew_max = bucket_counts(&recorded.skew).into_keys().last().unwrap();
+    assert!(skew_max <= s.bucket(10_000), "{skew_max}");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_input_that_is_a_join_stays_exact() {
+    let (join, inputs) = join_7_11(None, 400_000);
+    let h_join = derived_history(&[&inputs[0].1, &inputs[1].1], 20);
+    let s = scheme(4);
+
+    // An index on the join has one input and no skew.
+    let index = derived_history(&[&h_join], 5);
+    let inputs = [(&join, &h_join)];
+    let recorded = record_history(&join, &join, &index, &inputs, 120_000);
+    assert_eq!(
+        bucket_counts(&recorded.local),
+        BTreeMap::from([(s.bucket(5), recorded.high_water_ms - 120_000)])
+    );
+    assert_eq!(recorded.skew, vec![]);
+
+    // A join of the join with a 3 s source needs timestamps under all three leaves, which the
+    // inner join's frontier passes later than it shows the arrival.
+    let l3 = aligned(3000);
+    let h3 = leaf_history(3000, 10, 400_000, None, 0);
+    let outer = ResolvedTree::Min(vec![join.clone(), l3.clone()]);
+    let h_outer = derived_history(&[&h_join, &h3], 5);
+    let inputs = [(&join, &h_join), (&l3, &h3)];
+    let recorded = record_history(&outer, &outer, &h_outer, &inputs, 120_000);
+    let span = (120_000, recorded.high_water_ms);
+    let truths = Truth::all(&outer, &outer, &h_outer, &inputs, span);
+    for truth in &truths {
+        assert!(
+            truth.timestamp_ready_ms >= truth.arrival_ready_ms,
+            "{truth:?}"
+        );
+        assert_eq!(
+            truth.upstream_ms() + truth.skew_ms() + truth.local_ms(),
+            truth.end_to_end_ms(),
+            "{truth:?}"
+        );
+    }
+    assert_eq!(
+        bucket_counts(&recorded.local),
+        BTreeMap::from([(s.bucket(5), span.1 - span.0)])
+    );
+    assert_eq!(
+        bucket_counts(&recorded.skew),
+        histogram(truths.iter().map(Truth::skew_ms))
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_frontier_ahead_of_wall_clock_is_not_local() {
+    // A 1 s source whose frontier runs 3 s ahead of the controller's clock, and an index that
+    // shows it 5 ms later.
+    let leaf = aligned(1000);
+    let source = leaf_history(1000, 0, 400_000, None, 3000);
+    let index = derived_history(&[&source], 5);
+    let inputs = [(&leaf, &source)];
+    let recorded = record_history(&leaf, &leaf, &index, &inputs, 120_000);
+    assert_eq!(
+        bucket_counts(&recorded.local),
+        BTreeMap::from([(scheme(4).bucket(5), recorded.high_water_ms - 120_000)])
+    );
+    assert_eq!(recorded.skew, vec![]);
+}
+
+#[mz_ore::test]
+fn split_single_input_records_no_skew() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut log = VisibilityLog::default();
+    let mut recorder = LocalDelayRecorder::new(0);
+    let mut rows = LocalRows::default();
+    for w in (1000..=120_000u64).step_by(1000) {
+        log.record(w + 1, Some(w), w + 10);
+        let new = recorder.observe(&tree, &tree, &at(w + 1), w + 20, &[&log], &cfg);
+        rows.local.extend(new.local);
+        rows.skew.extend(new.skew);
+    }
+    assert_eq!(period_totals(&rows.local).values().sum::<u64>(), 120_000);
+    assert_eq!(rows.skew, vec![]);
+}
+
+/// Inputs that are a leaf or a join of two leaves, optionally stalled, and an object that joins
+/// them, each observed with a random delay so that an input's observation can come after the
+/// object's.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn split_never_exceeds_per_arrival_oracle() {
+    const END: u64 = 2_000;
+    let leaf = select(vec![3u64, 5, 7, 11, 13, 20]);
+    let input = (
+        proptest::collection::vec(leaf, 1..=2),
+        proptest::option::of((1u64..END, 0u64..300)),
+    );
+    let strategy = (
+        proptest::collection::vec(input, 1..=3),
+        any::<u64>(),
+        0u64..30,
+    );
+    proptest!(ProptestConfig::with_cases(64), |((specs, seed, max_delay) in strategy)| {
+        let mut state = seed | 1;
+        let mut delay = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % (max_delay + 1)
+        };
+        let cfg = RecorderConfig { period_ms: 500, ..config(4) };
+        let trees: Vec<ResolvedTree> = specs
+            .iter()
+            .map(|(leaves, _)| match leaves.as_slice() {
+                [one] => aligned(*one),
+                _ => ResolvedTree::Min(leaves.iter().map(|i| aligned(*i)).collect()),
+            })
+            .collect();
+        let tree = ResolvedTree::Min(trees.clone());
+        // The true frontier of input `k` at wall clock `t`, held during its stall.
+        let frontier = |k: usize, t: u64| -> u64 {
+            let (leaves, stall) = &specs[k];
+            let t = match stall {
+                Some((from, len)) if (*from..from + len).contains(&t) => from - 1,
+                _ => t,
+            };
+            leaves.iter().map(|i| t / i * i + 1).min().unwrap()
+        };
+        let mut histories: Vec<History> = vec![Vec::new(); specs.len()];
+        let mut history = Vec::new();
+        for t in 0..END {
+            for (k, h) in histories.iter_mut().enumerate() {
+                push_advance(h, t + delay(), frontier(k, t));
+            }
+            let f = (0..specs.len()).map(|k| frontier(k, t)).min().unwrap();
+            push_advance(&mut history, t + delay(), f);
+        }
+
+        // Observations in wall-clock order, inputs first at equal times.
+        let mut events: Vec<(u64, usize, u64)> = histories
+            .iter()
+            .enumerate()
+            .flat_map(|(k, h)| h.iter().map(move |(o, f)| (*o, k, *f)))
+            .chain(history.iter().map(|(o, f)| (*o, usize::MAX, *f)))
+            .collect();
+        events.sort();
+        let mut logs = vec![VisibilityLog::default(); specs.len()];
+        let mut end_to_end = FreshnessRecorder::new(0);
+        let mut local = LocalDelayRecorder::new(0);
+        let mut recorded = Recorded::default();
+        for (o, k, f) in events {
+            if k < specs.len() {
+                logs[k].record(f, trees[k].last_reflected(Timestamp::from(f)), o);
+                continue;
+            }
+            let inputs: Vec<&VisibilityLog> = logs.iter().collect();
+            recorded.end_to_end.extend(end_to_end.observe(&tree, &at(f), o, &cfg));
+            let rows = local.observe(&tree, &tree, &at(f), o, &inputs, &cfg);
+            recorded.local.extend(rows.local);
+            recorded.skew.extend(rows.skew);
+        }
+        let high_water_ms = local.high_water_ms();
+        recorded.end_to_end.extend(end_to_end.finish());
+        let rows = local.finish();
+        recorded.local.extend(rows.local);
+        recorded.skew.extend(rows.skew);
+
+        let inputs: Vec<_> = trees.iter().zip_eq(histories.iter()).collect();
+        let truths = Truth::all(&tree, &tree, &history, &inputs, (0, high_water_ms));
+        let per_period = |rows: &[PeriodRow]| {
+            let mut periods: BTreeMap<u64, BTreeMap<i32, u64>> = BTreeMap::new();
+            for row in rows {
+                *periods
+                    .entry(row.period_start_ms)
+                    .or_default()
+                    .entry(row.bucket)
+                    .or_default() += row.count;
+            }
+            periods
+        };
+        let truth_per_period = |latency: fn(&Truth) -> u64| {
+            let mut periods: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+            for truth in &truths {
+                let start = (truth.arrival - 1) / cfg.period_ms * cfg.period_ms;
+                periods.entry(start).or_default().push(latency(truth));
+            }
+            periods
+                .into_iter()
+                .map(|(p, latencies)| (p, histogram(latencies.into_iter())))
+                .collect::<BTreeMap<_, _>>()
+        };
+        prop_assert_eq!(
+            period_totals(&recorded.local),
+            period_totals(&recorded.end_to_end)
+        );
+        let local_truth = truth_per_period(Truth::local_ms);
+        let local_recorded = per_period(&recorded.local);
+        prop_assert_eq!(
+            local_truth.keys().collect::<Vec<_>>(),
+            local_recorded.keys().collect::<Vec<_>>()
+        );
+        for (p, counts) in &local_recorded {
+            let truth = &local_truth[p];
+            prop_assert!(dominated_by(counts, truth), "local {p}: {counts:?} > {truth:?}");
+        }
+        if specs.len() >= 2 {
+            prop_assert_eq!(
+                period_totals(&recorded.skew),
+                period_totals(&recorded.end_to_end)
+            );
+            let skew_truth = truth_per_period(Truth::skew_ms);
+            for (p, counts) in &per_period(&recorded.skew) {
+                let truth = &skew_truth[p];
+                prop_assert!(dominated_by(counts, truth), "skew {p}: {counts:?} > {truth:?}");
+            }
+        } else {
+            prop_assert!(recorded.skew.is_empty());
+        }
+    });
 }

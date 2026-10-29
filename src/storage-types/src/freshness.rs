@@ -183,6 +183,37 @@ impl ResolvedTree {
         }
     }
 
+    /// The timestamp an arrival at `arrival` is assigned, `None` if it never becomes visible, as
+    /// after the last refresh of a schedule without `EVERY`.
+    ///
+    /// It is the counterpart of `last_reflected`: an arrival is visible below `frontier` exactly
+    /// if its assigned timestamp is below `frontier`.
+    pub fn assigned(&self, arrival: u64) -> Option<u64> {
+        match self {
+            ResolvedTree::Leaf(ticker) => Some(match ticker.grid_ms() {
+                Some(i) => arrival.div_ceil(i).saturating_mul(i),
+                None => arrival,
+            }),
+            ResolvedTree::Min(inputs) => inputs
+                .iter()
+                .map(|i| i.assigned(arrival))
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .max(),
+            ResolvedTree::Refresh { schedule, input } => schedule
+                .round_up_timestamp(Timestamp::from(input.assigned(arrival)?))
+                .map(u64::from),
+        }
+    }
+
+    /// The input of a top-level refresh node, or the tree itself if it has none.
+    pub fn below_refresh(&self) -> &ResolvedTree {
+        match self {
+            ResolvedTree::Refresh { input, .. } => input,
+            _ => self,
+        }
+    }
+
     /// The smallest window boundary at or after `z`, the union of all aligned and unaligned
     /// leaf grids. Every millisecond is a boundary if a continuous leaf exists.
     pub fn next_boundary(&self, z: u64) -> u64 {

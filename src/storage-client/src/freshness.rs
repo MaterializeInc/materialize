@@ -26,7 +26,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::dyncfgs::WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL;
 use mz_storage_types::freshness::ResolvedTree;
 use mz_storage_types::freshness::histogram::BucketScheme;
-use mz_storage_types::freshness::local::{LocalDelayRecorder, VisibilityLog};
+use mz_storage_types::freshness::local::{LocalDelayRecorder, LocalRows, VisibilityLog};
 use mz_storage_types::freshness::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use timely::progress::Antichain;
 
@@ -35,8 +35,13 @@ use timely::progress::Antichain;
 pub enum Measure {
     /// The delay from arrival to visibility in the output.
     EndToEnd,
-    /// The delay from visibility in the slowest direct input to visibility in the output.
+    /// The delay from every direct input's frontier passing the timestamp the output needs for
+    /// an arrival to the arrival's visibility in the output.
     Local,
+    /// The delay from visibility in the slowest direct input to every direct input's frontier
+    /// passing the timestamp the output needs. Recorded only for outputs with two or more
+    /// direct inputs.
+    Skew,
 }
 
 impl Measure {
@@ -45,6 +50,7 @@ impl Measure {
         match self {
             Measure::EndToEnd => "end_to_end",
             Measure::Local => "local",
+            Measure::Skew => "skew",
         }
     }
 }
@@ -64,7 +70,7 @@ enum Start {
 #[derive(Debug)]
 pub struct FreshnessRecording {
     start: Start,
-    /// The recorders of both measures. They start together, so their per-period counts agree.
+    /// The recorders of all measures. They start together, so their per-period counts agree.
     recorders: Option<(FreshnessRecorder, LocalDelayRecorder)>,
 }
 
@@ -107,13 +113,14 @@ impl FreshnessRecording {
     }
 
     /// Records a write frontier observed at `now_ms` and returns the rows of closed periods of
-    /// both measures.
+    /// all measures.
     ///
-    /// `inputs` are the visibility logs of the direct inputs, as for
+    /// `needed` and `inputs`, the visibility logs of the direct inputs, are as for
     /// [`LocalDelayRecorder::observe`].
     pub fn observe(
         &mut self,
         tree: &ResolvedTree,
+        needed: &ResolvedTree,
         frontier: &Antichain<Timestamp>,
         now_ms: u64,
         inputs: &[&VisibilityLog],
@@ -141,28 +148,30 @@ impl FreshnessRecording {
         }
         let (end_to_end, local) = self.recorders.as_mut().expect("initialized above");
         let end_to_end = end_to_end.observe(tree, frontier, now_ms, config);
-        let local = local.observe(tree, frontier, now_ms, inputs, config);
-        let end_to_end = end_to_end.into_iter().map(|row| (Measure::EndToEnd, row));
-        let local = local.into_iter().map(|row| (Measure::Local, row));
-        end_to_end.chain(local).collect()
+        let local = local.observe(tree, needed, frontier, now_ms, inputs, config);
+        tag(end_to_end, local)
     }
 
     /// Ends the recording of a collection that goes away and returns the rows of the open
-    /// periods of both measures, which hold the arrivals up to the last observed frontier.
+    /// periods of all measures, which hold the arrivals up to the last observed frontier.
     pub fn finish(&mut self) -> Vec<(Measure, PeriodRow)> {
         let Some((end_to_end, local)) = self.recorders.as_mut() else {
             return Vec::new();
         };
-        let end_to_end = end_to_end.finish().into_iter();
-        let local = local.finish().into_iter();
-        let end_to_end = end_to_end.map(|row| (Measure::EndToEnd, row));
-        let local = local.map(|row| (Measure::Local, row));
-        end_to_end.chain(local).collect()
+        tag(end_to_end.finish(), local.finish())
     }
 }
 
-/// Records in `log` that the arrivals `frontier` reflects were visible at `now_ms`, and drops the
-/// entries older than the retention of `config`.
+/// The rows of all measures, tagged with their measure.
+fn tag(end_to_end: Vec<PeriodRow>, local: LocalRows) -> Vec<(Measure, PeriodRow)> {
+    let end_to_end = end_to_end.into_iter().map(|row| (Measure::EndToEnd, row));
+    let skew = local.skew.into_iter().map(|row| (Measure::Skew, row));
+    let local = local.local.into_iter().map(|row| (Measure::Local, row));
+    end_to_end.chain(local).chain(skew).collect()
+}
+
+/// Records in `log` that `frontier`, and the arrivals it reflects, were visible at `now_ms`, and
+/// drops the entries older than the retention of `config`.
 pub fn record_visibility(
     log: &mut VisibilityLog,
     tree: &ResolvedTree,
@@ -170,15 +179,13 @@ pub fn record_visibility(
     now_ms: u64,
     config: &RecorderConfig,
 ) {
-    let reflected = match frontier.as_option() {
-        Some(t) => tree.last_reflected(*t),
+    let (frontier, reflected) = match frontier.as_option() {
+        Some(t) => (u64::from(*t), tree.last_reflected(*t)),
         // A complete collection makes every arrival visible from now on. Without this entry its
         // consumers would find no answer for later arrivals and record a local delay of 0.
-        None => Some(u64::MAX),
+        None => (u64::MAX, Some(u64::MAX)),
     };
-    if let Some(reflected) = reflected {
-        log.record(reflected, now_ms);
-    }
+    log.record(frontier, reflected, now_ms);
     // Pruned by age, not through the least arrival its consumers recorded, because consumers in
     // other controllers read the log and tracking them would need a registration protocol. A
     // consumer that lags the input by more than the retention finds those arrivals visible when
