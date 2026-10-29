@@ -26,7 +26,9 @@ use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::dyncfgs::WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL;
 use mz_storage_types::freshness::ResolvedTree;
 use mz_storage_types::freshness::histogram::BucketScheme;
-use mz_storage_types::freshness::local::{LocalDelayRecorder, LocalRows, VisibilityLog};
+use mz_storage_types::freshness::local::{
+    LocalDelayRecorder, LocalInput, LocalRows, VisibilityLog,
+};
 use mz_storage_types::freshness::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use timely::progress::Antichain;
 
@@ -124,7 +126,7 @@ impl FreshnessRecording {
         needed: &ResolvedTree,
         frontier: &Antichain<Timestamp>,
         now_ms: u64,
-        inputs: &[&VisibilityLog],
+        inputs: &[LocalInput<'_>],
         config: &RecorderConfig,
     ) -> Vec<(Measure, PeriodRow)> {
         let reflected =

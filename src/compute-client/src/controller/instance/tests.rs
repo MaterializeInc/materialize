@@ -735,7 +735,13 @@ impl FreshnessHarness {
             None,
             None,
             Some(FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))),
-            inputs.iter().copied().collect(),
+            inputs
+                .iter()
+                .map(|input| {
+                    let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT));
+                    (*input, tree)
+                })
+                .collect(),
         );
     }
 
