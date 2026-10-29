@@ -498,8 +498,8 @@ impl ConsumedVisibilityLog {
             // The last entry stays for consumers that register later.
             None => self.log.prune_through_except_last(u64::MAX),
         }
-        // A consumer that lags the input by more than the retention finds no entry and records
-        // those arrivals with a local delay of 0, which understates and never overstates.
+        // A consumer that lags the input by more than the retention finds those arrivals visible
+        // when the last pruned entry was observed, which understates and never overstates.
         self.log.prune_observed_before(cutoff);
     }
 
