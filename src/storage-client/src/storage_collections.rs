@@ -1920,185 +1920,226 @@ impl StorageCollections for StorageCollectionsImpl {
             _ => DependencyOrder::Collection(*id),
         });
 
-        // We hold this lock for a very short amount of time, just doing some
-        // hashmap inserts and unbounded channel sends.
-        let mut self_collections = self.collections.lock().expect("lock poisoned");
+        // Reported after the lock is released, since an ingestion export's
+        // violation needs a persist read to confirm.
+        let dependency_violations = {
+            // We hold this lock for a very short amount of time, just doing some
+            // hashmap inserts and unbounded channel sends.
+            let mut self_collections = self.collections.lock().expect("lock poisoned");
+            let mut dependency_violations = Vec::new();
 
-        for (id, description, write_handle, since_handle, metadata) in to_register {
-            let write_frontier = write_handle.upper();
-            let data_shard_since = since_handle.since().clone();
+            for (id, description, write_handle, since_handle, metadata) in to_register {
+                let write_frontier = write_handle.upper();
+                let data_shard_since = since_handle.since().clone();
 
-            // Determine if this collection has any dependencies.
-            let storage_dependencies =
-                Self::determine_collection_dependencies(&*self_collections, id, &description)?;
+                // Determine if this collection has any dependencies.
+                let storage_dependencies =
+                    Self::determine_collection_dependencies(&*self_collections, id, &description)?;
 
-            // Determine the initial since of the collection.
-            let initial_since = match storage_dependencies
-                .iter()
-                .at_most_one()
-                .expect("should have at most one dependency")
-            {
-                Some(dep) => {
-                    let dependency_collection = self_collections
-                        .get(dep)
-                        .ok_or(StorageError::IdentifierMissing(*dep))?;
-                    let dependency_since = dependency_collection.implied_capability.clone();
-
-                    // If an item has a dependency, its initial since must be
-                    // advanced as far as its dependency, i.e. a dependency's
-                    // since may never be in advance of its dependents.
-                    //
-                    // We have to do this every time we initialize the
-                    // collection, though––the invariant might have been upheld
-                    // correctly in the previous epoch, but the
-                    // `data_shard_since` might not have compacted and, on
-                    // establishing a new persist connection, still have data we
-                    // said _could_ be compacted.
-                    if PartialOrder::less_than(&data_shard_since, &dependency_since) {
-                        // The dependency since cannot be beyond the dependent
-                        // (our) upper unless the collection is new. In
-                        // practice, the depdenency is the remap shard of a
-                        // source (export), and if the since is allowed to
-                        // "catch up" to the upper, that is `upper <= since`, a
-                        // restarting ingestion cannot differentiate between
-                        // updates that have already been written out to the
-                        // backing persist shard and updates that have yet to be
-                        // written. We would write duplicate updates.
-                        //
-                        // If this check fails, it means that the read hold
-                        // installed on the dependency was probably not upheld
-                        // –– if it were, the dependency's since could not have
-                        // advanced as far the dependent's upper.
-                        //
-                        // We don't care about the dependency since when the
-                        // write frontier is empty. In that case, no-one can
-                        // write down any more updates.
-                        // This invariant applies to remap dependencies. A `primary`
-                        // dependency is another version of the same shard, whose since can
-                        // validly equal the dependent's upper.
-                        if description.primary.is_none() {
-                            mz_ore::soft_assert_or_log!(
-                                write_frontier.elements() == &[Timestamp::MIN]
-                                    || write_frontier.is_empty()
-                                    || PartialOrder::less_than(&dependency_since, write_frontier),
-                                "dependency ({dep}) since has advanced past dependent ({id}) upper \n
-                                dependent ({id}): since {:?}, upper {:?} \n
-                                dependency ({dep}): since {:?}",
-                                data_shard_since,
-                                write_frontier,
-                                dependency_since
-                            );
-                        }
-
-                        dependency_since
-                    } else {
-                        data_shard_since
-                    }
-                }
-                None => data_shard_since,
-            };
-
-            // Determine the time dependence of the collection.
-            let time_dependence = {
-                use DataSource::*;
-                if let Some(timeline) = &description.timeline
-                    && *timeline != Timeline::EpochMilliseconds
+                // Determine the initial since of the collection.
+                let initial_since = match storage_dependencies
+                    .iter()
+                    .at_most_one()
+                    .expect("should have at most one dependency")
                 {
-                    // Only the epoch timeline follows wall-clock.
-                    None
-                } else {
-                    match &description.data_source {
-                        Ingestion(ingestion) => {
-                            use GenericSourceConnection::*;
-                            match ingestion.desc.connection {
-                                // Kafka, Postgres, MySql, and SQL Server sources all
-                                // follow wall clock.
-                                Kafka(_) | Postgres(_) | MySql(_) | SqlServer(_) => {
-                                    Some(TimeDependence::default())
-                                }
-                                // Load generators not further specified.
-                                LoadGenerator(_) => None,
+                    Some(dep) => {
+                        let dependency_collection = self_collections
+                            .get(dep)
+                            .ok_or(StorageError::IdentifierMissing(*dep))?;
+                        let dependency_since = dependency_collection.implied_capability.clone();
+
+                        // If an item has a dependency, its initial since must be
+                        // advanced as far as its dependency, i.e. a dependency's
+                        // since may never be in advance of its dependents.
+                        //
+                        // We have to do this every time we initialize the
+                        // collection, though––the invariant might have been upheld
+                        // correctly in the previous epoch, but the
+                        // `data_shard_since` might not have compacted and, on
+                        // establishing a new persist connection, still have data we
+                        // said _could_ be compacted.
+                        if PartialOrder::less_than(&data_shard_since, &dependency_since) {
+                            // The dependency since cannot be beyond the dependent
+                            // (our) upper unless the collection is new. In
+                            // practice, the depdenency is the remap shard of a
+                            // source (export), and if the since is allowed to
+                            // "catch up" to the upper, that is `upper <= since`, a
+                            // restarting ingestion cannot differentiate between
+                            // updates that have already been written out to the
+                            // backing persist shard and updates that have yet to be
+                            // written. We would write duplicate updates.
+                            //
+                            // If this check fails, it means that the read hold
+                            // installed on the dependency was probably not upheld
+                            // –– if it were, the dependency's since could not have
+                            // advanced as far the dependent's upper.
+                            //
+                            // We don't care about the dependency since when the
+                            // write frontier is empty. In that case, no-one can
+                            // write down any more updates.
+                            // This invariant applies to remap dependencies. A `primary`
+                            // dependency is another version of the same shard, whose since can
+                            // validly equal the dependent's upper.
+                            if description.primary.is_none()
+                                && write_frontier.elements() != &[Timestamp::MIN]
+                                && !write_frontier.is_empty()
+                                && !PartialOrder::less_than(&dependency_since, write_frontier)
+                            {
+                                dependency_violations.push(DependencyViolation {
+                                    id,
+                                    dependency: *dep,
+                                    data_shard_since: data_shard_since.clone(),
+                                    write_frontier: write_frontier.clone(),
+                                    dependency_since: dependency_since.clone(),
+                                    ingestion_export: matches!(
+                                        description.data_source,
+                                        DataSource::IngestionExport { .. }
+                                    )
+                                    .then(|| metadata.clone()),
+                                });
                             }
+
+                            dependency_since
+                        } else {
+                            data_shard_since
                         }
-                        IngestionExport { ingestion_id, .. } => {
-                            let c = self_collections.get(ingestion_id).expect("known to exist");
-                            c.time_dependence.clone()
-                        }
-                        // Introspection, other, progress, table, and webhook sources follow wall clock.
-                        Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
-                            Some(TimeDependence::default())
-                        }
-                        // Materialized views, etc, aren't managed by storage.
-                        Other => None,
-                        Sink { .. } => None,
                     }
-                }
-            };
+                    None => data_shard_since,
+                };
 
-            let ingestion_remap_collection_id = match &description.data_source {
-                DataSource::Ingestion(desc) => Some(desc.remap_collection_id),
-                _ => None,
-            };
-
-            let mut collection_state = CollectionState::new(
-                description.primary,
-                time_dependence,
-                ingestion_remap_collection_id,
-                initial_since,
-                write_frontier.clone(),
-                storage_dependencies,
-                metadata.clone(),
-            );
-
-            // Install the collection state in the appropriate spot.
-            match &description.data_source {
-                DataSource::Introspection(_) => {
-                    self_collections.insert(id, collection_state);
-                }
-                DataSource::Webhook => {
-                    self_collections.insert(id, collection_state);
-                }
-                DataSource::IngestionExport { .. } => {
-                    self_collections.insert(id, collection_state);
-                }
-                DataSource::Table => {
-                    // See comment on self.initial_txn_upper on why we're doing
-                    // this.
-                    if is_in_txns(id, &metadata)
-                        && PartialOrder::less_than(
-                            &collection_state.write_frontier,
-                            &self.initial_txn_upper,
-                        )
+                // Determine the time dependence of the collection.
+                let time_dependence = {
+                    use DataSource::*;
+                    if let Some(timeline) = &description.timeline
+                        && *timeline != Timeline::EpochMilliseconds
                     {
-                        // We could try and be cute and use the join of the txn
-                        // upper and the table upper. But that has more
-                        // complicated reasoning for why it is or isn't correct,
-                        // and we're only dealing with totally ordered times
-                        // here.
-                        collection_state
-                            .write_frontier
-                            .clone_from(&self.initial_txn_upper);
+                        // Only the epoch timeline follows wall-clock.
+                        None
+                    } else {
+                        match &description.data_source {
+                            Ingestion(ingestion) => {
+                                use GenericSourceConnection::*;
+                                match ingestion.desc.connection {
+                                    // Kafka, Postgres, MySql, and SQL Server sources all
+                                    // follow wall clock.
+                                    Kafka(_) | Postgres(_) | MySql(_) | SqlServer(_) => {
+                                        Some(TimeDependence::default())
+                                    }
+                                    // Load generators not further specified.
+                                    LoadGenerator(_) => None,
+                                }
+                            }
+                            IngestionExport { ingestion_id, .. } => {
+                                let c = self_collections.get(ingestion_id).expect("known to exist");
+                                c.time_dependence.clone()
+                            }
+                            // Introspection, other, progress, table, and webhook sources follow wall clock.
+                            Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
+                                Some(TimeDependence::default())
+                            }
+                            // Materialized views, etc, aren't managed by storage.
+                            Other => None,
+                            Sink { .. } => None,
+                        }
                     }
-                    self_collections.insert(id, collection_state);
+                };
+
+                let ingestion_remap_collection_id = match &description.data_source {
+                    DataSource::Ingestion(desc) => Some(desc.remap_collection_id),
+                    _ => None,
+                };
+
+                let mut collection_state = CollectionState::new(
+                    description.primary,
+                    time_dependence,
+                    ingestion_remap_collection_id,
+                    initial_since,
+                    write_frontier.clone(),
+                    storage_dependencies,
+                    metadata.clone(),
+                );
+
+                // Install the collection state in the appropriate spot.
+                match &description.data_source {
+                    DataSource::Introspection(_) => {
+                        self_collections.insert(id, collection_state);
+                    }
+                    DataSource::Webhook => {
+                        self_collections.insert(id, collection_state);
+                    }
+                    DataSource::IngestionExport { .. } => {
+                        self_collections.insert(id, collection_state);
+                    }
+                    DataSource::Table => {
+                        // See comment on self.initial_txn_upper on why we're doing
+                        // this.
+                        if is_in_txns(id, &metadata)
+                            && PartialOrder::less_than(
+                                &collection_state.write_frontier,
+                                &self.initial_txn_upper,
+                            )
+                        {
+                            // We could try and be cute and use the join of the txn
+                            // upper and the table upper. But that has more
+                            // complicated reasoning for why it is or isn't correct,
+                            // and we're only dealing with totally ordered times
+                            // here.
+                            collection_state
+                                .write_frontier
+                                .clone_from(&self.initial_txn_upper);
+                        }
+                        self_collections.insert(id, collection_state);
+                    }
+                    DataSource::Progress | DataSource::Other => {
+                        self_collections.insert(id, collection_state);
+                    }
+                    DataSource::Ingestion(_) => {
+                        self_collections.insert(id, collection_state);
+                    }
+                    DataSource::Sink { .. } => {
+                        self_collections.insert(id, collection_state);
+                    }
                 }
-                DataSource::Progress | DataSource::Other => {
-                    self_collections.insert(id, collection_state);
-                }
-                DataSource::Ingestion(_) => {
-                    self_collections.insert(id, collection_state);
-                }
-                DataSource::Sink { .. } => {
-                    self_collections.insert(id, collection_state);
-                }
+
+                self.register_handles(id, is_in_txns(id, &metadata), since_handle, write_handle);
+
+                // If this collection has a dependency, install a read hold on it.
+                self.install_collection_dependency_read_holds_inner(&mut *self_collections, id)?;
             }
+            dependency_violations
+        };
 
-            self.register_handles(id, is_in_txns(id, &metadata), since_handle, write_handle);
-
-            // If this collection has a dependency, install a read hold on it.
-            self.install_collection_dependency_read_holds_inner(&mut *self_collections, id)?;
+        for violation in dependency_violations {
+            // An ingestion export whose upper is at or below its remap since
+            // re-snapshots on its next render, which can only duplicate
+            // updates it has already written. One whose snapshot has not
+            // completed has written none, because the persist sink commits
+            // only an empty batch up to the snapshot's as_of before the
+            // snapshot lands. Sinks are not exempt: they advance their shards
+            // with empty appends alone, so an empty shard says nothing about
+            // them.
+            if let Some(metadata) = &violation.ingestion_export
+                && shard_has_no_updates(persist_client, violation.id, metadata).await
+            {
+                continue;
+            }
+            let DependencyViolation {
+                id,
+                dependency,
+                data_shard_since,
+                write_frontier,
+                dependency_since,
+                ingestion_export: _,
+            } = violation;
+            mz_ore::soft_panic_or_log!(
+                "dependency ({dependency}) since has advanced past dependent ({id}) upper \n
+                dependent ({id}): since {:?}, upper {:?} \n
+                dependency ({dependency}): since {:?}",
+                data_shard_since,
+                write_frontier,
+                dependency_since
+            );
         }
-
-        drop(self_collections);
 
         self.synchronize_finalized_shards(storage_metadata);
 
@@ -3268,6 +3309,47 @@ async fn finalize_shards_task(
 
         debug!("done finalizing shards");
     }
+}
+
+/// A dependency whose since is not below its dependent's upper, found while
+/// registering collections for bootstrap.
+#[derive(Debug)]
+struct DependencyViolation {
+    id: GlobalId,
+    dependency: GlobalId,
+    data_shard_since: Antichain<Timestamp>,
+    write_frontier: Antichain<Timestamp>,
+    dependency_since: Antichain<Timestamp>,
+    /// The dependent's metadata, if it is an ingestion export.
+    ingestion_export: Option<CollectionMetadata>,
+}
+
+/// Reports whether the data shard of collection `id` holds no updates, judged
+/// from batch metadata alone.
+pub async fn shard_has_no_updates(
+    persist_client: &PersistClient,
+    id: GlobalId,
+    metadata: &CollectionMetadata,
+) -> bool {
+    let read_handle = persist_client
+        .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+            metadata.data_shard,
+            Arc::new(metadata.relation_desc.clone()),
+            Arc::new(UnitSchema),
+            Diagnostics {
+                shard_name: id.to_string(),
+                handle_purpose: format!("checking {id} for updates"),
+            },
+            false,
+        )
+        .await
+        .expect("invalid persist usage");
+    let stats = read_handle
+        .snapshot_stats(None)
+        .await
+        .expect("stats without an as_of cannot be behind the since");
+    read_handle.expire().await;
+    stats.num_updates == 0
 }
 
 #[derive(Debug)]
