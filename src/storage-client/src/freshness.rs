@@ -181,8 +181,8 @@ pub fn record_visibility(
     }
     // Pruned by age, not through the least arrival its consumers recorded, because consumers in
     // other controllers read the log and tracking them would need a registration protocol. A
-    // consumer that lags the input by more than the retention finds no entry and records those
-    // arrivals with a local delay of 0, which understates and never overstates.
+    // consumer that lags the input by more than the retention finds those arrivals visible when
+    // the last pruned entry was observed, which understates and never overstates.
     log.prune_observed_before(now_ms.saturating_sub(visibility_retention_ms(config)));
 }
 
@@ -306,6 +306,7 @@ mod tests {
             scheme: BucketScheme::new(4).expect("power of two"),
             interval_ms: 1,
             period_ms: 60_000,
+            retention_ms: 30 * 24 * 60 * 60 * 1000,
         };
         let log = SharedVisibilityLog::default();
         assert_eq!(log.input_log(None).visible_at(1), None);
@@ -315,13 +316,13 @@ mod tests {
             log.record(&tree, &frontier, s * 1000 + 5, &config);
         }
         let copy = log.input_log(None);
-        // Ten minutes are kept.
+        // Ten minutes are kept, and older arrivals are answered by the last pruned entry.
         assert_eq!(copy.visible_at(300_000), Some(300_005));
-        assert_eq!(copy.visible_at(299_000), None);
+        assert_eq!(copy.visible_at(299_000), Some(299_005));
+        assert_eq!(copy.visible_at(1), Some(299_005));
         assert_eq!(copy.visible_at(900_000), Some(900_005));
-        // A copy for a consumer answers only what it has not recorded yet.
+        // A copy for a consumer answers what it has not recorded yet exactly.
         let copy = log.input_log(Some(600_000));
-        assert_eq!(copy.visible_at(600_000), None);
         assert_eq!(copy.visible_at(600_001), Some(601_005));
     }
 
@@ -332,6 +333,7 @@ mod tests {
             scheme: BucketScheme::new(4).expect("power of two"),
             interval_ms: 1,
             period_ms: 60_000,
+            retention_ms: 30 * 24 * 60 * 60 * 1000,
         };
         let log = SharedVisibilityLog::default();
         log.record(

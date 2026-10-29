@@ -4351,7 +4351,7 @@ fn swap_updates(
 #[cfg(test)]
 mod tests {
     use mz_repr::Timestamp;
-    use mz_storage_client::freshness::FreshnessRecording;
+    use mz_storage_client::freshness::{FreshnessRecording, Measure};
     use mz_storage_types::freshness::histogram::BucketScheme;
     use mz_storage_types::freshness::recorder::RecorderConfig;
     use mz_storage_types::freshness::{ResolvedTree, Ticker};
@@ -4370,8 +4370,9 @@ mod tests {
         // The arrivals recorded through 60 s, which start after the returned start.
         let start = |since: Antichain<Timestamp>, created_ms: u64| {
             let mut recording = FreshnessRecording::created(since, created_ms);
-            let rows = recording.observe(&tree, &since_frontier(60_001), 61_000, &config);
-            60_000 - rows.iter().map(|r| r.count).sum::<u64>()
+            let rows = recording.observe(&tree, &since_frontier(60_001), 61_000, &[], &config);
+            let end_to_end = rows.iter().filter(|(m, _)| *m == Measure::EndToEnd);
+            60_000 - end_to_end.map(|(_, r)| r.count).sum::<u64>()
         };
         assert_eq!(start(since(0), 3000), 3000, "new shard");
         assert_eq!(start(Antichain::new(), 3000), 3000, "empty since");
