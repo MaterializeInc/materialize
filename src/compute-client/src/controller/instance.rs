@@ -357,9 +357,9 @@ impl Instance {
         // The storage controller reports the wallclock lag of the storage collection, which is
         // the minimum with the replicas' in `mz_wallclock_global_lag_history`, so it needs the
         // same tree.
-        if storage_sink && let Some(tree) = &state.freshness_tree {
+        if storage_sink {
             self.storage_collections
-                .set_freshness_tree(id, tree.clone());
+                .set_freshness_tree(id, state.freshness_tree.clone());
         }
         let freshness_created_ms = self.freshness_created_ms(id);
         state.freshness =
@@ -627,7 +627,8 @@ impl Instance {
         let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
         let histogram_labels = self.histogram_labels();
         let reporting = ENABLE_WALLCLOCK_FRESHNESS_REPORTING.get(&self.dyncfg);
-        // The resolved freshness tree and bounded D of each collection, while reporting is on.
+        // The resolved freshness tree and bounded D of each collection whose reported lag is
+        // consumed, filled on first use.
         let mut freshness = BTreeMap::new();
 
         // For collections that sink into storage, we need to ask the storage controller to know
@@ -651,20 +652,7 @@ impl Instance {
                 PartialOrder::less_than(&collection.read_frontier(), &write_frontier)
             };
 
-            if reporting
-                // Resolved at every sample, so a changed tick interval takes effect at once.
-                && let Some(tree) = collection
-                    .freshness_tree
-                    .as_ref()
-                    .and_then(|tree| tree.resolve(&*self.ticker_lookup))
-                && let Some(bound) = collection.assignment_bound.get(&tree)
-            {
-                freshness.insert(*id, (tree, bound));
-            }
-
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
-                // The `WallclockLagHistogram` keeps today's samples, since the freshness
-                // histograms replace it.
                 let bucket = if readable {
                     WallclockLag::from_duration(frontier_lag(&write_frontier)).histogram_bucket()
                 } else {
@@ -685,9 +673,30 @@ impl Instance {
                 //  (b) it is hydrated
                 let readable = readable_storage_collections.contains(id) || collection.hydrated();
 
+                // Only a lag history or metrics consume the reported lag. Transient collections
+                // have neither, and D of a tree with a refresh can scan up to a million points.
+                let consumed =
+                    collection.wallclock_lag_max.is_some() || collection.metrics.is_some();
                 let lag = if readable {
                     let frontier = &collection.write_frontier;
-                    let freshness = freshness.get(id).map(|(tree, bound)| (tree, *bound));
+                    let freshness = match reporting && consumed {
+                        true => freshness
+                            .entry(*id)
+                            .or_insert_with(|| {
+                                let global = self.collections.get_mut(id)?;
+                                // Resolved at every sample, so a changed tick interval takes
+                                // effect at once.
+                                let tree = global
+                                    .freshness_tree
+                                    .as_ref()?
+                                    .resolve(&*self.ticker_lookup)?;
+                                let bound = global.assignment_bound.get(&tree)?;
+                                Some((tree, bound))
+                            })
+                            .as_ref()
+                            .map(|(tree, bound)| (tree, *bound)),
+                        false => None,
+                    };
                     freshness::reported_lag(freshness, frontier, now_ms, frontier_lag(frontier))
                 } else {
                     WallclockLag::Undefined

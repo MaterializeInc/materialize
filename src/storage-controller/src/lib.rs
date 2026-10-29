@@ -3911,8 +3911,6 @@ where
                 .observe(lag.metric_seconds());
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
-                // The `WallclockLagHistogram` keeps today's samples, since the freshness
-                // histograms replace it.
                 let bucket = histogram_lag.histogram_bucket();
                 let labels = histogram_labels(&self.instances, &collection.extra_state);
                 let key = (histogram_period, bucket, labels);

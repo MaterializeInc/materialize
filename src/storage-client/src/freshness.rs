@@ -239,6 +239,11 @@ pub struct AssignmentBoundCache {
 }
 
 impl AssignmentBoundCache {
+    /// Whether D has been computed for some tree.
+    pub fn is_computed(&self) -> bool {
+        self.cached.is_some()
+    }
+
     /// [`ResolvedTree::assignment_bound`] of `tree`.
     pub fn get(&mut self, tree: &ResolvedTree) -> Option<u64> {
         match &self.cached {
