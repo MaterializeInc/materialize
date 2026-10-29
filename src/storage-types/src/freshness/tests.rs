@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use proptest::strategy::Union;
 
 use super::histogram::{BucketScheme, add_span};
 use super::local::{LocalDelayRecorder, VisibilityLog};
+use super::period::{DAY_MS, PeriodBook};
 use super::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use super::*;
 use timely::progress::Antichain;
@@ -724,8 +726,11 @@ fn config(per_octave: u32) -> RecorderConfig {
         scheme: scheme(per_octave),
         interval_ms: 1,
         period_ms: 60_000,
+        retention_ms: RETENTION_MS,
     }
 }
+
+const RETENTION_MS: u64 = 30 * DAY_MS;
 
 fn at(frontier: u64) -> Antichain<Timestamp> {
     Antichain::from_elem(Timestamp::from(frontier))
@@ -1024,12 +1029,14 @@ fn visibility_log_visible_at() {
     assert_eq!(log.visible_at(1001), Some(2020));
     assert_eq!(log.visible_at(2000), Some(2020));
     assert_eq!(log.visible_at(2001), None);
-    // Pruned entries answer nothing, and the rest stay correct.
+    // Pruned entries answer with the observation of the last pruned entry, and the rest stay
+    // correct.
     log.prune_through(1000);
-    assert_eq!(log.visible_at(1000), None);
+    assert_eq!(log.visible_at(1000), Some(1010));
     assert_eq!(log.visible_at(1001), Some(2020));
     log.prune_through(5000);
-    assert_eq!(log.visible_at(2000), None);
+    assert_eq!(log.visible_at(1), Some(2020));
+    assert_eq!(log.visible_at(2000), Some(2020));
     assert_eq!(log.visible_at(6000), None);
 }
 
@@ -1129,11 +1136,8 @@ fn local_missing_input_entry_understates() {
     );
     // Without any, the input counts as ready when the object advanced, a delay of 0.
     assert_eq!(run(&missing), BTreeMap::from([(s.bucket(1), 2000)]));
-    // The pruned log answers the second window and not the first.
-    assert_eq!(
-        run(&pruned),
-        BTreeMap::from([(s.bucket(1), 1000), (s.bucket(300), 1000)])
-    );
+    // The pruned log answers the first window with its last pruned entry.
+    assert_eq!(run(&pruned), run(&observed));
 }
 
 #[mz_ore::test]
@@ -1315,4 +1319,225 @@ fn debug_output_stays_small() {
     for debug in [end_to_end, format!("{local:?}"), log] {
         assert!(debug.len() < 1024, "{} bytes: {debug}", debug.len());
     }
+}
+
+/// Advances `book` and returns the closed periods with the arrivals added to each, and the
+/// number of `open` and `add` calls.
+fn advance_counted(
+    book: &mut PeriodBook<u64>,
+    to_ms: u64,
+    now_ms: u64,
+    cfg: &RecorderConfig,
+) -> (Vec<(u64, u64, u64)>, usize, usize) {
+    let (opens, adds) = (Cell::new(0), Cell::new(0));
+    let closed = book.advance(
+        to_ms,
+        now_ms,
+        cfg,
+        || {
+            opens.set(opens.get() + 1);
+            0
+        },
+        |sum, from, to| {
+            adds.set(adds.get() + 1);
+            *sum += to - from;
+        },
+    );
+    let closed = closed
+        .into_iter()
+        .map(|p| (p.start_ms, p.end_ms, p.state))
+        .collect();
+    (closed, opens.get(), adds.get())
+}
+
+/// A wall-clock time in 2026, a multiple of neither the period nor a day.
+const NOW_MS: u64 = 1_793_262_731_123;
+
+#[mz_ore::test]
+fn period_book_catch_up_cuts_day_pieces() {
+    let cfg = config(4);
+    let stalled = |stall_days: u64| {
+        let drop_ms = NOW_MS - stall_days * DAY_MS;
+        let mut book = PeriodBook::new(drop_ms);
+        let (closed, opens, adds) = advance_counted(&mut book, NOW_MS, NOW_MS, &cfg);
+        (drop_ms, closed, opens, adds)
+    };
+    let (drop_ms, closed, opens, adds) = stalled(29);
+    // Pieces are contiguous and cover the stall up to the last period boundary, which leaves
+    // the rest in an open period.
+    let covered_to = NOW_MS - NOW_MS % cfg.period_ms;
+    let mut pos = drop_ms;
+    for (start, end, sum) in &closed {
+        assert!(*start <= pos && pos < *end, "gap before ({start}, {end}]");
+        assert_eq!(*sum, end - pos, "({start}, {end}]");
+        pos = *end;
+    }
+    assert_eq!(pos, covered_to);
+    // The first period ends the minute of the drop, and the pieces in between end at days.
+    let drop_period_end = drop_ms.div_ceil(cfg.period_ms) * cfg.period_ms;
+    assert_eq!(closed[0].1, drop_period_end);
+    for (start, end, _) in &closed[1..closed.len() - 1] {
+        assert_eq!(end % DAY_MS, 0, "({start}, {end}]");
+        assert!(end - start <= DAY_MS);
+    }
+    assert!(
+        (30..=32).contains(&closed.len()),
+        "{} periods",
+        closed.len()
+    );
+    assert_eq!(opens, closed.len() + 1);
+    assert_eq!(adds, opens);
+    // A stall longer than the retention does no more work.
+    let (_, longer, longer_opens, _) = stalled(90);
+    assert!(longer.len() <= closed.len() + 2, "{} periods", longer.len());
+    assert!(longer_opens <= opens + 2);
+}
+
+#[mz_ore::test]
+fn period_book_short_span_keeps_periods() {
+    let cfg = config(4);
+    let mut book = PeriodBook::new(NOW_MS - 3_600_000);
+    let (closed, _, _) = advance_counted(&mut book, NOW_MS, NOW_MS, &cfg);
+    // One hour is not a catch-up yet, so every closed period has the configured length.
+    assert!(closed.iter().all(|(s, e, _)| e - s == cfg.period_ms));
+    assert_eq!(closed.len(), 60);
+}
+
+#[mz_ore::test]
+fn period_book_skips_arrivals_before_retention() {
+    let cfg = config(4);
+    let mut book = PeriodBook::new(0);
+    let (closed, _, _) = advance_counted(&mut book, NOW_MS, NOW_MS, &cfg);
+    let floor = NOW_MS - RETENTION_MS;
+    assert!(closed.iter().all(|(_, end, _)| *end > floor));
+    let total: u64 = closed.iter().map(|(_, _, sum)| sum).sum();
+    assert_eq!(total, NOW_MS - NOW_MS % cfg.period_ms - floor);
+    assert!(closed.len() <= 32, "{} periods", closed.len());
+    // A frontier entirely older than the retention records nothing.
+    let mut book = PeriodBook::new(0);
+    let (closed, opens, _) = advance_counted(&mut book, floor - 1, NOW_MS, &cfg);
+    assert!(closed.is_empty());
+    assert_eq!(opens, 0);
+}
+
+#[mz_ore::test]
+fn period_book_caps_frontier_ahead_of_wall_clock() {
+    let cfg = config(4);
+    let mut book = PeriodBook::new(NOW_MS - 30_000);
+    let far = NOW_MS + 75 * 365 * DAY_MS;
+    let (closed, opens, _) = advance_counted(&mut book, far, NOW_MS, &cfg);
+    let cap = NOW_MS + cfg.period_ms;
+    assert!(closed.iter().all(|(_, end, _)| *end <= cap));
+    assert!(opens <= 2, "{opens} periods opened");
+    // At the same wall-clock time, the cap is reached already.
+    let (closed, opens, _) = advance_counted(&mut book, far, NOW_MS, &cfg);
+    assert!(closed.is_empty() && opens == 0);
+    // The next observation continues from the cap.
+    let later = NOW_MS + 10 * cfg.period_ms;
+    let (closed, opens, _) = advance_counted(&mut book, far, later, &cfg);
+    assert!(
+        closed
+            .iter()
+            .all(|(_, end, _)| *end <= later + cfg.period_ms)
+    );
+    assert!(opens <= 11, "{opens} periods opened");
+}
+
+#[mz_ore::test]
+fn replica_outage_catch_up_is_exact_and_bounded() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let start = NOW_MS - NOW_MS % 1000;
+    let mut recorder = FreshnessRecorder::new(start);
+    let mut rows = Vec::new();
+    let mut drop_ms = start;
+    // Steady state for ten minutes, then the replica goes away.
+    for w in (start + 1000..=start + 600_500).step_by(1000) {
+        rows.extend(recorder.observe(&tree, &at(w + 1), w + 1, &cfg));
+        drop_ms = w;
+    }
+    let last_end = rows.iter().map(|r| r.period_end_ms).max().unwrap();
+    assert!(last_end <= drop_ms && drop_ms - last_end < cfg.period_ms);
+    // A new replica catches up thirty days later.
+    let now = drop_ms + 30 * DAY_MS;
+    let caught_up = recorder.observe(&tree, &at(now + 1), now, &cfg);
+    let mut per_period: BTreeMap<(u64, u64), u64> = BTreeMap::new();
+    for r in &caught_up {
+        *per_period
+            .entry((r.period_start_ms, r.period_end_ms))
+            .or_default() += r.count;
+    }
+    // Every piece holds exactly its arrivals, one per ms, from the end of the last row on.
+    let mut pos = last_end;
+    for ((start, end), count) in &per_period {
+        assert!(*start <= pos && pos < *end, "gap before ({start}, {end}]");
+        assert_eq!(*count, end - pos, "({start}, {end}]");
+        pos = *end;
+    }
+    assert_eq!(pos, now - now % cfg.period_ms);
+    assert!((30..=33).contains(&per_period.len()), "{per_period:?}");
+    // About 100 rows: the pieces times the buckets they touch.
+    assert!(caught_up.len() <= 200, "{} rows", caught_up.len());
+    // The catch-up is latency: the oldest arrivals waited thirty days.
+    let oldest = caught_up.iter().map(|r| r.bucket).max().unwrap();
+    assert_eq!(oldest, cfg.scheme.bucket(30 * DAY_MS));
+}
+
+#[mz_ore::test]
+fn finish_emits_open_periods() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(0);
+    let mut local = LocalDelayRecorder::new(0);
+    assert!(
+        recorder
+            .observe(&tree, &at(30_001), 30_001, &cfg)
+            .is_empty()
+    );
+    assert!(
+        local
+            .observe(&tree, &at(30_001), 30_001, &[], &cfg)
+            .is_empty()
+    );
+    let rows = recorder.finish();
+    assert_eq!(period_totals(&rows), BTreeMap::from([(0, 30_000)]));
+    assert_eq!(local.finish(), rows);
+    assert!(
+        recorder
+            .observe(&tree, &at(90_001), 90_001, &cfg)
+            .is_empty()
+    );
+    assert!(recorder.finish().is_empty());
+}
+
+#[mz_ore::test]
+fn local_long_input_outage_uses_last_pruned_observation() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let start = NOW_MS - NOW_MS % 1000 - 2 * 3_600_000;
+    let end = start + 2 * 3_600_000;
+    // The input shows each window 100 ms after it ends, for two hours, while the object is stuck
+    // at `start`. The input's log keeps the entries of the last ten minutes.
+    let mut log = VisibilityLog::default();
+    for w in (start + 1000..=end).step_by(1000) {
+        log.record(w, w + 100);
+    }
+    let now = end + 100;
+    let cutoff = now - 600_000;
+    log.prune_through(cutoff - 1100);
+    let mut recorder = LocalDelayRecorder::new(start);
+    let mut rows = recorder.observe(&tree, &at(end + 1), now, &[&log], &cfg);
+    rows.extend(recorder.finish());
+    let counts = bucket_counts(&rows);
+    let total: u64 = counts.values().sum();
+    assert_eq!(total, end - start);
+    // The pruned arrivals were visible in the input at the latest when its last pruned entry
+    // was observed, just before the cutoff, not when the object advanced.
+    let last_pruned_observed = cutoff - 1000;
+    let pruned: u64 = counts
+        .range(cfg.scheme.bucket(now - last_pruned_observed)..)
+        .map(|(_, c)| c)
+        .sum();
+    assert!(pruned >= end - start - 600_000, "{counts:?}");
+    assert!(counts.get(&0).copied().unwrap_or(0) <= 1000, "{counts:?}");
 }

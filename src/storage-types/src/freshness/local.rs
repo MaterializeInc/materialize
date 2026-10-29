@@ -32,6 +32,8 @@ pub struct VisibilityLog {
     entries: Vec<(u64, u64)>,
     /// Arrivals at or below this are no longer answerable because their entries were pruned.
     floor: u64,
+    /// The observation time of the last pruned entry, `None` before the first prune.
+    floor_observed_ms: Option<u64>,
 }
 
 // NOTE: Summarizes instead of deriving, because controller state dumps format every log, and
@@ -43,6 +45,7 @@ impl fmt::Debug for VisibilityLog {
             .field("first", &self.entries.first())
             .field("last", &self.entries.last())
             .field("floor", &self.floor)
+            .field("floor_observed_ms", &self.floor_observed_ms)
             .finish()
     }
 }
@@ -57,6 +60,9 @@ impl VisibilityLog {
     }
 
     /// The earliest observation time at which arrival time `arrival` was visible, if known.
+    ///
+    /// For an arrival whose entry was pruned it is the observation time of the last pruned
+    /// entry, which is at or after the arrival's actual visibility.
     pub fn visible_at(&self, arrival: u64) -> Option<u64> {
         self.segment(arrival).0
     }
@@ -67,7 +73,9 @@ impl VisibilityLog {
         // so it is dead once `r` is at most `arrival`.
         let dead = self.entries.partition_point(|(r, _)| *r <= arrival);
         if dead > 0 {
-            self.floor = self.floor.max(self.entries[dead - 1].0);
+            let (reflected, observed_ms) = self.entries[dead - 1];
+            self.floor = self.floor.max(reflected);
+            self.floor_observed_ms = self.floor_observed_ms.max(Some(observed_ms));
         }
         self.entries.drain(..dead);
     }
@@ -76,7 +84,7 @@ impl VisibilityLog {
     /// arrivals that share this answer, `None` if unbounded.
     fn segment(&self, arrival: u64) -> (Option<u64>, Option<u64>) {
         if arrival <= self.floor {
-            return (None, Some(self.floor));
+            return (self.floor_observed_ms, Some(self.floor));
         }
         let idx = self.entries.partition_point(|(r, _)| *r < arrival);
         match self.entries.get(idx) {
@@ -108,9 +116,9 @@ impl LocalDelayRecorder {
     /// logs, and returns the rows of periods that closed.
     ///
     /// An arrival window is ready when every input's log shows its end as visible. With no inputs
-    /// the local delay is the end-to-end latency. An input whose log cannot answer, because it
-    /// was pruned or the advance was never observed, counts as ready at `now_ms`, which
-    /// understates the delay and never overstates it.
+    /// the local delay is the end-to-end latency. An input whose log never observed the advance
+    /// counts as ready at `now_ms`, and one whose answering entry was pruned as ready at the
+    /// observation of its last pruned entry. Both understate the delay and never overstate it.
     /// Rows have the order and finality of `FreshnessRecorder::observe`.
     pub fn observe(
         &mut self,
@@ -129,7 +137,8 @@ impl LocalDelayRecorder {
                 let advance_ms = now_ms.max(last_reflected);
                 self.book.advance(
                     last_reflected,
-                    config.period_ms,
+                    now_ms,
+                    config,
                     || PeriodHistogram {
                         scheme: config.scheme,
                         counts: BTreeMap::new(),
@@ -161,6 +170,11 @@ impl LocalDelayRecorder {
             }
         };
         rows(closed)
+    }
+
+    /// Like [`FreshnessRecorder::finish`](super::recorder::FreshnessRecorder::finish).
+    pub fn finish(&mut self) -> Vec<PeriodRow> {
+        rows(self.book.finish())
     }
 }
 

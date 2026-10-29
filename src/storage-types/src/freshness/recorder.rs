@@ -27,6 +27,8 @@ pub struct RecorderConfig {
     pub interval_ms: u64,
     /// The period length in ms.
     pub period_ms: u64,
+    /// How long the histograms keep periods, in ms. Arrivals older than this are not recorded.
+    pub retention_ms: u64,
 }
 
 /// One non-empty bucket of a closed period `(period_start_ms, period_end_ms]`.
@@ -84,7 +86,8 @@ impl FreshnessRecorder {
                 let advance_ms = now_ms.max(last_reflected);
                 self.book.advance(
                     last_reflected,
-                    config.period_ms,
+                    now_ms,
+                    config,
                     || PeriodHistogram {
                         scheme: config.scheme,
                         counts: BTreeMap::new(),
@@ -104,6 +107,12 @@ impl FreshnessRecorder {
             }
         };
         rows(closed)
+    }
+
+    /// Ends the recording like an empty frontier, for an object that goes away without one, and
+    /// returns the rows of the open periods.
+    pub fn finish(&mut self) -> Vec<PeriodRow> {
+        rows(self.book.finish())
     }
 }
 
