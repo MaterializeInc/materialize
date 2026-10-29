@@ -49,8 +49,6 @@ SELECT
     '{"a": 1}'::jsonb AS c_jsonb
 """
 
-# `numeric` and `uuid` have no native Arrow type the driver maps them onto, so it
-# wraps them in an `arrow.opaque` extension type over string or binary storage.
 EXPECTED_SCALAR_TYPES = {
     "c_bool": pa.bool_(),
     "c_int2": pa.int16(),
@@ -67,7 +65,7 @@ EXPECTED_SCALAR_TYPES = {
     "c_timestamp": pa.timestamp("us"),
     "c_timestamptz": pa.timestamp("us", tz="UTC"),
     "c_interval": pa.month_day_nano_interval(),
-    "c_uuid": pa.opaque(pa.binary(), "uuid", "PostgreSQL"),
+    "c_uuid": pa.uuid(),
     "c_jsonb": pa.json_(pa.string()),
 }
 
