@@ -1409,7 +1409,7 @@ name  false  text  The␠name␠of␠the␠column.
 position  false  uint8  The␠1-indexed␠position␠of␠the␠column␠in␠its␠containing␠table,␠source,␠or␠view.
 nullable  false  boolean  Can␠the␠column␠contain␠a␠`NULL`␠value?
 type  false  text  The␠data␠type␠of␠the␠column.
-default  true  text  The␠default␠expression␠of␠the␠column,␠or␠`NULL`␠if␠it␠has␠none.
+default  true  text  The␠default␠expression␠of␠the␠column.␠A␠table␠column␠without␠one␠reads␠as␠the␠string␠`NULL`.
 type_oid  false  oid  The␠OID␠of␠the␠type␠of␠the␠column␠(references␠`mz_types`).
 type_mod  false  integer  The␠packed␠type␠identifier␠of␠the␠column.
 

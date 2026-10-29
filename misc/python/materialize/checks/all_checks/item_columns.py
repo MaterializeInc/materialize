@@ -143,14 +143,14 @@ class ItemColumns(Check):
                 item_columns_initial_mv 1 a false integer <null> int4 -1
                 item_columns_initial_mv 2 b true text <null> text -1
                 item_columns_initial_mv 3 c1 true numeric <null> numeric -1
-                item_columns_initial_table 1 a false integer <null> int4 -1
+                item_columns_initial_table 1 a false integer NULL int4 -1
                 item_columns_initial_table 2 b true text 'b' text -1
-                item_columns_initial_table 3 c true numeric <null> numeric 2555910
-                item_columns_initial_table 4 d true item_columns_list <null> item_columns_list -1
-                item_columns_initial_table 5 e true item_columns_record <null> item_columns_record -1
-                item_columns_initial_table 6 f true "timestamp without time zone" <null> timestamp 3
-                item_columns_initial_table 7 g true integer[] <null> _int4 -1
-                item_columns_initial_table 8 i true integer <null> int4 -1
+                item_columns_initial_table 3 c true numeric NULL numeric 2555910
+                item_columns_initial_table 4 d true item_columns_list NULL item_columns_list -1
+                item_columns_initial_table 5 e true item_columns_record NULL item_columns_record -1
+                item_columns_initial_table 6 f true "timestamp without time zone" NULL timestamp 3
+                item_columns_initial_table 7 g true integer[] NULL _int4 -1
+                item_columns_initial_table 8 i true integer NULL int4 -1
                 item_columns_initial_view 1 a false integer <null> int4 -1
                 item_columns_initial_view 2 b true text <null> text -1
                 item_columns_initial_view 3 c1 true numeric <null> numeric -1
@@ -160,9 +160,9 @@ class ItemColumns(Check):
                 item_columns_initial_view 7 g true integer[] <null> _int4 -1
                 item_columns_middle_mv 1 a true integer <null> int4 -1
                 item_columns_middle_mv 2 b true item_columns_list <null> item_columns_list -1
-                item_columns_middle_table 1 a true integer <null> int4 -1
-                item_columns_middle_table 2 b true item_columns_list <null> item_columns_list -1
-                item_columns_middle_table 3 c true text <null> text -1
+                item_columns_middle_table 1 a true integer NULL int4 -1
+                item_columns_middle_table 2 b true item_columns_list NULL item_columns_list -1
+                item_columns_middle_table 3 c true text NULL text -1
 
                 > SELECT i.name, ic.index_position, ic.on_position, ic.on_expression, ic.nullable
                   FROM mz_index_columns ic

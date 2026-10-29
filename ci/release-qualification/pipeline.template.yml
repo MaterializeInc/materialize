@@ -11,6 +11,26 @@
 priority: 40
 
 steps:
+  - id: terraform-acceptance
+    label: "Terraform Acceptance tests"
+    command: ci/release-qualification/terraform.sh acceptance
+    depends_on: []
+    if: build.tag != ""
+    timeout_in_minutes: 150
+    agents:
+      queue: hetzner-x86-64-8cpu-16gb
+    sanitizer: skip
+
+  - id: terraform-integration
+    label: "Terraform Integration tests"
+    command: ci/release-qualification/terraform.sh integration
+    depends_on: []
+    if: build.tag != ""
+    timeout_in_minutes: 90
+    agents:
+      queue: hetzner-x86-64-8cpu-16gb
+    sanitizer: skip
+
   - group: Builds
     key: builds
     steps:

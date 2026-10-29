@@ -3574,7 +3574,7 @@ mz_internal.pg_attrdef_all_databases:
     →Arrange (#0{id})
       →Fused with Child Map/Filter/Project
         Project: #1, #2, #5
-        Filter: (#5{default}) IS NOT NULL
+        Filter: (#5{default} != "NULL")
           →Arranged mz_catalog.mz_columns
             Key: (#1{name})
     →Arrange (#0{id})
@@ -3658,7 +3658,7 @@ mz_internal.pg_attribute_all_databases:
   →Return
     →Map/Filter/Project
       Project: #0, #1, #5, #7, #10, #6, #13, #11, #12, #14, #14..=#16, #9, #8
-      Map: bigint_to_smallint(uint8_to_bigint(#2{position})), NOT(#3{nullable}), (#4{default}) IS NOT NULL, 0, 0, false, 0
+      Map: bigint_to_smallint(uint8_to_bigint(#2{position})), NOT(#3{nullable}), coalesce((#4{default} != "NULL"), false), 0, 0, false, 0
         →Union
           →Map/Filter/Project
             Project: #0..=#9
@@ -4929,9 +4929,6 @@ mz_catalog.mz_columns:
                             Project: #0, #1
                               →Read l1
       →Differential Join %1:mz_catalog_raw[#1{schema_name}, #2{name}] » %0[#0{schema_name}, #1{relation_name}]
-        Final closure:
-          Project: #6, #0..=#3, #7, #4, #5
-          Map: null
         →Arrange (#0{schema_name}, #1{relation_name})
           →Constant (1937 rows)
         →Arrange (#1{schema_name}, #2{name})
@@ -6711,8 +6708,8 @@ Explained Query:
                 Key: (#2{database_id})
   →Return
     →Map/Filter/Project
-      Project: #9, #6, #5, #0, #7, #4, #8, #3, #10, #10, #10
-      Map: uint8_to_bigint(#1{position}), case when #2{nullable} then "YES" else "NO" end, "materialize", null
+      Project: #10, #6, #5, #0, #7..=#9, #3, #11, #11, #11
+      Map: uint8_to_bigint(#1{position}), case when (#4{default} = "NULL") then null else #4{default} end, case when #2{nullable} then "YES" else "NO" end, "materialize", null
         →Union
           →Fused with Child Map/Filter/Project
             Project: #0..=#5, #7
