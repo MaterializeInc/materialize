@@ -2891,8 +2891,8 @@ struct CollectionState {
 
     /// How the collection's frontier follows arrival time. `None` if it has no time dependence.
     freshness_tree: Option<FreshnessTree>,
-    /// Whether `freshness_tree` ends in the collection's own refresh node, which the timestamps
-    /// its inputs must pass do not include.
+    /// Whether the top-level node of `freshness_tree` is the collection's own refresh schedule,
+    /// which the timestamps its inputs must pass do not include.
     freshness_own_refresh: bool,
     /// The direct inputs whose visibility local delay is measured against, the imports that
     /// contributed to the freshness tree, with their log in `StorageCollections` if they have

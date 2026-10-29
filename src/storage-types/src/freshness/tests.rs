@@ -141,15 +141,16 @@ fn arb_tree() -> impl Strategy<Value = ResolvedTree> {
             .boxed(),
         Just(Ticker::Continuous).boxed(),
     ]);
+    let schedule = (1u64..=60, 0u64..=30);
     (
-        proptest::collection::vec(ticker, 1..=4),
-        proptest::option::of((1u64..=60, 0u64..=30)),
+        proptest::collection::vec(ticker.clone(), 1..=4),
+        // A refresh input of the minimum, as a join that reads a REFRESH view.
+        proptest::option::of((proptest::collection::vec(ticker, 1..=2), schedule.clone())),
+        proptest::option::of(schedule),
     )
-        .prop_map(|(leaves, refresh)| {
-            let min = ResolvedTree::Min(leaves.into_iter().map(ResolvedTree::Leaf).collect());
-            match refresh {
-                None => min,
-                Some((interval, aligned_to)) => ResolvedTree::Refresh {
+        .prop_map(|(leaves, inner, outer)| {
+            let refreshed =
+                |(interval, aligned_to): (u64, u64), input: ResolvedTree| ResolvedTree::Refresh {
                     schedule: RefreshSchedule {
                         everies: vec![RefreshEvery {
                             interval: Duration::from_millis(interval),
@@ -157,8 +158,17 @@ fn arb_tree() -> impl Strategy<Value = ResolvedTree> {
                         }],
                         ats: vec![],
                     },
-                    input: Box::new(min),
-                },
+                    input: Box::new(input),
+                };
+            let mut inputs: Vec<_> = leaves.into_iter().map(ResolvedTree::Leaf).collect();
+            if let Some((inner_leaves, schedule)) = inner {
+                let inner_leaves = inner_leaves.into_iter().map(ResolvedTree::Leaf).collect();
+                inputs.push(refreshed(schedule, ResolvedTree::Min(inner_leaves)));
+            }
+            let min = ResolvedTree::Min(inputs);
+            match outer {
+                None => min,
+                Some(schedule) => refreshed(schedule, min),
             }
         })
 }
@@ -1948,6 +1958,10 @@ impl Truth {
             timestamp_ready_ms =
                 timestamp_ready_ms.max(h.get(passed).map_or(observed_ms, |(o, _)| *o));
         }
+        // An input observed after the object showed the arrival cannot have delayed it beyond
+        // that observation.
+        let arrival_ready_ms = arrival_ready_ms.min(observed_ms);
+        let timestamp_ready_ms = timestamp_ready_ms.min(observed_ms).max(arrival_ready_ms);
         Truth {
             arrival,
             window_start: tree.prev_boundary(arrival - 1),
@@ -2078,14 +2092,15 @@ fn split_join_input_stall_is_upstream() {
         bucket_counts(&recorded.skew),
         histogram(truths.iter().map(Truth::skew_ms))
     );
-    // An arrival that the 11 s input showed before its stall, but that needs a timestamp of the
-    // 7 s grid past the input's last tick before the stall, waits for that input's frontier
-    // through the stall. That is at most one window of the 11 s input.
+    // NOTE: An arrival that the 11 s input showed before its stall, but whose needed timestamp,
+    // rounded up on the 7 s grid, lies past that input's last tick before the stall, waits in
+    // skew for that input's frontier through the stall. Such arrivals lie within the largest
+    // gap between an arrival and its needed timestamp, here one window of the 7 s input.
     let long_skew: u64 = bucket_counts(&recorded.skew)
         .range(s.bucket(10_000) + 1..)
         .map(|(_, c)| c)
         .sum();
-    assert!(long_skew <= 11_000, "{long_skew}");
+    assert!(long_skew <= 7_000, "{long_skew}");
     // The arrivals during the stall wait for the input to show them, its own latency, and
     // little else.
     assert!(truths.iter().map(Truth::upstream_ms).max().unwrap() >= 290_000);
@@ -2210,9 +2225,10 @@ fn split_single_input_records_no_skew() {
     assert_eq!(rows.skew, vec![]);
 }
 
-/// Inputs that are a leaf or a join of two leaves, optionally stalled, and an object that joins
-/// them, each observed with a random delay so that an input's observation can come after the
-/// object's.
+/// Inputs that are a leaf or a join of two leaves, optionally under a refresh and stalled, and
+/// an object that joins them. Each is observed with a random delay so that an input's
+/// observation can come after the object's, and with a random lead of its frontier over the
+/// wall clock, which makes the period book defer arrivals.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn split_never_exceeds_per_arrival_oracle() {
@@ -2220,14 +2236,17 @@ fn split_never_exceeds_per_arrival_oracle() {
     let leaf = select(vec![3u64, 5, 7, 11, 13, 20]);
     let input = (
         proptest::collection::vec(leaf, 1..=2),
+        proptest::option::of(select(vec![20u64, 30, 50])),
         proptest::option::of((1u64..END, 0u64..300)),
+        0u64..800,
     );
     let strategy = (
         proptest::collection::vec(input, 1..=3),
+        0u64..800,
         any::<u64>(),
         0u64..30,
     );
-    proptest!(ProptestConfig::with_cases(64), |((specs, seed, max_delay) in strategy)| {
+    proptest!(ProptestConfig::with_cases(64), |((specs, lead, seed, max_delay) in strategy)| {
         let mut state = seed | 1;
         let mut delay = || {
             state ^= state << 13;
@@ -2238,29 +2257,38 @@ fn split_never_exceeds_per_arrival_oracle() {
         let cfg = RecorderConfig { period_ms: 500, ..config(4) };
         let trees: Vec<ResolvedTree> = specs
             .iter()
-            .map(|(leaves, _)| match leaves.as_slice() {
-                [one] => aligned(*one),
-                _ => ResolvedTree::Min(leaves.iter().map(|i| aligned(*i)).collect()),
+            .map(|(leaves, refresh_ms, _, _)| {
+                let inner = match leaves.as_slice() {
+                    [one] => aligned(*one),
+                    _ => ResolvedTree::Min(leaves.iter().map(|i| aligned(*i)).collect()),
+                };
+                match refresh_ms {
+                    None => inner,
+                    Some(p) => refresh(every(*p), inner),
+                }
             })
             .collect();
         let tree = ResolvedTree::Min(trees.clone());
-        // The true frontier of input `k` at wall clock `t`, held during its stall.
+        // The true frontier of input `k` at wall clock `t`, held during its stall. A refresh
+        // advances to its next refresh once its input passed the previous one.
         let frontier = |k: usize, t: u64| -> u64 {
-            let (leaves, stall) = &specs[k];
+            let (leaves, refresh_ms, stall, _) = &specs[k];
             let t = match stall {
                 Some((from, len)) if (*from..from + len).contains(&t) => from - 1,
                 _ => t,
             };
-            leaves.iter().map(|i| t / i * i + 1).min().unwrap()
+            let f = leaves.iter().map(|i| t / i * i + 1).min().unwrap();
+            refresh_ms.map_or(f, |p| ceil_to(f, 0, p))
         };
         let mut histories: Vec<History> = vec![Vec::new(); specs.len()];
         let mut history = Vec::new();
         for t in 0..END {
             for (k, h) in histories.iter_mut().enumerate() {
-                push_advance(h, t + delay(), frontier(k, t));
+                let observed = (t + delay()).saturating_sub(specs[k].3);
+                push_advance(h, observed, frontier(k, t));
             }
             let f = (0..specs.len()).map(|k| frontier(k, t)).min().unwrap();
-            push_advance(&mut history, t + delay(), f);
+            push_advance(&mut history, (t + delay()).saturating_sub(lead), f);
         }
 
         // Observations in wall-clock order, inputs first at equal times.
@@ -2294,6 +2322,17 @@ fn split_never_exceeds_per_arrival_oracle() {
 
         let inputs: Vec<_> = trees.iter().zip_eq(histories.iter()).collect();
         let truths = Truth::all(&tree, &tree, &history, &inputs, (0, high_water_ms));
+        for truth in &truths {
+            // The split covers the end-to-end charge unless an input showed the arrival before
+            // its window started, which a frontier ahead of the wall clock allows.
+            if truth.arrival_ready_ms >= truth.window_start {
+                let split = truth.upstream_ms() + truth.skew_ms() + truth.local_ms();
+                prop_assert!(split <= truth.end_to_end_ms(), "{truth:?}");
+                if truth.advance_ms == truth.observed_ms {
+                    prop_assert_eq!(split, truth.end_to_end_ms(), "{:?}", truth);
+                }
+            }
+        }
         let per_period = |rows: &[PeriodRow]| {
             let mut periods: BTreeMap<u64, BTreeMap<i32, u64>> = BTreeMap::new();
             for row in rows {
