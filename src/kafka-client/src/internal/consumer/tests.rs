@@ -2223,3 +2223,154 @@ fn error_callback_may_use_the_consumer() {
     }));
     assert!(delivered("split"));
 }
+
+/// Requests sent to all brokers of a consumer so far.
+fn requests_sent(consumer: &BaseConsumer<Ctx>) -> u64 {
+    consumer
+        .inner()
+        .cluster
+        .brokers()
+        .iter()
+        .map(|b| b.counters().tx.load(Ordering::Relaxed))
+        .sum()
+}
+
+/// While the reader of a full partition is stalled, as under backpressure,
+/// requests for another partition at the end of its log on the same broker
+/// still wait `fetch.wait.max.ms` at the broker: the stalled reader's last
+/// drain rate does not shorten them.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn stalled_reader_does_not_shorten_fetch_waits() {
+    for brokers in test_brokers() {
+        let admin = Admin::new(&brokers);
+        let topic_guard = admin.new_topic("mzkc-c-stalled", 2);
+        let topic = topic_guard.name.clone();
+        let value = vec![b'x'; 10_000];
+        for _ in 0..300 {
+            let records: Vec<Rec<'_>> = (0..10).map(|_| Rec::value(&value)).collect();
+            admin.produce(&topic, 0, &records);
+        }
+        let (consumer, _) = consumer(&brokers, &[("group.id", "mzkc-test")]);
+        let q0 = consumer.split_partition_queue(&topic, 0).unwrap();
+        let _q1 = consumer.split_partition_queue(&topic, 1).unwrap();
+        consumer
+            .assign(&tpl(&[
+                (&topic, 0, Offset::Beginning),
+                (&topic, 1, Offset::Beginning),
+            ]))
+            .unwrap();
+        // Drain partition 0 quickly, so that it has a drain rate, then stall.
+        let mut got = 0;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(1500) && got < 2000 {
+            if let Some(m) = q0.poll(Duration::from_millis(100)) {
+                m.unwrap();
+                got += 1;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        let p0 = Arc::clone(&consumer.inner().lock_state().partitions[&topic][&0]);
+        let before = requests_sent(&consumer);
+        std::thread::sleep(Duration::from_secs(3));
+        let sent = requests_sent(&consumer) - before;
+        // One Fetch per `fetch.wait.max.ms` (500 ms) for the idle partition.
+        // A drain estimate frozen by the stall made it hundreds.
+        assert!(
+            sent <= 20,
+            "{brokers}: {sent} requests in 3 s with the reader stalled after {got} messages \
+             (partition 0 queued {:?})",
+            p0.queued()
+        );
+    }
+}
+
+/// A queued record set counts with the buffer holding it, and a small one
+/// gets a buffer of its own size.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn queued_record_sets_count_their_buffers() {
+    let topic = "mzkc-c-buffers";
+    let (consumer, _) = consumer("127.0.0.1:1", &[("group.id", "mzkc-test")]);
+    let q = consumer.split_partition_queue(topic, 0).unwrap();
+    consumer
+        .assign(&tpl(&[(topic, 0, Offset::Offset(0))]))
+        .unwrap();
+    let inner = consumer.inner();
+    let partition = Arc::clone(&inner.lock_state().partitions[topic][&0]);
+    let batch = |base_offset: i64, value: &[u8]| {
+        let mut builder = BatchBuilder::new(Compression::None, None, false);
+        builder.append(now_ms(), None, Some(value), &[]);
+        let mut bytes = builder
+            .build(ProducerIdentity::NONE, -1)
+            .unwrap()
+            .bytes()
+            .to_vec();
+        bytes[..8].copy_from_slice(&base_offset.to_be_bytes());
+        bytes
+    };
+    let fetched = |records: Vec<u8>| {
+        let mut wakes = Vec::new();
+        let mut state = partition.lock_state();
+        fetcher::handle_records(
+            inner,
+            &partition,
+            &mut state,
+            Bytes::from(records),
+            Vec::new(),
+            &mut wakes,
+        );
+        drop(state);
+        for wake in wakes {
+            partition.notify(inner, wake);
+        }
+    };
+    let n = 1000;
+    let mut wire = 0;
+    for i in 0..n {
+        let set = batch(i, &[b'v'; 100]);
+        wire += u64::try_from(set.len()).unwrap();
+        fetched(set);
+    }
+    assert_eq!(partition.queued(), (wire, u64::try_from(n).unwrap()));
+    // A large record set with an incomplete batch at its end: the buffer
+    // holds the complete batch, in a capacity class of at most 5/4 its size.
+    let mut large = batch(n, &vec![b'w'; 70_000]);
+    let large_len = u64::try_from(large.len()).unwrap();
+    large.extend_from_slice(&batch(n + 1, &[b'x'; 100])[..50]);
+    fetched(large);
+    let (bytes, queued_msgs) = partition.queued();
+    assert_eq!(queued_msgs, u64::try_from(n + 1).unwrap());
+    let buffer = bytes - wire;
+    assert!(
+        buffer > large_len && buffer <= large_len * 5 / 4,
+        "{buffer} for {large_len}"
+    );
+    // Consuming releases all of it.
+    let got = queue_until(&q, Duration::from_secs(10), |i| {
+        i.len() == usize::try_from(n + 1).unwrap()
+    });
+    assert_eq!(msgs(&got).last(), Some(&n));
+    // The reader finishes a batch, and the chunk, on the poll after its last
+    // record.
+    assert!(q.poll(Duration::ZERO).is_none());
+    assert_eq!(partition.queued(), (0, 0));
+}
+
+/// The consumer frees pooled buffers once its queues are idle, also while no
+/// fetcher plans a request.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn idle_consumer_frees_pooled_buffers() {
+    let (consumer, _) = consumer("127.0.0.1:1", &[("group.id", "mzkc-test")]);
+    let inner = consumer.inner();
+    inner.pool.decay_limit(8 << 20);
+    drop(inner.pool.copy(&vec![0; 1 << 20]));
+    assert!(inner.pool.pooled() >= 1 << 20);
+    inner.wake();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while inner.pool.pooled() > 0 {
+        assert!(Instant::now() < deadline, "pool not trimmed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}

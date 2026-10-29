@@ -34,7 +34,10 @@
 //! at the end of their logs would wait at the broker for up to
 //! `fetch.wait.max.ms` while partitions left out because their queues were
 //! full drain and need data. Such requests wait only until those queues are
-//! expected to reach their triggers, at their drain rate.
+//! expected to reach their triggers, at their drain rate, but at least
+//! [`MIN_BROKER_WAIT`], and only for queues whose readers drained within
+//! [`RECENT_DRAIN`]. A stalled reader (backpressure) leaves a stale rate
+//! that would otherwise make every request come back after a round trip.
 //!
 //! Each partition's `PartitionMaxBytes` is also capped by what its queue can
 //! still take before reaching the limits, so that a response does not
@@ -67,6 +70,7 @@ use crate::error::KafkaError;
 use crate::internal::cluster::MetadataSnapshot;
 use crate::internal::compression::CodecError;
 use crate::internal::net::RequestOptions;
+use crate::internal::pool::LIMIT_DECAY;
 use crate::internal::protocol;
 use crate::internal::records;
 use crate::types::RDKafkaErrorCode;
@@ -88,6 +92,14 @@ const TARGET_LATENCIES: u128 = 4;
 /// The smallest `PartitionMaxBytes` the fetcher asks for. Brokers return at
 /// least one whole batch regardless (KIP-74).
 const MIN_PARTITION_FETCH_BYTES: u64 = 64 << 10;
+
+/// How recently the reader of a full queue must have drained for its drain
+/// rate to shorten the broker wait.
+const RECENT_DRAIN: Duration = Duration::from_millis(100);
+
+/// The shortest broker wait a drain estimate shortens `fetch.wait.max.ms`
+/// to.
+const MIN_BROKER_WAIT: Duration = Duration::from_millis(10);
 
 /// The largest `MaxBytes` of a Fetch request, below `fetch.max.bytes`
 /// (default 50 MB).
@@ -145,7 +157,7 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
         let (mut fetching, next_wakeup, soonest_need) =
             plan(&inner, broker_id, &md, request_id, now);
         let max_wait_ms = match soonest_need {
-            Some(d) => max_wait_ms.min(i32::try_from(d.as_millis()).unwrap_or(i32::MAX).max(1)),
+            Some(d) => max_wait_ms.min(i32::try_from(d.as_millis()).unwrap_or(i32::MAX)),
             None => max_wait_ms,
         };
         if fetching.is_empty() {
@@ -388,11 +400,17 @@ fn plan(
         };
         let target = fetch.target.max(TARGET_FLOOR);
         let (queued, _) = partition.queued();
-        let mut need_in = |fetch: &super::partition::FetchState| {
-            if fetch.drain_rate > 0 {
+        let mut need_in = |fetch: &mut super::partition::FetchState| {
+            // Sampled here too, as a full partition is in no response.
+            sample_drain(fetch, partition.consumed(), now);
+            let drained_recently = fetch
+                .drained_at
+                .is_some_and(|at| now.saturating_duration_since(at) <= RECENT_DRAIN);
+            if drained_recently && fetch.drain_rate > 0 {
                 let excess = u128::from(queued.saturating_sub(target / 2));
                 let nanos = excess * 1_000_000_000 / u128::from(fetch.drain_rate);
-                let d = Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX));
+                let d = Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+                    .max(MIN_BROKER_WAIT);
                 soonest_need = Some(soonest_need.map_or(d, |s| s.min(d)));
             }
         };
@@ -440,25 +458,7 @@ fn plan(
             max_bytes,
         });
     }
-    // The pool keeps as much free capacity as the queues of partitions that
-    // are being drained are meant to hold, and nothing once they are idle.
-    let total_target: u64 = inner
-        .assigned_partitions()
-        .iter()
-        .map(|p| {
-            let state = p.lock_state();
-            if state.fetch.drain_rate > 0 {
-                state.fetch.target.max(TARGET_FLOOR)
-            } else {
-                0
-            }
-        })
-        .sum();
-    // Twice the targets: buffers circulate between the queues, the pool and
-    // the response being copied out.
-    inner
-        .pool
-        .decay_limit(usize::try_from(total_target.saturating_mul(2)).unwrap_or(usize::MAX));
+    trim_pool(inner, now);
     if !triggered {
         // Nobody needs data yet; the candidates wait for their triggers.
         if !fetching.is_empty() {
@@ -480,6 +480,34 @@ fn plan(
         true
     });
     (fetching, next_wakeup, soonest_need)
+}
+
+/// Sets the consumer's buffer pool limit: as much free capacity as the
+/// queues of partitions whose readers drained within [`LIMIT_DECAY`] are
+/// meant to hold, and nothing once none did. Returns whether the pool holds
+/// more than that, to be trimmed again once the limit decays.
+pub(super) fn trim_pool(inner: &ConsumerInner, now: Instant) -> bool {
+    let total_target: u64 = inner
+        .assigned_partitions()
+        .iter()
+        .map(|p| {
+            let state = p.lock_state();
+            let draining = state
+                .fetch
+                .drained_at
+                .is_some_and(|at| now.saturating_duration_since(at) <= LIMIT_DECAY);
+            if draining {
+                state.fetch.target.max(TARGET_FLOOR)
+            } else {
+                0
+            }
+        })
+        .sum();
+    // Twice the targets: buffers circulate between the queues, the pool and
+    // the response being copied out.
+    let limit = usize::try_from(total_target.saturating_mul(2)).unwrap_or(usize::MAX);
+    inner.pool.decay_limit(limit);
+    inner.pool.pooled() > limit
 }
 
 /// Clears the in-flight marks of a request that got no answer for these
@@ -605,25 +633,7 @@ fn update_target(
     latency: Duration,
     starved: bool,
 ) {
-    let now = Instant::now();
-    let consumed = partition.consumed();
-    match fetch.drain_mark {
-        Some((mark, at)) => {
-            let elapsed = now.saturating_duration_since(at);
-            if elapsed >= Duration::from_millis(1) {
-                let drained = u128::from(consumed.saturating_sub(mark));
-                let rate =
-                    u64::try_from(drained * 1_000_000_000 / elapsed.as_nanos()).unwrap_or(u64::MAX);
-                fetch.drain_rate = if fetch.drain_rate == 0 {
-                    rate
-                } else {
-                    fetch.drain_rate / 2 + rate / 2
-                };
-                fetch.drain_mark = Some((consumed, now));
-            }
-        }
-        None => fetch.drain_mark = Some((consumed, now)),
-    }
+    sample_drain(fetch, partition.consumed(), Instant::now());
     let wanted =
         u128::from(fetch.drain_rate) * latency.as_nanos() * TARGET_LATENCIES / 1_000_000_000;
     let mut target = u64::try_from(wanted).unwrap_or(u64::MAX).max(TARGET_FLOOR);
@@ -638,6 +648,30 @@ fn update_target(
         cap = cap.min(max_msgs.saturating_mul(fetch.avg_msg_bytes));
     }
     fetch.target = target.min(cap.max(TARGET_FLOOR));
+}
+
+/// Samples the drain rate of a partition's reader from `consumed`, the
+/// bytes it consumed in total. A sample that finds nothing drained halves
+/// the rate.
+fn sample_drain(fetch: &mut super::partition::FetchState, consumed: u64, now: Instant) {
+    let Some((mark, at)) = fetch.drain_mark else {
+        fetch.drain_mark = Some((consumed, now));
+        return;
+    };
+    if consumed != mark {
+        fetch.drained_at = Some(now);
+    }
+    let elapsed = now.saturating_duration_since(at);
+    if elapsed >= Duration::from_millis(1) {
+        let drained = u128::from(consumed.saturating_sub(mark));
+        let rate = u64::try_from(drained * 1_000_000_000 / elapsed.as_nanos()).unwrap_or(u64::MAX);
+        fetch.drain_rate = if fetch.drain_rate == 0 {
+            rate
+        } else {
+            fetch.drain_rate / 2 + rate / 2
+        };
+        fetch.drain_mark = Some((consumed, now));
+    }
 }
 
 /// Queues a partition's record set and advances its fetch offset.
@@ -715,13 +749,21 @@ pub(super) fn handle_records(
     }
     state.fetch.leader_epoch = leader_epoch;
     state.fetch.offset = next_offset;
-    let records = inner.pool.copy(&records);
-    partition.add_queued(bytes, msgs);
+    // The incomplete batch at the end, if any, is fetched again.
+    let complete = records.len() - batches.truncated_bytes();
+    let (records, capacity) = inner.pool.copy(&records[..complete]);
+    // The queue accounts for the buffer, which the limits and targets are
+    // about, not just for the batches in it.
+    let overhead = u64::try_from(capacity)
+        .expect("usize fits u64")
+        .saturating_sub(bytes);
+    partition.add_queued(bytes + overhead, msgs);
     wakes.push(state.push(
         Item::Chunk(Chunk {
             records,
             fetch_offset,
             aborted,
+            overhead,
         }),
         partition.is_split(),
     ));

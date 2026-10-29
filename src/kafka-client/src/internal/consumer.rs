@@ -55,7 +55,7 @@ use crate::consumer::CommitMode;
 use crate::error::{KafkaError, KafkaResult};
 use crate::internal::cluster::{Cluster, CoordinatorKind, MetadataSnapshot};
 use crate::internal::hooks::{ConsumerHooks, Logger};
-use crate::internal::pool::BufferPool;
+use crate::internal::pool::{BufferPool, LIMIT_DECAY};
 use crate::internal::runtime;
 use crate::message::BorrowedMessage;
 use crate::topic_partition_list::TopicPartitionList;
@@ -1186,6 +1186,12 @@ async fn manage(inner: Arc<ConsumerInner>) {
                 next_auto_commit = Some(at);
                 next_timer = Some(next_timer.map_or(at, |t| t.min(at)));
             }
+        }
+        // Fetchers trim the buffer pool when they plan, which they do not
+        // while their partitions are idle or throttled.
+        if fetcher::trim_pool(&inner, now) {
+            let at = now + LIMIT_DECAY;
+            next_timer = Some(next_timer.map_or(at, |t| t.min(at)));
         }
         let sleep = async {
             match next_timer {

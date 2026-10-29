@@ -124,6 +124,8 @@ pub(super) struct FetchState {
     /// `Partition::consumed` and the time when `drain_rate` was last
     /// sampled.
     pub drain_mark: Option<(u64, Instant)>,
+    /// When a sample last saw the reader drain.
+    pub drained_at: Option<Instant>,
     /// The last error reported to the application, for errors reported once.
     pub last_error: Option<RDKafkaErrorCode>,
     /// Log start offset, high watermark and last stable offset from the last
@@ -257,6 +259,7 @@ impl Partition {
                     target: 0,
                     drain_rate: 0,
                     drain_mark: None,
+                    drained_at: None,
                     last_error: None,
                     lo_offset: -1,
                     hi_offset: -1,
@@ -386,6 +389,7 @@ impl Partition {
         fetch.target = 0;
         fetch.drain_rate = 0;
         fetch.drain_mark = None;
+        fetch.drained_at = None;
         self.queued_bytes.store(0, Ordering::SeqCst);
         self.queued_msgs.store(0, Ordering::Release);
         self.resume_below.store(0, Ordering::SeqCst);

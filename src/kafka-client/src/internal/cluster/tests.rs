@@ -1029,3 +1029,29 @@ fn diff_scenario() {
     polling.store(false, std::sync::atomic::Ordering::SeqCst);
     poller.join().unwrap();
 }
+
+/// Callers retrying `fetch_metadata` with short timeouts against a broker
+/// that does not answer join the outstanding request, which outlives each
+/// caller, instead of adding one per call.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn metadata_retries_join_outstanding_request() {
+    let metadata_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&metadata_requests);
+    let addr = fake_broker(move |key, _| {
+        if key == 3 {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        None
+    });
+    let bootstrap = addr.to_string();
+    let (client, _) = client(
+        ClientKind::Consumer,
+        &[("bootstrap.servers", bootstrap.as_str())],
+    );
+    for _ in 0..20 {
+        let _ = client.fetch_metadata(None, Duration::from_millis(50));
+    }
+    let sent = metadata_requests.load(std::sync::atomic::Ordering::SeqCst);
+    assert!((1..=3).contains(&sent), "{sent} Metadata requests");
+}

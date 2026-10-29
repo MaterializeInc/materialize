@@ -56,6 +56,9 @@ pub(super) struct Chunk {
     /// Aborted transactions as `(producer id, first offset)`, sorted by first
     /// offset. Empty under `read_uncommitted`.
     pub aborted: Vec<(i64, i64)>,
+    /// The bytes of buffer capacity beyond the batches, which the queue
+    /// accounts for until the chunk is consumed.
+    pub overhead: u64,
 }
 
 /// The record count a batch contributes to queue accounting.
@@ -111,6 +114,8 @@ pub(super) struct Cursor {
     aborted: std::iter::Peekable<std::vec::IntoIter<(i64, i64)>>,
     /// Producers inside an aborted transaction whose marker is pending.
     aborted_producers: Vec<i64>,
+    /// [`Chunk::overhead`], released once the chunk is done.
+    overhead: u64,
 }
 
 impl Cursor {
@@ -123,6 +128,7 @@ impl Cursor {
             check_crcs,
             aborted: chunk.aborted.into_iter().peekable(),
             aborted_producers: Vec::new(),
+            overhead: chunk.overhead,
         }
     }
 
@@ -165,7 +171,10 @@ impl Cursor {
                 }
             }
             let fetched = match self.batches.next() {
-                None => return Step::Done,
+                None => {
+                    progress.bytes += std::mem::take(&mut self.overhead);
+                    return Step::Done;
+                }
                 // The fetcher did not account for undecodable entries.
                 Some(Err(e)) => return Step::Error(codec_error(&e)),
                 Some(Ok(fetched)) => fetched,

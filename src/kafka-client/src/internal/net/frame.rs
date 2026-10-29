@@ -10,12 +10,13 @@
 //! Length-prefixed response frames.
 
 use std::io;
+use std::time::Duration;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_util::codec::Decoder;
 
-use crate::internal::pool::BufferPool;
+use crate::internal::pool::{BufferPool, LIMIT_DECAY};
 use crate::internal::protocol::FRAME_LEN_SIZE;
 
 /// A frame read error.
@@ -110,6 +111,10 @@ const READ_AHEAD: usize = 64 << 10;
 /// Capacity that is never written takes address space, not memory.
 const LARGE_FRAME_CAPACITY: usize = 10 << 20;
 
+/// After how long without a frame a connection frees its kept frame
+/// buffer, e.g. while a consumer whose queues are full sends no Fetch.
+const IDLE_RELEASE: Duration = LIMIT_DECAY;
+
 /// A large frame being read.
 struct LargeFrame {
     buf: Vec<u8>,
@@ -126,8 +131,9 @@ struct LargeFrame {
 /// those allocations, coming from whichever thread polls the reader, kept
 /// several times the live memory resident in the allocator (see
 /// [`crate::internal::pool`]). One pooled frame buffer is reused while large
-/// frames keep coming, and freed once only small frames arrived for a
-/// while.
+/// frames keep coming, and freed once only small frames or none arrived for
+/// a while. A frame much smaller than the kept buffer gets a buffer of its
+/// own, so one oversized frame does not pin its buffer for every later one.
 pub(crate) struct FrameReader<R> {
     io: R,
     codec: FrameCodec,
@@ -146,8 +152,7 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
             codec: FrameCodec::new(max_size),
             buf: BytesMut::new(),
             large: None,
-            // The one kept buffer serves any smaller frame.
-            pool: BufferPool::with_fit(usize::MAX),
+            pool: BufferPool::with_fit(2),
             eof: false,
         }
     }
@@ -189,7 +194,19 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
                 return self.codec.decode_eof(&mut self.buf).transpose();
             }
             self.buf.reserve(READ_AHEAD);
-            match self.io.read_buf(&mut self.buf).await {
+            let read = self.io.read_buf(&mut self.buf);
+            let result = if self.pool.pooled() > 0 {
+                tokio::select! {
+                    result = read => result,
+                    _ = tokio::time::sleep(IDLE_RELEASE) => {
+                        self.pool.decay_limit(0);
+                        continue;
+                    }
+                }
+            } else {
+                read.await
+            };
+            match result {
                 Ok(0) => self.eof = true,
                 Ok(_) => {}
                 Err(e) => return Some(Err(e.into())),
@@ -338,6 +355,39 @@ mod tests {
         drop(tx);
         let mut reader = FrameReader::new(rx, 1 << 20);
         assert!(reader.next().await.is_none());
+    }
+
+    /// One oversized frame does not pin its buffer: smaller large frames get
+    /// their own, and the kept buffer is freed once no frame arrives.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn frame_reader_releases_buffers() {
+        let frame = |len: usize| {
+            let mut out = i32::try_from(len).unwrap().to_be_bytes().to_vec();
+            out.resize(4 + len, 7);
+            out
+        };
+        let (mut tx, rx) = tokio::io::duplex(1 << 20);
+        let mut reader = FrameReader::new(rx, 64 << 20);
+        let writer = mz_ore::task::spawn(|| "frame-writer", async move {
+            tx.write_all(&frame(30 << 20)).await.unwrap();
+            tx.write_all(&frame(100 << 10)).await.unwrap();
+            tx
+        });
+        let huge = reader.next().await.unwrap().unwrap();
+        assert_eq!(huge.len(), 30 << 20);
+        drop(huge);
+        let kept = reader.pool.pooled();
+        assert!(kept >= 30 << 20, "{kept}");
+        let small = reader.next().await.unwrap().unwrap();
+        assert_eq!(small.len(), 100 << 10);
+        assert_eq!(reader.pool.pooled(), kept, "the huge buffer was not reused");
+        drop(small);
+        let _tx = writer.await;
+        // Nothing arrives: the kept buffers are freed while the reader waits.
+        let idle = tokio::time::timeout(IDLE_RELEASE * 3, reader.next()).await;
+        assert!(idle.is_err());
+        assert_eq!(reader.pool.pooled(), 0);
     }
 
     #[mz_ore::test]

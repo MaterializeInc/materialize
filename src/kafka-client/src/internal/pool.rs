@@ -32,7 +32,7 @@ const MIN_CAPACITY: usize = 64 << 10;
 
 /// How long a pool keeps its limit before lowering it, so that a
 /// fluctuating demand does not free buffers it needs again right away.
-const LIMIT_DECAY: Duration = Duration::from_secs(1);
+pub(crate) const LIMIT_DECAY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Default)]
 struct PoolState {
@@ -197,11 +197,17 @@ impl BufferPool {
         })
     }
 
-    /// Copies `data` into a pooled buffer.
-    pub(crate) fn copy(&self, data: &[u8]) -> Bytes {
+    /// Copies `data` into a pooled buffer, or into an allocation of its own
+    /// size if it is shorter than the smallest pooled buffer. Returns the
+    /// copy and the capacity it holds.
+    pub(crate) fn copy(&self, data: &[u8]) -> (Bytes, usize) {
+        if data.len() < MIN_CAPACITY {
+            return (Bytes::copy_from_slice(data), data.len());
+        }
         let mut buf = self.take(data.len());
         buf.extend_from_slice(data);
-        self.freeze(buf)
+        let capacity = buf.capacity();
+        (self.freeze(buf), capacity)
     }
 
     #[cfg(test)]
@@ -240,8 +246,8 @@ impl BufferPool {
         drop(freed);
     }
 
-    #[cfg(test)]
-    fn pooled(&self) -> usize {
+    /// The capacity of the free buffers.
+    pub(crate) fn pooled(&self) -> usize {
         self.state.lock().expect("lock poisoned").pooled
     }
 }
@@ -270,16 +276,17 @@ mod tests {
     #[mz_ore::test]
     fn recycles() {
         let pool = BufferPool::default();
+        let large = vec![7; MIN_CAPACITY];
         // Nothing is kept by default.
-        drop(pool.copy(b"a"));
+        drop(pool.copy(&large));
         assert_eq!(pool.pooled(), 0);
         pool.set_limit(1 << 20);
-        let a = pool.copy(b"hello");
+        let (a, capacity) = pool.copy(&large);
+        assert_eq!(capacity, MIN_CAPACITY);
         let slice = a.slice(1..3);
-        assert_eq!(&a[..], b"hello");
         drop(a);
         assert_eq!(pool.pooled(), 0, "still referenced by a slice");
-        assert_eq!(&slice[..], b"el");
+        assert_eq!(&slice[..], &[7, 7]);
         drop(slice);
         assert_eq!(pool.pooled(), MIN_CAPACITY);
         let mut b = pool.take(5);
@@ -288,20 +295,28 @@ mod tests {
         let b = pool.freeze(b);
         assert_eq!(&b[..], b"world");
         drop(b);
+        // Data shorter than the smallest buffer gets an exact copy and
+        // leaves the pool alone.
+        assert_eq!(pool.pooled(), MIN_CAPACITY);
+        let (c, capacity) = pool.copy(b"hello");
+        assert_eq!((&c[..], capacity), (&b"hello"[..], 5));
+        assert_eq!(pool.pooled(), MIN_CAPACITY);
+        drop(c);
+        assert_eq!(pool.pooled(), MIN_CAPACITY);
         // Lowering the limit frees pooled buffers.
         pool.set_limit(0);
         assert_eq!(pool.pooled(), 0);
-        drop(pool.copy(&[7; 100]));
+        drop(pool.copy(&large));
         assert_eq!(pool.pooled(), 0);
         // A larger buffer evicts smaller ones to fit under the limit.
         pool.set_limit(MIN_CAPACITY * 2);
-        drop(pool.copy(b"small"));
+        drop(pool.copy(&large));
         assert_eq!(pool.pooled(), MIN_CAPACITY);
         drop(pool.copy(&vec![0; MIN_CAPACITY + 1]));
         assert_eq!(pool.pooled(), 80 << 10, "the smaller buffer was evicted");
         // Buffers outliving the pool are freed.
         pool.set_limit(1 << 20);
-        let d = pool.copy(b"x");
+        let d = pool.copy(&large);
         drop(pool);
         drop(d);
     }

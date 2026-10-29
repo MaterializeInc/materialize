@@ -44,14 +44,17 @@
 //! though its code intends to. Materialize only parses the text.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
+use futures::FutureExt;
+use futures::future::Shared;
 use kafka_protocol::messages::find_coordinator_request::FindCoordinatorRequest;
 use kafka_protocol::messages::metadata_request::MetadataRequestTopic;
 use kafka_protocol::messages::{MetadataRequest, MetadataResponse, TopicName};
 use kafka_protocol::protocol::StrBytes;
+use mz_ore::task::JoinHandle;
 use rand::seq::IndexedRandom;
 use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
@@ -170,9 +173,17 @@ pub(crate) struct Cluster {
     refresh: Arc<Notify>,
     last_connect_any: Mutex<Option<Instant>>,
     stats_sources: Mutex<Vec<Weak<dyn StatsSource>>>,
+    /// Metadata requests that outlive their callers, by broker and requested
+    /// topics (`None` for all), each with an id, see
+    /// [`Cluster::fetch_metadata`].
+    metadata_requests: Mutex<BTreeMap<MetadataKey, (u64, SharedMetadataRequest)>>,
+    next_metadata_request: AtomicU64,
     created: Instant,
     handle_name: String,
 }
+
+type MetadataKey = (i32, Option<Vec<String>>);
+type SharedMetadataRequest = Shared<JoinHandle<Result<MetadataResponse, NetError>>>;
 
 impl std::fmt::Debug for Cluster {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -262,6 +273,8 @@ impl Cluster {
                 refresh: Arc::new(Notify::new()),
                 last_connect_any: Mutex::new(None),
                 stats_sources: Mutex::new(Vec::new()),
+                metadata_requests: Mutex::new(BTreeMap::new()),
+                next_metadata_request: AtomicU64::new(0),
                 created: Instant::now(),
                 handle_name,
             }
@@ -587,6 +600,10 @@ impl Cluster {
     /// `OperationTimedOut` if the response did not arrive in time. The
     /// response updates the cache, also if it arrives after the deadline.
     /// Returns the broker that answered.
+    ///
+    /// A caller joins the outstanding request for the same topics to the
+    /// same broker, if any, so that callers retrying with short deadlines
+    /// against a slow broker do not pile up requests.
     pub(crate) async fn fetch_metadata(
         &self,
         topics: MetadataTopics<'_>,
@@ -617,6 +634,7 @@ impl Cluster {
                 Ok(broker) => broker,
                 Err(e) => return Err(last_error.unwrap_or(e)),
             };
+            let key = (broker.id(), names.clone());
             let names = names.clone();
             let request = {
                 let broker = Arc::clone(&broker);
@@ -652,7 +670,33 @@ impl Cluster {
             // The request runs as its own task, bounded by
             // `socket.timeout.ms`, so that its response updates the cache
             // even when this caller stops waiting for it.
-            let request = runtime::spawn("kafka-metadata-request", request);
+            let request = {
+                let mut requests = self.metadata_requests.lock().expect("lock poisoned");
+                match requests.get(&key) {
+                    Some((_, outstanding)) => outstanding.clone(),
+                    None => {
+                        let id = self.next_metadata_request.fetch_add(1, Ordering::Relaxed);
+                        let cluster = Weak::clone(&self.weak);
+                        let task_key = key.clone();
+                        // Spawned under the lock, so that the task removes
+                        // its entry only after it was inserted.
+                        let task = runtime::spawn("kafka-metadata-request", async move {
+                            let result = request.await;
+                            if let Some(cluster) = cluster.upgrade() {
+                                let mut requests =
+                                    cluster.metadata_requests.lock().expect("lock poisoned");
+                                if requests.get(&task_key).is_some_and(|(i, _)| *i == id) {
+                                    requests.remove(&task_key);
+                                }
+                            }
+                            result
+                        })
+                        .shared();
+                        requests.insert(key, (id, task.clone()));
+                        task
+                    }
+                }
+            };
             let result = match deadline.instant() {
                 Some(at) => match tokio::time::timeout_at(at.into(), request).await {
                     Ok(r) => r,
