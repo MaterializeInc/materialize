@@ -113,6 +113,10 @@ pub fn pod_disruption_budget(metadata: ObjectMeta, deployment: &Deployment) -> P
         spec: Some(PodDisruptionBudgetSpec {
             max_unavailable: Some(IntOrString::Int(1)),
             selector: deployment.spec.as_ref().map(|spec| spec.selector.clone()),
+            // The default, `IfHealthyBudget`, refuses to evict unready pods
+            // once none are healthy, so a crashlooping Deployment would block
+            // node drains.
+            unhealthy_pod_eviction_policy: Some("AlwaysAllow".into()),
             ..Default::default()
         }),
         status: None,

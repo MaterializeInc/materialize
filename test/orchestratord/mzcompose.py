@@ -736,6 +736,7 @@ def check_pod_disruption_budget(app: str, enabled: bool) -> None:
     pdb = pdbs[0]
     name = pdb["metadata"]["name"]
     assert pdb["spec"]["maxUnavailable"] == 1, pdb["spec"]
+    assert pdb["spec"]["unhealthyPodEvictionPolicy"] == "AlwaysAllow", pdb["spec"]
     deployment = json.loads(
         spawn.capture(
             ["kubectl", "get", "deployment", name, "-n", namespace, "-o", "json"]

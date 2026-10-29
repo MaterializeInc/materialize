@@ -791,6 +791,10 @@ mod tests {
         );
         let spec = pdb.spec.unwrap();
         assert_eq!(spec.max_unavailable, Some(IntOrString::Int(1)));
+        assert_eq!(
+            spec.unhealthy_pod_eviction_policy.as_deref(),
+            Some("AlwaysAllow")
+        );
         let match_labels = spec.selector.unwrap().match_labels.unwrap();
         let pod_labels = deployment
             .spec
