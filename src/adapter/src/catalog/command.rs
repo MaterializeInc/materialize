@@ -10,14 +10,7 @@
 //! Catalog commands retain intent, not the writes derived from a speculative catalog.
 //!
 //! Final execution resolves and authorizes each command against the candidate produced
-//! by its predecessors. Pending external work abandons that candidate. A continuation
-//! rebuilds the prefix before consuming its indexed response, so successful preparation
-//! and preparation errors are accepted only when their inputs still match.
-//!
-//! External mutations are not catalog operations. CREATE CONNECTION retains its allocated
-//! ID, generated keys, and successful secret-write completion across retries. ROTATE KEYS
-//! uses a pinned publication command instead of retrying its external mutation. Catalog
-//! rollback cannot undo either secret writes or changes in external services.
+//! by its predecessors.
 
 use std::sync::Arc;
 
