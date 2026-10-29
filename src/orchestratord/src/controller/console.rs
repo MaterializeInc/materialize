@@ -21,6 +21,7 @@ use k8s_openapi::{
             IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
             NetworkPolicySpec,
         },
+        policy::v1::PodDisruptionBudget,
     },
     apimachinery::pkg::{
         apis::meta::v1::{Condition, LabelSelector, Time},
@@ -39,7 +40,10 @@ use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, get_resource, recommended_k8s_labels, replace_resource},
+    k8s::{
+        apply_resource, get_resource, pod_disruption_budget, recommended_k8s_labels,
+        replace_resource,
+    },
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -646,6 +650,7 @@ impl k8s_controller::Context for Context {
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
+        let pdb_api: Api<PodDisruptionBudget> = Api::namespaced(client.clone(), &namespace);
 
         let step = metadata.step("network_policies");
         trace!("creating new network policies");
@@ -671,6 +676,14 @@ impl k8s_controller::Context for Context {
         self.fix_deployment(&deployment_api, &console_deployment)
             .await?;
         apply_resource(&deployment_api, &console_deployment).await?;
+        step.finish(Outcome::Completed);
+
+        let step = metadata.step("pod_disruption_budget");
+        let pdb = pod_disruption_budget(
+            console.managed_resource_meta(console.deployment_name()),
+            &console_deployment,
+        );
+        apply_resource(&pdb_api, &pdb).await?;
         step.finish(Outcome::Completed);
 
         let step = metadata.step("service");

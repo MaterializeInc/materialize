@@ -712,6 +712,47 @@ class LicenseKeyCheck(Modification):
             ), f"Expected {expected} in environmentd args, but only found {args}"
 
 
+def check_pod_disruption_budget(app: str, enabled: bool) -> None:
+    namespace = "materialize-environment"
+    pdbs = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "poddisruptionbudget",
+                "-l",
+                f"app.kubernetes.io/name={app}",
+                "-n",
+                namespace,
+                "-o",
+                "json",
+            ]
+        )
+    )["items"]
+    if not enabled:
+        assert not pdbs, f"Unexpected {app} PDBs: {pdbs}"
+        return
+    assert len(pdbs) == 1, f"Expected one {app} PDB, got {pdbs}"
+    pdb = pdbs[0]
+    name = pdb["metadata"]["name"]
+    assert pdb["spec"]["maxUnavailable"] == 1, pdb["spec"]
+    deployment = json.loads(
+        spawn.capture(
+            ["kubectl", "get", "deployment", name, "-n", namespace, "-o", "json"]
+        )
+    )
+    pod_labels = deployment["spec"]["template"]["metadata"]["labels"]
+    match_labels = pdb["spec"]["selector"]["matchLabels"]
+    assert (
+        match_labels and match_labels.items() <= pod_labels.items()
+    ), f"{app} PDB selector {match_labels} does not match pod labels {pod_labels}"
+    # With every pod healthy, one may be evicted whatever the replica count,
+    # so the PDB never blocks a drain.
+    status = pdb.get("status", {})
+    assert status.get("expectedPods", 0) >= 1, status
+    assert status.get("disruptionsAllowed") == 1, status
+
+
 class BalancerdEnabled(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:
@@ -748,6 +789,7 @@ class BalancerdEnabled(Modification):
                 assert result, f"Unexpected result: {result}"
             else:
                 assert not result, f"Unexpected result: {result}"
+            check_pod_disruption_budget("balancerd", self.value)
 
         # Balancerd can take a while to start up
         retry(check, 240)
@@ -894,7 +936,8 @@ class ConsoleEnabled(Modification):
             return
 
         def check() -> None:
-            pass  # TODO: https://linear.app/materializeinc/issue/DB-105
+            check_pod_disruption_budget("console", self.value)
+            # TODO: https://linear.app/materializeinc/issue/DB-105
             # result = spawn.capture(
             #     [
             #         "kubectl",

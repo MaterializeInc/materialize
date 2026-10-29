@@ -18,6 +18,7 @@ use k8s_openapi::{
             SeccompProfile, SecretVolumeSource, SecurityContext, Service, ServicePort, ServiceSpec,
             Toleration, Volume, VolumeMount,
         },
+        policy::v1::PodDisruptionBudget,
     },
     apimachinery::pkg::{
         apis::meta::v1::{Condition, LabelSelector, Time},
@@ -35,7 +36,10 @@ use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{FIELD_MANAGER, apply_resource, get_resource, recommended_k8s_labels, replace_resource},
+    k8s::{
+        FIELD_MANAGER, apply_resource, get_resource, pod_disruption_budget, recommended_k8s_labels,
+        replace_resource,
+    },
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -663,6 +667,7 @@ impl k8s_controller::Context for Context {
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
+        let pdb_api: Api<PodDisruptionBudget> = Api::namespaced(client.clone(), &namespace);
 
         let step = metadata.step("certificate");
         if let Some(external_certificate) = self.create_external_certificate_object(balancer)? {
@@ -683,6 +688,14 @@ impl k8s_controller::Context for Context {
         }
         trace!("creating new balancerd deployment");
         apply_resource(&deployment_api, &deployment).await?;
+        step.finish(Outcome::Completed);
+
+        let step = metadata.step("pod_disruption_budget");
+        let pdb = pod_disruption_budget(
+            balancer.managed_resource_meta(balancer.deployment_name()),
+            &deployment,
+        );
+        apply_resource(&pdb_api, &pdb).await?;
         step.finish(Outcome::Completed);
 
         let step = metadata.step("service");
@@ -766,6 +779,34 @@ mod tests {
             assert_eq!(deployment.spec.unwrap().replicas, expected);
             assert_eq!(balancer.initial_replicas(), 3);
         }
+    }
+
+    #[mz_ore::test]
+    fn pdb_selects_deployment_pods() {
+        let balancer = test_balancer(BalancerSpec::default());
+        let deployment = test_context().create_deployment_object(&balancer).unwrap();
+        let pdb = pod_disruption_budget(
+            balancer.managed_resource_meta(balancer.deployment_name()),
+            &deployment,
+        );
+        let spec = pdb.spec.unwrap();
+        assert_eq!(spec.max_unavailable, Some(IntOrString::Int(1)));
+        let match_labels = spec.selector.unwrap().match_labels.unwrap();
+        let pod_labels = deployment
+            .spec
+            .unwrap()
+            .template
+            .metadata
+            .unwrap()
+            .labels
+            .unwrap();
+        assert!(!match_labels.is_empty());
+        assert!(
+            match_labels
+                .iter()
+                .all(|(k, v)| pod_labels.get(k) == Some(v)),
+            "PDB selector {match_labels:?} does not match pod labels {pod_labels:?}",
+        );
     }
 
     #[mz_ore::test]

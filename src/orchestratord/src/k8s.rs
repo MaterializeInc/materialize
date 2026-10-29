@@ -12,14 +12,19 @@ use std::time::Duration;
 
 use k8s_openapi::{
     ByteString,
+    api::{
+        apps::v1::Deployment,
+        policy::v1::{PodDisruptionBudget, PodDisruptionBudgetSpec},
+    },
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
         CustomResourceColumnDefinition, CustomResourceConversion, ServiceReference,
         WebhookClientConfig, WebhookConversion,
     },
+    apimachinery::pkg::util::intstr::IntOrString,
 };
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
-    api::{DeleteParams, Patch, PatchParams, PostParams},
+    api::{DeleteParams, ObjectMeta, Patch, PatchParams, PostParams},
     core::Status,
     core::response::StatusSummary,
 };
@@ -97,6 +102,20 @@ where
             Ok(())
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+/// A PodDisruptionBudget letting at most one of `deployment`'s pods be evicted
+/// at a time. With a single replica it never blocks a drain.
+pub fn pod_disruption_budget(metadata: ObjectMeta, deployment: &Deployment) -> PodDisruptionBudget {
+    PodDisruptionBudget {
+        metadata,
+        spec: Some(PodDisruptionBudgetSpec {
+            max_unavailable: Some(IntOrString::Int(1)),
+            selector: deployment.spec.as_ref().map(|spec| spec.selector.clone()),
+            ..Default::default()
+        }),
+        status: None,
     }
 }
 
