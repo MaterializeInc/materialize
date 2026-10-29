@@ -173,7 +173,8 @@ On staging this wait was 1 s to 10 s per arrival for such a join, while the join
 Charging the wait to local made healthy joins look like slow hops, and charging it to upstream would claim a delay that no input has.
 A join with one stalled input records the stall as upstream, and its local stays at its processing time.
 
-Local and skew use the same virtual arrivals, windows, periods and finality as the end-to-end histogram and are stored in the same relations with `measure = 'local'` and `measure = 'skew'`, so per period the counts of all three measures are equal.
+Local and skew use the same virtual arrivals, windows, periods and finality as the end-to-end histogram and are stored in the same relations with `measure = 'local'` and `measure = 'skew'`, so per period the counts of the measures an object records are equal.
+An object with a single direct input has no skew, because that input's frontier passes the needed timestamp exactly when it shows the arrival, so only objects with two or more direct inputs record skew rows.
 Upstream is not stored, because it is the slowest input's end-to-end latency for the same arrivals.
 Each collection keeps a visibility log of entries (frontier timestamp, reflected arrival time, observation time), and a consumer reads its inputs' logs.
 Upstream readiness uses the reflected arrival time, which keeps a refresh wait on the refreshing view, because a REFRESH view's frontier passes leaf timestamps before its data is visible.
