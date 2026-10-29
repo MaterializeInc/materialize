@@ -687,6 +687,114 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
+    async fn cross_shard_tidy_preserves_snapshots_and_listen_after_restart() {
+        use crate::operator::DataSubscribeTask;
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let client = PersistClient::new_for_tests().await;
+            let mut first = TxnsHandle::expect_open(client.clone()).await;
+            let txns_id = first.txns_id();
+            let mut ids = first.expect_registers(1, 2).await;
+            ids.sort();
+            let (a, b) = (ids[0], ids[1]);
+            let mut second = TxnsHandle::expect_open_id(client.clone(), txns_id).await;
+            second
+                .register(2, [writer(&client, a).await, writer(&client, b).await])
+                .await
+                .expect("second writer joins registered shards");
+            let mut observer = TxnsCache::expect_open(0, &first).await;
+
+            let mut txn = first.begin();
+            txn.write(&a, "a".into(), (), 1).await;
+            txn.write(&b, "b".into(), (), 1).await;
+            let applied = txn
+                .commit_at(&mut first, 3)
+                .await
+                .expect("shared transaction");
+            let tidy = applied.apply(&mut first).await;
+            let mut listen_a = DataSubscribeTask::new(client.clone(), txns_id, a, 3).await;
+            let mut listen_b = DataSubscribeTask::new(client.clone(), txns_id, b, 3).await;
+
+            let mut txn = second.begin();
+            txn.write(&a, "a-later".into(), (), 1).await;
+            txn.commit_at(&mut second, 4).await.expect("peer write");
+            let _ = observer.update_gt(&4).await;
+            // Both shards have a batch at 3. Retraction ordering visits a first,
+            // while b still pins the global unapplied minimum. Retiring b then
+            // advances that minimum without touching a's retained write times.
+            second
+                .tidy_at(5, tidy)
+                .await
+                .expect("peer tidies shared transaction");
+            let _ = observer.update_gt(&5).await;
+            let tidy = second.apply_le(&4).await;
+            second.tidy_at(6, tidy).await.expect("tidy later write");
+            assert_eq!(
+                observer.expect_snapshot(&client, a, 6).await,
+                vec!["a", "a-later"]
+            );
+            assert_eq!(observer.expect_snapshot(&client, b, 6).await, vec!["b"]);
+            assert!(listen_a.step_past(6).await > 6);
+            assert!(listen_b.step_past(6).await > 6);
+
+            drop(first);
+            drop(second);
+            drop(observer);
+            let mut restarted = TxnsHandle::expect_open_id(client.clone(), txns_id).await;
+            restarted
+                .register(7, [writer(&client, a).await, writer(&client, b).await])
+                .await
+                .expect("restarted writer joins");
+            let mut replay = TxnsCache::expect_open(0, &restarted).await;
+            assert_eq!(
+                replay.expect_snapshot(&client, a, 7).await,
+                vec!["a", "a-later"]
+            );
+            assert_eq!(replay.expect_snapshot(&client, b, 7).await, vec!["b"]);
+            let mut txn = restarted.begin();
+            txn.write(&b, "b-restart".into(), (), 1).await;
+            let tidy = txn
+                .commit_at(&mut restarted, 8)
+                .await
+                .expect("write after replay")
+                .apply(&mut restarted)
+                .await;
+            restarted.tidy_at(9, tidy).await.expect("tidy after replay");
+            assert_eq!(
+                replay.expect_snapshot(&client, a, 9).await,
+                vec!["a", "a-later"]
+            );
+            assert_eq!(
+                replay.expect_snapshot(&client, b, 9).await,
+                vec!["b", "b-restart"]
+            );
+            assert!(
+                listen_a.step_past(9).await > 9,
+                "idle shard follows WAL progress"
+            );
+            assert!(
+                listen_b.step_past(9).await > 9,
+                "written shard follows WAL progress"
+            );
+            let mut updates_a = listen_a.finish().await;
+            let mut updates_b = listen_b.finish().await;
+            updates_a.sort();
+            updates_b.sort();
+            assert_eq!(
+                updates_a,
+                vec![("a".into(), 3, 1), ("a-later".into(), 4, 1)]
+            );
+            assert_eq!(
+                updates_b,
+                vec![("b".into(), 3, 1), ("b-restart".into(), 8, 1)]
+            );
+        })
+        .await
+        .expect("snapshot and listen progress");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
     async fn commit_retry() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;

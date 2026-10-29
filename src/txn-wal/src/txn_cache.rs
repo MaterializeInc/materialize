@@ -743,20 +743,12 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
             prev_register_ts = ts.clone();
         }
 
-        let min_unapplied_ts = self.min_unapplied_ts_inner();
-
+        // Cleanup is lazy and per-shard. Tidying another shard can advance the
+        // global unapplied minimum while leaving already-applied timestamps here
+        // until this shard is next touched. Require sufficient history below,
+        // not globally minimal history.
         for (data_id, data_times) in self.datas.iter() {
             let () = data_times.validate()?;
-
-            if let Some(ts) = data_times.writes.front() {
-                // Writes are compacted.
-                if min_unapplied_ts > ts && data_times.writes.len() > 1 {
-                    return Err(format!(
-                        "{:?} write ts {:?} not past min unapplied ts {:?}",
-                        data_id, ts, min_unapplied_ts
-                    ));
-                }
-            }
 
             // datas contains all unapplied writes.
             if let Some((_, (_, _, unapplied_ts))) = self
