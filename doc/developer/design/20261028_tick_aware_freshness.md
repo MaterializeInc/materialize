@@ -53,7 +53,7 @@ It is pessimistic for a record that only lands in one input, which becomes visib
 Leaves carry a ticker that describes their grid:
 
 * Sources: aligned to the epoch at the ingestion's `TIMESTAMP INTERVAL`, looked up live so `ALTER SOURCE` takes effect without rebuilding downstream dependence. The probe ticker in `src/storage/src/source/probe.rs` rounds probe times down to interval multiples, and the upper after a tick at T is T + 1.
-* Compute introspection collections: aligned to the introspection interval.
+* Compute introspection collections: aligned to the introspection interval. The interval can differ between replicas of a cluster, and introspection is read through replica-targeted queries, so per-replica freshness rows are the meaningful ones and the global aggregate is not. The controller keeps one tree per collection, using the interval of the most recently added replica with logging, so a replica with a different interval records against the wrong grid. That wrinkle is documented, not solved.
 * Webhook sources and other storage-managed collections: an unaligned 1s tick. They have no timestamp interval: a write is visible once its batch is appended, and when idle the collection manager advances the upper every `DEFAULT_TICK_MS` (1s), resetting the timer after each write (`src/storage-controller/src/collection_mgmt.rs`).
 * Tables: an unaligned 1s tick. Tables can tick irregularly, up to 1 kHz when inserts bump them, and their freshness otherwise depends on the txn-wal tick. Recording treats them as an epoch-aligned 1s grid for window boundaries, an accepted quirk, while D uses the unaligned bound so it never underestimates.
 * Anything else: continuous wall clock.
