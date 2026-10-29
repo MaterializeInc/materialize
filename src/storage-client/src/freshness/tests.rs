@@ -130,6 +130,11 @@ fn visibility_log_is_pruned_through_consumers() {
         record_tick(&mut log, s);
     }
     assert_eq!(log.len(), 1);
+    // When it reads again, the arrivals it missed were visible at the latest when the last
+    // pruned entry was observed, not when it reads.
+    let late = log.read(a, Some(0), 700_005);
+    assert_eq!(late.visible_at(1000), Some(699_005));
+    assert_eq!(late.visible_at(700_000), Some(700_005));
 }
 
 #[mz_ore::test]
