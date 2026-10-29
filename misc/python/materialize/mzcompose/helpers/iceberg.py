@@ -235,6 +235,7 @@ def setup_polaris_for_iceberg(
     namespace: str = "default_namespace",
     vended: bool = False,
     static_credentials: bool = True,
+    polaris_extra_environment: list[str] = [],
 ) -> tuple[str, str]:
     """
     Set up Polaris catalog with MinIO for Iceberg sink usage.
@@ -274,6 +275,7 @@ def setup_polaris_for_iceberg(
     with c.override(
         Polaris(
             extra_environment=[
+                *polaris_extra_environment,
                 f"AWS_ACCESS_KEY_ID={username}",
                 f"AWS_SECRET_ACCESS_KEY={key}",
             ],

@@ -252,7 +252,9 @@ class SetupIcebergTesting(MzcomposeAction):
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        iceberg_credentials = setup_polaris_for_iceberg(c)
+        iceberg_credentials = setup_polaris_for_iceberg(
+            c, polaris_extra_environment=["JAVA_OPTS_APPEND=-Xmx2g"]
+        )
         input = dedent(
             f"""
             > CREATE VIEW iceberg_credentials AS SELECT '{iceberg_credentials[0]}' AS user, '{iceberg_credentials[1]}' AS key;

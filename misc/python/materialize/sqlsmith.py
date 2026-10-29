@@ -66,6 +66,7 @@ known_errors = [
     "timestamp out of range",
     "date out of range",
     "integer out of range",
+    "OID out of range",
     "unterminated escape sequence in LIKE",
     "null character not permitted",
     "is defined for numbers between",
