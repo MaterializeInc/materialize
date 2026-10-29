@@ -18,8 +18,8 @@ use std::sync::Arc;
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizedExpr, HumanizerMode};
 use mz_expr::{
-    BinaryFunc, Columns, Eval, EvalError, MapFilterProject, MfpPlan, MirScalarExpr,
-    OptimizableExpr, SafeMfpPlan, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+    BinaryFunc, Columns, Eval, EvalError, Interpretable, Interpreter, MapFilterProject, MfpPlan,
+    MirScalarExpr, OptimizableExpr, SafeMfpPlan, UnaryFunc, UnmaterializableFunc, VariadicFunc,
 };
 use mz_ore::str::separated;
 use mz_ore::treat_as_equal::TreatAsEqual;
@@ -437,6 +437,41 @@ impl Eval for LirScalarExpr {
                 func.could_error() || exprs.iter().any(|e| e.could_error())
             }
             If { cond, then, els } => cond.could_error() || then.could_error() || els.could_error(),
+        }
+    }
+}
+
+impl Interpretable for LirScalarExpr {
+    fn interpret<I: Interpreter + ?Sized>(&self, interpreter: &I) -> I::Summary {
+        use LirScalarExpr::*;
+        match self {
+            Column(id, _name) => interpreter.column(*id),
+            Literal(value, col_type) => {
+                // `StableRow` only changes how the row serializes.
+                let value = value.clone().map(|row| row.0);
+                interpreter.literal(&value, col_type)
+            }
+            CallUnary { func, expr } => {
+                // The interpreter inspects MIR funcs. Only the cast funcs
+                // carry an expression payload, and `map_expr` converts it.
+                let expr = expr.interpret(interpreter);
+                interpreter.unary(&func.map_expr(), expr)
+            }
+            CallBinary { func, expr1, expr2 } => {
+                let expr1 = expr1.interpret(interpreter);
+                let expr2 = expr2.interpret(interpreter);
+                interpreter.binary(func, expr1, expr2)
+            }
+            CallVariadic { func, exprs } => {
+                let exprs = exprs.iter().map(|e| e.interpret(interpreter)).collect();
+                interpreter.variadic(func, exprs)
+            }
+            If { cond, then, els } => {
+                let cond = cond.interpret(interpreter);
+                let then = then.interpret(interpreter);
+                let els = els.interpret(interpreter);
+                interpreter.cond(cond, then, els)
+            }
         }
     }
 }

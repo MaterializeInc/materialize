@@ -16,11 +16,13 @@ use std::collections::BTreeMap;
 
 use mz_expr::explain::{ExplainContext, ExplainMultiPlan, ExplainSource, enforce_linear_chains};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+
 use mz_repr::GlobalId;
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
 use crate::dataflows::{DataflowDescription, LirDataflowDescription};
 use crate::plan::LirRelationExpr;
+use crate::plan::scalar::mfp_plan_lir_to_mir;
 
 impl<'a> Explain<'a> for LirDataflowDescription {
     type Context = ExplainContext<'a>;
@@ -72,9 +74,13 @@ impl<'a> LirDataflowDescription {
             .iter_mut()
             .map(|(id, import)| {
                 // Folding the plan back is display-only, and need not
-                // reproduce the planned operators exactly.
+                // reproduce the planned operators exactly. It goes through
+                // MIR because only MIR spells the bounds as `mz_now()`
+                // predicates.
                 let op = import.desc.arguments.operators.as_ref();
-                let op = op.map(|plan| Cow::Owned(plan.clone().into_map_filter_project()));
+                let op = op.map(|plan| {
+                    Cow::Owned(mfp_plan_lir_to_mir(plan.clone()).into_map_filter_project())
+                });
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();

@@ -20,7 +20,10 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
-use mz_expr::{ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use mz_expr::{
+    ColumnSpecs, Eval, EvalError, Interpretable, Interpreter, MfpPlan, OptimizableExpr, ResultSpec,
+    UnmaterializableFunc,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::redact;
@@ -152,6 +155,11 @@ impl Subtime {
 ///
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 /// All updates at times greater or equal to `until` will be suppressed.
+/// The scalar expression type of a source's [`MfpPlan`]: anything the plan can
+/// evaluate per row and the filter-pushdown interpreter can summarize per part.
+pub trait PlanExpr: OptimizableExpr + Eval + Interpretable + Send + Sync + 'static {}
+impl<X: OptimizableExpr + Eval + Interpretable + Send + Sync + 'static> PlanExpr for X {}
+
 /// The `map_filter_project` argument, if supplied, may be partially applied,
 /// and any un-applied part of the argument will be left behind in the argument.
 ///
@@ -169,7 +177,7 @@ impl Subtime {
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<'scope, E, CB>(
+pub fn persist_source<'scope, E, CB, X>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -179,7 +187,7 @@ pub fn persist_source<'scope, E, CB>(
     as_of: Option<Antichain<Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
-    map_filter_project: Option<&mut MfpPlan>,
+    map_filter_project: Option<&mut MfpPlan<X>>,
     max_inflight_bytes: Option<usize>,
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
@@ -192,6 +200,7 @@ where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
     CB: ContainerBuilder + PushInto<(Row, mz_repr::Timestamp, Diff)>,
     CB::Container: Clone,
+    X: PlanExpr,
 {
     let mut tokens = vec![];
     let name = source_id.to_string();
@@ -255,7 +264,7 @@ where
             );
             tokens.extend(source_tokens);
 
-            let (ok_stream, err_stream) = decode_and_mfp::<E, mz_repr::Timestamp, CB>(
+            let (ok_stream, err_stream) = decode_and_mfp::<E, mz_repr::Timestamp, CB, X>(
                 cfg,
                 fetched,
                 &name,
@@ -324,7 +333,7 @@ type RefinedScope<'scope, T> = Scope<'scope, (T, Subtime)>;
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source_core<'g, 'outer, E>(
+pub fn persist_source_core<'g, 'outer, E, X>(
     outer: Scope<'outer, mz_repr::Timestamp>,
     scope: RefinedScope<'g, mz_repr::Timestamp>,
     source_id: GlobalId,
@@ -334,7 +343,7 @@ pub fn persist_source_core<'g, 'outer, E>(
     as_of: Option<Antichain<Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
-    map_filter_project: Option<&mut MfpPlan>,
+    map_filter_project: Option<&mut MfpPlan<X>>,
     flow_control: Option<FlowControl<'g, RefinedTime>>,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
@@ -347,6 +356,7 @@ pub fn persist_source_core<'g, 'outer, E>(
 )
 where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+    X: PlanExpr,
 {
     let name = source_id.to_string();
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
@@ -366,7 +376,7 @@ where
         start_signal,
         error_handler,
     );
-    let (oks, errs) = decode_and_mfp::<E, RefinedTime, RowVecBuilder<RefinedTime>>(
+    let (oks, errs) = decode_and_mfp::<E, RefinedTime, RowVecBuilder<RefinedTime>, X>(
         cfg,
         fetched,
         &name,
@@ -380,7 +390,7 @@ where
 /// Fetch the parts of a persist shard a dataflow needs, distributing the work of reading them
 /// across all timely workers.
 #[allow(clippy::needless_borrow)]
-fn fetch_parts<'g, 'outer>(
+fn fetch_parts<'g, 'outer, X: PlanExpr>(
     outer: Scope<'outer, mz_repr::Timestamp>,
     scope: RefinedScope<'g, mz_repr::Timestamp>,
     source_id: GlobalId,
@@ -391,7 +401,7 @@ fn fetch_parts<'g, 'outer>(
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     // The MFP whose filter is pushed down into persist, if any.
-    filter_plan: Option<MfpPlan>,
+    filter_plan: Option<MfpPlan<X>>,
     flow_control: Option<FlowControl<'g, RefinedTime>>,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
@@ -401,7 +411,10 @@ fn fetch_parts<'g, 'outer>(
     PersistConfig,
     StreamVec<'g, RefinedTime, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     Vec<PressOnDropButton>,
-) {
+)
+where
+    X: PlanExpr,
+{
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
 
@@ -480,11 +493,11 @@ fn fetch_parts<'g, 'outer>(
     (cfg, fetched, token)
 }
 
-fn filter_result(
+fn filter_result<X: PlanExpr>(
     relation_desc: &RelationDesc,
     time_range: ResultSpec,
     stats: RelationPartStats,
-    plan: &MfpPlan,
+    plan: &MfpPlan<X>,
 ) -> FilterResult {
     let arena = RowArena::new();
     let relation = ReprRelationType::from(relation_desc.typ());
@@ -544,12 +557,12 @@ type ErrBuilder<E, RT> = ConsolidatingContainerBuilder<Vec<(E, RT, Diff)>>;
 /// the enclosing scope refines with: that coordinate exists to pace flow control and stays on
 /// the capabilities, and keeping it in the records would force a re-encode to strip it later.
 /// A reader that builds a collection in the refined scope needs it, and passes `|time| time`.
-fn decode_and_mfp<'scope, E, RT, CB>(
+fn decode_and_mfp<'scope, E, RT, CB, X>(
     cfg: PersistConfig,
     fetched: StreamVec<'scope, RefinedTime, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     name: &str,
     until: Antichain<Timestamp>,
-    mut map_filter_project: Option<&mut MfpPlan>,
+    mut map_filter_project: Option<&mut MfpPlan<X>>,
     record_time: fn(RefinedTime) -> RT,
 ) -> (
     Stream<'scope, RefinedTime, CB::Container>,
@@ -559,6 +572,7 @@ where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
     RT: Ord + Clone + Debug + 'static,
     CB: ContainerBuilder + PushInto<(Row, RT, Diff)>,
+    X: PlanExpr,
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
@@ -684,13 +698,13 @@ impl PendingPart {
 ///
 /// Records carry `cap_time` with its millisecond replaced by the record's own time, so the
 /// caller must emit them at the capability `cap_time` came from.
-fn decode_part<E, F>(
+fn decode_part<E, F, X>(
     part: &mut PendingPart,
     panic_on_audit_failure: bool,
     cap_time: RefinedTime,
     name: &str,
     until: &Antichain<Timestamp>,
-    map_filter_project: Option<&MfpPlan>,
+    map_filter_project: Option<&MfpPlan<X>>,
     datum_vec: &mut DatumVec,
     row_builder: &mut Row,
     work: &mut usize,
@@ -700,6 +714,7 @@ fn decode_part<E, F>(
 where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
     F: FnMut(Result<Cow<'_, Row>, E>, RefinedTime, Diff),
+    X: PlanExpr,
 {
     let fetched_part = part.part_mut();
     let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
@@ -2308,7 +2323,9 @@ mod tests {
 
             // No predicates, no errors: every row passes, so the part is
             // replaced with the synthesized KV.
-            let plan = MapFilterProject::new(0).into_plan().expect("into_plan");
+            let plan = MapFilterProject::<MirScalarExpr>::new(0)
+                .into_plan()
+                .expect("into_plan");
             let part_stats = build_part_stats(&desc, &ok_rows);
             let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
             let decision = filter_result(&desc, ResultSpec::anything(), stats, &plan);
