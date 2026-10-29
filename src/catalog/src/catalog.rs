@@ -210,11 +210,23 @@ pub struct OpenCommittedCatalog {
     pub txn_wal_shard: Option<mz_persist_client::ShardId>,
 }
 
+#[async_trait::async_trait]
+impl mz_storage_client::controller::CollectionMetadataCertifier for CatalogUpperHandle {
+    async fn collection_shards_at_current(
+        &self,
+        ids: &BTreeSet<GlobalId>,
+    ) -> Result<BTreeMap<GlobalId, mz_persist_client::ShardId>, anyhow::Error> {
+        Ok(CatalogUpperHandle::collection_shards_at_current(self, ids).await?)
+    }
+}
+
 impl CatalogUpperHandle {
     /// Certifies requested collection mappings against a freshly fetched prefix.
     ///
     /// Registration callers must allocate and fence their WAL timestamp first,
     /// and repeat certification after any definitive WAL conflict.
+    /// Frontier retirement callers must first observe the rows they certify.
+    /// Exact bindings are never readmitted after a committed deletion.
     pub async fn collection_shards_at_current(
         &self,
         ids: &BTreeSet<GlobalId>,

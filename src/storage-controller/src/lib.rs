@@ -96,6 +96,7 @@ use tracing::{debug, info, warn};
 
 pub mod adapter_storage;
 mod collection_mgmt;
+mod frontier_observations;
 mod history;
 mod instance;
 pub mod rtr;
@@ -167,6 +168,9 @@ pub struct Controller {
 
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(crate) introspection_ids: BTreeMap<IntrospectionType, GlobalId>,
+    storage_frontier_observations: Option<frontier_observations::StorageFrontierObservations>,
+    collection_metadata_certifier:
+        Option<Arc<dyn mz_storage_client::controller::CollectionMetadataCertifier>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
@@ -292,6 +296,14 @@ fn warm_persist_state_in_background(
 
 #[async_trait(?Send)]
 impl StorageController for Controller {
+    fn set_collection_metadata_certifier(
+        &mut self,
+        certifier: Arc<dyn mz_storage_client::controller::CollectionMetadataCertifier>,
+    ) {
+        assert!(self.storage_frontier_observations.is_none());
+        self.collection_metadata_certifier = Some(certifier);
+    }
+
     fn initialization_complete(&mut self) {
         self.reconcile_dangling_statistics();
         self.initialized = true;
@@ -1261,6 +1273,9 @@ impl StorageController for Controller {
             let collection_state =
                 CollectionState::new(data_source, metadata, extra_state, wallclock_lag_metrics);
 
+            if let Some(sampler) = &self.storage_frontier_observations {
+                sampler.upsert(id, collection_state.collection_metadata.clone());
+            }
             self.collections.insert(id, collection_state);
         }
 
@@ -1505,6 +1520,9 @@ impl StorageController for Controller {
 
         // Great! We have successfully evolved the schema of our Table, now we need to update our
         // in-memory data structures.
+        if let Some(sampler) = &self.storage_frontier_observations {
+            sampler.upsert(new_collection, collection_state.collection_metadata.clone());
+        }
         self.collections.insert(new_collection, collection_state);
 
         self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
@@ -2064,6 +2082,9 @@ impl StorageController for Controller {
         // Remove collection state
         for id in ingestions_to_drop.iter().chain(collections_to_drop.iter()) {
             tracing::info!(%id, "dropping collection state");
+            if let Some(sampler) = &self.storage_frontier_observations {
+                sampler.remove(*id);
+            }
             let collection = self
                 .collections
                 .remove(id)
@@ -2181,6 +2202,9 @@ impl StorageController for Controller {
         // Remove collection/export state
         for id in sinks_to_drop.iter() {
             tracing::info!(%id, "dropping export state");
+            if let Some(sampler) = &self.storage_frontier_observations {
+                sampler.remove(*id);
+            }
             let collection = self
                 .collections
                 .remove(id)
@@ -2645,6 +2669,8 @@ impl StorageController for Controller {
         let Self {
             build_info: _,
             now: _,
+            storage_frontier_observations: _,
+            collection_metadata_certifier: _,
             read_only,
             replica_owned,
             collections,
@@ -2828,6 +2854,8 @@ where
             persist_location,
             persist: persist_clients,
             metrics,
+            storage_frontier_observations: None,
+            collection_metadata_certifier: None,
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
             wallclock_lag,
@@ -3151,6 +3179,26 @@ where
         );
 
         let metadata = self.storage_collections.collection_metadata(id)?.clone();
+        if self.replica_owned
+            && introspection_type == IntrospectionType::StorageFrontierObservations
+        {
+            let sampler = frontier_observations::StorageFrontierObservations::new(
+                persist_client.clone(),
+                (id, metadata.data_shard, metadata.relation_desc.clone()),
+                self.now.clone(),
+                Arc::clone(
+                    self.collection_metadata_certifier
+                        .as_ref()
+                        .expect("native sampler requires catalog certification"),
+                ),
+            );
+            // Initial inventory only. Subsequent catalog changes update the
+            // sampler at collection creation, schema evolution and removal.
+            for (id, collection) in &self.collections {
+                sampler.upsert(*id, collection.collection_metadata.clone());
+            }
+            self.storage_frontier_observations = Some(sampler);
+        }
 
         let read_handle_fn = move || {
             let persist_client = persist_client.clone();
@@ -3622,6 +3670,12 @@ where
     /// This method is invoked by `Controller::maintain`, which we expect to be called once per
     /// second during normal operation.
     fn update_frontier_introspection(&mut self) {
+        // Native frontiers derive from replica reports and cooperative physical
+        // storage samples. An adapter must not replace those shared observations.
+        if self.replica_owned {
+            return;
+        }
+
         let mut global_frontiers = BTreeMap::new();
         let mut replica_frontiers = BTreeMap::new();
 
@@ -3629,9 +3683,6 @@ where
             let id = collection_frontiers.id;
             // Native read protection can retain physical history beyond the
             // object's controller lifetime, but not its public frontier row.
-            if self.replica_owned && !self.collections.contains_key(&id) {
-                continue;
-            }
             let since = collection_frontiers.read_capabilities;
             let upper = collection_frontiers.write_frontier;
 
@@ -3878,6 +3929,9 @@ where
     /// This method is invoked roughly once per second during normal operation. It is a good place
     /// for tasks that need to run periodically, such as state cleanup or updating of metrics.
     fn maintain(&mut self) {
+        if let Some(sampler) = &self.storage_frontier_observations {
+            sampler.sample();
+        }
         self.update_frontier_introspection();
         self.refresh_wallclock_lag();
 
@@ -3921,7 +3975,9 @@ impl From<&IntrospectionType> for CollectionManagerKind {
             | IntrospectionType::SessionHistory
             | IntrospectionType::StatementLifecycleHistory
             | IntrospectionType::SqlText
-            | IntrospectionType::StorageStatuses => CollectionManagerKind::AppendOnly,
+            | IntrospectionType::StorageStatuses
+            | IntrospectionType::ReplicaFrontierObservations
+            | IntrospectionType::StorageFrontierObservations => CollectionManagerKind::AppendOnly,
         }
     }
 }

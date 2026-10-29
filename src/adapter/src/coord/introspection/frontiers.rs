@@ -31,8 +31,6 @@ type Observation = (GlobalId, ReplicaId, bool, FrontiersResponse);
 
 #[derive(Debug, Default)]
 pub(crate) struct NativeFrontiers {
-    global: BTreeSet<Row>,
-    replicas: BTreeSet<Row>,
     dependencies: BTreeSet<Row>,
     refreshes: BTreeSet<Row>,
     wallclock_lag: lag::NativeWallclockLag,
@@ -134,7 +132,6 @@ impl Coordinator {
             })
             .collect();
         let mut updates = self.native_lag_updates(&observations);
-        updates.extend(self.native_frontiers.update(observations));
         updates.push((
             IntrospectionType::ComputeDependencies,
             replace_rows(&mut self.native_frontiers.dependencies, dependencies),
@@ -323,71 +320,6 @@ impl Coordinator {
             &retained_collections,
         )
     }
-}
-
-impl NativeFrontiers {
-    /// Report only observed fields. Across connected replicas the read frontier
-    /// is the meet and the write frontier the join, matching query observations.
-    /// An absent observation is not an empty (completed) frontier. Rebuilding the
-    /// snapshot also retracts disconnected replicas and catalog-dropped exports.
-    /// Storage sinks report replica uppers here, but storage owns their global
-    /// frontiers so compute must not emit duplicate global rows.
-    fn update(
-        &mut self,
-        observations: impl IntoIterator<Item = Observation>,
-    ) -> [(IntrospectionType, Vec<(Row, Diff)>); 2] {
-        type Frontiers = (Option<Antichain<Timestamp>>, Option<Antichain<Timestamp>>);
-        let mut global = BTreeMap::<GlobalId, Frontiers>::new();
-        let mut replicas = BTreeSet::new();
-        for (id, replica, storage_sink, observation) in observations {
-            if let Some(write) = &observation.write_frontier {
-                replicas.insert(Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&replica.to_string()),
-                    frontier_datum(write),
-                ]));
-            }
-            if storage_sink {
-                continue;
-            }
-            let (since, upper) = global.entry(id).or_default();
-            if let Some(read) = observation.read_frontier {
-                since.get_or_insert_with(Antichain::new).extend(read);
-            }
-            if let Some(write) = observation.write_frontier {
-                if upper
-                    .as_ref()
-                    .is_none_or(|old| PartialOrder::less_than(old, &write))
-                {
-                    *upper = Some(write);
-                }
-            }
-        }
-        let global = global
-            .into_iter()
-            .filter_map(|(id, (since, upper))| {
-                Some(Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    frontier_datum(&since?),
-                    frontier_datum(&upper?),
-                ]))
-            })
-            .collect();
-        [
-            (
-                IntrospectionType::Frontiers,
-                replace_rows(&mut self.global, global),
-            ),
-            (
-                IntrospectionType::ReplicaFrontiers,
-                replace_rows(&mut self.replicas, replicas),
-            ),
-        ]
-    }
-}
-
-fn frontier_datum(frontier: &Antichain<Timestamp>) -> Datum<'static> {
-    frontier.as_option().map_or(Datum::Null, |ts| (*ts).into())
 }
 
 fn refresh_row(

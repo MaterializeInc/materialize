@@ -873,6 +873,13 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION: LazyLock<SystemObjectDescri
         object_type: CatalogItemType::Source,
         object_name: MZ_CLUSTER_REPLICA_FRONTIERS_RAW.name.to_string(),
     });
+/// Native active-deployment reference progress must survive candidate bootstrap.
+pub static MZ_REPLICA_FRONTIER_OBSERVATIONS_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_REPLICA_FRONTIER_OBSERVATIONS.schema.to_string(),
+        object_type: CatalogItemType::Source,
+        object_name: MZ_REPLICA_FRONTIER_OBSERVATIONS.name.to_string(),
+    });
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -1379,6 +1386,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SHOW_DEFAULT_PRIVILEGES),
         Builtin::View(&MZ_SHOW_MY_DEFAULT_PRIVILEGES),
         Builtin::Source(&MZ_STORAGE_STATUSES_RAW),
+        Builtin::Source(&MZ_REPLICA_FRONTIER_OBSERVATIONS),
+        Builtin::Source(&MZ_STORAGE_FRONTIER_OBSERVATIONS),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
@@ -1410,7 +1419,11 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SINK_STATISTICS),
         Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::View(&MZ_STORAGE_USAGE),
-        Builtin::Source(&MZ_FRONTIERS),
+        Builtin::Source(&MZ_FRONTIERS_RAW),
+        Builtin::View(&MZ_FRONTIER_OBJECT_PLACEMENT),
+        Builtin::View(&MZ_CURRENT_REPLICA_FRONTIERS),
+        Builtin::View(&MZ_CURRENT_STORAGE_FRONTIERS),
+        Builtin::View(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Source(&MZ_WALLCLOCK_LAG_HISTORY),
         Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG_HISTORY),

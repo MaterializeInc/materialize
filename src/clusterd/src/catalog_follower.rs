@@ -408,6 +408,11 @@ pub(crate) async fn run(
     }
     if let Some(execution) = &mut owner.execution {
         execution.configure_status_history(&catalog, persist.clone(), config.deploy_generation)?;
+        execution.configure_frontier_publication(
+            &catalog,
+            persist.clone(),
+            config.deploy_generation,
+        )?;
     }
     let execution = &mut owner.execution;
     // None forces initial configuration in both lanes, even without catalog effects.

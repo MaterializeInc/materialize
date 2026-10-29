@@ -192,6 +192,29 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
             .expect("projection updates remain available")
             .is_empty()
     );
+    // Replacing the shard under an existing ID must not let a stale observer
+    // mistake the successor for the previously certified retired binding.
+    let successor = ShardId::new();
+    let mut txn = writer.transaction().await.expect("replacement transaction");
+    txn.insert_collection_metadata(BTreeMap::from([(dropped, successor)]))
+        .expect("insert successor binding");
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.expect("commit successor binding");
+    assert_eq!(
+        joiner
+            .collection_shards_at_current(&ids)
+            .await
+            .expect("certify successor"),
+        BTreeMap::from([(dropped, successor), (retained, mappings[&retained])])
+    );
+    assert!(
+        !joiner
+            .sync_to_current_updates()
+            .await
+            .expect("successor projection remains available")
+            .is_empty()
+    );
     joiner.expire().await;
     writer.expire().await;
 }

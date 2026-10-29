@@ -3112,20 +3112,23 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|
     // Public observations follow shared catalog authority, not the querying
     // process's deployment. Legacy execution has no deployment qualifier.
     sql: "
+WITH protected AS (
+    SELECT 1 FROM mz_internal.mz_catalog_shared
+    WHERE data->>'kind' = 'Config' AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+      AND data->'value'->'value' <> '0'::jsonb
+)
 SELECT object_id, replica_id, write_frontier
 FROM mz_internal.mz_cluster_replica_frontiers_raw
-WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT max((data->>'deploy_generation')::uint8)
-        FROM mz_internal.mz_catalog_shared
-        WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1
-              FROM mz_internal.mz_catalog_shared
-              WHERE data->>'kind' = 'Config'
-                AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND data->'value'->'value' <> '0'::jsonb
-          )
-    )",
+WHERE deployment_generation IS NULL AND NOT EXISTS (SELECT 1 FROM protected)
+UNION ALL
+SELECT object_id, replica_id, write_frontier FROM mz_internal.mz_current_replica_frontiers
+WHERE write_known AND EXISTS (SELECT 1 FROM protected)
+UNION ALL
+SELECT s.object_id, r.id AS replica_id, s.write_frontier
+FROM mz_internal.mz_current_storage_frontiers s
+JOIN mz_internal.mz_frontier_object_placement p ON p.object_id = s.object_id
+JOIN mz_catalog.mz_cluster_replicas r ON r.cluster_id = p.cluster_id
+WHERE NOT p.replica_owned AND s.write_known AND EXISTS (SELECT 1 FROM protected)",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });

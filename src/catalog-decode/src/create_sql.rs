@@ -122,6 +122,10 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
             };
             info.insert("cluster_id", json!(cluster_id));
 
+            if let Some(replica) = &stmt.in_cluster_replica {
+                info.insert("replica_name", json!(replica.as_str()));
+            }
+
             let mut definition = stmt.query.to_ast_string_stable();
             definition.push(';');
             info.insert("definition", json!(definition));
@@ -1963,6 +1967,22 @@ mod tests {
             err.contains("failed to parse"),
             "wrong error message: {err}"
         );
+    }
+
+    #[mz_ore::test]
+    fn catalog_materialized_view_replica_target() {
+        let targeted = super::item_details(
+            r#"CREATE MATERIALIZED VIEW materialize.public.mv
+               IN CLUSTER [u1] REPLICA "Target replica" AS SELECT 1"#,
+        )
+        .expect("targeted MV");
+        assert_eq!(targeted["cluster_id"], json!("u1"));
+        assert_eq!(targeted["replica_name"], json!("Target replica"));
+        let untargeted = super::item_details(
+            "CREATE MATERIALIZED VIEW materialize.public.mv IN CLUSTER [u1] AS SELECT 1",
+        )
+        .expect("untargeted MV");
+        assert_eq!(untargeted.get("replica_name"), None);
     }
 
     #[mz_ore::test]

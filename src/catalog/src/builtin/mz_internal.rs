@@ -75,6 +75,53 @@ pub static MZ_CATALOG_SHARED_IND: LazyLock<BuiltinIndex> = LazyLock::new(|| Buil
     is_retained_metrics_object: false,
 });
 
+// Separate from the upgrade-protected legacy reference relation. Unknown and
+// completed frontiers are distinct: NULL means empty only when *_known is true.
+pub static MZ_STORAGE_FRONTIER_OBSERVATIONS: LazyLock<BuiltinSource> =
+    LazyLock::new(|| BuiltinSource {
+        name: "mz_storage_frontier_observations",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_STORAGE_FRONTIER_OBSERVATIONS_OID,
+        data_source: IntrospectionType::StorageFrontierObservations.into(),
+        desc: RelationDesc::builder()
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("data_shard", SqlScalarType::String.nullable(false))
+            .with_column("read_known", SqlScalarType::Bool.nullable(false))
+            .with_column("read_frontier", SqlScalarType::MzTimestamp.nullable(true))
+            .with_column("write_known", SqlScalarType::Bool.nullable(false))
+            .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
+pub static MZ_REPLICA_FRONTIER_OBSERVATIONS: LazyLock<BuiltinSource> =
+    LazyLock::new(|| BuiltinSource {
+        name: "mz_replica_frontier_observations",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_REPLICA_FRONTIER_OBSERVATIONS_OID,
+        data_source: IntrospectionType::ReplicaFrontierObservations.into(),
+        desc: RelationDesc::builder()
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(false),
+            )
+            .with_column("client_incarnation", SqlScalarType::UInt64.nullable(false))
+            .with_column("read_known", SqlScalarType::Bool.nullable(false))
+            .with_column("read_frontier", SqlScalarType::MzTimestamp.nullable(true))
+            .with_column("write_known", SqlScalarType::Bool.nullable(false))
+            .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
 pub static MZ_CLUSTER_REPLICA_FRONTIERS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| {
     BuiltinSource {
         name: "mz_cluster_replica_frontiers_raw",
@@ -3101,8 +3148,8 @@ ORDER BY replica_id, process_id, occurred_at DESC",
     }),
 });
 
-pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
-    name: "mz_frontiers",
+pub static MZ_FRONTIERS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
+    name: "mz_frontiers_raw",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_FRONTIERS_OID,
     data_source: IntrospectionType::Frontiers.into(),
@@ -3151,6 +3198,155 @@ pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSourc
             ]
         },
     }),
+});
+
+pub static MZ_FRONTIER_OBJECT_PLACEMENT: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_frontier_object_placement",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_FRONTIER_OBJECT_PLACEMENT_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("compute_global", SqlScalarType::Bool.nullable(false))
+        .with_column("replica_owned", SqlScalarType::Bool.nullable(false))
+        .with_column("replica_name", SqlScalarType::String.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+WITH items AS (
+    SELECT mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+           mz_internal.parse_catalog_id(data->'value'->'global_id') AS global_id,
+           data->'value'->'extra_versions' AS extra_versions
+    FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'Item'
+), versions AS (
+    SELECT id, global_id, 0::uint8 AS version FROM items
+    UNION ALL
+    SELECT i.id, mz_internal.parse_catalog_id(v.version->'global_id'),
+           COALESCE((v.version->'version'->>'value')::uint8, 0)
+    FROM items i CROSS JOIN LATERAL jsonb_array_elements(i.extra_versions) AS v(version)
+), writers AS (
+    SELECT DISTINCT ON (id) id, global_id FROM versions ORDER BY id, version DESC
+), placement AS (
+    SELECT id, cluster_id, true AS compute_global, true AS replica_owned,
+           NULL::text AS replica_name FROM mz_catalog.mz_indexes
+    UNION ALL
+    SELECT id, cluster_id, true, true, NULL::text FROM mz_internal.mz_metric_sinks
+    UNION ALL
+    SELECT id, cluster_id, false, true,
+           mz_internal.parse_catalog_create_sql(create_sql)->>'replica_name'
+    FROM mz_catalog.mz_materialized_views
+    UNION ALL
+    SELECT id, cluster_id, false, false, NULL::text
+    FROM mz_catalog.mz_sources WHERE cluster_id IS NOT NULL
+    UNION ALL
+    SELECT id, cluster_id, false, false, NULL::text FROM mz_catalog.mz_sinks
+    UNION ALL
+    SELECT t.id, s.cluster_id, false, false, NULL::text FROM mz_catalog.mz_tables t
+    JOIN mz_catalog.mz_sources s ON s.id = t.source_id WHERE s.cluster_id IS NOT NULL
+)
+SELECT g.global_id AS object_id, p.cluster_id, p.compute_global,
+       p.replica_owned, p.replica_name
+FROM placement p JOIN mz_internal.mz_object_global_ids g ON g.id = p.id
+WHERE p.compute_global OR NOT p.replica_owned OR NOT EXISTS (
+    SELECT 1 FROM writers w WHERE w.id = p.id AND w.global_id <> g.global_id
+)
+UNION ALL
+SELECT id, cluster_id, true, true, NULL::text FROM mz_internal.mz_subscriptions",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+pub static MZ_CURRENT_REPLICA_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_current_replica_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CURRENT_REPLICA_FRONTIERS_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column("read_known", SqlScalarType::Bool.nullable(false))
+        .with_column("read_frontier", SqlScalarType::MzTimestamp.nullable(true))
+        .with_column("write_known", SqlScalarType::Bool.nullable(false))
+        .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
+        .with_column("compute_global", SqlScalarType::Bool.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+SELECT o.object_id, o.replica_id, o.read_known, o.read_frontier,
+       o.write_known, o.write_frontier, p.compute_global
+FROM mz_internal.mz_replica_frontier_observations o
+JOIN mz_internal.mz_frontier_object_placement p ON p.object_id = o.object_id
+JOIN mz_catalog.mz_cluster_replicas r ON r.id = o.replica_id AND r.cluster_id = p.cluster_id
+WHERE p.replica_owned AND (p.replica_name IS NULL OR p.replica_name = r.name)
+  AND o.deployment_generation = (
+    SELECT max((data->>'deploy_generation')::uint8)
+    FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'FenceToken'
+) AND EXISTS (
+    SELECT 1 FROM mz_internal.mz_catalog_shared c
+    WHERE c.data->>'kind' = 'ClientIncarnation'
+      AND (c.data->'key'->>'id')::uint8 = o.client_incarnation
+      AND COALESCE((c.data->'value'->>'deployment_generation')::uint8, 0) = o.deployment_generation
+      AND mz_internal.parse_catalog_id(c.data->'value'->'realization'->'Replica') = o.replica_id
+)",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+pub static MZ_CURRENT_STORAGE_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_current_storage_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CURRENT_STORAGE_FRONTIERS_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("read_known", SqlScalarType::Bool.nullable(false))
+        .with_column("read_frontier", SqlScalarType::MzTimestamp.nullable(true))
+        .with_column("write_known", SqlScalarType::Bool.nullable(false))
+        .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+SELECT o.object_id, o.read_known, o.read_frontier, o.write_known, o.write_frontier
+FROM mz_internal.mz_storage_frontier_observations o
+WHERE EXISTS (SELECT 1 FROM mz_internal.mz_object_global_ids g WHERE g.global_id = o.object_id)
+  AND EXISTS (
+    SELECT 1 FROM mz_internal.mz_catalog_shared c
+    WHERE c.data->>'kind' = 'StorageCollectionMetadata'
+      AND mz_internal.parse_catalog_id(c.data->'key'->'id') = o.object_id
+      AND c.data->'value'->>'shard' = o.data_shard
+  )",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+pub static MZ_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_FRONTIERS_OID,
+    desc: MZ_FRONTIERS_RAW.desc.clone(),
+    column_comments: MZ_FRONTIERS_RAW.column_comments.clone(),
+    // Across replicas, read is a meet (empty is top), write is a join
+    // (empty dominates). Unknown fields do not participate in either reduction.
+    sql: "
+WITH protected AS (
+    SELECT 1 FROM mz_internal.mz_catalog_shared
+    WHERE data->>'kind' = 'Config' AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+      AND data->'value'->'value' <> '0'::jsonb
+)
+SELECT object_id, read_frontier, write_frontier FROM mz_internal.mz_frontiers_raw
+WHERE NOT EXISTS (SELECT 1 FROM protected)
+UNION ALL
+SELECT object_id, read_frontier, write_frontier FROM mz_internal.mz_current_storage_frontiers
+WHERE read_known AND write_known AND EXISTS (SELECT 1 FROM protected)
+UNION ALL
+SELECT object_id,
+       min(CASE WHEN read_known THEN read_frontier END) AS read_frontier,
+       CASE WHEN bool_or(write_known AND write_frontier IS NULL) THEN NULL
+            ELSE max(CASE WHEN write_known THEN write_frontier END) END AS write_frontier
+FROM mz_internal.mz_current_replica_frontiers
+WHERE compute_global AND EXISTS (SELECT 1 FROM protected)
+GROUP BY object_id
+HAVING bool_or(read_known) AND bool_or(write_known)",
+    access: vec![PUBLIC_SELECT],
+    ontology: MZ_FRONTIERS_RAW.ontology.clone(),
 });
 
 /// DEPRECATED and scheduled for removal! Use `mz_frontiers` instead.

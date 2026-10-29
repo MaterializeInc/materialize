@@ -35,9 +35,9 @@ use crate::builtin::{
     BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
     MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION,
     MZ_OBJECT_HYDRATION_HISTORY, MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION,
-    MZ_REPLICA_HYDRATION_HISTORY, MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
-    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    MZ_REPLICA_FRONTIER_OBSERVATIONS_DESCRIPTION, MZ_REPLICA_HYDRATION_HISTORY,
+    MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use crate::config::BuiltinItemMigrationConfig;
 use crate::durable::objects::SystemObjectUniqueIdentifier;
@@ -976,6 +976,14 @@ impl Migration {
             assert_ne!(
                 &*MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, object,
                 "mz_cluster_replica_frontiers_raw cannot be migrated or else the 0dt caught-up gate loses its live-frontier reference"
+            );
+
+            // Native readiness also needs the active deployment's observations.
+            // Replacing this shard during candidate bootstrap loses that reference,
+            // even though candidate rows carry a distinct deployment qualifier.
+            assert_ne!(
+                &*MZ_REPLICA_FRONTIER_OBSERVATIONS_DESCRIPTION, object,
+                "mz_replica_frontier_observations cannot be migrated: active reference progress must survive"
             );
 
             let Some(object_info) = self.system_objects.get(object) else {

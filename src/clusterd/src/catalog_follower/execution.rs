@@ -96,6 +96,7 @@ fn is_catalog_conflict(error: &anyhow::Error) -> bool {
         })
 }
 
+mod frontiers;
 mod storage;
 
 #[cfg(test)]
@@ -285,6 +286,7 @@ pub(super) struct ReplicaEnactment {
     publication_retry_after: Option<Instant>,
     publication_needs_refresh: bool,
     publication_seconds: mz_ore::metrics::Histogram,
+    frontier_publication: Option<frontiers::Frontiers>,
 }
 
 impl ReplicaEnactment {
@@ -334,6 +336,7 @@ impl ReplicaEnactment {
             publication_bounds_pending: false,
             publication_retry_after: None,
             publication_needs_refresh: false,
+            frontier_publication: None,
             publication_seconds: registry.register(mz_ore::metric! {
                 name: "mz_catalog_follower_publication_seconds",
                 help: "Wall time for replica protection publication attempts, including derivation, catalog I/O, and retries.",
@@ -987,6 +990,22 @@ impl ReplicaEnactment {
         }
     }
 
+    pub fn configure_frontier_publication(
+        &mut self,
+        catalog: &Catalog,
+        persist: mz_persist_client::PersistClient,
+        deployment: u64,
+    ) -> anyhow::Result<()> {
+        self.frontier_publication = Some(frontiers::Frontiers::new(
+            catalog,
+            persist,
+            self.replica,
+            deployment,
+            self.protection.incarnation(),
+        )?);
+        Ok(())
+    }
+
     pub fn apply_progress(&mut self, catalog: &Catalog) {
         for (id, update) in std::mem::take(&mut self.io.frontiers) {
             let Some(collection) = self.installed.get_mut(&id) else {
@@ -1015,6 +1034,11 @@ impl ReplicaEnactment {
             }
             if update.hydrated.is_some() {
                 collection.progress.hydrated = update.hydrated;
+            }
+            if !collection.retired
+                && let Some(publisher) = &self.frontier_publication
+            {
+                publisher.record(id, &collection.progress);
             }
         }
         // Policy changes can advance a window even without a new progress report.
@@ -1078,6 +1102,9 @@ impl ReplicaEnactment {
                     });
             if !live && self.local.frontier(*id).is_empty() {
                 collection.retired = true;
+                if let Some(publisher) = &self.frontier_publication {
+                    publisher.retire(*id);
+                }
                 collection.window = None;
                 self.io.send(ComputeCommand::AllowCompaction {
                     id: *id,

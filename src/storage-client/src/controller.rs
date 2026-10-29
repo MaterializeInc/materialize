@@ -23,6 +23,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::num::NonZeroI64;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -141,6 +142,10 @@ pub enum IntrospectionType {
     /// Replica-owned current health. The controller advances the upper but does
     /// not reconcile these rows or subject them to historical-event retention.
     StorageStatuses,
+    /// Native compute observations, written by their replica incarnation.
+    ReplicaFrontierObservations,
+    /// Cooperative observations of physical storage progress, keyed by shard.
+    StorageFrontierObservations,
 }
 
 impl IntrospectionType {
@@ -305,7 +310,9 @@ pub trait StorageTxn {
     /// Add new storage metadata for a collection.
     ///
     /// Subsequent calls to [`StorageTxn::get_collection_metadata`] must include
-    /// this data.
+    /// this data. A binding removed in a committed transaction must never be
+    /// readmitted with the same `(GlobalId, ShardId)`. Table registration and
+    /// observed-frontier retirement rely on that exact-binding lifetime.
     fn insert_collection_metadata(
         &mut self,
         s: BTreeMap<GlobalId, ShardId>,
@@ -368,6 +375,21 @@ impl StorageWriteOp {
     }
 }
 
+/// Certifies exact storage bindings against a freshly fetched catalog prefix.
+///
+/// Retirement callers must observe shared rows before invoking this method.
+/// Native observations follow committed binding admission, and a deleted exact
+/// `(GlobalId, ShardId)` binding must never be readmitted. Under that contract,
+/// absence or a different shard certifies retirement of the observed binding.
+/// An error never authorizes deletion.
+#[async_trait]
+pub trait CollectionMetadataCertifier: Debug + Send + Sync {
+    async fn collection_shards_at_current(
+        &self,
+        ids: &BTreeSet<GlobalId>,
+    ) -> Result<BTreeMap<GlobalId, ShardId>, anyhow::Error>;
+}
+
 /// Controls local storage enactment.
 ///
 /// Lifecycle methods take `publish_status_history` separately from enactment.
@@ -378,6 +400,12 @@ impl StorageWriteOp {
 /// publication across commits. It is not authority for current catalog state.
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
+    /// Installs catalog certification before native introspection starts.
+    fn set_collection_metadata_certifier(
+        &mut self,
+        certifier: Arc<dyn CollectionMetadataCertifier>,
+    );
+
     /// Marks the end of any initialization commands.
     ///
     /// The implementor may wait for this method to be called before implementing prior commands,

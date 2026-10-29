@@ -69,9 +69,15 @@ use mz_orchestrator::OfflineReason;
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
+use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_storage_types::StorageDiff;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp as _};
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex, oneshot};
 use tokio::time::MissedTickBehavior;
 
 use crate::PeekClient;
@@ -120,12 +126,114 @@ pub struct CaughtUpCheckContext {
     pub exclude_collections: BTreeSet<GlobalId>,
 }
 
+/// Incremental active-reference state, owned by the readiness task. Dropping
+/// that task releases its reader, including after promotion or shutdown.
+#[derive(Debug)]
+struct ReplicaFrontierReference {
+    shard: ShardId,
+    reader: Option<ReadHandle<SourceData, (), Timestamp, StorageDiff>>,
+    subscription: Option<Subscribe<SourceData, (), Timestamp, StorageDiff>>,
+    rows: BTreeMap<Row, StorageDiff>,
+    upper: Timestamp,
+}
+
+impl ReplicaFrontierReference {
+    async fn open(persist: &PersistClient, metadata: &CollectionMetadata) -> Self {
+        let reader = persist
+            .open_leased_reader(
+                metadata.data_shard,
+                Arc::new(metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::from_purpose("caught-up replica frontier reference"),
+                false,
+            )
+            .await
+            .expect("reference source codecs");
+        Self {
+            shard: metadata.data_shard,
+            reader: Some(reader),
+            subscription: None,
+            rows: BTreeMap::new(),
+            upper: Timestamp::MIN,
+        }
+    }
+
+    /// Consume a completed prefix without cancelling leased-part reads. Only
+    /// the first refresh snapshots the shard. Later checks incorporate diffs.
+    async fn refresh(&mut self, persist: &PersistClient) -> Vec<Row> {
+        let target = persist
+            .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                self.shard,
+                Diagnostics::from_purpose("caught-up replica frontier reference"),
+            )
+            .await
+            .expect("reference source upper")
+            .into_option()
+            .expect("reference source remains open");
+        if let Some(reader) = &self.reader {
+            if reader.since().less_equal(&target) && reader.since() != &Antichain::from_elem(target)
+            {
+                self.subscription = Some(
+                    self.reader
+                        .take()
+                        .expect("reader present")
+                        .subscribe(Antichain::from_elem(
+                            target.step_back().expect("positive upper"),
+                        ))
+                        .await
+                        .expect("leased since protects reference snapshot"),
+                );
+            } else {
+                // No completed readable timestamp yet. Missing reference uses
+                // the strict hydration path, never fabricated completion.
+                return Vec::new();
+            }
+        }
+        let subscription = self.subscription.as_mut().expect("reference initialized");
+        while self.upper < target {
+            for event in subscription.next(None).await {
+                match event {
+                    ListenEvent::Updates(parts) => {
+                        for part in parts {
+                            let fetched = subscription.fetch_batch_part(part).await;
+                            for (index, ((data, ()), _, diff)) in fetched.enumerate() {
+                                let row = data.0.expect("reference row");
+                                let count = self.rows.entry(row.clone()).or_default();
+                                *count += diff;
+                                if *count == 0 {
+                                    self.rows.remove(&row);
+                                }
+                                if index % 1024 == 0 {
+                                    tokio::task::yield_now().await;
+                                }
+                            }
+                            tokio::task::yield_now().await;
+                        }
+                    }
+                    ListenEvent::Progress(upper) => {
+                        self.upper = upper.into_option().expect("reference remains open");
+                    }
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+        self.rows
+            .iter()
+            .map(|(row, diff)| {
+                assert_eq!(*diff, 1, "reference must consolidate to a set");
+                row.clone()
+            })
+            .collect()
+    }
+}
+
 /// A request from the caught-up check task for the coordinator's view of the
 /// clusters, answered by [`Coordinator::handle_caught_up_check_request`].
 #[derive(Debug)]
 pub struct CaughtUpCheckRequest {
     exclude_collections: Arc<BTreeSet<GlobalId>>,
     policy_read_ts: Option<Timestamp>,
+    reference: Arc<Mutex<Option<ReplicaFrontierReference>>>,
     tx: oneshot::Sender<CaughtUpSnapshot>,
 }
 
@@ -399,6 +507,7 @@ impl Coordinator {
             .then(|| self.get_local_timestamp_oracle());
 
         task::spawn(|| "caught_up_check", async move {
+            let reference = Arc::new(Mutex::new(None));
             let mut interval = tokio::time::interval(period);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
@@ -413,6 +522,7 @@ impl Coordinator {
                 let request = CaughtUpCheckRequest {
                     exclude_collections: Arc::clone(&exclude_collections),
                     policy_read_ts,
+                    reference: Arc::clone(&reference),
                     tx,
                 };
                 // A failed send or a dropped reply means the coordinator is
@@ -443,89 +553,100 @@ impl Coordinator {
         let CaughtUpCheckRequest {
             exclude_collections,
             policy_read_ts,
+            reference,
             tx,
         } = request;
 
-        let replica_frontier_item_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS_RAW);
+        let native = self.controller.replica_owned_compute();
+        let source = if native {
+            &mz_catalog::builtin::MZ_REPLICA_FRONTIER_OBSERVATIONS
+        } else {
+            &MZ_CLUSTER_REPLICA_FRONTIERS_RAW
+        };
+        let replica_frontier_item_id = self.catalog().resolve_builtin_storage_collection(source);
         let replica_frontier_gid = self
             .catalog()
             .get_entry(&replica_frontier_item_id)
             .latest_global_id();
 
-        // `snapshot_latest` requires that the collection consolidates to a
-        // set. `mz_cluster_replica_frontiers_raw` is a controller-managed builtin
-        // written with ±1 diffs, so it satisfies that invariant.
-        //
-        // Legacy deployments read the leader's shard. Native deployments share
-        // the shard and must filter its rows to active deployment membership below.
-        // `validate_migration_steps` forbids migrating `mz_cluster_replica_frontiers_raw` for this
-        // reason, so a declared migration can't reach here. A test forcing replacement across all
-        // builtins bypasses that guard, hands us a shard we write ourselves, and the lag check
-        // below then compares this deployment against itself.
-        let live_frontiers = self
-            .controller
-            .storage_collections
-            .snapshot_latest(replica_frontier_gid)
-            .await
-            .expect("can't read mz_cluster_replica_frontiers_raw");
+        // Both sources consolidate to sets. Their migration guards preserve the
+        // active deployment's reference shard rather than comparing a candidate
+        // with itself. Native prewarm requires matching builtin fingerprints, so
+        // there is no admitted native peer requiring a legacy-row fallback.
+        let live_frontiers = if native {
+            let metadata = self
+                .controller
+                .storage_collections
+                .collection_metadata(replica_frontier_gid)
+                .expect("reference collection metadata");
+            let mut reference = reference.lock().await;
+            if reference.is_none() {
+                *reference =
+                    Some(ReplicaFrontierReference::open(&self.persist_client, &metadata).await);
+            }
+            let reference = reference.as_mut().expect("reference initialized");
+            assert_eq!(
+                reference.shard, metadata.data_shard,
+                "reference must not migrate during prewarm"
+            );
+            reference.refresh(&self.persist_client).await
+        } else {
+            self.controller
+                .storage_collections
+                .snapshot_latest(replica_frontier_gid)
+                .await
+                .expect("can't read replica frontier reference")
+        };
 
-        let active_replicas = self.controller.replica_owned_compute().then(|| {
-            let state = self.catalog().state();
-            (
-                state
-                    .active_deployment_generation()
-                    .expect("native catalog has an active deployment"),
-                state.active_replica_ids().collect::<BTreeSet<_>>(),
-            )
-        });
+        let state = self.catalog().state();
         let live_frontiers = live_frontiers
             .into_iter()
-            .map(|row| {
+            .filter_map(|row| {
                 let mut iter = row.into_iter();
-
                 let id: GlobalId = iter
                     .next()
-                    .expect("missing object id")
+                    .expect("object id")
                     .unwrap_str()
                     .parse()
-                    .expect("cannot parse id");
-                let replica_id: ReplicaId = iter
+                    .expect("id");
+                let replica: ReplicaId = iter
                     .next()
-                    .expect("missing replica id")
+                    .expect("replica id")
                     .unwrap_str()
                     .parse()
-                    .expect("cannot parse replica id");
-                let maybe_upper_ts = iter.next().expect("missing upper_ts");
-                let generation = iter.next().expect("missing deployment generation");
-                let generation = if generation.is_null() {
-                    None
+                    .expect("id");
+                let upper = if native {
+                    let generation = iter.next().expect("deployment generation").unwrap_uint64();
+                    let incarnation = iter.next().expect("client incarnation").unwrap_uint64();
+                    let current = state.client_incarnations().get(&incarnation)?;
+                    if Some(generation) != state.active_deployment_generation()
+                        || current.deployment_generation != generation
+                        || current.realization
+                            != mz_catalog::durable::objects::ClientRealization::Replica(replica)
+                    {
+                        return None;
+                    }
+                    let _read_known = iter.next().expect("read known");
+                    let _read_frontier = iter.next().expect("read frontier");
+                    if !iter.next().expect("write known").unwrap_bool() {
+                        return None;
+                    }
+                    iter.next().expect("write frontier")
                 } else {
-                    Some(generation.unwrap_uint64())
+                    let upper = iter.next().expect("write frontier");
+                    if !iter.next().expect("deployment generation").is_null() {
+                        return None;
+                    }
+                    upper
                 };
-                // The timestamp has a total order, so there can be at
-                // most one entry in the upper frontier, which is this
-                // timestamp here. And NULL encodes the empty upper
-                // frontier.
-                let upper_frontier = if maybe_upper_ts.is_null() {
+                // Unknown was excluded above. NULL now means completed, not missing.
+                let upper = if upper.is_null() {
                     Antichain::new()
                 } else {
-                    let upper_ts = maybe_upper_ts.unwrap_mz_timestamp();
-                    Antichain::from_elem(upper_ts)
+                    Antichain::from_elem(upper.unwrap_mz_timestamp())
                 };
-
-                (id, replica_id, upper_frontier, generation)
+                Some((id, replica, upper))
             })
-            .filter(
-                |(_, replica, _, generation)| match active_replicas.as_ref() {
-                    Some((active_generation, active)) => {
-                        *generation == Some(*active_generation) && active.contains(replica)
-                    }
-                    None => generation.is_none(),
-                },
-            )
-            .map(|(id, replica, frontier, _)| (id, replica, frontier))
             .collect_vec();
 
         // The classification only requires each collection to be hydrated on
@@ -856,7 +977,17 @@ impl Coordinator {
 
         for res in itertools::chain(storage_frontiers, compute_frontiers) {
             let (id, write_frontier, collection_type) = res?;
-            let live_write_frontier = match live_frontiers.get(&id) {
+            // Native storage progress is the shared physical upper, already
+            // tracked locally in read-only mode. It is not an adapter observation
+            // and does not depend on the cooperative sampler's publication cadence.
+            let reference = if self.controller.replica_owned_compute()
+                && matches!(collection_type, CollectionType::Storage)
+            {
+                Some(&write_frontier)
+            } else {
+                live_frontiers.get(&id)
+            };
+            let live_write_frontier = match reference {
                 Some(frontier) => frontier,
                 None => {
                     // No live frontier to compare against, either because the collection didn't
@@ -1182,6 +1313,94 @@ impl Coordinator {
 
 #[cfg(test)]
 mod tests {
+    #[mz_ore::test(tokio::test)]
+    async fn reference_incorporates_peer_updates_and_empty_progress() {
+        use mz_catalog::builtin::MZ_REPLICA_FRONTIER_OBSERVATIONS;
+        use mz_persist_client::PersistLocation;
+
+        let persist = PersistClient::new_for_tests().await;
+        let shard = ShardId::new();
+        let desc = MZ_REPLICA_FRONTIER_OBSERVATIONS.desc.clone();
+        let metadata = CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: "mem://".parse().expect("blob URI"),
+                consensus_uri: "mem://".parse().expect("consensus URI"),
+            },
+            data_shard: shard,
+            relation_desc: desc.clone(),
+            txns_shard: None,
+        };
+        let mut a = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("first writer");
+        let mut b = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(desc),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("peer writer");
+        let mut reference = ReplicaFrontierReference::open(&persist, &metadata).await;
+        assert!(reference.refresh(&persist).await.is_empty());
+        let row = |upper: u64| {
+            Row::pack_slice(&[
+                Datum::String("u1"),
+                Datum::String("u1"),
+                Datum::UInt64(1),
+                Datum::UInt64(11),
+                Datum::True,
+                Timestamp::from(5).into(),
+                Datum::True,
+                Timestamp::from(upper).into(),
+            ])
+        };
+        let first = row(10);
+        a.compare_and_append(
+            vec![((SourceData(Ok(first.clone())), ()), Timestamp::MIN, 1)],
+            Antichain::from_elem(Timestamp::MIN),
+            Antichain::from_elem(1.into()),
+        )
+        .await
+        .expect("valid first append")
+        .expect("first upper matches");
+        assert_eq!(reference.refresh(&persist).await, vec![first.clone()]);
+        let second = row(20);
+        b.compare_and_append(
+            vec![
+                ((SourceData(Ok(first)), ()), Timestamp::from(1), -1),
+                ((SourceData(Ok(second.clone())), ()), Timestamp::from(1), 1),
+            ],
+            Antichain::from_elem(1.into()),
+            Antichain::from_elem(2.into()),
+        )
+        .await
+        .expect("valid peer append")
+        .expect("peer upper matches");
+        assert_eq!(reference.refresh(&persist).await, vec![second.clone()]);
+        a.compare_and_append(
+            Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+            Antichain::from_elem(2.into()),
+            Antichain::from_elem(3.into()),
+        )
+        .await
+        .expect("valid empty advancement")
+        .expect("empty advancement upper matches");
+        assert_eq!(reference.refresh(&persist).await, vec![second.clone()]);
+        assert_eq!(reference.upper, Timestamp::from(3));
+        // A new readiness task replays the current relation, not predecessor rows.
+        drop(reference);
+        let mut replay = ReplicaFrontierReference::open(&persist, &metadata).await;
+        assert_eq!(replay.refresh(&persist).await, vec![second]);
+    }
+
     use mz_repr::Datum;
     use mz_repr::adt::timestamp::CheckedTimestamp;
 
