@@ -316,6 +316,11 @@ pub trait StorageCollections: Debug + Sync {
     /// time dependence or is unknown.
     fn freshness_tree(&self, id: GlobalId) -> Option<FreshnessTree>;
 
+    /// Records the freshness tree of a collection that another controller writes, such as a
+    /// materialized view, for the storage controller's wallclock lag reporting. Does nothing if
+    /// `id` is unknown.
+    fn set_freshness_tree(&self, id: GlobalId, tree: FreshnessTree);
+
     /// The log of when the collection made arrivals visible, `None` if the collection is unknown.
     ///
     /// The storage controller records it for the collections it writes, and the compute
@@ -2464,6 +2469,13 @@ impl StorageCollections for StorageCollectionsImpl {
     fn freshness_tree(&self, id: GlobalId) -> Option<FreshnessTree> {
         let collections = self.collections.lock().expect("lock poisoned");
         collections.get(&id)?.freshness_tree.clone()
+    }
+
+    fn set_freshness_tree(&self, id: GlobalId, tree: FreshnessTree) {
+        let mut collections = self.collections.lock().expect("lock poisoned");
+        if let Some(collection) = collections.get_mut(&id) {
+            collection.freshness_tree = Some(tree);
+        }
     }
 
     fn visibility_log(&self, id: GlobalId) -> Option<SharedVisibilityLog> {

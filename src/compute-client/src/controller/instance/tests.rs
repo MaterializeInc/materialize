@@ -531,6 +531,8 @@ impl StorageCollections for TickerStorage {
         unimplemented!()
     }
 
+    fn set_freshness_tree(&self, _id: GlobalId, _tree: FreshnessTree) {}
+
     fn visibility_log(&self, id: GlobalId) -> Option<SharedVisibilityLog> {
         self.1.get(&id).cloned()
     }

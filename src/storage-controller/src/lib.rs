@@ -33,7 +33,8 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_0DT_DEPLOYMENT_SOURCES, ENABLE_WALLCLOCK_FRESHNESS_REPORTING,
+    WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::ConfigUpdates;
 use mz_ore::collections::CollectionExt;
@@ -62,7 +63,7 @@ use mz_storage_client::controller::{
     StorageMetadata, StorageTxn, StorageWriteOp, TableRegistration, WallclockLag,
     WallclockLagHistogramPeriod,
 };
-use mz_storage_client::freshness::{self, FreshnessRecording};
+use mz_storage_client::freshness::{self, AssignmentBoundCache, FreshnessRecording};
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
     MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_STATUS_HISTORY_DESC,
@@ -3124,8 +3125,8 @@ where
     /// Records the freshness of a collection's write frontier `frontier` and returns the
     /// introspection updates of closed periods.
     ///
-    /// Only collections with a freshness tree in [`StorageCollections`] are recorded, which
-    /// excludes materialized views and sinks.
+    /// Only collections this controller writes and that have a freshness tree in
+    /// [`StorageCollections`] are recorded.
     fn record_freshness(
         &mut self,
         id: GlobalId,
@@ -3137,6 +3138,11 @@ where
         let Some(collection) = self.collections.get_mut(&id) else {
             return Vec::new();
         };
+        // The compute controller records the collections it writes, among them materialized
+        // views, whose tree it publishes in `StorageCollections` for lag reporting only.
+        if matches!(collection.data_source, DataSource::Other) {
+            return Vec::new();
+        }
         // Resolved at every observation, so a changed tick interval takes effect at once.
         let Some(tree) = self
             .storage_collections
@@ -3848,6 +3854,9 @@ where
     ///   wallclock time every second. Every minute we emit all lags observed over the last minute,
     ///   together with the current histogram period.
     ///
+    /// Under `enable_wallclock_freshness_reporting`, histories report the lag of
+    /// [`freshness::reported_lag`] instead, while histograms keep the lag behind wallclock time.
+    ///
     /// Histories are emitted to both Mz introspection and Prometheus, histograms only to
     /// introspection. We treat lags of unreadable collections (i.e. collections that contain no
     /// readable times) as undefined and set them to NULL in introspection and `u64::MAX` in
@@ -3864,6 +3873,7 @@ where
             Some(ts) => (self.wallclock_lag)(*ts),
             None => Duration::ZERO,
         };
+        let reporting = ENABLE_WALLCLOCK_FRESHNESS_REPORTING.get(self.config.config_set());
 
         let mut unreported_frontiers = Vec::new();
         for frontiers in self.storage_collections.active_collection_frontiers() {
@@ -3874,22 +3884,36 @@ where
 
             let collection_unreadable =
                 PartialOrder::less_equal(&frontiers.write_frontier, &frontiers.read_capabilities);
-            let lag = if collection_unreadable {
-                WallclockLag::Undefined
+            let (lag, histogram_lag) = if collection_unreadable {
+                (WallclockLag::Undefined, WallclockLag::Undefined)
             } else {
-                let lag = frontier_lag(&frontiers.write_frontier);
-                WallclockLag::Seconds(lag.as_secs())
+                let today = frontier_lag(&frontiers.write_frontier);
+                // Resolved at every sample, so a changed tick interval takes effect at once.
+                let tree = reporting
+                    .then(|| self.storage_collections.freshness_tree(id))
+                    .flatten()
+                    .and_then(|tree| tree.resolve(&*self.ticker_lookup));
+                let bound_cache = &mut collection.assignment_bound;
+                let freshness = tree
+                    .as_ref()
+                    .and_then(|tree| Some((tree, bound_cache.get(tree)?)));
+                let lag =
+                    freshness::reported_lag(freshness, &frontiers.write_frontier, now_ms, today);
+                (lag, WallclockLag::from_duration(today))
             };
 
             collection.wallclock_lag_max = collection.wallclock_lag_max.max(lag);
 
             // No way to specify values as undefined in Prometheus metrics, so we use the
             // maximum value instead.
-            let secs = lag.unwrap_seconds_or(u64::MAX);
-            collection.wallclock_lag_metrics.observe(secs);
+            collection
+                .wallclock_lag_metrics
+                .observe(lag.metric_seconds());
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
-                let bucket = lag.map_seconds(|secs| secs.next_power_of_two());
+                // The `WallclockLagHistogram` keeps today's samples, since the freshness
+                // histograms replace it.
+                let bucket = histogram_lag.histogram_bucket();
                 let labels = histogram_labels(&self.instances, &collection.extra_state);
                 let key = (histogram_period, bucket, labels);
                 *stash.entry(key).or_default() += Diff::ONE;
@@ -3965,13 +3989,13 @@ where
                 continue;
             };
 
-            for ((period, lag, labels), count) in std::mem::take(stash) {
+            for ((period, bucket, labels), count) in std::mem::take(stash) {
                 let mut packer = row_buf.packer();
                 packer.extend([
                     Datum::TimestampTz(period.start),
                     Datum::TimestampTz(period.end),
                     Datum::String(&id.to_string()),
-                    lag.into_uint64_datum(),
+                    Datum::from(bucket),
                 ]);
                 let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
                 packer.push_dict(labels);
@@ -4139,14 +4163,15 @@ struct CollectionState {
     /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
     /// introspection update.
     ///
-    /// Keys are `(period, lag, labels)` triples, values are counts.
+    /// Keys are `(period, bucket, labels)` triples, values are counts. The bucket is that of
+    /// [`WallclockLag::histogram_bucket`].
     ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
     wallclock_lag_histogram_stash: Option<
         BTreeMap<
             (
                 WallclockLagHistogramPeriod,
-                WallclockLag,
+                Option<u64>,
                 BTreeMap<&'static str, String>,
             ),
             Diff,
@@ -4154,6 +4179,8 @@ struct CollectionState {
     >,
     /// Frontier wallclock lag metrics tracked for this collection.
     wallclock_lag_metrics: WallclockLagMetrics,
+    /// The assignment bound of the freshness tree, for the reported wallclock lag.
+    assignment_bound: AssignmentBoundCache,
     /// Freshness recording of the write frontier, `None` until recording starts.
     freshness: Option<FreshnessRecording>,
 }
@@ -4180,6 +4207,7 @@ impl CollectionState {
             wallclock_lag_max: WallclockLag::MIN,
             wallclock_lag_histogram_stash,
             wallclock_lag_metrics,
+            assignment_bound: AssignmentBoundCache::default(),
             freshness: None,
         }
     }

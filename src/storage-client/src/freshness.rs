@@ -32,6 +32,8 @@ use mz_storage_types::freshness::local::{
 use mz_storage_types::freshness::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use timely::progress::Antichain;
 
+use crate::controller::WallclockLag;
+
 /// What a freshness histogram row measures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Measure {
@@ -226,6 +228,53 @@ fn visibility_retention_ms(config: &RecorderConfig) -> u64 {
 /// A copy of `log` that answers the arrivals above `recorded_through`.
 pub fn input_log(log: &VisibilityLog, recorded_through: Option<u64>) -> VisibilityLog {
     log.after(recorded_through.unwrap_or(0))
+}
+
+/// Caches the assignment bound D of a collection's freshness tree.
+#[derive(Debug, Default)]
+pub struct AssignmentBoundCache {
+    /// The tree D was last computed for, and D. Comparing whole trees keys the cache on the
+    /// leaf tickers and the refresh schedules.
+    cached: Option<(ResolvedTree, Option<u64>)>,
+}
+
+impl AssignmentBoundCache {
+    /// [`ResolvedTree::assignment_bound`] of `tree`.
+    pub fn get(&mut self, tree: &ResolvedTree) -> Option<u64> {
+        match &self.cached {
+            Some((cached, bound)) if cached == tree => *bound,
+            // The scan behind D can take about a million evaluations, so it only runs when the
+            // tree changes, for example after `ALTER SOURCE` changed a tick interval.
+            _ => {
+                let bound = tree.assignment_bound();
+                self.cached = Some((tree.clone(), bound));
+                bound
+            }
+        }
+    }
+}
+
+/// The wallclock lag to report for a readable write frontier `frontier` at `now_ms`.
+///
+/// `freshness` is the collection's resolved freshness tree and its bounded D, `None` if
+/// reporting is off or there is no such tree. `today` is the lag of `frontier` rounded up to
+/// whole seconds, as `WallclockLagFn` computes it.
+///
+/// With `freshness`, the lag is max(D, S) in ms, where S is `now_ms` minus
+/// `last_reflected(frontier)`. It is `today` without `freshness` or if no arrival is reflected
+/// yet, because then there is no S to report.
+pub fn reported_lag(
+    freshness: Option<(&ResolvedTree, u64)>,
+    frontier: &Antichain<Timestamp>,
+    now_ms: u64,
+    today: Duration,
+) -> WallclockLag {
+    let lag = freshness.and_then(|(tree, bound)| {
+        // An empty frontier is complete forever, which `today` reports as 0.
+        let reflected = tree.last_reflected(*frontier.as_option()?)?;
+        Some(bound.max(now_ms.saturating_sub(reflected)))
+    });
+    lag.map_or_else(|| WallclockLag::from_duration(today), WallclockLag::Millis)
 }
 
 /// A visibility log shared between the controller that records it and the controllers whose

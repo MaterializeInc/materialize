@@ -124,7 +124,11 @@ src          true  {}
 src_tbl      true  {}
 tbl          true  {}
 
-# Test that history lag values are rounded to seconds.
+# Test that history lag values are rounded to seconds without freshness
+# reporting.
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_wallclock_freshness_reporting = false
 
 > SELECT DISTINCT ON(o.name, r.name)
     o.name, r.name, l.lag = date_trunc('second', l.lag)
@@ -147,6 +151,9 @@ snk          <null> true
 src          <null> true
 src_tbl      <null> true
 tbl          <null> true
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET enable_wallclock_freshness_reporting
 
 # Test annotation of histogram measurements with labels.
 
@@ -248,3 +255,46 @@ src     <null>
 
 > DROP CLUSTER storage CASCADE
 > DROP CLUSTER compute CASCADE
+
+# Test that freshness reporting reports max(D, S) in milliseconds: about a
+# minute for a view refreshed every minute, whose frontier is at its next
+# refresh, and about a second for a source that ticks every second.
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_wallclock_freshness_reporting = true
+
+> CREATE CLUSTER fresh SIZE 'scale=1,workers=1'
+> CREATE SOURCE src_1s IN CLUSTER fresh FROM LOAD GENERATOR counter
+> CREATE TABLE src_1s_tbl FROM SOURCE src_1s
+> CREATE TABLE refresh_input (a int)
+> CREATE MATERIALIZED VIEW mv_refresh IN CLUSTER fresh
+  WITH (REFRESH EVERY '1 minute')
+  AS SELECT * FROM refresh_input
+
+> SELECT DISTINCT ON(o.name, r.name)
+    o.name, r.name, l.lag >= '59s', l.lag < '2s'
+  FROM mz_internal.mz_wallclock_lag_history l
+  JOIN mz_objects o ON o.id = l.object_id
+  LEFT JOIN mz_cluster_replicas r ON r.id = l.replica_id
+  WHERE o.name IN ('src_1s', 'src_1s_tbl', 'mv_refresh')
+  ORDER BY o.name, r.name, l.occurred_at DESC
+mv_refresh  r1      true  false
+mv_refresh  <null>  true  false
+src_1s      <null>  false true
+src_1s_tbl  <null>  false true
+
+> SELECT DISTINCT ON(o.name)
+    o.name, l.lag >= '59s', l.lag < '2s'
+  FROM mz_internal.mz_wallclock_global_lag_history l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE o.name IN ('src_1s', 'src_1s_tbl', 'mv_refresh')
+  ORDER BY o.name, l.occurred_at DESC
+mv_refresh  true  false
+src_1s      false true
+src_1s_tbl  false true
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET enable_wallclock_freshness_reporting
+
+> DROP CLUSTER fresh CASCADE
+> DROP TABLE refresh_input CASCADE
