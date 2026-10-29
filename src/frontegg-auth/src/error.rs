@@ -38,6 +38,8 @@ pub enum Error {
     UserNameTooLong,
     #[error("user declared by tenant access token cannot be an email address")]
     InvalidTenantApiTokenUser,
+    #[error("tenant access token does not declare a user")]
+    MissingTenantApiTokenUser,
     #[error("request timeout")]
     Timeout(Arc<tokio::time::error::Elapsed>),
     #[error("internal error")]
@@ -61,7 +63,8 @@ impl Error {
             | Error::UnauthorizedTenant
             | Error::WrongUser
             | Error::UserNameTooLong
-            | Error::InvalidTenantApiTokenUser => true,
+            | Error::InvalidTenantApiTokenUser
+            | Error::MissingTenantApiTokenUser => true,
             Error::InvalidTokenFormat(_)
             | Error::MissingClaims
             | Error::TokenExpired
@@ -157,5 +160,7 @@ mod tests {
         // Checks on what the client sent do not.
         assert!(Error::WrongUser.is_credential_rejection());
         assert!(Error::UserNameTooLong.is_credential_rejection());
+        // The user a tenant API token declares is set when the client creates it.
+        assert!(Error::MissingTenantApiTokenUser.is_credential_rejection());
     }
 }

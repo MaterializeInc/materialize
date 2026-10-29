@@ -1045,8 +1045,11 @@ impl ConnectionFault {
         self.server.store(true, Ordering::Relaxed);
     }
 
-    /// Runs `fut` as balancerd's own work rather than a wait on the client, so that a deadline
-    /// expiring during it is a server fault.
+    /// Marks `fut` as balancerd's own work, so a pre-resolved deadline that fires while it is
+    /// pending counts as a server fault.
+    ///
+    /// NOTE: The flag is cleared only when `fut` completes. A deadline that drops this future
+    /// leaves it set, which is what [`ConnectionFault::timed_out`] relies on.
     async fn server_work<F: Future>(&self, fut: F) -> F::Output {
         self.in_server_work.store(true, Ordering::Relaxed);
         let output = fut.await;
@@ -2145,9 +2148,10 @@ impl BalancerResolver {
                 let has_sni = servername.is_some();
                 let resolved_addr = match (servername, sni_resolver.as_ref()) {
                     (Some(servername), Some(SniTemplate { template, port })) => {
-                        // A resolution failure here means the tenant's backend
-                        // is unreachable (or the client sent a bogus SNI). Not
-                        // a server fault.
+                        // Resolving the tenant's backend is balancerd's own
+                        // work, so a failure is a server fault, unless the
+                        // client's SNI named a host that doesn't exist
+                        // (`UnknownHost`).
                         let (addr, tenant) = fault
                             .server_work(dns_resolver.resolve_sni(template, *port, servername))
                             .await
