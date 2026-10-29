@@ -968,8 +968,8 @@ fn period_length_change_keeps_arrivals_in_their_period() {
     let mut recorder = FreshnessRecorder::new(0);
     let mut rows = Vec::new();
     let mut covered = 0;
-    // Open (0, 10 s], then switch to 60 s periods, so the new period starts at 0 as well. The
-    // later steps change the length again, including to one that nests the open periods.
+    // Open (0, 10 s], then switch to 60 s periods, whose grid starts at 0 as well. The later
+    // steps change the length again, including to one that nests the open periods.
     for (frontier, period_ms) in [
         (5_001, 10_000),
         (40_001, 60_000),
@@ -1000,10 +1000,15 @@ fn period_length_change_keeps_arrivals_in_their_period() {
     }
     let total: u64 = per_period.values().sum();
     assert_eq!(total, covered);
-    // The old period only holds the arrivals before the change, and the new (0, 60 s] period,
-    // which shares its start, takes the rest.
-    assert_eq!(per_period[&(0, 10_000)], 5_000);
-    assert_eq!(per_period[&(0, 60_000)], 50_000);
+    // The old period is cut where the change happened, and the new one starts there.
+    assert_eq!(per_period[&(0, 5_000)], 5_000);
+    assert_eq!(per_period[&(5_000, 40_000)], 35_000);
+    // The periods tile the arrivals without overlap.
+    let mut end = 0;
+    for (start, period_end) in per_period.keys() {
+        assert_eq!(*start, end, "{per_period:?}");
+        end = *period_end;
+    }
 }
 
 fn bucket_counts(rows: &[PeriodRow]) -> BTreeMap<i32, u64> {
@@ -1299,12 +1304,8 @@ fn debug_output_stays_small() {
     }
     let mut end_to_end = FreshnessRecorder::new(0);
     let mut local = LocalDelayRecorder::new(0);
-    // Each period length opens its own period `(0, length]`, which stays open below 1000.
     for t in 1..1_000 {
-        let cfg = RecorderConfig {
-            period_ms: 1_000 * t,
-            ..config(4)
-        };
+        let cfg = config(4);
         assert!(end_to_end.observe(&tree, &at(t + 1), t, &cfg).is_empty());
         assert!(
             local
@@ -1313,7 +1314,7 @@ fn debug_output_stays_small() {
         );
     }
     let end_to_end = format!("{end_to_end:?}");
-    assert!(end_to_end.contains("open_periods: 999"), "{end_to_end}");
+    assert!(end_to_end.contains("open_periods: 1"), "{end_to_end}");
     let log = format!("{log:?}");
     assert!(log.contains("len: 9999"), "{log}");
     for debug in [end_to_end, format!("{local:?}"), log] {
@@ -1540,4 +1541,94 @@ fn local_long_input_outage_uses_last_pruned_observation() {
         .sum();
     assert!(pruned >= end - start - 600_000, "{counts:?}");
     assert!(counts.get(&0).copied().unwrap_or(0) <= 1000, "{counts:?}");
+}
+
+#[mz_ore::test]
+fn period_book_cuts_open_periods_at_a_length_change() {
+    let long = RecorderConfig {
+        period_ms: 60_000,
+        ..config(4)
+    };
+    let short = RecorderConfig {
+        period_ms: 1_000,
+        ..config(4)
+    };
+    let mut book = PeriodBook::new(0);
+    let (closed, _, _) = advance_counted(&mut book, 30_000, 30_001, &long);
+    assert_eq!(closed, vec![]);
+    // The open (0, 60 s] period is cut at the change and handed out with its 30 s of arrivals,
+    // before the periods of the new length.
+    let (closed, _, _) = advance_counted(&mut book, 31_000, 31_001, &short);
+    assert_eq!(closed, vec![(0, 30_000, 30_000), (30_000, 31_000, 1_000)]);
+    let (mut later, _, _) = advance_counted(&mut book, 95_000, 95_001, &short);
+    later.extend(
+        book.finish()
+            .into_iter()
+            .map(|p| (p.start_ms, p.end_ms, p.state)),
+    );
+    assert!(
+        later.iter().all(|(start, _, _)| *start >= 30_000),
+        "{later:?}"
+    );
+    assert!(later.windows(2).all(|w| w[0].1 <= w[1].1), "{later:?}");
+    let total: u64 = later.iter().map(|(_, _, count)| count).sum();
+    assert_eq!(total, 95_000 - 31_000);
+}
+
+#[mz_ore::test]
+fn period_book_cuts_short_periods_before_long_ones() {
+    let short = RecorderConfig {
+        period_ms: 1_000,
+        ..config(4)
+    };
+    let long = RecorderConfig {
+        period_ms: 60_000,
+        ..config(4)
+    };
+    let mut book = PeriodBook::new(0);
+    let (closed, _, _) = advance_counted(&mut book, 30_500, 30_501, &short);
+    assert_eq!(closed.len(), 30);
+    // The open (30 s, 31 s] period is cut at 30.5 s, and the first long period starts there
+    // instead of at 0, which would overlap the short ones handed out.
+    let (closed, _, _) = advance_counted(&mut book, 70_000, 70_001, &long);
+    assert_eq!(
+        closed,
+        vec![(30_000, 30_500, 500), (30_500, 60_000, 29_500)]
+    );
+    let rest: Vec<_> = book
+        .finish()
+        .into_iter()
+        .map(|p| (p.start_ms, p.end_ms, p.state))
+        .collect();
+    assert_eq!(rest, vec![(60_000, 120_000, 10_000)]);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn period_book_tiles_in_order_across_length_changes() {
+    let step = (
+        1u64..200_000,
+        select(vec![1_000u64, 7_000, 10_000, 60_000, 300_000]),
+    );
+    proptest!(|(steps in proptest::collection::vec(step, 1..20))| {
+        let mut book = PeriodBook::new(0);
+        let mut handed_out = Vec::new();
+        let mut to = 0;
+        for (advance, period_ms) in steps {
+            to += advance;
+            let cfg = RecorderConfig { period_ms, ..config(4) };
+            let (closed, _, _) = advance_counted(&mut book, to, to, &cfg);
+            handed_out.extend(closed);
+        }
+        handed_out.extend(book.finish().into_iter().map(|p| (p.start_ms, p.end_ms, p.state)));
+        // In order, without gaps or overlap, every arrival in the period it falls into.
+        let mut end = 0;
+        for (start, period_end, count) in &handed_out {
+            prop_assert_eq!(*start, end, "{:?}", handed_out);
+            prop_assert!(*period_end > *start, "{:?}", handed_out);
+            prop_assert_eq!(*count, period_end.min(&to) - start, "{:?}", handed_out);
+            end = *period_end;
+        }
+        prop_assert!(end >= to);
+    });
 }

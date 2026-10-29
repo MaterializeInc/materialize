@@ -38,12 +38,22 @@ struct OpenPeriod<S> {
 /// Arrivals up to a high-water mark, charged to the periods in which they arrived.
 ///
 /// Periods are half-open `(start, end]` on arrival time and start at multiples of the period
-/// length, except for the pieces of a catch-up, so every arrival time belongs to exactly one
-/// period. A period is handed out once, when its end is at most the high-water mark, which makes
-/// everything handed out final.
+/// length, except for the pieces of a catch-up and the periods around a change of the period
+/// length, so every arrival time belongs to exactly one period. A period is handed out once,
+/// when its end is at most the high-water mark, which makes everything handed out final.
+/// Periods are handed out in order, each ending no earlier than the one before, so the largest
+/// end handed out bounds every arrival counted so far.
 pub(super) struct PeriodBook<S> {
     high_water_ms: u64,
-    open: BTreeMap<(u64, u64), OpenPeriod<S>>,
+    /// The open periods by start. They tile the arrivals after the last handed-out period.
+    open: BTreeMap<u64, OpenPeriod<S>>,
+    /// The period length of the open periods, `None` before the first advance.
+    period_ms: Option<u64>,
+    /// No period starts before this, the high-water mark at the last change of the period
+    /// length.
+    cut_ms: u64,
+    /// The end of the last handed-out period.
+    handed_out_ms: u64,
     finished: bool,
 }
 
@@ -54,6 +64,7 @@ impl<S> fmt::Debug for PeriodBook<S> {
         f.debug_struct("PeriodBook")
             .field("high_water_ms", &self.high_water_ms)
             .field("open_periods", &self.open.len())
+            .field("period_ms", &self.period_ms)
             .field("finished", &self.finished)
             .finish()
     }
@@ -65,6 +76,9 @@ impl<S> PeriodBook<S> {
         PeriodBook {
             high_water_ms: start_ms,
             open: BTreeMap::new(),
+            period_ms: None,
+            cut_ms: 0,
+            handed_out_ms: 0,
             finished: false,
         }
     }
@@ -82,6 +96,9 @@ impl<S> PeriodBook<S> {
     /// and later calls continue from there. A span longer than [`CATCH_UP_MS`] is accounted in
     /// pieces between UTC day boundaries, one period each, so the number of periods is bounded
     /// by the retention in days instead of the span in periods.
+    ///
+    /// A changed period length first cuts every open period at the high-water mark and hands
+    /// it out, and the periods of the new length start no earlier than the cut.
     pub fn advance(
         &mut self,
         to_ms: u64,
@@ -91,12 +108,32 @@ impl<S> PeriodBook<S> {
         mut add: impl FnMut(&mut S, u64, u64),
     ) -> Vec<ClosedPeriod<S>> {
         let period_ms = config.period_ms.max(1);
+        if self.finished {
+            return Vec::new();
+        }
+        let mut closed = Vec::new();
+        if self.period_ms.is_some_and(|p| p != period_ms) {
+            // NOTE: Periods of the new length can end before open periods of the old one, and a
+            // restart seeds from the largest end handed out, which would then skip the arrivals
+            // the old periods still hold. Their arrivals are all counted up to the high-water
+            // mark, so cutting them there hands them out final and in order.
+            let cut_ms = self.high_water_ms;
+            for (start_ms, p) in std::mem::take(&mut self.open) {
+                closed.push(ClosedPeriod {
+                    start_ms,
+                    end_ms: p.end_ms.min(cut_ms),
+                    state: p.state,
+                });
+            }
+            self.cut_ms = cut_ms;
+        }
+        self.period_ms = Some(period_ms);
         // A frontier far ahead of the wall clock, for example after a clock jump, would
         // otherwise open one period per period length up to it.
         let cap = now_ms.saturating_add(period_ms);
         let to_ms = to_ms.min(cap - cap % period_ms);
-        if self.finished || to_ms <= self.high_water_ms {
-            return Vec::new();
+        if to_ms <= self.high_water_ms {
+            return self.hand_out(closed);
         }
         // Rows of periods that end before the retention would be truncated right away.
         let floor = now_ms.saturating_sub(config.retention_ms);
@@ -118,13 +155,28 @@ impl<S> PeriodBook<S> {
         }
         self.add_periods(from, to_ms, period_ms, &mut open, &mut add);
         self.high_water_ms = to_ms;
-        // NOTE: A changed period length can leave a later-starting period that ends before an
-        // earlier one, so every period is checked instead of stopping at the first open one.
-        let (closed, open): (BTreeMap<_, _>, BTreeMap<_, _>) = std::mem::take(&mut self.open)
-            .into_iter()
-            .partition(|(_, p)| p.end_ms <= to_ms);
-        self.open = open;
-        closed.into_iter().map(Self::close).collect()
+        // The open periods tile the arrivals in order, so those that closed are a prefix.
+        while let Some(entry) = self.open.first_entry() {
+            if entry.get().end_ms > to_ms {
+                break;
+            }
+            closed.push(Self::close(entry.remove_entry()));
+        }
+        self.hand_out(closed)
+    }
+
+    /// Notes that `closed` are handed out, and returns them.
+    fn hand_out(&mut self, closed: Vec<ClosedPeriod<S>>) -> Vec<ClosedPeriod<S>> {
+        for p in &closed {
+            let in_order = p.end_ms >= self.handed_out_ms;
+            debug_assert!(
+                in_order,
+                "period ({}, {}] after one ending at {}",
+                p.start_ms, p.end_ms, self.handed_out_ms
+            );
+            self.handed_out_ms = self.handed_out_ms.max(p.end_ms);
+        }
+        closed
     }
 
     /// Adds the arrivals in `(from, to]` to the periods of length `period_ms` they fall into.
@@ -137,8 +189,9 @@ impl<S> PeriodBook<S> {
         add: &mut impl FnMut(&mut S, u64, u64),
     ) {
         while from < to {
-            let start = from - from % period_ms;
-            let end = start.saturating_add(period_ms);
+            let grid_start = from - from % period_ms;
+            let end = grid_start.saturating_add(period_ms);
+            let start = grid_start.max(self.cut_ms);
             let part_end = to.min(end);
             self.add_part((start, end), from, part_end, open, add);
             from = part_end;
@@ -154,13 +207,11 @@ impl<S> PeriodBook<S> {
         open: &mut impl FnMut() -> S,
         add: &mut impl FnMut(&mut S, u64, u64),
     ) {
-        // NOTE: Keyed by the end as well, because a changed period length can give a new
-        // period the start of an open one with a different end. Sharing the entry would
-        // charge arrivals past the open period's end to it.
-        let period = self.open.entry((start, end)).or_insert_with(|| OpenPeriod {
+        let period = self.open.entry(start).or_insert_with(|| OpenPeriod {
             end_ms: end,
             state: open(),
         });
+        debug_assert_eq!(period.end_ms, end, "period starting at {start}");
         add(&mut period.state, from, to);
     }
 
@@ -171,13 +222,14 @@ impl<S> PeriodBook<S> {
             return Vec::new();
         }
         self.finished = true;
-        std::mem::take(&mut self.open)
+        let closed = std::mem::take(&mut self.open)
             .into_iter()
             .map(Self::close)
-            .collect()
+            .collect();
+        self.hand_out(closed)
     }
 
-    fn close(((start_ms, _), p): ((u64, u64), OpenPeriod<S>)) -> ClosedPeriod<S> {
+    fn close((start_ms, p): (u64, OpenPeriod<S>)) -> ClosedPeriod<S> {
         ClosedPeriod {
             start_ms,
             end_ms: p.end_ms,
