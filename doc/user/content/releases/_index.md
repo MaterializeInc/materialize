@@ -21,7 +21,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.48.2
-*Released to Materialize Cloud: 2026-10-29* <br>
+*Released to Materialize Cloud: 2026-10-29 (v26.48.0)* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
 
 ### Improved hydration times and memory efficiency for upsert sources {#v26.48-upsert-hydration}
@@ -80,6 +80,10 @@ For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/mysql/)
 - [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/)
 
 ### Bug Fixes {#v26.48-bug-fixes}
+- Fixed PostgreSQL sources where a table whose ingestion had ended in an error (an upstream `TRUNCATE`, an incompatible schema change, or a dropped upstream table) resumed from its last position after a restart and silently skipped every upstream change made while it was in error, leaving the table with incorrect contents (<red>*Materialize Self-Managed only*</red>).
+- Fixed PostgreSQL sources where an upstream `TRUNCATE` applied while a newly added table was still snapshotting left that table serving stale rows without reporting an error (<red>*Materialize Self-Managed only*</red>).
+- Fixed a security vulnerability in the `rustls-webpki` dependency (RUSTSEC-2026-0382), where certificate verification could accept certificate paths containing distrusted emSign intermediates whose private keys are publicly known (<red>*Materialize Self-Managed only*</red>).
+- Fixed a security vulnerability in the `ctutils` dependency (RUSTSEC-2026-0385), where operations intended to run in constant time could branch on secret values, potentially leaking them through side channels (<red>*Materialize Self-Managed only*</red>).
 - Fixed a PostgreSQL source's replica growing until it was killed for running out of memory when upstream schema validation kept failing while the replication stream was silent. The validator retried without pausing and filled an unbounded error queue that is drained only on a keepalive. It now reports each failure once.
 - Fixed `ALTER CONNECTION` panicking when run on an Iceberg catalog connection, or on the parent S3 or GCP connection that an S3 Tables or BigLake catalog uses.
 - Fixed the `dbt-materialize` cluster and schema ownership checks that guard a blue/green deployment never raising anything, because they subtracted the set of objects under deployment the wrong way around. They now also treat membership in the owning role as ownership, which is how Materialize itself decides whether a role may run the swap that `deploy_promote` performs.
