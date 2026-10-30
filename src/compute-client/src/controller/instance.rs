@@ -39,6 +39,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
+use mz_storage_client::freshness::{self, FreshnessRecording};
 use mz_storage_types::freshness::recorder::{PeriodRow, RecorderConfig};
 use mz_storage_types::freshness::{FreshnessTree, TickerLookup};
 use mz_storage_types::read_holds::{self, ReadHold};
@@ -70,10 +71,6 @@ use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError as ProtocolPeekError,
     PeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
 };
-
-mod freshness;
-
-use freshness::FreshnessRecording;
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
