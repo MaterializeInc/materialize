@@ -102,8 +102,8 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, Cluste
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions, latest_item_version};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc,
-    ReconfigurationTarget, Table, TableDataSource,
+    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, DataSourceDesc, ReconfigurationTarget,
+    Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -151,8 +151,7 @@ use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
-    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
-    NetworkPolicyRule, Params, QueryWhen,
+    self, AlterSinkPlan, ConnectionDetails, HirRelationExpr, NetworkPolicyRule, Params, QueryWhen,
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
@@ -374,8 +373,6 @@ pub enum Message {
         pending: ddl::PendingDdlCommit,
         otel_ctx: OpenTelemetryContext,
     },
-    CreateConnectionValidationReady(CreateConnectionValidationReady),
-    AlterConnectionValidationReady(AlterConnectionValidationReady),
     DeferredPlanReady {
         /// The connection whose session-startup appends completed.
         conn_id: ConnectionId,
@@ -557,7 +554,6 @@ impl Message {
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::SourceStatementReady { .. } => "source_statement_ready",
             Message::DdlCommandsReady { .. } => "ddl_commands_ready",
-            Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::DeferredPlanReady { .. } => "deferred_plan_ready",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApplied { .. } => "group_commit_applied",
@@ -595,7 +591,6 @@ impl Message {
             Message::SecretStageReady { .. } => "secret_stage_ready",
             Message::ClusterStageReady { .. } => "cluster_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
-            Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
             Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
@@ -629,22 +624,6 @@ pub struct BackgroundWorkResult<T> {
 }
 
 pub type PurifiedStatementReady = BackgroundWorkResult<mz_sql::pure::PurifiedStatement>;
-
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub struct ValidationReady<T> {
-    #[derivative(Debug = "ignore")]
-    pub ctx: ExecuteContext,
-    pub result: Result<T, AdapterError>,
-    pub resolved_ids: ResolvedIds,
-    pub connection_id: CatalogItemId,
-    pub connection_gid: GlobalId,
-    pub plan_validity: PlanValidity,
-    pub otel_ctx: OpenTelemetryContext,
-}
-
-pub type CreateConnectionValidationReady = ValidationReady<CreateConnectionPlan>;
-pub type AlterConnectionValidationReady = ValidationReady<Connection>;
 
 #[derive(Debug)]
 pub struct CopyToContext {
