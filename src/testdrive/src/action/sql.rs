@@ -245,12 +245,21 @@ async fn try_run_sql(
     raw_output: bool,
     should_retry: bool,
 ) -> Result<(), anyhow::Error> {
-    let stmt = state
-        .materialize
-        .pgclient
-        .prepare(query)
-        .await
-        .context("preparing query failed")?;
+    // The prepare shares the connection with any statement a previous attempt
+    // left running on the server after its future was dropped, and
+    // tokio-postgres serializes statements on a connection, so without a
+    // deadline it waits behind that statement for as long as the server keeps
+    // it: on a dataflow that never produces, that is until the step is killed.
+    // Bound it by the same budget as the query itself.
+    let stmt = match tokio::time::timeout(
+        state.timeout.clone(),
+        state.materialize.pgclient.prepare(query),
+    )
+    .await
+    {
+        Ok(stmt) => stmt.context("preparing query failed")?,
+        Err(_) => bail!("preparing query timed out\n"),
+    };
 
     let query_with_timeout = tokio::time::timeout(
         state.timeout.clone(),
