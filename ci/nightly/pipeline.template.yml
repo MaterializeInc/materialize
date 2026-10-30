@@ -297,7 +297,7 @@ steps:
                 - common-ancestor
 
       - id: cargo-bench
-        label: ":rust: Cargo bench against ancestor"
+        label: ":rust: Cargo bench against merge base or 'latest'"
         sanitizer: skip
         depends_on: []
         timeout_in_minutes: 240

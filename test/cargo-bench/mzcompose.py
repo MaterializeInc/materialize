@@ -87,8 +87,10 @@ class TargetFailure:
 
 
 def resolve_ancestor() -> str:
-    """Pick the commit to compare against: `default_ancestor()`, moved forward to the bench baseline when HEAD contains the baseline and that ancestor does not."""
+    """Choose the comparison commit, clamping PR merge bases to the bench baseline."""
     ancestor = default_ancestor()
+    if not buildkite.is_in_pull_request():
+        return ancestor
     clamped = clamp_to_baseline(ancestor, "HEAD", MZ_ROOT)
     if clamped != ancestor:
         print(
@@ -98,7 +100,7 @@ def resolve_ancestor() -> str:
 
 
 def default_ancestor() -> str:
-    """The merge base in a pull request, else the latest release tag."""
+    """The PR merge base, or the latest stable release's commit."""
     if buildkite.is_in_pull_request():
         return buildkite.get_merge_base()
     current = MzVersion.parse_cargo()
@@ -111,12 +113,9 @@ def default_ancestor() -> str:
     ]
     if not releases:
         raise RuntimeError(f"no release tag older than {current} found")
-    tag = spawn.capture(
+    return spawn.capture(
         ["git", "rev-parse", f"{max(releases)}^{{commit}}"], cwd=MZ_ROOT
     ).strip()
-    # The tag sits on its release branch and carries backports that main
-    # lacks, so the comparison point is where that branch left main.
-    return spawn.capture(["git", "merge-base", tag, "HEAD"], cwd=MZ_ROOT).strip()
 
 
 def target_dir() -> Path:
@@ -568,7 +567,7 @@ def render_report(
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--ancestor",
-        help="commit to compare against, used as given, defaults to the merge base in a PR and the latest release tag otherwise, never older than the bench baseline",
+        help="commit to compare against, used as given, defaults to the PR merge base (clamped to the bench baseline) or the latest release tag otherwise",
     )
     parser.add_argument(
         "--threshold",
