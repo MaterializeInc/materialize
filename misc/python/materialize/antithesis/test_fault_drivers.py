@@ -112,7 +112,7 @@ def test_halt_capture_uses_the_stable_current_or_previous_log(
     assert call.kwargs["previous"] is (not current)
     assert call.kwargs["timestamps"] is True
     assert call.kwargs["limit_bytes"] == recovery.HALT_EVIDENCE_MAX_BYTES + 1
-    assert call.kwargs["tail_lines"] == recovery.EXIT_LOG_TAIL
+    assert call.kwargs["tail_lines"] == recovery.HALT_EVIDENCE_TAILS[0]
     assert 0 < call.kwargs["_request_timeout"] <= recovery.HALT_EVIDENCE_REQUEST_S
 
 
@@ -285,6 +285,100 @@ def test_halt_capture_requires_one_complete_message(
         text = "2026-10-30T12:00:00Z " + "[" * 1100 + "]" * 1100 + "\n"
     halt_capture.core.read_namespaced_pod_log.return_value = text
     assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+
+
+def test_halt_capture_retries_a_byte_capped_tail(
+    halt_capture: SimpleNamespace,
+) -> None:
+    routine = (
+        "2026-10-30T12:00:00.700000000Z "
+        + json.dumps({"fields": {"message": "r" * 512}})
+        + "\n"
+    )
+    lines = [routine] * 199 + [halt_capture.text]
+
+    def read_log(*args, tail_lines: int, limit_bytes: int, **kwargs):
+        return "".join(lines[-tail_lines:]).encode()[:limit_bytes].decode()
+
+    halt_capture.core.read_namespaced_pod_log.side_effect = read_log
+    result = recovery.capture_halt_evidence(halt_capture.observation, 10)
+    assert result is not None
+    assert result["halt"]["message"] == halt_capture.message
+    assert [
+        call.kwargs["tail_lines"]
+        for call in halt_capture.core.read_namespaced_pod_log.call_args_list
+    ] == [200, 20]
+    assert halt_capture.core.read_namespaced_pod.call_count == 3
+
+
+def test_halt_capture_checks_identity_again_after_shrinking(
+    halt_capture: SimpleNamespace,
+) -> None:
+    after = copy.deepcopy(halt_capture.pod)
+    after.metadata.uid = "replacement-uid"
+    halt_capture.core.read_namespaced_pod.side_effect = [
+        halt_capture.pod,
+        halt_capture.pod,
+        after,
+    ]
+    halt_capture.core.read_namespaced_pod_log.side_effect = [
+        "x" * (recovery.HALT_EVIDENCE_MAX_BYTES + 1),
+        halt_capture.text,
+    ]
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    assert halt_capture.core.read_namespaced_pod_log.call_count == 2
+
+
+def test_halt_capture_bounds_retries_for_a_truncated_single_line(
+    halt_capture: SimpleNamespace,
+) -> None:
+    halt_capture.core.read_namespaced_pod_log.return_value = (
+        halt_capture.text.rstrip("\n") + "x" * recovery.HALT_EVIDENCE_MAX_BYTES
+    )[: recovery.HALT_EVIDENCE_MAX_BYTES + 1]
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    assert [
+        call.kwargs["tail_lines"]
+        for call in halt_capture.core.read_namespaced_pod_log.call_args_list
+    ] == [200, 20, 1]
+    assert halt_capture.core.read_namespaced_pod.call_count == 4
+    assert all(
+        0 < call.kwargs["_request_timeout"] <= recovery.HALT_EVIDENCE_REQUEST_S
+        for call in halt_capture.core.read_namespaced_pod_log.call_args_list
+        + halt_capture.core.read_namespaced_pod.call_args_list
+    )
+
+
+def test_halt_capture_stops_shrinking_when_its_deadline_elapses(
+    halt_capture: SimpleNamespace,
+) -> None:
+    def read_log(*args, **kwargs):
+        halt_capture.clock.now = 9
+        return "x" * (recovery.HALT_EVIDENCE_MAX_BYTES + 1)
+
+    def read_pod(*args, **kwargs):
+        if halt_capture.clock.now:
+            halt_capture.clock.now = 10
+        return halt_capture.pod
+
+    halt_capture.core.read_namespaced_pod_log.side_effect = read_log
+    halt_capture.core.read_namespaced_pod.side_effect = read_pod
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    assert halt_capture.core.read_namespaced_pod_log.call_count == 1
+    assert halt_capture.core.read_namespaced_pod.call_count == 2
+    assert (
+        halt_capture.core.read_namespaced_pod.call_args.kwargs["_request_timeout"] == 1
+    )
+
+
+def test_halt_capture_does_not_shrink_a_complete_ambiguous_tail(
+    halt_capture: SimpleNamespace,
+) -> None:
+    halt_capture.core.read_namespaced_pod_log.side_effect = [
+        halt_capture.text * 2,
+        halt_capture.text,
+    ]
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    assert halt_capture.core.read_namespaced_pod_log.call_count == 1
 
 
 def test_halt_capture_makes_no_requests_after_its_deadline(
