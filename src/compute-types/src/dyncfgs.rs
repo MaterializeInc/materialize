@@ -96,12 +96,12 @@ pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
 /// The accumulable reduce keeps one accumulator per aggregate in the diff of its
 /// input arrangement. When `true`, that arrangement holds its diffs in a columnar
 /// container, which lays the accumulators out by variant so each pays only for its
-/// own fields. When `false` (the default), the diffs live in a columnation stack at
-/// the width of the largest variant. Read at operator construction time, so flips
-/// take effect on dataflows created after the change.
+/// own fields. When `false`, the diffs live in a columnation stack at the width of
+/// the largest variant. The default is `true`. Read at operator construction time,
+/// so flips take effect on dataflows created after the change.
 pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
     "enable_columnar_accumulable_diff",
-    false,
+    true,
     "Store the accumulable reduce's accumulators in a columnar arrangement diff, laid out by \
      variant, instead of a columnation stack of fixed-width accumulator enums.",
     ParameterScope::Replica,
