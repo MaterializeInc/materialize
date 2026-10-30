@@ -70,11 +70,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import psycopg
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
+from antithesis.assertions import (
     always_or_unreachable,
-    sometimes,
     unreachable,
+)
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+    always_or_unreachable as always,
 )
 
 from materialize.antithesis import ddl_hold, schema_model, sql, state
@@ -86,6 +87,7 @@ from materialize.antithesis.drivers.sources_common import (
     timeline_choice,
 )
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import sometimes
 from materialize.antithesis.rng import rng
 from materialize.antithesis.schema_model import KEY, Insert
 

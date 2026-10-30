@@ -52,11 +52,11 @@ from typing import Any
 import psycopg
 import requests
 import urllib3
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
+from antithesis.assertions import (
     always_or_unreachable,
-    reachable,
-    sometimes,
+)
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+    always_or_unreachable as always,
 )
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
@@ -74,6 +74,7 @@ from materialize.antithesis.drivers import counters, history, lifecycle
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
 from materialize.antithesis.kube_watch import ObjectChain
+from materialize.antithesis.observations import reachable, sometimes
 from materialize.antithesis.rng import rng
 from materialize.antithesis.state import open_db
 from materialize.mz_version import MzVersion

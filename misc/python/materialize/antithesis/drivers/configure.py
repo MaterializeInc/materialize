@@ -59,9 +59,7 @@ from typing import Any
 
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
-    reachable,
-    sometimes,
+    always_or_unreachable as always,
 )
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
@@ -69,6 +67,7 @@ from kubernetes.client.rest import ApiException  # type: ignore
 from materialize import orchestratord
 from materialize.antithesis import sql, state
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import reachable, sometimes
 from materialize.antithesis.render import (
     BASE_SYSTEM_PARAMETERS,
     OVERRIDABLE_BASE_PARAMETERS,

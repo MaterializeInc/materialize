@@ -55,7 +55,6 @@ from typing import Any
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
     always_or_unreachable,
-    sometimes,
 )
 
 from materialize.antithesis import sql, state
@@ -76,6 +75,7 @@ from materialize.antithesis.isolation import (
     promotable_ceiling,
     version_tuple,
 )
+from materialize.antithesis.observations import sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "read_only_isolation"
