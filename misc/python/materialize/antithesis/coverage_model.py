@@ -7,7 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Witnesses connecting observed disruptions to writes verified by later reads."""
+"""Witnesses connecting observed disruptions to writes verified by later reads.
+
+Replica deletes require a nonempty cluster id matching the oracle's cluster.
+"""
 
 from __future__ import annotations
 
@@ -42,6 +45,9 @@ class Event(Protocol):
     @property
     def role(self) -> str: ...
 
+    @property
+    def cluster_id(self) -> str: ...
+
 
 @dataclass(frozen=True)
 class Exposure:
@@ -51,7 +57,11 @@ class Exposure:
 
 
 def _exposures(
-    ordered: list[Event], starts: list[float], invoke: float, end: float
+    ordered: list[Event],
+    starts: list[float],
+    invoke: float,
+    end: float,
+    cluster_id: str | None,
 ) -> list[Exposure]:
     first = bisect.bisect_left(starts, invoke)
     last = bisect.bisect_right(starts, end)
@@ -62,6 +72,10 @@ def _exposures(
         if event.kind == "phase" and event.phase:
             matching.append(Exposure(event.phase, "", event.completed))
         elif event.kind == "fault" and event.role:
+            if event.role == "clusterd" and (
+                not cluster_id or event.cluster_id != cluster_id
+            ):
+                continue
             matching.append(Exposure("", event.role, event.completed))
     return matching
 
@@ -79,7 +93,11 @@ def report_passed(report: sz.Report) -> bool:
 
 
 def history_cases(
-    ops: Iterable[sz.Op], events: Iterable[Event], read_ids: set[int]
+    ops: Iterable[sz.Op],
+    events: Iterable[Event],
+    read_ids: set[int],
+    *,
+    cluster_id: str | None = None,
 ) -> set[Case]:
     """Return witnessed exposure combinations for selected successful reads.
 
@@ -110,7 +128,7 @@ def history_cases(
         if write.acked:
             assert write.complete is not None
             end = min(end, write.complete)
-        matching = _exposures(ordered, starts, write.invoke, end)
+        matching = _exposures(ordered, starts, write.invoke, end, cluster_id)
         if matching:
             exposures[op_id] = matching
 
@@ -143,6 +161,8 @@ def stream_cases(
     writes: Iterable[WriteOp],
     observed_by: Mapping[int, tuple[float, float]],
     events: Iterable[Event],
+    *,
+    cluster_id: str | None = None,
 ) -> set[Case]:
     """Exposure witnesses for write ids verified at closed SUBSCRIBE timestamps."""
     ordered = sorted(events, key=lambda e: e.started)
@@ -159,7 +179,7 @@ def stream_cases(
             end = min(end, write.complete_rt)
         exposed = [
             e
-            for e in _exposures(ordered, starts, write.invoke_rt, end)
+            for e in _exposures(ordered, starts, write.invoke_rt, end, cluster_id)
             if e.completed <= fetched
         ]
         if not exposed:
