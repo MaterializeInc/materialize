@@ -308,6 +308,35 @@ def test_halt_capture_keeps_api_outages_out_of_invalid_harness_health(
     health_error.assert_not_called()
 
 
+@pytest.mark.parametrize("kind", ["unavailable", "unavailable_newline", "truncated"])
+def test_halt_capture_distinguishes_unavailable_runtime_logs_from_partial_records(
+    halt_capture: SimpleNamespace, kind: str
+) -> None:
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    unavailable = "unable to retrieve container logs for cri-o://" + "a" * 64
+    assert len(unavailable.encode()) == 110
+    text = {
+        "unavailable": unavailable,
+        "unavailable_newline": unavailable + "\n",
+        "truncated": halt_capture.text.rstrip("\n"),
+    }[kind]
+    halt_capture.core.read_namespaced_pod_log.return_value = text
+
+    assert (
+        recovery.capture_halt_evidence(halt_capture.observation, 10, stats=counts)
+        is None
+    )
+
+    assert counts["runtime_log_unavailable"] == int(kind != "truncated")
+    assert counts["truncated_log"] == int(kind == "truncated")
+    assert counts["uncorrelated_or_incomplete_log"] == 1
+    assert counts["log_reads"] == 1
+    assert counts["pod_reads"] == 2
+    halt_capture.emitted.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "kind", ["empty", "truncated", "oversized", "multiple", "nonutf8", "deep"]
 )
