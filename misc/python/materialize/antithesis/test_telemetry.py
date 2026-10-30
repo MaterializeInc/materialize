@@ -9,9 +9,13 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import sqlite3
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -19,7 +23,7 @@ import pytest
 
 pytest.importorskip("antithesis")
 
-from materialize.antithesis import quiet, telemetry
+from materialize.antithesis import observations, quiet, state, telemetry
 
 
 @pytest.fixture(autouse=True)
@@ -311,7 +315,7 @@ def test_measurement_failures_are_reported_without_masking_command_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     failed = Mock()
-    monkeypatch.setattr(telemetry, "unreachable", failed)
+    monkeypatch.setattr(observations, "harness_error", failed)
     monkeypatch.setattr(
         telemetry.state, "open_db", Mock(side_effect=OSError("unavailable"))
     )
@@ -322,3 +326,280 @@ def test_measurement_failures_are_reported_without_masking_command_errors(
         telemetry.run_command("main", source)
     failed.assert_called_once()
     assert not telemetry.enabled()
+
+
+def test_observations_keep_false_counts_and_unseen_inventory_targets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = tmp_path / "coverage.json"
+    catalog.write_text(
+        '{"version":1,"targets":[{"message":"seen"},{"message":"never evaluated"}],'
+        '"unresolved":[{"kind":"sometimes","file":"driver.py","line":4,"reason":"dynamic"}]}'
+    )
+    monkeypatch.setenv(observations.CATALOG_ENV, str(catalog))
+    monkeypatch.setattr(observations, "send_event", lambda *args: None)
+    source = command(
+        tmp_path,
+        "parallel_driver_observations",
+        "from materialize.antithesis.observations import sometimes\n"
+        "for _ in range(10):\n    sometimes(False, 'seen')\n"
+        "sometimes(True, 'seen')\n",
+    )
+    telemetry.run_command("main", source)
+    report = telemetry.summary()
+    targets = {row["message"]: row for row in report["coverage_targets"]}
+    assert targets["seen"]["observed"] == 1
+    assert targets["seen"]["not_observed"] == 10
+    assert targets["never evaluated"]["observed"] == 0
+    assert targets["never evaluated"]["not_observed"] == 0
+    assert report["coverage_catalog_available"]
+    assert len(report["coverage_catalog_unresolved"]) == 1
+
+
+def test_unreadable_required_inventory_marks_harness_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(observations.CATALOG_ENV, str(tmp_path / "missing.json"))
+    invalid = Mock()
+    monkeypatch.setattr(observations, "harness_error", invalid)
+    report = telemetry.summary()
+    assert report["telemetry_available"] is False
+    assert report["harness_health"]["valid"] is False
+    invalid.assert_called_once_with(
+        "telemetry", "summarize", {"error": "FileNotFoundError"}
+    )
+
+
+def test_harness_health_is_counted_persisted_and_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(observations, "send_event", lambda *args: None)
+    monkeypatch.setattr(telemetry, "HEALTH_DIAGNOSTIC_CAPACITY", 2)
+    source = command(
+        tmp_path,
+        "parallel_driver_health",
+        "from materialize.antithesis.observations import harness_error\n"
+        "for i in range(5):\n    harness_error('test', 'diagnostic', {'value': i})\n",
+    )
+    assert telemetry.run_command("main", source) == 0
+    report = telemetry.summary()
+    health = report["harness_health"]
+    assert not health["valid"]
+    assert health["errors"] == report["commands"][0]["harness_errors"] == 5
+    assert len(health["diagnostics"]) == 2
+    assert health["diagnostics_omitted"] == 3
+    assert health["first_error"]["details"] == {"value": 0}
+
+
+def test_telemetry_storage_failure_leaves_a_sticky_invalidity_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = command(tmp_path, "parallel_driver_lost_metrics", "pass\n")
+    original = telemetry.state.open_db
+    with monkeypatch.context() as unavailable:
+        unavailable.setattr(
+            telemetry.state, "open_db", Mock(side_effect=OSError("unavailable"))
+        )
+        assert telemetry.run_command("main", source) == 0
+    assert telemetry.state.open_db is original
+    health = telemetry.summary()["harness_health"]
+    assert not health["valid"]
+    assert health["first_error"]["component"] == "telemetry"
+    assert health["first_error"]["message"] == "start command"
+
+
+def test_unavailable_telemetry_still_returns_explicit_harness_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        telemetry.state, "open_db", Mock(side_effect=OSError("unavailable"))
+    )
+    report = telemetry.summary()
+    assert report["telemetry_available"] is False
+    health = report["harness_health"]
+    assert health["valid"] is False
+    assert health["errors"] is None
+    assert health["first_error"]["component"] == "telemetry"
+    assert health["first_error"]["message"] == "summarize"
+
+
+def test_unavailable_storage_and_marker_cannot_omit_invalidity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        telemetry.state, "open_db", Mock(side_effect=OSError("unavailable"))
+    )
+    monkeypatch.setattr(
+        observations, "durable_health", Mock(side_effect=OSError("unreadable"))
+    )
+    report = telemetry.summary()
+    assert report["harness_health"]["valid"] is False
+    assert report["harness_health"]["first_error"]["details"] == {"error": "OSError"}
+
+
+def test_late_summary_metric_failure_updates_returned_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        quiet, "recent_quiet_fraction", Mock(side_effect=OSError("unavailable"))
+    )
+    report = telemetry.summary()
+    assert report["quiet_fraction"] is None
+    assert report["harness_health"]["valid"] is False
+
+
+@pytest.mark.parametrize("reset", ["changed", "missing"])
+def test_state_reset_cannot_regenerate_a_model_and_make_vacuous_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset: str
+) -> None:
+    directory = tmp_path / "state"
+    directory.mkdir()
+    epoch = directory / state.EPOCH_FILE
+    epoch.write_text("first")
+    (directory / state.SETUP_MARKER).touch()
+    db = state.open_db("model")
+    with db:
+        db.execute("CREATE TABLE acknowledged (value INTEGER)")
+        db.execute("INSERT INTO acknowledged VALUES (7)")
+    db.close()
+    if reset == "changed":
+        epoch.write_text("second")
+    else:
+        epoch.unlink()
+    connect = sqlite3.connect
+    connection = connect(directory / "model.sqlite")
+    monkeypatch.setattr(state.sqlite3, "connect", lambda *args, **kwargs: connection)
+    with pytest.raises(RuntimeError, match="state.*reset"):
+        with state.open_db("model") as db:
+            db.execute("DELETE FROM acknowledged")
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
+    with connect(directory / "model.sqlite") as intact:
+        assert intact.execute("SELECT value FROM acknowledged").fetchall() == [(7,)]
+    invalid = observations.durable_health()
+    assert invalid is not None and not invalid["valid"]
+    assert invalid["component"] == "state"
+
+
+def test_new_model_database_can_register_the_current_setup_epoch(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "state"
+    directory.mkdir()
+    (directory / state.EPOCH_FILE).write_text("first")
+    (directory / state.SETUP_MARKER).touch()
+    with state.open_db("new-model") as db:
+        assert db.execute("SELECT id FROM workload_state_epoch").fetchall() == [
+            ("first",)
+        ]
+
+
+@pytest.mark.parametrize("replacement", ["missing", "empty", "another-model"])
+def test_previously_opened_model_cannot_be_recreated_or_replaced(
+    tmp_path: Path, replacement: str
+) -> None:
+    directory = tmp_path / "state"
+    state.open_db("model").close()
+    database = directory / "model.sqlite"
+    database.unlink()
+    if replacement == "empty":
+        sqlite3.connect(database).close()
+    elif replacement == "another-model":
+        state.open_db("another-model").close()
+        shutil.copyfile(directory / "another-model.sqlite", database)
+    with pytest.raises(state.StateResetError):
+        state.open_db("model")
+    invalid = observations.durable_health()
+    assert invalid is not None and invalid["component"] == "state"
+
+
+def test_first_open_retry_reuses_committed_identity_before_marker_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "state"
+    link = state.os.link
+    identities = []
+
+    def interrupted(source: Path, destination: Path) -> None:
+        record = json.loads(source.read_text())
+        assert not destination.exists()
+        connection = sqlite3.connect(directory / "model.sqlite")
+        try:
+            identity = connection.execute(
+                "SELECT id FROM workload_database_identity"
+            ).fetchone()[0]
+            assert identity == record["identity"]
+            identities.append(identity)
+        finally:
+            connection.close()
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as interrupted_open:
+        interrupted_open.setattr(state.os, "link", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            state.open_db("model")
+    assert state.os.link is link
+    assert not (directory / "model.identity").exists()
+    connection = state.open_db("model")
+    try:
+        assert connection.execute(
+            "SELECT id FROM workload_database_identity"
+        ).fetchone() == (identities[0],)
+    finally:
+        connection.close()
+    assert (
+        json.loads((directory / "model.identity").read_text())["identity"]
+        == identities[0]
+    )
+    assert observations.durable_health() is None
+
+
+def test_interrupted_identity_initialization_can_retry_without_a_false_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(state.uuid, "uuid4", Mock(side_effect=KeyboardInterrupt))
+        with pytest.raises(KeyboardInterrupt):
+            state.open_db("model")
+    assert not (tmp_path / "state" / "model.identity").exists()
+    state.open_db("model").close()
+    assert observations.durable_health() is None
+
+
+def test_concurrent_first_opens_publish_one_complete_identity(tmp_path: Path) -> None:
+    directory = tmp_path / "state"
+    directory.mkdir()
+    connection = sqlite3.connect(directory / "model.sqlite")
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.close()
+
+    def opened(_: int) -> str:
+        connection = state.open_db("model")
+        try:
+            return connection.execute(
+                "SELECT id FROM workload_database_identity"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=8) as threads:
+        identities = set(threads.map(opened, range(16)))
+    assert len(identities) == 1
+    assert (
+        json.loads((directory / "model.identity").read_text())["identity"] in identities
+    )
+    assert observations.durable_health() is None
+
+
+@pytest.mark.parametrize(
+    "contents",
+    ["{", "[]", "{}", '{"version":1,"database":"model","identity":"invalid"}'],
+)
+def test_malformed_model_identity_cannot_reach_an_oracle(
+    tmp_path: Path, contents: str
+) -> None:
+    directory = tmp_path / "state"
+    state.open_db("model").close()
+    (directory / "model.identity").write_text(contents)
+    with pytest.raises(state.StateResetError, match="malformed"):
+        state.open_db("model")
