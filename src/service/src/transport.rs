@@ -26,9 +26,10 @@ mod tests;
 
 use std::convert::Infallible;
 use std::fmt::Debug;
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bincode::Options;
 use futures::future;
@@ -133,12 +134,8 @@ impl<Out: Message, In: Message> GenericClient<Out, In> for Client<Out, In> {
         self.conn.send(cmd).await
     }
 
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe.
-    async fn recv(&mut self) -> anyhow::Result<Option<In>> {
-        // `Connection::recv` is documented to be cancel safe.
-        self.conn.recv().await.map(Some)
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<anyhow::Result<Option<In>>> {
+        self.conn.poll_recv(cx).map_ok(Some)
     }
 }
 
@@ -231,8 +228,9 @@ where
                 let msg = inbound?;
                 handler.send(msg).await?;
             },
-            // `GenericClient::recv` is documented to be cancel safe.
-            outbound = handler.recv() => match outbound? {
+            // Poll the handler directly, because `GenericClient::recv` allocates a new future on
+            // every loop iteration.
+            outbound = future::poll_fn(|cx| handler.poll_recv(cx)) => match outbound? {
                 Some(msg) => conn.send(msg).await?,
                 None => bail!("client disconnected"),
             },
@@ -339,10 +337,16 @@ impl<Out: Message, In: Message> Connection<Out, In> {
     ///
     /// This method is cancel safe.
     async fn recv(&mut self) -> anyhow::Result<In> {
-        // `mpcs::Receiver::recv` is documented to be cancel safe.
-        match self.msg_rx.recv().await {
-            Some(msg) => Ok(msg),
-            None => bail!(self.error_rx.collect().await),
+        future::poll_fn(|cx| self.poll_recv(cx)).await
+    }
+
+    /// Poll for a received message.
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<anyhow::Result<In>> {
+        match ready!(self.msg_rx.poll_recv(cx)) {
+            Some(msg) => Poll::Ready(Ok(msg)),
+            // Only the recv task holds the sender. It reports its error before it drops the
+            // sender, so the error is available without waiting.
+            None => Poll::Ready(Err(anyhow!(self.error_rx.reported()))),
         }
     }
 
@@ -454,6 +458,12 @@ impl ErrorRx {
         // Mark the current value as unseen, so the next `collect` call can return immediately.
         self.0.mark_changed();
 
+        self.reported()
+    }
+
+    /// Return the first error reported on this channel so far, or [`CONNECTION_CLOSED`] if none
+    /// was.
+    fn reported(&self) -> String {
         let error = self.0.borrow().clone();
         error.unwrap_or_else(|| CONNECTION_CLOSED.into())
     }
