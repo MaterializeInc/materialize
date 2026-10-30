@@ -258,6 +258,9 @@ pub struct ComputeController {
     metrics: ComputeControllerMetrics,
     /// A function that produces the current wallclock time.
     now: NowFn,
+    /// The wall-clock time in ms at which this controller was created, see
+    /// [`mz_storage_client::freshness::recording_after_restart`].
+    boot_ms: u64,
     /// A function that computes the lag between the given time and wallclock time.
     wallclock_lag: WallclockLagFn<Timestamp>,
     /// Dynamic system configuration.
@@ -363,6 +366,7 @@ impl ComputeController {
             peek_stash_persist_location,
             stashed_response: None,
             metrics,
+            boot_ms: now(),
             now,
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
@@ -547,6 +551,7 @@ impl ComputeController {
             stashed_response,
             metrics: _,
             now: _,
+            boot_ms: _,
             wallclock_lag: _,
             dyncfg: _,
             replica_dyncfg_overrides: _,
@@ -614,6 +619,7 @@ impl ComputeController {
             logs,
             self.metrics.for_instance(id),
             self.now.clone(),
+            self.boot_ms,
             self.wallclock_lag.clone(),
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),

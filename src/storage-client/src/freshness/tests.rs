@@ -438,7 +438,7 @@ fn charged_recordings_start_at_their_seeds() {
 
     // A later recording of `a` would count its arrivals twice if it reused the seed.
     for id in [a, b] {
-        let mut recording = FreshnessRecording::seeded(seeds.clone(), id, None, T0);
+        let mut recording = FreshnessRecording::seeded(seeds.clone(), id, None, T0 + 180_000);
         assert_eq!(
             observe(&mut recording, T0 + 180_000),
             BTreeMap::new(),
@@ -447,7 +447,7 @@ fn charged_recordings_start_at_their_seeds() {
         assert_eq!(
             recording.recorded_through(),
             Some(T0 + 180_000),
-            "{id} starts at its first observation"
+            "{id} starts where it was built"
         );
     }
 
@@ -464,8 +464,12 @@ fn charged_recordings_start_at_their_seeds() {
     );
     assert_eq!(
         observe(&mut replica_a, T0 + 120_000),
-        BTreeMap::from([((Measure::EndToEnd, T0 + 120_000), 60_000)]),
-        "a measure without a seed starts at the first observation"
+        BTreeMap::from([
+            ((Measure::EndToEnd, T0 + 120_000), 60_000),
+            ((Measure::Local, T0 + 60_000), 60_000),
+            ((Measure::Local, T0 + 120_000), 60_000),
+        ]),
+        "a measure without a seed starts where the recording was built"
     );
 }
 
@@ -474,10 +478,12 @@ fn restart_policy_selects_the_recording() {
     let a = GlobalId::User(1);
     let tree = aligned(1000);
     let config = recorder_config();
+    // Built after the seeds, so `hole` counts the 30 s since the build and `charge` the 60 s since
+    // the seeds, of both measures.
     for (policy, expected, expected_count) in [
-        ("hole", RestartPolicy::Hole, 0),
+        ("hole", RestartPolicy::Hole, 60_000),
         ("charge", RestartPolicy::Charge, 120_000),
-        ("bogus", RestartPolicy::Hole, 0),
+        ("bogus", RestartPolicy::Hole, 60_000),
     ] {
         let dyncfg = mz_dyncfgs::all_dyncfgs();
         let mut updates = ConfigUpdates::default();
@@ -493,7 +499,7 @@ fn restart_policy_selects_the_recording() {
                 ((a, None, Measure::Local), T0 + 60_000),
             ]),
         );
-        let mut recording = recording_after_restart(&dyncfg, &seeds, a, None, T0);
+        let mut recording = recording_after_restart(&dyncfg, &seeds, a, None, T0 + 90_000);
         let rows = recording.observe(
             &tree,
             &tree,
@@ -575,7 +581,7 @@ fn charge_starts_no_earlier_than_the_retention() {
     let mut recording = FreshnessRecording::seeded(seeds, a, None, T0 - 1000);
     let rows = recording.observe(&tree, &tree, &frontier(T0 + 1), T0 + 5, &[], &config);
     // End to end catches up the retention in about a period per day. Local starts like `hole`,
-    // at the later of the first frontier and the recording, which closes no period yet.
+    // where the recording was built, and closes the period that ends at T0.
     let periods: BTreeMap<(u64, u64), u64> = rows
         .iter()
         .filter(|(measure, _)| *measure == Measure::EndToEnd)
@@ -589,7 +595,10 @@ fn charge_starts_no_earlier_than_the_retention() {
     assert!(first_end > T0 + 5 - RETENTION_MS, "{first_end}");
     assert_eq!(
         measure_totals(&rows),
-        BTreeMap::from([(Measure::EndToEnd, RETENTION_MS - 5)])
+        BTreeMap::from([
+            (Measure::EndToEnd, RETENTION_MS - 5),
+            (Measure::Local, 1000)
+        ])
     );
     assert_eq!(recording.recorded_through(), Some(T0));
 }
@@ -616,5 +625,56 @@ fn end_to_end_only_recording_needs_no_local_seed() {
     assert_eq!(
         period_counts(rows),
         BTreeMap::from([((Measure::EndToEnd, T0 + 120_000), 60_000)])
+    );
+}
+
+#[mz_ore::test]
+fn hole_records_arrivals_between_build_and_first_observation() {
+    let tree = aligned(1000);
+    let config = recorder_config();
+    let scheme = config.scheme;
+    let seeds = FreshnessSeeds::default();
+    let dyncfg = mz_dyncfgs::all_dyncfgs();
+    let mut updates = ConfigUpdates::default();
+    updates.add(&WALLCLOCK_FRESHNESS_RESTART_POLICY, "hole");
+    updates.apply(&dyncfg);
+    let mut recording = recording_after_restart(&dyncfg, &seeds, GlobalId::User(1), None, T0);
+    // The first frontier is past the build, as of a replica that reports only once it has
+    // rehydrated.
+    let rows = recording.observe(
+        &tree,
+        &tree,
+        &frontier(T0 + 90_001),
+        T0 + 90_005,
+        &[],
+        &config,
+    );
+    assert_eq!(
+        period_counts(rows.iter().cloned().collect()),
+        BTreeMap::from([
+            ((Measure::EndToEnd, T0 + 60_000), 60_000),
+            ((Measure::Local, T0 + 60_000), 60_000),
+        ])
+    );
+    // The arrivals in the closed period waited at least until the observation.
+    let fastest = scheme.bucket(90_005 - 60_000);
+    for (measure, row) in &rows {
+        assert!(row.bucket >= fastest, "{measure:?} {row:?}");
+    }
+    let rows = recording.observe(
+        &tree,
+        &tree,
+        &frontier(T0 + 120_001),
+        T0 + 120_005,
+        &[],
+        &config,
+    );
+    assert_eq!(
+        period_counts(rows),
+        BTreeMap::from([
+            ((Measure::EndToEnd, T0 + 120_000), 60_000),
+            ((Measure::Local, T0 + 120_000), 60_000),
+        ]),
+        "the arrivals up to the first observation are recorded once"
     );
 }

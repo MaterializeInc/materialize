@@ -78,8 +78,8 @@ impl Measure {
 /// How the recordings of collections that existed before environmentd started begin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RestartPolicy {
-    /// At the first observed frontier, but not before the recording was built. The arrivals
-    /// since the last emitted period are not recorded, which leaves a hole in the histogram.
+    /// At the time the controller was created. The arrivals from the last emitted period up to
+    /// that time are not recorded, which leaves a hole in the histogram.
     Hole,
     /// At the seed from [`FreshnessSeeds`], so the arrivals since the last emitted period count
     /// at the first observation, with the outage as latency.
@@ -101,20 +101,20 @@ impl RestartPolicy {
 }
 
 /// The recording of the global write frontier of collection `id`, or of `replica_id`'s, that
-/// existed before environmentd started, under the restart policy of `dyncfg`, built at the
-/// wall-clock time `built_ms`.
+/// existed before environmentd started, under the restart policy of `dyncfg`.
+///
+/// `boot_ms` is the wall-clock time at which the controller was created. All recordings after a
+/// restart share it, so how long bootstrap takes does not move their start.
 pub fn recording_after_restart(
     dyncfg: &ConfigSet,
     seeds: &FreshnessSeeds,
     id: GlobalId,
     replica_id: Option<ReplicaId>,
-    built_ms: u64,
+    boot_ms: u64,
 ) -> FreshnessRecording {
     match RestartPolicy::get(dyncfg) {
-        RestartPolicy::Hole => FreshnessRecording::at_first_observation(built_ms),
-        RestartPolicy::Charge => {
-            FreshnessRecording::seeded(seeds.clone(), id, replica_id, built_ms)
-        }
+        RestartPolicy::Hole => FreshnessRecording::at_first_observation(boot_ms),
+        RestartPolicy::Charge => FreshnessRecording::seeded(seeds.clone(), id, replica_id, boot_ms),
     }
 }
 
@@ -264,8 +264,8 @@ enum Start {
     /// At the latest of what the as-of reflects, the wall-clock creation time in ms, and the
     /// retention before the first observation.
     Created(Antichain<Timestamp>, u64),
-    /// At the later of what the first observed frontier reflects and the wall-clock time in ms
-    /// at which the recording was built.
+    /// At the wall-clock time in ms at which the recording was built, but no earlier than the
+    /// retention before the first observation.
     FirstObservation(u64),
     /// At the seeds of the recording of `id` on `replica_id`, or globally, but no earlier than
     /// the retention before the first observation, see [`RestartPolicy::Charge`]. A measure
@@ -304,9 +304,9 @@ impl FreshnessRecording {
         }
     }
 
-    /// Records the arrivals after the later of the first observed frontier and `built_ms`, the
-    /// wall-clock time now. The arrivals before it are not recorded, which leaves a hole in the
-    /// histogram.
+    /// Records the arrivals after `built_ms`, each once a frontier passes it, so the arrivals
+    /// between `built_ms` and the first observed frontier count with their real latency. The
+    /// arrivals at or before `built_ms` are not recorded, which leaves a hole in the histogram.
     pub fn at_first_observation(built_ms: u64) -> Self {
         FreshnessRecording {
             start: Start::FirstObservation(built_ms),
@@ -321,7 +321,7 @@ impl FreshnessRecording {
     /// histogram are published.
     ///
     /// The seeds are taken when the recording starts, so a later recording of the same frontier
-    /// starts at its first observation.
+    /// starts at its `built_ms`.
     pub fn seeded(
         seeds: FreshnessSeeds,
         id: GlobalId,
@@ -385,7 +385,6 @@ impl FreshnessRecording {
         let reflected =
             |f: &Antichain<Timestamp>| f.as_option().and_then(|t| tree.last_reflected(*t));
         if self.recorders.is_none() {
-            let first = reflected(frontier);
             let retained = now_ms.saturating_sub(config.retention_ms);
             let start = match &self.start {
                 Start::Created(as_of, created_ms) => {
@@ -393,28 +392,24 @@ impl FreshnessRecording {
                     let start = reflected.max(*created_ms).max(retained);
                     Some((start, start))
                 }
-                // A first frontier near the epoch, as of a collection whose as-of is `[0]`, would
-                // otherwise charge the time since the epoch as latency.
-                Start::FirstObservation(built_ms) => first.map(|first| {
-                    let start = first.max(*built_ms);
-                    (start, start)
-                }),
-                // Checks `first` before taking the seeds, which are lost if not used.
+                // A first frontier near the epoch, as of a collection whose as-of is `[0]`, records
+                // nothing until it passes `built_ms`, so the time since the epoch is never charged
+                // as latency.
+                Start::FirstObservation(built_ms) => {
+                    let start = (*built_ms).max(retained);
+                    Some((start, start))
+                }
                 Start::Seeded {
                     seeds,
                     id,
                     replica_id,
                     built_ms,
-                } => first.and_then(|first| {
-                    let seeds = seeds.take(*id, *replica_id)?;
+                } => seeds.take(*id, *replica_id).map(|seeds| {
                     // Seeds are taken at the first observation, which can come long after they
                     // were published, for example on a cluster without replicas, so a seed can
                     // be older than the retention.
-                    let start = |seed: Option<u64>| match seed {
-                        Some(seed) => seed.max(retained),
-                        None => first.max(*built_ms),
-                    };
-                    Some((start(seeds.end_to_end), start(seeds.local)))
+                    let start = |seed: Option<u64>| seed.unwrap_or(*built_ms).max(retained);
+                    (start(seeds.end_to_end), start(seeds.local))
                 }),
             };
             let Some((end_to_end, local)) = start else {

@@ -1178,7 +1178,7 @@ impl AppendOnlyWriteTask {
                 if let (Some(per_replica), Some(seeds)) = (per_replica, seeds) {
                     // Without a successful append right after the snapshot, rows may have been
                     // appended after it, and their periods would be counted twice. Recordings
-                    // without seeds start at their first observation.
+                    // without seeds start at the controller's creation, as under `hole`.
                     let seeds = match result {
                         Ok(()) => seeds.finish(),
                         Err(_) => BTreeMap::new(),
