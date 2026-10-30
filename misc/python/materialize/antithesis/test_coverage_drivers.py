@@ -561,6 +561,33 @@ def test_ivm_lost_commit_after_disruption_remains_indeterminate(ivm_write):
     ).fetchone() == ("indeterminate", 4.0)
 
 
+@pytest.mark.parametrize("lost_commit", [False, True])
+def test_ivm_protocol_diagnostics_report_the_actual_commit_outcome(
+    ivm_write,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_commit,
+):
+    from materialize.antithesis import observations
+
+    monkeypatch.setattr(
+        telemetry, "_recorder", telemetry.Recorder("main", "ivm_interleavings")
+    )
+    emitted = Mock()
+    monkeypatch.setattr(observations, "send_event", emitted)
+    ivm_write.clock.commit_error = lost_commit
+    ivm_write.writer.write(before_commit=ivm_write.disrupt, kind="t_insert")
+    events = [
+        call.args[1]
+        for call in emitted.call_args_list
+        if call.args[0] == "antithesis_interleaving"
+    ]
+    assert [event["stage"] for event in events] == ["start", "write", "end"]
+    assert len({event["round"] for event in events}) == 1
+    assert events[0]["mode"] == "held_ivm"
+    assert events[1]["write_id"] == 1
+    assert events[1]["outcome"] == ("indeterminate" if lost_commit else "ok")
+
+
 def test_ivm_regular_writes_keep_the_autocommit_path(ivm_write):
     assert ivm_write.writer.write()
     ivm_write.conn.transaction.assert_not_called()

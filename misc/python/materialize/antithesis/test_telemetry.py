@@ -124,6 +124,71 @@ def test_cluster_identity_cache_retries_unknown_identity_and_keeps_successes(
     assert connection.execute.call_count == 2
 
 
+def test_protocol_diagnostics_correlate_rounds_without_completing_interrupted_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = telemetry.Recorder(
+        "transactions", "parallel_driver_history_interleavings.py"
+    )
+    monkeypatch.setattr(telemetry, "_recorder", recorder)
+    emitted = Mock()
+    monkeypatch.setattr(observations, "send_event", emitted)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        with telemetry.interleaving("held_append", epoch=1) as interrupted:
+            telemetry.interleaving_progress(
+                "disruption", action="delete", outcome="acked"
+            )
+            raise RuntimeError("interrupted")
+    with telemetry.interleaving("race_rmw", epoch=1) as current:
+        telemetry.interleaving_progress(
+            "write", expected_round=interrupted, outcome="ok"
+        )
+        telemetry.interleaving_progress("end", outcome="completed")
+    events = [call.args[1] for call in emitted.call_args_list]
+    assert [event["stage"] for event in events] == [
+        "start",
+        "disruption",
+        "start",
+        "end",
+    ]
+    assert [event["round"] for event in events] == [
+        interrupted,
+        interrupted,
+        current,
+        current,
+    ]
+    assert interrupted != current
+    assert all(event["profile"] == "transactions" for event in events)
+    assert all(event["command"] == recorder.command for event in events)
+    assert recorder.interleaving_round is None
+    assert [event["mode"] for event in events] == [
+        "held_append",
+        "held_append",
+        "race_rmw",
+        "race_rmw",
+    ]
+
+
+def test_protocol_outcomes_keep_copied_metadata_and_restore_the_outer_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = telemetry.Recorder("main", "driver")
+    monkeypatch.setattr(telemetry, "_recorder", recorder)
+    emitted = Mock()
+    monkeypatch.setattr(observations, "send_event", emitted)
+    metadata = {"key": 1}
+    with telemetry.interleaving("outer", subject=metadata) as outer:
+        metadata["key"] = 2
+        with telemetry.interleaving("inner", epoch=2):
+            telemetry.interleaving_progress("end", outcome="completed")
+        telemetry.interleaving_progress("end", outcome="unresolved")
+    events = [call.args[1] for call in emitted.call_args_list]
+    assert events[-2]["mode"] == "inner" and events[-2]["epoch"] == 2
+    assert events[-1]["round"] == outer and events[-1]["mode"] == "outer"
+    assert events[-1]["subject"] == {"key": 1}
+    assert recorder.interleaving_details == {}
+
+
 def test_concurrent_comparisons_are_counted_and_normalized(tmp_path: Path) -> None:
     source = command(
         tmp_path,
