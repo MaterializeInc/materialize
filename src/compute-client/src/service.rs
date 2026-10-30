@@ -11,9 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
-use std::task::{Context, Poll};
 
-use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::lattice::Lattice;
 use mz_expr::row::RowCollection;
@@ -21,7 +19,7 @@ use mz_ore::cast::CastInto;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Timestamp, UpdateCollection};
-use mz_service::client::{GenericClient, Partitionable, PartitionedState};
+use mz_service::client::{Partitionable, PartitionedState};
 use timely::PartialOrder;
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use uuid::Uuid;
@@ -31,25 +29,6 @@ use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse,
     StashedPeekResponse, SubscribeBatch, SubscribeResponse,
 };
-
-/// A client to a compute server.
-pub trait ComputeClient: GenericClient<ComputeCommand, ComputeResponse> {}
-
-impl<C> ComputeClient for C where C: GenericClient<ComputeCommand, ComputeResponse> {}
-
-#[async_trait]
-impl GenericClient<ComputeCommand, ComputeResponse> for Box<dyn ComputeClient> {
-    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
-        (**self).send(cmd).await
-    }
-
-    fn poll_recv(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<Option<ComputeResponse>, anyhow::Error>> {
-        (**self).poll_recv(cx)
-    }
-}
 
 /// Maintained state for partitioned compute clients.
 ///

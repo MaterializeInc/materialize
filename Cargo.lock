@@ -6961,6 +6961,7 @@ dependencies = [
  "mz-rocksdb",
  "mz-row-spine",
  "mz-secrets",
+ "mz-service",
  "mz-storage",
  "mz-storage-client",
  "mz-storage-operators",
@@ -8589,7 +8590,6 @@ name = "mz-service"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "bincode",
  "futures",
  "itertools 0.15.0",
@@ -8910,6 +8910,7 @@ dependencies = [
  "mz-repr",
  "mz-rocksdb",
  "mz-row-spine",
+ "mz-service",
  "mz-sql-parser",
  "mz-sql-server-util",
  "mz-ssh-util",
