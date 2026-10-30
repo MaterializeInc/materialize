@@ -78,17 +78,123 @@ def test_repeated_delivery_of_the_same_evidence_is_idempotent() -> None:
     assert result.covered_occurrences == 1
 
 
-@pytest.mark.parametrize("change_time", [False, True])
-def test_duplicate_evidence_does_not_increase_occurrence_coverage(
-    change_time: bool,
-) -> None:
+def test_duplicate_evidence_does_not_increase_occurrence_coverage() -> None:
     original = occurrence()
     duplicate = copy.deepcopy(original)
-    if change_time:
-        for section in (duplicate["termination"], duplicate["halt"]["termination"]):
-            section["finished_at"] = "2026-10-30T12:30:00+00:00"
     result = classify(prop(2), [original, duplicate])
     assert result.disposition == "unresolved"
+    assert result.covered_occurrences == 1
+
+
+def test_forked_incarnations_can_finish_at_different_times() -> None:
+    original = occurrence()
+    fork = copy.deepcopy(original)
+    for section in (fork["termination"], fork["halt"]["termination"]):
+        section["finished_at"] = "2026-10-30T12:30:00+00:00"
+    result = classify(prop(2), [original, fork])
+    assert result.disposition == "designed"
+    assert result.covered_occurrences == 2
+
+
+def captured(when: str, message: str = DESIGNED) -> dict[str, Any]:
+    record = occurrence(message=message)
+    record["log_capture"] = {"message_at": when}
+    return record
+
+
+def test_forked_incarnations_can_share_a_coarse_finished_timestamp() -> None:
+    records = [
+        captured("2026-10-30T12:00:00.100000001Z"),
+        captured("2026-10-30T12:00:00.100000002Z"),
+    ]
+    result = classify(prop(2), records)
+    assert result.disposition == "designed"
+    assert result.covered_occurrences == 2
+
+
+@pytest.mark.parametrize("unknown_first", [False, True])
+@pytest.mark.parametrize("timestamped", [False, True])
+def test_conflicting_halts_for_the_same_fork_remain_unresolved(
+    unknown_first: bool, timestamped: bool
+) -> None:
+    records = [
+        occurrence(),
+        occurrence(message="an unreviewed halt"),
+    ]
+    if timestamped:
+        for record in records:
+            record["log_capture"] = {"message_at": "2026-10-30T12:00:00.100000001Z"}
+    if unknown_first:
+        records.reverse()
+    result = classify(prop(), records)
+    assert result.disposition == "unresolved"
+    assert result.covered_occurrences == 0
+
+
+@pytest.mark.parametrize(
+    "expected_count,disposition", [(1, "designed"), (2, "unresolved")]
+)
+def test_identical_fork_timestamps_cannot_prove_distinct_occurrences(
+    expected_count: int, disposition: str
+) -> None:
+    original = captured("2026-10-30T12:00:00.100000001Z")
+    result = classify(prop(expected_count), [original, copy.deepcopy(original)])
+    assert result.disposition == disposition
+    assert result.covered_occurrences == 1
+
+
+def test_detail_level_copies_do_not_count_as_distinct_forks() -> None:
+    result = classify(prop(2), [occurrence(), captured("2026-10-30T12:00:00.1Z")])
+    assert result.disposition == "unresolved"
+    assert result.covered_occurrences == 1
+
+
+def test_detail_level_copy_does_not_conflict_with_two_timestamped_forks() -> None:
+    result = classify(
+        prop(2),
+        [
+            occurrence(),
+            captured("2026-10-30T12:00:00.1Z"),
+            captured("2026-10-30T12:00:00.2Z"),
+        ],
+    )
+    assert result.disposition == "designed"
+    assert result.covered_occurrences == 2
+
+
+def test_timestamp_spelling_does_not_create_an_extra_fork() -> None:
+    result = classify(
+        prop(2),
+        [
+            captured("2026-10-30T12:00:00.100000001Z"),
+            captured("2026-10-30T13:00:00.100000001+01:00"),
+        ],
+    )
+    assert result.disposition == "unresolved"
+    assert result.covered_occurrences == 1
+
+
+def test_finished_timestamp_spelling_does_not_create_an_extra_fork() -> None:
+    original = occurrence()
+    equivalent = copy.deepcopy(original)
+    for section in (equivalent["termination"], equivalent["halt"]["termination"]):
+        section["finished_at"] = "2026-10-30T13:00:01+01:00"
+    result = classify(prop(2), [original, equivalent])
+    assert result.disposition == "unresolved"
+    assert result.covered_occurrences == 1
+
+
+@pytest.mark.parametrize("timestamp", [None, "", "not-a-time", "2026-10-30T12:00:00"])
+def test_malformed_fork_timestamp_stays_unresolved(timestamp: Any) -> None:
+    assert classify(prop(), [captured(timestamp)]).disposition == "unresolved"
+
+
+def test_independent_unexpected_halt_survives_a_conflicted_fork() -> None:
+    conflicted = captured("2026-10-30T12:00:00.1Z")
+    conflict = captured("2026-10-30T12:00:00.1Z", "an unreviewed halt")
+    independent = occurrence(2, "another unreviewed halt")
+    result = classify(prop(2), [conflicted, conflict, independent])
+    assert result.disposition == "product"
     assert result.covered_occurrences == 1
 
 
