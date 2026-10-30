@@ -293,7 +293,7 @@ pub const ENABLE_MCP_DEVELOPER_QUERY_TOOL: Config<bool> = Config::new(
 /// asks for 2026-07-28, so modern clients keep falling back to `initialize`.
 pub const ENABLE_MCP_PROTOCOL_2026_07_28: Config<bool> = Config::new(
     "enable_mcp_protocol_2026_07_28",
-    false,
+    true,
     "Whether the MCP endpoints serve the 2026-07-28 protocol revision alongside 2025-11-25. When false, requests are served on the 2025-11-25 protocol only.",
     ParameterScope::Environment,
 );
