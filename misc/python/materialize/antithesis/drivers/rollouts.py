@@ -984,6 +984,7 @@ def execute_kill(
                 uid=p.uid,
                 grace=plan.grace,
                 reason=reason,
+                victim_generation=p.generation,
             )
         ]
         if not deleted:
