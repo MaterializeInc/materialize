@@ -29,7 +29,7 @@ junit-xml==1.9
 junitparser==5.0.3
 jupyterlab==4.6.4
 jupyter-black==0.4.0
-kubernetes==25.3.0
+kubernetes==37.0.1
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==25.0.0
 # NOTE matplotlib 3.10.9 is required for Python 3.10 compatibility
