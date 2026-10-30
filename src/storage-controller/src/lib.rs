@@ -232,6 +232,9 @@ pub struct Controller {
     ///
     /// Always `None` in read-only mode.
     freshness_config: Option<RecorderConfig>,
+    /// The wall-clock time in ms at which this controller was created, see
+    /// [`freshness::recording_after_restart`].
+    boot_ms: u64,
 
     /// Handle to a [StorageCollections].
     storage_collections: Arc<dyn StorageCollections + Send + Sync>,
@@ -2762,6 +2765,7 @@ impl StorageController for Controller {
             wallclock_lag: _,
             wallclock_lag_last_recorded,
             freshness_config,
+            boot_ms,
             storage_collections: _,
             ticker_lookup: _,
             migrated_storage_collections,
@@ -2822,6 +2826,7 @@ impl StorageController for Controller {
             "recorded_replica_frontiers": recorded_replica_frontiers,
             "wallclock_lag_last_recorded": format!("{wallclock_lag_last_recorded:?}"),
             "freshness_config": format!("{freshness_config:?}"),
+            "boot_ms": boot_ms,
             "migrated_storage_collections": migrated_storage_collections,
             "maintenance_scheduled": maintenance_scheduled,
         }))
@@ -2936,7 +2941,8 @@ where
 
         let metrics = StorageControllerMetrics::new(metrics_registry, controller_metrics);
 
-        let now_dt = mz_ore::now::to_datetime(now());
+        let boot_ms = now();
+        let now_dt = mz_ore::now::to_datetime(boot_ms);
 
         let config = StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs());
         let freshness_config = (!read_only)
@@ -2978,6 +2984,7 @@ where
             wallclock_lag,
             wallclock_lag_last_recorded: now_dt,
             freshness_config,
+            boot_ms,
             storage_collections,
             ticker_lookup,
             migrated_storage_collections: BTreeSet::new(),
@@ -3106,7 +3113,7 @@ where
                     &seeds,
                     id,
                     None,
-                    (self.now)(),
+                    self.boot_ms,
                 )
                 .end_to_end_only(),
             );

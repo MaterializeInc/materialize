@@ -683,6 +683,7 @@ impl FreshnessHarness {
             logs,
             metrics,
             now.clone(),
+            T0,
             WallclockLagFn::new(now),
             Arc::new(dyncfg),
             command_rx,
@@ -1451,7 +1452,7 @@ async fn reported_lag_skips_transient_collections() {
 
 /// A collection and a replica that existed before a restart, whose seeds are published after the
 /// first observation. Under `charge` the periods since the seeds are contiguous and complete,
-/// under `hole` the recording starts at the first observation.
+/// under `hole` the recording starts at the controller's creation.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
 async fn restart_policy_charges_outage_or_leaves_hole() {
@@ -1459,10 +1460,15 @@ async fn restart_policy_charges_outage_or_leaves_hole() {
         (T0 + 60_000, T0 + 120_000, 60_000),
         (T0 + 120_000, T0 + 180_000, 60_000),
     ];
-    // The hole recording starts at the first observed frontier, which reflects T0 + 121_000.
-    let hole = vec![(T0 + 121_000, T0 + 180_000, 59_000)];
+    // The arrivals between the creation and the first observed frontier, which reflects
+    // T0 + 121_000, count at that observation.
+    let hole = vec![
+        (T0 + 90_000, T0 + 120_000, 30_000),
+        (T0 + 120_000, T0 + 180_000, 60_000),
+    ];
     for (policy, expected) in [("charge", charged), ("hole", hole)] {
         let mut h = FreshnessHarness::new(true, false);
+        h.instance.boot_ms = T0 + 90_000;
         let mut updates = ConfigUpdates::default();
         updates.add(&WALLCLOCK_FRESHNESS_RESTART_POLICY, policy);
         updates.apply(&h.instance.dyncfg);

@@ -225,6 +225,9 @@ pub(super) struct Instance {
     ///
     /// Refreshed by maintenance, which also drops all recording state while it is `None`.
     freshness_config: Option<RecorderConfig>,
+    /// The wall-clock time in ms at which the compute controller was created, see
+    /// [`freshness::recording_after_restart`].
+    boot_ms: u64,
 
     /// Sender for updates to collection read holds.
     ///
@@ -417,7 +420,7 @@ impl Instance {
             &seeds,
             id,
             replica_id,
-            (self.now)(),
+            self.boot_ms,
         ))
     }
 
@@ -1016,6 +1019,7 @@ impl Instance {
             wallclock_lag: _,
             wallclock_lag_last_recorded,
             freshness_config,
+            boot_ms,
             read_hold_tx: _,
             replica_tx: _,
             replica_rx: _,
@@ -1052,6 +1056,7 @@ impl Instance {
             "copy_tos": copy_tos,
             "wallclock_lag_last_recorded": wallclock_lag_last_recorded,
             "freshness_config": freshness_config,
+            "boot_ms": boot_ms,
         }))
     }
 
@@ -1072,6 +1077,7 @@ impl Instance {
         arranged_logs: Vec<ArrangedLog>,
         metrics: InstanceMetrics,
         now: NowFn,
+        boot_ms: u64,
         wallclock_lag: WallclockLagFn<Timestamp>,
         dyncfg: Arc<ConfigSet>,
         command_rx: mpsc::UnboundedReceiver<Command>,
@@ -1130,6 +1136,7 @@ impl Instance {
             wallclock_lag,
             wallclock_lag_last_recorded: now_dt,
             freshness_config,
+            boot_ms,
             read_hold_tx,
             replica_tx,
             replica_rx,
