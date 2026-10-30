@@ -106,7 +106,9 @@ phase-GET or acknowledged pod-delete interval must fit within the write's
 unresolved interval. The matrix records observed phase, kill role, write
 family, read path, and outcome.
 A phase and a kill can occur at different points of that same interval.
-Dedicated `sometimes` assertions expose witnessed combinations to Antithesis.
+Standalone guidance events expose witnessed combinations to Antithesis.
+Coverage observations and the generated inventory distinguish observed,
+not-yet-observed, and never-evaluated targets without creating product failures.
 
 Raw observations are capped at 4096 events and one hour of history. The
 summary reports pruned events, making missing measurement history visible.
@@ -156,6 +158,48 @@ the CR, waits for the first generation to serve SQL, and emits
 
 ## Instrumentation
 
+### Product findings and harness health
+
+The raw report includes platform checks for command scheduling, instrumentation,
+and other harness health. These are separate from product correctness. A command
+that was not selected or completed during a finite run does not demonstrate a
+product failure. The platform still reports these default properties.
+
+Export all property results and complete harness health, exit-evidence, and
+coverage events across the run's histories, then classify them with:
+
+```shell
+bin/pyactivate -m materialize.antithesis.findings \
+    --properties properties.ndjson --events events.ndjson --output findings.json
+```
+
+The command returns 1 for product violations with assessed harness evidence, 2 for
+inconclusive evidence or harness health failures, and 0 when evaluated checks found
+no product violations. Missing coverage remains in `incomplete_coverage` and does
+not become a product failure. Unknown failed properties remain unresolved.
+Concrete counterexamples remain in `product_candidates` when invalid or missing
+harness evidence prevents product attribution. Without an event export the verdict
+is inconclusive, because harness errors are SDK events rather than product
+assertions. A truncated export or a filter that omits relevant health events
+cannot establish a complete run assessment.
+
+Native halt exits are accepted only when complete, termination-correlated evidence
+explains every reported occurrence using the reviewed product policy. The workload
+emits this evidence as `antithesis_exit_evidence` events when it can capture it.
+An optional `--exit-evidence` JSON file can supply the same occurrence records,
+keyed by native property ID. An unexplained exit remains unresolved.
+Native aborts with potentially matching designed-panic observations remain
+candidates until incident attribution is established. Independent unexpected
+panic assertions retain their product verdict.
+
+Coverage milestones use guidance events and counters rather than failure-producing
+reachability assertions. The image generates `/opt/antithesis/coverage-catalog.json`
+from literal observation callsites so efficiency summaries include targets that
+have not been hit. Dynamically named targets remain explicitly unresolved in that
+inventory. The SDK source catalog continues to include conditional product
+invariants, which report actual counterexamples without requiring a visit to every
+assertion site.
+
 The Antithesis build flavor (`bin/mzimage ... --antithesis`, or
 `CI_ANTITHESIS=1`) builds with sancov coverage flags and the
 `mz-ore/antithesis` feature, which links the Antithesis SDK and reports:
@@ -163,13 +207,15 @@ The Antithesis build flavor (`bin/mzimage ... --antithesis`, or
 - every process panic as the failed property `Materialize process panicked`,
   except panics marked with `mz_ore::antithesis::expect_panic()`;
 - every `halt!` as a per-site `process halted at <file>:<line>` event, plus a
-  verdict from `mz_ore::antithesis::classify_halt`: `Materialize process
-  halted by design` for messages on the reviewed `DESIGNED_HALTS` list, a
-  dedicated failed property for halts of filed bugs, and `Materialize process
+  verdict from `mz_ore::antithesis::classify_halt`: a structured observation
+  for messages on the reviewed `DESIGNED_HALTS` list, a dedicated failed
+  property for halts of filed bugs, and `Materialize process
   halted for an unexpected reason` for everything else;
 - every soft assertion that logs instead of panicking as
   `Materialize soft assertion failed`;
-- assertions placed with `mz_ore::antithesis_{always,sometimes,reachable,unreachable}!`.
+- optional-hit safety assertions placed with `mz_ore::antithesis_always!` and
+  `mz_ore::antithesis_unreachable!`, and standalone coverage observations from
+  `mz_ore::antithesis_{sometimes,reachable}!`.
 
 Without the feature all of these compile to nothing.
 
@@ -194,11 +240,11 @@ dead pod as a Materialize bug:
   eviction and OOM events, and the node conditions. `No Materialize container
   is OOM-killed at its own memory limit` means environmentd, clusterd or
   orchestratord outgrew its own limit while the node had memory: a
-  Materialize finding, with the limit in the details. `No pod is evicted and
-  no process is OOM-killed for lack of node memory` and `The node never
-  reports memory pressure` mean the harness does not fit the VM: fix the
-  sizing, not Materialize. Restarts and failures in the same timeline after
-  one of these are suspect.
+  Materialize finding, with the limit in the details. Node-memory eviction
+  and pressure reports use `workload_harness_error`: they invalidate the
+  harness observations without accusing the product. Missing attribution
+  remains unresolved. Restarts and failures after node pressure need that
+  context when interpreting their cause.
 - The platform's `Peak memory usage` fails above 95% of the VM's memory. Its
   examples list the largest processes, which shows whose growth to look at.
 
