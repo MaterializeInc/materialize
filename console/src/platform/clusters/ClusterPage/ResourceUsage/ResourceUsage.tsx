@@ -56,6 +56,7 @@ import {
   ChangesLane,
   ChangeTooltipContent,
   CpuChart,
+  FittedLegendItem,
   LegendSwatch,
   MemoryChart,
   ReplicaStatusTimeline,
@@ -80,6 +81,7 @@ import {
 import {
   CHART_MARGIN,
   MIN_BAR_SLOT_PX,
+  truncatedLabelProps,
   useStatusStyles,
 } from "./resourceUsageStyles";
 import { ColoredReplica, useResourceUsageData } from "./useResourceUsageData";
@@ -445,8 +447,8 @@ interface ResourceUsageContentProps {
   missingUsage: MissingUsageCause;
   isDdlError: boolean;
   /**
-   * The replica toggles and processes button. In the CPU chart's header, or
-   * above the message explaining why there's no chart.
+   * The replica toggles. In the CPU chart's header, or above the message
+   * explaining why there's no chart.
    */
   cpuHeaderAction?: React.ReactNode;
   isStatusLoading: boolean;
@@ -673,6 +675,9 @@ const ResourceUsageContent = ({
 
 // The legend key that stands for every past replica.
 const PAST_REPLICAS_KEY = "past-replicas";
+// A toggle's square swatch, and the gap between its parts.
+const TOGGLE_SWATCH_PX = 8;
+const TOGGLE_GAP_PX = 4;
 // The most past replicas their toggle's tooltip names before summarizing the
 // rest.
 const PAST_REPLICA_TOOLTIP_LIMIT = 10;
@@ -691,11 +696,14 @@ const ReplicaToggle = forwardRef<ReplicaToggleProps, "button">(
       type="button"
       aria-pressed={isPressed}
       spacing={1}
+      minWidth={0}
       opacity={isPressed ? 1 : 0.5}
       whiteSpace="nowrap"
       {...props}
     >
-      <LegendSwatch color={swatchColor} variant="square" />
+      <Box flexShrink={0}>
+        <LegendSwatch color={swatchColor} variant="square" />
+      </Box>
       {children}
     </HStack>
   ),
@@ -755,25 +763,37 @@ const ReplicaToggles = ({
       listStyleType="none"
     >
       {currentGroups.map((replica) => (
-        <Box as="li" key={replica.id}>
+        <FittedLegendItem
+          key={replica.id}
+          fixedPx={TOGGLE_SWATCH_PX + (replica.size ? 2 : 1) * TOGGLE_GAP_PX}
+          fixedText={replica.size ?? undefined}
+        >
           <ReplicaToggle
             isPressed={visibleKeys.has(replica.id)}
             swatchColor={replica.color}
             onClick={(event) => onToggle(replica.id, event)}
           >
-            <Text textStyle="text-small" color={colors.foreground.primary}>
+            <Text
+              textStyle="text-small"
+              color={colors.foreground.primary}
+              {...truncatedLabelProps}
+            >
               {replica.name}
             </Text>
             {replica.size && (
-              <Text textStyle="text-small" color={colors.foreground.secondary}>
+              <Text
+                textStyle="text-small"
+                color={colors.foreground.secondary}
+                flexShrink={0}
+              >
                 {replica.size}
               </Text>
             )}
           </ReplicaToggle>
-        </Box>
+        </FittedLegendItem>
       ))}
       {pastGroups.length > 0 && (
-        <Box as="li">
+        <FittedLegendItem fixedPx={TOGGLE_SWATCH_PX + TOGGLE_GAP_PX}>
           <Tooltip
             label={<PastReplicaList replicas={pastGroups} />}
             placement="bottom-end"
@@ -786,13 +806,17 @@ const ReplicaToggles = ({
               swatchColor={pastGroups.map(({ color }) => color)}
               onClick={(event) => onToggle(PAST_REPLICAS_KEY, event)}
             >
-              <Text textStyle="text-small" color={colors.foreground.primary}>
+              <Text
+                textStyle="text-small"
+                color={colors.foreground.primary}
+                {...truncatedLabelProps}
+              >
                 +{pastGroups.length} past{" "}
                 {pluralize(pastGroups.length, "replica", "replicas")}
               </Text>
             </ReplicaToggle>
           </Tooltip>
-        </Box>
+        </FittedLegendItem>
       )}
     </Flex>
   );
@@ -958,34 +982,13 @@ export const ResourceUsage = ({
             isStatusError={isStatusError}
             isHydrationError={isHydrationError}
             cpuHeaderAction={
-              (selectedReplicaId === undefined ||
-                processReplicas.length > 0) && (
-                <Flex
-                  flexWrap="wrap"
-                  justifyContent="flex-end"
-                  alignItems="center"
-                  columnGap={4}
-                  rowGap={1}
-                  minWidth={0}
-                >
-                  {selectedReplicaId === undefined && (
-                    <ReplicaToggles
-                      currentGroups={currentGroups}
-                      pastGroups={pastGroups}
-                      visibleKeys={visibleLegendItems}
-                      onToggle={toggleLegendItem}
-                    />
-                  )}
-                  {processReplicas.length > 0 && (
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={() => setIsProcessesOpen(true)}
-                    >
-                      Processes
-                    </Button>
-                  )}
-                </Flex>
+              selectedReplicaId === undefined && (
+                <ReplicaToggles
+                  currentGroups={currentGroups}
+                  pastGroups={pastGroups}
+                  visibleKeys={visibleLegendItems}
+                  onToggle={toggleLegendItem}
+                />
               )
             }
           />
@@ -1003,12 +1006,27 @@ export const ResourceUsage = ({
       borderColor={colors.border.primary}
     >
       <VStack spacing={4} alignItems="stretch">
-        <HStack justifyContent="space-between" spacing={4}>
-          <Text as="h3" textStyle="heading-sm" whiteSpace="nowrap">
-            Resource Usage
-          </Text>
-          {history.isRefreshing && (
-            <Spinner size="sm" data-testid="refreshing-spinner" />
+        <HStack
+          justifyContent="space-between"
+          alignItems="flex-end"
+          spacing={4}
+        >
+          <HStack spacing={4}>
+            <Text as="h3" textStyle="heading-sm" whiteSpace="nowrap">
+              Resource Usage
+            </Text>
+            {history.isRefreshing && (
+              <Spinner size="sm" data-testid="refreshing-spinner" />
+            )}
+          </HStack>
+          {processReplicas.length > 0 && (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => setIsProcessesOpen(true)}
+            >
+              Processes
+            </Button>
           )}
         </HStack>
         {body}

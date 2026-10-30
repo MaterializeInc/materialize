@@ -54,6 +54,7 @@ import {
 import {
   CHART_MARGIN,
   percentChart,
+  truncatedLabelProps,
   useStatusStyles,
 } from "./resourceUsageStyles";
 
@@ -160,6 +161,48 @@ export const LegendSwatch = ({ color, variant }: LegendSwatchProps) => {
   );
 };
 
+// A crowded legend shrinks each label to this many characters, behind an
+// ellipsis, before wrapping onto another line.
+const MIN_LEGEND_LABEL_CHARS = 3;
+
+export interface FittedLegendItemProps {
+  /** The width of everything in the item but its text, in px. */
+  fixedPx: number;
+  /** Text in the item that never shrinks, such as a replica's size. */
+  fixedText?: string;
+  children: React.ReactNode;
+}
+
+/**
+ * A list item as wide as its label. A crowded list shrinks the label to
+ * `MIN_LEGEND_LABEL_CHARS` and an ellipsis before wrapping the item onto
+ * another line. The label is the child with `truncatedLabelProps`.
+ */
+export const FittedLegendItem = ({
+  fixedPx,
+  fixedText = "",
+  children,
+}: FittedLegendItemProps) => (
+  <Flex
+    as="li"
+    textStyle="text-small"
+    // A wrapping line breaks on each item's basis, so a basis of the shrunk
+    // width keeps items on one line until even that doesn't fit. Growing
+    // then gives the room back, up to each item's full width.
+    flex={`1 1 calc(${fixedPx}px + ${MIN_LEGEND_LABEL_CHARS + 1 + fixedText.length}ch)`}
+    maxWidth="max-content"
+    minWidth={0}
+  >
+    {children}
+  </Flex>
+);
+
+// The legend's gap between a swatch and its label.
+const LEGEND_SWATCH_GAP_PX = 6;
+
+const legendSwatchWidthPx = (variant: LegendSwatchProps["variant"]) =>
+  variant === "line" || variant === "dashed" ? 16 : 8;
+
 /** The charted replicas' colors, for a swatch that stands for all of them. */
 const replicaColors = (
   series: ReplicaData[],
@@ -202,7 +245,7 @@ export const ChartHeader = ({
       width="100%"
       pointerEvents="none"
     >
-      <HStack spacing={2} alignItems="baseline" {...headerItem}>
+      <HStack spacing={2} alignItems="baseline" flexShrink={0} {...headerItem}>
         <Text textStyle="text-ui-med">{title}</Text>
         {description && (
           <Text textStyle="text-small" color={colors.foreground.secondary}>
@@ -212,6 +255,9 @@ export const ChartHeader = ({
       </HStack>
       {(legend || action) && (
         <Flex
+          // A zero basis keeps the legend beside the title, so a crowded
+          // legend shrinks and wraps its own items instead.
+          flex="1 1 0"
           flexWrap="wrap"
           justifyContent="flex-end"
           alignItems="center"
@@ -224,21 +270,30 @@ export const ChartHeader = ({
             <Flex
               as="ul"
               flexWrap="wrap"
+              justifyContent="flex-end"
               columnGap={4}
               rowGap={1}
+              minWidth={0}
               listStyleType="none"
             >
               {legend.map(({ label, color, variant }) => (
-                <HStack as="li" key={label} spacing={1.5}>
-                  <LegendSwatch color={color} variant={variant} />
-                  <Text
-                    textStyle="text-small"
-                    color={colors.foreground.secondary}
-                    whiteSpace="nowrap"
-                  >
-                    {label}
-                  </Text>
-                </HStack>
+                <FittedLegendItem
+                  key={label}
+                  fixedPx={legendSwatchWidthPx(variant) + LEGEND_SWATCH_GAP_PX}
+                >
+                  <HStack spacing={1.5} minWidth={0}>
+                    <Box flexShrink={0}>
+                      <LegendSwatch color={color} variant={variant} />
+                    </Box>
+                    <Text
+                      textStyle="text-small"
+                      color={colors.foreground.secondary}
+                      {...truncatedLabelProps}
+                    >
+                      {label}
+                    </Text>
+                  </HStack>
+                </FittedLegendItem>
               ))}
             </Flex>
           )}

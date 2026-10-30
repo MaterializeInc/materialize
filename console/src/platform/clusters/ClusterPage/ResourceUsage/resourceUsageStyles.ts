@@ -69,6 +69,14 @@ export const percentChart = (peak: number, width: number) => {
   };
 };
 
+/** A one-line label that ends in an ellipsis when it doesn't fit. */
+export const truncatedLabelProps = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+} as const;
+
 /**
  * Wide windows merge buckets until a full bucket spans at least this many
  * pixels per bar charted at one time.
