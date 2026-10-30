@@ -53,7 +53,32 @@ macro_rules! __antithesis_assert {
     }};
 }
 
-/// Asserts that `$cond` holds every time this is evaluated.
+#[doc(hidden)]
+#[cfg(feature = "antithesis")]
+#[macro_export]
+macro_rules! __antithesis_observe {
+    ($cond:expr, $message:expr, $details:expr) => {{
+        let observed = $cond;
+        $crate::antithesis::observed(observed, $message, $details);
+        $crate::antithesis::sdk::guidance_helper!(
+            $crate::antithesis::sdk::assert::guidance::GuidanceType::Boolean,
+            ::std::concat!("workload coverage: ", $message),
+            true,
+            $crate::antithesis::sdk::serde_json::json!({"observed": observed})
+        );
+    }};
+}
+
+#[doc(hidden)]
+#[cfg(not(feature = "antithesis"))]
+#[macro_export]
+macro_rules! __antithesis_observe {
+    ($cond:expr, $message:expr, $details:expr) => {{
+        let _ = ($cond, $message, $details);
+    }};
+}
+
+/// Asserts that `$cond` holds whenever this site is evaluated.
 ///
 /// Without the `antithesis` feature this only evaluates its arguments.
 /// `$message` must be a string literal unique to the call site: Antithesis
@@ -62,25 +87,25 @@ macro_rules! __antithesis_assert {
 #[macro_export]
 macro_rules! antithesis_always {
     ($cond:expr, $message:expr, $details:expr) => {
-        $crate::__antithesis_assert!(assert_always, $cond, $message, $details)
+        $crate::__antithesis_assert!(assert_always_or_unreachable, $cond, $message, $details)
     };
 }
 
-/// Asserts that `$cond` holds at least once during a test run. See
+/// Records coverage and guides exploration toward `$cond` being true. See
 /// [`antithesis_always`] for the argument contract.
 #[macro_export]
 macro_rules! antithesis_sometimes {
     ($cond:expr, $message:expr, $details:expr) => {
-        $crate::__antithesis_assert!(assert_sometimes, $cond, $message, $details)
+        $crate::__antithesis_observe!($cond, $message, $details)
     };
 }
 
-/// Asserts that this point is reached at least once during a test run. See
+/// Records that this coverage milestone was reached. See
 /// [`antithesis_always`] for the argument contract.
 #[macro_export]
 macro_rules! antithesis_reachable {
     ($message:expr, $details:expr) => {
-        $crate::__antithesis_assert!(assert_reachable, $message, $details)
+        $crate::__antithesis_observe!(true, $message, $details)
     };
 }
 
@@ -103,14 +128,35 @@ pub fn expect_panic() {
     PANIC_EXPECTED.with(|expected| expected.set(true));
 }
 
-/// Initializes the SDK and registers the assertion catalog.
-///
-/// Call once at the top of `main`. Assertions registered here are reported as
-/// unreached if a run never evaluates them, which is what makes a missing
-/// `Sometimes` visible.
+/// Initializes the SDK and registers product assertions and exploration guidance.
 pub fn init() {
     #[cfg(feature = "antithesis")]
     antithesis_sdk::antithesis_init();
+}
+
+/// Records a coverage observation without defining a product failure condition.
+#[doc(hidden)]
+#[cfg(feature = "antithesis")]
+pub fn observed<S: serde::Serialize + ?Sized>(condition: bool, message: &str, details: &S) {
+    match antithesis_sdk::serde_json::to_value(details) {
+        Ok(details) => antithesis_sdk::lifecycle::send_event(
+            "workload_coverage",
+            &antithesis_sdk::serde_json::json!({
+                "message": message,
+                "observed": condition,
+                "details": details,
+            }),
+        ),
+        Err(error) => antithesis_sdk::lifecycle::send_event(
+            "workload_harness_error",
+            &antithesis_sdk::serde_json::json!({
+                "valid": false,
+                "component": "native coverage",
+                "message": "coverage details could not be serialized",
+                "details": {"target": message, "error": error.to_string()},
+            }),
+        ),
+    }
 }
 
 /// Reports a panic that is about to take down the process.
@@ -125,7 +171,7 @@ pub fn panicked(location: &str, message: &str) {
         }
         let details = Details { location, message };
         if expected {
-            antithesis_sdk::assert_reachable!("Materialize process panicked by design", &details);
+            crate::antithesis_reachable!("Materialize process panicked by design", &details);
         } else {
             antithesis_sdk::assert_unreachable!("Materialize process panicked", &details);
         }
@@ -283,7 +329,7 @@ pub fn halted(location: &str, message: &str) {
         };
         match class {
             HaltClass::Designed(_) => {
-                antithesis_sdk::assert_reachable!("Materialize process halted by design", &details)
+                crate::antithesis_reachable!("Materialize process halted by design", &details)
             }
             HaltClass::KnownBug(KnownHaltBug::AsOfNotReadable) => {
                 antithesis_sdk::assert_unreachable!(
