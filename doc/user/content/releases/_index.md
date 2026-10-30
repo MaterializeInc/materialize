@@ -20,6 +20,74 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.48.2
+*Released to Materialize Cloud: 2026-10-29 (v26.48.0)* <br>
+*Released to Materialize Self-Managed: 2026-10-30* <br>
+
+### Improved hydration times and memory efficiency for upsert sources {#v26.48-upsert-hydration}
+
+<red>*Materialize Cloud only*</red>
+
+Upsert sources that spill to disk now hydrate faster, with significantly lower lower heap (memory + disk) usage.
+
+![Hydration time and peak memory plus disk usage for an upsert source, old versus new: hydration time drops from 206.1 minutes to 107.9–113.3 minutes, and peak memory plus disk usage drops from 542 GiB to 183–208 GiB](/images/releases/v2648_upsert_hydration.png)
+
+Materialize now uses its own buffer pool to keep hot data in memory and serve sequential work from disk. Previously, this was left to the operating system's swap. In addition, we now apply LZ4 compression to in-progress data while building an upsert source. See our [blog post](https://materialize.com/blog/materialize-out-of-core/) for details on how it works.
+
+We ran our performance tests on Materialize Cloud. We setup a Kafka topic, with a single partition, of about 1.5B messages (roughly 100 GB), holding 956M distinct keys, with records around 100 bytes. We ingested this data into Materialize, using a Kafka Upsert source, on an M.1-1.5xlarge cluster. This cluster size has 98 GB of memory, and 586 GB of Disk. We measured hydration times as how long it took from `CREATE SOURCE` until every key is indexed, and the source is keeping up with the topic. We ran the test four times, and observed that hydration times dropped from 206 minutes to between 108 and 113 minutes. Peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
+
+In real world usage, we observed that hydration times improved by 49%-88%. Real world memory usage improved by 13-64%.
+
+Note that the improved hydration times are most impactful for workloads that spill heavily to disk. Workloads that are fully resident in memory won't see a speedup.
+
+This change has been rolled out to all Materialize Cloud environments and applies to all existing and new clusters. It will be enabled by default in Materialize Self-Managed in the coming weeks.
+
+### Improved Freshness page in the Console {#v26.48-freshness-page}
+
+<red>*Materialize Cloud only*</red>
+
+The Console's new **Freshness** page lets you track aggregate freshness across your environment. Filter by cluster, time range, and object type to see p90, p99, p99.9, and pMax freshness across the objects. If you're not meeting your freshness target, use the page to find the lagging objects, and start to debug why. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
+
+![Freshness page filtered to the materialized views on one cluster over 6 hours, showing p90, p99, p99.9, and pMAX lag, a lag over time chart with a 2-second threshold line, and a table of the objects that exceeded it](/images/releases/v2648_freshness.png)
+
+### Kafka sink headers are generally available {#v26.48-kafka-sink-headers-ga}
+
+The `HEADERS` option for Kafka sinks and the `materialize-sink-id` header, both previously in private preview, are now generally available. `HEADERS` adds the entries of a `map[text => text]` or `map[text => bytea]` column as headers on every message the sink produces. Every Kafka sink now also attaches a `materialize-sink-id` header carrying the sink's ID, so downstream consumers can correlate a data topic with its progress topic without querying Materialize. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
+
+To see how a downstream loader can use the `materialize-sink-id` header to expose only fully committed timestamps, see [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/).
+
+### Safely drop upstream `NOT NULL` constraints in your MySQL sources {#v26.48-exclude-not-null-constraints}
+Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a MySQL source, as it already did for PostgreSQL sources. Every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
+
+```mzsql
+CREATE TABLE orders
+  FROM SOURCE mysql_source (REFERENCE mydb.orders)
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
+```
+
+For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/mysql/) for MySQL and the guide on [excluding nullability constraints](/ingest-data/mysql/source-versioning/#excluding-nullability-constraints).
+
+### Improvements {#v26.48-improvements}
+- **New cluster details page on Self-Managed**: The [redesigned cluster details page](#v26.47-cluster-details-page) is now available on Materialize Self-Managed. The page charts each replica's CPU, memory, and disk use against its limits, marks when a replica was hydrating or ran out of memory, and ranks the objects using the most memory. To try it, open a cluster and select **Show the new cluster details page** in the breadcrumb bar.
+- **Fewer Kafka clients on replicas running many sources**: A worker now creates a Kafka reader consumer only once it is responsible for a partition of the source's topic, instead of one per source per worker, which on a four-worker replica with 11 mostly single-partition sources cut the replica's Kafka clients from 55 to 24. Each consumer runs a thread per broker, so the old count was what drove the CPU throttling and degraded freshness seen with a few hundred sources on one replica.
+- **Time zone data updated to 2026e**: Materialize now ships IANA time zone data 2026e, in which `America/Winnipeg`, `Canada/Central`, `America/Rainy_River`, and `America/Inuvik` stop falling back on 2026-11-01 and keep their summer offsets year-round, and `EST5EDT`, `CST6CDT`, `MST7MDT`, and `PST8PDT` return to US federal rules.
+- **External autoscaling for the connection balancer**: The `Materialize` resource gains a `balancerdExternallyScaled` field, and `Balancer` an `externallyScaled` field, that stop the Kubernetes operator from reasserting the balancerd Deployment's replica count on every reconcile, so a HorizontalPodAutoscaler can own it. `balancerdReplicas` then only seeds the count when the Deployment is first created.
+
+### Guides {#v26.48-guides}
+- [Fine tune for sub-second freshness](/transform-data/freshness/subsecond-freshness/)
+- [Troubleshooting Iceberg sinks](/export-data/iceberg-troubleshooting/)
+- [Iceberg sinks with S3-compatible storage and REST catalogs](/export-data/iceberg-rest/)
+- [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/)
+
+### Bug Fixes {#v26.48-bug-fixes}
+- Fixed PostgreSQL sources where a table whose ingestion had ended in an error (an upstream `TRUNCATE`, an incompatible schema change, or a dropped upstream table) resumed from its last position after a restart and silently skipped every upstream change made while it was in error, leaving the table with incorrect contents (<red>*Materialize Self-Managed only*</red>).
+- Fixed PostgreSQL sources where an upstream `TRUNCATE` applied while a newly added table was still snapshotting left that table serving stale rows without reporting an error (<red>*Materialize Self-Managed only*</red>).
+- Fixed a security vulnerability in the `rustls-webpki` dependency (RUSTSEC-2026-0382), where certificate verification could accept certificate paths containing distrusted emSign intermediates whose private keys are publicly known (<red>*Materialize Self-Managed only*</red>).
+- Fixed a security vulnerability in the `ctutils` dependency (RUSTSEC-2026-0385), where operations intended to run in constant time could branch on secret values, potentially leaking them through side channels (<red>*Materialize Self-Managed only*</red>).
+- Fixed a PostgreSQL source's replica growing until it was killed for running out of memory when upstream schema validation kept failing while the replication stream was silent. The validator retried without pausing and filled an unbounded error queue that is drained only on a keepalive. It now reports each failure once.
+- Fixed `ALTER CONNECTION` panicking when run on an Iceberg catalog connection, or on the parent S3 or GCP connection that an S3 Tables or BigLake catalog uses.
+- Fixed the `dbt-materialize` cluster and schema ownership checks that guard a blue/green deployment never raising anything, because they subtracted the set of objects under deployment the wrong way around. They now also treat membership in the owning role as ownership, which is how Materialize itself decides whether a role may run the swap that `deploy_promote` performs.
+
 ## v26.47.1
 *Released to Materialize Cloud: 2026-10-29* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
