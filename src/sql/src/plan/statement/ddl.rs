@@ -2920,18 +2920,43 @@ pub fn plan_create_materialized_view(
                     expr.arity(),
                 );
             }
-            // Install assignment casts to the declared types, as `INSERT` does.
+            // Only implicit casts, so a narrowing cast (`int8` to `int2`, `numeric` to
+            // `numeric(p, s)`) has to be written in the query instead of hiding in the
+            // declared types.
             let qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
             let target_types = declared.typ().column_types.iter().map(|c| &c.scalar_type);
-            expr = query::cast_relation(&qcx, CastContext::Assignment, expr, target_types)
-                .map_err(|e| {
+            let source_types = qcx.relation_type(&expr).column_types;
+            expr = query::cast_relation(&qcx, CastContext::Implicit, expr, target_types).map_err(
+                |e| {
                     sql_err!(
                         "column {} is of type {} but expression is of type {}",
                         declared.get_name(e.column).quoted(),
                         qcx.humanize_sql_scalar_type(&e.target_type, false),
                         qcx.humanize_sql_scalar_type(&e.source_type, false),
                     )
-                })?;
+                },
+            )?;
+            // NOTE: Implicit casts between types that differ only in modifiers, for
+            // example `numeric` to `numeric(10, 1)` or `varchar(10)` to `varchar(5)`,
+            // plan as the identity (see `typeconv::get_cast`) and would leave values
+            // that violate the declared modifier.
+            let cast_types = qcx.relation_type(&expr).column_types;
+            for (column, (cast, target)) in cast_types
+                .iter()
+                .zip_eq(declared.typ().column_types.iter())
+                .enumerate()
+            {
+                if cast.scalar_type != target.scalar_type {
+                    // Humanized types omit some modifiers, e.g. the scale of `numeric`, so
+                    // both types can print the same.
+                    sql_bail!(
+                        "column {} is of type {} but expression is of type {} with different type modifiers",
+                        declared.get_name(column).quoted(),
+                        qcx.humanize_sql_scalar_type(&target.scalar_type, false),
+                        qcx.humanize_sql_scalar_type(&source_types[column].scalar_type, false),
+                    );
+                }
+            }
             desc = declared.clone();
             declared_desc = Some(declared);
         }

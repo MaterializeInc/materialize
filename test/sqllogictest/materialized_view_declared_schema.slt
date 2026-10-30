@@ -34,9 +34,9 @@ ALTER SYSTEM SET enable_materialized_view_column_definitions = true
 COMPLETE 0
 
 # Declared types, nullability and names replace the inferred ones. The query is
-# cast to the declared types with assignment casts.
+# cast to the declared types with implicit casts.
 statement ok
-CREATE MATERIALIZED VIEW mv (x int8 NOT NULL, y text, z numeric(10, 1)) AS SELECT a, b, c FROM t
+CREATE MATERIALIZED VIEW mv (x int8 NOT NULL, y text, z numeric(10, 1)) AS SELECT a, b, c::numeric(10, 1) FROM t
 
 query TTT rowsort
 SELECT name, nullable, type FROM (SHOW COLUMNS FROM mv)
@@ -94,6 +94,22 @@ CREATE MATERIALIZED VIEW mv_err (a int4) AS SELECT a, b FROM t
 statement error column "a" is of type timestamp with time zone but expression is of type integer
 CREATE MATERIALIZED VIEW mv_err (a timestamptz) AS SELECT a FROM t
 
+# Narrowing casts are not implicit and have to be written in the query.
+statement error column "a" is of type smallint but expression is of type bigint
+CREATE MATERIALIZED VIEW mv_err (a int2) AS SELECT a::int8 FROM t
+
+statement error column "c" is of type numeric but expression is of type numeric with different type modifiers
+CREATE MATERIALIZED VIEW mv_err (c numeric(10, 1)) AS SELECT c FROM t
+
+statement error column "b" is of type varchar\(1\) but expression is of type varchar\(10\) with different type modifiers
+CREATE MATERIALIZED VIEW mv_err (b varchar(1)) AS SELECT b::varchar(10) FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv_narrow (a int2) AS SELECT a::int8::int2 FROM t
+
+statement ok
+DROP MATERIALIZED VIEW mv_narrow
+
 statement error column "a" specified more than once
 CREATE MATERIALIZED VIEW mv_err (a int4, a text) AS SELECT a, b FROM t
 
@@ -130,10 +146,10 @@ statement error replacement must declare its schema because its target does
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a::int8 AS x, b AS y, c::numeric(10, 1) AS z FROM t
 
 statement error replacement schema differs from target schema
-CREATE REPLACEMENT MATERIALIZED VIEW rp (x int8, y text, z numeric(10, 1)) FOR mv AS SELECT a, b, c FROM t
+CREATE REPLACEMENT MATERIALIZED VIEW rp (x int8, y text, z numeric(10, 1)) FOR mv AS SELECT a, b, c::numeric(10, 1) FROM t
 
 statement ok
-CREATE REPLACEMENT MATERIALIZED VIEW rp (x int8 NOT NULL, y text, z numeric(10, 1)) FOR mv AS SELECT a + 1, b, c FROM t
+CREATE REPLACEMENT MATERIALIZED VIEW rp (x int8 NOT NULL, y text, z numeric(10, 1)) FOR mv AS SELECT a + 1, b, c::numeric(10, 1) FROM t
 
 statement ok
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
