@@ -113,6 +113,7 @@ The query output is cast to the declared types with implicit casts (`CastContext
 The cast is planned into the HIR expression with the existing `query::cast_relation`, so it is part of the dataflow and appears in `EXPLAIN`.
 A column that cannot be implicitly cast is a planning error naming the column and both types, and the user writes the cast in the query.
 Implicit casts widen, so the narrowing casts that fail at runtime, `int8` to `int2` or `float8` to `numeric`, and the rounding cast from `numeric` to `numeric(p, s)` all have to be written in the query.
+Implicit casts between types that differ only in modifiers, such as `varchar(10)` to `varchar(5)`, do not change values, so planning also requires the cast query's types to equal the declared types, and a mismatch in modifiers needs an explicit cast.
 Two implicit casts can still fail or lose precision: `text` to `varchar(n)` or `char(n)` errors on values longer than `n`, and `int8` or `numeric` to `float8` rounds.
 A cast that fails at runtime produces an error in the materialized view, like any other evaluation error.
 Assignment casts, which `INSERT INTO t SELECT ...` applies, would accept the narrowing casts silently.
