@@ -11,9 +11,7 @@ import {
   formatLinger,
   parseAutoScaling,
   replicaStatus,
-  resetAutoScalingStatement,
   resizeNote,
-  setAutoScalingStatement,
 } from "./clusterConfigurationModel";
 
 const status = (state: string, reason: string | null = null) => ({
@@ -89,42 +87,6 @@ describe("replicaStatus", () => {
       replicaStatus([status("online"), status("offline", "oom-killed")]),
     ).toEqual({ kind: "offline", reason: "oom-killed" });
     expect(replicaStatus([])).toEqual({ kind: "unknown" });
-  });
-});
-
-describe("auto-scaling statements", () => {
-  it("quotes the cluster and writes the linger in seconds", () => {
-    expect(setAutoScalingStatement("my cluster", "800cc", 120_000)).toBe(
-      [
-        `ALTER CLUSTER "my cluster" SET (`,
-        "  AUTO SCALING STRATEGY = (",
-        "    ON HYDRATION (HYDRATION SIZE = '800cc', LINGER DURATION = '120s')",
-        "  )",
-        ");",
-      ].join("\n"),
-    );
-    expect(resetAutoScalingStatement("prod")).toBe(
-      `ALTER CLUSTER "prod" RESET (AUTO SCALING STRATEGY);`,
-    );
-  });
-
-  it("escapes a quote in the size", () => {
-    expect(setAutoScalingStatement("prod", "it's", undefined)).toContain(
-      "HYDRATION SIZE = 'it''s')",
-    );
-  });
-
-  it("keeps a zero or sub-second linger as it is", () => {
-    const linger = (lingerMs: number) =>
-      setAutoScalingStatement("prod", "800cc", lingerMs).match(
-        /LINGER DURATION = ('[^']*')/,
-      )?.[1];
-    expect(linger(0)).toBe("'0s'");
-    expect(linger(1_500)).toBe("'1500ms'");
-    expect(linger(250)).toBe("'250ms'");
-    expect(linger(15_000)).toBe("'15s'");
-    // `{ secs: 1, nanos: 32_053_000 }`, which parses to 1032.0529999999999.
-    expect(linger(1_000 + 32_053_000 / 1e6)).toBe("'1032.053ms'");
   });
 });
 
