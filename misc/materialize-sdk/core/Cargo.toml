@@ -1,0 +1,15 @@
+[package]
+name = "materialize-sdk-core"
+description = "The protocol core of the Materialize SDK: SUBSCRIBE decoding, batch release, statements, checkpoints, and error classification, with no I/O."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
