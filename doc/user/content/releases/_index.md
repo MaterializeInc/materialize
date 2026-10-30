@@ -82,7 +82,6 @@ For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/mysql/)
 ### Bug Fixes {#v26.48-bug-fixes}
 - Fixed a PostgreSQL source's replica growing until it was killed for running out of memory when upstream schema validation kept failing while the replication stream was silent. The validator retried without pausing and filled an unbounded error queue that is drained only on a keepalive. It now reports each failure once.
 - Fixed `ALTER CONNECTION` panicking when run on an Iceberg catalog connection, or on the parent S3 or GCP connection that an S3 Tables or BigLake catalog uses.
-- Fixed connection credentials supplied as literal strings rather than wrapped in a `SECRET` being written verbatim to the logs whenever a connection was dumped, which happens on every `ALTER CONNECTION` compatibility failure and on every sink a cluster reconciles. Affected credentials include OAuth credentials, AWS session tokens, usernames, access key IDs, and TLS certificates.
 - Fixed the `dbt-materialize` cluster and schema ownership checks that guard a blue/green deployment never raising anything, because they subtracted the set of objects under deployment the wrong way around. They now also treat membership in the owning role as ownership, which is how Materialize itself decides whether a role may run the swap that `deploy_promote` performs.
 
 ## v26.47.1
