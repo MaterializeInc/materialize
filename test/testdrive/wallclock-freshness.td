@@ -45,8 +45,8 @@ ALTER SYSTEM SET wallclock_freshness_virtual_arrival_interval = '1ms'
 
 > CREATE INDEX lg_join_idx IN CLUSTER freshness_compute ON lg_join (counter)
 
-# Every period after the first holds exactly one period of arrivals, in both
-# measures. Waits until two full periods have closed.
+# Every period after the first holds exactly one period of arrivals, in every
+# recorded measure. Waits until two full periods have closed.
 > SELECT o.name, p.measure, count(*) >= 2, bool_and(p.arrivals = 60000)
   FROM (
     SELECT object_id, measure, period_start, period_end, sum(count) AS arrivals
@@ -63,13 +63,10 @@ ALTER SYSTEM SET wallclock_freshness_virtual_arrival_interval = '1ms'
   GROUP BY o.name, p.measure
   HAVING count(*) >= 2
 lg      end_to_end  true  true
-lg      local       true  true
 lg_idx  end_to_end  true  true
 lg_idx  local       true  true
 lg_tbl  end_to_end  true  true
-lg_tbl  local       true  true
 tbl     end_to_end  true  true
-tbl     local       true  true
 
 # Every period after the first, which starts at the object's creation, is one
 # minute long and aligned to the minute.
@@ -90,7 +87,7 @@ lg_idx  00:01:00  true
 lg_tbl  00:01:00  true
 tbl     00:01:00  true
 
-# Per period, both measures count the same arrivals of each object.
+# Per period, both measures of the index count the same arrivals.
 > SELECT o.name, bool_and(e.arrivals IS NOT DISTINCT FROM l.arrivals)
   FROM (
     SELECT object_id, period_start, sum(count) AS arrivals
@@ -105,12 +102,9 @@ tbl     00:01:00  true
     GROUP BY object_id, period_start
   ) l ON e.object_id = l.object_id AND e.period_start = l.period_start
   JOIN mz_objects o ON o.id = coalesce(e.object_id, l.object_id)
-  WHERE o.name IN ('tbl', 'lg', 'lg_tbl', 'lg_idx')
+  WHERE o.name = 'lg_idx'
   GROUP BY o.name
-lg      true
 lg_idx  true
-lg_tbl  true
-tbl     true
 
 # Only the object with two inputs records skew, and per period it counts the
 # same arrivals as the end-to-end latency.
@@ -132,32 +126,15 @@ tbl     true
   GROUP BY o.name
 lg_join_idx  true
 
-# Storage-owned collections have no inputs, so their local delay is their
-# end-to-end latency, bucket by bucket.
-> SELECT o.name, d.measure, d.period_start, d.bucket, d.count
-  FROM (
-    (
-      SELECT object_id, 'end_to_end' AS measure, period_start, bucket, count
-      FROM mz_internal.mz_wallclock_global_freshness_histogram
-      WHERE measure = 'end_to_end'
-      EXCEPT ALL
-      SELECT object_id, 'end_to_end', period_start, bucket, count
-      FROM mz_internal.mz_wallclock_global_freshness_histogram
-      WHERE measure = 'local'
-    )
-    UNION ALL
-    (
-      SELECT object_id, 'local', period_start, bucket, count
-      FROM mz_internal.mz_wallclock_global_freshness_histogram
-      WHERE measure = 'local'
-      EXCEPT ALL
-      SELECT object_id, 'local', period_start, bucket, count
-      FROM mz_internal.mz_wallclock_global_freshness_histogram
-      WHERE measure = 'end_to_end'
-    )
-  ) d
-  JOIN mz_objects o ON o.id = d.object_id
+# Storage-owned collections have no inputs, so their local delay would repeat
+# their end-to-end latency, and they record only the latter.
+> SELECT DISTINCT o.name, h.measure
+  FROM mz_internal.mz_wallclock_global_freshness_histogram h
+  JOIN mz_objects o ON o.id = h.object_id
   WHERE o.name IN ('tbl', 'lg', 'lg_tbl')
+lg      end_to_end
+lg_tbl  end_to_end
+tbl     end_to_end
 
 # The index only adds the time it takes to reflect its input, well below the
 # 1 s tick that dominates its end-to-end latency. The first period includes
