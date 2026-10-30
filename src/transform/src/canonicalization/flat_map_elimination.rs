@@ -17,7 +17,7 @@
 
 use itertools::Itertools;
 use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, MirScalarExpr, TableFunc};
+use mz_expr::{Id, MapFilterProject, MirRelationExpr, MirScalarExpr, TableFunc};
 use mz_repr::{Diff, RowArena};
 
 use crate::TransformCtx;
@@ -63,6 +63,18 @@ impl FlatMapElimination {
                 }
             }
         }
+        // Strength-reduce a `FlatMap eval_relation(..)` whose housed relation is a
+        // row-preserving, single-valued `Map`/`Project` over the placeholder input
+        // row back to a plain `Map`/`Project` on the input. Such an `EvalRelation`
+        // emits exactly one output row per input row, so it needs neither a table
+        // function nor (downstream) an arrangement + join input.
+        if let MirRelationExpr::FlatMap {
+            func: TableFunc::EvalRelation { .. },
+            ..
+        } = relation
+        {
+            Self::eliminate_eval_relation(relation);
+        }
         // For all other table functions (and Wraps that are not covered by the above), check
         // whether all arguments are literals (with no errors), in which case we'll evaluate the
         // table function and check how many output rows it has, and maybe turn the FlatMap into
@@ -99,5 +111,107 @@ impl FlatMapElimination {
                 }
             }
         }
+    }
+
+    /// If `relation` is a `FlatMap eval_relation(..)` whose housed relation is a
+    /// row-preserving, single-valued `Map`/`Project` over the placeholder input
+    /// row, rewrite it in place to a plain `Map`/`Project` on `input`.
+    ///
+    /// `eval_relation` evaluates the housed relation per input row, binding the
+    /// `FlatMap` argument `exprs` to the placeholder `Get(Id::Local(input_id))`,
+    /// and the `FlatMap` emits `input_row ++ housed_output` for each input row
+    /// (see `mz_expr::relation::eval`). If the housed relation is exactly a
+    /// `MapFilterProject` (no `Filter`, since predicates can drop rows) rooted at
+    /// `Get(input_id)`, then it produces exactly one row per input row, computed
+    /// as a deterministic function of the placeholder columns. We can therefore
+    /// inline it: substitute each placeholder column reference with the
+    /// corresponding `exprs` entry and apply the resulting `Map`/`Project`
+    /// directly to `input`.
+    fn eliminate_eval_relation(relation: &mut MirRelationExpr) {
+        let MirRelationExpr::FlatMap { func, input, exprs } = relation else {
+            return;
+        };
+        let TableFunc::EvalRelation {
+            relation: housed,
+            input_id,
+            ..
+        } = func
+        else {
+            return;
+        };
+
+        // Extract the longest `Map`/`Filter`/`Project` chain at the root of the
+        // housed relation. We require the residual leaf to be exactly the
+        // placeholder `Get(Id::Local(input_id))`; anything else (a `Constant`, a
+        // `Reduce`, a `TopK`, ...) could change cardinality and is left alone.
+        let (mfp, leaf) = MapFilterProject::extract_from_expression(housed);
+        match leaf {
+            MirRelationExpr::Get {
+                id: Id::Local(id), ..
+            } if id == input_id => {}
+            _ => return,
+        }
+        // A `Filter` can drop rows, breaking the one-row-out-per-row-in property.
+        if !mfp.predicates.is_empty() {
+            return;
+        }
+        // The placeholder's arity must match the number of `FlatMap` arguments:
+        // each placeholder column `c` is bound to `exprs[c]`.
+        let key_arity = exprs.len();
+        if mfp.input_arity != key_arity {
+            return;
+        }
+
+        let input_arity = input.arity();
+        let MapFilterProject {
+            expressions,
+            projection,
+            ..
+        } = mfp;
+
+        // Translate a column reference in the housed relation's column space into
+        // the rewritten relation's column space, which is `input`'s columns
+        // (`0..input_arity`) followed by the housed `expressions`
+        // (`input_arity..`):
+        //
+        // * a placeholder column `c < key_arity` is the value bound to the
+        //   placeholder, i.e. `exprs[c]`;
+        // * a housed-expression column `key_arity + i` lives at `input_arity + i`.
+        let translate = |c: usize| -> MirScalarExpr {
+            if c < key_arity {
+                exprs[c].clone()
+            } else {
+                MirScalarExpr::column(input_arity + (c - key_arity))
+            }
+        };
+        // Substitute placeholder/expression column references inside a housed
+        // scalar expression so it reads from the rewritten column space.
+        let substitute = |mut e: MirScalarExpr| -> MirScalarExpr {
+            e.visit_mut_post(&mut |node: &mut MirScalarExpr| {
+                if let MirScalarExpr::Column(c, _name) = node {
+                    *node = translate(*c);
+                }
+            });
+            e
+        };
+
+        // The housed `expressions` become `Map` scalars appended to `input`.
+        let map_scalars: Vec<MirScalarExpr> = expressions.into_iter().map(substitute).collect();
+        // The `eval_relation` output columns are the housed `projection`; append
+        // them after `input`'s columns so the result mirrors the `FlatMap`'s
+        // `input_row ++ housed_output` row shape.
+        let output_scalars: Vec<MirScalarExpr> = projection.into_iter().map(&translate).collect();
+
+        let output_count = output_scalars.len();
+        let mut new = input.take_dangerous().map(map_scalars);
+        let mapped_arity = new.arity();
+        // Append the output columns, then project away the intermediate housed
+        // expressions, keeping `input`'s columns followed by the output columns.
+        new = new.map(output_scalars).project(
+            (0..input_arity)
+                .chain(mapped_arity..(mapped_arity + output_count))
+                .collect::<Vec<_>>(),
+        );
+        *relation = new;
     }
 }
