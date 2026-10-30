@@ -17,7 +17,13 @@ from materialize.antithesis.ivm_model import WriteOp
 from materialize.antithesis.observations import sometimes
 
 
-def history_checked(ops: list[sz.Op], report: sz.Report, read_ids: set[int]) -> None:
+def history_checked(
+    ops: list[sz.Op],
+    report: sz.Report,
+    read_ids: set[int],
+    *,
+    cluster_id: str | None = None,
+) -> None:
     if not telemetry.enabled():
         return
     reads = [op for op in ops if op.op_id in read_ids and op.acked]
@@ -31,7 +37,7 @@ def history_checked(ops: list[sz.Op], report: sz.Report, read_ids: set[int]) -> 
     events = telemetry.events_between(
         min(op.invoke for op in writes), max(op.invoke for op in reads)
     )
-    cases = coverage_model.history_cases(ops, events, read_ids)
+    cases = coverage_model.history_cases(ops, events, read_ids, cluster_id=cluster_id)
     telemetry.record_coverage(cases)
     details = {"combinations": sorted(cases)[:20], "reads": len(reads)}
     sometimes(
@@ -67,14 +73,20 @@ def history_checked(ops: list[sz.Op], report: sz.Report, read_ids: set[int]) -> 
 
 
 def ivm_checked(
-    writes: list[WriteOp], observed_by: dict[int, tuple[float, float]], passed: bool
+    writes: list[WriteOp],
+    observed_by: dict[int, tuple[float, float]],
+    passed: bool,
+    *,
+    cluster_id: str | None = None,
 ) -> None:
     if not telemetry.enabled() or not passed or not observed_by or not writes:
         return
     events = telemetry.events_between(
         min(w.invoke_rt for w in writes), max(t[0] for t in observed_by.values())
     )
-    cases = coverage_model.stream_cases(writes, observed_by, events)
+    cases = coverage_model.stream_cases(
+        writes, observed_by, events, cluster_id=cluster_id
+    )
     telemetry.record_coverage(cases)
     details = {"combinations": sorted(cases)[:20], "writes": len(observed_by)}
     sometimes(
