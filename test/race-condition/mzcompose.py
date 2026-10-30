@@ -465,18 +465,31 @@ class LoadGeneratorSource(Object):
         self.tick_interval = rng.choice(["1ms", "10ms", "100ms", "1s", "10s"])
 
     def create(self) -> str:
-        return f"> CREATE SOURCE {self.name} IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER (TICK INTERVAL '{self.tick_interval}')"
+        return dedent(f"""
+            > BEGIN
+            > CREATE SOURCE {self.name}_source
+              IN CLUSTER quickstart
+              FROM LOAD GENERATOR COUNTER (TICK INTERVAL '{self.tick_interval}')
+            > CREATE TABLE {self.name} FROM SOURCE {self.name}_source
+            > COMMIT""")
 
     def destroy(self) -> str:
-        return f"> DROP SOURCE {self.name} CASCADE"
+        return dedent(f"""
+            > DROP TABLE {self.name} CASCADE
+            > DROP SOURCE IF EXISTS {self.name}_source CASCADE""")
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
             lambda: dedent(f"""
+                > DROP TABLE IF EXISTS {self.name}_tmp_table
+                > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
+                > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
+"""),
+            lambda: dedent(f"""
                 > DROP SOURCE IF EXISTS {self.name}_tmp_source
-                > ALTER SOURCE {self.name} RENAME TO {self.name}_tmp_source
-                > ALTER SOURCE {self.name}_tmp_source RENAME TO {self.name}
+                > ALTER SOURCE {self.name}_source RENAME TO {self.name}_tmp_source
+                > ALTER SOURCE {self.name}_tmp_source RENAME TO {self.name}_source
 """),
             # Bounce cluster to force source restart (database-issues#8698)
             lambda: dedent("""

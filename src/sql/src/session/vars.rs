@@ -96,7 +96,7 @@ use uncased::UncasedStr;
 use crate::ast::Ident;
 use crate::session::user::User;
 
-pub(crate) mod constraints;
+pub mod constraints;
 pub(crate) mod definitions;
 pub(crate) mod errors;
 pub(crate) mod polyfill;
@@ -1463,6 +1463,11 @@ impl SystemVars {
         self.iter().filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
     }
 
+    /// Returns the [`VarDefinition`] of the named configuration parameter, if it exists.
+    pub fn definition(&self, name: &str) -> Option<&VarDefinition> {
+        self.vars.get(UncasedStr::new(name)).map(|v| &v.definition)
+    }
+
     /// Returns an iterator over the configuration parameters that can be overriden per-Session.
     pub fn iter_session(&self) -> impl Iterator<Item = &dyn Var> {
         self.vars
@@ -2459,7 +2464,7 @@ impl SystemVars {
     }
 
     /// Returns whether the named variable is a dyncfg configuration parameter.
-    fn is_dyncfg_var(&self, name: &str) -> bool {
+    pub fn is_dyncfg_var(&self, name: &str) -> bool {
         self.dyncfgs.entries().any(|e| name == e.name())
     }
 }

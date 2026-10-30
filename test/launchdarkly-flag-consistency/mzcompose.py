@@ -249,7 +249,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
-    enable_columnar_accumulable_diff
     enable_columnar_merge_batcher
     enable_compute_correction_v2_spill
     enable_compute_half_join2
@@ -476,7 +475,6 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     constraint_based_timestamp_selection
     enable_0dt_deployment
     enable_aws_msk_iam_auth
-    enable_compute_temporal_bucketing
     enable_consolidate_after_union_negate
     enable_continual_task_builtins
     enable_continual_task_transform

@@ -2167,6 +2167,15 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         # Drop the index on the base table. This will change the plan of `mv1` the
         # next time it is replanned, which should cause reconciliation to replace
         # it, as well as the other dataflows that depend on `mv1`.
+        #
+        # NOTE: This deliberately orphans `idx`'s dataflow. `mv` and `idx1` read
+        # from `idx`, so their plans only change on replan if `idx` goes away
+        # while they survive, which `enable_drop_in_use_index` allows.
+        c.sql(
+            "ALTER SYSTEM SET enable_drop_in_use_index = true",
+            port=6877,
+            user="mz_system",
+        )
         c.sql("DROP INDEX idx")
 
         # Restart environmentd to trigger a replanning and reconciliation.
@@ -2858,8 +2867,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
         # Check that collection metrics update when collections are dropped.
         c.sql("""
-            DROP INDEX idx;
             DROP MATERIALIZED VIEW mv;
+            DROP INDEX idx;
             """)
 
         time.sleep(2)
@@ -3014,8 +3023,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     # Drop the dataflows.
     c.sql("""
-        DROP INDEX idx;
         DROP MATERIALIZED VIEW mv;
+        DROP INDEX idx;
         """)
 
     # Wait for the controller to asynchronously drop the dataflows and update
@@ -8373,7 +8382,7 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
                 "enable_eager_delta_joins": "false",
             },
             environment_extra=[
-                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,info",
+                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,mz_adapter::catalog::state=debug,info",
             ],
         ),
     ):
@@ -8391,12 +8400,18 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
             user="mz_system",
         )
 
+        # `CREATE VIEW v` comes after `CREATE OR REPLACE VIEW`, whose cache
+        # invalidation is not awaited. The cache applies writes in order, so
+        # once `v`'s awaited write returns, the invalidation is durable too.
         c.sql("""
             SET cluster = test_cache;
 
             CREATE TABLE t (a int);
             CREATE DEFAULT INDEX ON t;
             CREATE MATERIALIZED VIEW mv AS SELECT a + 1 AS b FROM t;
+            CREATE VIEW v_replaced AS SELECT a FROM t;
+            CREATE OR REPLACE VIEW v_replaced AS SELECT a + 1 AS a FROM t;
+            CREATE VIEW v AS SELECT a * 2 AS c FROM t WHERE a > 0;
 
             SELECT * FROM t;
             SELECT * FROM mv;
@@ -8421,6 +8436,23 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
             if re.search(r"global expression cache hit for User\(\d+\)", line)
         ]
         assert len(cache_hits) == 2, cache_hits
+
+        # A view has only a local expression. Only the restarted boot can hit its
+        # durable entry, so count nothing before that boot's startup marker.
+        view_id = c.sql_query("SELECT id FROM mz_views WHERE name = 'v'")[0][0]
+        restarted_boot = logs[logs.rindex("startup: envd init: beginning") :]
+        view_hit = f"local expression cache hit for User({view_id.removeprefix('u')})"
+        assert view_hit in restarted_boot, f"no '{view_hit}' after the restart"
+
+        # `CREATE OR REPLACE VIEW` invalidates the replaced view's entry right
+        # away, so the restarted boot finds no entry of a dropped item to remove.
+        reconciled = [
+            line
+            for line in restarted_boot.splitlines()
+            if "reconciled the expression cache" in line
+        ]
+        assert reconciled, "no expression cache reconciliation after the restart"
+        assert "removed_dropped_item=0" in reconciled[-1], reconciled[-1]
 
 
 def workflow_test_github_11219(c: Composition) -> None:

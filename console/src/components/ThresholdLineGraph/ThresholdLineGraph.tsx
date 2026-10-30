@@ -18,25 +18,26 @@ import { Line, LinePath } from "@visx/shape";
 import { max } from "d3";
 import React from "react";
 
+import { MultilineXTick } from "~/components/graphComponents";
 import { useDrag } from "~/hooks/useDrag";
 import { MaterializeTheme } from "~/theme";
-import {
-  buildXYGraphLayoutProps,
-  niceTicks,
-  relativeTimeTickFormat,
-} from "~/utils/graph";
+import { DATE_FORMAT, formatDate } from "~/utils/dateFormat";
+import { buildXYGraphLayoutProps, niceTicks } from "~/utils/graph";
 
 import {
   assignLineColors,
   isBreaching,
   quantizeThreshold,
+  timeAxisTicks,
 } from "./thresholdLineGraphHelpers";
 import { ThresholdLineSeries } from "./types";
 
-const MARGIN = { top: 20, right: 8, bottom: 36, left: 52 };
+// The bottom fits two-line x-axis labels: the time, then the date.
+const MARGIN = { top: 20, right: 8, bottom: 44, left: 52 };
 const DEFAULT_HEIGHT_PX = 240;
-const X_TICK_COUNT = 4;
 const Y_TICK_COUNT = 4;
+/** The least room above the highest reading, as a multiple of it. */
+const Y_HEADROOM = 1.1;
 
 /** Axis top when there is nothing to scale to. */
 const FALLBACK_DOMAIN_TOP = 1;
@@ -125,26 +126,24 @@ const ThresholdLineGraphInner = <Datum,>(
   const step = props.thresholdStep ?? DEFAULT_THRESHOLD_STEP;
   const minThreshold = props.minThreshold ?? 0;
 
+  const plotClipId = React.useId();
   const [isDragging, setIsDragging] = React.useState(false);
   const [isFocused, setIsFocused] = React.useState(false);
 
   const yTicks = React.useMemo(() => {
     const drawnMax =
       max(data, (d) => max(lines, (line) => line.yAccessor(d) ?? 0)) ?? 0;
+    // Padded before rounding: a peak already on a round value would otherwise
+    // become the axis top and draw along the graph's top border.
     return niceTicks(
       0,
-      drawnMax > 0 ? drawnMax : FALLBACK_DOMAIN_TOP,
+      drawnMax > 0 ? drawnMax * Y_HEADROOM : FALLBACK_DOMAIN_TOP,
       Y_TICK_COUNT,
     );
   }, [data, lines]);
 
   const domainTop = yTicks[yTicks.length - 1];
   const maxThreshold = props.maxThreshold ?? domainTop;
-
-  const xTicks = React.useMemo(
-    () => [...niceTicks(props.startTime, props.endTime, X_TICK_COUNT)],
-    [props.startTime, props.endTime],
-  );
 
   const {
     xScaleRange,
@@ -172,6 +171,8 @@ const ThresholdLineGraphInner = <Datum,>(
       }),
     [props.startTime, props.endTime, xScaleRange],
   );
+
+  const xTicks = React.useMemo(() => timeAxisTicks(xScale), [xScale]);
 
   const yScale = React.useMemo(
     () =>
@@ -301,12 +302,11 @@ const ThresholdLineGraphInner = <Datum,>(
         strokeWidth={2}
         tickStroke={colors.border.primary}
         tickValues={xTicks}
+        tickComponent={MultilineXTick}
+        // Matches the connector graphs: 24-hour local time and zone over the
+        // date, so a 24 hour range that crosses midnight stays unambiguous.
         tickFormat={(value) =>
-          relativeTimeTickFormat(
-            Number(value),
-            new Date(props.startTime),
-            new Date(props.endTime),
-          )
+          `${formatDate(Number(value), "HH:mm z")}\n${formatDate(Number(value), DATE_FORMAT)}`
         }
         tickLabelProps={() => ({
           dy: 4,
@@ -317,23 +317,32 @@ const ThresholdLineGraphInner = <Datum,>(
         })}
       />
 
-      {orderedLines.map((line) => {
-        const highlighted = isHighlighted(line);
-        return (
-          <LinePath
-            key={line.key}
-            data={data}
-            stroke={
-              highlighted ? lineColors.get(line.key) : colors.border.secondary
-            }
-            strokeWidth={highlighted ? 2 : 1}
-            strokeLinejoin="round"
-            defined={(d) => line.yAccessor(d) !== null}
-            x={(d) => xScale(xAccessor(d))}
-            y={(d) => yScale(line.yAccessor(d) ?? 0)}
-          />
-        );
-      })}
+      <defs>
+        <clipPath id={plotClipId}>
+          <rect x={plot.x} y={plot.y} width={plot.width} height={plot.height} />
+        </clipPath>
+      </defs>
+      {/* A point can fall outside the time range, such as a bin that starts
+          before it, and would otherwise draw over the axes. */}
+      <g clipPath={`url(#${plotClipId})`}>
+        {orderedLines.map((line) => {
+          const highlighted = isHighlighted(line);
+          return (
+            <LinePath
+              key={line.key}
+              data={data}
+              stroke={
+                highlighted ? lineColors.get(line.key) : colors.border.secondary
+              }
+              strokeWidth={highlighted ? 2 : 1}
+              strokeLinejoin="round"
+              defined={(d) => line.yAccessor(d) !== null}
+              x={(d) => xScale(xAccessor(d))}
+              y={(d) => yScale(line.yAccessor(d) ?? 0)}
+            />
+          );
+        })}
+      </g>
 
       <Line
         from={{ x: plot.x, y: thresholdY }}

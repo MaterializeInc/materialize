@@ -519,7 +519,7 @@
     "mz_acl_item_privileges": {"display":"mz_aclitem_privileges","sqlfunc_decl":"#[sqlfunc(sqlname = \"mz_aclitem_privileges\")] fn mz_acl_item_privileges(mz_acl_item: MzAclItem) -> String","body_fingerprint":"91a9b4820e69b0f5"},
     "mz_format_privileges": {"display":"mz_format_privileges","sqlfunc_decl":"#[sqlfunc(sqlname = \"mz_format_privileges\")] fn mz_format_privileges(privileges: String) -> Result<ArrayRustType<String>, EvalError>","body_fingerprint":"ee0db2dd7968468c"},
     "mz_row_size": {"display":"mz_row_size","sqlfunc_decl":"#[sqlfunc] fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError>","body_fingerprint":"47c1839a8b383663"},
-    "mz_type_name": {"display":"mz_type_name","sqlfunc_decl":"#[sqlfunc] fn mz_type_name(oid: Oid) -> Option<String>","body_fingerprint":"783f0ac69e525f59"},
+    "mz_type_name": {"display":"mz_type_name","sqlfunc_decl":"#[sqlfunc] fn mz_type_name(oid: Oid) -> Option<String>","body_fingerprint":"b46a50dc0a34aa28"},
     "mz_validate_privileges": {"display":"mz_validate_privileges","sqlfunc_decl":"#[sqlfunc(sqlname = \"mz_validate_privileges\")] fn mz_validate_privileges(privileges: String) -> Result<bool, EvalError>","body_fingerprint":"24f14aa3d6084878"},
     "mz_validate_role_privilege": {"display":"mz_validate_role_privilege","sqlfunc_decl":"#[sqlfunc(sqlname = \"mz_validate_role_privilege\")] fn mz_validate_role_privilege(privilege: String) -> Result<bool, EvalError>","body_fingerprint":"dfa620601fa04e4a"},
     "neg_float32": {"display":"-","sqlfunc_decl":"#[sqlfunc(sqlname = \"-\", preserves_uniqueness = false, inverse = NegFloat32, is_monotone = true)] fn neg_float32(a: f32) -> f32","body_fingerprint":"eed9462be0936615"},

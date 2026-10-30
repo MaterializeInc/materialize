@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { CATALOG_SERVER_CLUSTER, SEARCH_PATH } from "~/api/materialize";
+import { SEARCH_PATH } from "~/api/materialize";
 import {
   executeSqlHttp,
-  getMaterializeClient,
+  explainOnCatalogServer,
   QUICKSTART_CLUSTER,
 } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
@@ -71,17 +71,9 @@ describe("buildReplicaHeapLimitsQuery", () => {
   });
 
   it("is a fast-path index lookup on the catalog server", async () => {
-    const client = await getMaterializeClient();
-    await client.query(`SET cluster = ${CATALOG_SERVER_CLUSTER}`);
-    const { sql, parameters } = buildReplicaHeapLimitsQuery({
-      replicaIds: ["u1", "u2"],
-    }).compile();
-
-    const {
-      rows: [plan],
-    } = await client.query(`EXPLAIN ${sql}`, [...parameters]);
-
-    const explained = String(Object.values(plan)[0]);
+    const explained = await explainOnCatalogServer(
+      buildReplicaHeapLimitsQuery({ replicaIds: ["u1", "u2"] }).compile(),
+    );
     expect(explained).toContain("Explained Query (fast path)");
     expect(explained).toContain(
       "Index Lookup on mz_internal.mz_cluster_replica_metrics",

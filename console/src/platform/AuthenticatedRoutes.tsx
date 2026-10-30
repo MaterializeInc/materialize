@@ -111,11 +111,6 @@ const EnvironmentNotReadyRoutesWrapper = () => {
   );
 };
 
-const NavigatePreservingSearch = ({ to }: { to: string }) => {
-  const { search } = useLocation();
-  return <Navigate to={{ pathname: to, search }} replace />;
-};
-
 export const AuthenticatedRoutes = () => {
   const flags = useFlags();
   const isLicenseKeysEnabled = flags["license-keys-3833"];
@@ -136,11 +131,6 @@ export const AuthenticatedRoutes = () => {
         <Route
           path="/access"
           element={<Navigate to="/access/app-passwords" replace />}
-        />
-        {/* Create a redirect, preserving the search params for the `mz` CLI */}
-        <Route
-          path="/access/cli"
-          element={<NavigatePreservingSearch to="/access/app-passwords/cli" />}
         />
         <Route
           path="/access/app-passwords/*"

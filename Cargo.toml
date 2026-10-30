@@ -114,6 +114,7 @@ members = [
     "src/storage-controller",
     "src/storage-operators",
     "src/storage-types",
+    "src/system-parameter-catalog",
     "src/testdrive",
     "src/timely-util",
     "src/timestamp-oracle",
@@ -245,6 +246,7 @@ default-members = [
     "src/storage-controller",
     "src/storage-operators",
     "src/storage-types",
+    "src/system-parameter-catalog",
     "src/testdrive",
     "src/timely-util",
     "src/timestamp-oracle",
@@ -364,7 +366,7 @@ enum-iterator = "2.1.0"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 fallible-iterator = "0.2.0"
-fancy-regex = "0.19.2"
+fancy-regex = "0.20.0"
 flate2 = "1.1.9"
 frontegg = { version = "0.9.0", default-features = false }
 futures = "0.3.32"
@@ -428,7 +430,7 @@ mappings = "0.7.2"
 md-5 = "0.11.0"
 mime = "0.3.16"
 murmur2 = "0.1.0"
-mysql_async = { version = "0.37.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
+mysql_async = { version = "0.37.1", default-features = false, features = ["aws-lc-rs", "binlog", "minimal", "rustls-tls", "tls12", "tracing"] }
 mysql_common = { version = "0.37.3", default-features = false, features = ["chrono"] }
 # Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
 # 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
@@ -462,7 +464,7 @@ postgres-openssl = "0.5.2"
 postgres-protocol = "0.6.12"
 postgres-replication = "0.6.7"
 postgres-types = { version = "0.2.11", features = ["with-chrono-0_4", "with-uuid-1"] }
-postgres_array = "0.11.0"
+postgres_array = "0.11.1"
 pprof = "0.15.0"
 pprof_util = "0.8.2"
 predicates = "3.1.4"
@@ -501,9 +503,10 @@ rlimit = "0.11.0"
 rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = "0.23.46"
+rustls-native-certs = "0.8.3"
 rustls-platform-verifier = "0.7.0"
 rpassword = "7.5.1"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 ryu = "1.0.23"
 schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
@@ -666,13 +669,12 @@ debug-assertions = true
 # version of Materialize.
 [patch.crates-io]
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
 
 # Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
 # `mz_changes` branch carries current IANA data only, no code changes. To bump
@@ -681,11 +683,15 @@ postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array"
 chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "1463cc380e9a2d842b9ed12cbe5952f983dc2b4a" }
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
-serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git", rev = "a84c6b71825efaffb332c0d19f18c2bdf9ee7b40" }
 
-# Waiting on https://github.com/edenhill/librdkafka/pull/4051.
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "20a1646031763eb813cb5184343f3e10c5918d32" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "20a1646031763eb813cb5184343f3e10c5918d32" }
+
+# v0.37.1 plus the upstream rustls verifier fixes for `skip_domain_validation`
+# and `accept_invalid_certs` (blackbeam/mysql_async#408, #409). Drop this patch
+# once a release contains both.
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "934c3cf3885c129b7150fd5787e48ada3908397a" }
 
 # Need to upstream a few PRs related to test builders.
 #

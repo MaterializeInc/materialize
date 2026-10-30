@@ -24,11 +24,13 @@ import {
 } from "~/api/mocks/materializeHandlers";
 import { getStore } from "~/jotai";
 import { createProviderWrapper } from "~/test/utils";
+import { parseDbVersion } from "~/version/api";
 
 import server from "../api/mocks/server";
 import {
   EnabledEnvironment,
   EnvironmentError,
+  environmentMeetsVersion,
   EnvironmentsWithHealth,
   environmentsWithHealth,
   fetchEnvironmentHealth,
@@ -57,6 +59,29 @@ const enabledStillBootingEnvironment: EnabledEnvironment = {
 describe("store/environments", () => {
   beforeEach(() => {
     server.use(buildCloudRegionsReponse());
+  });
+
+  describe("environmentMeetsVersion", () => {
+    const atVersion = (version: string): EnabledEnvironment => ({
+      ...enabledEnvironment,
+      status: {
+        health: "healthy",
+        version: parseDbVersion(`v${version} (abc123)`),
+        errors: [],
+      },
+    });
+
+    it.each([
+      ["null without an environment", undefined, null],
+      ["null for an environment that is not healthy", enabledEnvironment, null],
+      ["false below the version", atVersion("26.48.5"), false],
+      ["true for a dev build of the version", atVersion("26.49.0-dev.0"), true],
+      ["true above the version", atVersion("26.50.0"), true],
+    ])("is %s", (_name, environment, expected) => {
+      expect(environmentMeetsVersion(environment, "26.49.0-dev")).toBe(
+        expected,
+      );
+    });
   });
 
   describe("fetchEnvironmentHealth", () => {

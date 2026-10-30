@@ -27,7 +27,6 @@ import { TooltipColorSwatch } from "~/components/graphComponents";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import TextLink from "~/components/TextLink";
 import { generateRainbowPalette } from "~/components/ThresholdLineGraph/thresholdLineGraphHelpers";
-import { useFlags } from "~/hooks/useFlags";
 import { useLastDefined } from "~/hooks/useLastDefined";
 import { InfoIcon } from "~/icons";
 import {
@@ -41,11 +40,7 @@ import {
   useReplicaHeapLimits,
   useReplicaSizeAllocations,
 } from "~/platform/clusters/queries";
-import {
-  absoluteMaintainedObjectPath,
-  useBuildWorkflowGraphPath,
-} from "~/platform/routeHelpers";
-import { useEnvironmentGate, useRegionSlug } from "~/store/environments";
+import { useEnvironmentGate } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { formatMemoryUsage } from "~/utils/format";
 
@@ -57,6 +52,7 @@ import {
 } from "./memoryByObjectModel";
 import { PERCENT_TICKS } from "./ResourceUsage/resourceUsageStyles";
 import { useLiveLargestObjects } from "./useLiveLargestObjects";
+import { useObjectLink } from "./useObjectLink";
 
 export interface MemoryByObjectProps {
   cluster: Cluster;
@@ -341,12 +337,7 @@ const MemoryByObjectCard = ({
   isStale?: boolean;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  // The maintained objects page only has routes while its flag is on.
-  const hasMaintainedObjectsPage = Boolean(
-    useFlags()["maintained-objects-ui-50"],
-  );
-  const regionSlug = useRegionSlug();
-  const workflowGraphPath = useBuildWorkflowGraphPath();
+  const objectLink = useObjectLink();
 
   const hasHeapLimit = heapLimit !== null;
   if (objects.length === 0) {
@@ -373,22 +364,13 @@ const MemoryByObjectCard = ({
     ),
   );
   const segments: Segment[] = objects.map((object, index) => {
-    const { id, name, databaseName, schemaName, type } = object;
     return {
-      key: id ?? object.dataflowId ?? String(index),
-      label: name ?? object.dataflowName ?? "-",
+      key: object.id ?? object.dataflowId ?? String(index),
+      label: object.name ?? object.dataflowName ?? "-",
       usage: formatMemoryUsage(hasHeapLimit ? object : { size: object.size }),
       color: palette[index],
       widthPercent: widths[index],
-      path:
-        object.isOrphanedDataflow || !id || !name || !schemaName || !type
-          ? undefined
-          : hasMaintainedObjectsPage
-            ? absoluteMaintainedObjectPath(regionSlug, id)
-            : workflowGraphPath({
-                databaseObject: { id, name, databaseName, schemaName },
-                type,
-              }),
+      path: object.isOrphanedDataflow ? undefined : objectLink(object),
     };
   });
   if (other) {

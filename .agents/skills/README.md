@@ -31,6 +31,7 @@ explicitly with `$<skill-name>` in Codex and `/<skill-name>` in Claude Code.
 | **mz-benchmark** | Adding or debugging benchmark scenarios | Three measurement frameworks: Feature Benchmark (micro-benchmarks), Scalability Test (throughput under concurrency), Parallel Benchmark (sustained latency) |
 | **mz-profile** | Something is slow or using too much memory | CPU profiling with samply, memory profiling with heaptrack, binary size analysis |
 | **mz-query-tracing** | Understanding where time goes in SQL execution | Distributed tracing with OpenTelemetry/Tempo to get a latency breakdown of any SQL statement |
+| **mz-console-scalability** | Measuring what Console load costs `mz_catalog_server` | Runs the Console scalability suite against a replayed captured workload and reports catalog_server CPU per phase and per viewer |
 
 ## Specialized Test Frameworks
 

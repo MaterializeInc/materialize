@@ -25,6 +25,7 @@ import { useParentSize } from "@visx/responsive";
 import { scaleTime } from "@visx/scale";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import React from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import { SizeAllocation } from "~/api/materialize/cluster/replicaProcessMetrics";
@@ -51,7 +52,9 @@ import { capitalizeSentence, pluralize } from "~/util";
 import { formatBytesShort, formatPercentage } from "~/utils/format";
 import { buildXYGraphLayoutProps } from "~/utils/graph";
 
-import { ProcessesDrawer, ProcessReplica } from "./ProcessesDrawer";
+import { opensProcesses, workersTabLink } from "../tabLinks";
+import { useSizedReplicas } from "../useSizedReplicas";
+import { ProcessesDrawer } from "./ProcessesDrawer";
 import {
   ChangesLane,
   ChangeTooltipContent,
@@ -811,6 +814,8 @@ export const ResourceUsage = ({
   selectedReplicaId,
 }: ResourceUsageProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const location = useLocation();
+  const navigate = useNavigate();
   const {
     history,
     replicasById,
@@ -886,7 +891,18 @@ export const ResourceUsage = ({
     ),
   );
 
-  const [isProcessesOpen, setIsProcessesOpen] = React.useState(false);
+  const [isProcessesOpen, setIsProcessesOpen] = React.useState(() =>
+    opensProcesses(location.state),
+  );
+  const processesButtonRef = React.useRef<HTMLButtonElement>(null);
+  const closeProcesses = () => {
+    setIsProcessesOpen(false);
+    // The state that opened the drawer would otherwise reopen it on back or
+    // reload.
+    if (opensProcesses(location.state)) {
+      navigate({ search: location.search }, { replace: true, state: null });
+    }
+  };
   // Past replicas' sizes too, for their tooltip readings.
   const { data: allocationsBySize } = useReplicaSizeAllocations(
     [
@@ -895,17 +911,19 @@ export const ResourceUsage = ({
       ),
     ].sort(),
   );
+  const { replicas: sizedReplicas } = useSizedReplicas(cluster);
+  // A selected replica narrows the drawer and the Workers link to it.
+  const shownReplicas =
+    selectedReplicaId === undefined
+      ? sizedReplicas
+      : sizedReplicas.filter(({ id }) => id === selectedReplicaId);
   // Only a size that runs more than one process has processes to compare.
-  const processReplicas = cluster.replicas.flatMap(
-    ({ id, name, size }): ProcessReplica[] => {
-      if (selectedReplicaId !== undefined && id !== selectedReplicaId) {
-        return [];
-      }
-      const allocation = size ? allocationsBySize?.get(size) : undefined;
-      return size && allocation && allocation.processes > 1
-        ? [{ id, name, size, allocation }]
-        : [];
-    },
+  const processReplicas = shownReplicas.filter(
+    ({ allocation }) => allocation.processes > 1,
+  );
+  const hasWorkers = shownReplicas.length > 0;
+  const workersLink = workersTabLink(
+    cluster.replicas.find(({ id }) => id === selectedReplicaId)?.name,
   );
 
   let body: React.ReactNode;
@@ -950,14 +968,29 @@ export const ResourceUsage = ({
             isStatusError={isStatusError}
             isHydrationError={isHydrationError}
             cpuHeaderAction={
-              processReplicas.length > 0 && (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setIsProcessesOpen(true)}
-                >
-                  Processes
-                </Button>
+              (processReplicas.length > 0 || hasWorkers) && (
+                <HStack spacing={2}>
+                  {processReplicas.length > 0 && (
+                    <Button
+                      ref={processesButtonRef}
+                      size="xs"
+                      variant="outline"
+                      onClick={() => setIsProcessesOpen(true)}
+                    >
+                      Processes
+                    </Button>
+                  )}
+                  {hasWorkers && (
+                    <Button
+                      as={Link}
+                      to={workersLink}
+                      size="xs"
+                      variant="outline"
+                    >
+                      Workers
+                    </Button>
+                  )}
+                </HStack>
               )
             }
           />
@@ -1012,9 +1045,12 @@ export const ResourceUsage = ({
       </VStack>
       <ProcessesDrawer
         isOpen={isProcessesOpen}
-        onClose={() => setIsProcessesOpen(false)}
+        onClose={closeProcesses}
+        // Opened from a link, the drawer has no opener to return focus to.
+        finalFocusRef={processesButtonRef}
         replicas={processReplicas}
         timePeriodMinutes={timePeriodMinutes}
+        workersLink={workersTabLink}
       />
     </Card>
   );

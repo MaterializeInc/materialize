@@ -799,7 +799,8 @@
         CREDENTIAL = SECRET <secret_name>,
         OAUTH2 SERVER URL = '<token_url>',
         SCOPE = '<scope>',
-        ACCESS DELEGATION = 'vended-credentials'
+        ACCESS DELEGATION = 'vended-credentials',
+        STORAGE PROVIDER = '<provider>'
     );
   syntax_elements:
     - name: "`<connection_name>`"
@@ -834,6 +835,10 @@
 
         Required for catalogs that serve their token endpoint elsewhere, or
         behind an auth gateway that will not serve an unauthenticated exchange.
+
+        The URL must resolve to a public address. Materialize sends the
+        credential to it, so it rejects a URL that resolves to a private address
+        when the connection is created.
     - name: "`SCOPE`"
       description: |
         *Value:* `text`. Optional.
@@ -849,6 +854,18 @@
         as the only way to reach it.
 
         See [Storage access delegation](/sql/create-connection/#iceberg-catalog-access-delegation).
+    - name: "`STORAGE PROVIDER`"
+      description: |
+        *Value:* `'s3'`, `'gcs'`, or `'adls'`. Optional. Defaults to `'s3'`.
+
+        The object store holding the catalog's data files: Amazon S3 or an
+        S3-compatible store, Google Cloud Storage, or Azure Data Lake Storage
+        Gen2. The catalog reports where data files live but not what kind of
+        store they are in, so Materialize uses this to pick its storage client.
+
+        Not supported with `CATALOG TYPE = 's3tablesrest'`, which always stores
+        data in S3. A connection that authenticates with a GCP connection always
+        uses `'gcs'`, and rejects any other value.
 
 - name: "example-iceberg-catalog-connection"
   description: |

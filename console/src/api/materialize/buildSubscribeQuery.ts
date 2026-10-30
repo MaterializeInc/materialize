@@ -12,6 +12,11 @@ import { Compilable, RawBuilder, sql } from "kysely";
 export interface SubscribeQueryOptions {
   upsertKey: string | string[];
   asOfAtLeast?: Date;
+  /**
+   * Ends the subscribe once its frontier passes this timestamp, in
+   * milliseconds since the epoch, whether or not the client is still reading.
+   */
+  upToMs?: number;
 }
 
 /**
@@ -29,6 +34,9 @@ export function buildSubscribeQuery<T>(
     subscribeOptions.push(
       sql`AS OF AT LEAST TIMESTAMP ${sql.lit(options.asOfAtLeast.toISOString())}`,
     );
+  }
+  if (options?.upToMs !== undefined) {
+    subscribeOptions.push(sql`UP TO ${sql.lit(options.upToMs)}`);
   }
   if (options?.upsertKey) {
     const key =

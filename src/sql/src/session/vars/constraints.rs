@@ -10,7 +10,7 @@
 //! Defines constraints that can be imposed on variables.
 
 use std::fmt::Debug;
-use std::ops::{RangeBounds, RangeFrom, RangeInclusive};
+use std::ops::{Bound, RangeBounds, RangeFrom, RangeInclusive};
 use std::time::Duration;
 
 use mz_repr::adt::numeric::Numeric;
@@ -79,6 +79,7 @@ impl Clone for ValueConstraint {
 /// [`VarDefinition`]: crate::session::vars::definitions::VarDefinition
 pub trait DynDomainConstraint: Debug + Send + Sync + 'static {
     fn check(&self, var: &dyn Var, v: &dyn Value) -> Result<(), VarError>;
+    fn describe(&self) -> DomainDescription;
 }
 
 impl<D> DynDomainConstraint for D
@@ -93,11 +94,43 @@ where
             .expect("type should match");
         self.check(var, val)
     }
+
+    fn describe(&self) -> DomainDescription {
+        DomainConstraint::describe(self)
+    }
 }
+
 pub trait DomainConstraint: Debug + Send + Sync + 'static {
     type Value;
 
     fn check(&self, var: &dyn Var, v: &Self::Value) -> Result<(), VarError>;
+
+    /// Describes the accepted values, for tools that validate a parameter's
+    /// value without running [`Self::check`].
+    fn describe(&self) -> DomainDescription;
+}
+
+/// The values a [`DomainConstraint`] accepts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DomainDescription {
+    /// Rejects negative and NaN values.
+    NonNegativeNonNan,
+    /// Rejects zero.
+    NonZero,
+    /// Accepts values within the bounds, each formatted with [`Value::format`].
+    Range {
+        start: Bound<String>,
+        end: Bound<String>,
+    },
+}
+
+impl DomainDescription {
+    fn range<T: Value>(range: &impl RangeBounds<T>) -> Self {
+        DomainDescription::Range {
+            start: range.start_bound().map(Value::format),
+            end: range.end_bound().map(Value::format),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -105,6 +138,10 @@ pub struct NumericNonNegNonNan;
 
 impl DomainConstraint for NumericNonNegNonNan {
     type Value = Numeric;
+
+    fn describe(&self) -> DomainDescription {
+        DomainDescription::NonNegativeNonNan
+    }
 
     fn check(&self, var: &dyn Var, n: &Numeric) -> Result<(), VarError> {
         if n.is_nan() || n.is_negative() {
@@ -124,6 +161,10 @@ pub struct NonZeroDuration;
 
 impl DomainConstraint for NonZeroDuration {
     type Value = Duration;
+
+    fn describe(&self) -> DomainDescription {
+        DomainDescription::NonZero
+    }
 
     fn check(&self, var: &dyn Var, d: &Duration) -> Result<(), VarError> {
         if d.is_zero() {
@@ -146,6 +187,10 @@ where
     R: RangeBounds<f64> + std::fmt::Debug + Send + Sync + 'static,
 {
     type Value = Numeric;
+
+    fn describe(&self) -> DomainDescription {
+        DomainDescription::range(&self.0)
+    }
 
     fn check(&self, var: &dyn Var, n: &Numeric) -> Result<(), VarError> {
         let n: f64 = (*n)
@@ -187,6 +232,10 @@ where
 {
     type Value = ByteSize;
 
+    fn describe(&self) -> DomainDescription {
+        DomainDescription::range(&self.0)
+    }
+
     fn check(&self, var: &dyn Var, size: &ByteSize) -> Result<(), VarError> {
         if self.0.contains(size) {
             Ok(())
@@ -208,6 +257,10 @@ where
     R: RangeBounds<u32> + std::fmt::Debug + Send + Sync + 'static,
 {
     type Value = u32;
+
+    fn describe(&self) -> DomainDescription {
+        DomainDescription::range(&self.0)
+    }
 
     fn check(&self, var: &dyn Var, n: &u32) -> Result<(), VarError> {
         if self.0.contains(n) {

@@ -934,7 +934,7 @@ Materialize supports the following catalog type and destination combinations:
 | --- | --- | --- |
 | `'s3tablesrest'` | [AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) | [AWS connection](#aws) |
 | `'rest'` | [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) {{< private-preview-inline />}} | [GCP connection](#gcp) |
-| `'rest'` | Any [Iceberg REST catalog](https://iceberg.apache.org/spec/), including [Databricks Unity Catalog](/export-data/iceberg-databricks/) | OAuth2 credentials in a secret |
+| `'rest'` | Any [Iceberg REST catalog](https://iceberg.apache.org/rest-catalog-spec/), including [Databricks Unity Catalog](/export-data/iceberg-databricks/) and [Apache Polaris](/export-data/iceberg-rest/) | OAuth2 credentials in a secret |
 
 #### Syntax {#iceberg-catalog-syntax}
 
