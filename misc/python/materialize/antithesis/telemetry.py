@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -21,7 +22,8 @@ import sys
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -128,6 +130,8 @@ class Recorder:
     metric_errors: int = 0
     phase_sample: tuple[tuple[str, int | None, str | None], float] | None = None
     cluster_ids: dict[tuple[str, str], str] = field(default_factory=dict)
+    interleaving_round: str | None = None
+    interleaving_details: dict[str, Any] = field(default_factory=dict)
 
 
 _recorder: Recorder | None = None
@@ -147,6 +151,52 @@ class Event:
 def enabled() -> bool:
     """Whether this process is running a measured test command."""
     return _recorder is not None
+
+
+@contextmanager
+def interleaving(mode: str, **details: Any) -> Iterator[str | None]:
+    """Correlate protocol diagnostics within the current measured command."""
+    recorder = _recorder
+    if recorder is None:
+        yield None
+        return
+    token = f"{os.getpid()}:{time.monotonic_ns()}"
+    with recorder.lock:
+        previous = recorder.interleaving_round
+        previous_details = recorder.interleaving_details
+        recorder.interleaving_round = token
+        recorder.interleaving_details = {"mode": mode, **copy.deepcopy(details)}
+    try:
+        interleaving_progress("start", mode=mode, **details)
+        yield token
+    finally:
+        with recorder.lock:
+            recorder.interleaving_round = previous
+            recorder.interleaving_details = previous_details
+
+
+def interleaving_progress(
+    stage: str, *, expected_round: str | None = None, **details: Any
+) -> None:
+    recorder = _recorder
+    if recorder is None:
+        return
+    with recorder.lock:
+        token = recorder.interleaving_round
+        metadata = copy.deepcopy(recorder.interleaving_details)
+    if token is None or (expected_round is not None and token != expected_round):
+        return
+    observations.send_event(
+        "antithesis_interleaving",
+        {
+            "profile": recorder.profile,
+            "command": recorder.command,
+            "round": token,
+            "stage": stage,
+            **metadata,
+            **details,
+        },
+    )
 
 
 def _label(value: str, allowed: frozenset[str]) -> str:

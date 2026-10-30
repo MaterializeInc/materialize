@@ -927,7 +927,7 @@ def _overlap_write(
     return done.is_set()
 
 
-def interleaved_round(
+def _interleaved_round(
     db: sqlite3.Connection,
     host: str,
     epoch: int,
@@ -937,9 +937,8 @@ def interleaved_round(
     *,
     race_commit: bool,
     deadline: float,
+    round_id: str | None = None,
 ) -> bool:
-    """Overlap a real transaction with a disruption, then check its epoch and key."""
-
     def write(before_commit: Callable[[], None]) -> None:
         writer_db = open_state()
         writer = Session(Targets(host, 0.0), [1.0, 0.0, 0.0])
@@ -950,6 +949,17 @@ def interleaved_round(
                 )
             else:
                 _write(writer_db, writer, epoch, key, read_key, on_invoke=before_commit)
+            written = writer_db.execute(
+                "SELECT op_id, outcome FROM ops WHERE epoch = ? AND session = ? ORDER BY op_id DESC LIMIT 1",
+                (epoch, writer.name),
+            ).fetchone()
+            if written is not None and round_id is not None:
+                telemetry.interleaving_progress(
+                    "write",
+                    expected_round=round_id,
+                    write_id=written[0],
+                    outcome=written[1],
+                )
         finally:
             writer.reset()
             writer_db.close()
@@ -970,6 +980,10 @@ def interleaved_round(
         _read(db, reader, epoch, rng.choice([0.0, 1.0]), paths=_paths(key, True))
     finally:
         reader.reset()
+    read_back = db.execute(
+        "SELECT op_id, outcome FROM ops WHERE epoch = ? AND session = ? AND kind = 'r' ORDER BY op_id DESC LIMIT 1",
+        (epoch, reader.name),
+    ).fetchone()
     covered = _check_epoch(
         db,
         epoch,
@@ -985,7 +999,50 @@ def interleaved_round(
     }
     _assert_timestamp_order(db, read_ids)
     _mark_checked(db, covered)
+    telemetry.interleaving_progress(
+        "checked",
+        epoch=epoch,
+        read_id=read_back[0] if read_back is not None else None,
+        successful_reads=int(read_back is not None and read_back[1] == "ok"),
+    )
     return True
+
+
+def interleaved_round(
+    db: sqlite3.Connection,
+    host: str,
+    epoch: int,
+    key: int,
+    read_key: int | None,
+    disrupt: Callable[[], None],
+    *,
+    race_commit: bool,
+    deadline: float,
+) -> bool:
+    """Overlap a real transaction with a disruption, then check its epoch and key."""
+    mode = (
+        "race_rmw"
+        if read_key is not None
+        else "race_append" if race_commit else "held_append"
+    )
+    with telemetry.interleaving(
+        mode, epoch=epoch, key=key, read_key=read_key
+    ) as round_id:
+        completed = _interleaved_round(
+            db,
+            host,
+            epoch,
+            key,
+            read_key,
+            disrupt,
+            race_commit=race_commit,
+            deadline=deadline,
+            round_id=round_id,
+        )
+        telemetry.interleaving_progress(
+            "end", outcome="completed" if completed else "unresolved"
+        )
+        return completed
 
 
 def interleaving_driver() -> int:
