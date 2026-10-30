@@ -49,6 +49,10 @@ pub struct SourcePreparationRequest {
     kind: RequestKind,
 }
 
+/// Catalog-derived inputs used by external source preparation.
+///
+/// Equal requests reuse cached results, so each variant must include every
+/// catalog-derived input its external reads depend on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RequestKind {
     Source(Box<CreateSourcePreparation>),
