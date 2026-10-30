@@ -63,7 +63,7 @@ import {
   summarizeProcesses,
 } from "./processReadingsModel";
 import {
-  ChartHeader,
+  ChartFrame,
   ChartHeaderProps,
   HoverOverlay,
   Layout,
@@ -71,6 +71,7 @@ import {
   PercentAxis,
   PercentScale,
   TimeAxis,
+  TimeGridLines,
   TimeScale,
 } from "./ResourceUsageCharts";
 import { CHART_MARGIN, percentScale } from "./resourceUsageStyles";
@@ -82,7 +83,8 @@ const MAX_WINDOW_MINUTES = 24 * 60;
 // The theme's chart palette has five strong colors. Past five processes, only
 // the ones that stand out get a color; the rest stay grey but named.
 const MAX_COLORED_PROCESSES = 5;
-const PLOT_HEIGHT_PX = 150;
+// 0 to 100% keeps 150px on an axis that tops out at 125%.
+const PLOT_HEIGHT_PX = 188;
 // The most processes the tooltip lists before summarizing the rest.
 const TOOLTIP_PROCESS_LIMIT = 6;
 
@@ -471,7 +473,8 @@ const ProcessLineCharts = ({
 
   return (
     <Box ref={containerRef} position="relative" width="100%">
-      <VStack spacing={5} alignItems="stretch">
+      <TimeGridLines width={width} xScale={xScale} />
+      <VStack spacing={0} alignItems="stretch" position="relative">
         <ProcessLineChart
           {...chartProps}
           metric="cpu"
@@ -479,15 +482,14 @@ const ProcessLineCharts = ({
           description="% of each process's CPU allocation"
           legend={legend}
         />
-        <VStack spacing={0} alignItems="stretch">
-          <ProcessLineChart
-            {...chartProps}
-            metric="memory"
-            title="Memory by Process"
-            description={`% of each process's ${memoryLimit}`}
-          />
-          <TimeAxis width={width} xScale={xScale} />
-        </VStack>
+        <TimeAxis width={width} xScale={xScale} />
+        <ProcessLineChart
+          {...chartProps}
+          metric="memory"
+          title="Memory by Process"
+          description={`% of each process's ${memoryLimit}`}
+        />
+        <TimeAxis width={width} xScale={xScale} />
       </VStack>
       {hoveredBucket &&
         tooltipData &&
@@ -696,9 +698,8 @@ const ProcessLineChart = ({
   );
 
   return (
-    <VStack spacing={2} alignItems="stretch" width="100%">
-      <ChartHeader title={title} description={description} legend={legend} />
-      <svg {...layout.svgProps} role="img" aria-label={title}>
+    <ChartFrame title={title} description={description} legend={legend}>
+      <svg {...layout.svgProps} display="block" role="img" aria-label={title}>
         <ProcessLines
           layout={layout}
           xScale={xScale}
@@ -721,7 +722,7 @@ const ProcessLineChart = ({
           onPointerLeave={onLeave}
         />
       </svg>
-    </VStack>
+    </ChartFrame>
   );
 };
 

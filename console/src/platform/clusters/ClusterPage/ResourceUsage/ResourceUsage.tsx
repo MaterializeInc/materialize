@@ -61,6 +61,7 @@ import {
   ReplicaStatusTimeline,
   StatusTimelineRow,
   TimeAxis,
+  TimeGridLines,
 } from "./ResourceUsageCharts";
 import {
   canSwap,
@@ -443,6 +444,10 @@ interface ResourceUsageContentProps {
   unhydratedObjectCounts: Map<string, number> | undefined;
   missingUsage: MissingUsageCause;
   isDdlError: boolean;
+  /**
+   * The replica toggles and processes button. In the CPU chart's header, or
+   * above the message explaining why there's no chart.
+   */
   cpuHeaderAction?: React.ReactNode;
   isStatusLoading: boolean;
   isStatusError: boolean;
@@ -570,66 +575,69 @@ const ResourceUsageContent = ({
 
   return (
     <Box ref={containerRef} position="relative" width="100%">
-      <VStack spacing={6} alignItems="stretch">
+      <TimeGridLines width={width} xScale={xScale} />
+      <VStack spacing={0} alignItems="stretch" position="relative">
         {hasUsage ? (
           <>
             <CpuChart {...plotProps} headerAction={cpuHeaderAction} />
-            <VStack spacing={0} alignItems="stretch">
-              <MemoryChart
-                {...plotProps}
-                heapLimitBytes={heapLimitBytes}
-                hasHeapLimit={hasHeapLimit}
-              />
-              <TimeAxis width={width} xScale={xScale} />
-            </VStack>
+            <TimeAxis width={width} xScale={xScale} />
+            <MemoryChart
+              {...plotProps}
+              heapLimitBytes={heapLimitBytes}
+              hasHeapLimit={hasHeapLimit}
+            />
+            <TimeAxis width={width} xScale={xScale} />
           </>
         ) : (
-          <VStack spacing={2} alignItems="stretch">
+          <VStack spacing={2} alignItems="stretch" pb={4}>
+            {cpuHeaderAction && (
+              <Flex justifyContent="flex-end">{cpuHeaderAction}</Flex>
+            )}
             <MissingUsageMessage
               cause={missingUsage}
               hasReplicas={replicasById.size > 0}
             />
-            <TimeAxis width={width} xScale={xScale} />
           </VStack>
         )}
-        <VStack spacing={1} alignItems="stretch">
-          {isStatusError ? (
-            <Alert variant="error" message="Replica status is unavailable." />
-          ) : isStatusLoading ? (
-            <Flex justifyContent="center">
-              <Spinner size="sm" />
-            </Flex>
-          ) : (
-            <ReplicaStatusTimeline
-              width={width}
-              xScale={xScale}
-              rows={statusRows}
-              hoverTimeMs={tooltipData}
-              onPointerMove={onPointerMove}
-              onPointerLeave={hideTooltip}
-            />
-          )}
-          {!isStatusError && !isStatusLoading && isHydrationError && (
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              Hydration history is unavailable.
-            </Text>
-          )}
-        </VStack>
-        <VStack spacing={1} alignItems="stretch">
-          <ChangesLane
+        {isStatusError ? (
+          <Alert variant="error" message="Replica status is unavailable." />
+        ) : isStatusLoading ? (
+          <Flex justifyContent="center" py={4}>
+            <Spinner size="sm" />
+          </Flex>
+        ) : (
+          <ReplicaStatusTimeline
             width={width}
             xScale={xScale}
-            events={ddlEvents}
-            activeStartMs={changeTooltip.tooltipData?.startMs}
-            onActivate={onChangeActivate}
-            onDeactivate={changeTooltip.hideTooltip}
+            rows={statusRows}
+            hoverTimeMs={tooltipData}
+            onPointerMove={onPointerMove}
+            onPointerLeave={hideTooltip}
           />
-          {isDdlError && (
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              Object creation markers are unavailable.
-            </Text>
-          )}
-        </VStack>
+        )}
+        {!isStatusError && !isStatusLoading && isHydrationError && (
+          <Text textStyle="text-small" color={colors.foreground.secondary}>
+            Hydration history is unavailable.
+          </Text>
+        )}
+        <TimeAxis width={width} xScale={xScale} />
+        <ChangesLane
+          width={width}
+          xScale={xScale}
+          events={ddlEvents}
+          activeStartMs={changeTooltip.tooltipData?.startMs}
+          onActivate={onChangeActivate}
+          onDeactivate={changeTooltip.hideTooltip}
+        />
+        {isDdlError && (
+          <Text
+            textStyle="text-small"
+            color={colors.foreground.secondary}
+            mt={1}
+          >
+            Object creation markers are unavailable.
+          </Text>
+        )}
       </VStack>
       {tooltipSections.length > 0 &&
         tooltipLeft !== undefined &&
@@ -950,14 +958,34 @@ export const ResourceUsage = ({
             isStatusError={isStatusError}
             isHydrationError={isHydrationError}
             cpuHeaderAction={
-              processReplicas.length > 0 && (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setIsProcessesOpen(true)}
+              (selectedReplicaId === undefined ||
+                processReplicas.length > 0) && (
+                <Flex
+                  flexWrap="wrap"
+                  justifyContent="flex-end"
+                  alignItems="center"
+                  columnGap={4}
+                  rowGap={1}
+                  minWidth={0}
                 >
-                  Processes
-                </Button>
+                  {selectedReplicaId === undefined && (
+                    <ReplicaToggles
+                      currentGroups={currentGroups}
+                      pastGroups={pastGroups}
+                      visibleKeys={visibleLegendItems}
+                      onToggle={toggleLegendItem}
+                    />
+                  )}
+                  {processReplicas.length > 0 && (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => setIsProcessesOpen(true)}
+                    >
+                      Processes
+                    </Button>
+                  )}
+                </Flex>
               )
             }
           />
@@ -974,40 +1002,15 @@ export const ResourceUsage = ({
       borderWidth="1px"
       borderColor={colors.border.primary}
     >
-      <VStack spacing={6} alignItems="stretch">
-        <Flex
-          justifyContent="space-between"
-          alignItems="start"
-          flexWrap="wrap"
-          columnGap={4}
-          rowGap={2}
-        >
+      <VStack spacing={4} alignItems="stretch">
+        <HStack justifyContent="space-between" spacing={4}>
           <Text as="h3" textStyle="heading-sm" whiteSpace="nowrap">
             Resource Usage
           </Text>
-          {/* NOTE: a basis of 0, as `flex="1"` sets, never wraps this below
-              the title, so long toggles overlap it on a narrow card. */}
-          <Flex
-            flex="1 1 auto"
-            minWidth={0}
-            justifyContent="flex-end"
-            alignItems="center"
-            columnGap={4}
-            rowGap={1}
-          >
-            {history.isRefreshing && (
-              <Spinner size="sm" data-testid="refreshing-spinner" />
-            )}
-            {selectedReplicaId === undefined && (
-              <ReplicaToggles
-                currentGroups={currentGroups}
-                pastGroups={pastGroups}
-                visibleKeys={visibleLegendItems}
-                onToggle={toggleLegendItem}
-              />
-            )}
-          </Flex>
-        </Flex>
+          {history.isRefreshing && (
+            <Spinner size="sm" data-testid="refreshing-spinner" />
+          )}
+        </HStack>
         {body}
       </VStack>
       <ProcessesDrawer

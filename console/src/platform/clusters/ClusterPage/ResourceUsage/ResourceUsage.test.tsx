@@ -51,7 +51,8 @@ import { parseDbVersion } from "~/version/api";
 
 import { ClusterMetrics } from "../ClusterMetrics";
 import { ResourceUsage } from "./ResourceUsage";
-import { CHART_MARGIN } from "./resourceUsageStyles";
+import { mergedBucketMs } from "./resourceUsageModel";
+import { CHART_MARGIN, MIN_BAR_SLOT_PX } from "./resourceUsageStyles";
 
 // The Metrics page's other card has its own tests and queries.
 vi.mock("../MemoryByObject", () => ({ MemoryByObject: () => null }));
@@ -719,11 +720,12 @@ describe("ResourceUsage", () => {
     expect(tooltip).toHaveTextContent(/r2.*CPU5\.0 cores · 250\.0%/);
   });
 
-  it("keeps the CPU axis at 100% while replicas stay within their allocation", async () => {
+  it("leaves headroom above 100% without marking the allocation while replicas stay within it", async () => {
     await renderResourceUsage({ withSwap: true });
 
     const cpu = await screen.findByRole("img", { name: "CPU usage" });
     expect(within(cpu).getByText("100%")).toBeInTheDocument();
+    expect(within(cpu).queryByText("125%")).not.toBeInTheDocument();
     expect(screen.queryByText("CPU allocation")).not.toBeInTheDocument();
   });
 
@@ -737,7 +739,7 @@ describe("ResourceUsage", () => {
     expect(within(status).getByText("r2")).toBeInTheDocument();
   });
 
-  it("truncates a long replica name in its status row, keeping the full name as its title", async () => {
+  it("names a long replica in full inside its status row", async () => {
     await renderResourceUsage({
       withSwap: true,
       replicaNames: { u1: "r1", u2: "blue_green_r2" },
@@ -746,15 +748,8 @@ describe("ResourceUsage", () => {
     const status = await screen.findByRole("img", {
       name: "Replica status over time",
     });
-    expect(within(status).getByText("blue_…")).toBeInTheDocument();
+    expect(within(status).getByText("blue_green_r2")).toBeInTheDocument();
     expect(within(status).getByText("r1")).toBeInTheDocument();
-    // An SVG `title` is the browser's tooltip for its parent.
-    expect(
-      [...status.querySelectorAll("title")].map((title) => [
-        title.textContent,
-        title.parentElement?.textContent,
-      ]),
-    ).toEqual([["blue_green_r2", "blue_green_r2blue_…"]]);
   });
 
   it("orders the status rows like the replica pills", async () => {
@@ -1252,13 +1247,20 @@ describe("ResourceUsage", () => {
   });
 
   it("draws a refresh that fits in one merged bucket as a dot", async () => {
-    // Three hourly buckets starting on a 3h boundary merge into one of the
-    // week's 3h buckets, a single reading with no line to draw.
-    const alignedMs = Math.ceil(FIRST_BUCKET_MS / (3 * HOUR_MS)) * 3 * HOUR_MS;
+    // Hourly buckets filling one of the week's merged buckets, starting on its
+    // boundary, merge into a single reading with no line to draw.
+    const groupMs = mergedBucketMs({
+      sourceBucketMs: HOUR_MS,
+      domainMs: TIME_PERIOD_MINUTES * 60_000,
+      plotWidthPx: WIDTH_PX - CHART_MARGIN.left - CHART_MARGIN.right,
+      replicaCount: 1,
+      minSlotPx: MIN_BAR_SLOT_PX,
+    });
+    const alignedMs = Math.ceil(FIRST_BUCKET_MS / groupMs) * groupMs;
     const lastMs = FIRST_BUCKET_MS + BUCKET_COUNT * HOUR_MS;
     const refreshIds = Array.from(
       {
-        length: Math.floor((lastMs - alignedMs - 3 * HOUR_MS) / (6 * HOUR_MS)),
+        length: Math.floor((lastMs - alignedMs - groupMs) / (2 * groupMs)),
       },
       (_, index) => `u${index + 10}`,
     );
@@ -1268,8 +1270,8 @@ describe("ResourceUsage", () => {
           replicaId,
           "r1",
           (startMs) =>
-            startMs >= alignedMs + index * 6 * HOUR_MS &&
-            startMs < alignedMs + (index * 6 + 3) * HOUR_MS,
+            startMs >= alignedMs + index * 2 * groupMs &&
+            startMs < alignedMs + (index * 2 + 1) * groupMs,
         ),
       ),
       replicaIds: refreshIds,

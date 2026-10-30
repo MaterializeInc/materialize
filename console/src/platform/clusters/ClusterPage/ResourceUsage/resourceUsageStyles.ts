@@ -15,37 +15,54 @@ import { buildXYGraphLayoutProps } from "~/utils/graph";
 
 import { ReplicaState } from "./resourceUsageModel";
 
-/** Shared by every chart so their plot areas line up on one time axis. */
-export const CHART_MARGIN = { top: 24, right: 16, bottom: 8, left: 56 };
+/**
+ * Shared by every chart so their plot areas line up on one time axis. The
+ * right margin holds the percent labels.
+ */
+export const CHART_MARGIN = { top: 0, right: 40, bottom: 0, left: 0 };
 
 export const PERCENT_TICKS = [0, 25, 50, 75, 100];
 
-const OVERFLOW_TICK_COUNT = 4;
+const PERCENT_TICK_STEP = 25;
+// Clear space above the highest reading, which a chart's header floats over.
+const HEADROOM_PERCENT = 25;
+const MIN_AXIS_TOP_PERCENT = 125;
+const MAX_PERCENT_TICK_STEPS = 7;
+
+/** The first 25% line at least 25 points above `peak`, and never under 125%. */
+export const percentAxisTop = (peak: number) =>
+  Math.max(
+    MIN_AXIS_TOP_PERCENT,
+    Math.ceil((peak + HEADROOM_PERCENT) / PERCENT_TICK_STEP) *
+      PERCENT_TICK_STEP,
+  );
 
 /**
- * A 0 to 100% scale, extended to `peak` with nice ticks when a reading passes
- * 100%.
+ * The labeled lines strictly between 0 and `top`: every 25%, or every 50%,
+ * 75% and so on once an axis spans more than seven 25% steps.
  */
+export const percentAxisTicks = (top: number) => {
+  const step =
+    Math.ceil(top / PERCENT_TICK_STEP / MAX_PERCENT_TICK_STEPS) *
+    PERCENT_TICK_STEP;
+  const ticks: number[] = [];
+  for (let tick = step; tick < top; tick += step) ticks.push(tick);
+  return ticks;
+};
+
+/** A scale from 0 to `percentAxisTop(peak)`. */
 export const percentScale = (
   peak: number,
   layout: ReturnType<typeof buildXYGraphLayoutProps>,
 ) => {
-  if (peak <= 100) {
-    return {
-      yScale: scaleLinear<number>({
-        domain: [0, 100],
-        range: layout.yScaleRange,
-        clamp: true,
-      }),
-      ticks: PERCENT_TICKS,
-    };
-  }
-  const yScale = scaleLinear<number>({
-    domain: [0, peak],
-    range: layout.yScaleRange,
-    nice: OVERFLOW_TICK_COUNT,
-  });
-  return { yScale, ticks: yScale.ticks(OVERFLOW_TICK_COUNT) };
+  const top = percentAxisTop(peak);
+  return {
+    yScale: scaleLinear<number>({
+      domain: [0, top],
+      range: layout.yScaleRange,
+    }),
+    ticks: percentAxisTicks(top),
+  };
 };
 
 /**
