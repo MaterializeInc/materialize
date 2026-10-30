@@ -20,6 +20,7 @@ The following configurations are available for the `/api/mcp/agent` endpoint:
 |-----------|---------|-------------|
 | `enable_mcp_agent` | `true` | Enable or disable the `/api/mcp/agent` endpoint. When disabled, requests return `HTTP 503 (Service Unavailable)`.|
 | `enable_mcp_agent_query_tool` <a name="enable_mcp_agent_query_tool"></a> | `true` | Enable or disable the [`query` tool](/developer-tools/mcp-server/mcp-agent-tools/#query), which allows for queries with joins. {{< include-headless "/headless/mcp-agent-query-tool-warning" >}}  To prevent catalog-level discovery of operational metadata through system catalog access, you can [restrict `query` tool access to user objects only](/developer-tools/mcp-server/mcp-agent-tools/#restrict-to-user-objects). |
+| `enable_mcp_protocol_2026_07_28` | `true` | Available starting in v26.XX. Serve MCP protocol version 2026-07-28 next to 2025-11-25. When disabled, every request is served as 2025-11-25. See [Protocol versions](/developer-tools/mcp-server/#protocol-versions). |
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
 ## Disabling the endpoint
