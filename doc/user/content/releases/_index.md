@@ -42,22 +42,22 @@ Note that the improved hydration times are most impactful for workloads that spi
 
 This change has been rolled out to all Materialize Cloud environments and applies to all existing and new clusters. It will be enabled by default in Materialize Self-Managed in the coming weeks.
 
-### Improved Freshness page in the Console {#v26.48-freshness-page}
+### Track environment wide Freshness, using the new Freshness page in the Console {#v26.48-freshness-page}
 
 <red>*Materialize Cloud only*</red>
 
-The Console's new **Freshness** page lets you track aggregate freshness across your environment. Filter by cluster, time range, and object type to see p90, p99, p99.9, and pMax freshness across the objects. If you're not meeting your freshness target, use the page to find the lagging objects, and start to debug why. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
+The Console's new **Freshness** page lets you track aggregate freshness across your environment. Filter by cluster or schema, time range, and object type to see p90, p99, p99.9, and pMax freshness across the objects. If you're not meeting your freshness target, use the page to find the lagging objects, and start to debug why. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
 
 ![Freshness page filtered to the materialized views on one cluster over 6 hours, showing p90, p99, p99.9, and pMAX lag, a lag over time chart with a 2-second threshold line, and a table of the objects that exceeded it](/images/releases/v2648_freshness.png)
 
-### Kafka sink headers are generally available {#v26.48-kafka-sink-headers-ga}
+### Use Kafka sink headers to deliver transactional updates to your consumers {#v26.48-kafka-sink-headers-ga}
 
-The `HEADERS` option for Kafka sinks and the `materialize-sink-id` header, both previously in private preview, are now generally available. `HEADERS` adds the entries of a `map[text => text]` or `map[text => bytea]` column as headers on every message the sink produces. Every Kafka sink now also attaches a `materialize-sink-id` header carrying the sink's ID, so downstream consumers can correlate a data topic with its progress topic without querying Materialize. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
+Every Kafka sink now attaches a `materialize-sink-id` header to each message by default. This is especially useful if you load data from Kafka into an external system, like a warehouse or analytics store, and want that system to stay transactionally consistent with Materialize. Downstream loaders can use the header to match each message to the sink's progress topic and only expose fully committed timestamps, without querying Materialize. To get started, see [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/).
 
-To see how a downstream loader can use the `materialize-sink-id` header to expose only fully committed timestamps, see [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/).
+The `HEADERS` option is also now generally available, after being in private preview. `HEADERS` adds the entries of a `map[text => text]` or `map[text => bytea]` column as headers on every message the sink produces, so you can attach custom headers to each message using data in Materialize. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
 
-### Safely drop upstream `NOT NULL` constraints in your MySQL sources {#v26.48-exclude-not-null-constraints}
-Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a MySQL source, as it already did for PostgreSQL sources. Every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
+### Drop upstream `NOT NULL` constraints from your MySQL database, without downtime in Materialize {#v26.48-exclude-not-null-constraints}
+Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a MySQL source, as it already did for PostgreSQL sources. When turned on, every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
 
 ```mzsql
 CREATE TABLE orders
