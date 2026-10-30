@@ -26,12 +26,11 @@ COPY misc/python /usr/local/share/materialize/misc/python
 
 # Only the packages the workload imports, at the versions the rest of the
 # repository pins. Constraint files cannot carry extras or pip options, so
-# those lines are dropped from the pin list first. The Antithesis SDK is pinned
-# here rather than in requirements.txt, which is shared with ci-builder and
-# feeds every cargo image fingerprint.
+# those lines are dropped from the pin list first.
 RUN grep -v -e '\[' -e '^--' /usr/local/share/materialize/misc/python/requirements.txt > /tmp/constraints.txt \
     && pip install --no-cache-dir --only-binary=:all: --constraint /tmp/constraints.txt \
-        antithesis==0.4.0 boto3 colored confluent-kafka kubernetes psycopg psycopg-binary pyyaml requests semver \
+        --requirement /usr/local/share/materialize/misc/python/materialize/antithesis/requirements.txt \
+        boto3 colored confluent-kafka kubernetes psycopg psycopg-binary pyyaml requests semver \
     && rm /tmp/constraints.txt
 
 # Antithesis catalogs every assertion under /opt/antithesis/catalog, so that
