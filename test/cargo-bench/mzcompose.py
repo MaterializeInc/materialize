@@ -19,9 +19,10 @@ current-commit build does not reuse the developer's own `target/` cache; the
 first run compiles it from scratch into a parked target dir and later runs
 reuse that.
 
-A package whose dependency closure has no committed change between the ancestor
-and the current commit is not built at all: identical source at identical paths
-would only reproduce the identical-binary skip below at the cost of two builds.
+Unless the benchmark harness changed, a package whose dependency closure has no
+committed change between the ancestor and the current commit is not built at
+all: identical source at identical paths would only reproduce the
+identical-binary skip below at the cost of two builds.
 That prediction is unchecked by construction, so scheduled runs build those
 packages anyway and fail when a predicted-unchanged package yields differing
 binaries, which points at a hole in the closure or an unpinned compile-time
@@ -75,6 +76,8 @@ RERUN = "confirm"
 # Repo-relative paths outside any crate directory that feed every build:
 # dependency versions, workspace profiles, and the rustflags cargo applies.
 BUILD_INPUTS = ("Cargo.lock", "Cargo.toml", ".cargo")
+
+HARNESS_INPUTS = ("test/cargo-bench", "misc/python/materialize/cargo_bench")
 
 
 @dataclass(frozen=True)
@@ -369,6 +372,8 @@ def run_benches(
     env: dict[str, str],
     results_root: Path,
     threshold: float,
+    *,
+    force_run: bool = False,
 ) -> tuple[
     list[TargetFailure], list[TargetFailure], list[TargetFailure], list[BuiltBench]
 ]:
@@ -384,6 +389,8 @@ def run_benches(
 
     First-pass regressions get up to four paired reruns, filtered to those IDs.
     A clean comparison ends confirmation. Earlier attempts remain in artifacts.
+
+    `force_run` runs targets even when their binaries are identical.
 
     Returns the ancestor, current, and rerun failures, then the targets
     skipped for identical binaries. Current-side failures also fail the step.
@@ -426,7 +433,8 @@ def run_benches(
         ancestor_digest = loaded_image_digest(ancestor_bin.executable, scratch)
         head_digest = loaded_image_digest(head_bin.executable, scratch)
         if (
-            ancestor_digest is not None
+            not force_run
+            and ancestor_digest is not None
             and head_digest is not None
             and ancestor_digest == head_digest
         ):
@@ -611,11 +619,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     head = spawn.capture(["git", "rev-parse", "HEAD"], cwd=MZ_ROOT).strip()
     ancestor: str | None = None
     unchanged: list[str] = []
+    force_run = False
     if not args.skip_ancestor:
         ancestor = args.ancestor or resolve_ancestor()
         assert ancestor is not None
         print(f"--- Comparing against ancestor {ancestor}")
-        unchanged = unchanged_packages(ancestor, head, shard_packages)
+        force_run = bool(
+            spawn.capture(
+                [
+                    "git",
+                    "diff",
+                    "--name-only",
+                    "--no-renames",
+                    ancestor,
+                    head,
+                    "--",
+                    *HARNESS_INPUTS,
+                ],
+                cwd=MZ_ROOT,
+            ).strip()
+        )
+        if force_run:
+            print("--- Benchmark harness changed, building and running all targets")
+        else:
+            unchanged = unchanged_packages(ancestor, head, shard_packages)
     # The prefilter is a prediction the identical-binary check can confirm or
     # refute, but only if the predicted-unchanged packages get built. Pull
     # requests and local runs take the saving, scheduled runs pay for the
@@ -784,6 +811,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 env,
                 results_root,
                 args.threshold,
+                force_run=force_run,
             )
             ancestor_failures = ancestor_build_failures + ancestor_run_failures
             current_failures = current_build_failures + current_run_failures
