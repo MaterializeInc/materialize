@@ -34,10 +34,6 @@ const BrowserRouterWrapper = ({ children }: React.PropsWithChildren) => {
       basename={
         appConfig.mode === "cloud" ? appConfig.impersonationBasePath : ""
       }
-      future={{
-        v7_relativeSplatPath: true,
-        v7_startTransition: true,
-      }}
     >
       {children}
     </BrowserRouter>

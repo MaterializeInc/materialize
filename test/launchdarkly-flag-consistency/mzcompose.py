@@ -62,8 +62,8 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-import launchdarkly_api  # type: ignore
-from launchdarkly_api.api import feature_flags_api  # type: ignore
+import launchdarkly_api
+from launchdarkly_api.api import feature_flags_api
 
 from materialize.mzcompose.composition import (
     Composition,
@@ -126,6 +126,7 @@ SESSION_VARIABLES = {
     "server_version_num",
     "sql_safe_updates",
     "real_time_recency",
+    "emit_execution_time_notice",
     "emit_plan_insights_notice",
     "emit_timestamp_notice",
     "emit_trace_id_notice",
@@ -198,6 +199,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     cluster_controller_tick_interval
     cluster_enable_topology_spread
     cluster_multi_process_replica_az_affinity_weight
+    cluster_reconfiguration_allowed_lag
     cluster_soften_az_affinity
     cluster_soften_az_affinity_weight
     cluster_soften_replication_anti_affinity
@@ -205,6 +207,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     cluster_topology_spread_ignore_non_singular_scale
     cluster_topology_spread_max_skew
     cluster_topology_spread_soft
+    column_paged_batcher_spill_worker_fraction
     compute_correction_v2_chain_proportionality
     compute_correction_v2_chunk_size
     compute_flat_map_fuel
@@ -238,19 +241,19 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
-    enable_adapter_frontend_occ_read_then_write
     enable_alter_table_add_column
     enable_any_all_null_array_semantics
     enable_auto_scaling_strategy
     enable_background_alter_cluster
+    enable_cluster_reconfiguration_lag_gate
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
     enable_columnar_merge_batcher
+    enable_compute_correction_v2_spill
     enable_compute_half_join2
     enable_compute_index_peek_offload
     enable_compute_peek_row_iteration_limit
-    enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
     enable_default_connection_validation
     enable_dequadratic_eqprop_map
@@ -269,7 +272,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_load_generator_counter
     enable_load_generator_datums
     enable_managed_cluster_availability_zones
-    enable_metric_sink
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
@@ -292,6 +294,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_simplify_from_less_existence
     enable_simplify_quantified_comparisons
     enable_time_at_time_zone
+    enable_unified_cluster
     enable_union_cancellation_after_relation_cse
     enable_unlimited_retain_history
     enable_will_distinct_propagation
@@ -301,6 +304,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     hydration_history_retention_period
     kafka_buffered_event_resize_threshold_elements
     kafka_default_aws_privatelink_endpoint_identification_algorithm
+    kafka_offset_commit_refresh_interval
     kafka_poll_max_wait
     kafka_reconnect_backoff
     kafka_reconnect_backoff_max
@@ -340,7 +344,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_blob_connect_timeout
     persist_blob_hedged_get_budget_ratio
     persist_blob_hedged_get_delay
-    persist_blob_hedged_get_enabled
     persist_blob_hedged_get_max_concurrent
     persist_blob_hedged_get_warm_interval
     persist_blob_operation_attempt_timeout
@@ -357,7 +360,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_consensus_connection_pool_ttl_stagger
     persist_expression_cache_force_compaction_fuel
     persist_expression_cache_force_compaction_wait
-    persist_fast_path_order
     persist_fetch_semaphore_cost_adjustment
     persist_gc_fallback_threshold_ms
     persist_gc_min_versions
@@ -400,6 +402,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     postgres_fetch_slot_resume_lsn_interval
     privatelink_status_update_quota_per_minute
     read_then_write_max_dependencies
+    replica_hydration_history_retention_period
     replica_metrics_history_retention_interval
     replica_status_history_retention_window
     scram_iterations
@@ -415,6 +418,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     statement_logging_use_reproducible_rng
     storage_cluster_shutdown_grace_period
     storage_downgrade_since_during_finalization
+    storage_persist_sink_description_lookahead
     storage_record_source_sink_namespaced_errors
     storage_rocksdb_cleanup_tries
     storage_server_maintenance_interval
@@ -483,6 +487,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_multi_replica_sources
     enable_reduce_reduction
     enable_repr_typecheck
+    enable_storage_introspection_logs
     enable_unified_cluster_arrangment
     enable_yugabyte_connection
     enable_zero_downtime_cluster_reconfiguration
@@ -539,16 +544,13 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     # the compiled-in default was changed prematurely. Allowlisted for now to
     # keep the build green; revisit and either reconcile the default or move the
     # flag to a permanent category above.
-    "compute_subscribe_snapshot_optimization",
     "enable_cast_elimination",
     "enable_compute_correction_v2",
     "enable_compute_error_distinct",
-    "enable_compute_temporal_bucketing",
     "enable_new_outer_join_lowering",
     "enable_upsert_v2",
     "enable_variadic_left_join_lowering",
     "persist_batch_delete_enabled",
-    "persist_rollup_use_active_rollup",
 }
 
 # Flags whose served default knowingly differs between LaunchDarkly environments
@@ -562,7 +564,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     column_paged_batcher_budget_fraction
     compute_dataflow_max_inflight_bytes
     compute_peek_response_stash_threshold_bytes
-    compute_subscribe_snapshot_optimization
     enable_cluster_schedule_refresh
     enable_column_paged_batcher
     enable_column_paged_batcher_spill
@@ -592,9 +593,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     persist_catalog_force_compaction_fuel
     persist_claim_compaction_min_version
     persist_claim_unclaimed_compactions
-    persist_enable_incremental_compaction
     persist_fetch_semaphore_permit_adjustment
-    persist_rollup_use_active_rollup
     persist_txns_data_shard_retryer_initial_backoff
     persist_validate_part_bounds_on_read
     statement_logging_max_data_credit
@@ -662,7 +661,7 @@ def ld_served_default(flag: dict[str, Any], environment: str) -> Any | None:
     if env.get("on"):
         index = (env.get("fallthrough") or {}).get("variation")
     else:
-        index = env.get("off_variation")
+        index = env.get("offVariation")
     if index is None or not (0 <= index < len(variations)):
         return None
     return variations[index].get("value")
@@ -685,7 +684,7 @@ def launchdarkly_flag_tags(api: Any) -> dict[str, list[str]]:
         items = page.get("items") or []
         for flag in items:
             flags[flag["key"]] = list(flag.get("tags") or [])
-        total = page.get("total_count")
+        total = page.get("totalCount")
         offset += len(items)
         if not items or (total is not None and offset >= total):
             break

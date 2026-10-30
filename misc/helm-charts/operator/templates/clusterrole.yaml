@@ -37,6 +37,12 @@ rules:
   - get
   - list
   - watch
+- apiGroups: ["events.k8s.io"]
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups: ["coordination.k8s.io"]
   resources:
   - leases
@@ -47,6 +53,17 @@ rules:
 - apiGroups: ["networking.k8s.io"]
   resources:
   - networkpolicies
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups: ["policy"]
+  resources:
+  - poddisruptionbudgets
   verbs:
   - create
   - update

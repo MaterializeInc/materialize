@@ -931,6 +931,7 @@ pub enum ConnectionOptionName {
     SslMode,
     SessionToken,
     CatalogType,
+    StorageProvider,
     Url,
     User,
     Warehouse,
@@ -978,6 +979,7 @@ impl ConnectionOptionName {
             | ConnectionOptionName::SshTunnel
             | ConnectionOptionName::SslMode
             | ConnectionOptionName::CatalogType
+            | ConnectionOptionName::StorageProvider
             | ConnectionOptionName::Url
             | ConnectionOptionName::Warehouse => false,
         }
@@ -1027,6 +1029,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SslMode => "SSL MODE",
             ConnectionOptionName::SessionToken => "SESSION TOKEN",
             ConnectionOptionName::CatalogType => "CATALOG TYPE",
+            ConnectionOptionName::StorageProvider => "STORAGE PROVIDER",
             ConnectionOptionName::Url => "URL",
             ConnectionOptionName::User => "USER",
             ConnectionOptionName::Warehouse => "WAREHOUSE",

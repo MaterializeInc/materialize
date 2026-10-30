@@ -50,7 +50,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_service::secrets::SecretsReaderCliArgs;
+use mz_secrets_cli::SecretsReaderCliArgs;
 use mz_storage_client::controller::{
     IntrospectionType, StorageController, StorageMetadata, StorageTxn,
 };
@@ -166,7 +166,7 @@ pub struct Controller {
     /// Tracks the readiness of the underlying controllers.
     readiness: Readiness,
     /// Tasks for collecting replica metrics.
-    metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
+    metrics_tasks: BTreeMap<(ClusterId, ReplicaId), AbortOnDropHandle<()>>,
     /// Sender for the channel over which replica metrics are sent.
     metrics_tx: mpsc::UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
@@ -636,6 +636,7 @@ impl Controller {
                     Datum::TimestampTz(now_tz),
                     m.heap_bytes.into(),
                     m.heap_limit.into(),
+                    m.swap_bytes.into(),
                 ]);
                 (row.clone(), mz_repr::Diff::ONE)
             })

@@ -1,4 +1,5 @@
 ---
+draft: true
 title: mz profile
 description: The `mz profile` command manages authentication profiles for `mz`.
 menu:

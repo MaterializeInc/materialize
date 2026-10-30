@@ -11,24 +11,25 @@
 Test the LaunchDarkly integration, get configuration flags from LD.
 """
 
+import json
 from itertools import chain
 from os import environ
 from textwrap import dedent
-from time import sleep
+from time import monotonic, sleep
 from typing import Any
 from uuid import uuid1
 
-import launchdarkly_api  # type: ignore
-from launchdarkly_api.api import feature_flags_api  # type: ignore
-from launchdarkly_api.model.client_side_availability_post import (  # type: ignore
+import launchdarkly_api
+import requests
+from launchdarkly_api.api import feature_flags_api
+from launchdarkly_api.models.client_side_availability_post import (
     ClientSideAvailabilityPost,
 )
-from launchdarkly_api.model.defaults import Defaults  # type: ignore
-from launchdarkly_api.model.feature_flag_body import FeatureFlagBody  # type: ignore
-from launchdarkly_api.model.json_patch import JSONPatch  # type: ignore
-from launchdarkly_api.model.patch_operation import PatchOperation  # type: ignore
-from launchdarkly_api.model.patch_with_comment import PatchWithComment  # type: ignore
-from launchdarkly_api.model.variation import Variation  # type: ignore
+from launchdarkly_api.models.defaults import Defaults
+from launchdarkly_api.models.feature_flag_body import FeatureFlagBody
+from launchdarkly_api.models.patch_operation import PatchOperation
+from launchdarkly_api.models.patch_with_comment import PatchWithComment
+from launchdarkly_api.models.variation import Variation
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_ORG_ID
 from materialize.mzcompose.composition import Composition, Service
@@ -96,7 +97,8 @@ SERVICES = [
         },
         external_metadata_store=True,
     ),
-    Testdrive(no_reset=True, seed=1),
+    # Include streaming reconnect backoff in the live-update assertion window.
+    Testdrive(no_reset=True, seed=1, default_timeout="120s"),
 ]
 
 
@@ -142,10 +144,6 @@ def workflow_default(c: Composition) -> None:
             LD_FEATURE_FLAG_KEY,
             on=True,
         )
-
-        # 3 seconds should be enough to avoid race conditions between the update
-        # above and the query below.
-        sleep(3)
 
         # Assert that the value is as expected after the initial parameter sync.
         with c.override(
@@ -599,16 +597,16 @@ class LaunchDarklyClient:
                 feature_flag_body=FeatureFlagBody(
                     name=feature_flag_key,
                     key=feature_flag_key,
-                    client_side_availability=ClientSideAvailabilityPost(
-                        using_environment_id=True,
-                        using_mobile_key=True,
+                    clientSideAvailability=ClientSideAvailabilityPost(
+                        usingEnvironmentId=True,
+                        usingMobileKey=True,
                     ),
                     variations=variations,
                     temporary=False,
                     tags=tags,
                     defaults=Defaults(
-                        off_variation=off_variation,
-                        on_variation=on_variation,
+                        offVariation=off_variation,
+                        onVariation=on_variation,
                     ),
                 ),
             )
@@ -622,51 +620,119 @@ class LaunchDarklyClient:
     ) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)
-            return api.patch_feature_flag(
+            flag = api.patch_feature_flag(
                 project_key=self.project_key,
                 feature_flag_key=feature_flag_key,
                 patch_with_comment=PatchWithComment(
-                    patch=JSONPatch(
-                        list(
-                            chain(
-                                (
-                                    [
-                                        PatchOperation(
-                                            op="replace",
-                                            path=f"/environments/{self.environment_key}/on",
-                                            value=on,
-                                        )
-                                    ]
-                                    if on is not None
-                                    else []
-                                ),
-                                (
-                                    [
-                                        PatchOperation(
-                                            op="replace",
-                                            path=f"/environments/{self.environment_key}/contextTargets",
-                                            value=contextTargets,
-                                        ),
-                                    ]
-                                    if contextTargets is not None
-                                    else []
-                                ),
-                                (
-                                    [
-                                        PatchOperation(
-                                            op="replace",
-                                            path=f"/environments/{self.environment_key}/rules",
-                                            value=rules,
-                                        ),
-                                    ]
-                                    if rules is not None
-                                    else []
-                                ),
-                            )
+                    patch=list(
+                        chain(
+                            (
+                                [
+                                    PatchOperation(
+                                        op="replace",
+                                        path=f"/environments/{self.environment_key}/on",
+                                        value=on,
+                                    )
+                                ]
+                                if on is not None
+                                else []
+                            ),
+                            (
+                                [
+                                    PatchOperation(
+                                        op="replace",
+                                        path=f"/environments/{self.environment_key}/contextTargets",
+                                        value=contextTargets,
+                                    ),
+                                ]
+                                if contextTargets is not None
+                                else []
+                            ),
+                            (
+                                [
+                                    PatchOperation(
+                                        op="replace",
+                                        path=f"/environments/{self.environment_key}/rules",
+                                        value=rules,
+                                    ),
+                                ]
+                                if rules is not None
+                                else []
+                            ),
                         )
                     )
                 ),
             )
+        # `environments` is optional in the response model, but the patched flag
+        # always carries its environment configurations.
+        assert flag.environments is not None
+        self.wait_for_propagation(
+            feature_flag_key, flag.environments[self.environment_key].version
+        )
+        return flag
+
+    def wait_for_propagation(self, feature_flag_key: str, version: int) -> None:
+        """Probe fresh SDK stream snapshots until one contains the updated flag."""
+        assert LAUNCHDARKLY_SDK_KEY is not None
+        # A successful management API write does not imply SDK visibility. In
+        # particular, the boot-only assertion has no sync loop to repair a stale
+        # initial read. Probe the same initial snapshot endpoint that boot uses,
+        # not the polling endpoint or later patches on an already-open stream.
+        # These versions are environment-specific, not the flag's top-level
+        # management API version.
+        deadline = monotonic() + 120
+        observed: int | str | None = "no snapshot"
+        while monotonic() < deadline:
+            try:
+                with requests.get(
+                    "https://stream.launchdarkly.com/all",
+                    headers={"Authorization": LAUNCHDARKLY_SDK_KEY},
+                    stream=True,
+                    timeout=10,
+                ) as response:
+                    response.raise_for_status()
+                    response.encoding = "utf-8"
+                    event = ""
+                    data: list[str] = []
+                    for line in response.iter_lines(decode_unicode=True):
+                        if monotonic() >= deadline:
+                            break
+                        if line.startswith("event:"):
+                            event = line[len("event:") :].strip()
+                        elif line.startswith("data:"):
+                            data.append(line[len("data:") :].lstrip())
+                        elif not line and data:
+                            snapshot = json.loads("\n".join(data))
+                            if event != "put" or snapshot["path"] != "/":
+                                raise UIError(
+                                    "Expected an initial root put from SDK stream"
+                                )
+                            flag = snapshot["data"]["flags"].get(feature_flag_key)
+                            snapshot_version = (
+                                flag["version"] if flag is not None else None
+                            )
+                            observed = snapshot_version
+                            if (
+                                snapshot_version is not None
+                                and snapshot_version >= version
+                            ):
+                                print(
+                                    f"SDK snapshot contains {feature_flag_key} version "
+                                    f"{observed} (wanted {version})"
+                                )
+                                return
+                            break
+            except requests.HTTPError as e:
+                if e.response is None or e.response.status_code < 500:
+                    raise
+                observed = f"HTTP {e.response.status_code}"
+            except (requests.ConnectionError, requests.Timeout) as e:
+                observed = type(e).__name__
+            sleep(1)
+        raise UIError(
+            f"SDK propagation timed out for {feature_flag_key}: "
+            f"expected version >= {version}, last observed {observed}"
+        )
 
     def delete_flag(self, feature_flag_key: str) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:

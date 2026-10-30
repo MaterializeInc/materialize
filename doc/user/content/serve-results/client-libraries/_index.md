@@ -26,7 +26,7 @@ Client libraries tend to run complex introspection queries that may use configur
 | Java     | [PostgreSQL JDBC driver](https://jdbc.postgresql.org/)          | See the [Java cheatsheet](/serve-results/client-libraries/java-jdbc/).  |
 | Node.js  | [`node-postgres`](https://node-postgres.com/)                   | See the [Node.js cheatsheet](/serve-results/client-libraries/node-js/). |
 | PHP      | [`pdo_pgsql`](https://www.php.net/manual/en/ref.pgsql.php)      | See the [PHP cheatsheet](/serve-results/client-libraries/php/).         |
-| Python   | [`psycopg2`](https://pypi.org/project/psycopg2/)                | See the [Python cheatsheet](/serve-results/client-libraries/python/).   |
+| Python   | [`psycopg2`](https://pypi.org/project/psycopg2/)                | See the [Python cheatsheet](/serve-results/client-libraries/python/) and its [SQLAlchemy section](/serve-results/client-libraries/python/#sqlalchemy). |
 | Ruby     | [`pg` gem](https://rubygems.org/gems/pg/)                       | See the [Ruby cheatsheet](/serve-results/client-libraries/ruby/).       |
 | Rust     | [`postgres-openssl`](https://crates.io/crates/postgres-openssl) | See the [Rust cheatsheet](/serve-results/client-libraries/rust/).       |
 

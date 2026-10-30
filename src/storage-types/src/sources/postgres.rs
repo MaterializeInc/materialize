@@ -190,6 +190,9 @@ pub struct PostgresSourceExportDetails {
     /// their target types
     pub column_casts: Vec<(CastType, crate::sources::casts::StorageScalarExpr)>,
     pub table: PostgresTableDesc,
+    /// An upper bound on the upstream LSN whose schema `table` describes.
+    /// `None` for exports created before this was recorded.
+    pub initial_lsn: Option<MzOffset>,
 }
 
 impl AlterCompatible for PostgresSourceExportDetails {
@@ -199,6 +202,7 @@ impl AlterCompatible for PostgresSourceExportDetails {
         let Self {
             column_casts: _,
             table: _,
+            initial_lsn: _,
         } = self;
         Ok(())
     }

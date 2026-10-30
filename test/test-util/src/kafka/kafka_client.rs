@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use anyhow::Context;
 use mz_kafka_util::admin::EnsureTopicConfig;
-use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
+use mz_kafka_util::client::{
+    MzClientContext, create, create_new_client_config_simple, create_with_context,
+};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
@@ -36,7 +38,7 @@ impl KafkaClient {
             config.set(*key, *val);
         }
 
-        let producer = config.create_with_context(MzClientContext::default())?;
+        let producer = create_with_context(&config, MzClientContext::default())?;
 
         Ok(KafkaClient {
             producer,
@@ -55,9 +57,7 @@ impl KafkaClient {
         let mut config = create_new_client_config_simple();
         config.set("bootstrap.servers", &self.kafka_url);
 
-        let client = config
-            .create::<AdminClient<_>>()
-            .expect("creating admin kafka client failed");
+        let client = create::<AdminClient<_>>(&config).expect("creating admin kafka client failed");
 
         let admin_opts = AdminOptions::new().request_timeout(timeout);
 

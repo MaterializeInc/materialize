@@ -42,15 +42,17 @@
 //!    to learn which times have been committed. When the persist frontier
 //!    reaches the resume upper, rehydration is complete.
 //!
-//! 3. **Seal & drain.** Call `batcher.seal(input_upper)` to extract all
+//! 3. **Seal & drain.** Seal the batcher just past the persist frontier
+//!    (capped at the input frontier, see `seal_upper`) to extract
 //!    source-finalized entries as sorted, consolidated chunks. Each entry is
 //!    classified:
 //!    - **Eligible** (at the persist frontier): the persist trace has the
 //!      correct "before" state for this time. Look up the old value in the
 //!      feedback arrangement, emit a retraction if present, and emit the new
 //!      value.
-//!    - **Ineligible** (between persist and input frontiers): persist hasn't
-//!      caught up yet. Push back into the batcher for the next iteration.
+//!    - **Ineligible** (above the persist frontier, below the seal upper):
+//!      persist hasn't caught up yet. Push back into the batcher for the next
+//!      iteration.
 //!    - **Already persisted** (below the persist frontier): some writer has
 //!      already advanced the shard past this time, so it is dropped. See the
 //!      drain functions for why re-stashing it would strand the data and pin
@@ -68,10 +70,10 @@
 //! loop:
 //!
 //! * **Chunked**: the stash is differential's chunk merge batcher over
-//!   `ColumnChunk`s and the feedback arrangement is a spine of chunk batches.
-//!   Committed chunk bodies spill to the process buffer pool, the drain
-//!   loads sealed chunks one at a time, and prior state comes back through
-//!   bulk probes of the trace's batches.
+//!   time-major `ColumnChunk`s and the feedback arrangement is a spine of
+//!   chunk batches. Committed chunk bodies spill to the process buffer pool,
+//!   the drain loads sealed chunks one at a time, and prior state comes back
+//!   through bulk probes of the trace's batches.
 //! * **Paged**: the stash is the paged columnar merge batcher and the
 //!   feedback arrangement is a `ValRowSpine`. Cold chains page out of RSS
 //!   through the storage-owned column pager, and prior state comes back
@@ -90,51 +92,52 @@
 
 use std::fmt::Debug;
 
-use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::logging::Logger;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::{Arranged, arrange_core};
-use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkBuilder, ChunkSpine};
-use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
+use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkBuilder};
+use differential_dataflow::trace::{BatchReader, Batcher, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_dyncfg::ConfigSet;
-use mz_repr::{Datum, Diff, GlobalId, Row};
-// Only the fuzzing-gated `datum_seq_to_upsert_value` takes a `DatumSeq`.
-#[cfg(feature = "fuzzing")]
-use mz_row_spine::DatumSeq;
-use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
+use mz_ore::cast::CastFrom;
+use mz_repr::{Diff, GlobalId, Row};
+use mz_row_spine::{FundedValRowSpine, ValRowColPagedBuilder};
 use mz_storage_types::dyncfgs::ENABLE_UPSERT_CHUNKED_STASH;
-use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton,
 };
-use mz_timely_util::columnar::batcher::ColumnChunker;
-use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk};
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
-use mz_timely_util::columnar::unload::UnloadBatch;
-use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
+use mz_timely_util::columnar::chunk::{ChunkChunker, StorageSpill};
+use mz_timely_util::columnar::merge_batcher::PagedChunker;
 use mz_timely_util::containers::stack::FueledBuilder;
 use std::convert::Infallible;
-use timely::container::{CapacityContainerBuilder, PushInto};
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::generic::Operator;
-use timely::dataflow::operators::{Capability, CapabilitySet, Exchange as _};
-use timely::dataflow::{Stream, StreamVec};
+use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
-use crate::statistics::SourceStatistics;
 use crate::upsert::UpsertKey;
 use crate::upsert::UpsertSourceTime;
 use crate::upsert::UpsertValue;
+
+use self::feedback::{FeedbackChunk, FeedbackSpine, UpsertFeedbackBatcher, encode_feedback};
+use self::stash::{ChunkedArm, PagedArm, UpsertDiff, UpsertStashArm, UpsertUpdate, seal_upper};
+
+#[cfg(feature = "fuzzing")]
+pub use self::feedback::datum_seq_to_upsert_value;
+pub use self::feedback::upsert_value_to_row;
+
+mod drain;
+mod feedback;
+mod stash;
+#[cfg(test)]
+mod tests;
 
 /// Which stash and feedback-arrangement representation the upsert-v2
 /// operator instantiates. The two flavors run the same operator loop; they
@@ -164,235 +167,11 @@ impl UpsertStashFlavor {
     }
 }
 
-/// The paged flavor's persist-feedback batcher, wrapping
-/// [`Col2ValPagedBatcher`] only to capture the storage upsert-stash pager at
-/// construction.
-///
-/// `arrange_core` builds its batcher via [`Batcher::new`], which has no pager
-/// hook, so a plain `Col2ValPagedBatcher` falls back to the process-global
-/// (compute) pager, meaning the feedback arrangement's spill would be gated
-/// by compute's `enable_column_paged_batcher_spill` rather than storage's
-/// `enable_upsert_paged_spill`. Injecting `upsert_stash_pager::pager()` in
-/// `new` puts the feedback arrangement under the same flag as the source
-/// stash. Every other method delegates to the inner batcher unchanged.
-struct UpsertFeedbackBatcher<T: columnar::Columnar>(Col2ValPagedBatcher<UpsertKey, Row, T, Diff>);
-
-impl<T> Batcher for UpsertFeedbackBatcher<T>
-where
-    T: Timestamp + columnar::Columnar + Default + PartialOrder,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-{
-    type Output = Column<((UpsertKey, Row), T, Diff)>;
-    type Time = T;
-
-    fn new(logger: Option<Logger>, operator_id: usize) -> Self {
-        let mut batcher =
-            <Col2ValPagedBatcher<UpsertKey, Row, T, Diff> as Batcher>::new(logger, operator_id);
-        batcher.set_pager(crate::upsert::upsert_stash_pager::pager());
-        Self(batcher)
-    }
-
-    fn seal(&mut self, upper: Antichain<T>) -> (Vec<Self::Output>, Description<T>) {
-        self.0.seal(upper)
-    }
-
-    fn frontier(&mut self) -> AntichainRef<'_, T> {
-        self.0.frontier()
-    }
-}
-
-impl<T> PushInto<Column<((UpsertKey, Row), T, Diff)>> for UpsertFeedbackBatcher<T>
-where
-    T: Timestamp + columnar::Columnar + Default + PartialOrder,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-{
-    fn push_into(&mut self, chunk: Column<((UpsertKey, Row), T, Diff)>) {
-        self.0.push_into(chunk)
-    }
-}
-
-/// One persist-feedback update: a key, its current value row, the time, and
-/// an additive count.
-type FeedbackUpdate<T> = ((UpsertKey, Row), T, Diff);
-
-/// One feedback-arrangement chunk: a sorted, consolidated run of updates,
-/// resident or spilled to the buffer pool. Both batcher chains and sealed
-/// spine batches are sequences of these, so the arrangement's state pages out
-/// of RSS under the pool's budget, and the drain reads it back through the
-/// bulk [`UnloadChunk`](mz_timely_util::columnar::unload::UnloadChunk)
-/// surface: copy-out probes, no cursor borrows.
-type FeedbackChunk<T> = ColumnChunk<(UpsertKey, Row), T, Diff>;
-
-/// The feedback arrangement's trace: a spine of `Rc`-shared chunk batches.
-type FeedbackSpine<T> = ChunkSpine<FeedbackChunk<T>>;
-
-// The source stash carries the upsert payload in a custom diff type so the
-// merge batcher consolidates by (key, time), keeping the update with the
-// highest `FromTime` (latest source offset) per group. The diff is `Columnar`
-// so the paged merge batcher can store it in a `Column` and page it out of RSS.
-//
-// The value is a tag-encoded `Row` (see `upsert_value_to_row`) rather than an
-// `UpsertValue`: folding both the `Ok` and `Err` arms into one `Row` lets the
-// value share a single columnar byte container, and `Row` already implements
-// `Columnar`. `None` is a deletion tombstone.
-
-// Derive ordering on the generated `UpsertDiffReference` too: the paged merge
-// batcher requires `Ref: Ord` to sort the `(key, time, diff)` columns it
-// consolidates. The derived order (by `from_time`, then `value`) is fine —
-// "max FromTime wins" can tie only between equal `from_time`s, and a source
-// never emits two distinct values for the same `(key, time, from_time)`, so
-// the consolidated result doesn't depend on the fold order of equal
-// `(key, time)` runs.
-#[derive(Clone, Debug, Default, columnar::Columnar)]
-#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
-struct UpsertDiff<O> {
-    from_time: O,
-    value: Option<Row>,
-}
-
-impl<O> IsZero for UpsertDiff<O> {
-    fn is_zero(&self) -> bool {
-        false
-    }
-}
-
-impl<O: Ord + Clone> Semigroup for UpsertDiff<O> {
-    fn plus_equals(&mut self, rhs: &Self) {
-        if rhs.from_time > self.from_time {
-            *self = rhs.clone();
-        }
-    }
-}
-
-// Accumulate a borrowed columnar reference: the paged merge batcher consolidates
-// `Column`-resident diffs through this path on every fold of an equal
-// `(key, time)` run. Materialize only the order key to decide the "max FromTime
-// wins" comparison — copying the value `Row` out of the column solely when `rhs`
-// wins. Losing folds (the common case for a repeatedly-updated key) then pay no
-// `Row` copy at all.
-impl<'a, O> Semigroup<columnar::Ref<'a, UpsertDiff<O>>> for UpsertDiff<O>
-where
-    O: columnar::Columnar + Ord + Clone,
-{
-    fn plus_equals(&mut self, rhs: &columnar::Ref<'a, UpsertDiff<O>>) {
-        let rhs_from_time = <O as columnar::Columnar>::into_owned(rhs.from_time);
-        if rhs_from_time > self.from_time {
-            self.from_time = rhs_from_time;
-            self.value = <Option<Row> as columnar::Columnar>::into_owned(rhs.value);
-        }
-    }
-}
-
-/// One source-stash update: a key, its dataflow time, and the payload diff.
-/// `O` is the columnar order key projected from the source `FromTime` (see
-/// [`UpsertSourceTime`]).
-type UpsertUpdate<T, O> = (UpsertKey, T, UpsertDiff<O>);
-
-/// One stash chunk: a sorted, consolidated run of updates, resident or
-/// spilled to the buffer pool.
-type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O>>;
-
-/// The chunked flavor's stash: differential's chunk merge batcher over
-/// `ColumnChunk`s. Data is pushed in unsorted. The batcher maintains
-/// geometrically-sized sorted chains and consolidates via the UpsertDiff
-/// Semigroup automatically. Committed chunks spill their bodies to the
-/// process buffer pool (see `mz_timely_util::columnar::chunk`), so the
-/// not-yet-eligible backlog (the snapshot / persist-lag window) pages out of
-/// RSS instead of growing it.
-type UpsertChunkBatcher<T, O> = ChunkBatcher<UpsertChunk<T, O>>;
-
-/// The paged flavor's stash: the paged columnar merge batcher, consolidating
-/// like [`UpsertChunkBatcher`] but storing each chain entry as a `Column`
-/// routed through the storage-owned pager, which pages cold chains out of
-/// RSS.
-type UpsertPagedBatcher<T, O> = ColumnMergeBatcher<UpsertKey, T, UpsertDiff<O>>;
-
-/// The chunker that sorts and consolidates raw input into the `Column` chunks
-/// both stash batchers consume.
-type UpsertChunker<T, O> = ColumnChunker<UpsertUpdate<T, O>>;
-
 /// The operator's data-output handle. A fueled `Vec` builder so the drain can
 /// `give_fueled` each emitted update and yield to timely under large snapshot
 /// drains instead of monopolizing the worker.
 type UpsertOutputHandle<T> =
     AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<(UpsertValue, T, Diff)>>>>;
-
-// The persist-feedback arrangement stores `(UpsertKey, Row)` pairs in columnar
-// chunk batches ([`FeedbackSpine`]). `UpsertValue` is
-// `Result<Row, Box<UpsertError>>`, so we fold both arms into a single `Row`
-// with a leading tag column so they share the value column.
-
-/// Encode an [`UpsertValue`] as a `Row` with a leading tag column so both `Ok`
-/// and `Err` payloads round-trip through `Row` byte storage.
-///
-/// Used on the render path. `pub` only so [`crate::fuzz_exports`] can re-export
-/// it under the `fuzzing` feature for the storage fuzz crate. The enclosing
-/// module is crate-private, so it is not otherwise reachable. Not a stable
-/// public API.
-#[doc(hidden)]
-pub fn upsert_value_to_row(value: &UpsertValue) -> Row {
-    let mut row = Row::default();
-    let mut packer = row.packer();
-    match value {
-        Ok(ok) => {
-            packer.push(Datum::UInt8(0));
-            packer.extend(ok.iter());
-        }
-        Err(err) => {
-            packer.push(Datum::UInt8(1));
-            let bytes =
-                bincode::serialize(err.as_ref()).expect("UpsertError is serializable via bincode");
-            packer.push(Datum::Bytes(&bytes));
-        }
-    }
-    row
-}
-
-/// Heap-size estimate for an emitted [`UpsertValue`], used to drive
-/// `give_fueled` yielding on the output edge.
-fn upsert_value_byte_len(value: &UpsertValue) -> usize {
-    match value {
-        Ok(row) => row.byte_len(),
-        Err(err) => std::mem::size_of_val(err.as_ref()),
-    }
-}
-
-/// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] back from the
-/// `DatumSeq` view returned by a `ValRowSpine` cursor.
-///
-/// Exists only for the storage fuzz crate, so it is gated behind the `fuzzing`
-/// feature. Not a stable public API.
-#[cfg(feature = "fuzzing")]
-#[doc(hidden)]
-pub fn datum_seq_to_upsert_value(seq: DatumSeq<'_>) -> UpsertValue {
-    decode_upsert_value(seq)
-}
-
-/// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] from any
-/// datum iterator, whether over a columnar `Row` reference or an owned `Row`.
-fn decode_upsert_value<'a>(mut iter: impl Iterator<Item = Datum<'a>>) -> UpsertValue {
-    let tag = match iter.next() {
-        Some(Datum::UInt8(tag)) => tag,
-        other => panic!("upsert value missing UInt8 tag, got {:?}", other),
-    };
-    match tag {
-        0 => {
-            let mut row = Row::default();
-            row.packer().extend(iter);
-            Ok(row)
-        }
-        1 => {
-            let bytes = match iter.next() {
-                Some(Datum::Bytes(b)) => b,
-                other => panic!("upsert error tag missing Bytes payload, got {:?}", other),
-            };
-            let err: UpsertError =
-                bincode::deserialize(bytes).expect("UpsertError bincode round-trip");
-            Err(Box::new(err))
-        }
-        tag => panic!("unknown upsert value tag {tag}"),
-    }
-}
 
 /// Transforms a stream of upserts (key-value updates) into a differential
 /// collection.
@@ -414,7 +193,8 @@ pub fn upsert_inner<'scope, T, FromTime>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<T>,
-    persist_input: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    persist_ok: VecCollection<'scope, T, Row, Diff>,
+    persist_err: VecCollection<'scope, T, DataflowError, Diff>,
     persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -437,19 +217,20 @@ where
     // arrangement they feed is not, so each arm names its own arrange types
     // and hands the arrangement to the shared operator loop.
     let encoded = encode_feedback(
-        persist_input,
+        persist_ok,
+        persist_err,
         key_indices,
         source_config.source_statistics.clone(),
     );
     match flavor {
         UpsertStashFlavor::Chunked => {
             // Chains and sealed batches alike are `FeedbackChunk`s whose
-            // bodies spill to the buffer pool, behind the same process spill
+            // bodies spill to the buffer pool, behind the same storage spill
             // gate as the source stash.
             let persist_arranged = arrange_core::<
                 _,
                 _,
-                ChunkChunker<(UpsertKey, Row), T, Diff>,
+                ChunkChunker<(UpsertKey, Row), T, Diff, StorageSpill>,
                 ChunkBatcher<FeedbackChunk<T>>,
                 ChunkBuilder<FeedbackChunk<T>>,
                 FeedbackSpine<T>,
@@ -472,10 +253,10 @@ where
             let persist_arranged = arrange_core::<
                 _,
                 _,
-                ColumnChunker<((UpsertKey, Row), T, Diff)>,
+                PagedChunker<((UpsertKey, Row), T, Diff)>,
                 UpsertFeedbackBatcher<T>,
                 ValRowColPagedBuilder<UpsertKey, T, Diff>,
-                ValRowSpine<UpsertKey, T, Diff>,
+                FundedValRowSpine<UpsertKey, T, Diff>,
             >(encoded, Pipeline, "Persist feedback");
             build_upsert_operator::<PagedArm, _, _>(
                 input,
@@ -487,70 +268,6 @@ where
             )
         }
     }
-}
-
-/// Key the persist feedback by [`UpsertKey`], record source statistics, and
-/// encode `(UpsertKey, UpsertValue)` as `(UpsertKey, Row)` `Column` chunks,
-/// the input both flavors' feedback arrangements consume. Built with
-/// `Pipeline` downstream of an `UpsertKey::hashed` exchange, so the
-/// arrangement keeps that locality.
-fn encode_feedback<'scope, T>(
-    persist_input: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
-    key_indices: Vec<usize>,
-    source_statistics: SourceStatistics,
-) -> Stream<'scope, T, Column<((UpsertKey, Row), T, Diff)>>
-where
-    T: Timestamp + TotalOrder + Sync,
-    T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
-    T: columnation::Columnation,
-    T: columnar::Columnar + Default,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-{
-    // Extract (UpsertKey, UpsertValue) from the persist feedback collection.
-    let persist_keyed = persist_input.flat_map(move |result| {
-        let value = match result {
-            Ok(ok) => Ok(ok),
-            Err(DataflowError::EnvelopeError(err)) => match *err {
-                EnvelopeError::Upsert(err) => Err(Box::new(err)),
-                EnvelopeError::Flat(_) => return None,
-            },
-            Err(_) => return None,
-        };
-        let value_ref = match value {
-            Ok(ref row) => Ok(row),
-            Err(ref err) => Err(&**err),
-        };
-        Some((UpsertKey::from_value(value_ref, &key_indices), value))
-    });
-    let persist_keyed = persist_keyed
-        .inner
-        // The arrangement already implicitly exchanges by key, so this is redundant, but we want to
-        // do it earlier so that we can inspect the stream properly for source statistics.
-        .exchange(move |((key, _), _, _)| UpsertKey::hashed(key))
-        .as_collection()
-        .inspect(move |((_, row), _, diff)| {
-            source_statistics.update_records_indexed_by(diff.into_inner());
-            source_statistics.update_bytes_indexed_by(
-                row.as_ref().map_or(0, |r| r.byte_len().try_into().unwrap()) * diff.into_inner(),
-            );
-        });
-    persist_keyed
-        .inner
-        .unary::<ColumnBuilder<((UpsertKey, Row), T, Diff)>, _, _, _>(
-            Pipeline,
-            "Persist feedback encode",
-            |_, _| {
-                move |input, output| {
-                    input.for_each(|time, data| {
-                        let mut session = output.session_with_builder(&time);
-                        for ((key, value), ts, diff) in data.drain(..) {
-                            let row = upsert_value_to_row(&value);
-                            session.give(((&key, &row), &ts, &diff));
-                        }
-                    });
-                }
-            },
-        )
 }
 
 /// The flavor-independent upsert-v2 operator loop, generic over an
@@ -630,9 +347,9 @@ where
         // large initial snapshots. How cold stash state leaves RSS is
         // flavor-specific; see the arm impls.
         let mut batcher = A::new_batcher();
-        // The chunker sorts and consolidates raw input into the `Column` chunks
-        // the batcher consumes.
-        let mut chunker: UpsertChunker<T, FromTime::Order> = Default::default();
+        // The chunker sorts and consolidates raw input into the chunks the
+        // batcher consumes.
+        let mut chunker = A::Chunker::default();
         // Scratch buffer for accumulating source events before flushing to
         // the batcher. Drained on each iteration via the chunker.
         let mut push_buffer: Vec<UpsertUpdate<T, FromTime::Order>> = Vec::new();
@@ -660,7 +377,13 @@ where
             tokio::select! {
                 _ = input.ready() => {}
                 _ = persist_wakeup.ready() => {
-                    while persist_wakeup.next_sync().is_some() {}
+                    while let Some(event) = persist_wakeup.next_sync() {
+                        if let AsyncEvent::Data(_, batches) = event {
+                            for batch in batches {
+                                mz_timely_util::columnar::chunk::metrics::record_batch(batch.len());
+                            }
+                        }
+                    }
                 }
             }
 
@@ -747,24 +470,24 @@ where
             }
 
             // Step 3: Seal & drain.
-            // Seal the batcher at input_upper to extract all source-finalized
-            // entries as sorted, consolidated chunks. The seal merges all
-            // internal chains (O(N) linear merge of sorted data) and splits
-            // by time: entries at ts < input_upper are extracted, the rest
-            // stay in the batcher.
+            // Seal the batcher at `seal_upper`, just past persist_upper and at
+            // most input_upper, to extract source-finalized entries as sorted,
+            // consolidated chunks. The seal merges all internal chains and
+            // splits by time: entries below the seal upper are extracted, the
+            // rest stay in the batcher.
             //
             // Extracted entries are partitioned into:
             //   - Eligible (ts == persist_upper): processed now via a
             //     prior-value lookup in the persist trace.
-            //   - Ineligible (persist_upper < ts < input_upper): persist
+            //   - Ineligible (persist_upper < ts < seal upper): persist
             //     hasn't caught up yet, so pushed back into the batcher.
             //
             // We skip the seal entirely unless an eligible entry is at all
-            // possible. `seal` performs an O(N) merge of all chains
-            // regardless of how much it extracts, so calling it when nothing
-            // can be processed makes the operator quadratic in the number of
-            // wakeups (a real pathology during upstream snapshots and during
-            // rehydration when the source races ahead of persist).
+            // possible. `seal` merges all chains regardless of how much it
+            // extracts, so calling it when nothing can be processed makes
+            // the operator quadratic in the number of wakeups (a real
+            // pathology during upstream snapshots and during rehydration
+            // when the source races ahead of persist).
             //
             // For an entry at `ts` to be eligible we need
             // `ts == persist_upper && ts < input_upper`. The necessary
@@ -789,8 +512,8 @@ where
                 // Step 1 already consolidated `push_buffer` through the chunker
                 // (which readies a complete chunk per `push_into`), so the
                 // chunker holds nothing pending here and we can seal directly.
-                let (sealed, _description) = batcher.seal(input_upper.clone());
-                // Frontier of data remaining in the batcher (ts >= input_upper).
+                let (sealed, _description) = batcher.seal(seal_upper(&persist_upper, &input_upper));
+                // Frontier of data remaining in the batcher (ts >= seal upper).
                 let remaining_frontier = batcher.frontier().to_owned();
 
                 let mut ineligible = Vec::new();
@@ -819,6 +542,9 @@ where
                 upsert_metrics.upsert_inserts.inc_by(drain_stats.inserts);
                 upsert_metrics.upsert_updates.inc_by(drain_stats.updates);
                 upsert_metrics.upsert_deletes.inc_by(drain_stats.deletes);
+                upsert_metrics
+                    .restashed
+                    .inc_by(u64::cast_from(ineligible.len()));
 
                 if hydrating {
                     rehydration_total += drain_stats.inserts;
@@ -827,8 +553,8 @@ where
 
                 // Step 4: Capability management.
                 // Downgrade the output capability to the minimum time of any
-                // remaining data: either entries still in the batcher (above
-                // input_upper) or ineligible entries being pushed back.
+                // remaining data: either entries still in the batcher (at or
+                // above the seal upper) or ineligible entries being pushed back.
                 let min_ineligible_ts = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
                 A::flush(&mut ineligible, &mut chunker, &mut batcher);
 
@@ -865,1212 +591,4 @@ where
         snapshot_stream,
         shutdown_button.press_on_drop(),
     )
-}
-
-/// The flavor-specific pieces of the upsert-v2 operator: the stash batcher,
-/// the feedback arrangement's spine, and how the drain reads prior state.
-/// [`build_upsert_operator`] holds the flavor-independent operator loop and
-/// calls through this trait at the few points where the flavors diverge.
-trait UpsertStashArm<T, O>
-where
-    T: Timestamp + Lattice + columnar::Columnar + Default,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
-    for<'a> columnar::Ref<'a, O>: Ord + Copy,
-{
-    /// The feedback arrangement's spine. `'static` because the operator
-    /// future owns a trace agent for it.
-    type Spine: TraceReader<Time = T> + 'static;
-    /// The source-stash batcher. `'static` because the operator future owns
-    /// it.
-    type Batcher: Batcher<Time = T> + 'static;
-
-    /// A new stash batcher for one source dataflow.
-    fn new_batcher() -> Self::Batcher;
-
-    /// Push one sorted, consolidated `Column` chunk into the batcher, in the
-    /// batcher's chunk representation.
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>);
-
-    /// Consolidate `updates` through `chunker` into `Column` chunks and push
-    /// them into `batcher`, emptying `updates` (keeping its capacity). The
-    /// chunker readies a fully-consolidated chunk per `push_into`, so the
-    /// `extract` loop drains everything it produced.
-    fn flush(
-        updates: &mut Vec<UpsertUpdate<T, O>>,
-        chunker: &mut UpsertChunker<T, O>,
-        batcher: &mut Self::Batcher,
-    ) {
-        use timely::container::{ContainerBuilder as _, PushInto as _};
-        if updates.is_empty() {
-            return;
-        }
-        let mut raw: Column<UpsertUpdate<T, O>> = Default::default();
-        for update in updates.drain(..) {
-            raw.push_into(&update);
-        }
-        chunker.push_into(&mut raw);
-        while let Some(chunk) = chunker.extract() {
-            Self::push_chunk(batcher, std::mem::take(chunk));
-        }
-    }
-
-    /// Classify one sealed stash against `persist_upper` and emit eligible
-    /// output; see [`DrainStats`].
-    async fn drain(
-        sealed: Vec<<Self::Batcher as Batcher>::Output>,
-        ineligible: &mut Vec<UpsertUpdate<T, O>>,
-        output_handle: &UpsertOutputHandle<T>,
-        output_cap: &Capability<T>,
-        persist_upper: &Antichain<T>,
-        trace: &mut TraceAgent<Self::Spine>,
-        worker_id: usize,
-        source_id: GlobalId,
-    ) -> DrainStats;
-}
-
-/// The chunked flavor: [`UpsertChunkBatcher`] stash, [`FeedbackSpine`]
-/// feedback arrangement, bulk-probe drain.
-///
-/// NOTE: the seal's chain merge loads the bodies of the chunks it actually
-/// merges, while untouched survivors keep their spilled bodies. The
-/// partition against the upper passes chunks whose resident time bounds fall
-/// entirely on one side through without loading them, so only chunks the
-/// upper splits round-trip the pool codec. The drain then loads sealed
-/// chunks one at a time, so a large drain (a frontier advance releasing a
-/// snapshot's worth of stash at once) holds at most one chunk resident
-/// rather than the whole backlog.
-struct ChunkedArm;
-
-impl<T, O> UpsertStashArm<T, O> for ChunkedArm
-where
-    T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + columnar::Columnar + Default,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
-    for<'a> columnar::Ref<'a, O>: Ord + Copy,
-{
-    type Spine = FeedbackSpine<T>;
-    type Batcher = UpsertChunkBatcher<T, O>;
-
-    fn new_batcher() -> Self::Batcher {
-        Batcher::new(None, 0)
-    }
-
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
-        batcher.push_into(ColumnChunk::from_column(chunk));
-    }
-
-    async fn drain(
-        sealed: Vec<UpsertChunk<T, O>>,
-        ineligible: &mut Vec<UpsertUpdate<T, O>>,
-        output_handle: &UpsertOutputHandle<T>,
-        output_cap: &Capability<T>,
-        persist_upper: &Antichain<T>,
-        trace: &mut TraceAgent<Self::Spine>,
-        worker_id: usize,
-        source_id: GlobalId,
-    ) -> DrainStats {
-        drain_sealed_input_chunked(
-            sealed.into_iter().map(ColumnChunk::into_column),
-            ineligible,
-            output_handle,
-            output_cap,
-            persist_upper,
-            trace,
-            worker_id,
-            source_id,
-        )
-        .await
-    }
-}
-
-/// The paged flavor: [`UpsertPagedBatcher`] stash, `ValRowSpine` feedback
-/// arrangement, cursor drain. Cold chains page out of RSS through the
-/// storage-owned column pager, captured once per batcher at construction.
-struct PagedArm;
-
-impl<T, O> UpsertStashArm<T, O> for PagedArm
-where
-    T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + columnar::Columnar + Default,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
-    for<'a> columnar::Ref<'a, O>: Ord + Copy,
-{
-    type Spine = ValRowSpine<UpsertKey, T, Diff>;
-    type Batcher = UpsertPagedBatcher<T, O>;
-
-    fn new_batcher() -> Self::Batcher {
-        let mut batcher: UpsertPagedBatcher<T, O> = Batcher::new(None, 0);
-        batcher.set_pager(crate::upsert::upsert_stash_pager::pager());
-        batcher
-    }
-
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
-        batcher.push_into(chunk);
-    }
-
-    async fn drain(
-        sealed: Vec<Column<UpsertUpdate<T, O>>>,
-        ineligible: &mut Vec<UpsertUpdate<T, O>>,
-        output_handle: &UpsertOutputHandle<T>,
-        output_cap: &Capability<T>,
-        persist_upper: &Antichain<T>,
-        trace: &mut TraceAgent<Self::Spine>,
-        worker_id: usize,
-        source_id: GlobalId,
-    ) -> DrainStats {
-        drain_sealed_input_paged(
-            sealed,
-            ineligible,
-            output_handle,
-            output_cap,
-            persist_upper,
-            trace,
-            worker_id,
-            source_id,
-        )
-        .await
-    }
-}
-
-/// Where a stashed entry's time falls relative to the feedback frontier.
-enum TimeClass {
-    /// `ts < persist_upper`: already persisted, dropped by the drain.
-    AlreadyPersisted,
-    /// `ts == persist_upper`: processed now.
-    Eligible,
-    /// `ts > persist_upper`: re-stashed until persist catches up.
-    Ineligible,
-}
-
-/// Classify `ts` against `persist_upper`: the single spelling of the drain's
-/// eligibility test. The chunked drain's probe-collection pass and its
-/// classification pass, and the paged drain's cursor walk, all call this, so
-/// the probe set and the classification cannot disagree. Under the
-/// operator's total order, `Eligible` means `ts` equals the frontier's one
-/// element.
-fn classify_time<T: PartialOrder>(persist_upper: &Antichain<T>, ts: &T) -> TimeClass {
-    if !persist_upper.less_equal(ts) {
-        TimeClass::AlreadyPersisted
-    } else if persist_upper.less_than(ts) {
-        TimeClass::Ineligible
-    } else {
-        TimeClass::Eligible
-    }
-}
-
-/// Counts from a single call to [`drain_sealed_input_chunked`] or
-/// [`drain_sealed_input_paged`], used to update metrics.
-struct DrainStats {
-    /// Number of eligible entries probed against the feedback trace.
-    eligible: u64,
-    /// Number of probed entries for which a prior value was found.
-    result_count: u64,
-    /// New value written with no prior value (insert).
-    inserts: u64,
-    /// New value written over an existing value (update).
-    updates: u64,
-    /// Tombstone (None) applied to an existing value (delete).
-    deletes: u64,
-    /// Total output records emitted (retractions + insertions).
-    output_count: u64,
-}
-
-/// Process sealed chunks from the batcher, classifying each entry by its
-/// timestamp relative to `persist_upper`:
-///
-///   * `ts == persist_upper`: eligible for processing now (bulk probe of the
-///     feedback trace + output).
-///   * `ts >  persist_upper`: not yet processable. Returned in `ineligible`
-///     for re-stashing until the feedback frontier catches up to it.
-///   * `ts <  persist_upper`: already persisted by some writer and not
-///     relevant anymore, so DROPPED. The downstream persist_sink would filter
-///     such updates out anyway since the shard upper is further ahead, and
-///     our state is already up-to-date to `persist_upper` so we could not
-///     emit correct retractions for it. Re-stashing it would strand the data
-///     forever (`persist_upper` only advances, so `ts == persist_upper` can
-///     never again hold) and pin the operator's output frontier below the
-///     shard upper. This mirrors v1's `relevant = persist_upper.less_equal(ts)`.
-///
-/// The sealed chunks are already sorted and consolidated by the merge
-/// batcher, so each chunk's eligible keys form a sorted, deduplicated probe
-/// set, and the prior state comes back through one bulk `extract_into` pass
-/// per trace batch. Resident fence metadata selects the touched trace
-/// chunks, and only those bodies are read back, copy-out, per chunk probed.
-/// Sealed chunks are pulled from the iterator one at a time and dropped
-/// before the next is requested, so at most one loaded stash chunk (plus the
-/// probe hits for its keys) is resident regardless of drain size. Only the
-/// re-stashed ineligible set is materialized.
-async fn drain_sealed_input_chunked<T, O>(
-    sealed: impl Iterator<Item = Column<UpsertUpdate<T, O>>>,
-    ineligible: &mut Vec<UpsertUpdate<T, O>>,
-    output_handle: &UpsertOutputHandle<T>,
-    output_cap: &Capability<T>,
-    persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<FeedbackSpine<T>>,
-    worker_id: usize,
-    source_id: GlobalId,
-) -> DrainStats
-where
-    T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + columnar::Columnar + Default,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar,
-{
-    let mut eligible_count: u64 = 0;
-    let mut result_count: u64 = 0;
-    let mut output_count: u64 = 0;
-    let mut inserts: u64 = 0;
-    let mut updates: u64 = 0;
-    let mut deletes: u64 = 0;
-
-    // The batches this drain reads against. `Rc` clones of the trace's
-    // sealed chunk batches: chunk bodies stay spilled and are read back
-    // copy-out, per probed chunk, inside `extract_into`.
-    let batches = trace
-        .batches_through(Antichain::new().borrow())
-        .expect("complete batch set for the feedback trace; is it closed?");
-
-    // Eligible keys are probed against the trace in windows of this many
-    // distinct keys, bounding what one pass stages resident: probe hits carry
-    // full values, so an unwindowed pass over a byte-graded chunk of small
-    // records could stage tens of thousands of values at once.
-    const PROBE_WINDOW: usize = 1024;
-
-    for chunk in sealed {
-        use columnar::{Index, Len};
-        let view = chunk.borrow();
-        let total = view.len();
-        let mut start = 0;
-        while start < total {
-            // Pass 1: this window's sorted, deduplicated probe keys. The
-            // chunk is sorted by (key, time), so a window is a contiguous
-            // record range, probes come out sorted, and dedup is a neighbor
-            // test. The window closes where its PROBE_WINDOW + 1st distinct
-            // eligible key would begin.
-            let mut probe_col = <UpsertKey as columnar::Columnar>::Container::default();
-            let mut probe_count = 0usize;
-            let mut end = total;
-            {
-                use columnar::Push;
-                let mut last_probe: Option<&UpsertKey> = None;
-                for index in start..total {
-                    let (key, ts, _diff) = view.get(index);
-                    let ts = <T as columnar::Columnar>::into_owned(ts);
-                    if matches!(classify_time(persist_upper, &ts), TimeClass::Eligible) {
-                        if last_probe != Some(key) {
-                            if probe_count == PROBE_WINDOW {
-                                end = index;
-                                break;
-                            }
-                            probe_col.push(key);
-                            probe_count += 1;
-                            last_probe = Some(key);
-                        }
-                    }
-                }
-            }
-
-            // Pass 2: bulk-probe the trace's batches through the chunk
-            // batches' `UnloadChunk` surface and consolidate the hits into
-            // the prior value per key. Hits arrive per batch, so equal
-            // `(key, val)` pairs from different batches are non-adjacent.
-            // Sort before folding.
-            let mut old_values: std::collections::BTreeMap<UpsertKey, UpsertValue> =
-                std::collections::BTreeMap::new();
-            if probe_count > 0 {
-                use columnar::Borrow;
-                let mut staging = <FeedbackUpdate<T> as columnar::Columnar>::Container::default();
-                for batch in &batches {
-                    batch.extract_into(probe_col.borrow(), &mut staging);
-                }
-                let staged = staging.borrow();
-                let mut hits: Vec<_> = (0..staged.len())
-                    .map(|i| {
-                        let ((key, val), _time, diff) = staged.get(i);
-                        (key, val, <Diff as columnar::Columnar>::into_owned(diff))
-                    })
-                    .collect();
-                hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-                let mut i = 0;
-                while i < hits.len() {
-                    let (key, val, _) = hits[i];
-                    let mut count = Diff::ZERO;
-                    let mut j = i;
-                    while j < hits.len() && hits[j].0 == key && hits[j].1 == val {
-                        count += hits[j].2;
-                        j += 1;
-                    }
-                    if count.is_positive() {
-                        assert!(
-                            count == 1.into(),
-                            "unexpected multiple entries for the same key in persist trace"
-                        );
-                        let prev = old_values.insert(*key, decode_upsert_value(val.iter()));
-                        assert!(
-                            prev.is_none(),
-                            "unexpected multiple values for the same key in persist trace"
-                        );
-                    }
-                    i = j;
-                }
-            }
-
-            // Pass 3: classify and emit this window's records.
-            for index in start..end {
-                let (key, ts, diff) = view.get(index);
-                let ts = <T as columnar::Columnar>::into_owned(ts);
-                match classify_time(persist_upper, &ts) {
-                    TimeClass::AlreadyPersisted => continue,
-                    TimeClass::Ineligible => {
-                        // Re-stash for later (owned).
-                        ineligible.push((
-                            *key,
-                            ts,
-                            <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
-                        ));
-                        continue;
-                    }
-                    TimeClass::Eligible => {}
-                }
-
-                // ts == persist_upper: eligible. The chunk holds one entry per
-                // (key, time) and eligibility pins the time, so this key appears
-                // at most once and its prior value can move out of the map.
-                eligible_count += 1;
-                let old_value = old_values.remove(key);
-
-                if old_value.is_some() {
-                    result_count += 1;
-                }
-
-                match diff.value {
-                    Some(row) => {
-                        if let Some(old_val) = old_value {
-                            let size = upsert_value_byte_len(&old_val);
-                            output_handle
-                                .give_fueled(
-                                    output_cap,
-                                    (old_val, ts.clone(), Diff::MINUS_ONE),
-                                    size,
-                                )
-                                .await;
-                            output_count += 1;
-                            updates += 1;
-                        } else {
-                            inserts += 1;
-                        }
-                        let new_val = decode_upsert_value(row.iter());
-                        let size = upsert_value_byte_len(&new_val);
-                        output_handle
-                            .give_fueled(output_cap, (new_val, ts, Diff::ONE), size)
-                            .await;
-                        output_count += 1;
-                    }
-                    None => {
-                        if let Some(old_val) = old_value {
-                            let size = upsert_value_byte_len(&old_val);
-                            output_handle
-                                .give_fueled(output_cap, (old_val, ts, Diff::MINUS_ONE), size)
-                                .await;
-                            output_count += 1;
-                            deletes += 1;
-                        }
-                    }
-                }
-            }
-            start = end;
-        }
-    }
-
-    tracing::debug!(
-        worker_id = %worker_id,
-        source_id = %source_id,
-        ineligible = ineligible.len(),
-        eligible = eligible_count,
-        "drained stash",
-    );
-
-    DrainStats {
-        eligible: eligible_count,
-        result_count,
-        inserts,
-        updates,
-        deletes,
-        output_count,
-    }
-}
-
-/// [`drain_sealed_input_chunked`]'s counterpart for the paged flavor,
-/// classifying entries the same way but reading prior state through a trace
-/// cursor.
-///
-/// The sealed chunks are already sorted and consolidated by the merge
-/// batcher, so the trace cursor walks forward through keys in order and
-/// seeks amortize. Entries are walked by reference rather than collecting
-/// the eligible set into an owned Vec, and eligible values are emitted
-/// straight from the column's `RowRef` with no owned `UpsertDiff` copy. Only
-/// the re-stashed ineligible set is materialized.
-async fn drain_sealed_input_paged<T, O>(
-    sealed: Vec<Column<UpsertUpdate<T, O>>>,
-    ineligible: &mut Vec<UpsertUpdate<T, O>>,
-    output_handle: &UpsertOutputHandle<T>,
-    output_cap: &Capability<T>,
-    persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<ValRowSpine<UpsertKey, T, Diff>>,
-    worker_id: usize,
-    source_id: GlobalId,
-) -> DrainStats
-where
-    T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + columnar::Columnar,
-    O: columnar::Columnar,
-{
-    use columnar::Index as _;
-
-    // Classify each entry by its timestamp relative to `persist_upper`:
-    //
-    //   * `ts == persist_upper`: eligible for processing now.
-    //   * `ts >  persist_upper`: not yet processable; re-stashed (ineligible)
-    //     until the feedback frontier catches up to it.
-    //   * `ts <  persist_upper`: already persisted by some writer and not
-    //     relevant anymore. We DROP it. The downstream persist_sink would
-    //     filter such updates out anyway since the shard upper is further
-    //     ahead, and our state is already up-to-date to `persist_upper` so we
-    //     could not emit correct retractions for it. Re-stashing it would
-    //     strand the data forever (`persist_upper` only advances, so
-    //     `ts == persist_upper` can never again hold) and pin the operator's
-    //     output frontier below the shard upper. This mirrors v1's
-    //     `relevant = persist_upper.less_equal(ts)`.
-    let mut eligible_count: u64 = 0;
-    let mut result_count: u64 = 0;
-    let mut output_count: u64 = 0;
-    let mut inserts: u64 = 0;
-    let mut updates: u64 = 0;
-    let mut deletes: u64 = 0;
-
-    let (mut cursor, storage) = trace.cursor();
-
-    for chunk in &sealed {
-        for (key, ts, diff) in chunk.borrow().into_index_iter() {
-            let ts = <T as columnar::Columnar>::into_owned(ts);
-            match classify_time(persist_upper, &ts) {
-                TimeClass::AlreadyPersisted => continue,
-                TimeClass::Ineligible => {
-                    // Re-stash for later (owned).
-                    ineligible.push((
-                        *key,
-                        ts,
-                        <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
-                    ));
-                    continue;
-                }
-                TimeClass::Eligible => {}
-            }
-
-            // ts == persist_upper: eligible. Look up the prior value for this
-            // key in the persist trace and emit the retraction / insertion. The
-            // spine stores keys in a columnation arena, so we seek by the
-            // column's borrowed `&UpsertKey` directly.
-            eligible_count += 1;
-            cursor.seek_key(&storage, key);
-            let old_value = match cursor.get_key(&storage) {
-                Some(found) if found == key => {
-                    let mut result = None;
-                    while let Some(val) = cursor.get_val(&storage) {
-                        let mut count = Diff::ZERO;
-                        cursor.map_times(&storage, |_time, d| {
-                            count += d.clone();
-                        });
-                        if count.is_positive() {
-                            assert!(
-                                count == 1.into(),
-                                "unexpected multiple entries for the same key in persist trace"
-                            );
-                            assert!(
-                                result.is_none(),
-                                "unexpected multiple values for the same key in persist trace"
-                            );
-                            result = Some(decode_upsert_value(val));
-                        }
-                        cursor.step_val(&storage);
-                    }
-                    result
-                }
-                _ => None,
-            };
-
-            if old_value.is_some() {
-                result_count += 1;
-            }
-
-            match diff.value {
-                Some(row) => {
-                    if let Some(old_val) = old_value {
-                        let size = upsert_value_byte_len(&old_val);
-                        output_handle
-                            .give_fueled(output_cap, (old_val, ts.clone(), Diff::MINUS_ONE), size)
-                            .await;
-                        output_count += 1;
-                        updates += 1;
-                    } else {
-                        inserts += 1;
-                    }
-                    let new_val = decode_upsert_value(row.iter());
-                    let size = upsert_value_byte_len(&new_val);
-                    output_handle
-                        .give_fueled(output_cap, (new_val, ts, Diff::ONE), size)
-                        .await;
-                    output_count += 1;
-                }
-                None => {
-                    if let Some(old_val) = old_value {
-                        let size = upsert_value_byte_len(&old_val);
-                        output_handle
-                            .give_fueled(output_cap, (old_val, ts, Diff::MINUS_ONE), size)
-                            .await;
-                        output_count += 1;
-                        deletes += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    tracing::debug!(
-        worker_id = %worker_id,
-        source_id = %source_id,
-        ineligible = ineligible.len(),
-        eligible = eligible_count,
-        "drained stash",
-    );
-
-    DrainStats {
-        eligible: eligible_count,
-        result_count,
-        inserts,
-        updates,
-        deletes,
-        output_count,
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_persist_types::ShardId;
-    use mz_repr::{Datum, Timestamp as MzTimestamp};
-    use mz_storage_operators::persist_source::Subtime;
-    use mz_storage_types::sources::SourceEnvelope;
-    use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
-    use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, Input};
-    use timely::progress::Timestamp;
-
-    use crate::metrics::StorageMetrics;
-    use crate::metrics::upsert::UpsertMetricDefs;
-    use crate::source::SourceExportCreationConfig;
-    use crate::statistics::{SourceStatistics, SourceStatisticsMetricDefs};
-
-    use super::*;
-
-    // The tests drive the operator with a plain integer `FromTime` standing in
-    // for a Kafka offset; project it to itself so dedup orders by it directly.
-    impl UpsertSourceTime for i32 {
-        type Order = i32;
-        fn upsert_order(&self) -> i32 {
-            *self
-        }
-    }
-
-    type Ts = (MzTimestamp, Subtime);
-
-    fn new_ts(ts: u64) -> Ts {
-        (MzTimestamp::new(ts), Subtime::minimum())
-    }
-
-    fn key(k: i64) -> UpsertKey {
-        UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(k)])))
-    }
-
-    fn row(k: i64, v: i64) -> Row {
-        Row::pack_slice(&[Datum::Int64(k), Datum::Int64(v)])
-    }
-
-    // Runs the test body once per stash flavor and asserts the two flavors
-    // produce identical (consolidated) output, so every scenario covers both
-    // operator arms. Returns one flavor's output for the caller's own
-    // expected-value assertion.
-    macro_rules! upsert_test {
-        (|$input:ident, $persist:ident, $worker:ident| $body:block) => {{
-            let run = |flavor: UpsertStashFlavor| {
-                let output_handle = timely::execute_directly(move |$worker| {
-                    let (mut $input, mut $persist, output_handle) = $worker
-                        .dataflow::<MzTimestamp, _, _>(|scope| {
-                            scope.scoped::<Ts, _, _>("upsert", |scope| {
-                                let (input_handle, input) = scope.new_input();
-                                let (persist_handle, persist_input) = scope.new_input();
-                                let source_id = GlobalId::User(0);
-
-                                let reg = MetricsRegistry::new();
-                                let upsert_defs = UpsertMetricDefs::register_with(&reg);
-                                let upsert_metrics =
-                                    UpsertMetrics::new(&upsert_defs, source_id, 0, None);
-
-                                let reg2 = MetricsRegistry::new();
-                                let storage_metrics = StorageMetrics::register_with(&reg2);
-
-                                let reg3 = MetricsRegistry::new();
-                                let stats_defs =
-                                    SourceStatisticsMetricDefs::register_with(&reg3);
-                                let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
-                                    source_arity: 2,
-                                    style: UpsertStyle::Default(KeyEnvelope::Flattened),
-                                    key_indices: vec![0],
-                                });
-                                let source_statistics = SourceStatistics::new(
-                                    source_id, 0, &stats_defs, source_id, &ShardId::new(),
-                                    envelope, Antichain::from_elem(Timestamp::minimum()),
-                                );
-                                let source_config = SourceExportCreationConfig {
-                                    id: source_id,
-                                    worker_id: 0,
-                                    metrics: storage_metrics,
-                                    source_statistics,
-                                };
-
-                                let (output, _, _, button) = upsert_inner(
-                                    flavor,
-                                    input.as_collection(),
-                                    vec![0],
-                                    Antichain::from_elem(Timestamp::minimum()),
-                                    persist_input.as_collection(),
-                                    None,
-                                    upsert_metrics,
-                                    source_config,
-                                );
-                                std::mem::forget(button);
-                                (input_handle, persist_handle, output.inner.capture())
-                            })
-                        });
-
-                    $body
-
-                    output_handle
-                });
-
-                let mut actual: Vec<_> = output_handle
-                    .extract()
-                    .into_iter()
-                    .flat_map(|(_cap, container)| container)
-                    .collect();
-                differential_dataflow::consolidation::consolidate_updates(&mut actual);
-                actual
-            };
-
-            let paged = run(UpsertStashFlavor::Paged);
-            let chunked = run(UpsertStashFlavor::Chunked);
-            assert_eq!(paged, chunked, "stash flavors must produce equal output");
-            chunked
-        }};
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn gh_9160_repro() {
-        let actual = upsert_test!(|input, persist, worker| {
-            let key0 = key(0);
-            let key1 = key(1);
-            let value1 = row(0, 0);
-            let value3 = row(0, 1);
-            let value4 = row(0, 2);
-
-            input.send(((key0, Some(Ok(value1.clone())), 1), new_ts(0), Diff::ONE));
-            input.advance_to(new_ts(2));
-            worker.step();
-
-            persist.send((Ok(value1), new_ts(0), Diff::ONE));
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            input.send_batch(&mut vec![
-                ((key1, None, 2), new_ts(2), Diff::ONE),
-                ((key0, Some(Ok(value3)), 3), new_ts(3), Diff::ONE),
-            ]);
-            input.advance_to(new_ts(3));
-            input.send_batch(&mut vec![(
-                (key0, Some(Ok(value4)), 4),
-                new_ts(3),
-                Diff::ONE,
-            )]);
-            input.advance_to(new_ts(4));
-            worker.step();
-
-            persist.advance_to(new_ts(3));
-            worker.step();
-        });
-
-        let value1 = row(0, 0);
-        let value4 = row(0, 2);
-        let expected: Vec<(Result<Row, DataflowError>, _, _)> = vec![
-            (Ok(value1.clone()), new_ts(0), Diff::ONE),
-            (Ok(value1), new_ts(3), Diff::MINUS_ONE),
-            (Ok(value4), new_ts(3), Diff::ONE),
-        ];
-        assert_eq!(actual, expected);
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn out_of_order_keys_across_timestamps() {
-        let actual = upsert_test!(|input, persist, worker| {
-            let key_high = key(99);
-            let key_low = key(1);
-            let val_a = row(99, 1);
-            let val_b = row(1, 2);
-
-            input.send(((key_high, Some(Ok(val_a.clone())), 1), new_ts(0), Diff::ONE));
-            input.advance_to(new_ts(1));
-            worker.step();
-            persist.send((Ok(val_a.clone()), new_ts(0), Diff::ONE));
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            input.send(((key_low, Some(Ok(val_b.clone())), 2), new_ts(1), Diff::ONE));
-            input.advance_to(new_ts(2));
-            worker.step();
-            persist.send((Ok(val_b.clone()), new_ts(1), Diff::ONE));
-            persist.advance_to(new_ts(2));
-            worker.step();
-
-            let val_a2 = row(99, 10);
-            let val_b2 = row(1, 20);
-            input.send_batch(&mut vec![
-                (
-                    (key_high, Some(Ok(val_a2.clone())), 3),
-                    new_ts(2),
-                    Diff::ONE,
-                ),
-                ((key_low, Some(Ok(val_b2.clone())), 4), new_ts(2), Diff::ONE),
-            ]);
-            input.advance_to(new_ts(3));
-            worker.step();
-            persist.advance_to(new_ts(3));
-            worker.step();
-        });
-
-        let val_a = row(99, 1);
-        let val_b = row(1, 2);
-        let val_a2 = row(99, 10);
-        let val_b2 = row(1, 20);
-        let expected: Vec<(Result<Row, DataflowError>, _, _)> = vec![
-            (Ok(val_b.clone()), new_ts(1), Diff::ONE),
-            (Ok(val_b), new_ts(2), Diff::MINUS_ONE),
-            (Ok(val_b2), new_ts(2), Diff::ONE),
-            (Ok(val_a.clone()), new_ts(0), Diff::ONE),
-            (Ok(val_a), new_ts(2), Diff::MINUS_ONE),
-            (Ok(val_a2), new_ts(2), Diff::ONE),
-        ];
-        let mut actual_sorted = actual;
-        let mut expected_sorted = expected;
-        actual_sorted.sort();
-        expected_sorted.sort();
-        assert_eq!(actual_sorted, expected_sorted);
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn rehydration_then_update() {
-        let actual = upsert_test!(|input, persist, worker| {
-            let k = key(42);
-            let old_val = row(42, 100);
-            let new_val = row(42, 200);
-
-            persist.send((Ok(old_val), new_ts(0), Diff::ONE));
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            input.send(((k, Some(Ok(new_val)), 1), new_ts(1), Diff::ONE));
-            input.advance_to(new_ts(2));
-            worker.step();
-            persist.advance_to(new_ts(2));
-            worker.step();
-        });
-
-        let old_val = row(42, 100);
-        let new_val = row(42, 200);
-        let expected: Vec<(Result<Row, DataflowError>, _, _)> = vec![
-            (Ok(old_val), new_ts(1), Diff::MINUS_ONE),
-            (Ok(new_val), new_ts(1), Diff::ONE),
-        ];
-        assert_eq!(actual, expected);
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn drain_crosses_probe_window() {
-        // More distinct keys than one drain probe window holds, all eligible
-        // at the same timestamp. The records fit one sealed chunk (the ship
-        // threshold is ~2 MiB), so the drain must close a probe window
-        // mid-chunk and carry keys correctly across the boundary.
-        const KEYS: i64 = 1500;
-        let actual = upsert_test!(|input, persist, worker| {
-            for k in 0..KEYS {
-                persist.send((Ok(row(k, k)), new_ts(0), Diff::ONE));
-            }
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            for k in 0..KEYS {
-                input.send(((key(k), Some(Ok(row(k, k + 1))), 1), new_ts(1), Diff::ONE));
-            }
-            input.advance_to(new_ts(2));
-            worker.step();
-            persist.advance_to(new_ts(2));
-            worker.step();
-        });
-
-        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
-        for k in 0..KEYS {
-            expected.push((Ok(row(k, k)), new_ts(1), Diff::MINUS_ONE));
-            expected.push((Ok(row(k, k + 1)), new_ts(1), Diff::ONE));
-        }
-        let mut actual_sorted = actual;
-        actual_sorted.sort();
-        expected.sort();
-        assert_eq!(actual_sorted, expected);
-    }
-
-    /// The probe-window scenario with committed chunks forced through a
-    /// private buffer pool, so the chunked flavor's seal and drain read
-    /// spilled bodies back through the pool codec rather than resident
-    /// memory. The override is thread-scoped and `execute_directly` runs the
-    /// worker on this thread, so it reaches the operator's batchers. The
-    /// paged flavor (which the harness also runs) routes through the column
-    /// pager rather than the chunk override, so it stays resident and serves
-    /// as the reference.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn drain_reads_spilled_chunks() {
-        use mz_ore::pool::Pool;
-        use mz_timely_util::columnar::chunk::set_spill_override;
-
-        let pool = Pool::new().expect("pool creation");
-        set_spill_override(Some(pool.clone()));
-
-        const KEYS: i64 = 1500;
-        let actual = upsert_test!(|input, persist, worker| {
-            for k in 0..KEYS {
-                persist.send((Ok(row(k, k)), new_ts(0), Diff::ONE));
-            }
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            for k in 0..KEYS {
-                input.send(((key(k), Some(Ok(row(k, k + 1))), 1), new_ts(1), Diff::ONE));
-            }
-            input.advance_to(new_ts(2));
-            worker.step();
-            persist.advance_to(new_ts(2));
-            worker.step();
-        });
-
-        set_spill_override(None);
-        assert!(
-            pool.stats().inserts > 0,
-            "chunks should have spilled through the pool"
-        );
-
-        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
-        for k in 0..KEYS {
-            expected.push((Ok(row(k, k)), new_ts(1), Diff::MINUS_ONE));
-            expected.push((Ok(row(k, k + 1)), new_ts(1), Diff::ONE));
-        }
-        let mut actual_sorted = actual;
-        actual_sorted.sort();
-        expected.sort();
-        assert_eq!(actual_sorted, expected);
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn delete_existing_key() {
-        let actual = upsert_test!(|input, persist, worker| {
-            let k = key(7);
-            let val = row(7, 77);
-
-            input.send(((k, Some(Ok(val.clone())), 1), new_ts(0), Diff::ONE));
-            input.advance_to(new_ts(1));
-            worker.step();
-            persist.send((Ok(val), new_ts(0), Diff::ONE));
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            input.send(((k, None, 2), new_ts(1), Diff::ONE));
-            input.advance_to(new_ts(2));
-            worker.step();
-            persist.advance_to(new_ts(2));
-            worker.step();
-        });
-
-        let val = row(7, 77);
-        let expected: Vec<(Result<Row, DataflowError>, _, _)> = vec![
-            (Ok(val.clone()), new_ts(0), Diff::ONE),
-            (Ok(val), new_ts(1), Diff::MINUS_ONE),
-        ];
-        assert_eq!(actual, expected);
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn multi_batch_rehydration() {
-        let actual = upsert_test!(|input, persist, worker| {
-            let k = key(5);
-            let old_val = row(5, 10);
-            let new_val = row(5, 20);
-            let updated_val = row(5, 30);
-
-            persist.send((Ok(old_val.clone()), new_ts(0), Diff::ONE));
-            persist.send((Ok(old_val), new_ts(0), Diff::MINUS_ONE));
-            persist.send((Ok(new_val), new_ts(0), Diff::ONE));
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            input.send(((k, Some(Ok(updated_val)), 1), new_ts(1), Diff::ONE));
-            input.advance_to(new_ts(2));
-            worker.step();
-            persist.advance_to(new_ts(2));
-            worker.step();
-        });
-
-        let new_val = row(5, 20);
-        let updated_val = row(5, 30);
-        let expected: Vec<(Result<Row, DataflowError>, _, _)> = vec![
-            (Ok(new_val), new_ts(1), Diff::MINUS_ONE),
-            (Ok(updated_val), new_ts(1), Diff::ONE),
-        ];
-        assert_eq!(actual, expected);
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn delete_nonexistent_key() {
-        let actual = upsert_test!(|input, persist, worker| {
-            let k = key(99);
-
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            input.send(((k, None, 1), new_ts(1), Diff::ONE));
-            input.advance_to(new_ts(2));
-            worker.step();
-            persist.advance_to(new_ts(2));
-            worker.step();
-        });
-
-        assert!(actual.is_empty(), "expected empty output, got: {actual:?}");
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn reinsert_after_delete() {
-        let actual = upsert_test!(|input, persist, worker| {
-            let k = key(3);
-            let val_a = row(3, 10);
-            let val_b = row(3, 20);
-
-            input.send(((k, Some(Ok(val_a.clone())), 1), new_ts(0), Diff::ONE));
-            input.advance_to(new_ts(1));
-            worker.step();
-            persist.send((Ok(val_a.clone()), new_ts(0), Diff::ONE));
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            input.send(((k, None, 2), new_ts(1), Diff::ONE));
-            input.advance_to(new_ts(2));
-            worker.step();
-            persist.send((Ok(val_a), new_ts(1), Diff::MINUS_ONE));
-            persist.advance_to(new_ts(2));
-            worker.step();
-
-            input.send(((k, Some(Ok(val_b.clone())), 3), new_ts(2), Diff::ONE));
-            input.advance_to(new_ts(3));
-            worker.step();
-            persist.advance_to(new_ts(3));
-            worker.step();
-        });
-
-        let val_a = row(3, 10);
-        let val_b = row(3, 20);
-        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = vec![
-            (Ok(val_a.clone()), new_ts(0), Diff::ONE),
-            (Ok(val_a), new_ts(1), Diff::MINUS_ONE),
-            (Ok(val_b), new_ts(2), Diff::ONE),
-        ];
-        expected.sort();
-        let mut actual = actual;
-        actual.sort();
-        assert_eq!(actual, expected);
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn idempotent_update() {
-        let actual = upsert_test!(|input, persist, worker| {
-            let k = key(11);
-            let val = row(11, 50);
-
-            input.send(((k, Some(Ok(val.clone())), 1), new_ts(0), Diff::ONE));
-            input.advance_to(new_ts(1));
-            worker.step();
-            persist.send((Ok(val.clone()), new_ts(0), Diff::ONE));
-            persist.advance_to(new_ts(1));
-            worker.step();
-
-            input.send(((k, Some(Ok(val.clone())), 2), new_ts(1), Diff::ONE));
-            input.advance_to(new_ts(2));
-            worker.step();
-            persist.advance_to(new_ts(2));
-            worker.step();
-        });
-
-        let val = row(11, 50);
-        let expected: Vec<(Result<Row, DataflowError>, _, _)> =
-            vec![(Ok(val), new_ts(0), Diff::ONE)];
-        assert_eq!(actual, expected);
-    }
-
-    /// Operator-level repro of the 0dt read-only-handoff stranding bug.
-    ///
-    /// Models a lagging replacement generation: the external (old) writer has
-    /// already advanced the shard — and therefore the feedback `persist_upper`
-    /// — to `T = 10`, while the operator itself has emitted nothing. The
-    /// lagging replacement now produces source data at timestamps BELOW that
-    /// upper (`ts = 5, 7`), i.e. data the external writer has already persisted.
-    ///
-    /// The drain DROPS such already-persisted data (it satisfies
-    /// neither `ts == persist_upper` nor `ts > persist_upper`), mirroring v1's
-    /// `relevant = persist_upper.less_equal(ts)`. Were it instead re-stashed,
-    /// the data would be stranded forever — `persist_upper` only advances, so
-    /// `ts == persist_upper` could never again hold — and `min_ineligible_ts`
-    /// would pin the operator's output capability at `ts = 5`, BELOW the shard
-    /// upper, where it would stay for good. Dropping it lets the frontier
-    /// advance freely.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn lagging_replacement_below_upper_strands_data() {
-        for flavor in [UpsertStashFlavor::Paged, UpsertStashFlavor::Chunked] {
-            let (frontier, emitted) = run_below_upper_scenario_v2(flavor);
-
-            // The below-upper data is discarded (no output) and the output
-            // frontier is not pinned below the shard upper (10); it advances
-            // to the input upper (11), matching v1's behavior.
-            assert!(
-                emitted.is_empty(),
-                "below-upper data should be dropped, not emitted; got {emitted:?} ({flavor:?})"
-            );
-            assert_eq!(
-                frontier,
-                vec![new_ts(11)],
-                "v2 output frontier should advance to the input upper, not pin below \
-                 persist_upper ({flavor:?})"
-            );
-            assert!(
-                frontier[0] >= new_ts(10),
-                "v2 output frontier {frontier:?} should reach at least persist_upper (10) \
-                 ({flavor:?})"
-            );
-        }
-    }
-
-    /// Shared driver for the lagging-replacement scenario against v2. Returns
-    /// `(output_frontier, consolidated_emitted_updates)`.
-    fn run_below_upper_scenario_v2(
-        flavor: UpsertStashFlavor,
-    ) -> (Vec<Ts>, Vec<(Result<Row, DataflowError>, Ts, Diff)>) {
-        use timely::dataflow::operators::Probe;
-
-        let (frontier, capture) = timely::execute_directly(move |worker| {
-            let (mut input, mut persist, probe, capture) =
-                worker.dataflow::<MzTimestamp, _, _>(|scope| {
-                    scope.scoped::<Ts, _, _>("upsert", |scope| {
-                        let (input_handle, input) = scope.new_input();
-                        let (persist_handle, persist_input) = scope.new_input();
-                        let source_id = GlobalId::User(0);
-
-                        let reg = MetricsRegistry::new();
-                        let upsert_defs = UpsertMetricDefs::register_with(&reg);
-                        let upsert_metrics = UpsertMetrics::new(&upsert_defs, source_id, 0, None);
-
-                        let reg2 = MetricsRegistry::new();
-                        let storage_metrics = StorageMetrics::register_with(&reg2);
-
-                        let reg3 = MetricsRegistry::new();
-                        let stats_defs = SourceStatisticsMetricDefs::register_with(&reg3);
-                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
-                            source_arity: 2,
-                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
-                            key_indices: vec![0],
-                        });
-                        let source_statistics = SourceStatistics::new(
-                            source_id,
-                            0,
-                            &stats_defs,
-                            source_id,
-                            &ShardId::new(),
-                            envelope,
-                            Antichain::from_elem(Timestamp::minimum()),
-                        );
-                        let source_config = SourceExportCreationConfig {
-                            id: source_id,
-                            worker_id: 0,
-                            metrics: storage_metrics,
-                            source_statistics,
-                        };
-
-                        let (output, _, _, button) = upsert_inner(
-                            flavor,
-                            input.as_collection(),
-                            vec![0],
-                            Antichain::from_elem(Timestamp::minimum()),
-                            persist_input.as_collection(),
-                            None,
-                            upsert_metrics,
-                            source_config,
-                        );
-                        std::mem::forget(button);
-                        let (probe, stream) = output.inner.probe();
-                        (input_handle, persist_handle, probe, stream.capture())
-                    })
-                });
-
-            // The external writer has advanced the shard (feedback persist_upper)
-            // to T = 10 WITHOUT the operator emitting anything itself.
-            persist.advance_to(new_ts(10));
-            for _ in 0..20 {
-                worker.step();
-            }
-
-            // The lagging replacement produces source data at ts BELOW the
-            // current persist_upper (5 and 7 while persist_upper = 10).
-            input.send(((key(0), Some(Ok(row(0, 1))), 1), new_ts(5), Diff::ONE));
-            input.send(((key(1), Some(Ok(row(1, 2))), 2), new_ts(7), Diff::ONE));
-            input.advance_to(new_ts(11));
-            for _ in 0..20 {
-                worker.step();
-            }
-
-            (probe.with_frontier(|f| f.to_vec()), capture)
-        });
-
-        let mut emitted: Vec<_> = capture
-            .extract()
-            .into_iter()
-            .flat_map(|(_cap, c)| c)
-            .collect();
-        differential_dataflow::consolidation::consolidate_updates(&mut emitted);
-        (frontier, emitted)
-    }
 }

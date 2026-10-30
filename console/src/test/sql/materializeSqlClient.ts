@@ -11,7 +11,11 @@ import { CompiledQuery } from "kysely";
 import { Client, ClientConfig } from "pg";
 import { inject } from "vitest";
 
-import { executeSqlV2, SEARCH_PATH } from "~/api/materialize";
+import {
+  CATALOG_SERVER_CLUSTER,
+  executeSqlV2,
+  SEARCH_PATH,
+} from "~/api/materialize";
 import { ExecuteSqlRequest } from "~/api/materialize/executeSqlV2";
 
 export const QUICKSTART_CLUSTER = "quickstart";
@@ -53,4 +57,18 @@ export async function executeSqlHttp<Q extends CompiledQuery>(
     httpAddress: `${host}:${port}`,
     ...options,
   });
+}
+
+/** The plan `query` gets on the catalog server, as `EXPLAIN` prints it. */
+export async function explainOnCatalogServer(query: CompiledQuery) {
+  const client = await getMaterializeClient();
+  try {
+    await client.query(`SET cluster = ${CATALOG_SERVER_CLUSTER}`);
+    const {
+      rows: [plan],
+    } = await client.query(`EXPLAIN ${query.sql}`, [...query.parameters]);
+    return String(Object.values(plan)[0]);
+  } finally {
+    await client.end();
+  }
 }

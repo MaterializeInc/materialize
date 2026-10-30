@@ -11,7 +11,7 @@
 # BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw: see
 # MZ_KAFKA_CONNECTIONS in src/catalog/src/builtin/mz_catalog.rs and the
 # parse_connection_details helper in
-# src/expr/src/scalar/func/impls/jsonb.rs. Rows with a live broker are
+# src/catalog-decode/src/create_sql.rs. Rows with a live broker are
 # exercised by test/testdrive/connection-create-drop.td; this file pins the
 # column shape, the progress-topic default, and the parent-type filtering,
 # none of which need a live Kafka.

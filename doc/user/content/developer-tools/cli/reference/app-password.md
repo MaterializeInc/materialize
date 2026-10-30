@@ -1,4 +1,5 @@
 ---
+draft: true
 title: mz app-password
 description: The `mz app-password` command manages app passwords for your user account.
 menu:

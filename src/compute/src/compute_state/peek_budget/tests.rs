@@ -65,6 +65,9 @@ fn beginning_an_activation_refills_the_aggregate() {
 #[mz_ore::test]
 fn the_kill_switch_grants_every_peek_an_unbounded_slice() {
     let config = mz_dyncfgs::all_dyncfgs();
+    let mut updates = ConfigUpdates::default();
+    updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, false);
+    updates.apply(&config);
     let mut budget = InlineBudget::new(&config);
 
     for _ in 0..3 {
@@ -103,6 +106,9 @@ fn the_aggregate_is_spent_by_what_the_peeks_walk() {
 #[mz_ore::test]
 fn a_parameter_change_reaches_the_next_activation() {
     let config = mz_dyncfgs::all_dyncfgs();
+    let mut updates = ConfigUpdates::default();
+    updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, false);
+    updates.apply(&config);
     let mut budget = InlineBudget::new(&config);
 
     assert_eq!(budget.grant(), Some(usize::MAX));

@@ -23,7 +23,7 @@ use deadpool_postgres::tokio_postgres::error::SqlState;
 use deadpool_postgres::tokio_postgres::types::ToSql;
 use deadpool_postgres::tokio_postgres::{Row, Statement};
 use dec::Decimal;
-use mz_adapter_types::timestamp_oracle::{
+use mz_adapter_dyncfgs::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER, DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_IDLE,

@@ -48,8 +48,14 @@ The WebSocket API provides two modes with slightly different transactional seman
 - **Extended**, which mirrors PostgreSQL's [Extended Query][extended-query] protocol.
     - Supports multiple queries, but only one statement per query string.
     - Supports parameters.
-    - Eagerly commits DDL (e.g. `CREATE TABLE`) in implicit transactions, but
-      not DML (e.g. `INSERT`).
+    - Each query runs in its own implicit transaction, as if it were followed by
+      `Sync` in PostgreSQL's extended query protocol. A failing query does not
+      roll back the queries before it.
+
+Use Simple mode to run several statements without parameters in one
+[transaction](/sql/begin/). Use Extended mode to pass parameters, or to commit
+each statement on its own. To run several statements with parameters in one
+transaction, add `BEGIN` and `COMMIT` queries to an Extended request.
 
 ## Usage
 
@@ -122,7 +128,7 @@ Key | Value
 {
     "queries": [
         { "query": "select * from a;" },
-        { "query": "select a + $1 from a;", "params": ["100"] }
+        { "query": "select a + $1 from a;", "params": ["100"] },
         { "query": "select a + $1 from a;", "params": [null] }
     ]
 }
@@ -210,6 +216,7 @@ The payload is a `string` containing the statement's tag.
 
 A rows-returning statement is executing and some number (possibly 0) of `Row` messages will follow.
 Either a `CommandComplete` or `Error` message will then follow indicating there are no more rows and the final result of the statement.
+Until then, the rows do not mean that the statement succeeded.
 The payload has the following structure:
 
 ```
@@ -242,7 +249,7 @@ Numeric results are converted to strings to avoid possible JavaScript number ina
 #### `ParameterStatus`
 
 Announces the value of a session setting.
-These are sent during startup and when a statement caused a session parameter to change.
+These are sent during startup, when a statement changes a session parameter, and when the end of a transaction restores a value set with `SET LOCAL`.
 The payload has the following structure:
 
 ```

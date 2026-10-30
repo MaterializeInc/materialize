@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 deadpool.workspace = true
 deadpool-postgres.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes"] }
@@ -19,6 +18,9 @@ mz-tls-util = { path = "../tls-util" }
 prometheus.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 
 [features]
 default = []

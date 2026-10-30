@@ -39,6 +39,8 @@ pub const MAX_ARRAY_DIMENSIONS: u8 = 6;
 /// `Array<'a>` continues to work unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Array<'a, T = Datum<'a>> {
+    // NOTE: Declared before `dims` so that the derived `Ord` compares the elements first, as
+    // PostgreSQL does.
     /// The elements in the array.
     pub(crate) elements: DatumList<'a, T>,
     /// The dimensions of the array.
@@ -103,9 +105,23 @@ impl ArrayDimensions<'_> {
     }
 }
 
+/// Orders like PostgreSQL's `array_cmp` orders arrays with equal elements: by the number of
+/// dimensions, then by the length of each dimension, then by the lower bound of each dimension.
+/// Only equal dimensions compare as `Ordering::Equal`, which keeps `Ord` consistent with `Eq`.
 impl Ord for ArrayDimensions<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.ndims().cmp(&other.ndims())
+        self.ndims()
+            .cmp(&other.ndims())
+            .then_with(|| {
+                self.into_iter()
+                    .map(|d| d.length)
+                    .cmp(other.into_iter().map(|d| d.length))
+            })
+            .then_with(|| {
+                self.into_iter()
+                    .map(|d| d.lower_bound)
+                    .cmp(other.into_iter().map(|d| d.lower_bound))
+            })
     }
 }
 

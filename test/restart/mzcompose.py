@@ -1196,12 +1196,15 @@ def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> N
         wait_for_full_sample(remaining)
 
         for round_num in range(5):
-            dropped, remaining = remaining[:2], remaining[2:]
+            # Newer indexes on stale_v read from older ones' arrangements, and
+            # `DROP INDEX` refuses an index that others read from, so drop from
+            # the newest end.
+            dropped, remaining = remaining[-2:], remaining[:-2]
 
             # Kill right after the drops: their retractions cannot reach the
             # storage collections before the process dies, so the retained
             # shard contents keep rows for the now-nonexistent indexes.
-            c.sql(";".join(f"DROP INDEX {name}" for name in dropped))
+            c.sql(f"DROP INDEX {', '.join(dropped)}")
             c.kill("materialized")
             c.up("materialized")
 
@@ -1464,15 +1467,26 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         return c.sql_query("""
             SELECT h.replica_id, h.started_at::text, h.finished_at::text,
                    h.object_count::text, h.peak_memory_bytes::text,
-                   h.peak_disk_bytes::text, h.status
+                   h.peak_disk_bytes::text, h.status, h.process_id::bigint
             FROM mz_internal.mz_replica_hydration_history AS h
             JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
             JOIN mz_catalog.mz_clusters AS c ON c.id = h.cluster_id
             WHERE r.name = 'r1' AND c.name = 'hydration_history'
-            ORDER BY h.started_at""")
+            ORDER BY h.started_at, h.process_id""")
 
-    def replica_episode_identities(episodes: list[list]) -> list[tuple[str, str]]:
-        return [(episode[0], episode[1]) for episode in episodes]
+    def replica_episode_identities(episodes: list[list]) -> list[tuple[str, str, int]]:
+        by_episode: dict[tuple[str, str], list[list]] = {}
+        for episode in episodes:
+            by_episode.setdefault((episode[0], episode[1]), []).append(episode)
+        for identity, rows in by_episode.items():
+            assert [row[7] for row in rows] == [
+                0,
+                1,
+            ], f"expected one row per process for {identity}, got {rows}"
+            assert (
+                len({(row[2], row[3], row[6]) for row in rows}) == 1
+            ), f"process rows disagree on replica-wide episode fields: {rows}"
+        return [(episode[0], episode[1], episode[7]) for episode in episodes]
 
     def parse_ts(text: str) -> datetime:
         return datetime.fromisoformat(text)
@@ -1485,13 +1499,14 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
                 # Pin retention: CI randomizes it, and a short period would
                 # prune the episode this test restarts around.
                 "hydration_history_retention_period": "30d",
+                "replica_hydration_history_retention_period": "120d",
             },
             sanity_restart=False,
         )
     ):
         c.up("materialized")
         c.sql(dedent("""\
-            CREATE CLUSTER hydration_history SIZE 'scale=1,workers=2';
+            CREATE CLUSTER hydration_history SIZE 'scale=2,workers=1';
             CREATE TABLE hydration_history_t (a int);
             INSERT INTO hydration_history_t SELECT generate_series(1, 100000);
             CREATE INDEX hydration_history_i

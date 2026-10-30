@@ -13,6 +13,7 @@ Tests the mz command line tool against a real Cloud instance
 import argparse
 import datetime
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -28,9 +29,10 @@ from textwrap import dedent
 from typing import IO
 
 import psycopg
+import requests
 import yaml
 
-from materialize import MZ_ROOT, ci_util, spawn
+from materialize import MZ_ROOT, ci_util, gcp_oidc, spawn
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -47,6 +49,7 @@ SERVICES = [
 TD_CMD = [
     "--var=default-replica-size=25cc",
     "--var=default-storage-size=25cc",
+    "--var=multi-worker-replica-size=100cc",
 ]
 
 COMPATIBLE_TESTDRIVE_FILES = [
@@ -115,6 +118,12 @@ COMPATIBLE_TESTDRIVE_FILES = [
     # Hangs on GCP in check-shard-tombstone
     # "webhook.td",
 ]
+
+# Testdrive files of this composition, which run after the requested files.
+# They live in a subdirectory of test/testdrive: testdrive only finds files
+# below its working directory, and the testdrive suite's `*.td` glob
+# (test/testdrive/mzcompose.py) does not descend into subdirectories.
+TERRAFORM_TESTDRIVE_FILES = ["terraform/hedged-blob-gets.td"]
 
 
 def add_arguments_temporary_test(parser: WorkflowArgumentParser) -> None:
@@ -621,7 +630,7 @@ class State:
         if run_testdrive_files:
             with c.override(testdrive(no_reset=False)):
                 c.up(Service("testdrive", idle=True))
-                c.run_testdrive_files(*TD_CMD, *files)
+                c.run_testdrive_files(*TD_CMD, *files, *TERRAFORM_TESTDRIVE_FILES)
 
     def _find_service(self, pattern: str) -> str:
         """Find a service in materialize-environment namespace by name pattern."""
@@ -659,6 +668,16 @@ class State:
             ],
             preexec_fn=os.setpgrp,
         )
+
+    def environmentd_metric(self, name: str) -> float:
+        """Value of the unlabeled metric `name` on environmentd, which must be
+        forwarded by `connect`."""
+        metrics = requests.get("http://127.0.0.1:6878/metrics", timeout=30)
+        metrics.raise_for_status()
+        for line in metrics.text.splitlines():
+            if line.startswith(f"{name} "):
+                return float(line.split()[1])
+        raise ValueError(f"environmentd has no metric {name}")
 
     def connect(self, c: Composition) -> None:
         # Find services by name pattern (they're named like mz<id>-environmentd)
@@ -873,8 +892,7 @@ class AWS(State):
             delete_after = "2099-12-31T00:00:00Z"
         else:
             delete_after = (
-                datetime.datetime.now(datetime.timezone.utc)
-                + datetime.timedelta(hours=24)
+                datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=24)
             ).strftime("%Y-%m-%dT%H:%M:%SZ")
         tags = {
             "Environment": "dev",
@@ -1331,7 +1349,96 @@ def workflow_aws_persistent_destroy(
     aws.destroy()
 
 
-def _terraform_apply_gcp(path: Path, vars: list[str]) -> None:
+GCP_SHARED_PROJECT = "materialize-ci"
+
+# The APIs the gcp-temporary root needs in a fresh project.
+GCP_RUN_PROJECT_APIS = [
+    "cloudresourcemanager.googleapis.com",
+    "compute.googleapis.com",
+    "container.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "servicenetworking.googleapis.com",
+    "sqladmin.googleapis.com",
+    "storage.googleapis.com",
+]
+
+
+def gcp_run_project() -> str | None:
+    """This job attempt's own GCP project, or None for the shared project.
+
+    A job that authenticates through Buildkite OIDC (with
+    GCP_WORKLOAD_IDENTITY_PROVIDER set) deploys into a project of
+    its own and deletes it at the end, so whatever a wedged `terraform
+    destroy` leaves behind goes with it. The ID is derived from the job ID,
+    which is unique across pipelines and retries. A random ID would not do:
+    the mzcompose plugin's cleanup pass runs as a separate invocation in the
+    same job and must find the same project.
+    """
+    if not os.getenv("GCP_WORKLOAD_IDENTITY_PROVIDER"):
+        return None
+    build = os.environ["BUILDKITE_BUILD_NUMBER"]
+    job = hashlib.sha256(os.environ["BUILDKITE_JOB_ID"].encode()).hexdigest()[:8]
+    return f"mz-ci-{build}-{job}"
+
+
+def gcp_authenticate_oidc() -> None:
+    """Authenticates gcloud and Terraform as GCP_SERVICE_ACCOUNT_EMAIL
+    through Buildkite OIDC and workload identity federation."""
+    config_path = gcp_oidc.authenticate()
+    spawn.runv(["gcloud", "auth", "login", f"--cred-file={config_path}", "--quiet"])
+
+
+def gcp_create_run_project(project: str) -> None:
+    spawn.runv(
+        [
+            "gcloud",
+            "projects",
+            "create",
+            project,
+            f"--folder={os.environ['GCP_CI_FOLDER_ID']}",
+            "--labels=purpose=integration-test,managed-by=buildkite",
+            "--no-enable-cloud-apis",
+        ]
+    )
+    spawn.runv(
+        [
+            "gcloud",
+            "billing",
+            "projects",
+            "link",
+            project,
+            f"--billing-account={os.environ['GCP_BILLING_ACCOUNT']}",
+        ]
+    )
+    spawn.runv(
+        ["gcloud", "services", "enable", *GCP_RUN_PROJECT_APIS, f"--project={project}"]
+    )
+
+
+def gcp_delete_run_project(project: str) -> None:
+    """Deletes the job attempt's project, including anything that
+    `terraform destroy` left behind. A project that was never created or is
+    already being deleted is fine."""
+    try:
+        lifecycle = spawn.capture(
+            [
+                "gcloud",
+                "projects",
+                "describe",
+                project,
+                "--format=value(lifecycleState)",
+            ]
+        ).strip()
+    except subprocess.CalledProcessError as e:
+        print(f"Project {project} not found, nothing to delete: {e}")
+        return
+    if lifecycle == "ACTIVE":
+        print(f"--- Deleting project {project}")
+        spawn.runv(["gcloud", "projects", "delete", project, "--quiet"])
+
+
+def _terraform_apply_gcp(path: Path, vars: list[str], project: str) -> None:
     """Run `terraform apply` for the GCP setup, recovering from a known flake.
 
     Cloud SQL instance creation occasionally fails on the Terraform side while
@@ -1377,7 +1484,7 @@ def _terraform_apply_gcp(path: Path, vars: list[str]) -> None:
                         "import",
                         *vars,
                         "module.database.module.postgresql.google_sql_database_instance.default",
-                        f"materialize-ci/{instance_name}",
+                        f"{project}/{instance_name}",
                     ],
                     cwd=path,
                 )
@@ -1395,30 +1502,44 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "gcp-temporary"
     state = State(path)
+    run_project = gcp_run_project()
+    project = run_project or GCP_SHARED_PROJECT
 
-    gcp_service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
-    assert (
-        gcp_service_account_json
-    ), "GCP_SERVICE_ACCOUNT_JSON environment variable has to be set"
-    gcloud_creds_path = path / "gcp.json"
-    with open(gcloud_creds_path, "w") as f:
-        f.write(gcp_service_account_json)
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcloud_creds_path)
+    if not run_project:
+        gcp_service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
+        assert (
+            gcp_service_account_json
+        ), "GCP_SERVICE_ACCOUNT_JSON environment variable has to be set"
+        gcloud_creds_path = path / "gcp.json"
+        with open(gcloud_creds_path, "w") as f:
+            f.write(gcp_service_account_json)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcloud_creds_path)
 
     mz_debug_build_thread: threading.Thread | None = None
     try:
         if args.run_mz_debug:
             mz_debug_build_thread = build_mz_debug_async()
-        spawn.runv(["gcloud", "config", "set", "project", "materialize-ci"])
 
-        spawn.runv(
-            [
-                "gcloud",
-                "auth",
-                "activate-service-account",
-                f"--key-file={gcloud_creds_path}",
-            ],
-        )
+        if run_project:
+            gcp_authenticate_oidc()
+            # Without an explicit billing project, the google provider bills
+            # some API calls (e.g. Service Networking operation polling) to
+            # the service account's home project, which lacks these APIs.
+            os.environ["USER_PROJECT_OVERRIDE"] = "true"
+            os.environ["GOOGLE_BILLING_PROJECT"] = run_project
+            os.environ["TF_VAR_project_id"] = run_project
+            if args.setup:
+                gcp_create_run_project(run_project)
+        else:
+            spawn.runv(
+                [
+                    "gcloud",
+                    "auth",
+                    "activate-service-account",
+                    f"--key-file={gcloud_creds_path}",
+                ],
+            )
+        spawn.runv(["gcloud", "config", "set", "project", project])
 
         vars = [
             "-var",
@@ -1451,7 +1572,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             spawn.runv(["terraform", "init"], cwd=path)
             spawn.runv(["terraform", "validate"], cwd=path)
             spawn.runv(["terraform", "plan", *vars], cwd=path)
-            _terraform_apply_gcp(path, vars)
+            _terraform_apply_gcp(path, vars, project)
 
         gke_cluster = json.loads(
             spawn.capture(
@@ -1474,7 +1595,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 "--region",
                 gke_cluster["location"],
                 "--project",
-                "materialize-ci",
+                project,
             ]
         )
 
@@ -1515,6 +1636,13 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
         if args.test:
             state.test(c, tag, args.run_testdrive_files, args.files)
+            # Persist data lives in GCS, and gcp-temporary/main.tf defaults
+            # `persist_blob_http_pool` to 'gcs', which uses the pool only if
+            # `S3Blob` recognizes the endpoint as GCS.
+            pool_requests = state.environmentd_metric(
+                "mz_persist_s3_http_pool_requests"
+            )
+            assert pool_requests > 0, "no persist request went through the pool"
     finally:
         state.cleanup()
 
@@ -1524,7 +1652,72 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             run_mz_debug()
 
         if args.cleanup:
-            state.destroy()
+            try:
+                state.destroy()
+            finally:
+                if run_project:
+                    gcp_delete_run_project(run_project)
+
+
+def azure_run_names() -> tuple[str, str]:
+    """Resource group and name prefix of this azure-temporary run.
+
+    In CI both are derived from the job ID, which is unique across pipelines
+    and retries, so a run cannot collide with what a failed run left behind,
+    and its forced cleanup cannot delete another run's resources. A random
+    suffix would not do: the mzcompose plugin's cleanup pass runs as a
+    separate invocation in the same job and must derive the same names.
+
+    NOTE: the storage module names its account from the prefix without
+    hyphens plus 9 characters, and Azure caps storage account names at 24,
+    so the prefix has at most 15 characters besides its hyphens."""
+    build = os.getenv("BUILDKITE_BUILD_NUMBER")
+    if not build:
+        return "mz-tf-test-rg", "mz-tf-test"
+    job = hashlib.sha256(os.environ["BUILDKITE_JOB_ID"].encode()).hexdigest()[:5]
+    prefix = f"mzci-{build}-{job}"
+    return f"{prefix}-rg", prefix
+
+
+def delete_azure_resource_groups(resource_group: str, env: dict[str, str]) -> None:
+    """Requests deletion of the run's resource group and its AKS node resource
+    groups, whatever `terraform destroy` left behind.
+
+    Everything a run creates lives in these groups, so this cleans up even
+    when resources fell out of Terraform state. The AKS node groups
+    (MC_<group>_*) go first: deleting the parent does not always cascade to
+    them, and their NICs can block the parent's subnet deletion. Deletions are
+    submitted with --no-wait, because Azure finishes an accepted deletion
+    server-side even if this job is killed before it completes.
+    """
+    groups = spawn.capture(
+        [
+            "az",
+            "group",
+            "list",
+            "--query",
+            f"[?starts_with(name, 'MC_{resource_group}_')].name",
+            "--output",
+            "tsv",
+        ],
+        env=env,
+    ).split()
+    failed = []
+    for group in [*groups, resource_group]:
+        try:
+            exists = spawn.capture(
+                ["az", "group", "exists", "--name", group], env=env
+            ).strip()
+            if exists != "true":
+                continue
+            print(f"--- Requesting deletion of resource group {group}")
+            spawn.runv(
+                ["az", "group", "delete", "--name", group, "--yes", "--no-wait"],
+                env=env,
+            )
+        except subprocess.CalledProcessError:
+            failed.append(group)
+    assert not failed, f"Could not request deletion of resource groups {failed}"
 
 
 def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1534,6 +1727,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "azure-temporary"
     state = State(path)
+    resource_group, name_prefix = azure_run_names()
 
     spawn.runv(
         [
@@ -1549,6 +1743,10 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
     venv_env = os.environ.copy()
     venv_env["PATH"] = f"{path/'venv'/'bin'}:{os.getenv('PATH')}"
     venv_env["VIRTUAL_ENV"] = str(path / "venv")
+    # Every terraform invocation, including the cleanup pass's destroy, must
+    # see the same names.
+    venv_env["TF_VAR_resource_group_name"] = resource_group
+    venv_env["TF_VAR_name_prefix"] = name_prefix
     spawn.runv(
         ["uv", "pip", "install", "-r", "requirements.txt", "--prerelease=allow"],
         cwd=path,
@@ -1702,4 +1900,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             run_mz_debug(env=venv_env)
 
         if args.cleanup:
-            state.destroy(env=venv_env)
+            try:
+                state.destroy(env=venv_env)
+            finally:
+                delete_azure_resource_groups(resource_group, venv_env)

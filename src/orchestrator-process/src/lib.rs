@@ -46,7 +46,7 @@ use nix::sys::signal::Signal;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
-use sysinfo::{Pid, PidExt, Process, ProcessExt, ProcessRefreshKind, System, SystemExt};
+use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::fs::remove_dir_all;
 use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
@@ -369,6 +369,13 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         result_rx.await.expect("worker task not dropped")
     }
 
+    async fn flush(&self) -> Result<(), anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::Flush { result_tx });
+        result_rx.await.expect("worker task not dropped");
+        Ok(())
+    }
+
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         let mut initial_events = vec![];
         let mut service_event_rx = {
@@ -432,6 +439,9 @@ enum WorkerCommand {
     },
     ListServices {
         result_tx: oneshot::Sender<Result<Vec<String>, anyhow::Error>>,
+    },
+    Flush {
+        result_tx: oneshot::Sender<()>,
     },
     FetchServiceMetrics {
         id: String,
@@ -500,6 +510,10 @@ impl OrchestratorWorker {
                     let _ = result_tx.send(self.list_services().await);
                     Ok(())
                 }
+                Flush { result_tx } => {
+                    let _ = result_tx.send(());
+                    Ok(())
+                }
                 FetchServiceMetrics { id, result_tx } => {
                     let _ = result_tx.send(self.fetch_service_metrics(&id));
                     Ok(())
@@ -529,8 +543,11 @@ impl OrchestratorWorker {
             let (cpu_nano_cores, memory_bytes) = match pid {
                 None => (None, None),
                 Some(pid) => {
-                    self.system
-                        .refresh_process_specifics(pid, ProcessRefreshKind::new().with_cpu());
+                    self.system.refresh_processes_specifics(
+                        ProcessesToUpdate::Some(&[pid]),
+                        true,
+                        ProcessRefreshKind::nothing().with_cpu().with_memory(),
+                    );
                     match self.system.process(pid) {
                         None => (None, None),
                         Some(process) => {
@@ -559,6 +576,7 @@ impl OrchestratorWorker {
                 disk_bytes: None,
                 heap_bytes: None,
                 heap_limit: None,
+                swap_bytes: None,
             });
         }
         Ok(metrics)
@@ -721,10 +739,10 @@ impl OrchestratorWorker {
         // Drop the supervisor for the service, if it exists. If this service
         // was under supervision, this will kill all processes associated with
         // it.
-        {
+        let supervised = {
             let mut supervisors = self.services.lock().expect("lock poisoned");
-            supervisors.remove(id);
-        }
+            supervisors.remove(id).is_some()
+        };
 
         // If the service was orphaned by a prior incarnation of the
         // orchestrator, it won't have been under supervision and therefore will
@@ -736,6 +754,19 @@ impl OrchestratorWorker {
                 if path.extension() == Some(OsStr::new("pid")) {
                     let mut system = System::new();
                     let Some(process) = find_process_from_pid_file(&mut system, &path).await else {
+                        // Dropping the supervisor may already have killed a
+                        // supervised process. An orphan that cannot be found
+                        // either exited or runs in a PID namespace this
+                        // orchestrator cannot see, e.g., another container
+                        // sharing the data directory. Its run directory is
+                        // deleted below, so warn while there is a trace.
+                        if !supervised {
+                            warn!(
+                                "not terminating orphaned process for {full_id}: no live process \
+                                 matches {}",
+                                path.display()
+                            );
+                        }
                         continue;
                     };
                     let pid = process.pid();
@@ -978,7 +1009,12 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
     // on each iteration to detect PID reuse.
     let mut system = System::new();
     loop {
-        if !system.refresh_process_specifics(pid, ProcessRefreshKind::new()) {
+        let refreshed = system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        if refreshed == 0 {
             break;
         }
         match system.process(pid) {
@@ -1062,7 +1098,11 @@ fn did_process_crash(status: ExitStatus) -> bool {
 
 async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
     let mut system = System::new();
-    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
     let start_time = system.process(pid).map_or(0, |p| p.start_time());
     fs::write(pid_file, format!("{pid}\n{start_time}\n")).await?;
     Ok(())
@@ -1085,7 +1125,11 @@ async fn find_process_from_pid_file<'a>(
     let Ok(start_time) = u64::from_str(start_time) else {
         return None;
     };
-    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
     let process = system.process(pid)?;
     // Checking the start time protects against killing an unrelated process due
     // to PID reuse.

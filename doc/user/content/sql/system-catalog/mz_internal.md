@@ -24,7 +24,8 @@ reference these objects is not allowed.
 
 ## `mz_object_global_ids`
 
-The `mz_object_global_ids` table maps Materialize catalog item IDs to global IDs.
+The `mz_object_global_ids` materialized view maps Materialize catalog item
+IDs to global IDs.
 
 <!-- RELATION_SPEC mz_internal.mz_object_global_ids -->
 | Field        | Type     | Meaning                                                                                             |
@@ -94,7 +95,7 @@ granted the [`mz_monitor` role](/security/appendix/appendix-built-in-roles/#syst
 | `session_id`               | [`uuid`]                     | An ID that is unique for each session. Corresponds to [mz_sessions.id](#mz_sessions). |
 | `prepared_at`              | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 | `statement_type`           | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
-| `throttled_count`          | [`uint8`]                    | The number of statement executions dropped due to throttling between the previously logged statement and this one. If you have a very high volume of queries and need to log them without throttling, [contact our team](/support/).                          |
+| `throttled_count`          | [`uint8`]                    | The number of statement executions dropped due to throttling between the previously logged statement and this one. If you have a very high volume of queries and need to log them without throttling, [contact our team](https://materialize.com/support/).                          |
 | `connected_at`       | [`timestamp with time zone`]                     | The time at which the session was established.                                                                                                                                                                                                                   |
 | `initial_application_name` | [`text`]                     | The initial value of `application_name` at the beginning of the session.                                                                                                                                                                                                      |
 | `authenticated_user`       | [`text`]                     | The name of the user for which the session was established.                                                                                                                                                                                                                   |
@@ -201,7 +202,7 @@ an autoscaling action is running.
 |----------------|-----------|----------------------------------------------------------------|
 | `cluster_id`   | [`text`]  | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
 | `strategy`     | [`jsonb`] | **Unstable** The configured autoscaling policy, as JSON. Currently an `on_hydration` sub-policy carrying its `hydration_size` and optional `linger_duration`. |
-| `state`        | [`jsonb`] | **Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_hydrated_at`. |
+| `state`        | [`jsonb`] | **Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_ready_at`. |
 
 ## `mz_cluster_replica_metrics`
 
@@ -227,6 +228,7 @@ usage.
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage, in bytes.
 | `heap_bytes`        | [`uint8`]    | Approximate heap (RAM + swap) usage, in bytes.
 | `heap_limit`        | [`uint8`]    | Available heap (RAM + swap) space, in bytes.
+| `swap_bytes`        | [`uint8`]    | Approximate swap usage, in bytes.
 
 ## `mz_cluster_replica_metrics_history`
 
@@ -252,6 +254,7 @@ history is retained across restarts.
 | `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 | `heap_bytes`     | [`uint8`] | Approximate heap (RAM + swap) usage, in bytes.
 | `heap_limit`     | [`uint8`] | Available heap (RAM + swap) space, in bytes.
+| `swap_bytes`     | [`uint8`] | Approximate swap usage, in bytes.
 
 ## `mz_cluster_replica_statuses`
 
@@ -298,6 +301,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation.
 | `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation.
 | `heap_percent`   | [`double precision`] | Approximate heap (RAM + swap) usage, in percent of the total allocation.
+| `swap_percent`   | [`double precision`] | Approximate swap usage, in percent of the total heap allocation.
 
 ## `mz_cluster_replica_utilization_history`
 
@@ -316,6 +320,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation.
 | `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation.
 | `heap_percent`   | [`double precision`] | Approximate heap (RAM + swap) usage, in percent of the total allocation.
+| `swap_percent`   | [`double precision`] | Approximate swap usage, in percent of the total heap allocation.
 | `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 
 ## `mz_cluster_replica_history`
@@ -574,8 +579,8 @@ strategies, a row will exist for each.
 | `materialized_view_id` | [`text`]   | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views)  |
 | `type`                 | [`text`]   | `at`, `every`, or `on-commit`. Default: `on-commit`                                           |
 | `interval`             | [`interval`] | The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.   |
-| `aligned_to`           | [`timestamp with time zone`] | The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`. |
-| `at`                   | [`timestamp with time zone`] | The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.            |
+| `aligned_to_expression` | [`text`]  | The `ALIGNED TO` expression of a `REFRESH EVERY` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `every`. |
+| `at_expression`        | [`text`]   | The time expression of a `REFRESH AT` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `at`. |
 
 ## `mz_materialized_view_refreshes`
 
@@ -723,6 +728,8 @@ The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/sql/system-
 
 ## `mz_object_hydration_history`
 
+{{< warn-if-unreleased v26.42 >}}
+
 The `mz_object_hydration_history` table records completed hydration of indexes and
 materialized views, with one row for each time a dataflow hydrated on a replica.
 By default, rows are retained for 30 days while collection is enabled. Disabling
@@ -737,6 +744,20 @@ multi-process replica, timestamps come from process-local logging clocks and inc
 their clock skew. A process whose clock is ahead can be absent at the sampled
 logical timestamp, so the recorded finish can precede the latest process's finish.
 
+Only indexes and materialized views are recorded. Sources, including upsert
+sources, contribute no rows here and do not gate the completion of a replica
+episode in [`mz_replica_hydration_history`](#mz_replica_hydration_history).
+That table's peaks measure whole replica processes rather than individual
+dataflows, so they include a source's memory and disk only for work finished
+before the episode was recorded.
+
+`object_id` is a global ID rather than a catalog item ID, so join
+[`mz_object_global_ids`](#mz_object_global_ids) to reach the index or
+materialized view. To recover the name and size of a replica that has since been
+replaced, join [`mz_cluster_replica_history`](#mz_cluster_replica_history). For
+how to use these columns to choose a cluster size, see [Optimize cluster
+size](/clusters/sizing/).
+
 <!-- RELATION_SPEC mz_internal.mz_object_hydration_history -->
 | Field          | Type                         | Meaning                                                                                                                  |
 | -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -750,6 +771,8 @@ logical timestamp, so the recorded finish can precede the latest process's finis
 
 ## `mz_replica_hydration_history`
 
+{{< warn-if-unreleased v26.42 >}}
+
 The `mz_replica_hydration_history` table records successful replica hydration
 episodes. An episode begins when a maintained compute dataflow is installed on
 a fully hydrated replica and finishes when every running maintained compute
@@ -758,8 +781,26 @@ dataflow has hydrated.
 By default, rows are retained for 30 days while collection is enabled. Recording
 is best effort, and only the latest completed episode visible in each collection
 is recorded. Resource peaks cover the replica processes' lifetimes through
-collection, not only the hydration episode. On a multi-process replica, the
-table records the largest peak reported by any process.
+collection, not only the hydration episode. Each episode has one row per process,
+so memory and disk peaks can be compared across processes to identify skew.
+Episode timing and object count describe the whole replica, not each process.
+Do not sum object counts across process rows. Summing process peaks does not
+give a simultaneous replica-wide peak, since they can occur at different times.
+
+{{< note >}}
+**Multi-process replicas.** `peak_memory_bytes` is a single process's
+high-water mark, not the replica's. On a multi-process size it does not capture
+the replica's true peak, and no way to combine the per-process marks into one is
+established. Size from these peaks only on a single-process size.
+{{< /note >}}
+
+Because memory and disk limits apply to each replica process independently,
+compare `peak_memory_bytes` against
+[`mz_cluster_replica_sizes.memory_bytes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes),
+which is also per process. Join
+[`mz_cluster_replica_history`](#mz_cluster_replica_history) for the size the
+episode ran at, since that row survives the replica. For how to use these
+columns to choose a cluster size, see [Optimize cluster size](/clusters/sizing/).
 
 <!-- RELATION_SPEC mz_internal.mz_replica_hydration_history -->
 | Field               | Type                         | Meaning                                                                                                                  |
@@ -768,10 +809,11 @@ table records the largest peak reported by any process.
 | `cluster_id`        | [`text`]                     | The ID of the replica's cluster.                                                                                          |
 | `started_at`        | [`timestamp with time zone`] | The earliest maintained compute dataflow installation in the hydration episode.                                         |
 | `finished_at`       | [`timestamp with time zone`] | The latest maintained compute dataflow hydration in the hydration episode.                                               |
-| `object_count`      | [`uint8`]                    | The number of maintained compute dataflows in the hydration episode.                                                     |
-| `peak_memory_bytes` | [`uint8`]                    | The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak. |
-| `peak_disk_bytes`   | [`uint8`]                    | The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
+| `object_count`      | [`uint8`]                    | The number of maintained compute dataflows in the hydration episode. Includes the replica's system introspection dataflows, so it exceeds the number of indexes and materialized views you created. |
+| `peak_memory_bytes` | [`uint8`]                    | The process-lifetime cgroup memory high-water mark when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak. |
+| `peak_disk_bytes`   | [`uint8`]                    | The process-lifetime scratch-filesystem or swap high-water mark when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
 | `status`            | [`text`]                     | The hydration episode's status. Currently always `hydrated`.                                                             |
+| `process_id`        | [`uint8`]                    | The ID of a process within the replica. Episode timing and object_count are replica-wide and repeated for each process. |
 
 ## `mz_object_transitive_dependencies`
 
@@ -1590,6 +1632,10 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`timestamp with time zone`]: /sql/types/timestamp
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_columns -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_index_columns -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_indexes -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_log_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_sources -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->

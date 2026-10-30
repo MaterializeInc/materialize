@@ -40,7 +40,7 @@ from functools import cache
 from pathlib import Path
 from tempfile import TemporaryFile
 from threading import Lock
-from typing import IO, Any, cast
+from typing import IO, Any, NoReturn, cast
 
 import requests
 import yaml
@@ -62,6 +62,58 @@ class RustIncrementalBuildFailure(Exception):
 class CargoRegistryFetchFailure(Exception):
     """A crates.io fetch that failed for transport reasons. Retrying recovers,
     and the target directories must be kept: nothing in them is corrupted."""
+
+
+def raise_if_retryable_build_failure(output: str) -> None:
+    """Raises `RustIncrementalBuildFailure` or `CargoRegistryFetchFailure` if
+    the output of a failed cargo invocation matches a known signature."""
+    incremental_build_failure_msgs = [
+        "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
+        "Found unstable fingerprints for",
+        "ld.lld: error: undefined symbol",
+        "truncated or malformed archive",
+        "signal: 11, SIGSEGV",
+    ]
+    registry_fetch_failure_msgs = [
+        "unable to update registry",
+    ]
+    # A cached build-script binary poisoned by cargo cache corruption dies
+    # with a bare ENOENT before doing any work. Both halves are required,
+    # and the error must be the exact bare line: "failed to run custom
+    # build command" alone is any build-script bug, which a retry cannot
+    # fix, and a build script that fails on a missing file with an error
+    # context of its own produces the ENOENT in a "Caused by:" detail line
+    # instead of the bare "Error:" line.
+    custom_build_script_enoent = "failed to run custom build command" in output and any(
+        line.strip() == "Error: No such file or directory (os error 2)"
+        for line in output.splitlines()
+    )
+    if custom_build_script_enoent or any(
+        msg in output for msg in incremental_build_failure_msgs
+    ):
+        raise RustIncrementalBuildFailure()
+    if any(msg in output for msg in registry_fetch_failure_msgs):
+        raise CargoRegistryFetchFailure()
+
+
+def exit_for_retryable_build_failure(
+    e: RustIncrementalBuildFailure | CargoRegistryFetchFailure,
+) -> NoReturn:
+    """Exits with 199, which Buildkite retries automatically (see
+    mkpipeline.py), after clearing the cargo target directories if they are
+    corrupted."""
+    if isinstance(e, RustIncrementalBuildFailure):
+        print(
+            "--- Detected incremental build failure, clearing cargo target directories"
+        )
+        for dir in ["target", "target-xcompile"]:
+            shutil.rmtree(MZ_ROOT / dir, ignore_errors=True)
+    else:
+        # Nothing on disk is corrupted, so keep the target directories. Wiping
+        # them would turn a network blip into a full rebuild of the workspace,
+        # here and in every later job that shares the agent's target directory.
+        print("--- Detected transient cargo registry failure, retrying")
+    sys.exit(199)
 
 
 def run_and_detect_retryable_build_failure(
@@ -131,38 +183,7 @@ def run_and_detect_retryable_build_failure(
     stderr_contents = stderr_result.getvalue()
     stderr_result.close()
     if retcode:
-        # Keep these signatures in sync with bin/clear-corrupted-cargo-target-dir.
-        incremental_build_failure_msgs = [
-            "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
-            "Found unstable fingerprints for",
-            "ld.lld: error: undefined symbol",
-            "signal: 11, SIGSEGV",
-        ]
-        registry_fetch_failure_msgs = [
-            "unable to update registry",
-        ]
-        combined = stdout_contents + stderr_contents
-        # A cached build-script binary poisoned by cargo cache corruption dies
-        # with a bare ENOENT before doing any work. Both halves are required,
-        # and the error must be the exact bare line: "failed to run custom
-        # build command" alone is any build-script bug, which a retry cannot
-        # fix, and a build script that fails on a missing file with an error
-        # context of its own produces the ENOENT in a "Caused by:" detail line
-        # instead of the bare "Error:" line.
-        custom_build_script_enoent = (
-            "failed to run custom build command" in combined
-            and any(
-                line.strip() == "Error: No such file or directory (os error 2)"
-                for line in combined.splitlines()
-            )
-        )
-        if custom_build_script_enoent or any(
-            msg in combined for msg in incremental_build_failure_msgs
-        ):
-            raise RustIncrementalBuildFailure()
-        if any(msg in combined for msg in registry_fetch_failure_msgs):
-            raise CargoRegistryFetchFailure()
-
+        raise_if_retryable_build_failure(stdout_contents + stderr_contents)
         raise subprocess.CalledProcessError(
             retcode, p.args, output=stdout_contents, stderr=stderr_contents
         )
@@ -254,6 +275,24 @@ class RepositoryDetails:
         # fail earlier if you don't have compilation tools installed and
         # run without the ci-builder.
         return [name]
+
+    def builder(self, args: list[str]) -> list[str]:
+        """Start an invocation of `args` inside the ci-builder for the
+        configured architecture, from the repository root.
+
+        Unlike `build`, this enters the ci-builder on macOS too, so `args` can
+        rely on files that only the ci-builder image provides.
+        """
+        if "MZ_DEV_CI_BUILDER" in os.environ:
+            return args
+        return [
+            "env",
+            f"MZ_DEV_CI_BUILDER_ARCH={self.arch}",
+            "bin/ci-builder",
+            "run",
+            "stable",
+            *args,
+        ]
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
@@ -602,13 +641,17 @@ class Copy(PreImage):
 
     def run(self, prep: Any) -> None:
         super().run(prep)
-        for src in self.inputs():
+        for src in self._source_files():
             dst = self.path / self.destination / src
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(self.rd.root / self.source / src, dst)
 
-    def inputs(self) -> set[str]:
+    def _source_files(self) -> set[str]:
+        """The files to copy, relative to `source`."""
         return set(git.expand_globs(self.rd.root / self.source, self.matching))
+
+    def inputs(self) -> set[str]:
+        return {str(Path(self.source) / src) for src in self._source_files()}
 
 
 class CargoPreImage(PreImage):
@@ -665,6 +708,7 @@ class CargoBuild(CargoPreImage):
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+        self.builder_files = config.pop("builder-files", {})
         features = config.pop("features", [])
         self.features = features if isinstance(features, list) else [features]
 
@@ -732,7 +776,12 @@ class CargoBuild(CargoPreImage):
                 "RANLIB": "llvm-ranlib-22",
                 "CFLAGS": "-flto=thin",
                 "CXXFLAGS": "-flto=thin",
-                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++",
+                # `-static-libstdc++` is unused when clang links a C program,
+                # and jemalloc's configure runs its `strerror_r` link checks
+                # with `-Werror`. Without `-Wno-unused-command-line-argument`
+                # both checks fail and configure aborts with "cannot determine
+                # return type of strerror_r".
+                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++ -Wno-unused-command-line-argument",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
             }
@@ -861,6 +910,14 @@ class CargoBuild(CargoPreImage):
             )
             copy(src_path, Path("examples") / example)
 
+        for src, dst in self.builder_files.items():
+            dst_path = self.path / dst
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            spawn.runv(
+                self.rd.builder(["cp", src, str(dst_path.relative_to(self.rd.root))]),
+                cwd=self.rd.root,
+            )
+
         if self.extract:
             cargo_build_json_output = build_output["cargo"]
 
@@ -889,19 +946,7 @@ class CargoBuild(CargoPreImage):
                 else:
                     package = message["package_id"].split("#")[0].split("/")[-1]
                 for src, dst in self.extract.get(package, {}).items():
-                    # Sources are relative to the build script's `out` dir.
-                    # `$CARGO_TARGET_DIR` instead names the Cargo target root
-                    # (`cargo_target_dir` is the per-target directory below
-                    # it), for artifacts a build script caches outside of
-                    # `out`. Reaching the root with `..` does not work: how
-                    # deep `out` sits below it differs between Cargo versions.
-                    if src.startswith("$CARGO_TARGET_DIR/"):
-                        src_path = target_dir.parent / src.removeprefix(
-                            "$CARGO_TARGET_DIR/"
-                        )
-                    else:
-                        src_path = out_dir / src
-                    spawn.runv(["cp", "-R", src_path, self.path / dst])
+                    spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 
         self.acquired = True
 

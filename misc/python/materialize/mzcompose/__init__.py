@@ -50,13 +50,19 @@ DEFAULT_MZ_VOLUMES = [
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
 ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
-    # Benchmarks measure the intended production configuration. For hedged
-    # blob gets that is the planned enablement state (on, at production
-    # tuning), not the CI-wide coverage tuning below, whose short delay
-    # would add duplicate fetches to any measured get slower than it.
+    # Benchmarks measure the production configuration. For hedged blob gets
+    # that is on at the production tuning, not the CI-wide coverage tuning
+    # below, whose short delay would add duplicate fetches to any measured
+    # get slower than it. `enabled` is set explicitly even though it is the
+    # default now, because benchmarks compare against older releases whose
+    # default is off.
     "persist_blob_hedged_get_enabled": "true",
     "persist_blob_hedged_get_delay": "2s",
     "persist_blob_hedged_get_budget_ratio": "0.01",
+    # The unified cluster defaults off in production, so benchmarks measure the
+    # two-cluster topology we ship. Correctness coverage is unaffected: the
+    # rest of CI still gets "true" from get_minimal_system_parameters().
+    "enable_unified_cluster": "false",
 }
 
 
@@ -109,6 +115,7 @@ def get_minimal_system_parameters(
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
+        "enable_mcp_protocol_2026_07_28": "true",
         "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
         "enable_rbac_checks": "true",
@@ -122,11 +129,18 @@ def get_minimal_system_parameters(
         "enable_background_alter_cluster": (
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         ),
+        "enable_cluster_reconfiguration_lag_gate": (
+            "true" if version >= MzVersion.parse_mz("v26.44.0-dev") else "false"
+        ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
-        "enable_storage_introspection_logs": "true",
+        "enable_try_cast": "true",
+        # Introspection goldens depend on the replica topology, so tests need
+        # one consistent value rather than a varying one.
+        "enable_unified_cluster": (
+            "true" if version >= MzVersion.parse_mz("v26.43.0-dev") else "false"
+        ),
         "enable_compute_error_distinct": "true",
-        "enable_compute_temporal_bucketing": "true",
         "enable_union_cancellation_after_relation_cse": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
@@ -145,9 +159,10 @@ def get_minimal_system_parameters(
         config["compute_peek_row_iteration_limit"] = "1000000000"
         config["enable_compute_peek_row_iteration_limit"] = "true"
 
-        # Exercise the peek offload path in tests while it defaults off in
-        # production. The budgets stay at their code defaults so tests make the
-        # same placement decisions production makes.
+        # Exercise the peek offload path in tests. Binaries before v26.44
+        # default it off, so this keeps mixed-version runs on the path current
+        # versions take. The budgets stay at their code defaults so tests make
+        # the same placement decisions production makes.
         config["enable_compute_index_peek_offload"] = "true"
 
     if version < MzVersion.parse_mz("v0.163.0-dev"):
@@ -161,8 +176,23 @@ def get_minimal_system_parameters(
     if version >= MzVersion.parse_mz("v26.40.0-dev"):
         config["hydration_history_collection_interval"] = "60s"
 
+    if version >= MzVersion.parse_mz("v26.45.0-dev"):
+        # Exercise the source persist sink's grouping of a snapshotting export's
+        # updates ahead of release to production. At least one default_timestamp_interval
+        # (1s by default). A Postgres source's snapshot and first CDC
+        # rows become visible about this much later, which the PgCdc feature
+        # benchmarks measure.
+        config["storage_persist_sink_description_lookahead"] = "2s"
+
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
+
+    # Keep older baselines and mixed-version runs on the same read-then-write
+    # path as current binaries, where frontend OCC is unconditional.
+    if version < MzVersion.parse_mz("v26.46.0-dev"):
+        config["enable_adapter_frontend_occ_read_then_write"] = (
+            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false"
+        )
 
     # The cluster controller's break-glass gate. Removed in v26.38, where the
     # controller runs unconditionally. Older binaries still read it, and
@@ -173,13 +203,27 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         )
 
+    # Frontend peek sequencing's flag, which current versions no longer have
+    # because the frontend always sequences peeks. Older binaries that have it
+    # still read it, so pin the value CI has been running them with.
+    if version < MzVersion.parse_mz("v26.47.0-dev"):
+        config["enable_frontend_peek_sequencing"] = (
+            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false"
+        )
+
     # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
-    # from v26.41 on. Older binaries still gate it behind this feature flag, so
+    # from v26.42 on. Older binaries still gate it behind this feature flag, so
     # pin it on for them: the tests that use the surface no longer enable it
     # themselves, and in a mixed-version run some of their phases execute
     # against the old binary.
-    if version < MzVersion.parse_mz("v26.41.0-dev"):
+    if version < MzVersion.parse_mz("v26.42.0-dev"):
         config["enable_zero_downtime_cluster_reconfiguration"] = "true"
+
+    # Temporal bucketing is unconditional from v26.47 on. Older binaries still
+    # read this flag and default it off, so pin it on for them to keep benchmark
+    # baselines and mixed-version runs bucketing like current versions.
+    if version < MzVersion.parse_mz("v26.47.0-dev"):
+        config["enable_compute_temporal_bucketing"] = "true"
 
     return config
 
@@ -239,6 +283,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_hedged_get_enabled", "true", ["true", "false"]
         ),
+        # 'on' because CI's S3 endpoint is not GCS, so 'gcs' would never use
+        # the pool.
+        VariableSystemParameter("persist_blob_http_pool", "on", ["off", "gcs", "on"]),
         # 10ms (vs the 2s production default) makes hedges actually fire in
         # every CI run; 0s makes every blob get hedge under randomized seeds.
         VariableSystemParameter(
@@ -264,8 +311,8 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "compute_correction_v2_chunk_size",
-            "8192",
-            ["8192", "65536", "1048576"],
+            "2097152",
+            ["8192", "65536", "2097152"],
         ),
         VariableSystemParameter(
             "compute_dataflow_max_inflight_bytes",
@@ -279,10 +326,36 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
         ),
+        # On by default so CI exercises the jq function, which is off in
+        # production while it earns trust.
+        VariableSystemParameter("enable_jq", "true", ["true", "false"]),
         # On by default so CI exercises the columnar merge batcher, which is
         # off in production while it earns trust.
         VariableSystemParameter(
             "enable_columnar_merge_batcher", "true", ["true", "false"]
+        ),
+        # Varied rather than defaulted on, unlike the two flags above. This one
+        # takes precedence over `enable_columnar_merge_batcher`, so defaulting it
+        # on would take the columnar arm's coverage away rather than add to it.
+        VariableSystemParameter(
+            "enable_column_paged_batcher", "false", ["true", "false"]
+        ),
+        # Varied for the same reason, and because it reaches past the arrange
+        # sites: it installs the process buffer pool and enables the column pager
+        # storage's upsert stash draws from, so defaulting it on would move several
+        # subsystems' memory behavior at once.
+        VariableSystemParameter(
+            "enable_column_paged_batcher_spill", "false", ["true", "false"]
+        ),
+        # On by default so CI exercises the columnar accumulable diff layout, which
+        # is off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_columnar_accumulable_diff", "true", ["true", "false"]
+        ),
+        # On by default so CI exercises correction chunks spilling through the
+        # buffer pool, which is off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_compute_correction_v2_spill", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
@@ -307,11 +380,6 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_adapter_frontend_occ_read_then_write",
-            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
             "enable_cast_elimination",
             "true",
             ["true", "false"],
@@ -327,13 +395,14 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_password_auth",
-            "true",
-            ["true", "false"],
+            "compute_mv_sink_shared_batch_max_bytes",
+            "1048576",
+            # 0 never shares, 64 KiB, 1 MiB, 128 MiB
+            ["0", "65536", "1048576", "134217728"],
         ),
         VariableSystemParameter(
-            "enable_frontend_peek_sequencing",
-            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false",
+            "enable_password_auth",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(
@@ -379,6 +448,14 @@ def get_variable_system_parameters(
             "true" if force_source_table_syntax else "false",
             ["true", "false"] if force_source_table_syntax else ["false"],
         ),
+        # Low default so CI exercises the periodic recommit, which production
+        # only reaches after ten minutes.
+        VariableSystemParameter(
+            "kafka_offset_commit_refresh_interval", "10s", ["1s", "10s", "10min"]
+        ),
+        VariableSystemParameter(
+            "kafka_sink_emit_sink_id_header", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]
         ),
@@ -419,6 +496,17 @@ def get_variable_system_parameters(
             ],
         ),
         VariableSystemParameter("persist_stats_audit_panic", "true", ["true", "false"]),
+        VariableSystemParameter(
+            "persist_shard_metrics",
+            "summary",
+            ["none", "summary", "per_shard", "both"],
+        ),
+        VariableSystemParameter(
+            "persist_per_shard_metrics_enable_regex",
+            "",
+            ["", "^u1", ".*"],
+        ),
+        VariableSystemParameter("persist_shard_info_metric", "true", ["true", "false"]),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
@@ -516,6 +604,17 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_part_decode_format", "arrow", ["arrow", "row_with_validate"]
         ),
+        # Empty decodes fetched parts whole, otherwise at most this many rows
+        # at once. 7 makes batch boundaries split small test parts.
+        *(
+            [
+                VariableSystemParameter(
+                    "persist_part_decode_batch_rows", "16384", ["", "7", "16384"]
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.46.0-dev")
+            else []
+        ),
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
@@ -538,6 +637,17 @@ def get_variable_system_parameters(
                 )
             ]
             if version >= MzVersion.parse_mz("v26.40.0-dev")
+            else []
+        ),
+        *(
+            [
+                VariableSystemParameter(
+                    "replica_hydration_history_retention_period",
+                    "120d",
+                    ["0s", "1min", "120d"],
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.44.0-dev")
             else []
         ),
         VariableSystemParameter(
@@ -662,16 +772,16 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    # Off by default so tests exercise the refusal to drop in-use indexes.
+    "enable_drop_in_use_index",
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
-    "enable_column_paged_batcher",
-    "enable_column_paged_batcher_spill",
     "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",
-    "column_paged_batcher_spill_worker_count",
+    "column_paged_batcher_spill_worker_fraction",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
     "enable_lgalloc_eager_reclamation",
@@ -695,7 +805,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_mv_sink_advance_persist_frontiers",
     "compute_prometheus_introspection_scrape_interval",
     "enable_compute_replica_expiration",
-    "enable_compute_render_fueled_as_specific_collection",
     "compute_logical_backpressure_max_retained_capabilities",
     "compute_logical_backpressure_inflight_slack",
     "persist_fetch_semaphore_cost_adjustment",
@@ -740,6 +849,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_blob_read_timeout",
     "persist_blob_hedged_get_max_concurrent",
     "persist_blob_hedged_get_warm_interval",
+    "persist_blob_http_pool_max_in_flight_per_client",
     "persist_stats_collection_enabled",
     "persist_stats_filter_enabled",
     "persist_stats_budget_bytes",
@@ -762,6 +872,10 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "balancerd_sigterm_connection_wait",
     "balancerd_sigterm_listen_wait",
     "balancerd_inject_proxy_protocol_header_http",
+    "balancerd_max_connections",
+    "balancerd_connection_high_watermark",
+    "balancerd_connection_low_watermark",
+    "balancerd_pre_resolved_timeout",
     "balancerd_log_filter",
     "balancerd_opentelemetry_filter",
     "balancerd_log_filter_defaults",
@@ -801,6 +915,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
+    "pg_source_replication_slot_creation_timeout",
     "pg_source_validate_timeline",
     "sql_server_source_validate_restore_history",
     "storage_enforce_external_addresses",
@@ -875,6 +990,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "read_then_write_max_dependencies",
     "enable_hydration_burst",
     "default_hydration_burst_linger",
+    "cluster_reconfiguration_allowed_lag",
 ]
 
 
@@ -909,9 +1025,7 @@ def _check_tcp(
         spawn.capture(cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
         ui.log_in_automation(
-            "wait-for-tcp ({}{}:{}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
-                kind, host, port, ui.shell_quote(cmd), e, e.stdout, e.stderr
-            )
+            f"wait-for-tcp ({kind}{host}:{port}): error running {ui.shell_quote(cmd)}: {e}, stdout:\n{e.stdout}\nstderr:\n{e.stderr}"
         )
         raise
     return cmd

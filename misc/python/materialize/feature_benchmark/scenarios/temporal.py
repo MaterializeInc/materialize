@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from textwrap import dedent
 
 from materialize.feature_benchmark.action import Action, TdAction
@@ -39,7 +39,7 @@ class TemporalFilterIndexed(TemporalFilter):
         ]
 
     def benchmark(self) -> MeasurementSource:
-        today = date.today()
+        today = datetime.now(UTC).date()
         next_week = today + timedelta(days=7)
         return Td(dedent(f"""
             > DROP VIEW IF EXISTS v_temporal CASCADE;
@@ -89,7 +89,7 @@ class TemporalFilterSustainedInsert(TemporalFilter):
     FIXED_SCALE = True
 
     def benchmark(self) -> MeasurementSource:
-        today = date.today()
+        today = datetime.now(UTC).date()
         next_week = today + timedelta(days=7)
         return Td(dedent(f"""
             > DROP TABLE IF EXISTS t_temporal CASCADE;

@@ -117,6 +117,16 @@ export const ClusterMetricsInner = ({
   // number and divide by the remaining 1000.
   const cores = Number(metrics.cpuNanoCores / 1_000_000n) / 1000.0;
 
+  // Without --heap-limit, which is every emulator, the view reports memory in
+  // place of heap and heapBytes stays 0. The gauge still earns its place there,
+  // as the only memory reading on this card, but not under a heap label.
+  const measuresHeap = metrics.heapLimit != null;
+  const memoryUsed = BigInt(
+    Math.round(
+      (Number(metrics.memoryBytes) * (metrics.memoryPercent ?? 0)) / 100,
+    ),
+  );
+
   const metricsUnavailable =
     !metrics.memoryPercent &&
     !metrics.cpuPercent &&
@@ -197,13 +207,15 @@ export const ClusterMetricsInner = ({
         )}
         {metrics.heapPercent && (
           <RadialPercentageGraph percentage={metrics.heapPercent ?? 0}>
-            <Text textStyle="text-ui-med">Heap Utilization</Text>
+            <Text textStyle="text-ui-med">
+              {measuresHeap ? "Heap Utilization" : "Memory Utilization"}
+            </Text>
             <Text
               color={colors.foreground.secondary}
               textAlign="center"
               textStyle="text-small"
             >
-              {formatBytesShort(metrics.heapBytes)}
+              {formatBytesShort(measuresHeap ? metrics.heapBytes : memoryUsed)}
             </Text>
           </RadialPercentageGraph>
         )}

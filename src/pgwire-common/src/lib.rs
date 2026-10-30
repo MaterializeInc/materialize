@@ -14,22 +14,22 @@
 
 mod codec;
 mod conn;
-mod format;
 mod message;
 mod severity;
 
 pub use codec::{
-    ACCEPT_SSL_ENCRYPTION, CodecError, Cursor, DecodeState, MAX_REQUEST_SIZE, Pgbuf,
-    REJECT_ENCRYPTION, decode_startup, input_err, parse_frame_len,
+    ACCEPT_SSL_ENCRYPTION, CodecError, Cursor, DecodeState, FORWARDED_STARTUP_PARAM_ALLOWANCE,
+    MAX_FORWARDED_STARTUP_FRAME_SIZE, MAX_PREAUTH_FRAME_SIZE, MAX_REQUEST_SIZE,
+    MAX_STARTUP_FRAME_SIZE, Pgbuf, REJECT_ENCRYPTION, decode_startup, input_err, parse_frame_len,
 };
 pub use conn::{
     CONN_UUID_KEY, Conn, ConnectionCounter, ConnectionError, ConnectionHandle,
     MZ_FORWARDED_FOR_KEY, UserMetadata,
 };
-pub use format::Format;
 pub use message::{
     ChannelBinding, ErrorResponse, FrontendMessage, FrontendStartupMessage, GS2Header,
     SASLClientFinalResponse, SASLInitialResponse, VERSION_3, VERSION_CANCEL, VERSION_GSSENC,
     VERSION_SSL, VERSIONS,
 };
+pub use mz_pgrepr_consts::Format;
 pub use severity::Severity;

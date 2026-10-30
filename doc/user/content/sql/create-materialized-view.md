@@ -43,8 +43,6 @@ offers lower latency for direct querying within that cluster.
 
 {{< tab "CREATE REPLACEMENT MATERIALIZED VIEW" >}}
 
-{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
-
 Create a replacement materialized view for an existing materialized view.
 
 {{% include-syntax file="examples/create_materialized_view" example="syntax-replacement" %}}
@@ -96,8 +94,6 @@ specified, querying the materialized view will produce an error until the
 offending row is deleted.
 
 ### Creating replacement materialized views
-
-{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
 
 {{% include-headless "/headless/replacement-views/associated-commands-blurb/"
 %}}
@@ -157,8 +153,6 @@ things like querying materialized views from different clusters, indexed vs.
 non-indexed, and so on."
 
 ### Creating a replacement materialized view
-
-{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
 
 {{% include-from-yaml file="examples/create_materialized_view"
 name="replacement-view-syntax-details" %}}

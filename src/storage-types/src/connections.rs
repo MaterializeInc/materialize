@@ -37,7 +37,8 @@ use iceberg_catalog_rest::{
     RestCatalogBuilder, TokenProvider,
 };
 use iceberg_storage_opendal::{
-    AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
+    AwsCredential, CustomAwsCredentialLoader, CustomAzdlsCredentialLoader,
+    CustomGcsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
 };
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
@@ -66,7 +67,7 @@ use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
 use reqsign_core::time::Timestamp;
-use reqwest::Request;
+use reqwest_0_12::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
@@ -103,9 +104,11 @@ pub mod string_or_secret;
 const OAUTH2_PARAM_SCOPE: &str = "scope";
 
 const REST_CATALOG_PROP_OAUTH2_SERVER_URI: &str = "oauth2-server-uri";
-/// Requests catalog-vended storage credentials. `iceberg-rust` turns `header.*` catalog
-/// properties into headers on every REST request, the same way the Iceberg Java client
-/// carries this one.
+/// The prefix marking a catalog property that `iceberg-rust` turns into a header on every REST
+/// request, the same convention the Iceberg Java client uses.
+const REST_CATALOG_HEADER_PROP_PREFIX: &str = "header.";
+/// Requests catalog-vended storage credentials, carried as a header by way of
+/// [`REST_CATALOG_HEADER_PROP_PREFIX`].
 const REST_CATALOG_PROP_ACCESS_DELEGATION: &str = "header.X-Iceberg-Access-Delegation";
 
 /// A credential loader that wraps an aws-sdk-rust credentials provider for use with
@@ -627,6 +630,9 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),
+            (Self::GlueSchemaRegistry(s), Self::GlueSchemaRegistry(o)) => s.alter_compatible(id, o),
+            (Self::IcebergCatalog(s), Self::IcebergCatalog(o)) => s.alter_compatible(id, o),
             _ => {
                 tracing::warn!(
                     "Connection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -671,6 +677,11 @@ pub struct RestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     /// a catalog can reject our whole request,
     /// even if we have our own storage credentials to fall back on.
     pub access_delegation: Option<IcebergAccessDelegation>,
+    /// Which object store the catalog's tables live in.
+    ///
+    /// Defaults to S3. A REST catalog does not tell us this, so a table backed
+    /// by GCS or ADLS is unreadable until the connection says so.
+    pub storage_provider: IcebergStorageProvider,
 }
 
 /// The value Materialize sends in the Iceberg REST `X-Iceberg-Access-Delegation`
@@ -686,6 +697,24 @@ impl IcebergAccessDelegation {
     pub fn as_header_value(&self) -> &'static str {
         match self {
             IcebergAccessDelegation::VendedCredentials => "vended-credentials",
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for RestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        // Auth and access delegation are not considered for compatibility, because they can
+        // be changed without breaking existing tables.
+        if (self.warehouse != other.warehouse) || (self.storage_provider != other.storage_provider)
+        {
+            tracing::warn!(
+                "RestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            Ok(())
         }
     }
 }
@@ -725,6 +754,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<RestIcebergCatalog, R>
             auth: self.auth.into_inline_connection(&r),
             warehouse: self.warehouse,
             access_delegation: self.access_delegation,
+            storage_provider: self.storage_provider,
         }
     }
 }
@@ -740,10 +770,60 @@ impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for S3TablesRestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self.aws_connection.connection_id != other.aws_connection.connection_id
+            || self.warehouse != other.warehouse
+        {
+            tracing::warn!(
+                "S3TablesRestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            self.aws_connection
+                .connection
+                .alter_compatible(id, &other.aws_connection.connection)?;
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogType {
     Rest,
     S3TablesRest,
+}
+
+/// Which object store holds the data files of a REST catalog's tables.
+///
+/// The catalog protocol says nothing about this: a REST catalog hands back
+/// storage locations and credentials, and the client has to already know how to
+/// talk to that store. So it is configured per connection rather than
+/// discovered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergStorageProvider {
+    S3,
+    Gcs,
+    Adls,
+}
+
+impl IcebergStorageProvider {
+    /// The name as spelled in SQL.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IcebergStorageProvider::S3 => "s3",
+            IcebergStorageProvider::Gcs => "gcs",
+            IcebergStorageProvider::Adls => "adls",
+        }
+    }
+}
+
+impl Default for IcebergStorageProvider {
+    fn default() -> Self {
+        IcebergStorageProvider::S3
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -767,17 +847,49 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogImpl, R>
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogImpl<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        match (self, other) {
+            (IcebergCatalogImpl::Rest(rest), IcebergCatalogImpl::Rest(other_rest)) => {
+                rest.alter_compatible(id, other_rest)
+            }
+            (
+                IcebergCatalogImpl::S3TablesRest(s3tables),
+                IcebergCatalogImpl::S3TablesRest(other_s3tables),
+            ) => s3tables.alter_compatible(id, other_s3tables),
+            _ => Err(AlterError { id }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     /// The catalog impl impl of that catalog
     pub catalog: IcebergCatalogImpl<C>,
     /// Where the catalog is located
-    pub uri: reqwest::Url,
+    pub uri: reqwest_0_12::Url,
 }
 
-impl AlterCompatible for IcebergCatalogConnection {
-    fn alter_compatible(&self, id: GlobalId, _other: &Self) -> Result<(), AlterError> {
-        Err(AlterError { id })
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let compatibility_checks = [
+            (
+                self.catalog.alter_compatible(id, &other.catalog).is_ok(),
+                "catalog",
+            ),
+            (self.uri == other.uri, "uri"),
+        ];
+        for (is_ok, field) in compatibility_checks {
+            if !is_ok {
+                tracing::warn!(
+                    "IcebergCatalogConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -982,6 +1094,79 @@ impl IcebergCatalogConnection<InlinedConnection> {
         Ok(Arc::new(catalog))
     }
 
+    /// Collects the headers `iceberg-rust` puts on every catalog request out of the `header.*`
+    /// props it takes them from.
+    ///
+    /// The credential endpoints Materialize calls directly bypass the catalog client, so without
+    /// this they would reach the same server missing headers it may require, `x-goog-user-project`
+    /// on a GCP-hosted catalog among them.
+    fn catalog_headers(props: &BTreeMap<String, String>) -> Result<HeaderMap, anyhow::Error> {
+        props
+            .iter()
+            .filter_map(|(k, v)| {
+                k.strip_prefix(REST_CATALOG_HEADER_PROP_PREFIX)
+                    .map(|name| (name, v))
+            })
+            .map(|(name, value)| {
+                let name = HeaderName::try_from(name)
+                    .with_context(|| format!("invalid Iceberg catalog header name: {name}"))?;
+                let value = HeaderValue::try_from(value)
+                    .with_context(|| format!("invalid Iceberg catalog header value for {name}"))?;
+                Ok((name, value))
+            })
+            .collect()
+    }
+
+    /// Resolves the endpoint that vends storage credentials for `table`, or `None` if this
+    /// connection has no use for one.
+    ///
+    /// A loader built on the returned endpoint takes sole responsibility for storage credentials,
+    /// so `None` is the signal to leave the catalog's static `storage-credentials` props in force.
+    /// It means either that the connection did not ask for delegation, or that the caller named no
+    /// table, and the specification scopes vended credentials to a single table.
+    async fn vended_credential_endpoint(
+        &self,
+        rest: &RestIcebergCatalog,
+        client: &reqwest_0_12::Client,
+        token: &Arc<dyn TokenProvider>,
+        headers: &HeaderMap,
+        table: Option<&TableIdent>,
+    ) -> Result<Option<Url>, anyhow::Error> {
+        match (&rest.access_delegation, table) {
+            (Some(IcebergAccessDelegation::VendedCredentials), Some(table)) => Ok(Some(
+                iceberg_credentials::table_credentials_endpoint(
+                    &self.uri,
+                    client,
+                    token,
+                    headers,
+                    rest.warehouse.as_deref(),
+                    table,
+                )
+                .await?,
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    /// Builds a GCS storage factory, refreshing vended credentials from `endpoint` if there is one.
+    fn gcs_storage_factory(
+        endpoint: Option<Url>,
+        client: &reqwest_0_12::Client,
+        token: &Arc<dyn TokenProvider>,
+        headers: &HeaderMap,
+    ) -> OpenDalStorageFactory {
+        OpenDalStorageFactory::Gcs {
+            customized_credential_load: endpoint.map(|endpoint| {
+                CustomGcsCredentialLoader::new(iceberg_credentials::VendedCredentialLoader::new(
+                    client.clone(),
+                    endpoint,
+                    Arc::clone(token),
+                    headers.clone(),
+                ))
+            }),
+        }
+    }
+
     async fn connect_rest(
         &self,
         rest: &RestIcebergCatalog,
@@ -1000,7 +1185,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
 
         // One client for catalog requests, OAuth token requests, and credential refreshes, so all
         // three share a connection pool. `iceberg-rust` would otherwise default to its own.
-        let client = reqwest::Client::new();
+        let client = reqwest_0_12::Client::new();
 
         // Catalog auth is configured through a combination of `props` and `.with_authenticator(...)`,
         // which happen at different stages of the [`RestCatalogBuilder`] -> [`RestCatalog`]
@@ -1082,41 +1267,48 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     oauth_params.into_iter().collect(),
                 ));
 
-                // Installing a loader hands it sole responsibility for S3 credentials: OpenDAL
-                // replaces its whole provider chain, including the static keys parsed out of the
-                // catalog's vended `storage-credentials` props. So only install one when the
-                // connection asked for delegation and we know which table to refresh, and let the
-                // static props serve every other case.
-                let customized_credential_load = match (&rest.access_delegation, table) {
-                    (Some(IcebergAccessDelegation::VendedCredentials), Some(table)) => {
-                        let endpoint = iceberg_credentials::table_credentials_endpoint(
-                            &self.uri,
-                            &client,
-                            &token,
-                            rest.warehouse.as_deref(),
-                            table,
-                        )
-                        .await?;
-                        Some(CustomAwsCredentialLoader::new(
-                            iceberg_credentials::VendedCredentialLoader::new(
-                                client.clone(),
-                                endpoint,
-                                Arc::clone(&token),
-                            ),
-                        ))
-                    }
-                    _ => None,
-                };
+                let headers = Self::catalog_headers(&props)?;
+                let endpoint = self
+                    .vended_credential_endpoint(rest, &client, &token, &headers, table)
+                    .await?;
 
                 (
-                    OpenDalStorageFactory::S3 {
+                    // The catalog tells us where the data lives but not what
+                    // kind of store it is, so the connection has to say.
+                    match rest.storage_provider {
                         // When used with MinIO, Polaris returns a config with:
                         //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
                         // `iceberg-rust` forwards these props to `opendal`. When the catalog
                         // vends instead, it returns per-table `storage-credentials` that
                         // `iceberg-rust` wires into the same FileIO.
                         // N.B. This is not confirmed to work with other catalog & storage implementations.
-                        customized_credential_load,
+                        IcebergStorageProvider::S3 => OpenDalStorageFactory::S3 {
+                            customized_credential_load: endpoint.map(|endpoint| {
+                                CustomAwsCredentialLoader::new(
+                                    iceberg_credentials::VendedCredentialLoader::new(
+                                        client.clone(),
+                                        endpoint,
+                                        Arc::clone(&token),
+                                        headers.clone(),
+                                    ),
+                                )
+                            }),
+                        },
+                        IcebergStorageProvider::Gcs => {
+                            Self::gcs_storage_factory(endpoint, &client, &token, &headers)
+                        }
+                        IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls {
+                            customized_credential_load: endpoint.map(|endpoint| {
+                                CustomAzdlsCredentialLoader::new(
+                                    iceberg_credentials::VendedCredentialLoader::new(
+                                        client.clone(),
+                                        endpoint,
+                                        Arc::clone(&token),
+                                        headers.clone(),
+                                    ),
+                                )
+                            }),
+                        },
                     },
                     // NOTE: We construct our own OAuth authenticator for the Catalog client instead of using the one built in.
                     // This means we ignore auth overrides from `/v1/config` (e.g. `oauth2-server-uri`).
@@ -1146,18 +1338,31 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     );
                 }
 
+                // The service account authenticates catalog requests whether or not the catalog
+                // vends storage credentials, and doubles as the token source for refreshing them.
+                let token: Arc<dyn TokenProvider> = Arc::new(GcpTokenProvider { service_account });
+                let headers = Self::catalog_headers(&props)?;
+                let endpoint = self
+                    .vended_credential_endpoint(rest, &client, &token, &headers, table)
+                    .await?;
+
                 (
-                    OpenDalStorageFactory::Gcs,
-                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(
-                        Arc::new(GcpTokenProvider { service_account }),
-                    )),
+                    // A GCP-hosted catalog vends GCS credentials, so the storage provider is not
+                    // in question here the way it is for a generic REST catalog.
+                    //
+                    // NOTE: with delegation the service account key above stops governing storage
+                    // and only authenticates the catalog. That is not a change in precedence:
+                    // OpenDAL already preferred the vended token over a credential file, and a
+                    // loader only keeps that token from expiring.
+                    Self::gcs_storage_factory(endpoint, &client, &token, &headers),
+                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(token)),
                 )
             }
         };
 
-        // `iceberg-rust` turns `header.*` props into headers on every REST request, so
-        // connection asked for delegation.
-        // than falling back to their configured storage credentials.
+        // Inserted after the storage factory is built, so that the loaders above carry only the
+        // headers the catalog client would send on an ordinary request. Each adds this one itself,
+        // since the credentials endpoint is the one request that always asks for delegation.
         if let Some(delegation) = &rest.access_delegation {
             props.insert(
                 REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
@@ -1605,9 +1810,6 @@ impl KafkaConnection {
             ),
         };
 
-        // TODO(roshan): Implement enforcement of external address validation once
-        // rdkafka client has been updated to support providing multiple resolved
-        // addresses for brokers
         let mut context = TunnelingClientContext::new(
             context,
             Handle::current(),
@@ -1618,6 +1820,7 @@ impl KafkaConnection {
             storage_configuration.parameters.ssh_timeout_config,
             aws_config,
             in_task,
+            ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
         );
 
         match &self.default_tunnel {
@@ -1739,7 +1942,9 @@ impl KafkaConnection {
             }
         }
 
-        Ok(config.create_with_context(context)?)
+        Ok(mz_kafka_util::client::create_with_context(
+            &config, context,
+        )?)
     }
 
     async fn validate(
@@ -2315,7 +2520,8 @@ impl PostgresConnection<InlinedConnection> {
             .port(self.port)
             .dbname(&self.database)
             .user(&self.user.get_string(in_task, secrets_reader).await?)
-            .ssl_mode(self.tls_mode);
+            .ssl_mode(self.tls_mode)
+            .application_name("materialize");
         if let Some(password) = self.password {
             let password = secrets_reader
                 .read_string_in_task_if(in_task, password)
@@ -2715,12 +2921,25 @@ impl MySqlConnection<InlinedConnection> {
             self.tls_mode,
             MySqlSslMode::VerifyCa | MySqlSslMode::VerifyIdentity
         ) {
+            // Trust the platform's roots, not the Mozilla set compiled into
+            // mysql_async, so a distrusted root goes away with an OS update.
+            let native = rustls_native_certs::load_native_certs();
+            for error in &native.errors {
+                tracing::warn!("failed to load native root certs: {error}");
+            }
+            let mut roots: Vec<_> = native
+                .certs
+                .into_iter()
+                .map(|cert| cert.to_vec().into())
+                .collect();
             if let Some(tls_root_cert) = &self.tls_root_cert {
                 let tls_root_cert = tls_root_cert.get_string(in_task, secrets_reader).await?;
-                ssl_opts = ssl_opts.map(|opts| {
-                    opts.with_root_certs(vec![tls_root_cert.as_bytes().to_vec().into()])
-                });
+                roots.push(tls_root_cert.into_bytes().into());
             }
+            ssl_opts = ssl_opts.map(|opts| {
+                opts.with_disable_built_in_roots(true)
+                    .with_root_certs(roots)
+            });
         }
 
         if let Some(identity) = &self.tls_identity {
@@ -2728,14 +2947,11 @@ impl MySqlConnection<InlinedConnection> {
                 .read_string_in_task_if(in_task, identity.key)
                 .await?;
             let cert = identity.cert.get_string(in_task, secrets_reader).await?;
-            let (der, pass) =
-                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?.into_parts();
-
-            // Add client identity to SSLOpts
             ssl_opts = ssl_opts.map(|opts| {
-                opts.with_client_identity(Some(
-                    mysql_async::ClientIdentity::new(der.into()).with_password(pass),
-                ))
+                opts.with_client_identity(Some(mysql_async::ClientIdentity::new(
+                    cert.into_bytes().into(),
+                    key.into_bytes().into(),
+                )))
             });
         }
 
@@ -3492,6 +3708,31 @@ impl AwsPrivatelinkConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn test_catalog_headers() {
+        let props = BTreeMap::from_iter(
+            [
+                (REST_CATALOG_PROP_URI, "https://catalog.example"),
+                (REST_CATALOG_PROP_WAREHOUSE, "wh"),
+                ("header.x-goog-user-project", "some-project"),
+                (REST_CATALOG_PROP_ACCESS_DELEGATION, "vended-credentials"),
+            ]
+            .map(|(k, v)| (k.to_string(), v.to_string())),
+        );
+
+        // Only `header.*` props become headers, and the prefix is stripped. Header names are
+        // matched case-insensitively, so the delegation prop's mixed-case spelling still lands.
+        let headers = IcebergCatalogConnection::catalog_headers(&props).expect("valid headers");
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers["x-goog-user-project"], "some-project");
+        assert_eq!(headers["x-iceberg-access-delegation"], "vended-credentials");
+
+        // A prop whose name is not a legal header is an error rather than a dropped header: it
+        // would otherwise mean silently talking to the catalog differently than asked.
+        let props = BTreeMap::from([("header.bad name".to_string(), "v".to_string())]);
+        assert!(IcebergCatalogConnection::catalog_headers(&props).is_err());
+    }
 
     #[mz_ore::test]
     fn test_check_service_name() {

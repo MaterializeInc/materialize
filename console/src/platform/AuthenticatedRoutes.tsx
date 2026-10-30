@@ -33,6 +33,7 @@ import ClusterRoutes from "~/platform/clusters/ClusterRoutes";
 import BlockedState from "~/platform/environment-not-ready/BlockedState";
 import { EnvironmentNotReadyRoutes } from "~/platform/environment-not-ready/EnvironmentNotReadyRoutes";
 import { EnvironmentOverviewRoutes } from "~/platform/environment-overview/EnvironmentOverviewRoutes";
+import FreshnessRoutes from "~/platform/freshness/FreshnessRoutes";
 import IntegrationsRoutes from "~/platform/integrations/IntegrationsRoutes";
 import { MaintainedObjectsRoutes } from "~/platform/maintained-objects/MaintainedObjectsRoutes";
 import { ObjectExplorerDetailRoutes } from "~/platform/object-explorer/ObjectExplorerDetailRoutes";
@@ -110,11 +111,6 @@ const EnvironmentNotReadyRoutesWrapper = () => {
   );
 };
 
-const NavigatePreservingSearch = ({ to }: { to: string }) => {
-  const { search } = useLocation();
-  return <Navigate to={{ pathname: to, search }} replace />;
-};
-
 export const AuthenticatedRoutes = () => {
   const flags = useFlags();
   const isLicenseKeysEnabled = flags["license-keys-3833"];
@@ -135,11 +131,6 @@ export const AuthenticatedRoutes = () => {
         <Route
           path="/access"
           element={<Navigate to="/access/app-passwords" replace />}
-        />
-        {/* Create a redirect, preserving the search params for the `mz` CLI */}
-        <Route
-          path="/access/cli"
-          element={<NavigatePreservingSearch to="/access/app-passwords/cli" />}
         />
         <Route
           path="/access/app-passwords/*"
@@ -345,6 +336,19 @@ const EnvironmentRoutes = () => {
           />
         )}
 
+        {flags["freshness-page-CNS164"] && (
+          <Route path="freshness">
+            <Route
+              index
+              path="*"
+              element={
+                <BaseLayout>
+                  <FreshnessRoutes />
+                </BaseLayout>
+              }
+            />
+          </Route>
+        )}
         <Route path="query-history">
           <Route
             index

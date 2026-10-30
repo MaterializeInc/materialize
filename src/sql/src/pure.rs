@@ -38,18 +38,18 @@ use mz_sql_parser::ast::visit::{Visit, visit_function};
 use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption, CreateSubsourceOptionName,
-    CreateTableFromSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier,
-    DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption, GlueAvroSeed, Ident,
-    KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
-    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, SourceEnvelope, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
-    UnresolvedItemName,
+    CastFailureMode, ColumnName, CreateMaterializedViewStatement, CreateSinkConnection,
+    CreateSinkOptionName, CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateTableFromSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption,
+    GlueAvroSeed, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
+    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, SqlServerConfigOption,
+    SqlServerConfigOptionName, Statement, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, UnresolvedItemName,
 };
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -60,7 +60,7 @@ use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceConnection, SourceDesc, SourceExportStatementDetails,
+    GenericSourceConnection, MzOffset, SourceConnection, SourceDesc, SourceExportStatementDetails,
     SqlServerSourceExtras,
 };
 use prost::Message;
@@ -259,6 +259,7 @@ pub enum PurifiedExportDetails {
         table: PostgresTableDesc,
         text_columns: Option<Vec<Ident>>,
         exclude_columns: Option<Vec<Ident>>,
+        initial_lsn: MzOffset,
     },
     SqlServer {
         table: SqlServerTableDesc,
@@ -765,6 +766,40 @@ pub(crate) enum SourceReferencePolicy {
     Required,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FilterConstraints {
+    ExcludeAll,
+    Exclude(BTreeSet<String>),
+}
+
+impl FilterConstraints {
+    pub(crate) fn none() -> Self {
+        FilterConstraints::Exclude(BTreeSet::new())
+    }
+
+    fn from_options(
+        exclude_constraints: Vec<String>,
+        exclude_all_constraints: bool,
+    ) -> Result<Self, PlanError> {
+        if !exclude_all_constraints {
+            return Ok(FilterConstraints::Exclude(
+                exclude_constraints.into_iter().collect(),
+            ));
+        }
+        if !exclude_constraints.is_empty() {
+            sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
+        }
+        Ok(FilterConstraints::ExcludeAll)
+    }
+
+    pub(crate) fn excludes_any(&self) -> bool {
+        match self {
+            FilterConstraints::ExcludeAll => true,
+            FilterConstraints::Exclude(names) => !names.is_empty(),
+        }
+    }
+}
+
 async fn purify_create_source(
     catalog: impl SessionCatalog,
     now: u64,
@@ -989,6 +1024,15 @@ async fn purify_create_source(
             };
             retrieved_source_references = reference_client.get_source_references().await?;
 
+            // Record whether the upstream server is a physical replica, which changes how we can determine
+            // the latest LSN.
+            let is_physical_replica = mz_postgres_util::get_is_in_recovery(&client).await?;
+
+            // Read after the references above, so it bounds the LSN their schemas belong to.
+            let initial_lsn = MzOffset::from(
+                mz_postgres_util::fetch_max_lsn(&client, is_physical_replica).await?,
+            );
+
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
@@ -998,10 +1042,11 @@ async fn purify_create_source(
                 external_references,
                 text_columns,
                 exclude_columns,
-                &BTreeSet::new(),
+                &FilterConstraints::none(),
                 false,
                 source_name,
                 &reference_policy,
+                initial_lsn,
             )
             .await?;
 
@@ -1018,10 +1063,6 @@ async fn purify_create_source(
             // point-in-time-recovery that will put the source into an error state.
             let timeline_id = mz_postgres_util::get_timeline_id(&client).await?;
 
-            // Record whether the upstream server is a physical replica, which changes how we can determine
-            // the latest LSN.
-            let is_physical_replica = Some(mz_postgres_util::get_is_in_recovery(&client).await?);
-
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourcePublicationDetails {
@@ -1031,7 +1072,7 @@ async fn purify_create_source(
                 ),
                 timeline_id: Some(timeline_id),
                 database: connection.database,
-                is_physical_replica,
+                is_physical_replica: Some(is_physical_replica),
             };
             options.push(PgConfigOption {
                 name: PgConfigOptionName::Details,
@@ -1187,6 +1228,8 @@ async fn purify_create_source(
                 external_references,
                 text_columns,
                 exclude_columns,
+                &FilterConstraints::none(),
+                false,
                 source_name,
                 initial_gtid_set.clone(),
                 &reference_policy,
@@ -1552,6 +1595,17 @@ async fn purify_alter_source_add_subsources(
             };
             let retrieved_source_references = reference_client.get_source_references().await?;
 
+            // Read after the references above, so it bounds the LSN their schemas belong to.
+            let initial_lsn = MzOffset::from(
+                mz_postgres_util::fetch_max_lsn(
+                    &client,
+                    pg_source_connection
+                        .publication_details
+                        .get_is_physical_replica(),
+                )
+                .await?,
+            );
+
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
@@ -1561,10 +1615,11 @@ async fn purify_alter_source_add_subsources(
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
                 exclude_columns,
-                &BTreeSet::new(),
+                &FilterConstraints::none(),
                 false,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
+                initial_lsn,
             )
             .await?;
 
@@ -1619,6 +1674,8 @@ async fn purify_alter_source_add_subsources(
                 &requested_references,
                 text_columns,
                 exclude_columns,
+                &FilterConstraints::none(),
+                false,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
@@ -1858,6 +1915,7 @@ async fn purify_create_table_from_source(
         exclude_columns,
         exclude_constraints,
         exclude_all_constraints,
+        exclude_all_not_null_constraints,
         retain_history: _,
         details,
         partition_by: _,
@@ -1867,13 +1925,11 @@ async fn purify_create_table_from_source(
         sql_bail!("DETAILS option cannot be explicitly set");
     }
 
-    if !exclude_constraints.is_empty() || exclude_all_constraints {
+    let filter_constraints =
+        FilterConstraints::from_options(exclude_constraints, exclude_all_constraints)?;
+    if filter_constraints.excludes_any() || exclude_all_not_null_constraints {
         scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
     }
-    if !exclude_constraints.is_empty() && exclude_all_constraints {
-        sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
-    }
-    let exclude_constraints: BTreeSet<String> = exclude_constraints.into_iter().collect();
 
     // Our text column values are unqualified (just column names), but the purification methods below
     // expect to match the fully-qualified names against the full set of tables in upstream, so we
@@ -1913,8 +1969,11 @@ async fn purify_create_table_from_source(
         }])
     });
 
-    if (!exclude_constraints.is_empty() || exclude_all_constraints)
-        && !matches!(desc.connection, GenericSourceConnection::Postgres(_))
+    if (filter_constraints.excludes_any() || exclude_all_not_null_constraints)
+        && !matches!(
+            desc.connection,
+            GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_)
+        )
     {
         sql_bail!(
             "EXCLUDE CONSTRAINTS is not supported for {} sources",
@@ -1940,6 +1999,17 @@ async fn purify_create_table_from_source(
             };
             retrieved_source_references = reference_client.get_source_references().await?;
 
+            // Read after the references above, so it bounds the LSN their schemas belong to.
+            let initial_lsn = MzOffset::from(
+                mz_postgres_util::fetch_max_lsn(
+                    &client,
+                    pg_source_connection
+                        .publication_details
+                        .get_is_physical_replica(),
+                )
+                .await?,
+            );
+
             let postgres::PurifiedSourceExports {
                 source_exports,
                 // TODO(database-issues#8620): Remove once subsources are removed
@@ -1952,10 +2022,11 @@ async fn purify_create_table_from_source(
                 &requested_references,
                 qualified_text_columns,
                 qualified_exclude_columns,
-                &exclude_constraints,
-                exclude_all_constraints,
+                &filter_constraints,
+                exclude_all_not_null_constraints,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
+                initial_lsn,
             )
             .await?;
             // There should be exactly one source_export returned for this statement
@@ -2006,6 +2077,8 @@ async fn purify_create_table_from_source(
                 &requested_references,
                 qualified_text_columns,
                 qualified_exclude_columns,
+                &filter_constraints,
+                exclude_all_not_null_constraints,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
@@ -3108,6 +3181,7 @@ impl VisitMut<'_, Aug> for MzNowPurifierVisitor {
                 *expr = Expr::Cast {
                     expr: Box::new(Expr::Value(Value::Number(mz_now.to_string()))),
                     data_type: self.mz_timestamp_type.clone(),
+                    failure_mode: CastFailureMode::Error,
                 };
                 self.introduced_mz_timestamp = true;
             }

@@ -28,10 +28,39 @@ cloud-style sizes (`25cc`, `50cc`, ...).
 Run unit tests with `cargo test`.
 If available, use `cargo nextest` instead.
 If these complain about `METADATA_BACKEND_URL`, then use `bin/cargo-test` instead.
+`bin/cargo-test` sets `METADATA_BACKEND_URL` from its `--postgres` argument,
+which defaults to `MZDEV_POSTGRES` or else the local CockroachDB, and
+overwrites any value already in the environment. To run against another
+metadata store, pass `--postgres` or set `MZDEV_POSTGRES`. It also sets
+`RUST_MIN_STACK=8388608`, which some tests need to avoid stack overflows.
+CI's cargo-test step sets 4194304. A bare `cargo test` or `cargo nextest run`
+sets neither, so export it yourself.
 When using `-p`, our packages typically have an `mz-` suffix, e.g., `mz-adapter`.
 Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.
+
+### Scalar function registry
+
+`cargo test -p mz-compute-types --test func_registry` snapshots every
+`UnaryFunc`, `BinaryFunc`, and `VariadicFunc` variant's properties and
+`#[sqlfunc]` body fingerprint into `src/compute-types/tests/snapshots/`. It
+fails when a variant is added or removed, when a recorded property changes,
+and when a `#[sqlfunc]` declaration or body changes. It records nothing for
+the bodies of hand-written variants, so a change to one of those passes.
+Removals and property changes to a shipped `LIR_VERSION` require a bump
+**before** regenerating, because a rewrite at the old version silently
+overwrites that version's digest. See the mz-commit skill for the decision
+procedure. Then regenerate with
+`REWRITE=1 cargo test -p mz-compute-types --test func_registry` and review the
+JSON diff. Never edit those files by hand. A new variant whose payload carries
+data needs a `Sample` in `src/expr/src/scalar/func/registry.rs`, and the panic
+names the function to add it to.
+
+The sibling `--test lir_schema` snapshots the serde schema of the whole LIR
+plan into `lir_v{LIR_VERSION}.json` and fails on shape changes anywhere under
+`src/compute-types/src/plan`, including `*Func` payloads. Regenerate with
+`REWRITE=1 cargo test -p mz-compute-types --test lir_schema`.
 
 Some tests require access to a metadata store.
 Set environment variables to `COCKROACH_URL=postgres://root@localhost:26257 METADATA_BACKEND_URL=postgres://root@localhost:26257`.
@@ -57,6 +86,19 @@ across files instead of paying it per file. It also matches how CI drives the
 suite, so goldens generated one-file-per-process can diverge from CI's batched
 context.
 Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
+Override one system parameter with
+`bin/sqllogictest -- --system-parameter-default=NAME=VALUE PATH`. The wrapper
+passes its own defaults first and the last value per name wins.
+After `timeout N bin/sqllogictest ...` expires, sqllogictest and its clusterd
+processes keep running. The mz-run skill explains why and how to stop them.
+
+Before blaming a change for a golden failure, run the same file on
+upstream/main in a detached worktree. Not every file runs on PRs:
+`compileFastSltConfig` in `test/sqllogictest/mzcompose.py` excludes some (e.g.
+`distinct_arrangements.slt`), which then only run in Nightly, so their goldens
+can be stale on main. `test/sqllogictest/introspection/relations.slt` pins
+dataflow channel container type names, so changing an operator's output
+container needs `--rewrite-results` on it.
 
 When a plan changes only because of nondeterministic IDs in the output,
 normalize it with sqllogictest's `replace` directive rather than running files
@@ -164,6 +206,11 @@ Other useful commands:
 
 Many tests expect to start with fresh state.
 Run `bin/mzcompose --find NAME down` between test runs, not just at the end of a session.
+
+The Docker Compose project name defaults to the composition directory name, so
+every worktree and concurrent session running the same composition shares
+containers, and one session's `down` kills another's run. Pass
+`bin/mzcompose --project-name <unique> --find NAME` on both `run` and `down`.
 
 Instead of manually building with `cargo build`, use `bin/mzcompose` directly.
 It implicitly builds in the `target-xcompile` directory when no prebuilt image

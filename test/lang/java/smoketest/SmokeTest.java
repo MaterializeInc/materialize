@@ -166,6 +166,15 @@ class SmokeTest {
     }
 
     @Test
+    void testPgJDBCgetMaxNameLength() throws SQLException {
+        // pgjdbc derives these from `pg_type.typlen` of `name`. Trino rejects
+        // joins and table creation when they are not positive.
+        DatabaseMetaData meta = conn.getMetaData();
+        Assertions.assertEquals(63, meta.getMaxColumnNameLength());
+        Assertions.assertEquals(63, meta.getMaxTableNameLength());
+    }
+
+    @Test
     void testPgJDBCgetPrimaryKeys() throws SQLException, ClassNotFoundException {
         Statement stmt = conn.createStatement();
         stmt.execute("CREATE TABLE materialize.public.getpks (a INT, b STRING)");
@@ -177,6 +186,23 @@ class SmokeTest {
 
         stmt = conn.createStatement();
         stmt.execute("DROP TABLE materialize.public.getpks");
+        stmt.close();
+    }
+
+    @Test
+    void testPgJDBCgetIndexInfo() throws SQLException, ClassNotFoundException {
+        Statement stmt = conn.createStatement();
+        stmt.execute("CREATE TABLE materialize.public.getidx (a INT, b STRING)");
+        stmt.execute("CREATE INDEX getidx_a ON materialize.public.getidx (a)");
+        stmt.close();
+
+        // `pg_am` has no rows and pgjdbc inner-joins on it, so the index is not reported.
+        ResultSet indexes = conn.getMetaData().getIndexInfo("materialize", "public", "getidx", false, true);
+        Assertions.assertFalse(indexes.next());
+        indexes.close();
+
+        stmt = conn.createStatement();
+        stmt.execute("DROP TABLE materialize.public.getidx");
         stmt.close();
     }
 

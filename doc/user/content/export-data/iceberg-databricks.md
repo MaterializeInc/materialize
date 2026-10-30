@@ -1,29 +1,43 @@
 ---
-title: "Databricks on AWS"
-description: "How to export results from Materialize to Apache Iceberg tables registered in Databricks Unity Catalog on AWS."
+title: "Databricks Unity Catalog"
+description: "How to export results from Materialize to Apache Iceberg tables registered in Databricks Unity Catalog on AWS or Azure."
 menu:
-  main:
-    parent: sink-iceberg
-    name: "Databricks on AWS"
-    weight: 30
+    main:
+        parent: sink-iceberg
+        name: "Databricks Unity Catalog"
+        weight: 30
 aliases:
-  - /serve-results/sink/iceberg-databricks/
+    - /serve-results/sink/iceberg-databricks/
 ---
 
 {{< public-preview />}}
 
-*Available starting in v26.40*
+_Available starting in v26.40. Databricks on Azure is available starting in
+v26.43._
 
 This guide walks you through the steps required to set up Iceberg sinks in
 Materialize Cloud against [Databricks Unity
-Catalog](https://docs.databricks.com/aws/en/data-governance/unity-catalog/) on AWS.
+Catalog](https://docs.databricks.com/aws/en/data-governance/unity-catalog/).
 Materialize reaches Unity Catalog through its [Iceberg REST catalog
 endpoint](https://docs.databricks.com/aws/en/external-access/iceberg),
 authenticating with the OAuth2 credentials of a Databricks service principal.
 
-This guide covers Databricks workspaces on AWS, whose URLs have the form
-`https://<workspace>.cloud.databricks.com`. Databricks on Azure and Google Cloud
-are not yet covered.
+The setup is the same on both clouds apart from your workspace URL, the storage
+your catalog writes to, and one connection option. Steps that differ are shown
+in **Databricks on AWS** and **Databricks on Azure** tabs. Databricks on Google
+Cloud is not yet covered.
+
+{{< tabs >}}
+{{< tab "Databricks on AWS" >}}
+Workspace URLs have the form `https://<workspace>.cloud.databricks.com`, and
+catalogs store their data in Amazon S3.
+{{</ tab >}}
+{{< tab "Databricks on Azure" >}}
+Workspace URLs have the form
+`https://adb-<workspace_id>.<region_id>.azuredatabricks.net`, and catalogs store
+their data in Azure Data Lake Storage Gen2.
+{{</ tab >}}
+{{</ tabs >}}
 
 ## Prerequisites
 
@@ -52,15 +66,34 @@ Catalog](https://docs.databricks.com/aws/en/external-access/admin).
 
 ### A catalog and a schema to write into
 
-Materialize creates the Iceberg *table* a sink writes to, but it does not create
+Materialize creates the Iceberg _table_ a sink writes to, but it does not create
 the catalog or the schema containing it. Both must exist first.
 
 In a Databricks SQL editor or notebook:
+
+{{< tabs >}}
+{{< tab "Databricks on AWS" >}}
 
 ```sql
 CREATE CATALOG <catalog_name> MANAGED LOCATION '<s3 bucket URI plus optional path>';
 CREATE SCHEMA <catalog_name>.<schema_name>;
 ```
+
+{{</ tab >}}
+{{< tab "Databricks on Azure" >}}
+
+```sql
+CREATE CATALOG <catalog_name>
+  MANAGED LOCATION 'abfss://<container>@<storage_account>.dfs.core.windows.net/<path>';
+CREATE SCHEMA <catalog_name>.<schema_name>;
+```
+
+The managed location must be an ADLS Gen2 container on a storage account with
+[hierarchical
+namespace](https://learn.microsoft.com/azure/storage/blobs/data-lake-storage-namespace)
+enabled.
+{{</ tab >}}
+{{</ tabs >}}
 
 The two names map onto the Materialize objects you create below:
 
@@ -108,14 +141,14 @@ principal](https://docs.databricks.com/aws/en/admin/users-groups/service-princip
       ON SCHEMA <catalog_name>.<schema_name> TO `<application_id>`;
     ```
 
-    | Privilege | Why Materialize needs it |
-    | --- | --- |
-    | `USE CATALOG`, `USE SCHEMA` | Allows access to the catalog and schema. |
-    | `READ METADATA` | Read the metadata of the tables the sink commits against. |
-    | `EXTERNAL USE SCHEMA` | Read and write the schema's tables from an Iceberg REST client. Without it, every catalog request is rejected. |
-    | `CREATE TABLE` | Create the Iceberg table the first time the sink runs. |
-    | `MODIFY` | Commit new snapshots as data changes. |
-    | `SELECT` | Read the table the sink writes to. |
+    | Privilege                   | Why Materialize needs it                                                                                       |
+    | --------------------------- | -------------------------------------------------------------------------------------------------------------- |
+    | `USE CATALOG`, `USE SCHEMA` | Allows access to the catalog and schema.                                                                       |
+    | `READ METADATA`             | Read the metadata of the tables the sink commits against.                                                      |
+    | `EXTERNAL USE SCHEMA`       | Read and write the schema's tables from an Iceberg REST client. Without it, every catalog request is rejected. |
+    | `CREATE TABLE`              | Create the Iceberg table the first time the sink runs.                                                         |
+    | `MODIFY`                    | Commit new snapshots as data changes.                                                                          |
+    | `SELECT`                    | Read the table the sink writes to.                                                                             |
 
     Databricks restricts who may grant `EXTERNAL USE SCHEMA`. If the grant is
     rejected, ask the catalog owner or a metastore admin to run it. See
@@ -137,21 +170,51 @@ principal](https://docs.databricks.com/aws/en/admin/users-groups/service-princip
     grant. Like `EXTERNAL USE SCHEMA`, this grant is restricted to the location
     owner and metastore admins.
 
+    The external location itself is backed by a Unity Catalog storage
+    credential that Databricks, not Materialize, uses to reach your data: an
+    IAM role on AWS, or an [Azure managed
+    identity](https://learn.microsoft.com/azure/databricks/connect/unity-catalog/cloud-storage/azure-managed-identities)
+    on a Databricks access connector on Azure. Materialize never holds it, so a
+    sink to an Azure workspace needs no Azure credentials of its own.
+
 ## Create the Iceberg catalog connection in Materialize
 
+{{< tabs >}}
+{{< tab "Databricks on AWS" >}}
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-databricks-connection" %}}
 
 Fill in the syntax elements as follows:
 
-| Syntax element | Value for Unity Catalog |
-| --- | --- |
-| `URL` | `https://<workspace>.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest` |
-| `WAREHOUSE` | The name of the Unity Catalog catalog holding your tables. Unlike other catalogs, this is not a storage location. |
-| `CREDENTIAL` | A secret holding the service principal's `<client_id>:<client_secret>`. |
-| `OAUTH2 SERVER URL` | `https://<workspace>.cloud.databricks.com/oidc/v1/token` |
-| `SCOPE` | `all-apis` |
-| `ACCESS DELEGATION` | `'vended-credentials'` |
+| Syntax element      | Value for Unity Catalog                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `URL`               | `https://<workspace>.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest`                                     |
+| `WAREHOUSE`         | The name of the Unity Catalog catalog holding your tables. Unlike other catalogs, this is not a storage location. |
+| `CREDENTIAL`        | A secret holding the service principal's `<client_id>:<client_secret>`.                                           |
+| `OAUTH2 SERVER URL` | `https://<workspace>.cloud.databricks.com/oidc/v1/token`                                                          |
+| `SCOPE`             | `all-apis`                                                                                                        |
+| `ACCESS DELEGATION` | `'vended-credentials'`                                                                                            |
+| `STORAGE PROVIDER`  | `'s3'`                                                                                                            |
+
+{{</ tab >}}
+{{< tab "Databricks on Azure" >}}
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-databricks-azure-connection" %}}
+
+Fill in the syntax elements as follows:
+
+| Syntax element      | Value for Unity Catalog                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `URL`               | `https://adb-<workspace_id>.<region_id>.azuredatabricks.net/api/2.1/unity-catalog/iceberg-rest`                   |
+| `WAREHOUSE`         | The name of the Unity Catalog catalog holding your tables. Unlike other catalogs, this is not a storage location. |
+| `CREDENTIAL`        | A secret holding the service principal's `<client_id>:<client_secret>`.                                           |
+| `OAUTH2 SERVER URL` | `https://adb-<workspace_id>.<region_id>.azuredatabricks.net/oidc/v1/token`                                        |
+| `SCOPE`             | `all-apis`                                                                                                        |
+| `ACCESS DELEGATION` | `'vended-credentials'`                                                                                            |
+| `STORAGE PROVIDER`  | `'adls'`                                                                                                          |
+
+{{</ tab >}}
+{{</ tabs >}}
 
 `OAUTH2 SERVER URL`, `SCOPE`, and `ACCESS DELEGATION` are all required for Unity
 Catalog. It serves its token endpoint on a path unrelated to the catalog URL,
@@ -215,7 +278,7 @@ ALTER SECRET databricks_oauth AS '<client_id>:<new_client_secret>';
 - Materialize does not create schemas. The Unity Catalog schema named by the
   sink's `NAMESPACE` must already exist.
 
-- Materialize can only sink into *managed* Iceberg tables. Foreign Iceberg
+- Materialize can only sink into _managed_ Iceberg tables. Foreign Iceberg
   tables and Delta tables are read-only through the Iceberg REST catalog.
 
 - Only `MODE APPEND` sinks are supported. `MODE UPSERT` expresses retractions as
@@ -232,12 +295,13 @@ If the sink reports an error, start with the sink's own status:
 SELECT name, error FROM mz_internal.mz_sink_statuses WHERE name = '<sink_name>';
 ```
 
-| Error | Cause |
-| --- | --- |
-| Token exchange failures | `OAUTH2 SERVER URL` or `SCOPE` does not match what the workspace expects, the service principal is not assigned to the workspace, or its OAuth secret has been rotated or revoked. |
-| Authentication failures on every catalog request | External data access is not enabled on the metastore, or the service principal is missing `READ METADATA` on the metastore or `EXTERNAL USE SCHEMA` on the schema. |
-| A namespace-not-found error when the sink starts | The schema named by `NAMESPACE` does not exist, or the service principal cannot see it. |
-| Storage errors once the sink is running | `ACCESS DELEGATION = 'vended-credentials'` is not set on the connection, or the catalog uses an external location the service principal lacks `EXTERNAL USE LOCATION` on. Unity Catalog vends credentials as the only way to reach its storage. |
+| Error                                                                       | Cause                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Token exchange failures                                                     | `OAUTH2 SERVER URL` or `SCOPE` does not match what the workspace expects, the service principal is not assigned to the workspace, or its OAuth secret has been rotated or revoked.                                                              |
+| Authentication failures on every catalog request                            | External data access is not enabled on the metastore, or the service principal is missing `READ METADATA` on the metastore or `EXTERNAL USE SCHEMA` on the schema.                                                                              |
+| A namespace-not-found error when the sink starts                            | The schema named by `NAMESPACE` does not exist, or the service principal cannot see it.                                                                                                                                                         |
+| Storage errors once the sink is running                                     | `ACCESS DELEGATION = 'vended-credentials'` is not set on the connection, or the catalog uses an external location the service principal lacks `EXTERNAL USE LOCATION` on. Unity Catalog vends credentials as the only way to reach its storage. |
+| Storage errors on an Azure workspace, with every catalog request succeeding | `STORAGE PROVIDER = 'adls'` is missing from the connection, so Materialize is addressing ADLS as though it were S3.                                                                                                                             |
 
 {{% include-headless "/headless/iceberg-sinks/troubleshooting" %}}
 

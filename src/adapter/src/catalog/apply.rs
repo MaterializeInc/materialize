@@ -1482,9 +1482,7 @@ impl CatalogState {
             }
             StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Comment(_) => Vec::new(),
-            StateUpdateKind::SourceReferences(source_references) => {
-                self.pack_source_references_update(&source_references, diff)
-            }
+            StateUpdateKind::SourceReferences(_) => Vec::new(),
             // mz_audit_events is a MaterializedView backed by
             // mz_internal.mz_catalog_raw, so audit log rows do not produce
             // builtin table updates here.
@@ -1529,7 +1527,7 @@ impl CatalogState {
     pub(super) fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        plan: mz_compute_types::dataflows::LirDataflowDescription,
     ) {
         let item_id = self.entry_by_global_id[&id];
         let entry = self.get_entry_mut(&item_id);

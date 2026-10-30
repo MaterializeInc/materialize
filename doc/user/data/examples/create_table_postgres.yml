@@ -8,6 +8,9 @@
     [WITH (
         TEXT COLUMNS (<column_name> [, ...])
       | EXCLUDE COLUMNS (<column_name> [, ...])
+      | EXCLUDE CONSTRAINTS ('<constraint_name>' [, ...])
+      | EXCLUDE ALL CONSTRAINTS
+      | EXCLUDE ALL NOT NULL CONSTRAINTS
       | PARTITION BY (<column_name> [, ...])
       [, ...]
     )]
@@ -65,6 +68,9 @@
         |--------|-------------|
         | `TEXT COLUMNS (<column_name> [, ...])` |*Optional.* If specified, decode data as `text` for the listed column(s),such as for unsupported data types. See also [supported types](#supported-data-types). |
         | `EXCLUDE COLUMNS (<column_name> [, ...])`| *Optional.* If specified,exclude the listed column(s) from the table, such as for unsupported data types. See also [supported types](#supported-data-types).|
+        | `EXCLUDE CONSTRAINTS ('<constraint_name>' [, ...])` | ***Public preview.** This option is under active development and may have stability or performance issues.* *Optional.* If specified, do not record the listed upstream `PRIMARY KEY` or `UNIQUE` constraint(s) as keys of the table, so that dropping them upstream does not put the table into an error state. Constraint names are string literals matched exactly, including case. `NOT NULL` constraints cannot be excluded by name; use `EXCLUDE ALL NOT NULL CONSTRAINTS` instead. See [Handle upstream constraint drop](/ingest-data/postgres/source-versioning/#handle-upstream-constraint-drop). |
+        | `EXCLUDE ALL CONSTRAINTS` | ***Public preview.** This option is under active development and may have stability or performance issues.* *Optional.* If specified, record no upstream constraints: the table has no keys and every column is nullable, so dropping any `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint upstream does not put the table into an error state. Cannot be combined with `EXCLUDE CONSTRAINTS`. To keep keys and only relax nullability, use `EXCLUDE ALL NOT NULL CONSTRAINTS` instead. |
+        | `EXCLUDE ALL NOT NULL CONSTRAINTS` | ***Public preview.** This option is under active development and may have stability or performance issues.* *Optional.* If specified, ingest every column as nullable, so that dropping any `NOT NULL` constraint upstream does not put the table into an error state. `PRIMARY KEY` and `UNIQUE` constraints are still recorded; to drop one of those safely, also list it in `EXCLUDE CONSTRAINTS`. Columns in a `PRIMARY KEY` remain `NOT NULL`, unless the primary key is also excluded with `EXCLUDE CONSTRAINTS`. Columns in a `UNIQUE` constraint become nullable, so that constraint is no longer used as a key for query optimization, unless it is a `UNIQUE NULLS NOT DISTINCT` constraint. See [Handle upstream constraint drop](/ingest-data/postgres/source-versioning/#handle-upstream-constraint-drop). |
         | `PARTITION BY (<column_name> [, ...])` | {{< include-md file="content/headless/partition-by-option-description.md" >}} |
   results: |
     {{< include-md

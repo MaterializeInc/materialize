@@ -61,7 +61,7 @@ cannot modify your existing tables, here are some common alternatives:
     [PostgreSQL](/sql/create-source/postgres-v2/) source connector with `REPLICA
     IDENTITY FULL` instead.
 
-  - [Contact Support](/support/) to discuss strategies for enabling `REPLICA
+  - [Contact Support](https://materialize.com/support/) to discuss strategies for enabling `REPLICA
     IDENTITY FULL`.
 
   {{< /note >}}
@@ -80,7 +80,7 @@ values.
   [PostgreSQL](/sql/create-source/postgres-v2/) source connector with `REPLICA
   IDENTITY FULL` instead.
 
-- [Contact Support](/support/) to discuss strategies for enabling `REPLICA
+- [Contact Support](https://materialize.com/support/) to discuss strategies for enabling `REPLICA
   IDENTITY FULL`.
 
 {{< /note >}}
@@ -89,4 +89,4 @@ values.
 
 {{% include-from-yaml data="postgres_source_details" name="postgres-unsupported-types" %}}
 
-See also: [PostgreSQL considerations](/ingest-data/postgres/#considerations).
+See also: [Supported data types](/ingest-data/postgres/#supported-data-types).

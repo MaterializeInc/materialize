@@ -26,8 +26,9 @@ mz-tls-util = { path = "../tls-util" }
 postgres-openssl.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 serde.workspace = true
-serde_yaml.workspace = true
+serde-saphyr.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-util = { workspace = true, features = ["io"] }

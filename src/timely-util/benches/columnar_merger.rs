@@ -32,6 +32,7 @@
 //! See `mz-compute/benches/columnar_merger_row.rs` for the `Row`-keyed
 //! companion bench (variable-length payload regime).
 
+use mz_alloc_default as _;
 use std::mem::size_of;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -40,7 +41,7 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnMerger;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use timely::container::PushInto;
 
 type Data = (u64, u64);
@@ -181,7 +182,7 @@ fn bench_merge(c: &mut Criterion) {
                         let mut merger: ColumnMerger<Data, Time, Diff> = Default::default();
                         let mut output = Vec::new();
                         let mut stash = Vec::new();
-                        merger.merge(vec![ca], vec![cb], &mut output, &mut stash);
+                        merger.merge(vec![ca.into()], vec![cb.into()], &mut output, &mut stash);
                         output
                     },
                     BatchSize::LargeInput,

@@ -61,7 +61,7 @@ pub(crate) struct StatementLogging {
     /// Only used by tests; otherwise, `rand::rng()` is used.
     /// Controlled by the system var `statement_logging_use_reproducible_rng`.
     /// This same instance will be used by all frontend tasks.
-    reproducible_rng: Arc<Mutex<rand_chacha::ChaCha8Rng>>,
+    reproducible_rng: Arc<Mutex<rand::rngs::ChaCha8Rng>>,
 
     /// Events to be persisted periodically.
     pending_statement_execution_events: Vec<(Row, Diff)>,
@@ -83,7 +83,7 @@ impl StatementLogging {
         Self {
             executions_begun: BTreeMap::new(),
             unlogged_sessions: BTreeMap::new(),
-            reproducible_rng: Arc::new(Mutex::new(rand_chacha::ChaCha8Rng::seed_from_u64(
+            reproducible_rng: Arc::new(Mutex::new(rand::rngs::ChaCha8Rng::seed_from_u64(
                 Self::REPRODUCIBLE_RNG_SEED,
             ))),
             pending_statement_execution_events: Vec::new(),

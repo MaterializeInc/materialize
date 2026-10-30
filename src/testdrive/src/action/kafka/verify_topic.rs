@@ -80,7 +80,8 @@ pub async fn run_verify_topic(
     let mut config = state.kafka_config.clone();
     config.set("enable.auto.offset.store", "false");
 
-    let client: AdminClient<_> = config.create().context("creating kafka consumer")?;
+    let client: AdminClient<_> =
+        mz_kafka_util::client::create(&config).context("creating kafka consumer")?;
 
     println!("waiting to create Kafka topic...");
 

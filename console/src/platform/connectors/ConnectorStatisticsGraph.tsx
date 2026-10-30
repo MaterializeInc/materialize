@@ -8,13 +8,12 @@
 // by the Apache License, Version 2.0.
 
 import { Box, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
-import { AxisBottom, AxisLeft, AxisScale, TickRendererProps } from "@visx/axis";
+import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { localPoint } from "@visx/event";
 import { GridRows } from "@visx/grid";
-import ParentSize from "@visx/responsive/lib/components/ParentSize";
+import { ParentSize } from "@visx/responsive";
 import { scaleLinear, scaleTime } from "@visx/scale";
 import { LinePath } from "@visx/shape";
-import { Text as VisxText } from "@visx/text";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import React, { PointerEvent } from "react";
 
@@ -22,11 +21,10 @@ import {
   GraphEventOverlay,
   GraphLineCursor,
   GraphTooltipCursor,
+  MultilineXTick,
 } from "~/components/graphComponents";
 import { useCursorState } from "~/hooks/usePointerEventEmitters";
 import { MaterializeTheme } from "~/theme";
-import { lineHeightFromFontSize } from "~/theme/utils";
-import { isNumber, maybeParseFloat } from "~/util";
 import { DATE_FORMAT, formatDate } from "~/utils/dateFormat";
 import { ByteUnit, convertBytes } from "~/utils/format";
 import {
@@ -72,34 +70,6 @@ export interface ConnectorStatisticsGraphProps<GDP extends GraphDataPoint> {
 }
 
 const yTickCount = 4;
-
-const XTick = ({ x, y, formattedValue, ...props }: TickRendererProps) => {
-  if (!formattedValue) return null;
-  const lines = formattedValue.split("\n");
-  const baseDy = isNumber(props.dy)
-    ? props.dy
-    : (maybeParseFloat(props.dy) ?? 0);
-  const fontSize = isNumber(props.fontSize)
-    ? props.fontSize
-    : (maybeParseFloat(props.fontSize) ?? 12);
-  const lineHeight = maybeParseFloat(lineHeightFromFontSize(fontSize)) ?? 16;
-  return (
-    <>
-      {lines.map((line, ix) => (
-        <VisxText
-          key={ix}
-          x={x}
-          y={y}
-          {...props}
-          fontSize={fontSize}
-          dy={baseDy + ix * lineHeight}
-        >
-          {line}
-        </VisxText>
-      ))}
-    </>
-  );
-};
 
 export const ConnectorStatisticsGraph = <GDP extends GraphDataPoint>(
   props: ConnectorStatisticsGraphProps<GDP>,
@@ -372,7 +342,7 @@ const ConnectorStatisticsGraphInner = <GDP extends GraphDataPoint>(
             fontSize: 12,
             textAnchor: "middle",
           })}
-          tickComponent={XTick}
+          tickComponent={MultilineXTick}
           tickFormat={(value) => {
             // To apply a custom tick component, we must format our structured data in a string
             return `${formatDate(value, "HH:mm z")}\n${formatDate(value, DATE_FORMAT)}`;

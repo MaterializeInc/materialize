@@ -18,7 +18,7 @@ use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
-use mz_timely_util::columnation::ColInternalMerger;
+use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
 
 use mz_row_spine::RowValBuilder;
 
@@ -96,7 +96,7 @@ pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
 pub type RowRowArrangement<'scope, T> = Arranged<'scope, RowRowAgent<T, Diff>>;
 pub type RowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
 // Row specialized spines and agents.
-pub type RowAgent<T, R> = TraceAgent<RowSpine<T, R>>;
+pub type RowAgent<T, R, DC = ColumnationStack<R>> = TraceAgent<RowSpine<T, R, DC>>;
 pub type RowArrangement<'scope, T> = Arranged<'scope, RowAgent<T, Diff>>;
 pub type RowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnter>;
 
@@ -138,14 +138,16 @@ where
 /// columnation.
 pub trait MzData:
     columnation::Columnation
-    + for<'a> columnar::Columnar<Container: Container<Ref<'a>: Copy + Ord> + Clone + Send>
+    + for<'a> columnar::Columnar<
+        Container: Container<Ref<'a>: Copy + Ord> + Clone + Send + columnar::Push<Self>,
+    >
 {
 }
 
 impl<T> MzData for T
 where
     T: columnation::Columnation,
-    T: columnar::Columnar<Container: Clone + Send>,
+    T: columnar::Columnar<Container: Clone + Send + columnar::Push<T>>,
     for<'a> Ref<'a, T>: Copy + Ord,
 {
 }

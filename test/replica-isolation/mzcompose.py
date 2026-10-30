@@ -482,18 +482,19 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         if any(
             isinstance(check, ArrangedIntro) for check in disruption.compaction_checks
         ):
-            # Disable introspection subscribes because they break the
-            # `ArrangedIntro` check by disabling compaction of logging indexes
-            # on all replicas if one of the replicas is failing. That's because
-            # of a defect of replica-targeted subscribes: They get installed on
-            # all replicas but only the targeted replica can drive the write
-            # frontier forward. If the targeted replica is crashing, the write
-            # frontier cannot advance and thus the read frontier cannot either.
+            # Replica-targeted introspection readers hold back compaction of
+            # logging indexes across the cluster if their target cannot advance.
+            # Disable both subscribes and curated metric sinks so ArrangedIntro
+            # can check compaction on healthy replicas when another is failing.
+            # This must happen before cluster creation, since disabling metric
+            # sinks does not remove sinks that are already installed.
             #
-            # TODO(database-issues#8091): Fix this by installing targeted subscribes only on the
-            #               targeted replica.
+            # TODO(database-issues#8091): Isolate introspection read holds per replica.
             c.sql(
-                "ALTER SYSTEM SET enable_introspection_subscribes = false;",
+                """
+                ALTER SYSTEM SET enable_introspection_subscribes = false;
+                ALTER SYSTEM SET enable_metric_sink = false;
+                """,
                 port=6877,
                 user="mz_system",
             )

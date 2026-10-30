@@ -1290,7 +1290,7 @@ impl<'a> RunnerInner<'a> {
                 },
             ],
         };
-        let listeners = mz_environmentd::Listeners::bind(listeners_config).await?;
+        let listeners = mz_environmentd::Listeners::bind(listeners_config)?;
         let host_name = format!(
             "localhost:{}",
             listeners.http["external"].handle.local_addr.port()
@@ -1322,8 +1322,8 @@ impl<'a> RunnerInner<'a> {
                 now: SYSTEM_TIME.clone(),
                 metrics_registry: metrics_registry.clone(),
                 persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
-                secrets_args: mz_service::secrets::SecretsReaderCliArgs {
-                    secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                secrets_args: mz_secrets_cli::SecretsReaderCliArgs {
+                    secrets_reader: mz_secrets_cli::SecretsControllerKind::LocalFile,
                     secrets_reader_local_file_dir: Some(secrets_dir),
                     secrets_reader_kubernetes_context: None,
                     secrets_reader_aws_prefix: None,
@@ -1342,6 +1342,7 @@ impl<'a> RunnerInner<'a> {
             cors_allowed_origin_list: Vec::new(),
             unsafe_mode: true,
             all_features: false,
+            restarted_in_place: false,
             metrics_registry,
             now,
             environment_id,
@@ -1990,7 +1991,7 @@ impl<'a> RunnerInner<'a> {
                     hasher.update(value);
                     hasher.update("\n");
                 }
-                let md5 = format!("{:x}", hasher.finalize());
+                let md5 = hex::encode(hasher.finalize());
                 if values.len() != *num_values || md5 != *expected_md5 {
                     return Ok(Outcome::OutputFailure {
                         expected_output,

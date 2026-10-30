@@ -10,7 +10,7 @@
 //! This module encapsulates all of the [`Coordinator`]'s logic for creating, dropping,
 //! and altering objects.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +21,7 @@ use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Sink};
+use mz_catalog::memory::objects::{CatalogItem, Sink};
 use mz_cluster_client::ReplicaId;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::ClusterId;
@@ -32,7 +32,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
-use mz_sql::catalog::{CatalogClusterReplica, CatalogSchema};
+use mz_sql::catalog::CatalogClusterReplica;
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
@@ -61,6 +61,92 @@ use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog, flags};
 
 impl Coordinator {
+    pub(super) fn sequence_catalog_result_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let prepared = {
+            let catalog = self.catalog().for_session(ctx.session());
+            catalog::command::CatalogResultCommand::prepare(
+                catalog.state(),
+                statement,
+                params,
+                ctx.session().meta(),
+            )
+        };
+        let (command, plan) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(&plan),
+            ));
+        if let Err(error) = self.prepare_plan_execution(&ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let row = match catalog::command::CatalogResultCommand::result(&plan) {
+            Ok(row) => row,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        let command = Arc::new(command);
+        ctx.session()
+            .add_notices(command.notices().iter().cloned().map(Into::into));
+        ctx.session_mut().retain_catalog_result(command);
+        ctx.retire(Ok(Self::send_immediate_rows(row)));
+    }
+
+    pub(super) async fn sequence_rename_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let prepared = {
+            let catalog = self.catalog().for_session(ctx.session());
+            catalog::command::RenameCommand::prepare(
+                catalog.state(),
+                statement,
+                params,
+                ctx.session().meta(),
+            )
+        };
+        let (command, plan) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(&plan),
+            ));
+        if self.controller.read_only() {
+            return ctx.retire(Err(AdapterError::ReadOnly));
+        }
+        if let Err(error) = self.prepare_plan_execution(&ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let command = Arc::new(command);
+        let result = self
+            .catalog_transact_with_ddl_transaction(
+                &mut ctx,
+                vec![Op::RenameCommand(Arc::clone(&command))],
+                |_, _| Box::pin(async {}),
+            )
+            .await;
+        match result {
+            Ok(()) => {
+                ctx.session()
+                    .add_notices(command.notices().iter().cloned().map(Into::into));
+                ctx.retire(Ok(crate::ExecuteResponse::AlteredObject(
+                    command.object_type(),
+                )));
+            }
+            Err(error) => ctx.retire(Err(error)),
+        }
+    }
+
     /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`].
     #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
@@ -103,15 +189,17 @@ impl Coordinator {
     {
         let start = Instant::now();
 
-        let (table_updates, catalog_updates) = self
-            .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
-            .await?;
+        // Keep catalog work out of the inline state of callers such as ordinary
+        // transaction completion and the coordinator's command dispatcher.
+        let (table_updates, catalog_updates) = Box::pin(
+            self.catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops),
+        )
+        .await?;
 
         // We can't run this concurrently with the explicit side effects,
         // because both want to borrow self mutably.
-        let apply_implications_res = self
-            .apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)
-            .await;
+        let apply_implications_res =
+            Box::pin(self.apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)).await;
 
         // We would get into an inconsistent state if we updated the catalog but
         // then failed to apply commands/updates to the controller. Easiest
@@ -196,13 +284,15 @@ impl Coordinator {
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 
-        let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
+        let (table_updates, catalog_updates) =
+            Box::pin(self.catalog_transact_inner(conn_id, ops)).await?;
 
         let table_updates_wait = self
             .metrics
             .catalog_transact_phase_seconds
             .with_label_values(&["table_updates_wait"]);
-        let apply_catalog_implications_fut = self.apply_catalog_implications(ctx, catalog_updates);
+        let apply_catalog_implications_fut =
+            Box::pin(self.apply_catalog_implications(ctx, catalog_updates));
 
         // Apply catalog implications concurrently with the table updates.
         let (combined_apply_res, ()) = futures::future::join(
@@ -273,6 +363,7 @@ impl Coordinator {
                 TransactionOps::DDL {
                     ops: txn_ops,
                     revision: txn_revision,
+                    revision_fenced,
                     state: txn_state,
                     snapshot: txn_snapshot,
                     side_effects: _,
@@ -290,8 +381,18 @@ impl Coordinator {
             return result;
         };
 
-        // Make sure our Catalog hasn't changed since openning the transaction.
-        if self.catalog().transient_revision() != *txn_revision {
+        // Statements without replay require their original catalog revision.
+        if self.catalog().transient_revision() != *txn_revision
+            && (*revision_fenced
+                || !txn_ops.iter().chain(&ops).all(|op| {
+                    matches!(
+                        op,
+                        catalog::Op::RenameCommand(_)
+                            | catalog::Op::CatalogResult(_)
+                            | catalog::Op::Description(_)
+                    )
+                }))
+        {
             self.metrics
                 .catalog_transact_seconds
                 .with_label_values(&["catalog_transact_with_ddl_transaction"])
@@ -308,6 +409,8 @@ impl Coordinator {
         // Clone what we need from the session before taking &mut below.
         let clone_start = Instant::now();
         let txn_ops_clone = txn_ops.clone();
+        let txn_revision = *txn_revision;
+        let revision_fenced = *revision_fenced;
         let txn_state_clone = txn_state.clone();
         // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
         // O(catalog size) in allocations, once per statement. `txn_state` next to
@@ -359,18 +462,16 @@ impl Coordinator {
         // initialize the transaction so it starts in sync with the accumulated
         // state. Otherwise (first statement), the fresh durable transaction is
         // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = self
-            .catalog()
-            .transact_incremental_dry_run(
-                &txn_state_clone,
-                ops.clone(),
-                conn,
-                prev_snapshot,
-                oracle_write_ts,
-            )
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
-            .await?;
+        let (new_state, new_snapshot) = Box::pin(self.catalog().transact_incremental_dry_run(
+            &txn_state_clone,
+            ops.clone(),
+            conn,
+            prev_snapshot,
+            oracle_write_ts,
+        ))
+        .wall_time()
+        .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
+        .await?;
 
         // Accumulate ops for eventual COMMIT.
         let result = ctx
@@ -380,7 +481,8 @@ impl Coordinator {
                 ops: combined_ops,
                 state: new_state,
                 side_effects: vec![Box::new(side_effect)],
-                revision: self.catalog().transient_revision(),
+                revision: txn_revision,
+                revision_fenced,
                 snapshot: Some(new_snapshot),
             });
 
@@ -394,7 +496,7 @@ impl Coordinator {
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
     /// called after this function successfully returns on any built
-    /// [`DataflowDesc`](mz_compute_types::dataflows::DataflowDesc).
+    /// [`MirDataflowDescription`](mz_compute_types::dataflows::MirDataflowDescription).
     #[instrument(name = "coord::catalog_transact_inner")]
     pub(crate) async fn catalog_transact_inner(
         &mut self,
@@ -414,7 +516,6 @@ impl Coordinator {
         let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
         let phase_start = Instant::now();
 
-        let mut webhook_sources_to_restart = BTreeSet::new();
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut clusters_to_create = vec![];
@@ -431,6 +532,7 @@ impl Coordinator {
         let mut update_http_config = false;
         let mut update_advance_timelines_interval = false;
         let mut update_optimizer_e2e_latency_warning_threshold = false;
+        let mut reconcile_metric_sinks = false;
 
         for op in &ops {
             match op {
@@ -487,6 +589,7 @@ impl Coordinator {
                     update_advance_timelines_interval |= name == DEFAULT_TIMESTAMP_INTERVAL.name();
                     update_optimizer_e2e_latency_warning_threshold |=
                         name == vars::OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD.name();
+                    reconcile_metric_sinks |= name == vars::DISABLED_METRIC_SINKS.name();
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -504,34 +607,7 @@ impl Coordinator {
                     update_http_config = true;
                     update_advance_timelines_interval = true;
                     update_optimizer_e2e_latency_warning_threshold = true;
-                }
-                catalog::Op::RenameItem { id, .. } => {
-                    let item = self.catalog().get_entry(id);
-                    let is_webhook_source = item
-                        .source()
-                        .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
-                        .unwrap_or(false);
-                    if is_webhook_source {
-                        webhook_sources_to_restart.insert(*id);
-                    }
-                }
-                catalog::Op::RenameSchema {
-                    database_spec,
-                    schema_spec,
-                    ..
-                } => {
-                    let schema = self.catalog().get_schema(
-                        database_spec,
-                        schema_spec,
-                        conn_id.unwrap_or(&SYSTEM_CONN_ID),
-                    );
-                    let webhook_sources = schema.item_ids().filter(|id| {
-                        let item = self.catalog().get_entry(id);
-                        item.source()
-                            .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
-                            .unwrap_or(false)
-                    });
-                    webhook_sources_to_restart.extend(webhook_sources);
+                    reconcile_metric_sinks = true;
                 }
                 catalog::Op::CreateCluster { id, .. } => {
                     clusters_to_create.push(*id);
@@ -654,10 +730,6 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            if !webhook_sources_to_restart.is_empty() {
-                self.restart_webhook_sources(webhook_sources_to_restart);
-            }
-
             if update_metrics_config {
                 mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
             }
@@ -701,6 +773,9 @@ impl Coordinator {
                     .optimizer_e2e_latency_warning_threshold();
                 self.optimizer_metrics
                     .set_e2e_optimization_time_log_threshold(threshold);
+            }
+            if reconcile_metric_sinks {
+                self.reconcile_metric_sinks().await;
             }
         }
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
@@ -781,12 +856,6 @@ impl Coordinator {
             .storage
             .drop_tables(storage_metadata, table_gids)
             .unwrap_or_terminate("cannot fail to drop tables");
-    }
-
-    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = CatalogItemId>) {
-        for id in sources {
-            self.active_webhooks.remove(&id);
-        }
     }
 
     /// Like `drop_compute_sinks`, but for a single compute sink.
@@ -871,6 +940,10 @@ impl Coordinator {
                 (sink, write_notify, reason)
             })
             .collect();
+
+        if to_retire.is_empty() {
+            return BuiltinTableAppendCompletion::completed();
+        }
 
         // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
         // before telling the subscribing client that the sink is gone. The returned notify
@@ -1398,6 +1471,9 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
+                | Op::RenameCommand(_)
+                | Op::CatalogResult(_)
+                | Op::Description(_)
                 | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }

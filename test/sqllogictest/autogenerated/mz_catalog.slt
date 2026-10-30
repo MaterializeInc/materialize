@@ -76,7 +76,7 @@ size  text  The␠human-readable␠replica␠size.
 processes  uint8  The␠number␠of␠processes␠in␠the␠replica.
 workers  uint8  The␠number␠of␠Timely␠Dataflow␠workers␠per␠process.
 cpu_nano_cores  uint8  The␠CPU␠allocation␠per␠process,␠in␠billionths␠of␠a␠vCPU␠core.
-memory_bytes  uint8  The␠RAM␠allocation␠per␠process,␠in␠billionths␠of␠a␠vCPU␠core.
+memory_bytes  uint8  The␠RAM␠allocation␠per␠process,␠in␠bytes.
 disk_bytes  uint8  The␠disk␠allocation␠per␠process.
 credits_per_hour  numeric  The␠number␠of␠compute␠credits␠consumed␠per␠hour.
 
@@ -114,7 +114,7 @@ name  text  The␠name␠of␠the␠column.
 position  uint8  The␠1-indexed␠position␠of␠the␠column␠in␠its␠containing␠table,␠source,␠or␠view.
 nullable  boolean  Can␠the␠column␠contain␠a␠`NULL`␠value?
 type  text  The␠data␠type␠of␠the␠column.
-default  text  The␠default␠expression␠of␠the␠column.
+default  text  The␠default␠expression␠of␠the␠column.␠A␠table␠column␠without␠one␠reads␠as␠the␠string␠`NULL`.
 type_oid  oid  The␠OID␠of␠the␠type␠of␠the␠column␠(references␠`mz_types`).
 type_mod  integer  The␠packed␠type␠identifier␠of␠the␠column.
 

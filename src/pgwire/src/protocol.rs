@@ -27,8 +27,8 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
-    verify_datum_desc,
+    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, ExecutionTime,
+    PeekResponseUnary, metrics, verify_datum_desc,
 };
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
@@ -613,6 +613,10 @@ where
         }
     }
 
+    // Authentication succeeded, so the connection may now carry query traffic,
+    // whose frames are far larger than any credential.
+    conn.allow_post_auth_frames();
+
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in adapter_client.session().vars().notify_set() {
         buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
@@ -638,6 +642,7 @@ where
         conn,
         adapter_client,
         txn_needs_commit: false,
+        reverted_parameters: BTreeMap::new(),
         tokio_metrics_intervals,
     };
 
@@ -850,6 +855,8 @@ where
     conn: &'a mut FramedConn<A>,
     adapter_client: mz_adapter::SessionClient,
     txn_needs_commit: bool,
+    /// Session parameters that a commit restored, to announce before the next `ReadyForQuery`.
+    reverted_parameters: BTreeMap<&'static str, String>,
     tokio_metrics_intervals: I,
 }
 
@@ -1001,6 +1008,9 @@ where
                         ExecuteTimeout::None,
                         None,
                         Some(received),
+                        // The extended protocol commits after `CommandComplete`, at `Sync` or
+                        // when the next statement starts (`txn_needs_commit` below).
+                        false,
                     )
                     .instrument(execute_root_span)
                     .await?;
@@ -1101,6 +1111,7 @@ where
         stmt: Statement<Raw>,
         sql: String,
         lifecycle_timestamps: LifecycleTimestamps,
+        ends_simple_query: bool,
     ) -> Result<State, io::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
@@ -1149,7 +1160,6 @@ where
             .await
         {
             Ok((response, execute_started)) => {
-                self.send_pending_notices().await?;
                 self.send_execute_response(
                     response,
                     stmt_desc.relation_desc,
@@ -1159,6 +1169,7 @@ where
                     None,
                     ExecuteTimeout::None,
                     execute_started,
+                    ends_simple_query,
                 )
                 .await
             }
@@ -1326,7 +1337,7 @@ where
         let num_stmts = stmts.len();
 
         // Compare with postgres' backend/tcop/postgres.c exec_simple_query.
-        for StatementParseResult { ast: stmt, sql } in stmts {
+        for (idx, StatementParseResult { ast: stmt, sql }) in stmts.into_iter().enumerate() {
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
             if self.is_aborted_txn() && !is_txn_exit_stmt(Some(&stmt)) {
                 self.aborted_txn_error().await?;
@@ -1342,8 +1353,14 @@ where
             // statement.
             self.ensure_transaction(num_stmts, "query").await?;
 
+            let ends_simple_query = idx + 1 == num_stmts;
             match self
-                .one_query(stmt, sql.to_string(), LifecycleTimestamps { received })
+                .one_query(
+                    stmt,
+                    sql.to_string(),
+                    LifecycleTimestamps { received },
+                    ends_simple_query,
+                )
                 .await?
             {
                 State::Ready => (),
@@ -1474,6 +1491,34 @@ where
                 ))
                 .await?;
             }
+        }
+        Ok(())
+    }
+
+    /// Settles a statement, or a step of one, right before its completion message
+    /// (`CommandComplete` or `PortalSuspended`). If `ends_simple_query`, the statement is the last
+    /// of a simple query, and its implicit transaction commits now. Returns the commit's error,
+    /// which takes the place of the completion message. The parameters that the commit reverts are
+    /// announced before the next `ReadyForQuery`.
+    async fn settle_statement(&mut self, ends_simple_query: bool) -> Option<ErrorResponse> {
+        match self
+            .adapter_client
+            .settle_statement(ends_simple_query)
+            .await
+        {
+            Ok(settled) => {
+                self.reverted_parameters.extend(settled.reverted);
+                None
+            }
+            Err(err) => Some(err.into_response(Severity::Error)),
+        }
+    }
+
+    async fn send_execution_time(&mut self, time: Option<ExecutionTime>) -> Result<(), io::Error> {
+        if let Some(notice) =
+            time.and_then(|time| self.adapter_client.session().execution_time_notice(time))
+        {
+            self.send(notice.into_response()).await?;
         }
         Ok(())
     }
@@ -1686,6 +1731,7 @@ where
         timeout: ExecuteTimeout,
         outer_ctx_extra: Option<ExecuteContextGuard>,
         received: Option<EpochMillis>,
+        ends_simple_query: bool,
     ) -> BoxFuture<'_, Result<State, io::Error>> {
         async move {
             let aborted_txn = self.is_aborted_txn();
@@ -1745,7 +1791,6 @@ where
                         .await
                     {
                         Ok((response, execute_started)) => {
-                            self.send_pending_notices().await?;
                             self.send_execute_response(
                                 response,
                                 row_desc,
@@ -1755,6 +1800,7 @@ where
                                 fetch_portal_name,
                                 timeout,
                                 execute_started,
+                                ends_simple_query,
                             )
                             .await
                         }
@@ -1776,6 +1822,7 @@ where
                             get_response,
                             fetch_portal_name,
                             timeout,
+                            ends_simple_query,
                         )
                         .await
                     {
@@ -1840,6 +1887,9 @@ where
                                 execution_strategy: None,
                             },
                         );
+                    }
+                    if let Some(err) = self.settle_statement(ends_simple_query).await {
+                        return self.send_error_and_get_state(err).await;
                     }
                     self.send(BackendMessage::CommandComplete { tag }).await?;
                     Ok(State::Ready)
@@ -1939,13 +1989,37 @@ where
         Ok(State::Ready)
     }
 
-    fn complete_portal(&mut self, name: &str) {
-        let portal = self
+    /// Completes the portal that carried a `CLOSE`.
+    ///
+    /// The `CLOSE` can name that very portal, and sequencing has then already
+    /// removed it. Marking the state is bookkeeping for a portal nobody will
+    /// read again, so its absence is expected rather than an error.
+    fn complete_portal_after_close(&mut self, name: &str) {
+        if let Some(portal) = self
             .adapter_client
             .session()
             .get_portal_unverified_mut(name)
-            .expect("portal should exist");
-        *portal.state = PortalState::Completed(None);
+        {
+            *portal.state = PortalState::Completed(None);
+        }
+    }
+
+    /// Completes the portal that carried a `DECLARE`.
+    ///
+    /// A successful `DECLARE` only ever adds a portal, and adding one under a
+    /// name already in use fails with `DuplicateCursor`, so the executing portal
+    /// is still present here.
+    fn complete_portal_after_declare(&mut self, name: &str) {
+        match self
+            .adapter_client
+            .session()
+            .get_portal_unverified_mut(name)
+        {
+            Some(portal) => *portal.state = PortalState::Completed(None),
+            None => {
+                mz_ore::soft_panic_or_log!("portal {} vanished across a DECLARE", name.quoted())
+            }
+        }
     }
 
     async fn fetch(
@@ -1956,6 +2030,7 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
         ctx_extra: ExecuteContextGuard,
+        ends_simple_query: bool,
     ) -> Result<State, io::Error> {
         // Unlike Execute, no count specified in FETCH returns 1 row, and 0 means 0
         // instead of All.
@@ -2022,6 +2097,7 @@ where
             timeout,
             Some(ctx_extra),
             None,
+            ends_simple_query,
         )
         .await
     }
@@ -2081,6 +2157,8 @@ where
 
     #[instrument(level = "debug")]
     async fn ready(&mut self) -> Result<State, io::Error> {
+        let reverted_parameters = mem::take(&mut self.reverted_parameters);
+        self.send_parameter_statuses(reverted_parameters).await?;
         let txn_state = self.adapter_client.session().transaction().into();
         self.send(BackendMessage::ReadyForQuery(txn_state)).await?;
         self.flush().await
@@ -2098,11 +2176,21 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
         execute_started: Instant,
+        ends_simple_query: bool,
     ) -> Result<State, io::Error> {
+        let execution_time = self
+            .adapter_client
+            .session()
+            .maybe_mark_staged(ExecutionTime::completed(execute_started.elapsed()));
+        self.send_pending_notices().await?;
         let mut tag = response.tag();
 
         macro_rules! command_complete {
             () => {{
+                if let Some(err) = self.settle_statement(ends_simple_query).await {
+                    return self.send_error_and_get_state(err).await;
+                }
+                self.send_execution_time(Some(execution_time)).await?;
                 self.send(BackendMessage::CommandComplete {
                     tag: tag
                         .take()
@@ -2115,11 +2203,11 @@ where
 
         let r = match response {
             ExecuteResponse::ClosedCursor => {
-                self.complete_portal(&portal_name);
+                self.complete_portal_after_close(&portal_name);
                 command_complete!()
             }
             ExecuteResponse::DeclaredCursor => {
-                self.complete_portal(&portal_name);
+                self.complete_portal_after_declare(&portal_name);
                 command_complete!()
             }
             ExecuteResponse::EmptyQuery => {
@@ -2139,6 +2227,7 @@ where
                     Some(portal_name.to_string()),
                     timeout,
                     ctx_extra,
+                    ends_simple_query,
                 )
                 .await
             }
@@ -2166,6 +2255,7 @@ where
                     get_response,
                     fetch_portal_name,
                     timeout,
+                    ends_simple_query,
                 )
                 .instrument(span)
                 .await
@@ -2193,6 +2283,7 @@ where
                     get_response,
                     fetch_portal_name,
                     timeout,
+                    ends_simple_query,
                 )
                 .instrument(span)
                 .await
@@ -2243,17 +2334,21 @@ where
                     .send_rows(
                         row_desc,
                         portal_name,
-                        InProgressRows::new(RecordFirstRowStream::new(
-                            rx,
-                            execute_started,
-                            &self.adapter_client,
-                            Some(instance_id),
-                            None,
-                        )),
+                        InProgressRows::new(
+                            RecordFirstRowStream::new(
+                                rx,
+                                execute_started,
+                                &self.adapter_client,
+                                Some(instance_id),
+                                None,
+                            )
+                            .without_execution_time(),
+                        ),
                         max_rows,
                         get_response,
                         fetch_portal_name,
                         timeout,
+                        ends_simple_query,
                     )
                     .await
                 {
@@ -2307,6 +2402,7 @@ where
                                     Some(instance_id),
                                     None,
                                 ),
+                                ends_simple_query,
                             )
                             .await
                         {
@@ -2360,6 +2456,7 @@ where
                                     Some(instance_id),
                                     Some(strategy),
                                 ),
+                                ends_simple_query,
                             )
                             .await
                             .map(|(state, _)| state);
@@ -2385,6 +2482,7 @@ where
                                     None,
                                     Some(StatementExecutionStrategy::Constant),
                                 ),
+                                ends_simple_query,
                             )
                             .instrument(span)
                             .await
@@ -2409,11 +2507,20 @@ where
             } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
-                self.copy_from(target_id, target_name, columns, params, row_desc, ctx_extra)
-                    .await
+                self.copy_from(
+                    target_id,
+                    target_name,
+                    columns,
+                    params,
+                    row_desc,
+                    ctx_extra,
+                    ends_simple_query,
+                )
+                .await
             }
             ExecuteResponse::TransactionCommitted { params }
-            | ExecuteResponse::TransactionRolledBack { params } => {
+            | ExecuteResponse::TransactionRolledBack { params }
+            | ExecuteResponse::DiscardedAll { params } => {
                 self.send_parameter_statuses(params).await?;
                 command_complete!()
             }
@@ -2443,7 +2550,6 @@ where
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
-            | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedObject(_)
             | ExecuteResponse::DroppedOwned
@@ -2479,6 +2585,7 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
+        ends_simple_query: bool,
     ) -> Result<(State, SendRowsEndedReason), io::Error> {
         // If this portal is being executed from a FETCH then we need to use the result
         // format type of the outer portal.
@@ -2677,6 +2784,10 @@ where
             }
         }
 
+        let execution_time = rows
+            .remaining
+            .take_execution_time()
+            .map(|time| self.adapter_client.session().maybe_mark_staged(time));
         let portal = self
             .adapter_client
             .session()
@@ -2703,8 +2814,6 @@ where
                 .expect("valid fetch portal")
         });
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
-        self.send(response_message).await?;
-
         // Attend to metrics if there are no more rows. Only record once per stream
         // to avoid polluting the histogram when an exhausted cursor is FETCHed again.
         if no_more_rows && !metric_recorded {
@@ -2737,8 +2846,18 @@ where
                 .observe(duration.as_secs_f64());
         }
 
+        // Committing clears the session's portals, so this comes after their last use above.
+        let state = match self.settle_statement(ends_simple_query).await {
+            Some(err) => self.send_error_and_get_state(err).await?,
+            None => {
+                self.send_execution_time(execution_time).await?;
+                self.send(response_message).await?;
+                State::Ready
+            }
+        };
+
         Ok((
-            State::Ready,
+            state,
             SendRowsEndedReason::Success {
                 result_size: u64::cast_from(total_sent_bytes),
                 rows_returned: u64::cast_from(total_sent_rows),
@@ -2752,6 +2871,7 @@ where
         format: CopyFormat,
         row_desc: RelationDesc,
         mut stream: RecordFirstRowStream,
+        ends_simple_query: bool,
     ) -> Result<(State, SendRowsEndedReason), io::Error> {
         let (row_format, encode_format) = match format {
             CopyFormat::Text => (
@@ -2896,9 +3016,15 @@ where
 
         let tag = format!("COPY {}", count);
         self.send(BackendMessage::CopyDone).await?;
-        self.send(BackendMessage::CommandComplete { tag }).await?;
+        let state = match self.settle_statement(ends_simple_query).await {
+            Some(err) => self.send_error_and_get_state(err).await?,
+            None => {
+                self.send(BackendMessage::CommandComplete { tag }).await?;
+                State::Ready
+            }
+        };
         Ok((
-            State::Ready,
+            state,
             SendRowsEndedReason::Success {
                 result_size: u64::cast_from(total_sent_bytes),
                 rows_returned: u64::cast_from(count),
@@ -2917,6 +3043,7 @@ where
         params: CopyFormatParams<'static>,
         row_desc: RelationDesc,
         mut ctx_extra: ExecuteContextGuard,
+        ends_simple_query: bool,
     ) -> Result<State, io::Error> {
         let res = self
             .copy_from_inner(
@@ -2926,6 +3053,7 @@ where
                 params,
                 row_desc,
                 &mut ctx_extra,
+                ends_simple_query,
             )
             .await;
         match &res {
@@ -2967,6 +3095,7 @@ where
         params: CopyFormatParams<'static>,
         row_desc: RelationDesc,
         ctx_extra: &mut ExecuteContextGuard,
+        ends_simple_query: bool,
     ) -> Result<State, io::Error> {
         let typ = row_desc.typ();
         let column_formats = vec![Format::Text; typ.column_types.len()];
@@ -3236,6 +3365,15 @@ where
                 .await;
         }
 
+        if let Some(err) = self.settle_statement(ends_simple_query).await {
+            self.adapter_client.retire_execute(
+                std::mem::take(ctx_extra),
+                StatementEndedExecutionReason::Errored {
+                    error: err.message.clone(),
+                },
+            );
+            return self.send_error_and_get_state(err).await;
+        }
         let tag = format!("COPY {}", row_count);
         self.send(BackendMessage::CommandComplete { tag }).await?;
 

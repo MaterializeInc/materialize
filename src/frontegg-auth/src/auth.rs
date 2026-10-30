@@ -21,11 +21,11 @@ use futures::future::Shared;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use lru::LruCache;
 use mz_auth::Authenticated;
+use mz_auth::user::ExternalUserMetadata;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::time::DurationExt;
-use mz_repr::user::ExternalUserMetadata;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time;
@@ -766,7 +766,7 @@ impl Claims {
                     .metadata
                     .as_ref()
                     .and_then(|m| m.user.as_deref())
-                    .ok_or(Error::MissingClaims)?;
+                    .ok_or(Error::MissingTenantApiTokenUser)?;
                 if is_email(user) {
                     return Err(Error::InvalidTenantApiTokenUser);
                 }
@@ -941,6 +941,22 @@ mod tests {
             claims.groups("groups"),
             Some(vec!["analytics".to_string(), "engineering".to_string()])
         );
+    }
+
+    /// A tenant API token without `metadata.user` was created without one, so
+    /// its error is a credential rejection, unlike a user token without an email.
+    #[mz_ore::test]
+    fn tenant_api_token_without_user_is_rejected() {
+        let mut claims = claims_with(json!({}));
+        claims.token_type = ClaimTokenType::TenantApiToken;
+        let err = claims.user().expect_err("no user declared");
+        assert!(matches!(err, Error::MissingTenantApiTokenUser), "{err:?}");
+        assert!(err.is_credential_rejection());
+
+        claims.token_type = ClaimTokenType::UserToken;
+        let err = claims.user().expect_err("no email");
+        assert!(matches!(err, Error::MissingClaims), "{err:?}");
+        assert!(!err.is_credential_rejection());
     }
 
     /// `roles` is a strongly typed field, so serde's `flatten` never routes it

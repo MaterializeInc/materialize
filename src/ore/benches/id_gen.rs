@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use mz_alloc_default as _;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInner, IdAllocatorInnerBitSet};
 
 fn bench_id_gen(c: &mut Criterion) {

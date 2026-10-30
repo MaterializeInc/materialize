@@ -22,7 +22,7 @@ Identify the login roles in your Materialize deployment:
 SELECT name FROM mz_roles WHERE name NOT LIKE 'mz_%' AND rolcanlogin = true;
 ```
 
-Users and service accounts authenticate using ID or access tokens issued by their IdP. As the admin, you need to choose the claim in these tokens whose value matches the existing role names in Materialize. The `oidc_authentication_claim` parameter tells Materialize which JWT claim to use as the role name during OIDC authentication. For more details, see [Mapping IdP Users to Materialize Roles](/security/self-managed/sso/#mapping-idp-users-to-materialize-roles).
+Users and service accounts authenticate using ID or access tokens issued by their IdP. As the admin, you need to choose the claim in these tokens whose value matches the existing role names in Materialize. The `oidc_authentication_claim` parameter tells Materialize which JWT claim to use as the role name during OIDC authentication. For more details, see [Mapping IdP Users to Materialize Roles](/self-managed-deployments/sso/oidc/#mapping-idp-users-to-materialize-roles).
 
 In most cases, this will work if your existing role names are **email
 addresses** (e.g., `alice@your-org.com`), since the `email` claim in the JWT
@@ -33,7 +33,7 @@ role.
 
 ## Step 2. Configure Single sign-on (SSO)
 
-Follow the steps in [Single sign-on (SSO)](/security/self-managed/sso/).
+Follow the steps in [Single sign-on (SSO)](/self-managed-deployments/sso/oidc/).
 
 ## Step 3. Verify the migration
 
@@ -41,6 +41,6 @@ After enabling OIDC, have each user sign in and verify their role name is the sa
 
 ## See also
 
-- [Single sign-on (SSO)](/security/self-managed/sso/)
+- [Single sign-on (SSO)](/self-managed-deployments/sso/oidc/)
 - [Authentication](/security/self-managed/authentication/)
 - [Manage roles](/security/self-managed/access-control/manage-roles/)

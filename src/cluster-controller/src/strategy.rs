@@ -26,17 +26,16 @@
 //!
 //! [`ClusterControllerCtx`]: crate::ctx::ClusterControllerCtx
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use mz_controller_types::ReplicaId;
 use mz_repr::{Timestamp, TimestampManipulation};
 
 use crate::ctx::{
-    AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord, BurstWrite, ClusterSchedule,
-    ClusterState, CreateReason, OnTimeout, ReconfigurationAudit, ReconfigurationRecord,
-    ReconfigurationStatus, ReconfigurationWrite, RefreshWindowDecision, RefreshWindowInputs,
-    ReplicaShape, StateWrite,
+    BurstAudit, BurstFinishCause, BurstRecord, BurstWrite, ClusterSchedule, ClusterState,
+    CreateReason, OnTimeout, ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus,
+    ReconfigurationWrite, RefreshWindowDecision, RefreshWindowInputs, ReplicaShape, StateWrite,
 };
 
 /// A replica slot a strategy desires this tick. The reconcile kernel unions
@@ -99,10 +98,18 @@ pub trait Strategy: Send + Sync {
 /// state, so they never participate in the compare-and-append witness. Keeping
 /// them out of [`ClusterState`] keeps that type exactly the witness material
 /// plus the observed replica set.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SignalRequest {
     /// Probe which of the cluster's replicas report all collections hydrated.
     pub hydration: bool,
+    /// Probe which of the cluster's replicas are ready to be cut over to:
+    /// hydrated, and within the configured lag of the *reference* replicas
+    /// in each reference set, the ones the cut-over will drop.
+    ///
+    /// Reference sets stay separate when strategies retire different replicas.
+    /// Each set must include every replica its transition retires. Including
+    /// a surviving replica only delays readiness.
+    pub readiness: BTreeSet<BTreeSet<ReplicaId>>,
     /// Check whether the cluster has at least one hydratable object bound to
     /// it. See `ClusterControllerCtx::has_hydratable_objects` for what counts.
     pub hydratable_objects: bool,
@@ -118,11 +125,13 @@ impl SignalRequest {
         // compile error here until its union is spelled out.
         let SignalRequest {
             hydration,
+            readiness,
             hydratable_objects,
             refresh_window,
         } = other;
         SignalRequest {
             hydration: self.hydration || hydration,
+            readiness: self.readiness.union(&readiness).cloned().collect(),
             hydratable_objects: self.hydratable_objects || hydratable_objects,
             refresh_window: self.refresh_window || refresh_window,
         }
@@ -152,6 +161,10 @@ pub struct LiveSignals {
     /// The replicas observed this tick to be online and to have *all* current
     /// collections on the cluster hydrated.
     pub hydrated_replicas: BTreeSet<ReplicaId>,
+    /// The replicas observed this tick to be ready to cut over to: hydrated, and
+    /// within the configured lag of each keyed reference set. The hydration
+    /// signal is populated independently, only when requested.
+    pub ready_replicas: BTreeMap<BTreeSet<ReplicaId>, BTreeSet<ReplicaId>>,
     /// Whether the cluster has at least one hydratable object. `false` when not
     /// requested.
     pub has_hydratable_objects: bool,
@@ -236,48 +249,58 @@ impl Strategy for BaselineStrategy {
 /// Engaged whenever the durable `reconfiguration` record is in progress. It
 /// desires `target.replication_factor` replicas at the target shape in addition
 /// to the baseline's realized-shape replicas, so both sets serve while the new
-/// one hydrates. Once rf-many target replicas are present and hydrated,
+/// one hydrates and catches up. Once rf-many target replicas are present and ready,
 /// `update_state` cuts over: the realized config advances to the target, the
 /// record is marked finalized, and the old replicas fall out of the union and
 /// are dropped. Success takes precedence over the deadline. On a timeout,
 /// `Commit` cuts over once the complete target set exists without waiting for
-/// hydration, and the baseline stops contributing in that window so the two
+/// readiness, and the baseline stops contributing in that window so the two
 /// sets swap in one transaction rather than overlapping (see
 /// `forced_cutover_pending`). `Rollback` (the default) marks the record timed
 /// out without touching the realized config and stops desiring the target
 /// replicas, reverting to the pre-reconfiguration set.
 ///
 /// Both functions are pure over the observed [`ClusterState`] and the fetched
-/// [`LiveSignals`]. Hydration is requested via [`Strategy::signal_request`]
+/// [`LiveSignals`]. Readiness is requested via [`Strategy::signal_request`]
 /// exactly while an in-progress reconfiguration is present.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GracefulReconfigurationStrategy;
 
 impl GracefulReconfigurationStrategy {
     /// Whether the cut-over precondition holds: at least
-    /// `target.replication_factor` replicas of the target shape report
-    /// hydrated.
+    /// `target.replication_factor` replicas of the target shape report ready.
     ///
-    /// Requiring rf-many hydrated replicas (not just one) preserves the
+    /// Requiring rf-many ready replicas (not just one) preserves the
     /// high-availability guarantee of `replication_factor > 1` across the
     /// cut-over. Extra target-shape replicas beyond the rf do not block: the
     /// post-cut-over reconcile retires them anyway, so waiting for them to
-    /// hydrate would only delay the cut-over.
-    fn target_hydrated(
+    /// become ready would only delay the cut-over.
+    fn target_ready(
         &self,
         state: &ClusterState,
         signals: &LiveSignals,
         record: &ReconfigurationRecord,
     ) -> bool {
         let target_shape = record.target.shape();
-        let hydrated_target_replicas = state
+        let ready = signals.ready_replicas.get(&self.reference_replicas(state));
+        let ready_target_replicas = state
             .replicas
             .iter()
             .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&target_shape)))
-            .filter(|r| signals.hydrated_replicas.contains(&r.replica_id))
+            .filter(|r| ready.is_some_and(|ready| ready.contains(&r.replica_id)))
             .count();
         let target_rf = usize::try_from(record.target.replication_factor).unwrap_or(usize::MAX);
-        hydrated_target_replicas >= target_rf
+        ready_target_replicas >= target_rf
+    }
+
+    fn reference_replicas(&self, state: &ClusterState) -> BTreeSet<ReplicaId> {
+        let realized = state.realized_shape();
+        state
+            .replicas
+            .iter()
+            .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&realized)))
+            .map(|r| r.replica_id)
+            .collect()
     }
 
     /// Whether the complete target set exists, without requiring hydration.
@@ -295,11 +318,15 @@ impl GracefulReconfigurationStrategy {
 
 impl Strategy for GracefulReconfigurationStrategy {
     fn signal_request(&self, state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
+        let in_progress = state
+            .reconfiguration
+            .as_ref()
+            .is_some_and(|record| record.is_in_progress());
+        if !in_progress {
+            return SignalRequest::default();
+        }
         SignalRequest {
-            hydration: state
-                .reconfiguration
-                .as_ref()
-                .is_some_and(|record| record.is_in_progress()),
+            readiness: BTreeSet::from([self.reference_replicas(state)]),
             ..Default::default()
         }
     }
@@ -320,10 +347,10 @@ impl Strategy for GracefulReconfigurationStrategy {
 
         // Cut over by advancing the realized config to the target and marking
         // the record finalized on either of two conditions:
-        //   1. rf-many target replicas are present and hydrated (success, which
+        //   1. rf-many target replicas are present and ready (success, which
         //      takes precedence over the deadline regardless of `on_timeout`), or
         //   2. the deadline has been reached, `on_timeout` is `Commit`, and the
-        //      complete target set exists (cut over without waiting for hydration).
+        //      complete target set exists (cut over without waiting for readiness).
         //
         // NOTE: the deadline is reached at `now >= deadline`, not `now > deadline`.
         // An `ON TIMEOUT COMMIT` with a zero timeout writes `deadline = now` to
@@ -339,11 +366,11 @@ impl Strategy for GracefulReconfigurationStrategy {
         // The baseline yields while we wait (see `forced_cutover_pending`), so
         // that create arrives in the same transaction that retires the realized
         // replicas and does not have to fit alongside them.
-        let hydrated = self.target_hydrated(state, signals, record);
+        let ready = self.target_ready(state, signals, record);
         let deadline_reached = now >= record.deadline;
         let commit_on_timeout = deadline_reached && matches!(record.on_timeout, OnTimeout::Commit);
         let target_materialized = self.target_materialized(state, record);
-        if hydrated || (commit_on_timeout && target_materialized) {
+        if ready || (commit_on_timeout && target_materialized) {
             return StateWrite {
                 new_size: Some(record.target.size.clone()),
                 new_replication_factor: Some(record.target.replication_factor),
@@ -356,16 +383,16 @@ impl Strategy for GracefulReconfigurationStrategy {
                         ..record.clone()
                     }),
                     // A cut-over that only happens because the deadline passed
-                    // under `Commit` is forced: the target has not hydrated.
+                    // under `Commit` is forced: the target is not ready.
                     // Declared here because only this decision point knows.
                     // The durable status reads `Finalized` either way.
-                    audit: Some(ReconfigurationAudit::Finalized { forced: !hydrated }),
+                    audit: Some(ReconfigurationAudit::Finalized { forced: !ready }),
                 }),
                 ..Default::default()
             };
         }
 
-        // Past the deadline un-hydrated under `Rollback`: abandon the
+        // Past the deadline not ready under `Rollback`: abandon the
         // reconfiguration while leaving the realized config untouched. The
         // terminal status is the durable transition the audit event records. With
         // the record no longer in progress the strategy stops contributing the
@@ -401,7 +428,7 @@ impl Strategy for GracefulReconfigurationStrategy {
             return Vec::new();
         }
 
-        // Past the deadline with the target not hydrated under `Rollback`: stop
+        // Past the deadline with the target not ready under `Rollback`: stop
         // contributing the target replicas. `update_state` marks the record
         // timed out in this same tick's first phase, so this usually never fires
         // against a re-read state. It matters when the deadline crosses between
@@ -415,7 +442,7 @@ impl Strategy for GracefulReconfigurationStrategy {
         // `now >= deadline` matches `update_state`'s boundary, so a zero-timeout
         // rollback stops desiring the target on the same tick it marks the
         // record timed out.
-        let timed_out = now >= record.deadline && !self.target_hydrated(state, signals, record);
+        let timed_out = now >= record.deadline && !self.target_ready(state, signals, record);
         if timed_out && matches!(record.on_timeout, OnTimeout::Rollback) {
             return Vec::new();
         }
@@ -605,7 +632,7 @@ impl Strategy for OnRefreshStrategy {
 /// on overflow rather than panicking the controller on a bad input.
 ///
 /// [`Duration`]: std::time::Duration
-fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
+pub fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
     Timestamp::try_from(duration).unwrap_or(Timestamp::MAX)
 }
 
@@ -615,7 +642,7 @@ fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
 /// the cluster is On and there exists an object on it that no steady-state
 /// (realized-config) replica has hydrated, it runs one extra replica at the
 /// configured `HYDRATION SIZE` to accelerate hydration; the burst replica tears
-/// down a `linger_duration` after the steady set first hydrates. Zero objects
+/// down after a steady replica stays hydrated and caught up for `linger_duration`. Zero objects
 /// make the condition vacuously unsatisfied, so a brand-new cluster never bursts
 /// before its first object lands. The burst is keyed entirely on the presence of a
 /// durable `burst` record (written/cleared by [`Strategy::update_state`]); the
@@ -623,12 +650,12 @@ fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
 /// drops it by shape+count with no special identity.
 ///
 /// There is deliberately no TTL on the burst replica: if the steady set can never
-/// hydrate at `cluster.size`, the burst stays up indefinitely (the cluster runs
+/// hydrate and catch up at `cluster.size`, the burst stays up indefinitely (the cluster runs
 /// permanently oversized, visible in billing and the audit log), the accepted
 /// trade for keeping the cluster serving. Burst is **not** suppressed during a
 /// reconfiguration; the two coexist.
 ///
-/// Steady-replica hydration and object existence are live signals requested via
+/// Hydration, catch-up and object existence are live signals requested via
 /// [`Strategy::signal_request`] while an `ON HYDRATION` policy is active.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HydrationBurstStrategy;
@@ -672,26 +699,57 @@ impl HydrationBurstStrategy {
         .then_some(record)
     }
 
-    /// Whether at least one steady-state (realized-config) replica reports all
-    /// current objects hydrated. `false` when no steady replica reports at all
-    /// (absent, or not yet registered with the compute controller).
-    fn steady_hydrated(&self, state: &ClusterState, signals: &LiveSignals) -> bool {
+    fn burst_shape(&self, state: &ClusterState, record: &BurstRecord) -> ReplicaShape {
+        ReplicaShape {
+            size: record.burst_size.clone(),
+            ..state.realized_shape()
+        }
+    }
+
+    fn reference_replicas(&self, state: &ClusterState) -> BTreeSet<ReplicaId> {
+        let Some(record) = &state.burst else {
+            return BTreeSet::new();
+        };
+        let shape = self.burst_shape(state, record);
+        // Conservatively include all burst-shaped replicas, even if another
+        // strategy also needs them. Ending the burst withdraws only our demand.
+        // Reconciliation keeps replicas still needed by another strategy, so
+        // waiting for catch-up in that case only delays clearing the burst record.
+        state
+            .replicas
+            .iter()
+            .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&shape)))
+            .map(|r| r.replica_id)
+            .collect()
+    }
+
+    /// Whether `replicas` contains a steady-shaped replica.
+    fn contains_steady_replica(
+        &self,
+        state: &ClusterState,
+        replicas: &BTreeSet<ReplicaId>,
+    ) -> bool {
         let steady_shape = state.realized_shape();
         state
             .replicas
             .iter()
             .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&steady_shape)))
-            .any(|r| signals.hydrated_replicas.contains(&r.replica_id))
+            .any(|r| replicas.contains(&r.replica_id))
     }
 }
 
 impl Strategy for HydrationBurstStrategy {
     fn signal_request(&self, state: &ClusterState, config: &ConfigSignals) -> SignalRequest {
-        // Hydration drives both the arm check and the linger lifecycle. Object
-        // existence only gates arming, so it is requested only record-less.
+        // Activation asks for hydration. Linger asks for catch-up against
+        // the burst-shape replicas withdrawing this contribution can retire.
         let active = self.active_policy(state, config).is_some();
         SignalRequest {
-            hydration: active,
+            hydration: active && state.burst.is_none(),
+            readiness: if self.warranted_record(state, config).is_some() {
+                BTreeSet::from([self.reference_replicas(state)])
+            } else {
+                BTreeSet::new()
+            },
             hydratable_objects: active && state.burst.is_none(),
             ..Default::default()
         }
@@ -728,8 +786,6 @@ impl Strategy for HydrationBurstStrategy {
             return StateWrite::default();
         };
 
-        let steady_hydrated = self.steady_hydrated(state, signals);
-
         match &state.burst {
             // No record: arm a burst only while some object exists that the
             // steady set has not hydrated. Without the object gate, a brand-new
@@ -739,7 +795,9 @@ impl Strategy for HydrationBurstStrategy {
             // mid-burst, the steady set reads hydrated and the linger clears
             // the record.
             None => {
-                if steady_hydrated || !signals.has_hydratable_objects {
+                if self.contains_steady_replica(state, &signals.hydrated_replicas)
+                    || !signals.has_hydratable_objects
+                {
                     StateWrite::default()
                 } else {
                     let linger_duration = policy
@@ -750,7 +808,7 @@ impl Strategy for HydrationBurstStrategy {
                             record: Some(BurstRecord {
                                 burst_size: policy.hydration_size.clone(),
                                 linger_duration,
-                                steady_hydrated_at: None,
+                                steady_ready_at: None,
                             }),
                             audit: Some(BurstAudit::Started),
                         }),
@@ -760,48 +818,51 @@ impl Strategy for HydrationBurstStrategy {
             }
             // Record present: drive the linger/teardown/re-arm lifecycle.
             Some(record) => {
-                match (record.steady_hydrated_at, steady_hydrated) {
-                    // Steady set hydrated and the linger has elapsed: tear down.
+                let steady_ready = signals
+                    .ready_replicas
+                    .get(&self.reference_replicas(state))
+                    .is_some_and(|ready| self.contains_steady_replica(state, ready));
+                match (record.steady_ready_at, steady_ready) {
+                    // Steady set ready and the linger has elapsed: tear down.
                     // A linger that overflows the timestamp space reads as
                     // never-elapsed.
-                    (Some(hydrated_at), true)
+                    (Some(ready_at), true)
                         if now
-                            > hydrated_at
+                            > ready_at
                                 .try_step_forward_by(&duration_to_ts(record.linger_duration))
                                 .unwrap_or(Timestamp::MAX) =>
                     {
                         clear(BurstFinishCause::LingerElapsed)
                     }
-                    // Steady set hydrated, linger not yet elapsed: hold.
+                    // Steady set ready, linger not yet elapsed: hold.
                     (Some(_), true) => StateWrite::default(),
-                    // First observation of the steady set hydrated: stamp the
+                    // First observation of the steady set ready: stamp the
                     // linger start. A bookkeeping rewrite, not a lifecycle
                     // transition, so it declares no audit.
                     (None, true) => StateWrite {
                         burst: Some(BurstWrite {
                             record: Some(BurstRecord {
-                                steady_hydrated_at: Some(now),
+                                steady_ready_at: Some(now),
                                 ..record.clone()
                             }),
                             audit: None,
                         }),
                         ..Default::default()
                     },
-                    // The steady set went un-hydrated again after we had stamped a
-                    // hydration time: re-arm so the linger restarts after the next
-                    // successful hydration. Also bookkeeping: the burst replica
+                    // The steady set lost readiness. Restart linger after it
+                    // catches up again. Also bookkeeping: the burst replica
                     // keeps running throughout, so no lifecycle event.
                     (Some(_), false) => StateWrite {
                         burst: Some(BurstWrite {
                             record: Some(BurstRecord {
-                                steady_hydrated_at: None,
+                                steady_ready_at: None,
                                 ..record.clone()
                             }),
                             audit: None,
                         }),
                         ..Default::default()
                     },
-                    // Steady set still un-hydrated and never stamped: keep waiting.
+                    // Steady set still not ready and never stamped: keep waiting.
                     (None, false) => StateWrite::default(),
                 }
             }
@@ -823,12 +884,7 @@ impl Strategy for HydrationBurstStrategy {
             return Vec::new();
         };
         vec![DesiredReplica {
-            shape: ReplicaShape {
-                size: record.burst_size.clone(),
-                availability_zones: AvailabilityZones(state.availability_zones.clone()),
-                logging: state.logging.clone(),
-                arrangement_compression: state.arrangement_compression,
-            },
+            shape: self.burst_shape(state, record),
             reason: CreateReason::HydrationBurst,
         }]
     }

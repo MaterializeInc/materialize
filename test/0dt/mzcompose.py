@@ -14,7 +14,7 @@ version, no upgrade).
 
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from textwrap import dedent
 from threading import Thread
 
@@ -26,6 +26,7 @@ from psycopg.sql import SQL, Identifier
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.service import Service as DockerService
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -55,6 +56,24 @@ HYDRATED_SELECT_FACTOR = 10 if sanitizer_enabled() else 1
 SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
 SERVICES = [
+    DockerService(
+        name="hydration-flags",
+        config={
+            "image": "python:3.12-slim",
+            "volumes": ["./mock_hydration_flags.py:/app/server.py"],
+            "command": ["python3", "-u", "/app/server.py"],
+            "healthcheck": {
+                "test": [
+                    "CMD",
+                    "python3",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+                ],
+                "interval": "1s",
+                "start_period": "30s",
+            },
+        },
+    ),
     MySql(),
     Postgres(),
     SqlServer(),
@@ -77,6 +96,17 @@ SERVICES = [
         restart="on-failure",
         external_metadata_store=True,
         default_replication_factor=2,
+    ),
+    # A second process of mz_new's generation, as the container entrypoint
+    # starts it after `restart_in_place!`.
+    Materialized(
+        name="mz_restarted_in_place",
+        sanity_restart=False,
+        deploy_generation=1,
+        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+        external_metadata_store=True,
+        default_replication_factor=2,
+        environment_extra=["MZ_RESTARTED_IN_PLACE=true"],
     ),
     Testdrive(
         materialize_url="postgres://materialize@mz_old:6875",
@@ -403,7 +433,7 @@ def workflow_read_only(c: Composition) -> None:
 
         c.up("mz_old")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_old")
-        c.promote_mz("mz_old")
+        c.promote_mz("mz_old", retire_mz_service=None)
 
     # After promotion, the deployment should boot with writes allowed.
     with c.override(
@@ -515,6 +545,10 @@ def workflow_basic(c: Composition) -> None:
     c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
+        # drop_idx exists only to be dropped while mz_new is in read-only mode.
+        # Nothing reads from it, unlike t_idx, which mv reads from.
+        > CREATE TABLE drop_t (a int);
+        > CREATE INDEX drop_idx ON drop_t (a);
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
@@ -785,7 +819,16 @@ def workflow_basic(c: Composition) -> None:
         > INSERT INTO t VALUES (5, 6);
         > SELECT * FROM mv;
         9
+        > DROP INDEX drop_idx
+        # NOTE: This deliberately orphans t_idx, which mv reads from, to cover
+        # the first upgrade from a release that allowed it: mz_new has to
+        # follow an old leader whose catalog no longer has an index that a
+        # running dataflow reads.
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM SET enable_drop_in_use_index = true
         > DROP INDEX t_idx
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM RESET enable_drop_in_use_index
         > CREATE INDEX t_idx2 ON t (a, b)
         > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 
@@ -894,7 +937,9 @@ def workflow_basic(c: Composition) -> None:
             """))
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        c.promote_mz("mz_new")
+        # mz_old runs without a restart policy, so its container exits once
+        # the fence stops environmentd. The loop below asserts exactly that.
+        c.promote_mz("mz_new", retire_mz_service=None)
 
         # Give some time for Mz to restart after promotion
         for i in range(10):
@@ -1104,13 +1149,15 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire_mz_service=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
 
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
@@ -1218,13 +1265,15 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire_mz_service=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
 
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
@@ -1341,13 +1390,15 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire_mz_service=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
         start_time = time.time()
         result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1464,13 +1515,15 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire_mz_service=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
         start_time = time.time()
         result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1594,13 +1647,15 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire_mz_service=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
         start_time = time.time()
         result = c.sql_query("SELECT * FROM sql_server_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1712,7 +1767,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
     ):
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        c.promote_mz("mz_new")
+        c.promote_mz("mz_new", retire_mz_service="mz_old")
 
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
@@ -1832,7 +1887,7 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
             )[0][0]
             assert count > 0, f"{relation} returned {count} on the read-only generation"
 
-        c.promote_mz("mz_new")
+        c.promote_mz("mz_new", retire_mz_service="mz_old")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
@@ -1916,7 +1971,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
         c.up("mz_new")
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        c.promote_mz("mz_new")
+        c.promote_mz("mz_new", retire_mz_service="mz_old")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
@@ -2250,7 +2305,7 @@ def workflow_upsert_sources(c: Composition) -> None:
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
             """))
 
-    end_time = datetime.now() + timedelta(seconds=200)
+    end_time = datetime.now(UTC) + timedelta(seconds=200)
     mz1 = "mz_old"
     mz2 = "mz_new"
 
@@ -2270,7 +2325,7 @@ def workflow_upsert_sources(c: Composition) -> None:
             > CREATE MATERIALIZED VIEW mv{i} AS SELECT * FROM kafka_source_tbl{i}
                 """))
 
-        while datetime.now() < end_time:
+        while datetime.now(UTC) < end_time:
             try:
                 c.testdrive(dedent(f"""
                     $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka{i} repeat=10000
@@ -2288,7 +2343,7 @@ def workflow_upsert_sources(c: Composition) -> None:
         thread.start()
 
     i = 1
-    while datetime.now() < end_time:
+    while datetime.now(UTC) < end_time:
         with c.override(
             Materialized(
                 name=mz2,
@@ -2312,7 +2367,7 @@ def workflow_upsert_sources(c: Composition) -> None:
         ):
             c.up(mz2)
             c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz2)
-            c.promote_mz(mz2)
+            c.promote_mz(mz2, retire_mz_service=mz1)
             c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz2)
 
         i += 1
@@ -2342,6 +2397,10 @@ def workflow_ddl(c: Composition) -> None:
     c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
+        # drop_idx exists only to be dropped while mz_new is in read-only mode.
+        # Nothing reads from it, unlike t_idx, which mv reads from.
+        > CREATE TABLE drop_t (a int);
+        > CREATE INDEX drop_idx ON drop_t (a);
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
@@ -2616,7 +2675,16 @@ def workflow_ddl(c: Composition) -> None:
         > INSERT INTO t VALUES (5, 6);
         > SELECT * FROM mv;
         9
+        > DROP INDEX drop_idx
+        # NOTE: This deliberately orphans t_idx, which mv reads from, to cover
+        # the first upgrade from a release that allowed it: mz_new has to
+        # follow an old leader whose catalog no longer has an index that a
+        # running dataflow reads.
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM SET enable_drop_in_use_index = true
         > DROP INDEX t_idx
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM RESET enable_drop_in_use_index
         > CREATE INDEX t_idx2 ON t (a, b)
         > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 
@@ -2729,7 +2797,9 @@ def workflow_ddl(c: Composition) -> None:
             """))
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        c.promote_mz("mz_new")
+        # mz_old runs without a restart policy, so its container exits once
+        # the fence stops environmentd. The loop below asserts exactly that.
+        c.promote_mz("mz_new", retire_mz_service=None)
 
         # Give some time for Mz to restart after promotion
         for i in range(10):
@@ -2893,7 +2963,7 @@ def workflow_stuck_collection(c: Composition) -> None:
 
     c.up("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
 
@@ -2932,7 +3002,7 @@ def workflow_caught_up_stability(c: Composition) -> None:
 
     c.up("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
 
@@ -3035,8 +3105,409 @@ def workflow_caught_up_stability_crash_loop(c: Composition) -> None:
 
     # The replica recovers. After the stability period mz_new becomes ready.
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def _pids(c: Composition, mz_service: str, command: str) -> set[str]:
+    """Returns the PIDs of processes named *command* in *mz_service*."""
+    return set(
+        c.exec(
+            mz_service,
+            "bash",
+            "-c",
+            f"ps -eo pid=,comm= | awk '$2 == \"{command}\" {{ print $1 }}'",
+            capture=True,
+            silent=True,
+        ).stdout.split()
+    )
+
+
+def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
+    """A follower restart preserves progress and a new replica gets an age cap."""
+    period = 120
+    ddl_after = 60
+
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    # Poll for DDL every second, so the restart comes right after the DDL and
+    # not at the end of the period.
+    c.sql(
+        f"""
+        ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '{period}s';
+        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE CLUSTER stable SIZE 'scale=1,workers=1';
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER stable AS SELECT * FROM t;
+        CREATE INDEX mv_idx IN CLUSTER stable ON mv (a);
+        INSERT INTO t VALUES (1), (2), (3);
+        """,
+        service="mz_old",
+    )
+
+    c.up("mz_new")
+    time.sleep(ddl_after)
+
+    def stable_hydration_times() -> list:
+        with c.sql_cursor(service="mz_new", reuse_connection=False) as cursor:
+            cursor.execute("SET cluster = stable")
+            cursor.execute("SET cluster_replica = r1")
+            cursor.execute("SET transaction_isolation = serializable")
+            cursor.execute(
+                "SELECT export_id, worker_id, hydrated_at "
+                "FROM mz_introspection.mz_compute_hydration_times_per_worker "
+                "WHERE export_id IN (SELECT id FROM mz_indexes WHERE name = 'mv_idx' "
+                "UNION ALL SELECT id FROM mz_materialized_views WHERE name = 'mv') "
+                "ORDER BY export_id, worker_id"
+            )
+            return cursor.fetchall()
+
+    hydration_before = stable_hydration_times()
+    assert len(hydration_before) == 2 and all(
+        row[2] is not None for row in hydration_before
+    )
+    environmentd = _pids(c, "mz_new", "environmentd")
+    replicas = _pids(c, "mz_new", "clusterd")
+
+    created = time.time()
+    c.sql("CREATE CLUSTER young SIZE 'scale=1,workers=1'", service="mz_old")
+    young_replica = c.sql_query(
+        "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+        "WHERE c.name = 'young'",
+        service="mz_old",
+    )[0][0]
+
+    # Rule out the leader-unhydrated exemption as the reason for early readiness.
+    deadline = time.time() + 30
+    while not c.sql_query(
+        "SELECT count(*) > 0 AND bool_and(time_ns IS NOT NULL) "
+        "FROM mz_internal.mz_compute_hydration_times "
+        f"WHERE replica_id = '{young_replica}' AND object_id NOT LIKE 't%'",
+        service="mz_old",
+    )[0][0]:
+        assert time.time() < deadline, "young leader replica did not hydrate"
+        time.sleep(0.5)
+
+    deadline = time.time() + 60
+    while True:
+        pids = _pids(c, "mz_new", "environmentd")
+        if pids and pids != environmentd:
+            break
+        assert time.time() < deadline, "the DDL did not restart mz_new"
+        time.sleep(0.5)
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    ready_after = time.time() - created
+
+    assert (
+        stable_hydration_times() == hydration_before
+    ), "stable dataflow rehydrated across the follower restart"
+
+    incoming_replicas = _pids(c, "mz_new", "clusterd")
+    assert (
+        replicas < incoming_replicas
+    ), "existing replicas restarted or the new replica never started"
+    assert (
+        ready_after < period
+    ), f"mz_new became ready {ready_after:.0f}s after replica creation, so a replica waited a full new period"
+
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def _leader_with_hydration_flags() -> Materialized:
+    return Materialized(
+        name="mz_old",
+        sanity_restart=False,
+        deploy_generation=0,
+        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+        external_metadata_store=True,
+        default_replication_factor=2,
+        environment_extra=[
+            "MZ_LAUNCHDARKLY_SDK_KEY=sdk-mock-key",
+            "MZ_LAUNCHDARKLY_BASE_URI=http://hydration-flags:8080",
+            "MZ_LAUNCHDARKLY_KEY_MAP=compute_hydration_concurrency=hydration-concurrency",
+            "MZ_CONFIG_SYNC_LOOP_INTERVAL=1s",
+        ],
+    )
+
+
+def workflow_caught_up_leader_unhydrated_collection(c: Composition) -> None:
+    c.down(destroy_volumes=True)
+    c.up("hydration-flags")
+    with c.override(_leader_with_hydration_flags()):
+        c.up("mz_old")
+        c.sql(
+            "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '10s'",
+            service="mz_old",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            """
+            CREATE CLUSTER waiting REPLICAS (
+                r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1')
+            );
+            CREATE TABLE waiting_input (a int);
+            INSERT INTO waiting_input VALUES (1);
+            """,
+            service="mz_old",
+        )
+        deadline = time.time() + 120
+        while not c.sql_query(
+            "SELECT count(*) = 2 FROM mz_internal.mz_replica_system_parameters p "
+            "JOIN mz_cluster_replicas r ON r.id = p.replica_id "
+            "JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'waiting' AND p.name = 'compute_hydration_concurrency' AND p.value = '0'",
+            service="mz_old",
+        )[0][0]:
+            assert (
+                time.time() < deadline
+            ), "replica hydration overrides were not applied"
+            time.sleep(0.5)
+        c.sql(
+            "CREATE INDEX waiting_idx IN CLUSTER waiting ON waiting_input (a)",
+            service="mz_old",
+        )
+        index_id = c.sql_query(
+            "SELECT id FROM mz_indexes WHERE name = 'waiting_idx'", service="mz_old"
+        )[0][0]
+        deadline = time.time() + 120
+        while not c.sql_query(
+            "SELECT count(*) = 2 AND bool_and(time_ns IS NULL) "
+            "FROM mz_internal.mz_compute_hydration_times "
+            f"WHERE object_id = '{index_id}'",
+            service="mz_old",
+        )[0][0]:
+            assert (
+                time.time() < deadline
+            ), "leader did not report both replicas unhydrated"
+            time.sleep(0.5)
+
+        c.up("mz_new")
+        c.await_mz_deployment_status(
+            DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=120
+        )
+        with c.sql_cursor(service="mz_new", reuse_connection=False) as cursor:
+            cursor.execute("SET cluster = waiting")
+            cursor.execute("SET cluster_replica = r1")
+            cursor.execute("SET transaction_isolation = serializable")
+            cursor.execute(
+                (
+                    "SELECT hydrated_at FROM mz_introspection.mz_compute_hydration_times_per_worker "
+                    f"WHERE export_id = '{index_id}'"
+                ).encode()
+            )
+            rows = cursor.fetchall()
+        assert rows and all(
+            row[0] is None for row in rows
+        ), "incoming index unexpectedly hydrated"
+
+
+def workflow_caught_up_leader_unhydrated_replica(c: Composition) -> None:
+    c.down(destroy_volumes=True)
+    c.up("hydration-flags")
+    with c.override(_leader_with_hydration_flags()):
+        c.up("mz_old")
+        c.sql(
+            "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '10s'",
+            service="mz_old",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            """
+            CREATE CLUSTER mixed REPLICAS (
+                r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1')
+            );
+            CREATE TABLE mixed_input (a int);
+            INSERT INTO mixed_input VALUES (1);
+            """,
+            service="mz_old",
+        )
+        deadline = time.time() + 120
+        while not c.sql_query(
+            "SELECT count(*) = 1 FROM mz_internal.mz_replica_system_parameters p "
+            "JOIN mz_cluster_replicas r ON r.id = p.replica_id "
+            "JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'mixed' AND r.name = 'r2' "
+            "AND p.name = 'compute_hydration_concurrency' AND p.value = '0'",
+            service="mz_old",
+        )[0][0]:
+            assert time.time() < deadline, "replica hydration override was not applied"
+            time.sleep(0.5)
+        c.sql(
+            "CREATE INDEX mixed_idx IN CLUSTER mixed ON mixed_input (a)",
+            service="mz_old",
+        )
+        index_id = c.sql_query(
+            "SELECT id FROM mz_indexes WHERE name = 'mixed_idx'", service="mz_old"
+        )[0][0]
+        deadline = time.time() + 120
+        while c.sql_query(
+            "SELECT r.name, h.time_ns IS NULL FROM mz_internal.mz_compute_hydration_times h "
+            "JOIN mz_cluster_replicas r ON r.id = h.replica_id "
+            f"WHERE h.object_id = '{index_id}' ORDER BY r.name",
+            service="mz_old",
+        ) != [("r1", False), ("r2", True)]:
+            assert time.time() < deadline, "leader did not report mixed hydration"
+            time.sleep(0.5)
+
+        c.up("mz_new")
+        c.await_mz_deployment_status(
+            DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=120
+        )
+        # A hydrated r1 vetoes the collection waiver. Readiness with this
+        # unhydrated r2 therefore requires the separate replica exemption.
+        with c.sql_cursor(service="mz_new", reuse_connection=False) as cursor:
+            cursor.execute("SET cluster = mixed")
+            cursor.execute("SET cluster_replica = r2")
+            cursor.execute("SET transaction_isolation = serializable")
+            cursor.execute(
+                (
+                    "SELECT hydrated_at FROM mz_introspection.mz_compute_hydration_times_per_worker "
+                    f"WHERE export_id = '{index_id}'"
+                ).encode()
+            )
+            rows = cursor.fetchall()
+        assert rows and all(
+            row[0] is None for row in rows
+        ), "incoming r2 unexpectedly hydrated"
+
+
+def workflow_caught_up_stability_without_dataflows(c: Composition) -> None:
+    """Verify the stability gate does not wait on hydration no replica reports.
+
+    A materialized view past its last refresh has a sealed shard, so mz_new
+    never runs a dataflow for it. A materialized view pinned to one replica
+    runs only there. Neither may keep any replica of the cluster from counting
+    as hydrated.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    c.sql(
+        """
+        ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '0s';
+        ALTER SYSTEM SET enable_replica_targeted_materialized_views = true;
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE CLUSTER pinned REPLICAS (
+            r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1')
+        );
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1), (2), (3);
+        CREATE MATERIALIZED VIEW sealed IN CLUSTER pinned
+            WITH (REFRESH AT mz_now()::string::int8) AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW on_r1 IN CLUSTER pinned REPLICA r1
+            AS SELECT count(*) FROM t;
+        """,
+        service="mz_old",
+    )
+
+    # Wait for the refresh to seal `sealed`, so mz_new starts with an empty
+    # as_of for it.
+    for _ in range(120):
+        sealed = c.sql_query(
+            """
+            SELECT f.write_frontier IS NULL
+            FROM mz_internal.mz_frontiers f
+            JOIN mz_materialized_views mv ON f.object_id = mv.id
+            WHERE mv.name = 'sealed'
+            """,
+            service="mz_old",
+        )
+        if sealed and sealed[0][0]:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("materialized view `sealed` never sealed its shard")
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(
+        DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=300
+    )
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def workflow_caught_up_leader_stopped_past_cutoff(c: Composition) -> None:
+    """Verify promotion after the leader was stopped for longer than the cutoff.
+
+    This is the shape of re-enabling a suspended environment: no leader runs
+    during the rollout, and its last frontiers are older than
+    `with_0dt_caught_up_check_cutoff`, so the caught-up check ignores every
+    compute collection. A replica with only ignored exports has no hydration
+    left to report and must not hold up promotion.
+
+    A zero cutoff puts every frozen leader frontier behind 'now' by the first
+    check, which stands in for a leader stopped longer than the real cutoff
+    without waiting on the wall clock.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_caught_up_check_cutoff = '0s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1), (2), (3);
+        CREATE MATERIALIZED VIEW mv AS SELECT count(*) AS n FROM t;
+        CREATE INDEX mv_idx ON mv (n);
+        """,
+        service="mz_old",
+    )
+
+    # The leader must record a frontier for each new collection on every
+    # replica before it stops. A collection without one is compared against
+    # 'now' instead, with no cutoff, and its frozen inputs fall behind that
+    # comparison for good after `with_0dt_caught_up_check_allowed_lag`.
+    for _ in range(120):
+        recorded = c.sql_query(
+            """
+            SELECT count(*) = 2 * (
+                SELECT count(*) FROM mz_cluster_replicas r
+                JOIN mz_clusters c ON c.id = r.cluster_id
+                WHERE c.name = 'quickstart'
+            )
+            FROM mz_cluster_replica_frontiers f
+            JOIN mz_objects o ON o.id = f.object_id
+            WHERE o.name IN ('mv', 'mv_idx') AND f.write_frontier > 0::mz_timestamp
+            """,
+            service="mz_old",
+        )
+        if recorded[0][0]:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("leader never recorded frontiers for mv and mv_idx")
+
+    c.kill("mz_old")
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(
+        DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=300
+    )
+    c.promote_mz("mz_new", retire_mz_service=None)
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+    assert c.sql_query("SELECT n FROM mv", service="mz_new") == [(3,)]
 
 
 def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
@@ -3101,7 +3572,7 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
 
     # Promote mz_new to leader.
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
     # Verify ALL objects are visible on mz_new, including those created
@@ -3131,6 +3602,95 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
             > SELECT * FROM pool_mv;
             1
             """))
+
+
+def workflow_ddl_detection_drops(c: Composition) -> None:
+    """Drop-only DDL must restart the follower and release dropped replicas."""
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE TABLE dropped_table (a int);
+        CREATE CLUSTER dropped_replica REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+        """,
+        service="mz_old",
+    )
+    replica_id = c.sql_query(
+        "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+        "WHERE c.name = 'dropped_replica' AND r.name = 'r1'",
+        service="mz_old",
+    )[0][0]
+
+    def replica_process_exists() -> bool:
+        return bool(
+            c.exec(
+                "mz_new",
+                "bash",
+                "-c",
+                f"ps aux | grep -v grep | grep -w 'replica_id={replica_id}' || true",
+                capture=True,
+            ).stdout.strip()
+        )
+
+    # Keep DDL polling active regardless of how quickly the follower catches up.
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            environment_extra=["FAILPOINTS=0dt_caught_up_check=return"],
+            default_replication_factor=2,
+        )
+    ):
+        c.up("mz_new")
+        for statement, reason in [
+            ("DROP TABLE dropped_table", "Dropped objects:"),
+            ("DROP CLUSTER REPLICA dropped_replica.r1", "Dropped replicas:"),
+        ]:
+            # Wait for the follower to finish its current boot before dropping.
+            # A fresh connection each attempt, because the cached one died with
+            # the previous boot.
+            deadline = time.time() + 120
+            while True:
+                try:
+                    c.sql("SELECT 1", service="mz_new", reuse_connection=False)
+                    break
+                except (OperationalError, CommandFailureCausedUIError):
+                    if time.time() > deadline:
+                        raise
+                    time.sleep(0.5)
+            logs = c.invoke("logs", "mz_new", capture=True).stdout
+            boots = logs.count("waiting for deployment to be caught up")
+            assert _leader_status(c, "mz_new") == DeploymentStatus.INITIALIZING.value
+            assert replica_process_exists(), "follower never started the replica"
+            c.sql(statement, service="mz_old")
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                logs = c.invoke("logs", "mz_new", capture=True).stdout
+                if (
+                    reason in logs
+                    and logs.count("waiting for deployment to be caught up") > boots
+                ):
+                    break
+                time.sleep(0.5)
+            else:
+                raise AssertionError(f"follower did not restart after {statement}")
+            c.up("mz_new")
+            if reason == "Dropped replicas:":
+                deadline = time.time() + 120
+                while replica_process_exists():
+                    if time.time() > deadline:
+                        raise AssertionError("follower retained the dropped replica")
+                    time.sleep(0.5)
 
 
 def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
@@ -3225,7 +3785,7 @@ def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
         count_preflight_starts() == 1
     ), "mz_new rebooted on the final DDL check with only temporary items created"
 
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
     # The takeover opened the catalog with write intent, which fences the old
@@ -3247,3 +3807,144 @@ def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
         conn.close()
     except Exception:
         pass
+
+
+def workflow_restarted_in_place_after_promotion(c: Composition) -> None:
+    """A process restarted in place halts once its generation has been promoted.
+
+    Booting writable instead would fence the promoted leader of its generation.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql("CREATE TABLE t (a int); INSERT INTO t VALUES (1);", service="mz_old")
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    c.up("mz_restarted_in_place", wait=False)
+    deadline = time.time() + 300
+    while c.is_running("mz_restarted_in_place"):
+        assert time.time() < deadline, "mz_restarted_in_place did not halt"
+        time.sleep(1)
+    exit_code = c.invoke(
+        "ps",
+        "--all",
+        "--format",
+        "{{.ExitCode}}",
+        "mz_restarted_in_place",
+        capture=True,
+        silent=True,
+    ).stdout.strip()
+    assert exit_code == "166", f"mz_restarted_in_place exited with {exit_code}"
+    logs = c.invoke("logs", "mz_restarted_in_place", capture=True).stdout
+    assert (
+        "restarted in place, but deployment generation 1 has been promoted; halting"
+        in logs
+    ), "mz_restarted_in_place did not halt on the marker"
+
+    c.sql("INSERT INTO t VALUES (2)", service="mz_new")
+    assert c.sql_query("SELECT count(*) FROM t", service="mz_new")[0][0] == 2
+    assert _leader_status(c, "mz_new") == DeploymentStatus.IS_LEADER.value
+
+
+def _replica_ids_of_cluster(
+    c: Composition, mz_service: str, cluster_id: str
+) -> set[str]:
+    """Returns the ids of the replica processes of *cluster_id* running in *mz_service*."""
+    prefix = "--opentelemetry-resource=replica_id="
+    ids = set()
+    for line in c.exec(
+        mz_service, "ps", "-eo", "args=", capture=True, silent=True
+    ).stdout.splitlines():
+        args = line.split()
+        if f"--opentelemetry-resource=cluster_id={cluster_id}" in args:
+            ids.update(
+                arg.removeprefix(prefix) for arg in args if arg.startswith(prefix)
+            )
+    return ids
+
+
+def workflow_system_replica_id_collision(c: Composition) -> None:
+    """A system replica id the leader reuses leaves no orphaned replica behind.
+
+    A controller resize names the leader's mz_catalog_server replica r2, so the
+    read-only generation's catalog open creates r1 in memory with the next
+    system replica id. The leader then gives that id to an mz_analytics replica,
+    and the read-only generation reboots on DDL and gives its r1 a new id. Its
+    process for the old id must go.
+    """
+    new_size = "scale=1,workers=1"
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        f"""
+        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
+        ALTER CLUSTER mz_catalog_server SET (SIZE = '{new_size}');
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    deadline = time.time() + 120
+    while True:
+        replicas = c.sql_query(
+            "SELECT r.name, r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'mz_catalog_server'",
+            service="mz_old",
+        )
+        if [size for _name, size in replicas] == [new_size]:
+            break
+        assert time.time() < deadline, f"the resize did not finish: {replicas}"
+        time.sleep(1)
+    assert replicas[0][0] != "r1", "the controller named the resized replica r1"
+
+    c.up("mz_new")
+    deadline = time.time() + 120
+    while not (ids := _replica_ids_of_cluster(c, "mz_new", "s2")):
+        assert (
+            time.time() < deadline
+        ), "mz_new never started an mz_catalog_server replica"
+        time.sleep(1)
+    assert len(ids) == 1, ids
+    (old_id,) = ids
+
+    # The leader allocates the id the read-only generation holds in memory. Only
+    # the cluster's owner can alter it, and the controller creates the replica on
+    # its next tick.
+    c.sql(
+        "ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR 1)",
+        service="mz_old",
+        port=6877,
+        user="mz_analytics",
+    )
+    deadline = time.time() + 60
+    while not (
+        taken := c.sql_query(
+            "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'mz_analytics'",
+            service="mz_old",
+        )
+    ):
+        assert (
+            time.time() < deadline
+        ), "the leader never created an mz_analytics replica"
+        time.sleep(1)
+    assert taken == [
+        (old_id,)
+    ], f"leader took {taken}, read-only generation holds {old_id}"
+
+    # The leader's new system replica does not make mz_new reboot, because its DDL
+    # check compares user items and user replicas only. User DDL does. Only a
+    # reboot gives mz_new's mz_catalog_server replica another id.
+    c.sql("CREATE TABLE collision_trigger (a int)", service="mz_old")
+    deadline = time.time() + 300
+    while True:
+        ids = _replica_ids_of_cluster(c, "mz_new", "s2")
+        if len(ids) == 1 and old_id not in ids:
+            break
+        assert (
+            time.time() < deadline
+        ), f"mz_new runs {ids}, expected one id other than {old_id}"
+        time.sleep(1)

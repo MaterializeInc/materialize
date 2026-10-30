@@ -24,7 +24,7 @@ describe("buildLargestMaintainedQueriesQuery", () => {
       await testdrive(`> SET database TO materialize;`);
       const query = buildLargestMaintainedQueriesQuery({
         replicaHeapLimit: 1024 ** 4,
-        limit: 100,
+        limit: 1000,
       }).compile();
       const result = await executeSqlHttp(query, {
         sessionVariables: {
@@ -59,7 +59,7 @@ describe("buildLargestMaintainedObjectSizesQuery", () => {
             clusterId: "s2",
             replicaName: "r1",
             replicaHeapLimit: 1024 ** 4,
-            limit: 100,
+            limit: 1000,
           }).compile(),
           { sessionVariables: { cluster: "mz_catalog_server" } },
         );

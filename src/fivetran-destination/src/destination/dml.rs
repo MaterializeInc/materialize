@@ -493,7 +493,7 @@ async fn get_scratch_table<'a>(
     // the scratch table with a hash.
     let mut hasher = Sha256::new();
     hasher.update(&format!("{database}.{schema}.{}", table.name));
-    let scratch_table_name = format!("{:x}", hasher.finalize());
+    let scratch_table_name = hex::encode(hasher.finalize());
 
     let qualified_scratch_table_name = UnresolvedItemName::qualified(&[
         Ident::new(SCRATCH_TABLE_SCHEMA).context("scratch schema")?,

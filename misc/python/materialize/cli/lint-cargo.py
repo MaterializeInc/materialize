@@ -9,8 +9,11 @@
 
 """Check our set of Cargo.toml files for issues"""
 
+import argparse
 import os
 import sys
+from collections.abc import Callable
+from pathlib import Path
 from pprint import pprint
 
 import toml
@@ -66,23 +69,24 @@ def check_default_members(workspace: Workspace) -> bool:
 
 
 def check_workspace_dependencies(workspace: Workspace) -> bool:
-    """Checks that crates use workspace dependencies instead of specifying
-    versions inline when a workspace dependency is available."""
+    """Checks that crates declare every dependency that is not a path
+    dependency with `workspace = true`, so that its version and source live in
+    the root `[workspace.dependencies]`."""
 
     success = True
     for name, crate in sorted(workspace.crates.items()):
         for dep, dep_types in crate.non_workspace_deps.items():
-            if dep in workspace.workspace_dependencies:
-                print(
-                    f"{name}: {dep} should use `workspace = true` "
-                    f"(found in {', '.join(dep_types)})",
-                    file=sys.stderr,
-                )
-                success = False
+            print(
+                f"{name}: {dep} should use `workspace = true` "
+                f"(found in {', '.join(dep_types)})",
+                file=sys.stderr,
+            )
+            success = False
     if not success:
         print(
-            '\nhint: replace `dep = "version"` with `dep.workspace = true` '
-            "or `dep = { workspace = true, ... }` for the above dependencies",
+            "\nhint: declare the above dependencies in `[workspace.dependencies]` "
+            'of the root Cargo.toml if missing, and replace `dep = "version"` '
+            "with `dep.workspace = true` or `dep = { workspace = true, ... }`",
             file=sys.stderr,
         )
     return success
@@ -115,7 +119,7 @@ def check_fuzz_versions_mirror_root(workspace: Workspace) -> bool:
         for name, spec in workspace.workspace_dependencies.items()
     }
 
-    fuzz_workspace = MZ_ROOT / "test" / "cargo-fuzz"
+    fuzz_workspace = workspace.root / "test" / "cargo-fuzz"
     with open(fuzz_workspace / "Cargo.toml") as f:
         members = toml.load(f)["workspace"]["members"]
 
@@ -146,14 +150,88 @@ def check_fuzz_versions_mirror_root(workspace: Workspace) -> bool:
     return success
 
 
+def check_fuzz_patches_mirror_root(workspace: Workspace) -> bool:
+    """Checks that the cargo-fuzz workspace (test/cargo-fuzz) carries the root
+    workspace's `[patch.crates-io]` entries verbatim.
+
+    Cargo never fails over a patch mismatch. An entry that does not apply lands
+    in `[[patch.unused]]` with only a warning, and a missing entry passes with no
+    warning at all. Either way the fuzz targets silently build against the
+    crates.io release instead of the fork production uses, and the build breaks
+    whenever the fork carries API the published crate lacks."""
+
+    # Root patches for crates outside the fuzz crates' dependency graph. Cargo
+    # would warn that they are unused, so the fuzz workspace leaves them out.
+    OMITTED = {"postgres_array"}
+
+    with open(workspace.root / "Cargo.toml") as f:
+        root_patches = toml.load(f).get("patch", {}).get("crates-io", {})
+    with open(workspace.root / "test" / "cargo-fuzz" / "Cargo.toml") as f:
+        fuzz_patches = toml.load(f).get("patch", {}).get("crates-io", {})
+
+    success = True
+    for name, spec in sorted(fuzz_patches.items()):
+        if name not in root_patches:
+            print(
+                f"test/cargo-fuzz/Cargo.toml: {name} is patched here but not in "
+                f"the root Cargo.toml",
+                file=sys.stderr,
+            )
+            success = False
+        elif spec != root_patches[name]:
+            print(
+                f"test/cargo-fuzz/Cargo.toml: {name} = {spec} must match the "
+                f"root Cargo.toml's {name} = {root_patches[name]}",
+                file=sys.stderr,
+            )
+            success = False
+    for name in sorted(root_patches.keys() - fuzz_patches.keys() - OMITTED):
+        print(
+            f"test/cargo-fuzz/Cargo.toml: {name} is patched in the root "
+            f"Cargo.toml but not here",
+            file=sys.stderr,
+        )
+        success = False
+    if not success:
+        print(
+            "\nhint: copy the entry from the root `[patch.crates-io]` verbatim, "
+            "or drop it here if the root no longer patches that crate. A root "
+            "entry that no fuzz crate depends on goes into `OMITTED` in "
+            "check_fuzz_patches_mirror_root instead.",
+            file=sys.stderr,
+        )
+    return success
+
+
+LINTS: dict[str, Callable[[Workspace], bool]] = {
+    "rust-versions": check_rust_versions,
+    "default-members": check_default_members,
+    "workspace-dependencies": check_workspace_dependencies,
+    "fuzz-versions-mirror-root": check_fuzz_versions_mirror_root,
+    "fuzz-patches-mirror-root": check_fuzz_patches_mirror_root,
+}
+
+
 def main() -> None:
-    workspace = Workspace(MZ_ROOT)
-    lints = [
-        check_rust_versions,
-        check_default_members,
-        check_workspace_dependencies,
-        check_fuzz_versions_mirror_root,
-    ]
+    parser = argparse.ArgumentParser(
+        prog="lint-cargo", description="Check Cargo.toml files for issues."
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=MZ_ROOT,
+        help="root of the Cargo workspace to check (default: the Materialize repository)",
+    )
+    parser.add_argument(
+        "--lint",
+        action="append",
+        choices=LINTS.keys(),
+        help="run only this lint; repeat to run several (default: all)",
+    )
+    args = parser.parse_args()
+
+    workspace = Workspace(args.root)
+    lints = [LINTS[name] for name in args.lint or LINTS]
     # Run every lint, then combine. `success and lint(...)` would short-circuit
     # and skip the remaining lints after the first failure, under-reporting.
     success = all([lint(workspace) for lint in lints])

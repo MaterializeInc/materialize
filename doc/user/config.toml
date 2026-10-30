@@ -90,6 +90,18 @@ name = "About"
 weight = 150
 
 [[menu.main]]
+name = "Support"
+parent = "about"
+url = "https://materialize.com/support/"
+weight = 10
+
+[[menu.main]]
+name = "Configure single sign-on"
+parent = "security-sm"
+url = "/self-managed-deployments/sso/"
+weight = 5
+
+[[menu.main]]
 name = "Materialize Cloud Security and Compliance"
 parent = "about"
 url = "https://materialize.com/security-overview"
@@ -135,6 +147,13 @@ unsafe = true
   [markup.tableOfContents]
     startLevel = 2
     endLevel = 4
+
+# hugo deploy sets each file's Content-Type from the first Hugo media type with
+# its suffix, and for ".xml" that is RSS, so the sitemap was served as
+# application/rss+xml. Matchers are tried in order; the first match wins.
+[[deployment.matchers]]
+pattern = "^(.+/)?sitemap\\.xml$"
+contentType = "application/xml"
 
 [[deployment.targets]]
 name = "production"

@@ -223,7 +223,10 @@ where
         .pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
 
     let mut remap_input = builder.new_input(remap_collection.inner, Pipeline);
-    let (output, reclocked) = builder.new_output();
+    // Keep the output disconnected from the remap collection input so that we can drop the output
+    // capability when we finish reclocking the source, which can happen before the
+    // remap_collection reaches the input frontier. See the `test_finalized_source` for an example.
+    let (output, reclocked) = builder.new_output_connection([]);
     let mut output = OutputBuilder::from(output);
 
     builder.build(move |caps| {
@@ -267,6 +270,7 @@ where
         // map to and also compact the maintained `remap_trace` to that time.
         move |frontiers| {
             let Some(cap) = capset.get(0).cloned() else {
+                remap_input.for_each(|_, _| {});
                 return;
             };
             let mut output = output.activate();
@@ -483,6 +487,11 @@ where
             // what push would grow it to.
             if deferred_source_updates.len() < deferred_source_updates.capacity() / 4 {
                 deferred_source_updates.shrink_to(deferred_source_updates.len() * 2);
+            }
+
+            // If this condition holds then this operator has no more work to do, so we drop the capability.
+            if source_frontier.frontier().is_empty() && deferred_source_updates.is_empty() {
+                capset = CapabilitySet::new();
             }
         }
     });
@@ -784,10 +793,74 @@ mod test {
                 // Drop the capability which should advance the reclocked frontier to 1001.
                 drop(data_cap);
                 step(worker);
+                assert_eq!(reclocked.try_recv(), Ok(Event::Progress(vec![(1000, -1)])));
+            },
+        );
+    }
+
+    // Test that once the input stream has reached the empty frontier with no pending data we
+    // eagerly downgrade the output frontier to the empty frontier regardless of the remap stream.
+    #[mz_ore::test]
+    fn test_finalized_source() {
+        let as_of = Antichain::from_elem(IntoTime::minimum());
+        harness(
+            as_of,
+            |worker, mut bindings, (mut data, data_cap), reclocked| {
+                // The starts by producing data in the source stream and advancing the frontier to
+                // the empty frontier. The reclock operator buffers the data and holds the
+                // appropriate capability to reclock the pending data in the future.
+                data.activate().session(&data_cap).give_iterator(
+                    vec![
+                        (1, Partitioned::new_singleton(0, 1), Diff::ONE),
+                        (2, Partitioned::new_singleton(0, 2), Diff::ONE),
+                    ]
+                    .into_iter(),
+                );
+                drop(data_cap);
+                step(worker);
+
+                // Reclock offset 0 and 1 to timestamp 1000
+                bindings.update_at(Partitioned::minimum(), 0, Diff::ONE);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
+                for time in partitioned_frontier([(0, 2)]) {
+                    bindings.update_at(time, 1000, Diff::ONE);
+                }
+                bindings.advance_to(1001);
+                bindings.flush();
+                step(worker);
+
+                // At this point the reclock operator is able to release one of the updates and
+                // downgrade the output capability to timestamp 1001. It can't yet downgrade to the
+                // empty frontier since the other update is still pending.
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Progress(vec![(1000, -1), (1001, 1)]))
+                    Ok(Event::Messages(0u64, vec![(1, 1000, Diff::ONE),]))
                 );
+                assert_eq!(
+                    reclocked.try_recv(),
+                    Ok(Event::Progress(vec![(0, -1), (1001, 1)]))
+                );
+
+                // Reclock offset 2 to timestamp 2000
+                for time in partitioned_frontier([(0, 2)]) {
+                    bindings.update_at(time, 2000, Diff::MINUS_ONE);
+                }
+                for time in partitioned_frontier([(0, 3)]) {
+                    bindings.update_at(time, 2000, Diff::ONE);
+                }
+                bindings.advance_to(2001);
+                bindings.flush();
+                step(worker);
+
+                // Now the reclock operator reclocks the last data item and since the source
+                // frontier is empty there will be no more work to be done, so the output frontier
+                // downgrades to the empty frontier even though the frontier of the remap bindings
+                // is still at [2001].
+                assert_eq!(
+                    reclocked.try_recv(),
+                    Ok(Event::Messages(1001u64, vec![(2, 2000, Diff::ONE),]))
+                );
+                assert_eq!(reclocked.try_recv(), Ok(Event::Progress(vec![(1001, -1)])));
             },
         );
     }
@@ -998,10 +1071,7 @@ mod test {
                     reclocked.try_recv(),
                     Ok(Event::Progress(vec![(0, -1), (1000, 1)]))
                 );
-                assert_eq!(
-                    reclocked.try_recv(),
-                    Ok(Event::Progress(vec![(1000, -1), (3001, 1)]))
-                );
+                assert_eq!(reclocked.try_recv(), Ok(Event::Progress(vec![(1000, -1)])));
             },
         );
     }

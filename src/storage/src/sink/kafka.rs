@@ -116,8 +116,8 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::{
     KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, KAFKA_SINK_BATCH_NUM_MESSAGES,
-    KAFKA_SINK_BATCH_SIZE, KAFKA_SINK_MESSAGE_MAX_BYTES, SINK_ENSURE_TOPIC_CONFIG,
-    SINK_PROGRESS_SEARCH,
+    KAFKA_SINK_BATCH_SIZE, KAFKA_SINK_EMIT_SINK_ID_HEADER, KAFKA_SINK_MESSAGE_MAX_BYTES,
+    SINK_ENSURE_TOPIC_CONFIG, SINK_PROGRESS_SEARCH,
 };
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
@@ -251,6 +251,8 @@ struct TransactionalProducer {
     progress_key: ProgressKey,
     /// The version of this sink, used to fence out previous versions from writing.
     sink_version: u64,
+    /// The `materialize-sink-id` header value, when the header is enabled.
+    sink_id_header: Option<String>,
     /// The number of partitions in the target topic.
     partition_count: Arc<AtomicU64>,
     /// A task to periodically refresh the partition count.
@@ -399,6 +401,9 @@ impl TransactionalProducer {
                 .into_owned(),
             progress_key,
             sink_version,
+            sink_id_header: KAFKA_SINK_EMIT_SINK_ID_HEADER
+                .get(storage_configuration.config_set())
+                .then(|| sink_id.to_string()),
             producer,
             statistics,
             staged_messages: 0,
@@ -495,6 +500,12 @@ impl TransactionalProducer {
             key: "materialize-timestamp",
             value: Some(time.to_string().as_bytes()),
         });
+        if let Some(sink_id) = &self.sink_id_header {
+            headers = headers.insert(Header {
+                key: "materialize-sink-id",
+                value: Some(sink_id.as_bytes()),
+            });
+        }
         for header in &message.headers {
             // Headers that start with `materialize-` are reserved for our
             // internal use, so we silently drop any such user-specified

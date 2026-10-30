@@ -1,5 +1,5 @@
 ---
-title: "Guide: Handle upstream schema changes with zero downtime"
+title: "Handle upstream schema changes"
 description: "How to add a column, or drop a column, from your source SQL Server database, without any downtime in Materialize"
 
 menu:
@@ -10,7 +10,6 @@ menu:
 
 ---
 
-{{< public-preview />}}
 {{< note >}}
 Changing column types is currently unsupported.
 {{< /note >}}

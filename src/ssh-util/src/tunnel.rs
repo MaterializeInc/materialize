@@ -22,8 +22,8 @@ use itertools::Itertools;
 use mz_ore::error::ErrorExt;
 use mz_ore::task::{self, AbortOnDropHandle};
 use openssh::{ForwardType, Session};
+use rand::RngExt;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::time;
 use tracing::{info, warn};
@@ -292,7 +292,7 @@ async fn port_forward(session: &Session, host: &str, port: u16) -> Result<u16, a
     // Loop trying to find an open port.
     for _ in 0..50 {
         // Choose a dynamic port according to RFC 6335.
-        let mut rng = StdRng::from_os_rng();
+        let mut rng: StdRng = rand::make_rng();
         let local_port: u16 = rng.random_range(49152..65535);
 
         // Force use of IPv4 loopback. Do not use the hostname `localhost`,

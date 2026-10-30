@@ -55,7 +55,7 @@ use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
 use postgres::config::SslMode;
 use postgres_array::Array;
-use rand::RngCore;
+use rand::Rng;
 use rdkafka::ClientConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
@@ -180,11 +180,12 @@ fn test_http_sql() {
     // datadriven output after N rows. Any directive with rows=N should be the
     // final directive in a file, since it leaves the websocket in a
     // mid-statement state.
-    // A "fixtimestamp=true" argument can be given to replace timestamps with "<TIMESTAMP>".
-    // A "fixid=true" argument can be given to replace IDs with "<ID>".
     //
     // Datadriven directive for HTTP POST is "http". Input and output are the
     // documented JSON formats.
+    //
+    // Both accept "fixtimestamp=true", "fixid=true" and "fixtiming=true" to replace
+    // timestamps, IDs and execution times with "<TIMESTAMP>", "<ID>" and "<DURATION>".
 
     let fixtimestamp_replacements = [(Regex::new(r#"\d{13}(\.0)?"#).unwrap(), "<TIMESTAMP>")];
     let fixid_replacements = [
@@ -194,6 +195,16 @@ fn test_http_sql() {
         ),
         (Regex::new(r#"\b[ust]\d+\b"#).unwrap(), "<ID>"),
         (Regex::new(r#"\\n[ust]\d+\b"#).unwrap(), "\\n<ID>"),
+    ];
+    let fixtiming_replacements = [
+        (
+            Regex::new(r#"execution time: \d+\.\d+ ms"#).unwrap(),
+            "execution time: <DURATION> ms",
+        ),
+        (
+            Regex::new(r#"\\"duration_us\\":\d+"#).unwrap(),
+            "\\\"duration_us\\\":<DURATION>",
+        ),
     ];
 
     datadriven::walk("tests/testdata/http", |f| {
@@ -259,6 +270,17 @@ fn test_http_sql() {
         ));
 
         f.run(|tc| {
+            let mut replacements = Vec::new();
+            if tc.args.contains_key("fixtimestamp") {
+                replacements.extend_from_slice(&fixtimestamp_replacements);
+            }
+            if tc.args.contains_key("fixid") {
+                replacements.extend_from_slice(&fixid_replacements);
+            }
+            if tc.args.contains_key("fixtiming") {
+                replacements.extend_from_slice(&fixtiming_replacements);
+            }
+
             let msg = match tc.directive.as_str() {
                 "ws-text" => Message::Text(tc.input.clone().into()),
                 "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec().into()),
@@ -269,7 +291,12 @@ fn test_http_sql() {
                         .json(&json)
                         .send()
                         .unwrap();
-                    return format!("{}\n{}\n", res.status(), res.text().unwrap());
+                    let status = res.status();
+                    let mut text = res.text().unwrap();
+                    for (re, replace) in &replacements {
+                        text = re.replace_all(&text, *replace).into_owned();
+                    }
+                    return format!("{}\n{}\n", status, text);
                 }
                 _ => panic!("unknown directive {}", tc.directive),
             };
@@ -278,14 +305,6 @@ fn test_http_sql() {
                 .get("rows")
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
-
-            let mut replacements = Vec::new();
-            if tc.args.contains_key("fixtimestamp") {
-                replacements.extend_from_slice(&fixtimestamp_replacements);
-            }
-            if tc.args.contains_key("fixid") {
-                replacements.extend_from_slice(&fixid_replacements);
-            }
 
             ws.send(msg).unwrap();
             let mut responses = String::new();
@@ -367,13 +386,16 @@ fn test_cancel_long_running_query() {
 #[allow(clippy::disallowed_methods)]
 fn test_cancellation_cancels_dataflows(query: &str) {
     // Query that returns how many dataflows are currently installed.
-    // Ignores introspection subscribe dataflows.
-    // Ignores storage operators, whose IDs are offset by STORAGE_ID_OFFSET (1 << 48).
+    // Ignores the background dataflows every replica carries: introspection
+    // subscribes and curated metric sinks. Filtering rather than turning the
+    // features off keeps the shipping configuration under test, and it also
+    // sidesteps the async install: a sink landing mid-test cannot be mistaken
+    // for the query's dataflow, nor for one that failed to clean up.
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
         WHERE name NOT LIKE '%introspection-subscribe%' \
-        AND id < 281474976710656";
+        AND name NOT LIKE '%metric-sink-%'";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -449,13 +471,16 @@ fn test_cancel_insert_select() {
 #[allow(clippy::disallowed_methods)]
 fn test_closing_connection_cancels_dataflows(query: String) {
     // Query that returns how many dataflows are currently installed.
-    // Ignores introspection subscribe dataflows.
-    // Ignores storage operators, whose IDs are offset by STORAGE_ID_OFFSET (1 << 48).
+    // Ignores the background dataflows every replica carries: introspection
+    // subscribes and curated metric sinks. Filtering rather than turning the
+    // features off keeps the shipping configuration under test, and it also
+    // sidesteps the async install: a sink landing mid-test cannot be mistaken
+    // for the query's dataflow, nor for one that failed to clean up.
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
         WHERE name NOT LIKE '%introspection-subscribe%' \
-        AND id < 281474976710656";
+        AND name NOT LIKE '%metric-sink-%'";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1411,6 +1436,387 @@ fn test_ws_select_streams_rows_then_size_error() {
     assert!(
         rows_seen > 0 && rows_seen < ROWS,
         "expected a truncated stream of rows before the error, got {rows_seen}"
+    );
+}
+
+/// Runs `request`, which must execute a constant `INSERT INTO {table}` in an implicit
+/// transaction, such that the INSERT's commit fails: the INSERT parks after packing its
+/// rows, `table` gains a column, and the INSERT resumes with rows of a stale arity.
+#[allow(clippy::disallowed_methods)]
+fn with_failing_insert_commit<T: Send + 'static>(
+    ddl: &mut postgres::Client,
+    table: &str,
+    request: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    // Sends "exited" when the request thread ends, also when it panics.
+    struct OnExit(std::sync::mpsc::Sender<&'static str>);
+    impl Drop for OnExit {
+        fn drop(&mut self) {
+            let _ = self.0.send("exited");
+        }
+    }
+
+    let (events, events_rx) = std::sync::mpsc::channel();
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    fail::cfg_callback("insert_after_pack_before_commit", {
+        let events = events.clone();
+        let resume = Arc::clone(&resume);
+        move || {
+            let _ = events.send("packed");
+            // The callback parks a runtime worker that the ALTER TABLE below needs.
+            // `block_in_place` hands the worker's queue to another thread first, see
+            // `test_insert_concurrent_alter_table` in tests/sql.rs.
+            tokio::task::block_in_place(|| resume.wait());
+        }
+    })
+    .unwrap();
+    let request = thread::spawn(move || {
+        let _on_exit = OnExit(events);
+        request()
+    });
+    // A request that ends before the failpoint fails the test with its own error, instead of
+    // leaving the test waiting for the failpoint.
+    if events_rx.recv().unwrap() != "packed" {
+        fail::remove("insert_after_pack_before_commit");
+        request.join().unwrap();
+        panic!("the request completed without reaching the failpoint");
+    }
+    ddl.batch_execute(&format!("ALTER TABLE {table} ADD COLUMN b int"))
+        .unwrap();
+    fail::remove("insert_after_pack_before_commit");
+    resume.wait();
+    request.join().unwrap()
+}
+
+/// Sends `request` and renders its responses up to `ReadyForQuery`, skipping notices and
+/// parameter statuses.
+fn ws_request_messages(
+    ws: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+    request: serde_json::Value,
+) -> Vec<String> {
+    ws.send(Message::Text(request.to_string().into())).unwrap();
+    let mut msgs = Vec::new();
+    loop {
+        let Message::Text(text) = ws.read().unwrap() else {
+            continue;
+        };
+        let msg = match serde_json::from_str::<WebSocketResponse>(&text).unwrap() {
+            WebSocketResponse::CommandStarting(_) => "CommandStarting".to_string(),
+            WebSocketResponse::CommandComplete(tag) => format!("CommandComplete {tag}"),
+            WebSocketResponse::Error(err) => format!("Error {}", err.code),
+            WebSocketResponse::Rows(_) => "Rows".to_string(),
+            WebSocketResponse::Row(_) => "Row".to_string(),
+            WebSocketResponse::Notice(_) | WebSocketResponse::ParameterStatus(_) => continue,
+            WebSocketResponse::ReadyForQuery(_) => break,
+            other @ WebSocketResponse::BackendKeyData(_) => panic!("unexpected message {other:?}"),
+        };
+        msgs.push(msg);
+    }
+    msgs
+}
+
+/// Sends `sql` as a simple query on a new pgwire connection and renders the errors, row
+/// descriptions, rows and `CommandComplete`s it gets back, up to `ReadyForQuery`.
+fn pgwire_simple_query_messages(addr: std::net::SocketAddr, sql: &str) -> Vec<String> {
+    use postgres_protocol::message::backend::Message;
+    use postgres_protocol::message::frontend;
+    use tokio_postgres::fallible_iterator::FallibleIterator;
+
+    let mut stream = std::net::TcpStream::connect(addr).unwrap();
+    let mut read_buf = bytes::BytesMut::new();
+    let mut read_until_ready = |stream: &mut std::net::TcpStream| {
+        let mut msgs = Vec::new();
+        loop {
+            if let Some(msg) = Message::parse(&mut read_buf).unwrap() {
+                match msg {
+                    Message::ReadyForQuery(_) => return msgs,
+                    Message::ErrorResponse(err) => {
+                        let code = err
+                            .fields()
+                            .find(|f| Ok(f.type_() == b'C'))
+                            .unwrap()
+                            .map(|f| String::from_utf8_lossy(f.value_bytes()).into_owned());
+                        msgs.push(format!("Error {}", code.unwrap()));
+                    }
+                    Message::CommandComplete(_) => msgs.push("CommandComplete".into()),
+                    Message::RowDescription(_) => msgs.push("Rows".into()),
+                    Message::DataRow(_) => msgs.push("Row".into()),
+                    _ => {}
+                }
+            } else {
+                let mut chunk = [0; 1 << 13];
+                let n = stream.read(&mut chunk).unwrap();
+                assert!(n > 0, "connection closed");
+                read_buf.extend_from_slice(&chunk[..n]);
+            }
+        }
+    };
+    let mut buf = bytes::BytesMut::new();
+    frontend::startup_message(
+        vec![
+            ("user", "materialize"),
+            ("options", "--welcome_message=off"),
+        ],
+        &mut buf,
+    )
+    .unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream);
+    buf.clear();
+    frontend::query(sql, &mut buf).unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream)
+}
+
+/// A commit failure replaces the completion of the statement that ends an implicit transaction,
+/// and it stops the request.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_implicit_commit_failure() {
+    let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_alter_table_add_column"]);
+    let mut system = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    let user = &HTTP_DEFAULT_USER.name;
+    for statement in [
+        format!("CREATE ROLE {user}"),
+        format!("GRANT ALL PRIVILEGES ON SYSTEM TO {user}"),
+        format!("GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {user}"),
+        format!("GRANT ALL PRIVILEGES ON DATABASE materialize TO {user}"),
+        format!("GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {user}"),
+    ] {
+        system.batch_execute(&statement).unwrap();
+    }
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let tables = [
+        "http_t",
+        "http_simple_t",
+        "ws_t",
+        "ws_simple_t",
+        "pg_t",
+        "pg_simple_t",
+    ];
+    for table in tables {
+        client
+            .batch_execute(&format!("CREATE TABLE {table} (a int)"))
+            .unwrap();
+    }
+    for table in ["http_t", "http_simple_t"] {
+        system
+            .batch_execute(&format!("GRANT ALL PRIVILEGES ON TABLE {table} TO {user}"))
+            .unwrap();
+    }
+
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
+    let mut http_request = |table: &str, request: serde_json::Value| {
+        let http_url = http_url.clone();
+        with_failing_insert_commit(&mut client, table, move || {
+            Client::new()
+                .post(http_url)
+                .json(&request)
+                .send()
+                .unwrap()
+                .json::<serde_json::Value>()
+                .unwrap()
+        })
+    };
+    let body = http_request(
+        "http_t",
+        serde_json::json!({
+            "queries": [{"query": "INSERT INTO http_t VALUES (1)"}, {"query": "SELECT 1"}]
+        }),
+    );
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "one result, the commit failure: {body}");
+    assert_eq!(results[0]["error"]["code"], "40001", "{body}");
+
+    // In a simple request the commit follows the rows of the last statement, and its failure
+    // replaces that statement's rows.
+    let body = http_request(
+        "http_simple_t",
+        serde_json::json!({"query": "INSERT INTO http_simple_t VALUES (1); SELECT 1"}),
+    );
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        2,
+        "the INSERT's result and the commit failure: {body}"
+    );
+    assert_eq!(results[0]["ok"], "INSERT 0 1", "{body}");
+    assert_eq!(results[1]["error"]["code"], "40001", "{body}");
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    let (mut ws, msgs) = with_failing_insert_commit(&mut client, "ws_t", move || {
+        let msgs = ws_request_messages(
+            &mut ws,
+            serde_json::json!({
+                "queries": [{"query": "INSERT INTO ws_t VALUES (1)"}, {"query": "SELECT 1"}]
+            }),
+        );
+        (ws, msgs)
+    });
+    assert_eq!(msgs, ["CommandStarting", "Error 40001"]);
+
+    // In a simple request the statements share one implicit transaction, which commits after
+    // the rows of the last statement and before its completion.
+    let (_ws, msgs) = with_failing_insert_commit(&mut client, "ws_simple_t", move || {
+        let msgs = ws_request_messages(
+            &mut ws,
+            serde_json::json!({"query": "INSERT INTO ws_simple_t VALUES (1); SELECT 1"}),
+        );
+        (ws, msgs)
+    });
+    assert_eq!(
+        msgs,
+        [
+            "CommandStarting",
+            "CommandComplete INSERT 0 1",
+            "CommandStarting",
+            "Rows",
+            "Row",
+            "Error 40001",
+        ]
+    );
+
+    // pgwire's simple query protocol commits likewise, so the commit error replaces the
+    // CommandComplete of the statement that ends the query.
+    let pgwire_addr = server.sql_local_addr();
+    let msgs = with_failing_insert_commit(&mut client, "pg_t", move || {
+        pgwire_simple_query_messages(pgwire_addr, "INSERT INTO pg_t VALUES (1)")
+    });
+    assert_eq!(msgs, ["Error 40001"]);
+    let msgs = with_failing_insert_commit(&mut client, "pg_simple_t", move || {
+        pgwire_simple_query_messages(pgwire_addr, "INSERT INTO pg_simple_t VALUES (1); SELECT 1")
+    });
+    assert_eq!(msgs, ["CommandComplete", "Rows", "Row", "Error 40001"]);
+
+    for table in tables {
+        let count: i64 = client
+            .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 0, "the failed write to {table} must not land");
+    }
+}
+
+/// Implicit commit waits are outside result readiness, but explicit COMMIT executes the wait.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_execution_time_result_ready_boundary() {
+    const HOLD: Duration = Duration::from_secs(1);
+    const FAILPOINT: &str = "group_commit_before_apply_write";
+
+    fn arm() {
+        fail::cfg_callback(FAILPOINT, move || {
+            // Keep runtime workers available while delaying the ordered group committer.
+            // Delay every commit because the first one may only advance table uppers.
+            tokio::task::block_in_place(|| {
+                thread::sleep(HOLD);
+            })
+        })
+        .unwrap();
+    }
+    let micros = |detail: &serde_json::Value| detail["duration_us"].as_u64().unwrap();
+    let hold_micros = u64::try_from(HOLD.as_micros()).unwrap();
+
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE dt (a int)").unwrap();
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws(
+        &mut ws,
+        BTreeMap::from([("emit_execution_time_notice".into(), "on".into())]),
+    )
+    .unwrap();
+    // Bound a broken request instead of hanging the test.
+    if let tungstenite::stream::MaybeTlsStream::Plain(stream) = ws.get_ref() {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(120)))
+            .unwrap();
+    }
+    // Sends `request` and returns the details of its execution time notices and how long the
+    // request took.
+    let mut run_ws = |request: serde_json::Value| {
+        arm();
+        let start = Instant::now();
+        ws.send(Message::Text(request.to_string().into())).unwrap();
+        let mut details = Vec::new();
+        loop {
+            let Message::Text(text) = ws.read().expect("request must complete") else {
+                continue;
+            };
+            let msg: serde_json::Value = serde_json::from_str(&text).unwrap();
+            match msg["type"].as_str().unwrap() {
+                "Notice" if msg["payload"]["code"] == "MZ012" => {
+                    let detail: serde_json::Value =
+                        serde_json::from_str(msg["payload"]["detail"].as_str().unwrap()).unwrap();
+                    details.push(detail);
+                }
+                "ReadyForQuery" => break,
+                "Error" => panic!("{msg}"),
+                _ => {}
+            }
+        }
+        fail::remove(FAILPOINT);
+        (details, start.elapsed())
+    };
+
+    // Compare the reported duration with the entire request, not an absolute speed limit.
+    // The commit delay must be absent even though success is delivered after that wait.
+    let (details, elapsed) = run_ws(serde_json::json!({
+        "queries": [{"query": "INSERT INTO dt VALUES (1)"}]
+    }));
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["staged"], "{details:?}");
+    assert!(
+        elapsed >= Duration::from_micros(micros(&details[0])) + HOLD,
+        "{details:?}, request took {elapsed:?}"
+    );
+
+    // In an explicit transaction, `COMMIT` carries the commit.
+    let (details, _) = run_ws(serde_json::json!({
+        "queries": [
+            {"query": "BEGIN"},
+            {"query": "INSERT INTO dt VALUES (3)"},
+            {"query": "COMMIT"}
+        ]
+    }));
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["completed", "staged", "completed"], "{details:?}");
+    assert!(micros(&details[2]) >= hold_micros, "{details:?}");
+
+    // pgwire's simple query protocol commits before the statement's `CommandComplete` too.
+    let (notice_tx, notice_rx) = std::sync::mpsc::channel();
+    let mut pg = server
+        .pg_config()
+        .options("--emit_execution_time_notice=on --welcome_message=off")
+        .notice_callback(move |notice| {
+            let _ = notice_tx.send(notice);
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+    arm();
+    let start = Instant::now();
+    pg.batch_execute("INSERT INTO dt VALUES (4)").unwrap();
+    let elapsed = start.elapsed();
+    fail::remove(FAILPOINT);
+    let details: Vec<serde_json::Value> = notice_rx
+        .try_iter()
+        .filter(|notice| notice.code().code() == "MZ012")
+        .map(|notice| serde_json::from_str(notice.detail().unwrap()).unwrap())
+        .collect();
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["staged"], "{details:?}");
+    assert!(
+        elapsed >= Duration::from_micros(micros(&details[0])) + HOLD,
+        "{details:?}, request took {elapsed:?}"
     );
 }
 
@@ -2655,7 +3061,7 @@ async fn test_leader_promotion_mixed_code_version() {
     client_this.simple_query("SELECT 1").await.unwrap();
 
     // Simulate a rolling upgrade and wait for the preflight checks.
-    let listeners_next = test_util::Listeners::new(&harness).await.unwrap();
+    let listeners_next = test_util::Listeners::new(&harness).unwrap();
     let internal_http_addr_next = listeners_next.inner.http["internal"].handle.local_addr;
     let config_next = harness
         .clone()
@@ -2695,6 +3101,60 @@ async fn test_leader_promotion_mixed_code_version() {
     // The next_version preflight checks shouldn't fence out the this_version
     // server.
     client_this.simple_query("SELECT 1").await.unwrap();
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+async fn test_caught_up_reads_do_not_block_coordinator() {
+    let tmpdir = TempDir::new().unwrap();
+    let harness = test_util::TestHarness::default()
+        .unsafe_mode()
+        .data_directory(tmpdir.path())
+        .with_deploy_generation(1);
+    let _leader = harness.clone().start().await;
+
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let entered_tx = Mutex::new(Some(entered_tx));
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+    let resume_rx = Mutex::new(resume_rx);
+    fail::cfg_callback("0dt_caught_up_read", move || {
+        let tx = entered_tx.lock().unwrap().take();
+        if let Some(tx) = tx {
+            // Leave runtime workers available while the catch-up read is held.
+            tokio::task::block_in_place(|| {
+                let _ = tx.send(());
+                let _ = resume_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(120));
+            });
+        }
+    })
+    .unwrap();
+    let follower = harness.with_deploy_generation(2).start().await;
+    tokio::time::timeout(Duration::from_secs(60), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let query = tokio::time::timeout(Duration::from_secs(10), async {
+        let client = follower.connect().await.unwrap();
+        client
+            .query_one("SELECT 1", &[])
+            .await
+            .unwrap()
+            .get::<_, i32>(0)
+    })
+    .await;
+    // Release the read before asserting, including on a timeout, so teardown
+    // never leaves a runtime worker parked at the rendezvous.
+    fail::remove("0dt_caught_up_read");
+    let _ = resume_tx.send(());
+    assert_eq!(
+        query.expect("coordinator blocked behind the caught-up read"),
+        1
+    );
 }
 
 /// The migrated builtin MVs that the 0dt hydration tests read.
@@ -3323,7 +3783,58 @@ async fn test_http_metrics() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
 #[allow(clippy::disallowed_methods)]
-async fn test_time_to_first_row_metric() {
+async fn test_session_end_does_not_force_group_commit() {
+    const SESSIONS: u64 = 100;
+    let server = test_util::TestHarness::default().start().await;
+    let watcher = server.connect().await.unwrap();
+    let live_sessions = || async {
+        watcher
+            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+    };
+    let group_commits = || {
+        server
+            .metrics_registry
+            .gather()
+            .into_iter()
+            .find(|m| m.name() == "mz_append_table_duration_seconds")
+            .map_or(0, |m| m.get_metric()[0].get_histogram().get_sample_count())
+    };
+
+    let sessions_before = live_sessions().await;
+    let commits_before = group_commits();
+    let start = Instant::now();
+    for _ in 0..SESSIONS {
+        let client = server.connect().await.unwrap();
+        client.query_one("SELECT 1", &[]).await.unwrap();
+    }
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry_async(|_| async {
+            match live_sessions().await {
+                n if n == sessions_before => Ok(()),
+                n => Err(n),
+            }
+        })
+        .await
+        .expect("closed sessions should leave mz_sessions");
+    let elapsed = start.elapsed();
+    let commits = group_commits() - commits_before;
+
+    // Tables still advance about once a second, so allow those commits plus slack.
+    let allowed = elapsed.as_secs() + 5;
+    assert!(
+        commits <= allowed,
+        "{SESSIONS} sessions ending caused {commits} group commits in {elapsed:?}, allowed {allowed}",
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+async fn test_statement_metrics() {
     let server = test_util::TestHarness::default().start().await;
 
     let client = server.connect().application_name("dbt").await.unwrap();
@@ -3364,6 +3875,62 @@ async fn test_time_to_first_row_metric() {
             ("strategy", "constant"),
         ],
     );
+
+    // Each SELECT or SUBSCRIBE with an AS OF clause counts once per execution. A cursor's SUBSCRIBE
+    // counts when FETCH runs it, not at DECLARE.
+    let as_of_queries = |kind, statement, application_name| {
+        test_util::get_counter_value(
+            &server.metrics_registry,
+            "mz_as_of_queries_total",
+            &[
+                ("session_type", "user"),
+                ("kind", kind),
+                ("statement", statement),
+                ("application_name", application_name),
+            ],
+        )
+    };
+
+    // The harness's default application name reports as `unrecognized`.
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    client.batch_execute("SELECT * FROM t").await.unwrap();
+    client
+        .batch_execute("SELECT * FROM t AS OF AT LEAST 0")
+        .await
+        .unwrap();
+    client.batch_execute("SELECT 1 AS OF 0").await.unwrap();
+    assert_eq!(as_of_queries("at_least", "select", "unrecognized"), 1);
+    assert_eq!(as_of_queries("at", "select", "unrecognized"), 1);
+
+    client.batch_execute("BEGIN").await.unwrap();
+    client
+        .batch_execute("DECLARE c CURSOR FOR SUBSCRIBE t AS OF AT LEAST 0")
+        .await
+        .unwrap();
+    assert_eq!(as_of_queries("at_least", "subscribe", "unrecognized"), 0);
+    client
+        .batch_execute("FETCH ALL c WITH (timeout = '0s')")
+        .await
+        .unwrap();
+    assert_eq!(as_of_queries("at_least", "subscribe", "unrecognized"), 1);
+    client.batch_execute("COMMIT").await.unwrap();
+
+    for application_name in ["web_console", "web_console_shell"] {
+        let client = server
+            .connect()
+            .application_name(application_name)
+            .await
+            .unwrap();
+        client
+            .batch_execute("SELECT * FROM t AS OF AT LEAST 0")
+            .await
+            .unwrap();
+        assert_eq!(as_of_queries("at_least", "select", application_name), 1);
+    }
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -4201,17 +4768,6 @@ async fn test_github_25388() {
         .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
 
-    // TODO(peek-seq) The second part of this test no longer works with the new peek sequencing,
-    // because we no longer check the catalog after optimization whether the original dependencies
-    // still exist. This might be fine, because nothing bad happens: timestamp determination already
-    // puts a a read hold on the index, so the index doesn't actually gets dropped in the
-    // Controller, and therefore the peek actually succeeds. In other words, the old peek
-    // sequencing's dependency check was overly cautious. I'm planning to revisit this later, and
-    // probably delete the second part of the test.
-    server
-        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
-        .await;
-
     let client1 = server.connect().await.unwrap();
 
     client1
@@ -4239,35 +4795,6 @@ async fn test_github_25388() {
 
             match client1
                 .query("SUBSCRIBE (SELECT *, mz_unsafe.mz_sleep(2) FROM t)", &[])
-                .await
-            {
-                Ok(_) => Err("unexpected query success".to_string()),
-                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
-                Err(err) => Err(err.to_string_with_causes()),
-            }
-        })
-        .await
-        .unwrap();
-
-    Retry::default()
-        .retry_async(|_| async {
-            client1
-                .batch_execute("DROP INDEX IF EXISTS idx")
-                .await
-                .unwrap();
-            client1
-                .batch_execute("CREATE INDEX idx ON t(a)")
-                .await
-                .unwrap();
-
-            let client2 = server.connect().await.unwrap();
-            mz_ore::task::spawn(|| "test", async move {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                client2.batch_execute("DROP INDEX idx").await.unwrap();
-            });
-
-            match client1
-                .query("SELECT *, mz_unsafe.mz_sleep(2) FROM t", &[])
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
@@ -5292,13 +5819,28 @@ fn run_mcp_datadriven_inner(
             // Origin header to exercise the DNS-rebinding defense. (Datadriven
             // arg values cannot contain `:` or `/`, so the origin value is a
             // fixed constant here rather than a directive parameter.)
+            //
+            // Input lines before the JSON body are `Name: value` request
+            // headers, written the way they appear on the wire.
             let client = Client::new();
+            let lines: Vec<&str> = tc.input.lines().collect();
+            let body_start = lines
+                .iter()
+                .position(|line| line.trim_start().starts_with('{'))
+                .unwrap_or(lines.len());
+            let (header_lines, body) = lines.split_at(body_start);
             let mut req = if tc.args.contains_key("get") {
                 client.get(url)
             } else {
-                let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
+                let json: serde_json::Value = serde_json::from_str(&body.join("\n")).unwrap();
                 client.post(url).json(&json)
             };
+            for line in header_lines {
+                let (name, value) = line
+                    .split_once(':')
+                    .expect("header lines are `Name: value`");
+                req = req.header(name.trim(), value.trim());
+            }
             if tc.args.contains_key("origin") {
                 req = req.header("origin", "https://evil.example.com");
             }
@@ -5378,6 +5920,67 @@ fn test_mcp_agent_disabled() {
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "false".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
+}
+
+/// A browser on an allowed origin may send the MCP transport headers.
+#[mz_ore::test]
+fn test_mcp_cors_allows_transport_headers() {
+    let origin = "https://browser-client.example";
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, true)
+        .with_cors_allowed_origin(origin)
+        .start_blocking();
+    let headers = ["mcp-protocol-version", "mcp-method", "mcp-name"];
+    for route in ["agent", "developer"] {
+        let response = Client::new()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{}/api/mcp/{route}", server.http_local_addr()),
+            )
+            .header(ORIGIN, origin)
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", headers.join(","))
+            .send()
+            .unwrap();
+        let allowed = response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        for header in headers {
+            assert!(
+                allowed.contains(header),
+                "{route} preflight does not allow {header}: {allowed}"
+            );
+        }
+    }
+}
+
+/// Tests the MCP agent endpoint on protocol 2026-07-28.
+#[mz_ore::test]
+fn test_mcp_agent_protocol_2026_07_28() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
+            "true".to_string(),
+        );
+    run_mcp_datadriven("tests/testdata/mcp/agent_2026_07_28", harness);
+}
+
+/// Tests the 2026-07-28 request headers on the MCP developer endpoint.
+#[mz_ore::test]
+fn test_mcp_developer_protocol_2026_07_28() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
+            "true".to_string(),
+        );
+    run_mcp_datadriven("tests/testdata/mcp/developer_2026_07_28", harness);
 }
 
 /// Tests the MCP developer endpoint with the query tool explicitly disabled.
@@ -7532,11 +8135,6 @@ fn test_shutdown_with_inflight_writes() {
     }
 }
 
-/// Changing a startup-only parameter is allowed and warns that it only takes
-/// effect after a restart. The running process keeps its sampled value, so the
-/// routing decision cannot change underneath open sessions. A change that is
-/// rejected, or a `RESET ALL` that leaves the parameter where it was, must not
-/// warn.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_startup_only_system_var_warns() {
@@ -7559,8 +8157,8 @@ fn test_startup_only_system_var_warns() {
     };
 
     for stmt in [
-        "ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true",
-        "ALTER SYSTEM RESET enable_adapter_frontend_occ_read_then_write",
+        "ALTER SYSTEM SET max_concurrent_occ_writes = 17",
+        "ALTER SYSTEM RESET max_concurrent_occ_writes",
     ] {
         client.batch_execute(stmt).unwrap();
         let notices = drain(&mut rx);
@@ -7601,9 +8199,8 @@ fn test_startup_only_system_var_warns() {
         "unexpected error: {err:?}"
     );
 
-    // `RESET ALL` also goes through, and warns for the parameter it changes.
     client
-        .batch_execute("ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true")
+        .batch_execute("ALTER SYSTEM SET max_concurrent_occ_writes = 17")
         .unwrap();
     let _ = drain(&mut rx);
     client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
@@ -7613,8 +8210,6 @@ fn test_startup_only_system_var_warns() {
         "RESET ALL did not warn, notices: {notices:?}"
     );
 
-    // Everything is at its effective default now, so a second `RESET ALL`
-    // changes no startup-only parameter and must stay quiet about them.
     client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
     let notices = drain(&mut rx);
     assert!(

@@ -32,7 +32,9 @@ use mz_adapter::config::{
     SystemParameterSyncClientConfig, SystemParameterSyncConfig, system_parameter_sync,
 };
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
-use mz_adapter::{AdapterError, Client as AdapterClient, load_remote_system_parameters};
+use mz_adapter::{
+    AdapterError, Client as AdapterClient, RemoteSystemParameters, load_remote_system_parameters,
+};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
@@ -72,7 +74,7 @@ use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 use tracing::{Instrument, info, info_span};
 
-use crate::deployment::preflight::{PreflightInput, PreflightOutput};
+use crate::deployment::preflight::{self, CatchupConfig};
 use crate::deployment::state::DeploymentState;
 use crate::http::{HttpConfig, HttpServer, InternalRouteConfig};
 
@@ -98,6 +100,9 @@ pub struct Config {
     /// Whether the environmentd is running on a local dev machine. This is
     /// never meant to run in production or CI.
     pub all_features: bool,
+    /// Whether the container entrypoint restarted this process after
+    /// `mz_ore::restart_in_place!`.
+    pub restarted_in_place: bool,
 
     // === Connection options. ===
     /// TLS encryption and authentication configuration.
@@ -258,8 +263,8 @@ where
     ///   * It allows the caller to communicate with the server via the internal
     ///     HTTP port while it is booting.
     ///
-    async fn bind(config: C) -> Result<Self, io::Error> {
-        let (handle, connection_stream) = mz_server_core::listen(&config.addr()).await?;
+    fn bind(config: C) -> Result<Self, io::Error> {
+        let (handle, connection_stream) = mz_server_core::listen(&config.addr())?;
         Ok(Self {
             handle,
             connection_stream,
@@ -363,15 +368,15 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn bind(config: ListenersConfig) -> Result<Self, io::Error> {
+    pub fn bind(config: ListenersConfig) -> Result<Self, io::Error> {
         let mut sql = BTreeMap::new();
         for (name, config) in config.sql {
-            sql.insert(name, Listener::bind(config).await?);
+            sql.insert(name, Listener::bind(config)?);
         }
 
         let mut http = BTreeMap::new();
         for (name, config) in config.http {
-            http.insert(name, Listener::bind(config).await?);
+            http.insert(name, Listener::bind(config)?);
         }
 
         Ok(Listeners { http, sql })
@@ -518,7 +523,10 @@ impl Listeners {
                 }
             };
 
-        let remote_system_parameters = load_remote_system_parameters(
+        let RemoteSystemParameters {
+            params: remote_system_parameters,
+            frontend: boot_frontend,
+        } = load_remote_system_parameters(
             &mut openable_adapter_storage,
             system_parameter_sync_config.clone(),
             config.config_sync_timeout,
@@ -663,30 +671,40 @@ impl Listeners {
         // Perform preflight checks.
         //
         // Preflight checks determine whether to boot in read-only mode or not.
+        let read_only = preflight::preflight_0dt(
+            openable_adapter_storage.as_mut(),
+            config.controller.deploy_generation,
+            config.restarted_in_place,
+        )
+        .await?;
+
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
-            bootstrap_role: config.bootstrap_role.clone(),
+            bootstrap_role: config.bootstrap_role,
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
-        let preflight_config = PreflightInput {
-            boot_ts,
-            environment_id: config.environment_id.clone(),
-            persist_client,
-            deploy_generation: config.controller.deploy_generation,
-            deployment_state: deployment_state.clone(),
-            openable_adapter_storage,
-            catalog_metrics: Arc::clone(&config.catalog_config.metrics),
-            caught_up_max_wait: with_0dt_deployment_max_wait,
-            panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
-            bootstrap_args,
-            ddl_check_interval: with_0dt_deployment_ddl_check_interval,
+
+        let (caught_up_trigger, bootstrapped) = if read_only {
+            let (caught_up_trigger, caught_up_receiver) = mz_ore::channel::trigger::channel();
+            let (bootstrapped, bootstrapped_receiver) = tokio::sync::oneshot::channel();
+            let catchup_config = CatchupConfig {
+                boot_ts,
+                environment_id: config.environment_id.clone(),
+                persist_client,
+                deploy_generation: config.controller.deploy_generation,
+                deployment_state: deployment_state.clone(),
+                catalog_metrics: Arc::clone(&config.catalog_config.metrics),
+                caught_up_max_wait: with_0dt_deployment_max_wait,
+                panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
+                bootstrap_args: bootstrap_args.clone(),
+                ddl_check_interval: with_0dt_deployment_ddl_check_interval,
+            };
+            preflight::spawn_catchup(catchup_config, caught_up_receiver, bootstrapped_receiver);
+            (Some(caught_up_trigger), Some(bootstrapped))
+        } else {
+            (None, None)
         };
-        let PreflightOutput {
-            openable_adapter_storage,
-            read_only,
-            caught_up_trigger,
-        } = deployment::preflight::preflight_0dt(preflight_config).await?;
 
         info!(
             "startup: envd serve: preflight checks complete in {:?}",
@@ -696,15 +714,8 @@ impl Listeners {
         let catalog_open_start = Instant::now();
         info!("startup: envd serve: durable catalog open beginning");
 
-        let bootstrap_args = BootstrapArgs {
-            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
-            default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
-            bootstrap_role: config.bootstrap_role,
-            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
-        };
-
         // Load the adapter durable storage.
-        let adapter_storage = if read_only {
+        let mut adapter_storage = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
             let adapter_storage = openable_adapter_storage
@@ -726,6 +737,11 @@ impl Listeners {
             deployment_state.set_is_leader();
 
             adapter_storage
+        };
+
+        let bootstrapped = match bootstrapped {
+            Some(tx) => Some((tx, preflight::get_user_ids(adapter_storage.as_mut()).await?)),
+            None => None,
         };
 
         // Enable Persist compaction if we're not in read only.
@@ -819,6 +835,11 @@ impl Listeners {
         .instrument(info_span!("adapter::serve"))
         .await?;
 
+        if let Some((tx, initial_ids)) = bootstrapped {
+            // The receiver is gone if an administrator already skipped catch-up.
+            let _ = tx.send(initial_ids);
+        }
+
         // Initialize the OIDC authenticator, shared between the HTTP and SQL servers.
         let oidc = GenericOidcAuthenticator::new(adapter_client.clone());
 
@@ -895,6 +916,7 @@ impl Listeners {
                 || "system_parameter_sync",
                 AssertUnwindSafe(system_parameter_sync(
                     system_parameter_sync_config,
+                    boot_frontend,
                     adapter_client.clone(),
                     config.config_sync_loop_interval,
                 ))

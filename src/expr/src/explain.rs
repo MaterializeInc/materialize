@@ -9,6 +9,7 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::time::Duration;
@@ -71,12 +72,12 @@ pub struct ExplainSinglePlan<'a, T> {
 /// Carries metadata about the possibility of MFP pushdown for a source.
 /// (Likely to change, and only emitted when a context flag is enabled.)
 #[allow(missing_debug_implementations)]
-pub struct PushdownInfo<'a> {
+pub struct PushdownInfo {
     /// Pushdown-able filters in the source, by index.
-    pub pushdown: Vec<&'a MirScalarExpr>,
+    pub pushdown: Vec<MirScalarExpr>,
 }
 
-impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, PushdownInfo<'a>, M>
+impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, PushdownInfo, M>
 where
     C: AsMut<Indent>,
     M: HumanizerMode,
@@ -85,7 +86,7 @@ where
         let PushdownInfo { pushdown } = self.expr;
 
         if !pushdown.is_empty() {
-            let pushdown = pushdown.iter().map(|e| self.mode.expr(*e, self.cols));
+            let pushdown = pushdown.iter().map(|e| self.mode.expr(e, self.cols));
             let pushdown = separated(" AND ", pushdown);
             writeln!(f, "{}pushdown=({})", ctx.as_mut(), pushdown)?;
         }
@@ -97,24 +98,24 @@ where
 #[allow(missing_debug_implementations)]
 pub struct ExplainSource<'a> {
     pub id: GlobalId,
-    pub op: Option<&'a MapFilterProject>,
-    pub pushdown_info: Option<PushdownInfo<'a>>,
+    pub op: Option<Cow<'a, MapFilterProject>>,
+    pub pushdown_info: Option<PushdownInfo>,
 }
 
 impl<'a> ExplainSource<'a> {
     pub fn new(
         id: GlobalId,
-        op: Option<&'a MapFilterProject>,
+        op: Option<Cow<'a, MapFilterProject>>,
         filter_pushdown: bool,
     ) -> ExplainSource<'a> {
         let pushdown_info = if filter_pushdown {
-            op.map(|op| {
+            op.as_deref().map(|op| {
                 let mfp_mapped = MfpEval::new(&Trace, op.input_arity, &op.expressions);
                 let pushdown = op
                     .predicates
                     .iter()
                     .filter(|(_, e)| mfp_mapped.expr(e).pushdownable())
-                    .map(|(_, e)| e)
+                    .map(|(_, e)| e.clone())
                     .collect();
                 PushdownInfo { pushdown }
             })
@@ -131,7 +132,7 @@ impl<'a> ExplainSource<'a> {
 
     #[inline]
     pub fn is_identity(&self) -> bool {
-        match self.op {
+        match &self.op {
             Some(op) => op.is_identity(),
             None => false,
         }
@@ -150,7 +151,7 @@ where
             .unwrap_or_else(|| self.expr.id.to_string());
         writeln!(f, "{}Source {}", ctx.as_mut(), id)?;
         ctx.indented(|ctx| {
-            if let Some(op) = self.expr.op {
+            if let Some(op) = self.expr.op.as_deref() {
                 self.child(op).fmt_text(f, ctx)?;
             }
             if let Some(pushdown_info) = &self.expr.pushdown_info {

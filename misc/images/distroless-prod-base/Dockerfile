@@ -13,7 +13,7 @@
 # Debian packages for the distroless final image, which has no package manager.
 # Installing them explicitly pulls current security-patched builds.
 # The digest pin is bumped by dependabot, which also busts the layer cache.
-FROM debian:13-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS apt-deps
+FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS apt-deps
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates eatmydata liblzma5 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,7 +26,7 @@ MZFROM tini-static AS tini
 # The `materialize` user (uid/gid 999), built here because the distroless final
 # image has no shell to run `useradd`. uid 999 matches the orchestrator's
 # hardcoded runAsUser/fsGroup, so no UID gate is needed.
-FROM debian:13-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS useradd
+FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS useradd
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
     && mkdir /mzdata /scratch \
@@ -35,7 +35,7 @@ RUN groupadd --system --gid=999 materialize \
 # `debug-nonroot` adds a busybox shell (`/busybox/sh`), kept intentionally so
 # entrypoint.sh and `kubectl exec` keep working. A later step can drop to the
 # shell-less variant. The digest pin is bumped by dependabot.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:0501a0f4bf6e8b6b2b72d6cbd7271d851c834053d2ae825595be0359fbb0e1ad
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:1b89bf5fd2bce2d4bd25bcf083c6da90178d2cd06bfb75dc3a66bc5c3eb6c3e7
 
 # Ensure any Rust binaries that crash print a backtrace.
 ENV RUST_BACKTRACE=1

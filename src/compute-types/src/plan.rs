@@ -29,7 +29,7 @@ use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{Diff, GlobalId, StableRow, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use crate::dataflows::DataflowDescription;
+use crate::dataflows::{DataflowDescription, LirDataflowDescription};
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::scalar::LirScalarExpr;
@@ -160,8 +160,6 @@ pub enum ArrangementStrategy {
     Direct,
     /// Insert temporal bucketing in front of the arrangement, to delay future-stamped
     /// updates (e.g., from `mz_now()` MFPs) until their bucket boundary releases them.
-    /// Honoured only when `ENABLE_COMPUTE_TEMPORAL_BUCKETING` is set; otherwise behaves like
-    /// `Direct`.
     TemporalBucketing,
 }
 
@@ -209,11 +207,34 @@ impl std::fmt::Display for LirId {
 
 /// Version of the stable LIR serialization format.
 ///
-/// Bump this when the serialized representation of [`LirRelationExpr`] or
-/// anything it transitively contains changes. The schema snapshot test in
-/// `tests/lir_schema.rs` enforces that the traced schema matches the
-/// checked-in `tests/snapshots/lir_v{LIR_VERSION}.json`.
+/// Once a version has shipped, meaning a released Materialize durably stores
+/// pinned plans in it, bump this when the serialized representation of
+/// [`LirRelationExpr`] or anything it transitively contains changes, or when
+/// a scalar function's declared properties change. Whether the current
+/// version has shipped is recorded in [`LIR_VERSION_POLICY`]. Two snapshot
+/// tests key off it: the schema snapshot in `tests/lir_schema.rs` against
+/// `tests/snapshots/lir_v{LIR_VERSION}.json`, and the function property
+/// registry in `tests/func_registry.rs` against
+/// `tests/snapshots/func_registry.json` with a per-version digest in
+/// `tests/snapshots/func_registry_digests.json`.
 pub const LIR_VERSION: u64 = 1;
+
+/// What a change to the stable LIR format must do at the current
+/// [`LIR_VERSION`]. The snapshot tests print it when a snapshot goes stale.
+///
+/// This is the one place that records whether the current version has
+/// shipped. Once a released Materialize durably stores pinned plans, replace
+/// the text with the shipped policy: bump `LIR_VERSION` rather than rewriting
+/// the shipped version's snapshots, so the old schema stays available to
+/// migration tooling.
+pub const LIR_VERSION_POLICY: &str = "\
+The current LIR version has NOT shipped: no released Materialize stores pinned
+LIR plans yet, so nothing depends on the checked-in snapshots. Regenerate them
+in place and include the diff in your PR.
+
+Once pinned plans are durably stored, a change like this must instead bump
+LIR_VERSION in src/compute-types/src/plan.rs so it lands as a new version.
+See doc/developer/design/20260826_pinned_lir.md.";
 
 pub use constant_rows_serde::ConstantRows;
 
@@ -646,7 +667,7 @@ impl LirRelationExpr {
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
-    ) -> Result<DataflowDescription<Self>, String> {
+    ) -> Result<LirDataflowDescription, String> {
         fail::fail_point!("finalize_dataflow");
 
         // First, we lower the dataflow description from MIR to LIR. Lowering
@@ -823,7 +844,7 @@ impl LirRelationExpr {
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
-    ) -> Result<DataflowDescription<Self>, String> {
+    ) -> Result<LirDataflowDescription, String> {
         let context = lowering::Context::new(desc.debug_name.clone(), features, metrics);
         let dataflow = context.lower(desc)?;
 
@@ -841,7 +862,7 @@ impl LirRelationExpr {
         fields(path.segment = "refine_single_time_consolidation")
     )]
     fn refine_single_time_consolidation(
-        dataflow: &mut DataflowDescription<Self>,
+        dataflow: &mut LirDataflowDescription,
         config: &TransformConfig,
     ) -> Result<(), String> {
         // We should only reach here if we have a one-shot SELECT query, i.e.,

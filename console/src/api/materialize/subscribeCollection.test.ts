@@ -10,6 +10,7 @@
 import { getStore } from "~/jotai";
 
 import {
+  createScopedSubscribeCollections,
   createSubscribeCollection,
   syncEngineCacheKey,
 } from "./subscribeCollection";
@@ -257,6 +258,39 @@ describe("createSubscribeCollection", () => {
     expect(getStore().get(statusAtom).snapshotComplete).toBe(false);
   });
 
+  it("marks held rows as refreshing until a new subscribe's snapshot lands", () => {
+    const { applySnapshot, statusAtom } = freshCollection();
+    applySnapshot(state([{ id: "1", name: "a" }]));
+    expect(getStore().get(statusAtom).isRefreshing).toBe(false);
+
+    // A new subscribe opens with an empty pre-snapshot.
+    applySnapshot(state([], false));
+    expect(getStore().get(statusAtom)).toMatchObject({
+      snapshotComplete: true,
+      isRefreshing: true,
+    });
+
+    applySnapshot(state([{ id: "1", name: "b" }]));
+    expect(getStore().get(statusAtom).isRefreshing).toBe(false);
+  });
+
+  it("marks the rows a reopened socket holds as refreshing", async () => {
+    const { collection, applySnapshot, statusAtom } = freshCollection();
+    applySnapshot(state([{ id: "1", name: "a" }]));
+
+    // A reopened socket re-emits its held rows until the new snapshot lands.
+    applySnapshot({ ...state([{ id: "1", name: "a" }]), resubscribing: true });
+    await flush();
+    expect(collection.get("1")?.name).toBe("a");
+    expect(getStore().get(statusAtom)).toMatchObject({
+      snapshotComplete: true,
+      isRefreshing: true,
+    });
+
+    applySnapshot(state([{ id: "1", name: "b" }]));
+    expect(getStore().get(statusAtom).isRefreshing).toBe(false);
+  });
+
   it("surfaces error and snapshotComplete on the status atom", () => {
     const { applySnapshot, statusAtom } = freshCollection();
 
@@ -300,5 +334,20 @@ describe("createSubscribeCollection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("createScopedSubscribeCollections", () => {
+  it("keeps one collection per scope and key, dropping other scopes' on a scope change", () => {
+    const collections = createScopedSubscribeCollections<Row>({
+      id: "scoped-test",
+      getKey: (row) => row.id,
+    });
+    const first = collections.get("org|regionA", "u1");
+    expect(collections.get("org|regionA", "u1")).toBe(first);
+    expect(collections.get("org|regionA", "u2")).not.toBe(first);
+
+    expect(collections.get("org|regionB", "u1")).not.toBe(first);
+    expect(collections.get("org|regionA", "u1")).not.toBe(first);
   });
 });

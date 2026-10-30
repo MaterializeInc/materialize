@@ -276,7 +276,9 @@ where
 
 fn analyze_type(ty: &syn::Type) -> Result<Type> {
     match ty {
-        syn::Type::Path(syn::TypePath { qself: None, path }) => match path.segments.len() {
+        syn::Type::Path(syn::TypePath {
+            qself: None, path, ..
+        }) => match path.segments.len() {
             2 => {
                 let name = path.segments.iter().map(|s| s.ident.to_string()).join("::");
                 Ok(Type::Abstract(name))

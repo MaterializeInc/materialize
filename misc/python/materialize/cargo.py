@@ -43,6 +43,9 @@ class Crate:
         path_dev_dependencies: The dev dependencies which are declared using
             paths.
         path_dependencies: The dependencies which are declared using paths.
+        non_workspace_deps: The dependencies which are declared neither using
+            paths nor with `workspace = true`, including target-specific ones,
+            mapped to the sections that declare them.
         rust_version: The minimum Rust version declared in the crate, if any.
         bins: The names of all binaries in the crate.
         examples: The names of all examples in the crate.
@@ -76,6 +79,14 @@ class Crate:
                         pass
                     else:
                         self.non_workspace_deps.setdefault(name, []).append(dep_type)
+        for target, target_config in config.get("target", {}).items():
+            for dep_type in ("build-dependencies", "dev-dependencies", "dependencies"):
+                for name, c in target_config.get(dep_type, {}).items():
+                    if isinstance(c, dict) and ("path" in c or c.get("workspace")):
+                        continue
+                    self.non_workspace_deps.setdefault(name, []).append(
+                        f"target.'{target}'.{dep_type}"
+                    )
         self.rust_version: str | None = None
         try:
             self.rust_version = str(config["package"]["rust-version"])
@@ -142,10 +153,12 @@ class Workspace:
         root: The path to the root of the workspace.
 
     Attributes:
+        root: The path to the root of the workspace.
         crates: A mapping from name to crate definition.
     """
 
     def __init__(self, root: Path):
+        self.root = root
         with open(root / "Cargo.toml") as f:
             config = toml.load(f)
 

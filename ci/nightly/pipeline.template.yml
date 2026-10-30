@@ -296,6 +296,33 @@ steps:
                 - --other-tag
                 - common-ancestor
 
+      - id: cargo-bench
+        label: ":rust: Cargo bench against ancestor"
+        sanitizer: skip
+        depends_on: []
+        # Measured: 48 minutes for the largest closure built twice on the
+        # 8-core queue, 73 minutes for a shard that also ran its benchmarks.
+        timeout_in_minutes: 240
+        # Annotation-only while the noise floor on this hardware is being
+        # calibrated. QAR-162 covers dropping `soft_fail` so regressions and
+        # HEAD build failures fail the build.
+        soft_fail: true
+        # One shard per package with bench targets, so this should track that
+        # package count. Extra shards exit as no-ops, fewer shards double up.
+        parallelism: 9
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cargo-bench
+              ci-builder: stable
+        agents:
+          # Dedicated hardware for stable timings.
+          queue: hetzner-x86-64-dedi-8cpu-32gb
+
       - id: workload-replay
         topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Workload Replay (1% initial data)"
@@ -1212,6 +1239,19 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-upgrade-entire-mz-azurite
+        topics: [azurite, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
+        label: "Checks upgrade, whole-Mz restart with :azure: blob store"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
+
       - id: checks-self-managed-upgrade
         topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
         label: "Checks Self-Managed upgrade, whole-Mz restart"
@@ -1224,6 +1264,19 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFromLatestSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-self-managed-upgrade-azurite
+        topics: [azurite, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
+        label: "Checks Self-Managed upgrade, whole-Mz restart with :azure: blob store"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeEntireMzFromLatestSelfManaged, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
 
       - id: checks-self-managed-upgrade-previous
         topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
@@ -1657,8 +1710,8 @@ steps:
       label: "Terraform + Helm Chart E2E on AWS"
       artifact_paths: [test/terraform/aws-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
-      timeout_in_minutes: 90
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 70 minutes.
+      timeout_in_minutes: 130
       concurrency: 1
       concurrency_group: 'terraform-aws'
       agents:
@@ -1679,7 +1732,7 @@ steps:
       label: "Terraform + Helm Chart Upgrade on AWS"
       artifact_paths: [test/terraform/aws-upgrade/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 120
+      timeout_in_minutes: 160
       concurrency: 1
       concurrency_group: 'terraform-upgrade-aws'
       agents:
@@ -1708,8 +1761,8 @@ steps:
       label: "Terraform + Helm Chart E2E on GCP"
       artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
-      timeout_in_minutes: 90
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 70 minutes.
+      timeout_in_minutes: 130
       concurrency: 1
       concurrency_group: 'terraform-gcp'
       agents:
@@ -1723,15 +1776,14 @@ steps:
             ci-builder: stable
             run-timeout: 60m
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize-terraform-self-managed#157"
 
     - id: terraform-azure
       topics: [self-managed]
       label: "Terraform + Helm Chart E2E on Azure"
       artifact_paths: [test/terraform/azure-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
-      timeout_in_minutes: 90
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 70 minutes.
+      timeout_in_minutes: 130
       concurrency: 1
       concurrency_group: 'terraform-azure'
       agents:
@@ -1745,7 +1797,6 @@ steps:
             ci-builder: stable
             run-timeout: 60m
       branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "Not enough capacity on Azure currently, see #operations"
       # Unreliable port-forward to Azure
       retry:
         automatic:
@@ -2402,14 +2453,14 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - id: occ-mixed-mode-read-then-write
-    label: "Read-then-write sequencing split across two environmentd processes"
+  - id: occ-read-then-write-fencing
+    label: "Read-then-write fencing across two environmentd processes"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
-          run: mixed-mode-read-then-write
+          run: read-then-write
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
@@ -2743,6 +2794,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               run: server-side-apply
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-failure-events
+        topics: [self-managed]
+        label: "Orchestratord reconciliation failure event tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: failure-events
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

@@ -20,7 +20,7 @@ import struct
 import time
 from collections.abc import Callable
 from copy import copy
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Event, Thread
@@ -256,6 +256,12 @@ def workflow_test_github_3553(c: Composition) -> None:
     c.sql("SELECT * FROM log_table;")
 
 
+# How many dataflows `test_github_4443` tolerates as not yet compacted out of a
+# command history. Compaction is asynchronous, so a sample can catch dataflows
+# the history has already dropped but not yet collapsed.
+MAX_LINGERING_DATAFLOWS = 5
+
+
 def workflow_test_github_4443(c: Composition) -> None:
     """
     Test that compute command history does not leak peek commands.
@@ -355,9 +361,9 @@ def workflow_test_github_4443(c: Composition) -> None:
         # Obtain initial history size and dataflow count.
         # Dataflow count can plausibly be more than 1, if compaction is delayed.
         (
-            controller_command_count,
+            initial_controller_command_count,
             controller_dataflow_count,
-            replica_command_count,
+            initial_replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
 
@@ -375,19 +381,21 @@ def workflow_test_github_4443(c: Composition) -> None:
             )
             metric_sink_dataflows = int(cursor.fetchall()[0][0])
 
-        assert controller_command_count > 0, "controller history cannot be empty"
+        assert (
+            initial_controller_command_count > 0
+        ), "controller history cannot be empty"
         assert (
             controller_dataflow_count > 0
         ), "at least one dataflow expected in controller history"
         assert (
-            controller_dataflow_count - metric_sink_dataflows < 6
+            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), "more dataflows than expected in controller history"
-        assert replica_command_count > 0, "replica history cannot be empty"
+        assert initial_replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
         ), "at least one dataflow expected in replica history"
         assert (
-            replica_dataflow_count - metric_sink_dataflows < 6
+            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), "more dataflows than expected in replica history"
 
         # execute 400 fast- and slow-path peeks
@@ -426,23 +434,41 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
+        # `ComputeCommandHistory` compacts only once the command count exceeds twice the count
+        # left by the previous compaction, so a healthy history oscillates between the compacted
+        # size and twice it. Both samples are drawn at an unknown point of that cycle, so the
+        # second can legitimately be twice the first. On top of that sits an allowance for the
+        # lingering dataflows the bounds below tolerate, each of which holds a `CreateDataflow`,
+        # a `Schedule`, and an `AllowCompaction` command. Bounding the second sample that way
+        # still catches a history that grows per peek, which is what this test is about: 400
+        # peeks that fail to retire land orders of magnitude above it. A fixed bound would
+        # instead need retuning whenever the object count installed at boot changes.
+        lingering_dataflow_commands = 3 * MAX_LINGERING_DATAFLOWS
         assert (
-            controller_command_count < 100
-        ), f"controller history grew more than expected after peeks, got {controller_command_count}"
+            controller_command_count
+            <= 2 * initial_controller_command_count + lingering_dataflow_commands
+        ), (
+            "controller history grew more than expected after peeks, got"
+            f" {controller_command_count}, started at {initial_controller_command_count}"
+        )
         assert (
             controller_dataflow_count > 0
         ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
-            controller_dataflow_count - metric_sink_dataflows < 6
+            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
-            replica_command_count < 100
-        ), f"replica history grew more than expected after peeks, got {replica_command_count}"
+            replica_command_count
+            <= 2 * initial_replica_command_count + lingering_dataflow_commands
+        ), (
+            "replica history grew more than expected after peeks, got"
+            f" {replica_command_count}, started at {initial_replica_command_count}"
+        )
         assert (
             replica_dataflow_count > 0
         ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
-            replica_dataflow_count - metric_sink_dataflows < 6
+            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 
@@ -1499,6 +1525,91 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
 
 
+def workflow_pg_snapshot_freshness(c: Composition) -> None:
+    """Test that already hydrated tables of a PostgreSQL source keep ingesting
+    CDC while a newly added table's snapshot runs, and that a table added
+    alongside completes its own snapshot without waiting. The new table's
+    snapshot is held with the pg_snapshot_pause failpoint."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="clusterd1", workers=4)
+        ):
+            c.up("clusterd1")
+            c.run_testdrive_files("pg-snapshot-freshness/03-verify.td")
+
+
+def workflow_pg_snapshot_freshness_release(c: Composition) -> None:
+    """Test that a table whose snapshot is held while CDC streams into it
+    converges once the hold lifts within the same dataflow incarnation. What
+    commits is the snapshot plus the updates the persist sink staged behind
+    the held frontier, not a re-run snapshot. The hold is timed with the
+    pg_snapshot_pause failpoint, long enough for the staging assertions of the
+    shared add-tables phase to run against a frontier that is still held."""
+
+    with c.override(
+        # The release waits out the hold, and after it the shard upper waits
+        # for the frontier to pass the ceiling the sink committed ahead of it.
+        Testdrive(no_reset=True, default_timeout="120s"),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused:30000)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+        c.run_testdrive_files("pg-snapshot-freshness/04-release.td")
+
+
+def workflow_pg_seal_on_replay(c: Composition) -> None:
+    """Test that a PostgreSQL table whose incompatible schema change is found
+    while the replication slot replays changes the table already committed is
+    sealed with its error. A held snapshot of another table keeps the slot
+    behind the committed changes across a restart."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        # The validation that runs when the stream starts precedes the schema
+        # change, and no other one runs before the restart.
+        c.sql(
+            "ALTER SYSTEM SET pg_schema_validation_interval = '1h'",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+        c.run_testdrive_files("pg-seal-on-replay/01-alter-schema.td")
+
+        c.kill("clusterd1")
+        c.up("clusterd1")
+        c.run_testdrive_files("pg-seal-on-replay/02-verify.td")
+
+
 def workflow_sink_failure(c: Composition) -> None:
     """Test specific sink failure scenarios"""
 
@@ -2056,6 +2167,15 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         # Drop the index on the base table. This will change the plan of `mv1` the
         # next time it is replanned, which should cause reconciliation to replace
         # it, as well as the other dataflows that depend on `mv1`.
+        #
+        # NOTE: This deliberately orphans `idx`'s dataflow. `mv` and `idx1` read
+        # from `idx`, so their plans only change on replan if `idx` goes away
+        # while they survive, which `enable_drop_in_use_index` allows.
+        c.sql(
+            "ALTER SYSTEM SET enable_drop_in_use_index = true",
+            port=6877,
+            user="mz_system",
+        )
         c.sql("DROP INDEX idx")
 
         # Restart environmentd to trigger a replanning and reconciliation.
@@ -2476,7 +2596,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
         time.sleep(10)
         envd = c.invoke("logs", "materialized", capture=True)
         print(envd.stdout)
-        assert "replica task failed: timed out" in envd.stdout
+        assert "replica task failed: recv error: timed out" in envd.stdout
 
 
 class Metrics:
@@ -2747,8 +2867,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
         # Check that collection metrics update when collections are dropped.
         c.sql("""
-            DROP INDEX idx;
             DROP MATERIALIZED VIEW mv;
+            DROP INDEX idx;
             """)
 
         time.sleep(2)
@@ -2903,8 +3023,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     # Drop the dataflows.
     c.sql("""
-        DROP INDEX idx;
         DROP MATERIALIZED VIEW mv;
+        DROP INDEX idx;
         """)
 
     # Wait for the controller to asynchronously drop the dataflows and update
@@ -3450,8 +3570,8 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
         raise AssertionError(f"since not found in explain: {explain}")
 
     def validate_since(since: int, name: str) -> None:
-        now = datetime.now()
-        dt = datetime.fromtimestamp(since / 1000.0)
+        now = datetime.now(UTC)
+        dt = datetime.fromtimestamp(since / 1000.0, UTC)
         diff = now - dt
 
         # This env was just created, so the since should be recent.
@@ -4035,7 +4155,7 @@ def workflow_test_incident_70(c: Composition) -> None:
                 {mz_view_create_statements_sql}
                 """))
 
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         end_time = start_time + timedelta(seconds=600)
 
         def worker(c: Composition, worker_index: int) -> None:
@@ -4044,7 +4164,7 @@ def workflow_test_incident_70(c: Composition) -> None:
             print(f"Thread {worker_index} got a cursor")
 
             iteration = 1
-            while datetime.now() < end_time:
+            while datetime.now(UTC) < end_time:
                 if iteration % 20 == 0:
                     print(f"Thread {worker_index}, iteration {iteration}")
                 cursor.execute("SELECT * FROM mv_lineitem_count_1;")
@@ -4989,28 +5109,16 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
         assert row is not None
         return int(row[0])
 
-    with c.override(
-        Materialized(
-            # Sampled once at startup, so this cannot be an `ALTER SYSTEM SET`.
-            additional_system_parameter_defaults={
-                "enable_adapter_frontend_occ_read_then_write": "true"
-            },
-        )
-    ):
+    with c.override(Materialized()):
         c.up("materialized")
         c.sql("CREATE TABLE t (k int, v int)")
         # A row here empties the UPDATE's selection. Keyed per attempt, so an
         # attempt never starts from a selection an earlier one already emptied.
         c.sql("CREATE TABLE guard (g int)")
 
-        # Ask the process rather than the catalog which path it takes: the UPDATE
-        # only reaches the histogram if the frontend sequenced it.
         sequenced = occ_writes()[0]
         c.sql("UPDATE t SET v = v + 1 WHERE k = 0")
-        assert occ_writes()[0] > sequenced, (
-            "the UPDATE did not go through the OCC path, so this would exercise the "
-            "coordinator's lock-based path instead"
-        )
+        assert occ_writes()[0] > sequenced, "empty UPDATE did not reach OCC"
 
         # Connections are opened before the failpoint is armed: starting a session
         # appends to `mz_sessions`, which parks like any other write.
@@ -5163,14 +5271,7 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
         c.sql("DELETE FROM dst")
         return rows
 
-    with c.override(
-        Materialized(
-            # Sampled once at startup, so this cannot be an `ALTER SYSTEM SET`.
-            additional_system_parameter_defaults={
-                "enable_adapter_frontend_occ_read_then_write": "true"
-            },
-        )
-    ):
+    with c.override(Materialized()):
         c.up("materialized")
         c.sql(dedent("""
                 CREATE TABLE src (a int);
@@ -5201,10 +5302,6 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
         rows = rows_surviving(write)
         assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
 
-        # Ask the process rather than the catalog which path that took: the
-        # write only reaches the histogram if the frontend sequenced it, and on
-        # the coordinator's lock path none of this is about read-then-write
-        # transaction handling at all.
         metrics = c.exec(
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
@@ -5214,7 +5311,7 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
             )
             and float(line.split()[1]) > 0
             for line in metrics.splitlines()
-        ), "no read-then-write went through the OCC path"
+        ), "persisted-input writes did not reach OCC"
 
         write = "INSERT INTO dst SELECT a FROM sealed"
         rows = rows_surviving(write)
@@ -5248,13 +5345,7 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
         ("DELETE FROM t WHERE a IN (SELECT a FROM v)", [LOCAL, GLOBAL, LIR]),
     ]
 
-    def check(frontend_peek: bool) -> None:
-        c.sql(
-            f"ALTER SYSTEM SET enable_frontend_peek_sequencing = {frontend_peek}",
-            port=6877,
-            user="mz_system",
-        )
-        # The peek flag is read when a connection is set up, so use a fresh one.
+    def check() -> None:
         with c.sql_cursor() as cur:
             # A SUBSCRIBE that unexpectedly succeeds would otherwise wait for
             # rows forever.
@@ -5282,26 +5373,15 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
             cur.execute("SELECT count(*) FROM t")
             assert cur.fetchall() == [(1,)]
 
-    # Read at startup, so the read-then-write path needs a restart to switch.
-    for occ in (False, True):
-        with c.override(
-            Materialized(
-                additional_system_parameter_defaults={
-                    "enable_adapter_frontend_occ_read_then_write": str(occ).lower()
-                },
-            )
-        ):
-            c.up("materialized")
-            c.sql(dedent("""
+    with c.override(Materialized()):
+        c.up("materialized")
+        c.sql(dedent("""
                 DROP TABLE IF EXISTS t CASCADE;
                 CREATE TABLE t (a int);
                 INSERT INTO t VALUES (1);
                 CREATE VIEW v AS SELECT a FROM t;
                 """))
-            for frontend_peek in (False, True):
-                check(frontend_peek)
-            c.kill("materialized")
-            c.rm("materialized")
+        check()
 
 
 def workflow_test_refresh_mv_warmup(
@@ -6021,8 +6101,8 @@ def workflow_test_http_race_condition(
         thread.join()
 
     cleanup_seconds = 120 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 30
-    stopping_time = datetime.now() + timedelta(seconds=cleanup_seconds)
-    while datetime.now() < stopping_time:
+    stopping_time = datetime.now(UTC) + timedelta(seconds=cleanup_seconds)
+    while datetime.now(UTC) < stopping_time:
         result = c.sql_query(
             "SELECT * FROM mz_internal.mz_sessions WHERE connection_id <> pg_backend_pid()"
         )
@@ -6469,6 +6549,121 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
                   WHERE replica_id = '{replica_id}'
                 true
                 """))
+
+
+def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
+    c.up("materialized")
+    c.sql(
+        """
+        ALTER SYSTEM SET enable_background_alter_cluster = true;
+        ALTER SYSTEM SET enable_cluster_reconfiguration_lag_gate = true;
+        ALTER SYSTEM SET cluster_reconfiguration_allowed_lag = '0s';
+        ALTER SYSTEM SET cluster_controller_tick_interval = '100ms';
+        SET failpoints = 'cluster_controller_hold_readiness=return';
+        """,
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("""
+        CREATE CLUSTER lag_gate SIZE 'scale=1,workers=1';
+        CREATE TABLE lag_gate_table (a int);
+        CREATE DEFAULT INDEX IN CLUSTER lag_gate ON lag_gate_table;
+        INSERT INTO lag_gate_table VALUES (1);
+        ALTER CLUSTER lag_gate SET (SIZE = 'scale=1,workers=2');
+        """)
+
+    def wait_for(query: str) -> None:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if c.sql_query(query) == [(True,)]:
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"condition did not become true: {query}")
+
+    replicas = """
+        SELECT r.id FROM mz_cluster_replicas r
+        JOIN mz_clusters c ON c.id = r.cluster_id
+        WHERE c.name = 'lag_gate'
+    """
+    wait_for(f"SELECT count(*) = 2 FROM ({replicas})")
+    outgoing, target = sorted(
+        (row[0] for row in c.sql_query(replicas)), key=lambda id: int(id[1:])
+    )
+    index_id = c.sql_query("""
+        SELECT i.id FROM mz_indexes i JOIN mz_tables t ON i.on_id = t.id
+        WHERE t.name = 'lag_gate_table'
+        """)[0][0]
+    wait_for(f"""
+        SELECT count(*) = 2 AND bool_and(hydrated)
+        FROM mz_internal.mz_compute_hydration_statuses
+        WHERE object_id = '{index_id}' AND replica_id IN ('{outgoing}', '{target}')
+        """)
+
+    # The process orchestrator records each worker process in its service's
+    # run directory. Stop only the replacement after real hydration, leaving
+    # its connection and the outgoing replica running.
+    pid_files = c.exec(
+        "materialized",
+        "find",
+        "/tmp",
+        "-path",
+        f"*/cluster-*-replica-{target}-gen-*/0.pid",
+        capture=True,
+    ).stdout.splitlines()
+    assert len(pid_files) == 1, pid_files
+    pid = c.exec(
+        "materialized", "head", "-n", "1", pid_files[0], capture=True
+    ).stdout.strip()
+    assert pid.isdigit(), pid
+    c.exec("materialized", "kill", "-STOP", pid)
+    try:
+        c.sql("INSERT INTO lag_gate_table VALUES (2)")
+        wait_for(f"""
+            SELECT old.write_frontier > new.write_frontier
+            FROM mz_catalog.mz_cluster_replica_frontiers old
+            JOIN mz_catalog.mz_cluster_replica_frontiers new USING (object_id)
+            WHERE old.object_id = '{index_id}'
+              AND old.replica_id = '{outgoing}' AND new.replica_id = '{target}'
+            """)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
+        )
+        # Observe an actual failed readiness probe before asserting retention.
+        # Merely sleeping and checking the catalog could pass without a probe.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            assert len(c.sql_query(replicas)) == 2, "cut over to a lagging replacement"
+            logs = c.invoke("logs", "materialized", capture=True).stdout
+            if any(
+                "collections are not ready" in line
+                and re.search(
+                    rf"lagging_ticks=\{{[^}}]*User\({index_id[1:]}\): [1-9][0-9]*", line
+                )
+                for line in logs.splitlines()
+            ):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("no lagging replacement readiness probe observed")
+        assert len(c.sql_query(replicas)) == 2
+        assert c.sql_query("SELECT size FROM mz_clusters WHERE name = 'lag_gate'") == [
+            ("scale=1,workers=1",)
+        ]
+    finally:
+        c.exec("materialized", "kill", "-CONT", pid)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
+        )
+
+    wait_for("""
+        SELECT size = 'scale=1,workers=2' FROM mz_clusters WHERE name = 'lag_gate'
+        """)
+    wait_for(f"SELECT count(*) = 1 FROM ({replicas})")
+    assert c.sql_query(replicas) == [(target,)]
 
 
 def workflow_test_zero_downtime_reconfigure(
@@ -6939,7 +7134,7 @@ def workflow_crash_on_replica_expiration_index(
             (expected_expiration_timestamp_sec - offset)
             < expiration_timestamp_sec
             < (expected_expiration_timestamp_sec + offset)
-        ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec)}]}]"
+        ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec, UTC)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec, UTC)}]}]"
 
         expiration_remaining = metrics.get_value(
             "mz_dataflow_replica_expiration_remaining_seconds"
@@ -8187,7 +8382,7 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
                 "enable_eager_delta_joins": "false",
             },
             environment_extra=[
-                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,info",
+                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,mz_adapter::catalog::state=debug,info",
             ],
         ),
     ):
@@ -8205,12 +8400,18 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
             user="mz_system",
         )
 
+        # `CREATE VIEW v` comes after `CREATE OR REPLACE VIEW`, whose cache
+        # invalidation is not awaited. The cache applies writes in order, so
+        # once `v`'s awaited write returns, the invalidation is durable too.
         c.sql("""
             SET cluster = test_cache;
 
             CREATE TABLE t (a int);
             CREATE DEFAULT INDEX ON t;
             CREATE MATERIALIZED VIEW mv AS SELECT a + 1 AS b FROM t;
+            CREATE VIEW v_replaced AS SELECT a FROM t;
+            CREATE OR REPLACE VIEW v_replaced AS SELECT a + 1 AS a FROM t;
+            CREATE VIEW v AS SELECT a * 2 AS c FROM t WHERE a > 0;
 
             SELECT * FROM t;
             SELECT * FROM mv;
@@ -8235,6 +8436,23 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
             if re.search(r"global expression cache hit for User\(\d+\)", line)
         ]
         assert len(cache_hits) == 2, cache_hits
+
+        # A view has only a local expression. Only the restarted boot can hit its
+        # durable entry, so count nothing before that boot's startup marker.
+        view_id = c.sql_query("SELECT id FROM mz_views WHERE name = 'v'")[0][0]
+        restarted_boot = logs[logs.rindex("startup: envd init: beginning") :]
+        view_hit = f"local expression cache hit for User({view_id.removeprefix('u')})"
+        assert view_hit in restarted_boot, f"no '{view_hit}' after the restart"
+
+        # `CREATE OR REPLACE VIEW` invalidates the replaced view's entry right
+        # away, so the restarted boot finds no entry of a dropped item to remove.
+        reconciled = [
+            line
+            for line in restarted_boot.splitlines()
+            if "reconciled the expression cache" in line
+        ]
+        assert reconciled, "no expression cache reconciliation after the restart"
+        assert "removed_dropped_item=0" in reconciled[-1], reconciled[-1]
 
 
 def workflow_test_github_11219(c: Composition) -> None:

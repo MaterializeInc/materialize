@@ -19,8 +19,6 @@ import yaml
 
 from materialize import git, spawn, ui
 
-T = TypeVar("T")
-
 
 class BuildkiteEnvVar(Enum):
     # environment
@@ -229,6 +227,9 @@ def notify_qa_team_about_failure(failure: str) -> None:
     )
 
 
+T = TypeVar("T")
+
+
 def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
     if len(items) == 0:
         return []
@@ -287,23 +288,27 @@ def get_artifact_url(artifact: dict[str, Any]) -> str:
     return f"https://buildkite.com/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{artifact['job_id']}/artifacts/{artifact['id']}"
 
 
-def add_annotation_raw(style: str, markdown: str) -> None:
+def add_annotation_raw(style: str, markdown: str, context: str | None = None) -> None:
     """
     Note that this does not trim the data.
     :param markdown: must not exceed 1 MB
+    :param context: suffix of the annotation context after the job ID, defaults
+        to `style`. An annotation replaces an earlier one with the same context.
     """
     spawn.runv(
         [
             "buildkite-agent",
             "annotate",
             f"--style={style}",
-            f"--context={os.environ['BUILDKITE_JOB_ID']}-{style}",
+            f"--context={os.environ['BUILDKITE_JOB_ID']}-{context or style}",
         ],
         stdin=markdown.encode(),
     )
 
 
-def add_annotation(style: str, title: str, content: str) -> None:
+def add_annotation(
+    style: str, title: str, content: str, context: str | None = None
+) -> None:
     if style == "info":
         markdown = f"""<details><summary>{title}</summary>
 
@@ -313,7 +318,7 @@ def add_annotation(style: str, title: str, content: str) -> None:
         markdown = f"""{title}
 
 {truncate_annotation_str(content)}"""
-    add_annotation_raw(style, markdown)
+    add_annotation_raw(style, markdown, context)
 
 
 def get_job_url_from_build_url(build_url: str, build_job_id: str) -> str:

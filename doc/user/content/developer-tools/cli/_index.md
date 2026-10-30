@@ -1,4 +1,5 @@
 ---
+draft: true
 title: "mz - Materialize CLI"
 description: The Materialize command-line interface (CLI).
 menu:

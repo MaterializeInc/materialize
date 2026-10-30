@@ -88,5 +88,6 @@ See also [Operational guidelines](/clusters/operational-guidelines/).
 
 - [`CREATE SOURCE`](/sql/create-source)
 - [`CREATE TABLE`](/sql/create-table)
+- [Understand the lifecycle of a source](/ingest-data/lifecycle-of-a-source/)
 - [Snapshotting](/fundamentals/concepts/snapshotting/)
 - [Hydration](/fundamentals/concepts/hydration/)

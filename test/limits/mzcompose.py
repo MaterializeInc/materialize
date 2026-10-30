@@ -1548,7 +1548,7 @@ class FilterSubqueries(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
 
-        # TODO: Slow optimization, possibly due to https://linear.app/materializeinc/issue/STG-42/use-equivalences-more-broadly
+        # TODO: Slow optimization, possibly due to https://linear.app/materializeinc/issue/SQL-788/use-equivalences-more-broadly
         print(f"$ set-sql-timeout duration={sql_timeout(3600)}s")
         print(f"> SET statement_timeout = '{sql_timeout(3600)}s'")
 
@@ -1622,6 +1622,8 @@ class RowsOrderByLimit(Generator):
 
 class RowsJoinOneToOne(Generator):
     COUNT = 10_000_000
+
+    MAX_COUNT = 160_000_000  # A replica OOMs (and find-limit usually hangs) with 320_000_000 on the 24 GB agents
 
     @classmethod
     def body(cls) -> None:
@@ -1757,6 +1759,8 @@ class PostgresSources(Generator):
 
 
 class PostgresTables(Generator):
+    MAX_COUNT = 2000  # TODO: Bump when SS-533 is fixed, too slow at count=4000
+
     @classmethod
     def body(cls) -> None:
         print(f"$ set-sql-timeout duration={sql_timeout(300)}s")

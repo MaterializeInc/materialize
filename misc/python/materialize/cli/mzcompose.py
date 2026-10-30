@@ -167,7 +167,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     # Convert to a list of the members: shtab renders them via str(), and
     # argparse still accepts the type-converted member, which converting to
     # name strings would not (the member never compares equal to its name).
-    for action in parser._actions:  # noqa: SLF001
+    for action in parser._actions:
         if isinstance(action.choices, type) and issubclass(action.choices, enum.Enum):
             action.choices = list(action.choices)
 
@@ -869,7 +869,7 @@ To see the available workflows, run:
                     workflow_name, *args.unknown_subargs[1:], *extra_args
                 )
 
-            if self.shall_generate_junit_report(args.find, composition):
+            if self.shall_generate_junit_report(args.find, workflow_name, composition):
                 junit_suite = self.generate_junit_suite(composition)
                 self.write_junit_report_to_file(junit_suite)
 
@@ -880,8 +880,16 @@ To see the available workflows, run:
                 raise UIError("at least one test case failed")
 
     def shall_generate_junit_report(
-        self, composition_name: str | None, composition: Composition
+        self,
+        composition_name: str | None,
+        workflow_name: str | None,
+        composition: Composition,
     ) -> bool:
+        if workflow_name == "ci-cleanup":
+            # Runs from the CI plugin's exit trap after the main workflow, under
+            # the same BUILDKITE_JOB_ID, so its report would overwrite the main
+            # run's. Its outcome is reported through run.log instead.
+            return False
         if composition.has_testdrive_junit:
             # Testdrive already produced a junit.xml with detailed errors;
             # skip the mzcompose-level junit to avoid duplicate annotations.

@@ -136,6 +136,42 @@ mod test {
             SqlScalarType::Float32.nullable(true)
         );
     }
+
+    // Separate from the tests above, which call the lazy traits' methods and would
+    // find them ambiguous with the eager traits in scope.
+    mod stateful {
+        use mz_expr_derive::sqlfunc;
+        use mz_repr::RowArena;
+
+        use crate::EvalError;
+        use crate::scalar::func::EagerUnaryFunc;
+        use crate::scalar::func::binary::EagerBinaryFunc;
+
+        pub struct AddOffset(i64);
+
+        #[sqlfunc(sqlname = "add_offset")]
+        fn add_offset(&self, a: i64) -> i64 {
+            a + self.0
+        }
+
+        pub struct ScaleSum(i64);
+
+        #[sqlfunc(sqlname = "scale_sum")]
+        fn scale_sum(&self, a: i64, b: i64) -> Result<i64, EvalError> {
+            (a + b)
+                .checked_mul(self.0)
+                .ok_or(EvalError::NumericFieldOverflow)
+        }
+
+        #[mz_ore::test]
+        fn stateful_unary_and_binary_read_their_state() {
+            let arena = RowArena::new();
+            assert_eq!(EagerUnaryFunc::call(&AddOffset(3), 4, &arena), 7);
+            assert_eq!(EagerBinaryFunc::call(&ScaleSum(2), (3, 4), &arena), Ok(14));
+            assert_eq!(format!("{}", AddOffset(3)), "add_offset");
+            assert_eq!(format!("{}", ScaleSum(2)), "scale_sum");
+        }
+    }
 }
 
 /// Temporary macro that generates the equivalent of what enum_dispatch will do in the future. We
@@ -229,6 +265,25 @@ macro_rules! derive_unary {
                 match self {
                     $(Self::$name(_) =>
                         <$name $(<$marker>)? as crate::func::FuncName>::NAME,)*
+                }
+            }
+
+            /// The `#[sqlfunc]` source of this variant's function, `None` for
+            /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$name $(<$marker>)? as crate::func::FuncName>::SQLFUNC,)*
+                }
+            }
+
+            /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$name $(<$marker>)? as crate::func::FuncName>::sqlfunc_input_types(),)*
                 }
             }
 
@@ -403,6 +458,24 @@ macro_rules! derive_variadic {
                 }
             }
 
+            /// The `#[sqlfunc]` source of this variant's function, `None` for
+            /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::SQLFUNC,)*
+                }
+            }
+
+            /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$variant as crate::func::FuncName>::sqlfunc_input_types(),)*
+                }
+            }
+
             /// Attempts to construct a `VariadicFunc` from the canonical name
             /// of one of its variants, as declared by the variant's
             /// [`FuncName`](crate::func::FuncName) impl (the name of the
@@ -537,6 +610,24 @@ macro_rules! derive_binary {
             pub fn variant_name(&self) -> &'static str {
                 match self {
                     $(Self::$name(_) => <$variant as crate::func::FuncName>::NAME,)*
+                }
+            }
+
+            /// The `#[sqlfunc]` source of this variant's function, `None` for
+            /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::SQLFUNC,)*
+                }
+            }
+
+            /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$variant as crate::func::FuncName>::sqlfunc_input_types(),)*
                 }
             }
 

@@ -8,20 +8,23 @@
 // by the Apache License, Version 2.0.
 
 import { useQuery } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import {
   buildQueryKeyPart,
   buildRegionQueryKey,
 } from "~/api/buildQueryKeySchema";
 import {
-  BlockedDependencyInfo,
-  fetchBlockedDependencies,
+  fetchMaterializationLag,
+  LagInfo,
+  LagResults,
 } from "~/api/materialize/cluster/materializationLag";
+import { DatabaseObject } from "~/api/materialize/objects";
 import {
   fetchNonRunningSources,
   NonRunningSourceInfo,
 } from "~/api/materialize/source/nonRunningSources";
+import { useAllObjects } from "~/store/allObjects";
 
 import { HistoryId } from "../historyId";
 
@@ -58,7 +61,10 @@ export const planInsightsQueryKeys = {
  * Keyed by an object, information about the dependencies that are blocking said object
  */
 export type BlockedDependencies = {
-  [objectId: string]: BlockedDependencyInfo;
+  [objectId: string]: Pick<LagInfo, "isOutdated" | "hydrated"> &
+    Pick<DatabaseObject, "sourceType" | "clusterId" | "clusterName"> & {
+      type: DatabaseObject["objectType"];
+    };
 };
 
 /**
@@ -82,30 +88,62 @@ const FETCH_ONCE_QUERY_OPTIONS = {
 export function useBlockedDependencies(
   params: BlockedDependenciesQueryKeyParams,
 ) {
-  const blockedDependenciesSelector = useCallback(
-    (lagData: Awaited<ReturnType<typeof fetchBlockedDependencies>>) => {
-      const blockedDependencies: BlockedDependencies = {};
-      for (const r of lagData?.rows ?? []) {
-        blockedDependencies[r.targetObjectId] = r;
-      }
+  const {
+    data: allObjects,
+    snapshotComplete,
+    isError: isObjectsError,
+  } = useAllObjects();
 
-      return {
-        blockedDependencies,
-      };
-    },
-    [],
-  );
-
-  return useQuery({
+  const lag = useQuery({
     queryKey: planInsightsQueryKeys.blockedDependencies(params),
     queryFn: ({ queryKey, signal }) => {
-      return fetchBlockedDependencies(params, queryKey, { signal });
+      return fetchMaterializationLag(params, queryKey, { signal });
     },
-
-    select: blockedDependenciesSelector,
     enabled: params.objectIds?.length > 0 && !params.hasSuccessfullyFetchedOnce,
     ...FETCH_ONCE_QUERY_OPTIONS,
   });
+
+  const data = useMemo(() => {
+    if (!lag.data || !snapshotComplete) return undefined;
+    return {
+      blockedDependencies: toBlockedDependencies(
+        lag.data.rows,
+        new Map(allObjects.map((object) => [object.id, object])),
+      ),
+    };
+  }, [lag.data, allObjects, snapshotComplete]);
+
+  return {
+    data,
+    // The notice publishes its insights once, when loading ends, so it has to
+    // wait for the labels as well as the lag.
+    isLoading:
+      lag.isLoading || (lag.isSuccess && !snapshotComplete && !isObjectsError),
+  };
+}
+
+/**
+ * Labels each import's lag and hydration with its type and cluster. An import
+ * with no `allObjects` row is left out, since the insights need its type.
+ */
+export function toBlockedDependencies(
+  rows: LagResults,
+  objectsById: Map<string, DatabaseObject>,
+) {
+  const blockedDependencies: BlockedDependencies = {};
+  for (const row of rows) {
+    const object = objectsById.get(row.targetObjectId);
+    if (!object) continue;
+    blockedDependencies[row.targetObjectId] = {
+      isOutdated: row.isOutdated,
+      hydrated: row.hydrated,
+      type: object.objectType,
+      sourceType: object.sourceType,
+      clusterId: object.clusterId,
+      clusterName: object.clusterName,
+    };
+  }
+  return blockedDependencies;
 }
 
 /**

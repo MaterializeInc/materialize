@@ -9,12 +9,6 @@ This directory is the root of Materialize's Hugo user documentation site.
   the documentation hierarchy: `identifier` names a node, `parent` places it
   beneath another node, and `weight` orders siblings. Section landing pages
   generally use `_index.md`.
-- `data/` contains YAML and JSON inputs used to populate reference pages and
-  examples.
-- `layouts/` contains Hugo templates and shortcodes; `assets/` contains SCSS
-  and JavaScript sources.
-- `archetypes/` provides metadata templates, `static/` holds copied assets,
-  and `sql-grammar/` contains BNF files and generated railroad diagrams.
 - `resources/` and `public/` are generated build output. Avoid hand-editing
   them.
 
@@ -104,22 +98,11 @@ appropriate language (`sql` for SQL and `nofmt` for expected output), and
 relative links to repository files. Match nearby front matter and URL naming
 patterns, generally using lowercase, hyphenated paths. Keep examples runnable
 and update related `data/` definitions when changing generated reference
-content. Use `warn-if-unreleased` or `version-added` for features not yet
-deployed.
+content.
 
-Documentation for a new feature should merge with its implementation. Gate
-unreleased material on the release instead of holding the documentation change:
-
-- Use `warn-if-unreleased` or `warn-if-unreleased-inline` for warnings.
-- Use paired `if-released` and `if-unreleased` blocks for conditional content.
-- Set `version-added` on signatures in `data/sql_funcs.yml`.
-
-These mechanisms read the `released`, `date`, and `patch` fields from
-`content/releases/vX.Y.md`, so release warnings disappear when the release page
-is marked as released. The `version` shortcode expands to the latest released
-version. Content in an `if-released` block is hidden in PR previews. Temporarily
-toggle the applicable release page when you need to preview it, and do not
-commit that toggle.
+Put non-trivial documentation for a new feature in its own PR, merged after the
+feature's release rolls out. Before documenting a new feature, read "Adding
+documentation for new features" in `README.md`.
 
 Use `public-preview`, `private-preview`, and `private-preview-inline` for
 maturity callouts.
@@ -177,6 +160,15 @@ Diátaxis mode per section:
 * When revising existing documentation, identify mixed modes and separate them
   into the appropriate Diátaxis categories.
 
+## Writing release notes
+
+Release notes live in `content/releases/_index.md`, one section per version.
+
+In the `Guides` section, use one bullet per guide containing only a link to
+that guide. Do not summarize or explain what the guide covers; the guide's own
+page does that. Notes about docs-wide changes, such as a reorganization, may
+carry a short sentence of context.
+
 ## Draft documentation from PRDs or engineering designs
 
 When asked to draft documentation from a PRD or engineering specification, do
@@ -195,7 +187,7 @@ When changing templates or shortcodes, inspect both the HTML and Markdown
 outputs. A successful HTML render does not prove that the `skill` output is
 valid.
 
-### Test syntax documentation
+## Test syntax as you write the documentation
 
 When documentation adds or changes SQL syntax, test each example using the
 Materialize emulator. Documentation is often written ahead of a public release,
@@ -203,14 +195,22 @@ so use a release candidate version of the emulator when the latest stable
 version does not support the syntax yet. Wherever possible, include sample
 output in the documentation and verify that it matches the emulator output.
 
+Don't try to build Materialize from source; just use the latest emulator verison.
+
+## Query history relations by ID
+
+History relations outlive renames and replicas, so find their rows by ID:
+
+- `mz_cluster_replica_history.cluster_name` is the name at replica creation and
+  goes stale after a rename or swap. Filter on the current name instead:
+  `JOIN mz_catalog.mz_clusters AS c ON c.id = rh.cluster_id WHERE c.name = '...'`.
+- Join history to `mz_internal.mz_cluster_replica_history`, not
+  `mz_catalog.mz_cluster_replicas`, which lists only current replicas and drops
+  the rows of replicas a resize replaced.
+
 ## Deployments
 
-- Changes merged to `main` deploy immediately to `materialize.com/docs` through
-  `ci/deploy_website/website.sh`.
-- Pull requests publish previews through `ci/test/preview-docs.sh` at
-  `preview.materialize.com/materialize/$PR`.
-- Branches named `self-managed-docs/*` publish a versioned snapshot under
-  `/docs/self-managed/$VERSION` instead of the main site.
+Docs changes are deployed via CI/CD. Don't deploy manually.
 
 ## Reviewing Documentation Changes
 
@@ -222,9 +222,13 @@ and broken include references.
 
 ## Commits and Pull Requests
 
-Recent commits use a concise `<component>: <imperative summary>` format, often
-with the GitHub PR number, for example `docs: clarify source configuration
-(#12345)`. Keep commits focused. PRs should explain the user impact, identify
-affected pages or data files, link relevant issues, and include screenshots or
-preview details for visual changes. Coordinate substantial feature or API
-documentation with a technical writer and add release notes when required.
+### PR body
+Your PR body should be very concise, and provide a link to the pages
+relevant for review. For instance
+
+--
+Adds a new hydration visibility guide
+- https://preview.materialize.com/materialize/38758/clusters/operational-guidelines/
+
+### Commits
+- Keep commits concise, with a concise `<component>: <imperative summary>` format

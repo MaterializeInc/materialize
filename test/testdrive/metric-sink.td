@@ -248,9 +248,9 @@ contains:still depended upon by metric sink "s"
 
 > CREATE INDEX arr_idx ON arr_t (k)
 
-# Each size family publishes one gauge series per dataflow, tagged with a
-# representative exported object's catalog id, or `unattributable` for a dataflow
-# that exports no catalog object. Values churn, so assert shape rather than magnitude.
+# Each size family publishes one gauge series per dataflow that exports a catalog
+# object, tagged with a representative exported object's catalog id. Values churn, so
+# assert shape rather than magnitude.
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
     AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
@@ -290,13 +290,12 @@ SELECT id FROM mz_catalog.mz_materialized_views WHERE name = 'arr_mv'
     AND labels -> 'id' = '${arr-mv-id}'
 true
 
-# The sentinel path: the replica's own introspection subscribes and metric sinks export
-# only transient ids, which are folded into the sentinel rather than labelled, so their
-# arrangements still count. These run on every replica, so the bucket is always present.
-> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
-    AND labels -> 'id' = 'unattributable'
-true
+# Every series is attributable. The sink used to fold dataflows with no catalog export
+# into an `unattributable` bucket, which is what put its own arrangements on its input.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name LIKE 'mz_metric_sink_curated_arrangement_%'
+    AND labels -> 'id' NOT IN (SELECT export_id FROM mz_introspection.mz_compute_exports)
+0
 
 # No series carries a transient id. Those are re-minted on every re-render, so labelling
 # them would grow the sink's series set without bound.
@@ -306,18 +305,18 @@ true
 0
 
 # Series count equals the sink's own operator -> dataflow -> export id mapping over the
-# raw heap-size log, the export id when the dataflow exports a catalog object and the
-# sentinel when it does not. Also confirms the per-worker rows collapsed.
+# raw heap-size log, restricted to dataflows that export a catalog object. Also confirms
+# the per-worker rows collapsed.
 > SELECT
     (SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
        WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes')
     =
-    (SELECT count(DISTINCT COALESCE(ex.export_id, 'unattributable'))
+    (SELECT count(DISTINCT ex.export_id)
        FROM mz_introspection.mz_arrangement_heap_size_raw r
-       LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-       LEFT JOIN (SELECT dataflow_id, min(export_id) AS export_id
+       JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
+       JOIN (SELECT dataflow_id, min(export_id) AS export_id
                FROM mz_introspection.mz_compute_exports
-               WHERE export_id NOT LIKE 't%' GROUP BY dataflow_id) ex
+               WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 'si%' GROUP BY dataflow_id) ex
          ON ex.dataflow_id = dod.dataflow_id)
 true
 
@@ -368,13 +367,62 @@ true
   WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count'
 0
 
-> DROP INDEX arr_idx
-
 > DROP MATERIALIZED VIEW arr_mv
+
+> DROP INDEX arr_idx
 
 > DROP TABLE arr_t
 
 > DROP TABLE err_t
+
+#
+# `INTROSPECTION DEBUGGING` registers the loggers before the logging dataflow is built, so
+# that dataflow's own operators get log rows, where a default replica's have none. Its
+# exports are introspection source indexes (`si<N>`), which are not transient, so only the
+# sink's `si%` filter keeps their arrangements out of the feedback loop.
+#
+> CREATE CLUSTER dbg_c (SIZE '${arg.default-replica-size}', INTROSPECTION DEBUGGING = true)
+
+> SET cluster = dbg_c
+
+> CREATE TABLE dbg_t (x int)
+
+> INSERT INTO dbg_t VALUES (0), (1), (2)
+
+> CREATE INDEX dbg_ix IN CLUSTER dbg_c ON dbg_t (x)
+
+# Proves the sink publishes here at all, so the zero below is the filter and not silence.
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+true
+
+# Both dataflows the sink must not measure are visible on this replica. The logging one is
+# visible only because debugging is on, so this also proves the option took effect, and a
+# rename of either turns the next assertion red instead of silently vacuous.
+> SELECT
+    (SELECT count(*) FROM mz_introspection.mz_dataflows
+       WHERE name = 'Dataflow: logging') > 0
+    AND
+    (SELECT count(*) FROM mz_introspection.mz_dataflows
+       WHERE name LIKE 'Dataflow: metric-sink-%') > 0
+true
+
+# Neither contributes a series. Keyed on the dataflow name, not on the `t%`/`si%` prefixes
+# the sink filters on, so a filter that stops covering one of them fails here rather than
+# passing a check written from the same rule.
+> SELECT count(*)
+  FROM mz_introspection.mz_cluster_prometheus_metrics m
+  JOIN mz_introspection.mz_compute_exports e ON e.export_id = m.labels -> 'id'
+  JOIN mz_introspection.mz_dataflows d ON d.id = e.dataflow_id
+  WHERE m.metric_name LIKE 'mz_metric_sink_curated_arrangement_%'
+    AND (d.name = 'Dataflow: logging' OR d.name LIKE 'Dataflow: metric-sink-%')
+0
+
+> RESET cluster
+
+> DROP CLUSTER dbg_c CASCADE
+
+> DROP TABLE dbg_t CASCADE
 
 # Replica churn drives the coordinator's curated metric-sink install and
 # teardown (`install_metric_sinks` / `drop_metric_sinks`): the curated sinks
@@ -486,12 +534,12 @@ true
     (SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
        WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes')
     =
-    (SELECT count(DISTINCT COALESCE(ex.export_id, 'unattributable'))
+    (SELECT count(DISTINCT ex.export_id)
        FROM mz_introspection.mz_arrangement_heap_size_raw r
-       LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-       LEFT JOIN (SELECT dataflow_id, min(export_id) AS export_id
+       JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
+       JOIN (SELECT dataflow_id, min(export_id) AS export_id
                FROM mz_introspection.mz_compute_exports
-               WHERE export_id NOT LIKE 't%' GROUP BY dataflow_id) ex
+               WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 'si%' GROUP BY dataflow_id) ex
          ON ex.dataflow_id = dod.dataflow_id)
 true
 
@@ -560,3 +608,104 @@ true
 > DROP CLUSTER mb_c CASCADE
 
 > DROP TABLE mrep_t CASCADE
+
+#
+# Per-metric denylist (`disabled_metric_sinks`): denying a name tears the running sink down and
+# keeps it from installing, where `enable_metric_sink` only ever gated future installs.
+#
+# The health gauges are the presence signal, since each carries a `sink` label naming the curated
+# definition and leaves the registry with that sink's dataflow, whether or not the definition has
+# rows of its own to publish.
+#
+
+> SET cluster = quickstart
+
+> SET cluster_replica = r1
+
+# An arrangement, so the teardown below is observable on the size family and not only the gauges.
+> CREATE TABLE deny_t (x int)
+
+> CREATE INDEX deny_ix ON deny_t (x)
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
+2
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+true
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET disabled_metric_sinks = 'mz_metric_arrangement_sizes'
+
+# Torn down on the replica it was already running on, families and gauges alike.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE labels -> 'sink' = 'mz_metric_arrangement_sizes'
+0
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+0
+
+# The definition that was not denied keeps running.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+1
+
+# A replica created while the name is denied never installs it. The undenied sink's gauge is what
+# keeps the zero below meaningful: it proves the curated install ran on this replica at all.
+> CREATE CLUSTER deny_c (SIZE '${arg.default-replica-size}')
+
+> SET cluster = deny_c
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+1
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE labels -> 'sink' = 'mz_metric_arrangement_sizes'
+0
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET disabled_metric_sinks
+
+# Clearing it installs the sink on both replicas already running: the torn-down one and the one
+# denied at creation.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+1
+
+> SET cluster = quickstart
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+1
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+true
+
+# A name matching no definition is tolerated: the SET succeeds and nothing is torn down.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET disabled_metric_sinks = 'mz_metric_no_such_sink'
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
+2
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET disabled_metric_sinks
+
+> RESET cluster_replica
+
+> RESET cluster
+
+> DROP CLUSTER deny_c CASCADE
+
+> DROP TABLE deny_t CASCADE

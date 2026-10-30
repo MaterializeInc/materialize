@@ -15,13 +15,17 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
+import { TickRendererProps } from "@visx/axis";
 import { Line } from "@visx/shape";
-import { TooltipInPortalProps } from "@visx/tooltip/lib/hooks/useTooltipInPortal";
+import { Text as VisxText } from "@visx/text";
+import { TooltipInPortalProps } from "@visx/tooltip";
 import React from "react";
 
 import { MODAL_TOOLTIP_Z_INDEX } from "~/layouts/zIndex";
 import { MaterializeTheme } from "~/theme";
+import { lineHeightFromFontSize } from "~/theme/utils";
 import { Point } from "~/types/geometry";
+import { isNumber, maybeParseFloat } from "~/util";
 import { DATE_FORMAT, TIME_FORMAT } from "~/utils/dateFormat";
 import { formatDate, formatDateInUtc } from "~/utils/dateFormat";
 
@@ -56,6 +60,10 @@ export const GraphTooltip = ({
         boxShadow: shadows.level3,
         minWidth: 60,
         overflow: "hidden",
+        // A tooltip anchored to its mark, as the worker bars' is, can open
+        // under the pointer. Taking the pointer then fires the mark's leave,
+        // which hides the tooltip, and it flickers as the pointer moves.
+        pointerEvents: "none",
         position: "absolute",
         zIndex: MODAL_TOOLTIP_Z_INDEX,
       }}
@@ -186,5 +194,39 @@ export const TooltipColorSwatch = ({ color }: { color: string }) => {
 export const AlertCircle = (props: React.SVGProps<SVGCircleElement>) => {
   return (
     <circle r={5} fill="white" stroke="#000082" strokeWidth={1.5} {...props} />
+  );
+};
+
+/** An x-axis tick that renders each `\n`-separated line of its label on its own row. */
+export const MultilineXTick = ({
+  x,
+  y,
+  formattedValue,
+  ...props
+}: TickRendererProps) => {
+  if (!formattedValue) return null;
+  const lines = formattedValue.split("\n");
+  const baseDy = isNumber(props.dy)
+    ? props.dy
+    : (maybeParseFloat(props.dy) ?? 0);
+  const fontSize = isNumber(props.fontSize)
+    ? props.fontSize
+    : (maybeParseFloat(props.fontSize) ?? 12);
+  const lineHeight = maybeParseFloat(lineHeightFromFontSize(fontSize)) ?? 16;
+  return (
+    <>
+      {lines.map((line, ix) => (
+        <VisxText
+          key={ix}
+          x={x}
+          y={y}
+          {...props}
+          fontSize={fontSize}
+          dy={baseDy + ix * lineHeight}
+        >
+          {line}
+        </VisxText>
+      ))}
+    </>
   );
 };

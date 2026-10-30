@@ -172,7 +172,8 @@ pub async fn run_verify_data(
     config.set("enable.auto.commit", "false");
     config.set("enable.auto.offset.store", "false");
 
-    let consumer: StreamConsumer = config.create().context("creating kafka consumer")?;
+    let consumer: StreamConsumer =
+        mz_kafka_util::client::create(&config).context("creating kafka consumer")?;
     consumer
         .subscribe(&[&topic])
         .context("subscribing to kafka topic")?;
@@ -400,7 +401,8 @@ fn verify_topic_exhausted(
     topic: &str,
     timeout: Duration,
 ) -> Result<(), anyhow::Error> {
-    let consumer: BaseConsumer = config.create().context("creating kafka consumer")?;
+    let consumer: BaseConsumer =
+        mz_kafka_util::client::create(&config).context("creating kafka consumer")?;
     let deadline = Instant::now() + timeout;
     let partitions = get_partitions(consumer.client(), topic, remaining(deadline)?)?;
 

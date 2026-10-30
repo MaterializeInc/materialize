@@ -97,17 +97,6 @@ SERVICES = [
     Materialized(name="mz_second"),
 ]
 
-# Selects how a process sequences DELETE/UPDATE/INSERT ... SELECT: `false` keeps
-# them on the Coordinator behind in-process write locks, `true` sequences them
-# from the session task under optimistic concurrency control. The value is
-# sampled once at process startup, so two processes in one environment can hold
-# different values.
-OCC_FLAG = "enable_adapter_frontend_occ_read_then_write"
-
-# Observed once per read-then-write that the OCC path sequenced. The `session`
-# caller's sample count identifies which path a process used for user DML.
-OCC_METRIC = "mz_occ_read_then_write_retry_count_count"
-
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
@@ -296,7 +285,7 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
 
 
 # Connections driving increments.
-MIXED_MODE_CONCURRENCY = 16
+READ_THEN_WRITE_CONCURRENCY = 16
 
 # The statement never reached a server, or a server refused it, so it wrote
 # nothing. Keeping these apart from the indeterminate ones below matters: a
@@ -328,17 +317,6 @@ class Increment(Enum):
     UNKNOWN = 2
 
 
-def occ_sequenced_writes(c: Composition, service: str) -> int:
-    """How many session read-then-writes `service` sequenced through OCC."""
-    metrics = c.exec(
-        service, "curl", "--silent", "localhost:6878/metrics", capture=True
-    ).stdout
-    for line in metrics.splitlines():
-        if line.startswith(f'{OCC_METRIC}{{caller="session"}} '):
-            return int(float(line.split()[1]))
-    return 0
-
-
 def increment_counter(args: tuple[Composition, str, bool]) -> Increment:
     """Increments the shared counter by one through a read-then-write.
 
@@ -362,44 +340,26 @@ def increment_counter(args: tuple[Composition, str, bool]) -> Increment:
     return Increment.ACKED
 
 
-def workflow_mixed_mode_read_then_write(
-    c: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """Two instances in one environment sequencing read-then-write differently.
-
-    `OCC_FLAG` is sampled once per process, so a rolling restart or a newly added
-    serving process can leave one instance on the Coordinator's write-lock path
-    and another on the OCC path. The two do not synchronize: the lock path
-    excludes concurrent writers, the OCC path detects them afterwards from the
-    write timestamp. A blind write from the lock path landing on top of an OCC
-    write leaves the row with a negative copy of the stale value and two copies
-    of the new one.
-
-    Both orderings run, because they put the lock path on opposite sides of the
-    handover. Each one goes red on a lost update or a broken multiplicity, and
-    also on the precondition for either: the two instances committing at the same
-    time.
-    """
+def workflow_read_then_write(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Tests concurrent read-then-writes across two fencing instances."""
     parser.add_argument(
         "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
     args = parser.parse_args()
-
-    # Every increment opens its own connection, so leave out the per-invocation
-    # Docker Compose echo.
     c.silent = True
 
-    for first_occ, second_occ in [("false", "true"), ("true", "false")]:
-        print(
-            f"+++ Running with {OCC_FLAG} {first_occ} on 'mz_first', {second_occ} on 'mz_second' ..."
-        )
-        run_mixed_mode(c, args.azurite, first_occ, second_occ)
+    def assert_occ_writes(service: str) -> None:
+        metrics = c.exec(
+            service, "curl", "--silent", "localhost:6878/metrics", capture=True
+        ).stdout
+        assert any(
+            line.startswith(
+                'mz_occ_read_then_write_retry_count_count{caller="session"} '
+            )
+            and float(line.split()[1]) > 0
+            for line in metrics.splitlines()
+        ), f"'{service}' sequenced no read-then-write through OCC"
 
-
-def run_mixed_mode(
-    c: Composition, azurite: bool, first_occ: str, second_occ: str
-) -> None:
-    """Runs one ordering: 'mz_first' comes up first, then 'mz_second' displaces it."""
     c.down(destroy_volumes=True)
     c.up(c.metadata_store())
 
@@ -409,12 +369,11 @@ def run_mixed_mode(
                 name=mz_name,
                 external_metadata_store=True,
                 external_blob_store=True,
-                blob_store_is_azure=azurite,
+                blob_store_is_azure=args.azurite,
                 sanity_restart=False,
                 support_external_clusterd=True,
-                additional_system_parameter_defaults={OCC_FLAG: occ},
             )
-            for mz_name, occ in [("mz_first", first_occ), ("mz_second", second_occ)]
+            for mz_name in ["mz_first", "mz_second"]
         ]
     ):
         c.up("mz_first")
@@ -432,15 +391,10 @@ def run_mixed_mode(
             service="mz_first",
         )
 
-        print("--- Confirming the instances disagree on how to sequence")
         assert (
             increment_counter((c, "mz_first", False)) == Increment.ACKED
         ), "baseline increment on 'mz_first' did not commit"
-        occ_writes = occ_sequenced_writes(c, "mz_first")
-        assert (occ_writes > 0) == (first_occ == "true"), (
-            f"'mz_first' sequenced {occ_writes} read-then-writes through OCC, "
-            f"which does not match {OCC_FLAG}={first_occ}"
-        )
+        assert_occ_writes("mz_first")
 
         print("--- Driving increments across both instances")
         stop = threading.Event()
@@ -461,10 +415,10 @@ def run_mixed_mode(
                 )
             return outcomes
 
-        with futures.ThreadPoolExecutor(MIXED_MODE_CONCURRENCY) as executor:
+        with futures.ThreadPoolExecutor(READ_THEN_WRITE_CONCURRENCY) as executor:
             drivers = [
                 executor.submit(drive, worker)
-                for worker in range(MIXED_MODE_CONCURRENCY)
+                for worker in range(READ_THEN_WRITE_CONCURRENCY)
             ]
             try:
                 time.sleep(2)
@@ -486,12 +440,6 @@ def run_mixed_mode(
         )
         print(f"acked: {acked}, unknown: {unknown}")
 
-        occ_writes = occ_sequenced_writes(c, "mz_second")
-        assert (occ_writes > 0) == (second_occ == "true"), (
-            f"'mz_second' sequenced {occ_writes} read-then-writes through OCC, "
-            f"which does not match {OCC_FLAG}={second_occ}"
-        )
-
         # Without a commit from each side the run exercised one instance only.
         acks = {
             mz_service: [
@@ -504,16 +452,6 @@ def run_mixed_mode(
         for mz_service, times in acks.items():
             assert times, f"'{mz_service}' committed no increment"
 
-        # What keeps the two modes from corrupting the row today is that they
-        # never commit at the same time: both paths advance the catalog upper
-        # before every write, so an instance stops committing once the other has
-        # fenced it, and the fence lands before the other instance reads anything.
-        # Overlapping commit windows are the bug's precondition, because a
-        # lock-path write can then land on top of an OCC write and leave the row
-        # with a negative copy of the stale value and two copies of the new one.
-        # Sampling the flag once per process does not prevent that, so a red
-        # assertion here means the modes have to be fenced against each other
-        # rather than merely fixed per process.
         # Comparing when 'mz_first' last *issued* a statement that went on to
         # commit against when 'mz_second' first committed keeps a slow response
         # from reading as an overlap: a statement issued after the other instance
@@ -524,7 +462,7 @@ def run_mixed_mode(
         print(f"'mz_first' stopped committing {gap:.1f}s before 'mz_second' started")
         assert gap > 0, (
             f"'mz_first' committed a statement it issued {-gap:.1f}s after "
-            f"'mz_second' had committed, so both sequencing modes were live at once"
+            f"'mz_second' had committed, so both instances were live at once"
         )
 
         print("--- Verifying the counter")
@@ -543,11 +481,10 @@ def run_mixed_mode(
         assert (
             acked <= v <= acked + unknown
         ), f"counter is {v}, expected between {acked} and {acked + unknown}"
+        assert_occ_writes("mz_second")
 
         # Checked last so that a lost update is reported as such rather than as a
-        # missing fence. The fence bounds the window in which the two modes
-        # overlap: both paths advance the catalog upper before every write, so an
-        # instance stops writing once the other one has fenced it.
+        # missing fence.
         log = c.invoke("logs", "mz_first", capture=True).stdout
         assert (
             "unable to advance catalog upper" in log or "fenced by envd" in log

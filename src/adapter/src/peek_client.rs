@@ -27,6 +27,7 @@ use mz_repr::{RelationDesc, Row};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::Params;
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{CopyRelation, CopyStatement, SubscribeStatement};
 use mz_storage_types::sources::Timeline;
@@ -42,6 +43,7 @@ use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::appends::GroupCommitNotifier;
 use crate::coord::peek::FastPathPlan;
+use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard, Message};
 use crate::metrics::Metrics;
 use crate::session::{LifecycleTimestamps, Session};
@@ -49,14 +51,16 @@ use crate::statement_logging::{
     FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
     StatementLoggingFrontend, StatementLoggingId, WatchSetCreation,
 };
-use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, metrics, statement_logging};
+use crate::{
+    AdapterError, AdapterNotice, Client, CollectionIdBundle, ReadHolds, metrics, statement_logging,
+};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
 pub type StorageCollectionsHandle =
     Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
 /// Clients needed for peek sequencing in the Adapter Frontend.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PeekClient {
     coordinator_client: CoordinatorClient,
     /// Cache of the latest catalog snapshot. Serves
@@ -83,8 +87,6 @@ pub struct PeekClient {
     pub statement_logging_frontend: StatementLoggingFrontend,
     /// Semaphore for limiting concurrent OCC (optimistic concurrency control) write operations.
     pub occ_write_semaphore: Arc<Semaphore>,
-    /// Whether frontend OCC read-then-write is enabled (determined once at process startup).
-    pub frontend_read_then_write_enabled: bool,
     /// Requests a group commit. Used to advance the write timeline when we
     /// need the oracle to move but have nothing to write ourselves.
     pub(crate) group_commit_notifier: GroupCommitNotifier,
@@ -158,7 +160,6 @@ impl PeekClient {
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
         occ_write_semaphore: Arc<Semaphore>,
-        frontend_read_then_write_enabled: bool,
         group_commit_notifier: GroupCommitNotifier,
         read_only: bool,
     ) -> Self {
@@ -173,7 +174,6 @@ impl PeekClient {
             oracles: Default::default(), // lazily populated
             persist_client,
             occ_write_semaphore,
-            frontend_read_then_write_enabled,
             group_commit_notifier,
             read_only,
         }
@@ -278,6 +278,39 @@ impl PeekClient {
         let (tx, rx) = oneshot::channel();
         self.coordinator_client.send(f(tx));
         Ok(rx.await?)
+    }
+
+    /// Adds the `emit_timestamp_notice` notice to `session`: the explanation of
+    /// `determination`, the timestamp of a statement that reads `id_bundle`.
+    ///
+    /// Skips the notice if a collection in `id_bundle` was dropped since the
+    /// timestamp was determined: the statement does not depend on the notice,
+    /// so it goes on without it.
+    pub(crate) async fn add_timestamp_notice(
+        &self,
+        session: &Session,
+        cluster_id: ComputeInstanceId,
+        id_bundle: CollectionIdBundle,
+        determination: TimestampDetermination,
+    ) -> Result<(), AdapterError> {
+        // Test-only synchronization point: parks the statement before the
+        // coordinator looks up the frontiers of `id_bundle`, so a test can drop
+        // one of its collections in between.
+        fail::fail_point!("timestamp_notice_before_dispatch");
+        let request = self.call_coordinator(|tx| Command::ExplainTimestamp {
+            conn_id: session.conn_id().clone(),
+            session_wall_time: session.pcx().wall_time,
+            cluster_id,
+            id_bundle,
+            determination,
+            tx,
+        });
+        match request.await? {
+            Ok(explanation) => session.add_notice(AdapterNotice::QueryTimestamp { explanation }),
+            Err(AdapterError::ConcurrentDependencyDrop { .. }) => {}
+            Err(e) => return Err(e),
+        }
+        Ok(())
     }
 
     /// The client for sending commands to the coordinator.
@@ -966,6 +999,10 @@ fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
             .metrics()
             .subscribe_outputs(&[session_type, metrics::subscribe_output_label_value(output)])
             .inc();
+    }
+    let application_name = ApplicationNameHint::from_str(session.application_name());
+    if let Some(labels) = metrics::as_of_query_label_values(session_type, application_name, stmt) {
+        session.metrics().as_of_queries(&labels).inc();
     }
 }
 

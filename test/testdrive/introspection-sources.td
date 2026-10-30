@@ -301,7 +301,17 @@ true true true true true
 > CREATE INDEX ii_t6 ON t6 (a)
 > CREATE VIEW t6_plus_1 AS SELECT a + 1 AS b FROM t6
 > CREATE INDEX ii_t6_plus_1 ON t6_plus_1 (b)
+
+# ii_t6_plus_1 reads from ii_t6, so dropping ii_t6 needs
+# enable_drop_in_use_index. That deliberately leaves ii_t6 running outside the
+# catalog, which is the scenario under test.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_drop_in_use_index = true
+
 > DROP INDEX ii_t6
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET enable_drop_in_use_index
 
 > SELECT name, records > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t6%'
 "Dataflow: materialize.public.ii_t6"        true
@@ -417,6 +427,45 @@ true true true true true
 true true true true true
 
 > DROP SOURCE counter CASCADE;
+
+# Test that each stage of a bucketed hierarchical reduction arranges only the
+# rows its buckets reject. Every group holds a single row, which wins its bucket
+# at every stage however the rows hash, so no stage's reduction may hold a
+# record. The stage inputs, which hold every row, guard against reading the
+# sizes before the dataflow has hydrated.
+> CREATE TABLE singletons (k int, v int);
+> INSERT INTO singletons SELECT g, g FROM generate_series(1, 1000) g;
+
+> CREATE MATERIALIZED VIEW singleton_max AS
+  SELECT k, MAX(v) FROM singletons GROUP BY k;
+
+> SELECT o.name, count(*), coalesce(sum(s.records), 0)
+  FROM mz_introspection.mz_dataflow_operator_dataflows o
+  LEFT JOIN mz_introspection.mz_arrangement_sizes s ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%singleton_max' AND
+    o.name IN ('Arranged MinsMaxesHierarchical input', 'Reduced Fallibly MinsMaxesHierarchical')
+  GROUP BY o.name
+"Arranged MinsMaxesHierarchical input" 7 7000
+"Reduced Fallibly MinsMaxesHierarchical" 7 0
+
+# Several aggregates share one hierarchy and pack one column each into the value
+# row. In a single-row group all aggregates pick the same row, so the winner still
+# equals its input.
+> CREATE MATERIALIZED VIEW singleton_min_max AS
+  SELECT k, MIN(v), MAX(v) FROM singletons GROUP BY k;
+
+> SELECT o.name, count(*), coalesce(sum(s.records), 0)
+  FROM mz_introspection.mz_dataflow_operator_dataflows o
+  LEFT JOIN mz_introspection.mz_arrangement_sizes s ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%singleton_min_max' AND
+    o.name IN ('Arranged MinsMaxesHierarchical input', 'Reduced Fallibly MinsMaxesHierarchical')
+  GROUP BY o.name
+"Arranged MinsMaxesHierarchical input" 7 7000
+"Reduced Fallibly MinsMaxesHierarchical" 7 0
+
+> DROP TABLE singletons CASCADE;
 
 # Test that MV sink correction buffers show up in mz_arrangement_sizes.
 # We use a replacement MV to keep the correction buffer filled with data while

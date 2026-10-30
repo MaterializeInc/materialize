@@ -90,7 +90,7 @@ class WebhookSender:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                now = datetime.datetime.now(tz=datetime.timezone.utc)
+                now = datetime.datetime.now(tz=datetime.UTC)
                 ts = now.isoformat()
                 payload = {
                     "event_type": "canary_heartbeat",
@@ -201,9 +201,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ) as e:
                     error_msg_str = str(e)
                     if is_connection_error(error_msg_str):
-                        now = datetime.datetime.now(
-                            tz=datetime.timezone.utc
-                        ).isoformat()
+                        now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                         connection_failures.append((now, error_msg_str))
                         print(f"Connection failure at {now}: {e}; retrying")
                     else:
@@ -215,9 +213,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         if "Non-positive multiplicity in DistinctBy" in error.message:
                             continue
                         if is_connection_error(error.message):
-                            now = datetime.datetime.now(
-                                tz=datetime.timezone.utc
-                            ).isoformat()
+                            now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                             connection_failures.append((now, error.message))
                             print(
                                 f"Connection failure at {now}: {error.message}; continuing."
@@ -234,9 +230,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     if "Non-positive multiplicity in DistinctBy" in msg:
                         continue
                     if is_connection_error(msg):
-                        now = datetime.datetime.now(
-                            tz=datetime.timezone.utc
-                        ).isoformat()
+                        now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                         connection_failures.append((now, msg))
                         print(f"Connection failure at {now}: {msg}; continuing.")
                         continue
@@ -310,7 +304,7 @@ def http_sql_query(
         assert "error" in results[0].keys()
         error = results[0]["error"]
 
-        details = f"Occurred at {datetime.datetime.now()}."
+        details = f"Occurred at {datetime.datetime.now(datetime.UTC)}."
         if "notices" in results[0].keys():
             notices = results[0]["notices"]
             if not (type(notices) == list and len(notices) == 0):
@@ -559,8 +553,8 @@ def validate_webhook(
     latest_ts = max(received_timestamps)
     latest_dt = datetime.datetime.fromisoformat(latest_ts)
     if latest_dt.tzinfo is None:
-        latest_dt = latest_dt.replace(tzinfo=datetime.timezone.utc)
-    age = datetime.datetime.now(tz=datetime.timezone.utc) - latest_dt
+        latest_dt = latest_dt.replace(tzinfo=datetime.UTC)
+    age = datetime.datetime.now(tz=datetime.UTC) - latest_dt
     assert (
         age.total_seconds() < 120
     ), f"Webhook ingestion stall: latest event is {age} old (ts={latest_ts}), expected < 120s"

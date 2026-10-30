@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 axum.workspace = true
+base64.workspace = true
 clap.workspace = true
 csv.workspace = true
 dirs.workspace = true
@@ -26,13 +27,15 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-sql-parser = { path = "../sql-parser" }
 open.workspace = true
 openssl-probe.workspace = true
+rand.workspace = true
 hyper.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["form"] }
 rpassword.workspace = true
 semver = { workspace = true, features = ["serde"] }
 serde.workspace = true
 serde-aux.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tabled.workspace = true
 time.workspace = true
 tokio.workspace = true
@@ -47,7 +50,7 @@ assert_cmd.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "3.7.0"
+security-framework.workspace = true
 
 [package.metadata.deb]
 name = "materialize-cli"

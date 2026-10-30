@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1787,10 +1788,6 @@ fn test_subscribe_outlive_cluster() {
 /// `insert_after_pack_before_commit` failpoint as a rendezvous: the INSERT blocks there and tells
 /// the test it has arrived, the test widens the table, then the test hands it back. No wall-clock
 /// waiting is involved, so there is no window to miss.
-///
-/// The reported repro widened the same window instead, by getting the INSERT deferred behind a
-/// write lock another session held. Both paths stage the write through `stage_group_commit`, which
-/// is where the check lives.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_insert_concurrent_alter_table() {
@@ -1868,31 +1865,102 @@ fn test_insert_concurrent_alter_table() {
         .unwrap();
 }
 
+// A SELECT whose `emit_timestamp_notice` notice is explained after an index it read was dropped
+// returns its rows without the notice, instead of aborting environmentd.
+//
+// The SELECT parks at the `timestamp_notice_before_dispatch` failpoint, after it has read through
+// the index and before the coordinator looks up the index's frontiers for the notice. The failpoint
+// is process-global, so the test relies on running in its own process, as nextest runs it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_timestamp_notice_after_concurrent_index_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    for stmt in [
+        "CREATE TABLE t (a int)",
+        "INSERT INTO t VALUES (1)",
+        "CREATE DEFAULT INDEX t_idx ON t",
+    ] {
+        ddl_client.batch_execute(stmt).await.unwrap();
+    }
+
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let reader = server
+        .connect()
+        .notice_callback({
+            let notices = Arc::clone(&notices);
+            move |notice| {
+                notices
+                    .lock()
+                    .expect("not poisoned")
+                    .push(notice.message().to_string())
+            }
+        })
+        .await
+        .unwrap();
+    reader
+        .batch_execute("SET emit_timestamp_notice = true")
+        .await
+        .unwrap();
+    let has_timestamp_notice = || {
+        notices
+            .lock()
+            .expect("not poisoned")
+            .iter()
+            .any(|n| n.contains("EXPLAIN TIMESTAMP"))
+    };
+
+    reader.query("SELECT * FROM t", &[]).await.unwrap();
+    assert!(has_timestamp_notice(), "no timestamp notice without a drop");
+    notices.lock().expect("not poisoned").clear();
+
+    // Arm only once setup is done, so it's the SELECT below that parks.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("timestamp_notice_before_dispatch", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            // This runs on a worker of the runtime that also has to run the `DROP INDEX` below.
+            // `block_in_place` hands this worker's queue to another thread before parking.
+            tokio::task::block_in_place(|| {
+                parked.wait();
+                resume.wait();
+            });
+        }
+    })
+    .unwrap();
+
+    let select = task::spawn(|| "reader_select", async move {
+        reader.query("SELECT * FROM t", &[]).await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    ddl_client.batch_execute("DROP INDEX t_idx").await.unwrap();
+
+    // Disarm before handing the SELECT back, so that no later statement parks.
+    fail::remove("timestamp_notice_before_dispatch");
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    let rows = select
+        .await
+        .expect("SELECT succeeds despite the dropped index");
+    assert_eq!(rows.len(), 1);
+    assert!(
+        !has_timestamp_notice(),
+        "timestamp notice despite the dropped index"
+    );
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
-    test_read_then_write_serializability_inner(false);
-}
-
-// Same as `test_read_then_write_serializability`, but exercising the frontend
-// OCC read-then-write path. Concurrent `INSERT INTO t SELECT * FROM t` must
-// still double the row count exactly, i.e. OCC retries must prevent lost
-// updates.
-#[mz_ore::test]
-fn test_read_then_write_serializability_frontend_occ() {
-    test_read_then_write_serializability_inner(true);
-}
-
-#[allow(clippy::disallowed_methods)]
-fn test_read_then_write_serializability_inner(frontend_occ: bool) {
-    let mut harness = test_util::TestHarness::default();
-    if frontend_occ {
-        harness = harness.with_system_parameter_default(
-            "enable_adapter_frontend_occ_read_then_write".to_string(),
-            "true".to_string(),
-        );
-    }
-    let server = harness.start_blocking();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // Create table with initial value
     {
@@ -4059,6 +4127,178 @@ async fn test_cancel_linearize_reads() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
+async fn test_cancel_linearize_commit_discards_set_local() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_refresh_every_mvs", "allow_real_time_recency"])
+        .await;
+    let client = server.connect().await.unwrap();
+    let client_cancel = client.cancel_token();
+
+    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
+    // to fix the test.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW const_mv WITH (REFRESH AT '30000-01-01 23:59') AS SELECT 2;",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute("SET transaction_isolation = 'serializable';")
+        .await
+        .unwrap();
+
+    let (commit_sent_tx, commit_sent_rx) = oneshot::channel();
+    let (tx, rx) = oneshot::channel();
+
+    let commit_task = task::spawn(|| "commit task", async move {
+        client
+            .batch_execute(
+                "BEGIN;
+                 SET LOCAL transaction_isolation = 'strict serializable';
+                 SET LOCAL real_time_recency = true;",
+            )
+            .await
+            .unwrap();
+        // The since of const_mv is in the year 30,000, so the read's timestamp is too, and COMMIT
+        // waits for the timestamp oracle to catch up.
+        client
+            .query_one("SELECT * FROM const_mv;", &[])
+            .await
+            .unwrap();
+        commit_sent_tx.send(()).unwrap();
+        let err = client.batch_execute("COMMIT;").await.unwrap_err();
+        assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+        tx.send(()).unwrap();
+        client
+    });
+
+    commit_sent_rx.await.unwrap();
+    let (_, res) = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry_async_with_state(
+            (client_cancel, rx),
+            |_, (client_cancel, mut rx)| async move {
+                client_cancel.cancel_query(postgres::NoTls).await.unwrap();
+                let res = rx.try_recv();
+                ((client_cancel, rx), res)
+            },
+        )
+        .await;
+    res.unwrap();
+    let client = commit_task.await;
+
+    // NOTE: This must use the simple query protocol. An extended-protocol query first sends Parse
+    // and Sync, and that Sync ends an empty transaction, which would discard leaked values before
+    // the SHOW runs.
+    let shown: Vec<String> = client
+        .simple_query("SHOW transaction_isolation; SHOW real_time_recency;")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|m| match m {
+            postgres::SimpleQueryMessage::Row(row) => Some(row.get(0).unwrap().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        ["serializable", "off"],
+        "SET LOCAL values outlived their cancelled transaction"
+    );
+}
+
+/// A COMMIT whose write is queued for group commit and then cancelled must not leave its
+/// `SET LOCAL` values on the session.
+///
+/// Group commits run one at a time, so a group commit parked at the
+/// `group_commit_before_apply_write` failpoint holds the COMMIT in `pending_writes`, where the
+/// cancel finds it. The failpoint is process-global, so the test relies on running in its own
+/// process, as nextest runs it.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_cancel_group_commit_discards_set_local() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let client_cancel = client.cancel_token();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client
+        .batch_execute("SET transaction_isolation = 'serializable'")
+        .unwrap();
+    client
+        .batch_execute(
+            "BEGIN;
+             SET LOCAL transaction_isolation = 'strict serializable';
+             INSERT INTO t VALUES (1);",
+        )
+        .unwrap();
+
+    // Park the first group commit to reach the failpoint, whether it is the INSERT below or a
+    // table keepalive. Later ones pass through, so nothing waits on a rendezvous nobody is at.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    let first = Arc::new(AtomicBool::new(true));
+    fail::cfg_callback("group_commit_before_apply_write", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            if first.swap(false, Ordering::SeqCst) {
+                // This runs on a worker of the server's runtime, which the COMMIT and the cancel
+                // below need. `block_in_place` hands this worker's queue to another thread.
+                tokio::task::block_in_place(|| {
+                    parked.wait();
+                    resume.wait();
+                });
+            }
+        }
+    })
+    .unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    let writer_thread = thread::spawn(move || writer.batch_execute("INSERT INTO t VALUES (2)"));
+    parked.wait();
+
+    let (commit_tx, commit_rx) = std::sync::mpsc::channel();
+    let commit_thread = thread::spawn(move || {
+        commit_tx.send(client.batch_execute("COMMIT")).unwrap();
+        client
+    });
+    // A cancel that lands before the COMMIT is queued has no effect, so retry until it returns.
+    let commit_res = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            client_cancel.cancel_query(postgres::NoTls).unwrap();
+            commit_rx.try_recv()
+        })
+        .expect("COMMIT returned");
+    fail::remove("group_commit_before_apply_write");
+    resume.wait();
+    writer_thread.join().unwrap().unwrap();
+    let mut client = commit_thread.join().unwrap();
+
+    let err = commit_res.expect_err("COMMIT was cancelled");
+    assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+    // NOTE: This must use the simple query protocol, see
+    // `test_cancel_linearize_commit_discards_set_local`.
+    let shown: Vec<String> = client
+        .simple_query("SHOW transaction_isolation")
+        .unwrap()
+        .into_iter()
+        .filter_map(|m| match m {
+            postgres::SimpleQueryMessage::Row(row) => Some(row.get(0).unwrap().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        ["serializable"],
+        "SET LOCAL values outlived their cancelled transaction"
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_cancel_linearize_read_then_writes() {
     let server = test_util::TestHarness::default().start().await;
     server
@@ -4336,4 +4576,134 @@ fn test_grant_all_on_view_suppresses_non_applicable_notice() {
             msg.message(),
         );
     }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_drop_in_use_index_is_refused() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("CREATE INDEX t_idx ON t (a)").unwrap();
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a FROM t WHERE a > 0")
+        .unwrap();
+
+    let err = client.batch_execute("DROP INDEX t_idx").unwrap_err();
+    let err = err.as_db_error().unwrap();
+    assert_eq!(err.code(), &SqlState::DEPENDENT_OBJECTS_STILL_EXIST);
+    assert_eq!(
+        err.message(),
+        "cannot drop index \"t_idx\": still depended upon by materialized view \"mv\""
+    );
+    assert_contains!(err.hint().unwrap(), "blue/green deployment");
+
+    // CASCADE does not extend to readers of the index.
+    let err = client
+        .batch_execute("DROP INDEX t_idx CASCADE")
+        .unwrap_err();
+    let err = err.as_db_error().unwrap();
+    assert_eq!(err.code(), &SqlState::DEPENDENT_OBJECTS_STILL_EXIST);
+
+    client.batch_execute("DROP MATERIALIZED VIEW mv").unwrap();
+    client.batch_execute("DROP INDEX t_idx").unwrap();
+    let remaining: Vec<String> = client
+        .query(
+            "SELECT name FROM mz_objects WHERE name IN ('t_idx', 'mv')",
+            &[],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(remaining.is_empty(), "drop left {remaining:?}");
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_drop_in_use_index_flag_warns() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_drop_in_use_index".into(), "true".into())
+        .start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("CREATE INDEX t_idx ON t (a)").unwrap();
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a FROM t WHERE a > 0")
+        .unwrap();
+    while rx.try_recv().is_ok() {}
+
+    client.batch_execute("DROP INDEX t_idx").unwrap();
+
+    let notice = rx
+        .try_recv()
+        .expect("expected a warning about the orphaned index");
+    assert_eq!(notice.severity(), "WARNING");
+    assert_eq!(
+        notice.message(),
+        "index \"materialize.public.t_idx\" was dropped, but these objects still read from it: materialize.public.mv"
+    );
+    assert_contains!(notice.detail().unwrap(), "enable_drop_in_use_index");
+    assert_contains!(notice.hint().unwrap(), "Drop and recreate those objects");
+
+    // The view survives on the orphaned index.
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM mz_objects WHERE name = 'mv'", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1);
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_drop_index_read_by_in_flight_subscribe_notice() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+    let mut subscribe_client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    client.batch_execute("CREATE INDEX t_idx ON t (a)").unwrap();
+
+    // The subscribe's dataflow reads from the index. Fetching a row proves the
+    // dataflow has been created before the index is dropped.
+    subscribe_client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t WHERE a > 0)")
+        .unwrap();
+    let rows = subscribe_client.query("FETCH 1 c", &[]).unwrap();
+    assert_eq!(rows.len(), 1);
+
+    while rx.try_recv().is_ok() {}
+    client.batch_execute("DROP INDEX t_idx").unwrap();
+
+    let notice = rx
+        .try_recv()
+        .expect("expected a notice about the in-flight subscribe");
+    assert_eq!(notice.severity(), "NOTICE");
+    assert_eq!(
+        notice.message(),
+        "index \"materialize.public.t_idx\" is still read by transient dataflows for 1 in-progress \
+         SUBSCRIBE statement. Those dataflows end when their statements finish, and the index is \
+         maintained until then."
+    );
+
+    subscribe_client.batch_execute("COMMIT").unwrap();
 }

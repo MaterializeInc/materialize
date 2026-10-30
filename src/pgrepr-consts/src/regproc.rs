@@ -218,6 +218,8 @@ pub const NAMES: &[(u32, &str)] = &[
     (2037, "pg_catalog.timezone"),
     (2038, "pg_catalog.timezone"),
     (2049, "pg_catalog.to_char"),
+    (2050, "pg_catalog.max"),
+    (2051, "pg_catalog.min"),
     (2058, "pg_catalog.age"),
     (2069, "pg_catalog.timezone"),
     (2070, "pg_catalog.timezone"),
@@ -673,7 +675,7 @@ pub const NAMES: &[(u32, &str)] = &[
     (17073, "mz_internal.parse_catalog_create_sql"),
     (17074, "mz_internal.redact_sql"),
     (17075, "repeat_row_non_negative"),
-    (17086, "mz_internal.mz_session_role_memberships"),
+    (17086, "mz_session_role_memberships"),
     (17090, "mz_internal.parse_catalog_acl_mode"),
     (17093, "mz_unsafe.generate_series_unoptimized"),
     (17094, "mz_unsafe.generate_series_unoptimized"),
@@ -686,6 +688,11 @@ pub const NAMES: &[(u32, &str)] = &[
     (17114, "mz_aws_external_id_prefix"),
     (17115, "mz_aws_connection_role_arn"),
     (17125, "mz_internal.parse_catalog_item_references"),
+    (17127, "mz_unsafe.mz_avg_promotion"),
+    (17128, "mz_unsafe.mz_avg_promotion_internal_v1"),
+    (17131, "pg_catalog.max"),
+    (17132, "pg_catalog.min"),
+    (17138, "jq"),
     // END GENERATED
 ];
 

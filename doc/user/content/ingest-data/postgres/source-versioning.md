@@ -1,6 +1,6 @@
 ---
-title: "Guide: Handle upstream schema changes with zero downtime"
-description: "How to add a column, or drop a column, from your source PostgreSQL database, without any downtime in Materialize"
+title: "Handle upstream schema changes"
+description: "How to add a column, drop a column, or drop a constraint in your source PostgreSQL database, without any downtime in Materialize"
 
 menu:
   main:
@@ -9,7 +9,6 @@ menu:
 
 ---
 
-{{< public-preview />}}
 {{< note >}}
 - Changing column types is currently unsupported.
 {{% include-example file="examples/create_table/example_postgres_table"
@@ -21,6 +20,7 @@ table schema changes seamlessly, specifically:
 
 - Adding a column in the upstream database.
 - Dropping a column in the upstream database.
+- Dropping a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint in the upstream database.
 
 This guide walks you through how to handle these changes without any downtime in Materialize.
 
@@ -36,7 +36,8 @@ table `T` and populate:
 
 ```sql
 CREATE TABLE T (
-    A INT
+    A INT,
+    CONSTRAINT t_pkey PRIMARY KEY (A)
 );
 
 INSERT INTO T (A) VALUES
@@ -87,7 +88,7 @@ snapshot](/ingest-data/#snapshotting) of table `v1.T` will begin.
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -136,7 +137,7 @@ The [snapshotting](/ingest-data/#snapshotting) of table `v2.T` will begin.
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -168,7 +169,7 @@ CREATE TABLE v3.T
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -184,3 +185,91 @@ Dropping the column B will have no effect on `v3.T`. However, the drop affects
 `v2.T` and `v2.matview` from our earlier examples. When the user attempts to
 read from either, Materialize will report an error that the source table schema
 has been altered.
+
+## Handle upstream constraint drop
+
+{{< public-preview >}}
+Excluding constraints with `EXCLUDE CONSTRAINTS`, `EXCLUDE ALL NOT NULL CONSTRAINTS`, or `EXCLUDE ALL CONSTRAINTS`
+{{< /public-preview >}}
+
+Materialize ignores the following constraints: foreign key, `CHECK`, and
+`EXCLUSION`. As such, you can add or drop them without affecting ingestion.
+To handle changes in `PRIMARY KEY`, `UNIQUE`, and `NOT NULL` constraints,
+follow the steps below.
+
+### A. Exclude the constraint in Materialize
+
+To drop a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint, in Materialize,
+first, create a new `v4` schema, and recreate table `T` in the new schema but
+exclude the constraint to drop. In this example, we'll drop the primary key
+`t_pkey`. The constraint name is a string literal and must match the upstream
+name exactly, including case.
+
+```sql
+CREATE SCHEMA v4;
+CREATE TABLE v4.T
+    FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE CONSTRAINTS ('t_pkey'));
+```
+
+Materialize does not record the excluded constraint as a key of `v4.T`.
+
+#### Excluding nullability constraints
+
+`EXCLUDE CONSTRAINTS` only accepts `PRIMARY KEY` and `UNIQUE` constraint
+names. Individual `NOT NULL` constraints cannot be excluded by name. To drop
+`NOT NULL` constraints safely, use `EXCLUDE ALL NOT NULL CONSTRAINTS`:
+
+```sql
+CREATE SCHEMA v4;
+CREATE TABLE v4.T
+    FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
+```
+
+Note that when excluding `NOT NULL` constraints:
+
+- Primary key columns remain `NOT NULL`, unless the primary key is also
+  excluded with `EXCLUDE CONSTRAINTS`.
+- Columns in a `UNIQUE` constraint become nullable. This means Materialize no
+  longer uses that constraint as a key when optimizing queries, which might
+  reduce query performance. `UNIQUE NULLS NOT DISTINCT` constraints
+  (PostgreSQL 15+) are still used as keys.
+- `PRIMARY KEY` and `UNIQUE` constraints are still recorded. Dropping one
+  upstream still puts the table into an error state unless it is also
+  excluded:
+
+  ```sql
+  CREATE TABLE v4.T
+      FROM SOURCE my_source(REFERENCE public.T)
+      WITH (EXCLUDE ALL NOT NULL CONSTRAINTS, EXCLUDE CONSTRAINTS ('t_pkey'));
+  ```
+
+#### Excluding all constraints
+
+To record no constraints at all, use `EXCLUDE ALL CONSTRAINTS`: the table has
+no keys and every column is nullable, so any later constraint drop is safe.
+Queries that relied on those keys for optimization may run slower.
+
+```sql
+CREATE TABLE v4.T
+    FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE ALL CONSTRAINTS);
+```
+
+{{< note >}}
+
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
+
+{{< /note >}}
+
+### B. Drop the constraint in your upstream PostgreSQL database
+
+In your upstream PostgreSQL database, drop the constraint `t_pkey` from the
+table `T`:
+
+```sql
+ALTER TABLE T DROP CONSTRAINT t_pkey;
+```
+
+Dropping the constraint will have no effect on `v4.T`. However, the drop affects
+`v3.T` from our earlier example, which still records `t_pkey` as a key. When the
+user attempts to read from it, Materialize will report an error that the
+constraint was dropped upstream.

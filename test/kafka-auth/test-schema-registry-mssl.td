@@ -57,15 +57,14 @@ contains:error sending request for url
   )
 contains:error sending request for url
 
-# This is a bad error message to indicate "invalid client certificate" but
-# it's not under our control.
+# Client key does not match the client certificate.
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://mssl.schema-registry.local:8082',
     SSL CERTIFICATE = '${schema-registry-crt}',
     SSL KEY = SECRET kafka_key,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:key values mismatch
+contains:keys may not be consistent: KeyMismatch
 
 # ==> Test without an SSH tunnel. <==
 

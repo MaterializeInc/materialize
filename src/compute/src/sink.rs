@@ -15,9 +15,10 @@ mod correction;
 #[cfg(feature = "bench")]
 pub mod correction_v2;
 #[cfg(not(feature = "bench"))]
-mod correction_v2;
+pub(crate) mod correction_v2;
 mod materialized_view;
 mod materialized_view_v2;
 mod metric_sink;
 mod refresh;
+mod shared_batch;
 mod subscribe;

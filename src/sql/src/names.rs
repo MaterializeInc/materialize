@@ -21,7 +21,7 @@ use mz_expr::LocalId;
 use mz_ore::str::StrExt;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_repr::{ColumnName, RelationVersionSelector};
 use mz_sql_parser::ast::visit_mut::VisitMutNode;
 use mz_sql_parser::ast::{Expr, RawNetworkPolicyName, Version};
@@ -548,7 +548,7 @@ impl AstDisplay for ResolvedItemName {
 
                 if *print_id {
                     if let RelationVersionSelector::Specific(version) = version {
-                        let version: Version = (*version).into();
+                        let version = normalize::ast_version(*version);
                         f.write_str(" VERSION ");
                         f.write_node(&version);
                     }
@@ -1622,7 +1622,7 @@ impl<'a> NameResolver<'a> {
             },
             // Note: Return the specific version if one is specified, even if the feature is off.
             Some(v) => {
-                let specified_version = RelationVersion::from(v);
+                let specified_version = normalize::relation_version(v);
                 match item.latest_version() {
                     Some(latest) if latest >= specified_version => {
                         RelationVersionSelector::Specific(specified_version)

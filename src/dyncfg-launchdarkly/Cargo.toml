@@ -13,11 +13,13 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 humantime.workspace = true
+hyper-rustls.workspace = true
 launchdarkly-server-sdk.workspace = true
 launchdarkly-sdk-transport.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
+rustls.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

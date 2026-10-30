@@ -18,9 +18,107 @@ Before committing, run these and fix any warnings:
 2. `bin/lint` (can error if tools are missing; use `bin/ci-builder run stable bin/lint` as an alternative)
 3. `cargo clippy --all-targets -- -D warnings`
 
+`bin/lint` and clippy do not run rustdoc. When the diff adds imports or edits
+doc comments, run the Doctests check on the changed crates (command in the
+mz-debug-ci skill). When a `metric!` definition changed, `bin/lint`
+regenerates `doc/user/data/metrics.yml`. Commit the result, or the "Lint and
+rustfmt" job fails on the diff.
+When a system parameter or dyncfg was added, removed, or changed (name,
+default, description, scope, constraint), run `bin/gen-system-parameter-catalog`
+and commit `src/sql/system-parameters.json`, or the
+`checked_in_catalog_is_current` test in `mz-system-parameter-catalog` fails.
+
+After rebasing onto upstream/main, run `cargo check --workspace --all-targets`
+even when the rebase had no conflicts. Upstream changes can still break the
+branch, for example a dependency your branch needs that upstream removed as
+unused (Nightly's `bin/unused-deps` reports those), a duplicate item, or a new
+enum variant your match does not cover. CI checks this in the
+"Merge skew cargo check" job.
+
 Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.
 Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
+
+### LIR plan changes: regenerate the schema registry
+
+The stable LIR format lets optimized plans be stored durably and reused, so
+two snapshot tests in `mz-compute-types` pin what a stored plan looks like
+and what it means. Both key off `LIR_VERSION` in
+`src/compute-types/src/plan.rs`.
+
+`lir_schema` traces the serde schema of everything reachable from
+`LirRelationExpr` into `tests/snapshots/lir_v{LIR_VERSION}.json`. Run it
+whenever the diff changes the serde-visible shape of a type the trace
+reaches: anything in `src/compute-types/src/plan.rs` or
+`src/compute-types/src/plan/`, a `*Func` payload, or a plan-reachable type
+in `mz-expr` or `mz-repr` such as `AggregateFunc`, `TableFunc`,
+`SqlScalarType` or `DateTimeUnits`:
+
+```
+cargo test -p mz-compute-types --test lir_schema
+```
+
+Regenerate with `REWRITE=1 cargo test -p mz-compute-types --test lir_schema`
+and review the diff. It is the reviewable record of the format change. If
+the current `LIR_VERSION` has shipped (see below), bump it first so the old
+`lir_v{N}.json` stays in place for migration tooling and the rewrite targets
+a fresh file.
+
+### Scalar function changes: regenerate the function registry
+
+The schema registry sees a plan's shape, not what its functions compute.
+`func_registry` covers that gap for `UnaryFunc`, `BinaryFunc`, and
+`VariadicFunc`. Run it whenever the diff touches
+`src/expr/src/scalar/func.rs` or `src/expr/src/scalar/func/` (including
+`impls/` and `#[sqlfunc]` bodies):
+
+```
+cargo test -p mz-compute-types --test func_registry
+```
+
+* It fails when a function is added, removed, or has a changed property
+  (nullability, error behavior, monotonicity, output type, sqlfunc
+  signature) or a changed `#[sqlfunc]` body. If the failure names removed or
+  changed functions, or a body change that alters results, settle the
+  `LIR_VERSION` question below **before** regenerating. A rewrite at the old
+  version overwrites that version's entry in `func_registry_digests.json`
+  instead of adding a new one, no later check catches it, and that entry is
+  the only key back into git history for what the shipped version's
+  functions meant. Once the version is settled, regenerate the checked-in
+  snapshots and review the diff under `src/compute-types/tests/snapshots/`:
+
+  ```
+  REWRITE=1 cargo test -p mz-compute-types --test func_registry
+  ```
+
+  Never hand-edit `func_registry*.json`. The test rebuilds the registry and
+  compares it against all three files, so an edit fails it.
+* **New function with a payload** (any variant that carries data, e.g. a
+  target type, a regex, a scale): the registry build panics naming the
+  variant. Add a representative `Sample` to `unary_samples()`,
+  `binary_samples()`, or `variadic_samples()` in
+  `src/expr/src/scalar/func/registry.rs`. If a property depends on the
+  payload (e.g. a cast only errors when it has a scale), add a second sample
+  with `.labeled("...")` covering the other branch. Payload-free variants and
+  plain `#[sqlfunc]` functions need no sample.
+* **Removed or changed function, or a body change that alters results**: if
+  the current `LIR_VERSION` has shipped in a release, bump it so stored plans
+  are replanned, and only then regenerate. An unshipped version is
+  regenerated in place. Treat the version as shipped when the latest release tag carries the
+  same `LIR_VERSION`:
+
+  ```
+  git fetch --tags
+  git show $(git tag --list 'v*' --sort=-v:refname | grep -v -- '-rc' | head -1):src/compute-types/src/plan.rs | grep 'pub const LIR_VERSION'
+  ```
+
+  A bump is a judgment call, so confirm it with the user before making it.
+  Additions never need a bump. When unsure whether a body change alters
+  results, say so in the PR description rather than deciding silently.
+
+Commit the regenerated snapshots together with the function change, and call
+out the registry diff (added, removed, changed functions) in the PR
+description.
 
 ## PR titles and commit messages
 
@@ -61,6 +159,7 @@ Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semve
 * Push branches to your fork.
 * Pull requests target `main` on `MaterializeInc/materialize`.
 * Each PR should contain one semantic change.
+* Put non-trivial user docs for a new feature in a separate PR. See "Adding documentation for new features" in `doc/user/README.md`.
 
 ## Splitting large branches
 

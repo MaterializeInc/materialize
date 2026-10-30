@@ -44,9 +44,7 @@ use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{
-    CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
-};
+use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{InsertStatement, StatementKind};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
@@ -70,6 +68,7 @@ use crate::frontend_read_then_write::{
     validate_selection_dependencies,
 };
 use crate::metrics::Metrics;
+use crate::notice::ExecutionTimeKind;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
 use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
@@ -80,7 +79,10 @@ use crate::session::{
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
+use crate::{
+    AdapterNotice, AppendWebhookError, ExecutionTime, PeekClient, PeekResponseUnary,
+    StartupResponse,
+};
 
 /// A handle to a running coordinator.
 ///
@@ -307,7 +309,6 @@ impl Client {
             statement_logging_frontend,
             superuser_attribute,
             occ_write_semaphore,
-            frontend_read_then_write_enabled,
             group_commit_notifier,
             read_only,
         } = response;
@@ -321,7 +322,6 @@ impl Client {
             persist_client,
             statement_logging_frontend,
             occ_write_semaphore,
-            frontend_read_then_write_enabled,
             group_commit_notifier,
             read_only,
         );
@@ -333,7 +333,6 @@ impl Client {
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
             peek_client,
-            enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
         };
 
         let session = client.session();
@@ -471,10 +470,6 @@ Issue a SQL query to get started. Need help?
                 session.add_notice(notice);
             }
         }
-
-        client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
-            .require(catalog.system_vars())
-            .is_ok();
 
         Ok(client)
     }
@@ -657,11 +652,6 @@ pub struct SessionClient {
     environment_id: EnvironmentId,
     /// Client for frontend peek sequencing; populated at connection startup.
     peek_client: PeekClient,
-    /// Whether frontend peek sequencing is enabled; initialized at connection startup.
-    // TODO(peek-seq): Currently, this is initialized only at session startup. We'll be able to
-    // check the actual feature flag value at every peek (without a Coordinator call) once we'll
-    // always have a catalog snapshot at hand.
-    pub enable_frontend_peek_sequencing: bool,
 }
 
 impl SessionClient {
@@ -1087,6 +1077,28 @@ impl SessionClient {
         res
     }
 
+    /// Settles a statement whose result is about to be reported. If `commit_implicit_transaction`
+    /// and the session is in an implicit transaction, commits it first, which clears the session's
+    /// transaction state, portals included. Returns the parameters the commit reverted, or the
+    /// commit's error.
+    ///
+    /// Committing before the result means that a client sees the statement's success or the
+    /// commit's failure, never both, as with the last statement of a simple query in PostgreSQL
+    /// (`exec_simple_query`).
+    pub async fn settle_statement(
+        &mut self,
+        commit_implicit_transaction: bool,
+    ) -> Result<SettledStatement, AdapterError> {
+        let mut reverted = BTreeMap::new();
+        if commit_implicit_transaction && self.session().transaction().is_implicit() {
+            let response = self.end_transaction(EndTransactionAction::Commit).await?;
+            if let ExecuteResponse::TransactionCommitted { params } = response {
+                reverted = params;
+            }
+        }
+        Ok(SettledStatement { reverted })
+    }
+
     /// Fails a transaction.
     pub fn fail_transaction(&mut self) {
         let session = self.session.take().expect("session invariant violated");
@@ -1451,34 +1463,28 @@ impl SessionClient {
 
     /// Attempt to sequence a peek from the session task.
     ///
-    /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` to fall back to the
-    /// Coordinator's sequencing. If it returns an error, it should be returned to the user.
+    /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` if the statement is
+    /// not one that the frontend peek sequencing handles, in which case the Coordinator sequences
+    /// it. If it returns an error, it should be returned to the user.
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        if self.enable_frontend_peek_sequencing {
-            let session = self.session.as_mut().expect("SessionClient invariant");
-            self.peek_client
-                .try_frontend_peek(portal_name, session, logging)
-                .await
-        } else {
-            Ok(None)
-        }
+        let session = self.session.as_mut().expect("SessionClient invariant");
+        self.peek_client
+            .try_frontend_peek(portal_name, session, logging)
+            .await
     }
 
     /// Whether the frontend read-then-write path could take this portal over.
     ///
-    /// The gate is deliberately cheap, a flag read and a portal lookup, because
+    /// The gate is deliberately cheap, a portal lookup, because
     /// every statement that reaches `execute_attempts` without being handled by
     /// the peek path is tested against it. Everything expensive, including the
     /// coordinator round-trip that registers the connection cancel watch, sits
     /// behind it.
     fn frontend_read_then_write_applies(&self, portal_name: &str) -> bool {
-        if !self.peek_client.frontend_read_then_write_enabled {
-            return false;
-        }
         let session = self.session.as_ref().expect("SessionClient invariant");
         match session.get_portal_unverified(portal_name) {
             Some(portal) => portal
@@ -1604,13 +1610,6 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        // Re-checked here rather than relying on the caller's gate. See the
-        // module-level docs on `frontend_read_then_write` for why the flag is
-        // fixed for the lifetime of the process.
-        if !self.peek_client.frontend_read_then_write_enabled {
-            return Ok(None);
-        }
-
         let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
 
         let stmt = {
@@ -1797,13 +1796,6 @@ impl SessionClient {
             }
         }
 
-        // The coordinator's per-plan checks, in the order it applies them:
-        // `sequence_insert` rejects a transaction that cannot take a write
-        // before it rejects the isolation level, and both it and
-        // `sequence_read_then_write` reject bounded staleness before dispatching
-        // on the plan. So both checks sit here, above the constant-INSERT
-        // dispatch as well as the read-then-write path.
-        //
         // `allows_writes` is only defined inside a transaction, which is also
         // the only place it can be false: outside one the session task opens a
         // fresh transaction with no ops. Autocommit statements therefore rely on
@@ -2037,20 +2029,41 @@ impl Drop for SessionClient {
 }
 
 /// Renders SQL for statement arrival logging: parsed and displayed with its
-/// literals redacted, which is the same redaction the statement log applies.
+/// literals redacted, which is the same redaction the statement log applies,
+/// and capped by [`truncate_sql_for_logging`].
 /// When the text does not parse or exceeds the statement batch size limit, a
 /// placeholder with the byte length is returned. Raw text is never returned,
 /// so a statement that crashes the parser is not captured, an accepted
 /// limitation.
 pub fn redact_sql_for_logging(sql: &str) -> String {
     match mz_sql_parser::parser::parse_statements_with_limit(sql) {
-        Ok(Ok(stmts)) => stmts
-            .into_iter()
-            .map(|stmt| stmt.ast.to_ast_string_redacted())
-            .join("; "),
+        Ok(Ok(stmts)) => truncate_sql_for_logging(
+            stmts
+                .into_iter()
+                .map(|stmt| stmt.ast.to_ast_string_redacted())
+                .join("; "),
+        ),
         Ok(Err(_)) => format!("<unparseable ({} bytes)>", sql.len()),
         Err(_) => format!("<too large ({} bytes)>", sql.len()),
     }
+}
+
+/// The maximum length in bytes of SQL text included in a log line.
+///
+/// Loki rejects a log entry larger than 256 KiB and drops it whole. A span's
+/// fields are repeated in every event logged inside the span, twice when it is
+/// the innermost span (the JSON format writes both `span` and `spans`), so one
+/// statement can appear several times in an entry.
+const MAX_LOGGED_SQL_LEN: usize = 8 * 1024;
+
+/// Truncates SQL text to `MAX_LOGGED_SQL_LEN` bytes for a log line, noting
+/// the original length.
+pub fn truncate_sql_for_logging(sql: String) -> String {
+    if sql.len() <= MAX_LOGGED_SQL_LEN {
+        return sql;
+    }
+    let end = sql.floor_char_boundary(MAX_LOGGED_SQL_LEN);
+    format!("{}... <truncated from {} bytes>", &sql[..end], sql.len())
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
@@ -2133,6 +2146,15 @@ impl Timeout {
     }
 }
 
+/// Additions to a statement's result that are known only after any commit that the result waits
+/// for, such as the session parameters that the commit reverted.
+#[derive(Debug)]
+pub struct SettledStatement {
+    /// Session parameters that committing the statement's implicit transaction reverted, if any,
+    /// such as a value set with `SET LOCAL`.
+    pub reverted: BTreeMap<&'static str, String>,
+}
+
 /// A wrapper around a Stream of PeekResponseUnary that records when it sees the
 /// first row data in the given histogram. It also keeps track of whether we have already observed
 /// the end of the underlying stream.
@@ -2155,6 +2177,8 @@ pub struct RecordFirstRowStream {
     pub no_more_rows: bool,
     /// Whether the first-to-last-byte metric has already been recorded for this stream.
     pub metric_recorded: bool,
+    execution_time: Option<ExecutionTime>,
+    execution_time_reported: bool,
 }
 
 impl RecordFirstRowStream {
@@ -2175,6 +2199,8 @@ impl RecordFirstRowStream {
             recorded_first_row_instant: None,
             no_more_rows: false,
             metric_recorded: false,
+            execution_time: None,
+            execution_time_reported: false,
         }
     }
 
@@ -2207,7 +2233,7 @@ impl RecordFirstRowStream {
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
-        let msg = self.rows.next().await;
+        let mut msg = self.rows.next().await;
         if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) {
             self.saw_rows = true;
             self.time_to_first_row_seconds
@@ -2217,6 +2243,66 @@ impl RecordFirstRowStream {
         if msg.is_none() {
             self.no_more_rows = true;
         }
+        if self.execution_time.is_none() && !self.execution_time_reported {
+            let kind = match &mut msg {
+                // An empty batch does not end the interval. A stashed result can start with an
+                // empty inline batch, and an `OFFSET` can empty whole stashed batches.
+                Some(PeekResponseUnary::Rows(rows)) => {
+                    rows.peek().is_some().then_some(ExecutionTimeKind::FirstRow)
+                }
+                None => Some(ExecutionTimeKind::EmptyResult),
+                _ => None,
+            };
+            self.execution_time = kind.map(|kind| ExecutionTime {
+                kind,
+                elapsed: self.execute_started.elapsed(),
+            });
+        }
         msg
+    }
+
+    /// Disables execution time notices for an unbounded subscription.
+    pub fn without_execution_time(mut self) -> Self {
+        self.execution_time = None;
+        self.execution_time_reported = true;
+        self
+    }
+
+    /// Takes the timing on the first execution step only, if a row or EOF was observed.
+    /// Later steps must not include a client's pause, even if the first step was `FETCH 0`.
+    pub fn take_execution_time(&mut self) -> Option<ExecutionTime> {
+        self.execution_time_reported = true;
+        self.execution_time.take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn truncate_sql_for_logging_caps_length() {
+        let short = "SELECT 1".to_string();
+        assert_eq!(truncate_sql_for_logging(short.clone()), short);
+
+        let exact = "x".repeat(MAX_LOGGED_SQL_LEN);
+        assert_eq!(truncate_sql_for_logging(exact.clone()), exact);
+
+        // A multi-byte character straddles the cap, so the cut must move back
+        // to the previous character boundary.
+        let long = format!(
+            "{}é{}",
+            "x".repeat(MAX_LOGGED_SQL_LEN - 1),
+            "y".repeat(1000)
+        );
+        let truncated = truncate_sql_for_logging(long.clone());
+        assert_eq!(
+            truncated,
+            format!(
+                "{}... <truncated from {} bytes>",
+                "x".repeat(MAX_LOGGED_SQL_LEN - 1),
+                long.len()
+            )
+        );
     }
 }

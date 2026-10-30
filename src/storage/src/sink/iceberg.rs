@@ -98,14 +98,16 @@ use differential_dataflow::trace::implementations::{BatchContainer, Layout};
 use differential_dataflow::{Hashable, VecCollection};
 use futures::StreamExt;
 use iceberg::ErrorKind;
-use iceberg::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
+use iceberg::arrow::{
+    arrow_schema_to_schema, arrow_schema_to_schema_auto_assign_ids, schema_to_arrow_schema,
+};
 use iceberg::spec::{
-    DataFile, FormatVersion, Snapshot, StructType, read_data_files_from_avro,
-    write_data_files_to_avro,
+    DataFile, FormatVersion, NestedField, PrimitiveType, Snapshot, StructType, Type,
+    read_data_files_from_avro, write_data_files_to_avro,
 };
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
-use iceberg::transaction::{ApplyTransactionAction, Transaction};
+use iceberg::transaction::{RowDeltaAction, TransactionAction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::base_writer::equality_delete_writer::{
     EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
@@ -120,7 +122,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
+use iceberg::{Catalog, NamespaceIdent, TableCommit, TableCreation, TableIdent};
 use itertools::Itertools;
 use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
 use mz_interchange::avro::DiffPair;
@@ -155,7 +157,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::progress::{Antichain, Timestamp as _};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
@@ -743,7 +745,7 @@ async fn reload_table(
     catalog: &dyn Catalog,
     namespace: String,
     table_name: String,
-    current_table: Table,
+    current_table: &Table,
 ) -> anyhow::Result<Table> {
     let namespace_ident = NamespaceIdent::new(namespace.clone());
     let table_ident = TableIdent::new(namespace_ident, table_name.clone());
@@ -778,26 +780,34 @@ async fn reload_table(
     }
 }
 
-/// Attempt a single commit of a batch of data files to an Iceberg table.
-/// On conflict or failure, reloads the table and returns a retryable error.
-/// On success, returns the updated table state.
-async fn try_commit_batch(
-    mut table: Table,
+/// A failed commit attempt, split by whether the commit request reached the catalog.
+enum CommitError {
+    /// Failed while building the commit locally. Nothing was sent to the catalog,
+    /// so the commit definitely didn't happen.
+    Local(iceberg::Error),
+    /// The update request failed. Depending on the error kind,
+    /// it's still possible the catalog applied the commit.
+    Request(iceberg::Error),
+}
+
+/// Build a row delta commit against the given table and send it to the catalog.
+///
+/// We can't use iceberg-rust's `Transaction::commit` (a retry wrapper for `Transaction::do_commit`)
+/// because it automatically rebases the transaction onto the latest state of the table.
+///
+/// That behavior leads to duplicate writes because there's no way to check:
+/// 1. Have we already committed this data?
+/// 2. Has another (newer) writer taken over?
+///
+/// So this implementation doesn't do that (details inline).
+async fn do_commit(
+    table: &Table,
+    catalog: &dyn Catalog,
     snapshot_properties: Vec<(String, String)>,
     data_files: Vec<DataFile>,
     delete_files: Vec<DataFile>,
-    catalog: &dyn Catalog,
-    conn_namespace: &str,
-    conn_table: &str,
-    sink_version: u64,
-    frontier: &Antichain<Timestamp>,
-    batch_lower: &Antichain<Timestamp>,
-    batch_upper: &Antichain<Timestamp>,
-    metrics: &IcebergSinkMetrics,
-) -> (Table, RetryResult<(), anyhow::Error>) {
-    let tx = Transaction::new(&table);
-    let mut action = tx
-        .row_delta()
+) -> Result<Table, CommitError> {
+    let mut action = RowDeltaAction::new()
         .set_snapshot_properties(snapshot_properties.into_iter().collect())
         .with_check_duplicate(false);
 
@@ -807,109 +817,204 @@ async fn try_commit_batch(
             .add_delete_files(delete_files);
     }
 
-    let tx = match action
-        .apply(tx)
-        .context("Failed to apply data file addition to iceberg table transaction")
+    // Divergence: `Transaction::do_commit` reloads the table and rebases the transaction onto it.
+    // We do not reload the table and rebase the transaction.
+    // The caller must check the transaction against the table before committing because
+    // the Iceberg Catalog's conflict check is not sufficient to prevent duplicate commits.
+
+    let mut action_commit = Arc::new(action)
+        .commit(table)
+        .await
+        .map_err(CommitError::Local)?;
+
+    // Divergence: `Transaction::do_commit` also checks each action's requirements
+    // against the local metadata and applies its updates to a local copy of the table,
+    // so the next action in the transaction can build on the result.
+    // We only commit a single action, so we skip that step.
+
+    let table_commit = TableCommit::builder()
+        .ident(table.identifier().clone())
+        .updates(action_commit.take_updates())
+        .requirements(action_commit.take_requirements())
+        .build();
+
+    catalog
+        .update_table(table_commit)
+        .await
+        .map_err(CommitError::Request)
+}
+
+/// Attempt a single commit of a batch of data files to an Iceberg table.
+async fn try_commit_batch(
+    table: Table,
+    snapshot_properties: Vec<(String, String)>,
+    data_files: Vec<DataFile>,
+    delete_files: Vec<DataFile>,
+    catalog: &dyn Catalog,
+    conn_namespace: &str,
+    conn_table: &str,
+    sink_id: GlobalId,
+    sink_version: u64,
+    batch_lower: &Antichain<Timestamp>,
+    batch_upper: &Antichain<Timestamp>,
+    metrics: &IcebergSinkMetrics,
+) -> (Table, RetryResult<(), anyhow::Error>) {
+    // We begin the attempt by evaluating our current state.
+    // 1. Load the table from the catalog.
+    // 2. Check if the table metadata says it's safe to write to.
+    let table = match reload_table(
+        catalog,
+        conn_namespace.to_string(),
+        conn_table.to_string(),
+        &table,
+    )
+    .await
     {
-        Ok(tx) => tx,
+        Ok(table) => table,
         Err(e) => {
-            match reload_table(
-                catalog,
-                conn_namespace.to_string(),
-                conn_table.to_string(),
-                table.clone(),
-            )
-            .await
-            {
-                Ok(reloaded) => table = reloaded,
-                Err(reload_err) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(reload_err)));
-                }
-            }
-            return (
-                table,
-                RetryResult::RetryableErr(anyhow!(
-                    "Failed to apply data file addition to iceberg table transaction: {}",
-                    e
-                )),
-            );
+            // We can't proceed without a fresh view of the table, so we must retry.
+            return (table, RetryResult::RetryableErr(anyhow!(e)));
         }
     };
 
-    let new_table = tx.commit(catalog).await;
-    match new_table {
-        Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
-            metrics.commit_conflicts.inc();
-            match reload_table(
-                catalog,
-                conn_namespace.to_string(),
-                conn_table.to_string(),
-                table.clone(),
-            )
-            .await
-            {
-                Ok(reloaded) => table = reloaded,
-                Err(e) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(e)));
-                }
-            };
+    let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
+    let last = match retrieve_upper_from_snapshots(&mut snapshots) {
+        Ok(last) => last,
+        Err(e) => return (table, RetryResult::RetryableErr(anyhow!(e))),
+    };
+    if let Some((last_frontier, last_id, last_version)) = last {
+        // Just in case the sink was recreated, check both sink ID and version to see if it was us.
+        if last_id == sink_id && last_version == sink_version && last_frontier == *batch_upper {
+            // Our own commit for this batch is already on the table.
+            // We must've missed the response.
+            info!(
+                namespace = %conn_namespace,
+                table = %conn_table,
+                lower = %batch_lower.pretty(),
+                upper = %batch_upper.pretty(),
+                "found iceberg commit from previous attempt, treating as success"
+            );
+            return (table, RetryResult::Ok(()));
+        }
 
-            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
-            let last = retrieve_upper_from_snapshots(&mut snapshots);
-            let last = match last {
-                Ok(val) => val,
-                Err(e) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(e)));
-                }
-            };
+        if last_version > sink_version {
+            // We've been superseded by a new version of the sink.
+            return (
+                table,
+                RetryResult::FatalErr(anyhow!(
+                    "Iceberg table '{}' has been modified by another writer \
+                    with version {}. Current sink version: {}. \
+                    Frontiers may be out of sync, aborting to avoid data loss.",
+                    conn_table,
+                    last_version,
+                    sink_version,
+                )),
+            );
+        }
 
-            // Check if another writer has advanced the frontier beyond ours (fencing check)
-            if let Some((last_frontier, last_version)) = last {
-                if last_version > sink_version {
-                    return (
-                        table,
-                        RetryResult::FatalErr(anyhow!(
-                            "Iceberg table '{}' has been modified by another writer \
-                             with version {}. Current sink version: {}. \
-                             Frontiers may be out of sync, aborting to avoid data loss.",
-                            conn_table,
-                            last_version,
-                            sink_version,
-                        )),
-                    );
-                }
-                if PartialOrder::less_equal(frontier, &last_frontier) {
-                    return (
-                        table,
-                        RetryResult::FatalErr(anyhow!(
-                            "Iceberg table '{}' has been modified by another writer. \
-                             Current frontier: {:?}, last frontier: {:?}.",
-                            conn_table,
-                            frontier,
-                            last_frontier,
-                        )),
-                    );
-                }
-            }
+        if PartialOrder::less_equal(batch_upper, &last_frontier)
+            || PartialOrder::less_than(batch_lower, &last_frontier)
+        {
+            // This batch contains records someone else has already written.
+            return (
+                table,
+                RetryResult::FatalErr(anyhow!(
+                    "Iceberg table '{}' has been modified by another writer. \
+                    Current frontier: {:?}, last frontier: {:?}.",
+                    conn_table,
+                    batch_upper,
+                    last_frontier,
+                )),
+            );
+        }
+    }
 
+    match do_commit(
+        &table,
+        catalog,
+        snapshot_properties,
+        data_files,
+        delete_files,
+    )
+    .await
+    {
+        Ok(new_table) => (new_table, RetryResult::Ok(())),
+        Err(CommitError::Local(e)) => {
+            // Nothing was sent to the catalog, so this commit definitely didn't happen.
+            // Next attempt should reload the table and try again from scratch.
+            metrics.commit_failures.inc();
             (
                 table,
-                RetryResult::RetryableErr(anyhow!(
-                    "Commit conflict detected when committing batch [{}, {}) \
-                     to Iceberg table '{}.{}'. Retrying...",
-                    batch_lower.pretty(),
-                    batch_upper.pretty(),
-                    conn_namespace,
-                    conn_table
-                )),
+                RetryResult::RetryableErr(anyhow!("Failed to build iceberg table commit: {}", e)),
             )
         }
-        Err(e) => {
-            metrics.commit_failures.inc();
-            (table, RetryResult::RetryableErr(anyhow!(e)))
-        }
-        Ok(new_table) => (new_table, RetryResult::Ok(())),
+        Err(CommitError::Request(e)) => match e.kind() {
+            ErrorKind::CatalogCommitConflicts => {
+                // Our view of the table was outdated.
+                // Next attempt should reload the table and try again from scratch.
+                metrics.commit_conflicts.inc();
+                (table, RetryResult::RetryableErr(anyhow!(e)))
+            }
+            ErrorKind::Unexpected => {
+                // The catalog may have applied this commit before the success response was lost.
+                // Next attempt should reload the table and see if the commit landed.
+                metrics.commit_failures.inc();
+                (table, RetryResult::RetryableErr(anyhow!(e)))
+            }
+            _ => {
+                // All other errors are definite: retrying will not change the outcome.
+                metrics.commit_failures.inc();
+                (table, RetryResult::FatalErr(anyhow!(e)))
+            }
+        },
     }
+}
+
+/// Whether the sink can write into a table that already carries `current`,
+/// where `expected` is the schema the sink would create today.
+///
+/// Names and nullability have to match. Types have to match too,
+/// except that a column may be `fixed[16]` where `expected` has `string`. Uuid
+/// columns were written as fixed binary before, and a table holding one stays
+/// writable, because the writer builds its Arrow columns from the table's own
+/// schema rather than from `expected`. Rejecting it would strand the sink.
+///
+/// NOTE: the tolerance keys on the Iceberg types alone, so it also accepts a
+/// `fixed[16]` column where the relation has `text`. Such a table fails on the
+/// first row written instead of here. Only a table created outside Materialize
+/// can be in that state, since the sink never creates one.
+///
+/// Field IDs are not checked as Materialize may generate them differently than
+/// the catalog (i.e., DFS vs BFS for nested types), which could result in
+/// failures on sink restart.
+fn is_compatible(current: &Schema, expected: &Schema) -> bool {
+    struct_is_compatible(current.as_struct(), expected.as_struct())
+}
+
+fn struct_is_compatible(current: &StructType, expected: &StructType) -> bool {
+    current.fields().len() == expected.fields().len()
+        && std::iter::zip(current.fields(), expected.fields())
+            .all(|(c, e)| field_is_compatible(c, e))
+}
+
+fn field_is_compatible(current: &NestedField, expected: &NestedField) -> bool {
+    current.name == expected.name
+        && current.required == expected.required
+        && match (&*current.field_type, &*expected.field_type) {
+            // A uuid column written before uuids became strings.
+            (Type::Primitive(PrimitiveType::Fixed(16)), Type::Primitive(PrimitiveType::String)) => {
+                true
+            }
+            (Type::Struct(c), Type::Struct(e)) => struct_is_compatible(c, e),
+            (Type::List(c), Type::List(e)) => {
+                field_is_compatible(&c.element_field, &e.element_field)
+            }
+            (Type::Map(c), Type::Map(e)) => {
+                field_is_compatible(&c.key_field, &e.key_field)
+                    && field_is_compatible(&c.value_field, &e.value_field)
+            }
+            (c, e) => c == e,
+        }
 }
 
 /// Load an existing Iceberg table or create it if it doesn't exist.
@@ -928,11 +1033,7 @@ async fn load_or_create_table(
             // Table exists, return it
             // TODO: Add proper schema evolution/validation to ensure compatibility
             let current_schema = table.metadata().current_schema();
-            if !(current_schema.as_struct().eq(schema.as_struct())
-                && current_schema
-                    .identifier_field_ids()
-                    .eq(schema.identifier_field_ids()))
-            {
+            if !is_compatible(current_schema, schema) {
                 anyhow::bail!(
                     "Iceberg table '{}' schema does not match expected schema. \
                      Current schema: {:?}, expected schema: {:?}",
@@ -978,28 +1079,36 @@ async fn load_or_create_table(
 }
 
 /// Find the most recent Materialize frontier from Iceberg snapshots.
+/// Returns: (frontier, sink id, sink version)
+///
 /// We store the frontier in snapshot metadata to track where we left off after restarts.
 /// Snapshots with operation="replace" (compactions) don't have our metadata and are skipped.
 /// The input slice will be sorted by sequence number in descending order.
 fn retrieve_upper_from_snapshots(
     snapshots: &mut [Arc<Snapshot>],
-) -> anyhow::Result<Option<(Antichain<Timestamp>, u64)>> {
+) -> anyhow::Result<Option<(Antichain<Timestamp>, GlobalId, u64)>> {
     snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
 
     for snapshot in snapshots {
         let props = &snapshot.summary().additional_properties;
-        if let (Some(frontier_json), Some(sink_version_str)) =
-            (props.get("mz-frontier"), props.get("mz-sink-version"))
-        {
+        if let (Some(frontier_json), Some(sink_id_str), Some(sink_version_str)) = (
+            props.get("mz-frontier"),
+            props.get("mz-sink-id"),
+            props.get("mz-sink-version"),
+        ) {
             let frontier: Vec<Timestamp> = serde_json::from_str(frontier_json)
                 .context("Failed to deserialize frontier from snapshot properties")?;
             let frontier = Antichain::from_iter(frontier);
+
+            let sink_id = sink_id_str
+                .parse::<GlobalId>()
+                .context("Failed to parse mz-sink-id from snapshot properties")?;
 
             let sink_version = sink_version_str
                 .parse::<u64>()
                 .context("Failed to parse mz-sink-version from snapshot properties")?;
 
-            return Ok(Some((frontier, sink_version)));
+            return Ok(Some((frontier, sink_id, sink_version)));
         }
         if snapshot.summary().operation.as_str() != "replace" {
             // This is a bad heuristic, but we have no real other way to identify compactions
@@ -1035,7 +1144,7 @@ fn relation_desc_to_iceberg_schema(
 
     let arrow_schema_with_ids = add_field_ids_to_arrow_schema(arrow_schema);
 
-    let iceberg_schema = arrow_schema_to_schema(&arrow_schema_with_ids)
+    let iceberg_schema = arrow_schema_to_schema_auto_assign_ids(&arrow_schema_with_ids)
         .context("Failed to convert Arrow schema to Iceberg schema")?;
 
     Ok((arrow_schema_with_ids, Arc::new(iceberg_schema)))
@@ -1184,7 +1293,7 @@ fn mint_batch_descriptions<'scope>(
             let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
             let resume = retrieve_upper_from_snapshots(&mut snapshots)?;
             let (resume_upper, resume_version) = match resume {
-                Some((f, v)) => (f, v),
+                Some((f, _, v)) => (f, v),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0),
             };
             debug!(
@@ -1968,7 +2077,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::{PrimitiveType, Type};
+    use iceberg::spec::{ListType, MapType, PrimitiveType, Type};
     use iceberg::writer::file_writer::location_generator::LocationGenerator;
     use mz_repr::SqlScalarType;
     use mz_storage_types::sinks::ICEBERG_UINT64_DECIMAL_PRECISION;
@@ -2071,6 +2180,14 @@ mod tests {
             DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
         );
 
+        // Interval should override to LargeUtf8
+        let result = iceberg_type_overrides(&SqlScalarType::Interval);
+        assert_eq!(result.unwrap().0, DataType::LargeUtf8);
+
+        // Uuid should override to Utf8
+        let result = iceberg_type_overrides(&SqlScalarType::Uuid);
+        assert_eq!(result.unwrap().0, DataType::Utf8);
+
         // Other types should return None (use default)
         assert!(iceberg_type_overrides(&SqlScalarType::Int32).is_none());
         assert!(iceberg_type_overrides(&SqlScalarType::String).is_none());
@@ -2131,6 +2248,304 @@ mod tests {
             .field_by_name("dur")
             .expect("field should exist");
         assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+    }
+
+    /// A uuid column must reach the Iceberg table as `string`, not as the
+    /// `fixed[16]` that the default `FixedSizeBinary(16)` mapping would produce.
+    #[mz_ore::test]
+    fn test_iceberg_uuid_override() {
+        let result = iceberg_type_overrides(&SqlScalarType::Uuid);
+        assert_eq!(result.unwrap().0, DataType::Utf8);
+
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("u", SqlScalarType::Uuid.nullable(true))
+            .finish();
+
+        let (arrow_schema, iceberg_schema) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
+
+        let field = iceberg_schema
+            .as_struct()
+            .field_by_name("u")
+            .expect("field should exist");
+        assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+        assert_ne!(
+            *field.field_type,
+            Type::Primitive(PrimitiveType::Fixed(16)),
+            "uuid must not fall back to the default FixedSizeBinary(16) mapping"
+        );
+    }
+
+    /// Rebuilds `schema` with the named field's type replaced, so a fixture can
+    /// differ from what the sink derives in exactly one type.
+    fn with_field_type(schema: &Schema, name: &str, ty: Type) -> Schema {
+        let fields = schema.as_struct().fields().iter().map(|f| {
+            let mut field = (**f).clone();
+            if field.name == name {
+                field.field_type = Box::new(ty.clone());
+            }
+            Arc::new(field)
+        });
+        Schema::builder()
+            .with_fields(fields)
+            .build()
+            .expect("valid schema")
+    }
+
+    /// A table created before uuid columns became strings holds `fixed[16]` and
+    /// must stay writable, while any other difference is still a mismatch.
+    #[mz_ore::test]
+    fn test_is_compatible_accepts_legacy_uuid() {
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("u", SqlScalarType::Uuid.nullable(true))
+            .finish();
+        let (_, expected) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        assert!(is_compatible(&expected, &expected));
+
+        // The halt this tolerance exists to prevent.
+        let legacy = with_field_type(&expected, "u", Type::Primitive(PrimitiveType::Fixed(16)));
+        assert!(is_compatible(&legacy, &expected));
+
+        // Only that direction: nothing produces a string column where the sink
+        // derives fixed binary.
+        assert!(!is_compatible(&expected, &legacy));
+
+        // An unrelated type difference is still a mismatch.
+        let wrong_type = with_field_type(&expected, "u", Type::Primitive(PrimitiveType::Long));
+        assert!(!is_compatible(&wrong_type, &expected));
+
+        // So is a missing column.
+        let truncated = Schema::builder()
+            .with_fields(expected.as_struct().fields().iter().take(1).cloned())
+            .build()
+            .expect("valid schema");
+        assert!(!is_compatible(&truncated, &expected));
+    }
+
+    /// The tolerance reaches a uuid nested inside a list, which the type
+    /// overrides remap just like a top-level column.
+    #[mz_ore::test]
+    fn test_is_compatible_accepts_legacy_uuid_in_list() {
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column(
+                "us",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Uuid),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .finish();
+        let (_, expected) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        let Type::List(list) = &*expected
+            .as_struct()
+            .field_by_name("us")
+            .expect("field should exist")
+            .field_type
+        else {
+            panic!("expected a list type");
+        };
+        let mut legacy_element = (*list.element_field).clone();
+        legacy_element.field_type = Box::new(Type::Primitive(PrimitiveType::Fixed(16)));
+        let legacy = with_field_type(
+            &expected,
+            "us",
+            Type::List(ListType {
+                element_field: Arc::new(legacy_element),
+            }),
+        );
+
+        assert!(is_compatible(&legacy, &expected));
+    }
+
+    /// Rebuilds `schema` with the field ids a Java-based REST catalog (Polaris,
+    /// the Apache REST fixture) assigns when it creates the table: every direct
+    /// child of a struct is numbered before any nested field, then each child's
+    /// subtree is visited. The sink numbers depth-first, so for any nested type
+    /// the two differ while names, types and nullability stay the same.
+    #[allow(clippy::disallowed_methods)]
+    #[allow(clippy::match_wildcard_for_single_variants)]
+    fn with_catalog_field_ids(schema: &Schema) -> Schema {
+        fn renumber_fields(fields: &[Arc<NestedField>], next: &mut i32) -> Vec<Arc<NestedField>> {
+            let ids: Vec<i32> = fields
+                .iter()
+                .map(|_| {
+                    let id = *next;
+                    *next += 1;
+                    id
+                })
+                .collect();
+            fields
+                .iter()
+                .zip(ids)
+                .map(|(f, id)| {
+                    let mut field = (**f).clone();
+                    field.id = id;
+                    field.field_type = Box::new(renumber_type(&field.field_type, next));
+                    Arc::new(field)
+                })
+                .collect()
+        }
+        fn renumber_type(ty: &Type, next: &mut i32) -> Type {
+            match ty {
+                Type::Struct(s) => Type::Struct(StructType::new(renumber_fields(s.fields(), next))),
+                Type::List(l) => {
+                    let mut element = (*l.element_field).clone();
+                    element.id = *next;
+                    *next += 1;
+                    element.field_type = Box::new(renumber_type(&element.field_type, next));
+                    Type::List(ListType {
+                        element_field: Arc::new(element),
+                    })
+                }
+                Type::Map(m) => {
+                    let mut key = (*m.key_field).clone();
+                    key.id = *next;
+                    *next += 1;
+                    let mut value = (*m.value_field).clone();
+                    value.id = *next;
+                    *next += 1;
+                    key.field_type = Box::new(renumber_type(&key.field_type, next));
+                    value.field_type = Box::new(renumber_type(&value.field_type, next));
+                    Type::Map(MapType::new(Arc::new(key), Arc::new(value)))
+                }
+                primitive => primitive.clone(),
+            }
+        }
+        let mut next = 1;
+        Schema::builder()
+            .with_fields(renumber_fields(schema.as_struct().fields(), &mut next))
+            .build()
+            .expect("valid schema")
+    }
+
+    /// Rebuilds `schema` with the element type of the array column `name`
+    /// replaced. Arrays are `struct { items: list<element>, dimensions }`.
+    fn with_array_element_type(schema: &Schema, name: &str, ty: Type) -> Schema {
+        let fields = schema.as_struct().fields().iter().map(|f| {
+            if f.name != name {
+                return Arc::clone(f);
+            }
+            let Type::Struct(array) = &*f.field_type else {
+                panic!("{name} should be an array struct");
+            };
+            let inner = array.fields().iter().map(|inner| {
+                let mut inner = (**inner).clone();
+                if inner.name == "items" {
+                    let Type::List(list) = &*inner.field_type else {
+                        panic!("items should be a list");
+                    };
+                    let mut element = (*list.element_field).clone();
+                    element.field_type = Box::new(ty.clone());
+                    inner.field_type = Box::new(Type::List(ListType {
+                        element_field: Arc::new(element),
+                    }));
+                }
+                Arc::new(inner)
+            });
+            let mut field = (**f).clone();
+            field.field_type = Box::new(Type::Struct(StructType::new(inner.collect())));
+            Arc::new(field)
+        });
+        Schema::builder()
+            .with_fields(fields)
+            .build()
+            .expect("valid schema")
+    }
+
+    /// Rebuilds `schema` with the top-level field's nullability flipped.
+    fn with_field_required(schema: &Schema, name: &str, required: bool) -> Schema {
+        let fields = schema.as_struct().fields().iter().map(|f| {
+            let mut field = (**f).clone();
+            if field.name == name {
+                field.required = required;
+            }
+            Arc::new(field)
+        });
+        Schema::builder()
+            .with_fields(fields)
+            .build()
+            .expect("valid schema")
+    }
+
+    /// A REST catalog assigns its own field ids when it creates the table. On
+    /// the sink's next start, `load_or_create_table` finds a table whose names,
+    /// types and nullability match the schema it would create, but whose ids
+    /// do not, and it must accept it (SS-522). Comparing ids strands every sink
+    /// over a relation with an array column after a restart: arrays nest two
+    /// levels, so the numberings always diverge. A record or map column diverges
+    /// whenever another column follows it, which in MODE APPEND is always the
+    /// case because `_mz_diff` and `_mz_timestamp` are appended. Flat relations
+    /// pass only because the two numberings coincide.
+    #[mz_ore::test]
+    fn test_is_compatible_accepts_catalog_assigned_field_ids() {
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int64.nullable(true))
+            .with_column(
+                "a",
+                SqlScalarType::Array(Box::new(SqlScalarType::Int64)).nullable(true),
+            )
+            .with_column("w", SqlScalarType::Int64.nullable(true))
+            .finish();
+        let arrow_schema =
+            mz_arrow_util::builder::desc_to_schema_with_overrides(&desc, iceberg_type_overrides)
+                .expect("schema conversion should succeed");
+
+        let arrow_schema_with_ids = add_field_ids_to_arrow_schema(arrow_schema);
+        let expected = arrow_schema_to_schema(&arrow_schema_with_ids)
+            .expect("schema conversion should succeed");
+        let catalog = with_catalog_field_ids(&expected);
+
+        // The fixture really is what a catalog hands back: same shape, ids moved.
+        let id_of = |schema: &Schema, name: &str| {
+            schema
+                .field_by_name(name)
+                .unwrap_or_else(|| panic!("field {name} should exist"))
+                .id
+        };
+        assert_eq!(id_of(&catalog, "id"), id_of(&expected, "id"));
+        assert_ne!(id_of(&catalog, "a.items"), id_of(&expected, "a.items"));
+        assert_ne!(id_of(&catalog, "w"), id_of(&expected, "w"));
+
+        // Renumbering must not hide a real difference: a top-level type ...
+        let wrong_type = with_field_type(&catalog, "w", Type::Primitive(PrimitiveType::String));
+        assert!(!is_compatible(&wrong_type, &expected));
+        // ... a type nested inside the array ...
+        let wrong_element =
+            with_array_element_type(&catalog, "a", Type::Primitive(PrimitiveType::String));
+        assert!(!is_compatible(&wrong_element, &expected));
+        // ... or nullability.
+        let wrong_required = with_field_required(&catalog, "w", true);
+        assert!(!is_compatible(&wrong_required, &expected));
+
+        // A flat relation gets identical ids under both schemes, which is why
+        // such sinks never hit this.
+        let flat = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int64.nullable(true))
+            .with_column("w", SqlScalarType::Int64.nullable(true))
+            .finish();
+        let (_, flat_expected) =
+            relation_desc_to_iceberg_schema(&flat).expect("schema conversion should succeed");
+        assert!(is_compatible(
+            &with_catalog_field_ids(&flat_expected),
+            &flat_expected
+        ));
+
+        // The table the catalog created differs from the expected schema only
+        // in ids, and the sink must accept it.
+        assert!(
+            is_compatible(&catalog, &expected),
+            "a table that differs from the expected schema only in field ids must be accepted"
+        );
     }
 
     #[mz_ore::test]
@@ -2681,7 +3096,6 @@ fn commit_to_iceberg<'scope>(
                             let catalog = Arc::clone(&catalog);
                             let conn_namespace = connection.namespace.clone();
                             let conn_table = connection.table.clone();
-                            let frontier = frontier.clone();
                             let batch_lower = batch.0.clone();
                             let batch_upper = batch.1.clone();
                             async move {
@@ -2693,8 +3107,8 @@ fn commit_to_iceberg<'scope>(
                                     catalog.as_ref(),
                                     &conn_namespace,
                                     &conn_table,
+                                    sink_id,
                                     sink_version,
-                                    &frontier,
                                     &batch_lower,
                                     &batch_upper,
                                     &metrics,
@@ -2826,9 +3240,10 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                     // merging metadata. Both must include these columns before any operator starts.
                     let extended_arrow = build_schema_with_append_columns(&arrow_schema_with_ids);
                     let extended_iceberg = Arc::new(
-                        arrow_schema_to_schema(&extended_arrow)
+                        arrow_schema_to_schema_auto_assign_ids(&extended_arrow)
                             .context("Failed to build Iceberg schema with append columns")?,
                     );
+
                     (extended_arrow, extended_iceberg)
                 } else {
                     (arrow_schema_with_ids, iceberg_schema)

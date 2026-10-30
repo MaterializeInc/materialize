@@ -191,6 +191,67 @@ where
     }
 }
 
+/// Sums intervals component-wise, as PostgreSQL's interval addition does:
+/// months, days, and microseconds each accumulate on their own, and nothing is
+/// carried from a coarser component into a finer one.
+fn sum_interval<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    sum_interval_counted(datums.into_iter().map(|datum| (datum, Diff::ONE)))
+}
+
+/// Count-aware interval sum. Accumulates `Σ value·diff` per interval component
+/// in `i128`, which matches `Accum::Interval` in `mz_compute::render::reduce`;
+/// the narrowing back to the `Interval` field widths reproduces that variant's
+/// `finalize_accum` arm. Consuming the multiplicity directly keeps this linear
+/// in the number of distinct values and correct for negative diffs
+/// (retractions), which `expand_counts` would silently drop.
+///
+/// A sum whose components exceed the `Interval` field widths is a query error
+/// only where the aggregate renders as an accumulable reduce, because that is
+/// the only rendering that pairs `finalize_accum` with `AccumulableErrorCheck`.
+/// This function and `finalize_accum` both return a bare `Datum`, so every
+/// other caller (constant folding, and window aggregates, which arrive through
+/// `eval` for whole-partition frames and through `AccumulableOneByOneAggr`
+/// otherwise) yields `Datum::Null` on overflow, which a reader cannot tell
+/// apart from an all-null input. `SumUInt*` has the same split today for
+/// negative accumulations. Closing it means giving aggregate evaluation an
+/// error channel.
+///
+/// Returns `Datum::Null` when no non-null value was accumulated, matching
+/// `finalize_accum`'s null handling: its `is_zero` check on `Accum::Interval`
+/// requires all three running sums and the non-null count to be zero.
+fn sum_interval_counted<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = (Datum<'a>, Diff)>,
+{
+    let (mut months, mut days, mut micros) = (0i128, 0i128, 0i128);
+    let mut non_nulls = Diff::ZERO;
+    for (datum, diff) in datums {
+        if datum.is_null() {
+            continue;
+        }
+        let interval = datum.unwrap_interval();
+        // The dataflow accumulates each component in an `Overflowing<i128>`; we
+        // mirror that. Genuine i128 overflow would require summands far beyond
+        // any realistic input, so wrapping matches the dataflow's production
+        // behavior.
+        let scale = i128::from(diff.into_inner());
+        months = months.wrapping_add(i128::from(interval.months).wrapping_mul(scale));
+        days = days.wrapping_add(i128::from(interval.days).wrapping_mul(scale));
+        micros = micros.wrapping_add(i128::from(interval.micros).wrapping_mul(scale));
+        non_nulls += diff;
+    }
+    if months == 0 && days == 0 && micros == 0 && non_nulls.is_zero() {
+        return Datum::Null;
+    }
+    match Interval::try_new(months, days, micros) {
+        Some(interval) => Datum::Interval(interval),
+        None => Datum::Null,
+    }
+}
+
 fn count<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = (Datum<'a>, Diff)>,
@@ -1890,6 +1951,8 @@ pub enum AggregateFunc {
     MaxTimestampTz,
     MaxInterval,
     MaxTime,
+    MaxArray,
+    MaxList,
     MinNumeric,
     MinInt16,
     MinInt32,
@@ -1907,6 +1970,8 @@ pub enum AggregateFunc {
     MinTimestampTz,
     MinInterval,
     MinTime,
+    MinArray,
+    MinList,
     SumInt16,
     SumInt32,
     SumInt64,
@@ -1916,6 +1981,7 @@ pub enum AggregateFunc {
     SumFloat32,
     SumFloat64,
     SumNumeric,
+    SumInterval,
     Count,
     Any,
     All,
@@ -2046,6 +2112,8 @@ impl AggregateFunc {
                 | MaxTimestampTz
                 | MaxInterval
                 | MaxTime
+                | MaxArray
+                | MaxList
                 | MinNumeric
                 | MinInt16
                 | MinInt32
@@ -2063,6 +2131,8 @@ impl AggregateFunc {
                 | MinTimestampTz
                 | MinInterval
                 | MinTime
+                | MinArray
+                | MinList
                 | Any
                 | All
         )
@@ -2082,11 +2152,12 @@ impl AggregateFunc {
         // expanding each `(datum, diff)` into `diff` copies. The cases handled
         // here mirror the dataflow's accumulable reduction (`build_accumulable`
         // in `mz_compute::render::reduce`) so that constant folding produces the
-        // same result the dataflow would. Signed integer sums are folded here;
-        // unsigned sums are not, because their negative-accumulation case is a
-        // query error in the dataflow that this `Datum`-returning path cannot
-        // signal. Floats and numerics use bespoke fixed-point/wide-decimal
-        // accumulators in the dataflow that `expand_counts` does not reproduce.
+        // same result the dataflow would. Signed integer and interval sums are
+        // folded here; unsigned sums are not, because their
+        // negative-accumulation case is a query error in the dataflow that this
+        // `Datum`-returning path cannot signal. Floats and numerics use bespoke
+        // fixed-point/wide-decimal accumulators in the dataflow that
+        // `expand_counts` does not reproduce.
         match self {
             AggregateFunc::Count => count(datums),
             AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => {
@@ -2098,6 +2169,7 @@ impl AggregateFunc {
                 })
             }
             AggregateFunc::SumInt64 => sum_signed_int_counted(datums, Datum::from),
+            AggregateFunc::SumInterval => sum_interval_counted(datums),
             _ if self.ignores_multiplicity() => {
                 self.eval_datums(datums.into_iter().map(|(datum, _diff)| datum), temp_storage)
             }
@@ -2134,6 +2206,9 @@ impl AggregateFunc {
             }
             AggregateFunc::MaxInterval => max_datum::<'a, I, Interval>(datums),
             AggregateFunc::MaxTime => max_datum::<'a, I, NaiveTime>(datums),
+            AggregateFunc::MaxArray | AggregateFunc::MaxList => {
+                max_datum::<'a, I, Datum<'a>>(datums)
+            }
             AggregateFunc::MinNumeric => {
                 min_datum::<'a, I, OrderedDecimal<numeric::Numeric>>(datums)
             }
@@ -2157,6 +2232,9 @@ impl AggregateFunc {
             }
             AggregateFunc::MinInterval => min_datum::<'a, I, Interval>(datums),
             AggregateFunc::MinTime => min_datum::<'a, I, NaiveTime>(datums),
+            AggregateFunc::MinArray | AggregateFunc::MinList => {
+                min_datum::<'a, I, Datum<'a>>(datums)
+            }
             AggregateFunc::SumInt16 => sum_datum::<'a, I, i16, i64>(datums),
             AggregateFunc::SumInt32 => sum_datum::<'a, I, i32, i64>(datums),
             AggregateFunc::SumInt64 => sum_datum::<'a, I, i64, i128>(datums),
@@ -2166,6 +2244,7 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => sum_datum::<'a, I, f32, f32>(datums),
             AggregateFunc::SumFloat64 => sum_datum::<'a, I, f64, f64>(datums),
             AggregateFunc::SumNumeric => sum_numeric(datums),
+            AggregateFunc::SumInterval => sum_interval(datums),
             AggregateFunc::Count => unreachable!("Count is handled in `eval`"),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
@@ -2376,6 +2455,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -2393,6 +2474,8 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::SumInt16
             | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64
@@ -2402,6 +2485,7 @@ impl AggregateFunc {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::Count
             | AggregateFunc::JsonbAgg { .. }
             | AggregateFunc::JsonbObjectAgg { .. }
@@ -2443,6 +2527,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -2460,6 +2546,8 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::SumInt16
             | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64
@@ -2469,6 +2557,7 @@ impl AggregateFunc {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::Count
             | AggregateFunc::JsonbAgg { .. }
             | AggregateFunc::JsonbObjectAgg { .. }
@@ -2720,6 +2809,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -2737,9 +2828,12 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
-            | AggregateFunc::SumNumeric => input_type.scalar_type.clone(),
+            | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval => input_type.scalar_type.clone(),
         };
         // Count never produces null, and other aggregations only produce
         // null in the presence of null inputs.
@@ -2841,6 +2935,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -2858,6 +2954,8 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::SumInt16
             | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64
@@ -2867,6 +2965,7 @@ impl AggregateFunc {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::StringAgg { .. } => true,
             // Count is never null
             AggregateFunc::Count
@@ -3197,6 +3296,8 @@ impl AggregateFunc {
             Self::MaxTimestampTz => "max",
             Self::MaxInterval => "max",
             Self::MaxTime => "max",
+            Self::MaxArray => "max",
+            Self::MaxList => "max",
             Self::MinNumeric => "min",
             Self::MinInt16 => "min",
             Self::MinInt32 => "min",
@@ -3214,6 +3315,8 @@ impl AggregateFunc {
             Self::MinTimestampTz => "min",
             Self::MinInterval => "min",
             Self::MinTime => "min",
+            Self::MinArray => "min",
+            Self::MinList => "min",
             Self::SumInt16 => "sum",
             Self::SumInt32 => "sum",
             Self::SumInt64 => "sum",
@@ -3223,6 +3326,7 @@ impl AggregateFunc {
             Self::SumFloat32 => "sum",
             Self::SumFloat64 => "sum",
             Self::SumNumeric => "sum",
+            Self::SumInterval => "sum",
             Self::Count => "count",
             Self::Any => "any",
             Self::All => "all",

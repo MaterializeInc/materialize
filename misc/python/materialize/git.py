@@ -377,7 +377,9 @@ def contains_commit(
     return is_ancestor(commit_sha, target)
 
 
-def get_tagged_release_version(version_type: type[VERSION_TYPE]) -> VERSION_TYPE | None:
+def get_tagged_release_version(
+    version_type: type[VERSION_TYPE],
+) -> VERSION_TYPE | None:
     """
     This returns the release version if exactly this commit is tagged.
     If multiple release versions are present, the highest one will be returned.

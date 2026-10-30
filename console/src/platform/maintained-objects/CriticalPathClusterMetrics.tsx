@@ -21,6 +21,7 @@ import React from "react";
 import { Link as RouterLink } from "react-router-dom";
 
 import { Bucket } from "~/api/materialize/cluster/replicaUtilizationHistory";
+import { MetricCard } from "~/components/MetricCard";
 import TextLink from "~/components/TextLink";
 import {
   calculateMemDiskUtilizationStatus,
@@ -41,32 +42,6 @@ import { ReplicaInWindow, useClusterBucketsInWindow } from "./queries";
 import { useJourneyLinkState } from "./useJourneyLinkState";
 
 type Cluster = NonNullable<RenderableNode["cluster"]>;
-
-const MetricCard = ({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  return (
-    <Card
-      px={3}
-      py={2}
-      borderWidth="1px"
-      borderColor={colors.border.primary}
-      borderRadius="md"
-    >
-      <VStack align="stretch" spacing={2}>
-        <Text textStyle="text-small" color={colors.foreground.secondary}>
-          {label}
-        </Text>
-        {children}
-      </VStack>
-    </Card>
-  );
-};
 
 const MetricBarCard = ({
   label,
@@ -147,7 +122,7 @@ const ClusterMetricsHeader = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const journeyLinkState = useJourneyLinkState(pageObjectId);
-  const objectLinkTarget = `../${node.parentSourceId ?? node.id}`;
+  const objectLinkTarget = `../${node.id}`;
   return (
     <VStack align="stretch" spacing={1}>
       <Text textStyle="heading-sm" noOfLines={1} title={node.name}>
@@ -326,7 +301,7 @@ export interface ClusterReplicaMetricsProps {
 
 /** Per-replica memory/CPU utilization for one cluster at a point in time,
  * with any replicas dropped inside the window called out. */
-export const ClusterReplicaMetrics = ({
+const ClusterReplicaMetrics = ({
   cluster,
   timestamp,
   bucketSizeMs,

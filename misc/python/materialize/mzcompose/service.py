@@ -203,4 +203,4 @@ class Service:
     def __init__(self, name: str, config: ServiceConfig) -> None:
         self.name = name
         self.config = config
-        self.companions: list["Service"] = []
+        self.companions: list[Service] = []

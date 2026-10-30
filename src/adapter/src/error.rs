@@ -210,8 +210,6 @@ pub enum AdapterError {
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
-    /// The current transaction had the wrong set of write locks.
-    WrongSetOfLocks,
     /// Waiting on a query timed out.
     ///
     /// Note this differs slightly from PG's implementation/semantics.
@@ -268,6 +266,8 @@ pub enum AdapterError {
     DDLOnlyTransaction,
     /// Another session modified the Catalog while this transaction was open.
     DDLTransactionRace,
+    /// Final execution would change an outcome already reported to the client.
+    DDLTransactionOutcomeChanged,
     /// A conditional cluster-config write failed its precondition: the cluster's
     /// managed config changed between when the write was conditioned and when it
     /// was applied. Produced by `Op::CheckClusterState`, never by SQL DDL, so it
@@ -285,6 +285,14 @@ pub enum AdapterError {
     ///
     /// The map keys are role names and values are detailed error messages.
     DependentObject(BTreeMap<String, Vec<String>>),
+    /// A statement tried to drop indexes while materialized views, indexes, or metric sinks
+    /// read from them.
+    ///
+    /// `blocked` is never empty. Each entry pairs a blocked index's name with its readers as
+    /// `(object type, name)` pairs.
+    IndexInUse {
+        blocked: Vec<(String, Vec<(String, String)>)>,
+    },
     /// When performing an `ALTER` of some variety, re-planning the statement
     /// errored.
     InvalidAlter(&'static str, PlanError),
@@ -323,9 +331,6 @@ pub enum AdapterError {
     /// Attempt to convert a cluster to unmanaged while a hydration burst is in
     /// flight.
     AlterClusterUnmanagedWhileBursting,
-    /// Attempt to change a cluster's replication factor while a graceful
-    /// reconfiguration is in progress.
-    AlterClusterReplicationFactorWhileReconfiguring,
     /// Attempt to change a cluster's schedule while a graceful reconfiguration
     /// is in progress.
     AlterClusterScheduleWhileReconfiguring,
@@ -335,7 +340,7 @@ pub enum AdapterError {
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
-    /// Attempt to apply a replacement to a sealed materialized view.
+    /// Attempt to replace a sealed materialized view.
     ReplaceMaterializedViewSealed {
         name: String,
     },
@@ -636,6 +641,29 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
+            AdapterError::IndexInUse { blocked } => match &blocked[..] {
+                [(index_name, _)] => Some(format!(
+                    "The dependent objects are live dataflows that read from index {}, so the \
+                     index cannot be dropped while they exist.",
+                    index_name.quoted()
+                )),
+                blocked => {
+                    let per_index = blocked
+                        .iter()
+                        .map(|(index_name, dependents)| {
+                            format!(
+                                "Index {} is read by {}.",
+                                index_name.quoted(),
+                                fmt_dependents(dependents.iter())
+                            )
+                        })
+                        .join(" ");
+                    Some(format!(
+                        "{per_index} The dependent objects are live dataflows that read from \
+                         these indexes, so the indexes cannot be dropped while they exist."
+                    ))
+                }
+            },
             AdapterError::DependentObject(dependent_objects) => Some(
                 dependent_objects
                     .iter()
@@ -753,8 +781,9 @@ impl AdapterError {
                 Some(lines.join("\n"))
             }
             AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
-                "The materialized view has already computed its output until the end of time, \
-                 so replacing its definition would have no effect."
+                "The materialized view's contents are final for all future times, so they can \
+                 no longer be changed. See \
+                 https://materialize.com/docs/sql/alter-materialized-view/#troubleshooting"
                     .into(),
             ),
             AdapterError::ImpossibleTimestampConstraints { constraints } => {
@@ -793,6 +822,12 @@ impl AdapterError {
             ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
+            AdapterError::IndexInUse { .. } => Some(
+                "Drop the dependent objects first, then drop the index and recreate the \
+                 dependents. To replace them in production without downtime, use a blue/green \
+                 deployment."
+                    .to_string(),
+            ),
             AdapterError::SubscribeFellBehind { .. } => Some(
                 "The client is not reading results fast enough. Use a client that reads output \
                 without buffering, or raise the subscribe_max_buffered_bytes system variable."
@@ -811,11 +846,6 @@ impl AdapterError {
             AdapterError::AlterClusterUnmanagedWhileBursting => Some(
                 "Remove the strategy with ALTER CLUSTER ... RESET (AUTO SCALING STRATEGY), \
                 or wait for the burst to wind down, then convert."
-                    .to_string(),
-            ),
-            AdapterError::AlterClusterReplicationFactorWhileReconfiguring => Some(
-                "Cancel the reconfiguration by altering the cluster back to its current \
-                configuration, or wait for it to settle, then change the replication factor."
                     .to_string(),
             ),
             AdapterError::AlterClusterScheduleWhileReconfiguring => Some(
@@ -903,6 +933,9 @@ impl AdapterError {
                 "Currently, DDL transactions fail when any other DDL happens concurrently, \
                  even on unrelated schemas/clusters.".into()
             ),
+            AdapterError::DDLTransactionOutcomeChanged => Some(
+                "Retry the transaction to execute its statements against the current catalog.".into()
+            ),
             AdapterError::ConcurrentDependencyMutation { .. } => Some(
                 "Another session modified one of this statement's dependencies before \
                  it could commit. Retry the statement.".into()
@@ -918,6 +951,9 @@ impl AdapterError {
             ),
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
+            ),
+            AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
+                "Create a new materialized view with the new definition instead.".into()
             ),
             _ => None,
         }
@@ -1013,7 +1049,6 @@ impl AdapterError {
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::SingleStatementTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            AdapterError::WrongSetOfLocks => SqlState::LOCK_NOT_AVAILABLE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
             AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
@@ -1073,7 +1108,9 @@ impl AdapterError {
             AdapterError::UnavailableFeature { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::DDLTransactionRace | AdapterError::DDLTransactionOutcomeChanged => {
+                SqlState::T_R_SERIALIZATION_FAILURE
+            }
             AdapterError::ClusterStateChanged { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
@@ -1085,6 +1122,7 @@ impl AdapterError {
                 SqlState::INTERNAL_ERROR
             }
             AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+            AdapterError::IndexInUse { .. } => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::InvalidAlter(_, _) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ConnectionValidation(_) => SqlState::SYSTEM_ERROR,
             // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
@@ -1103,9 +1141,6 @@ impl AdapterError {
             AdapterError::AlterClusterResourceExhausted => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
-            AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
-                SqlState::OBJECT_IN_USE
-            }
             AdapterError::AlterClusterScheduleWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterWaitOnScheduledCluster => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
@@ -1147,6 +1182,7 @@ impl AdapterError {
         }
     }
 
+    /// Maps a lookup error of the session task's compute instance clients.
     pub fn concurrent_dependency_drop_from_collection_lookup_error(
         e: CollectionLookupError,
         compute_instance: ComputeInstanceId,
@@ -1169,7 +1205,8 @@ impl AdapterError {
         }
     }
 
-    pub fn concurrent_dependency_drop_from_watch_set_install_error(
+    /// Maps a collection lookup error of the compute controller.
+    pub fn concurrent_dependency_drop_from_compute_lookup_error(
         e: compute_error::CollectionLookupError,
     ) -> Self {
         match e {
@@ -1409,9 +1446,6 @@ impl fmt::Display for AdapterError {
             AdapterError::ReadWriteUnavailable => {
                 f.write_str("transaction read-write mode must be set before any query")
             }
-            AdapterError::WrongSetOfLocks => {
-                write!(f, "internal error, wrong set of locks acquired")
-            }
             AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")
             }
@@ -1513,6 +1547,9 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLTransactionRace => f.write_str(
                 "another session modified the catalog while this DDL transaction was open",
             ),
+            AdapterError::DDLTransactionOutcomeChanged => f.write_str(
+                "a statement in this transaction would produce a different result at commit",
+            ),
             AdapterError::ClusterStateChanged { cluster_id } => {
                 write!(f, "cluster {cluster_id} was concurrently modified")
             }
@@ -1530,6 +1567,23 @@ impl fmt::Display for AdapterError {
                     "{role_str} \"{}\" cannot be dropped because some objects depend on it",
                     dependent_objects.keys().join(", ")
                 )
+            }
+            AdapterError::IndexInUse { blocked } => {
+                // Mirrors `PlanError::DependentObjectsStillExist` so clients see one shape of
+                // RESTRICT failure regardless of which layer detected the dependency.
+                let dependents = fmt_dependents(blocked.iter().flat_map(|(_, deps)| deps).unique());
+                match &blocked[..] {
+                    [(index_name, _)] => write!(
+                        f,
+                        "cannot drop index {}: still depended upon by {dependents}",
+                        index_name.quoted()
+                    ),
+                    blocked => write!(
+                        f,
+                        "cannot drop indexes {}: still depended upon by {dependents}",
+                        blocked.iter().map(|(name, _)| name.quoted()).join(", ")
+                    ),
+                }
             }
             AdapterError::InvalidAlter(t, e) => {
                 write!(f, "invalid ALTER {t}: {e}")
@@ -1602,12 +1656,6 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "cannot convert cluster to unmanaged while a hydration burst is in progress"
-                )
-            }
-            AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
-                write!(
-                    f,
-                    "cannot change replication factor while a reconfiguration is in progress"
                 )
             }
             AdapterError::AlterClusterScheduleWhileReconfiguring => {
@@ -1907,4 +1955,13 @@ mod tests {
         assert_eq!(response.code, SqlState::DIVISION_BY_ZERO);
         assert_eq!(response.message, expected_message);
     }
+}
+
+/// Renders `(object type, name)` pairs as `materialized view "mv", index "i"`.
+fn fmt_dependents<'a>(dependents: impl Iterator<Item = &'a (String, String)>) -> String {
+    dependents
+        .map(|(dependent_type, dependent_name)| {
+            format!("{} {}", dependent_type, dependent_name.quoted())
+        })
+        .join(", ")
 }

@@ -23,7 +23,8 @@ pub(super) fn reduce_call_unary(
         unreachable!()
     };
 
-    if expr.is_literal() && *func != UnaryFunc::Panic(func::Panic) {
+    // `jq` is not folded for the reason given on `contains_unfoldable`.
+    if expr.is_literal() && !matches!(func, UnaryFunc::Panic(_) | UnaryFunc::Jq(_)) {
         *e = MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type);
         return;
     }

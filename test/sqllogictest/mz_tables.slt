@@ -12,7 +12,7 @@
 # src/catalog/src/builtin/mz_catalog.rs) with two union branches, user tables
 # and builtin tables, and it derives every column from the durable catalog JSON
 # through parse_catalog_id, parse_catalog_privileges, redact_sql and
-# parse_catalog_create_sql (src/expr/src/scalar/func/impls/jsonb.rs).
+# parse_catalog_create_sql (src/catalog-decode/src/create_sql.rs).
 #
 # Before that it was a BuiltinTable populated by pack_table_update in the
 # adapter, so the values pinned here are a compatibility surface:
@@ -134,19 +134,19 @@ SELECT array_agg(DISTINCT schema_id) FROM mz_tables WHERE name = 'tt'
 
 query TTTT
 SELECT id LIKE 's%', owner_id, create_sql IS NULL, source_id IS NULL
-FROM mz_tables WHERE name = 'mz_columns'
+FROM mz_tables WHERE name = 'mz_cluster_replica_sizes'
 ----
 true  s1  true  true
 
 query T
 SELECT schema_id = (SELECT id FROM mz_schemas WHERE name = 'mz_catalog' AND database_id IS NULL)
-FROM mz_tables WHERE name = 'mz_columns'
+FROM mz_tables WHERE name = 'mz_cluster_replica_sizes'
 ----
 true
 
 # Exactly once: the user and builtin branches must not both claim a row.
 query I
-SELECT count(*) FROM mz_tables WHERE name = 'mz_columns'
+SELECT count(*) FROM mz_tables WHERE name = 'mz_cluster_replica_sizes'
 ----
 1
 

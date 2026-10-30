@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use mz_dyncfg::ConfigSet;
+use mz_ore::error::ErrorExt;
 use mz_ore::url::SensitiveUrl;
 use tracing::warn;
 
@@ -23,12 +24,13 @@ use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
+use crate::gcs::{GcsBlob, GcsBlobConfig};
 use crate::hedge::HedgeSibling;
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
-use crate::s3::{S3Blob, S3BlobConfig};
+use crate::s3::{BlobHttpPool, S3Blob, S3BlobConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
@@ -39,6 +41,8 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::hedge::BLOB_HEDGED_GET_MAX_CONCURRENT)
         .add(&crate::hedge::BLOB_HEDGED_GET_BUDGET_RATIO)
         .add(&crate::hedge::BLOB_HEDGED_GET_WARM_INTERVAL)
+        .add(&crate::s3::BLOB_HTTP_POOL)
+        .add(&crate::s3::BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT)
 }
 
 /// Opens the sibling handle that [crate::hedge::HedgedBlob] runs hedge
@@ -57,34 +61,40 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
 ///
 /// Errors opening the sibling degrade to [HedgeSibling::Unavailable] with a
 /// warning rather than failing: persist must come up even if hedging cannot.
-/// A process that hits this keeps hedging unavailable until restart, visible
-/// as `mz_persist_blob_hedges_skipped{reason="unavailable"}` and
-/// `mz_persist_blob_hedge_armed` staying 0.
+/// What a caller does with that is its own contract, see
+/// [crate::hedge::HedgedBlob::new_arming].
 pub async fn open_hedge_sibling(
     url: &SensitiveUrl,
     knobs: Box<dyn BlobKnobs>,
     metrics: S3BlobMetrics,
 ) -> HedgeSibling {
+    // The HTTP pool metrics describe only the primary's requests.
+    let metrics = metrics.without_http_pool_metrics();
     let config = match BlobConfig::try_from(url, knobs, metrics).await {
         Ok(config) => config,
         Err(err) => {
             warn!(
                 "hedged blob gets unavailable, sibling config failed: {}",
-                err
+                err.display_with_causes()
             );
             return HedgeSibling::Unavailable;
         }
     };
     match config {
-        // A second S3/Azure config builds its own SDK client and therefore
+        // A second S3/Azure/GCS config builds its own SDK client and therefore
         // its own connection pool, with DNS resolved per connect.
-        config @ (BlobConfig::S3(_) | BlobConfig::Azure(_)) => match config.open().await {
-            Ok(blob) => HedgeSibling::Isolated(blob),
-            Err(err) => {
-                warn!("hedged blob gets unavailable, sibling open failed: {}", err);
-                HedgeSibling::Unavailable
+        config @ (BlobConfig::S3(_) | BlobConfig::Azure(_) | BlobConfig::Gcs(_)) => {
+            match config.open().await {
+                Ok(blob) => HedgeSibling::Isolated(blob),
+                Err(err) => {
+                    warn!(
+                        "hedged blob gets unavailable, sibling open failed: {}",
+                        err.display_with_causes()
+                    );
+                    HedgeSibling::Unavailable
+                }
             }
-        },
+        }
         // File has no connection pool to isolate, so a second instance would
         // buy nothing. A second open of Mem (or of turmoil's simulated
         // store) would be actively wrong: it creates an INDEPENDENT store,
@@ -108,6 +118,8 @@ pub enum BlobConfig {
     Mem(bool),
     /// Config for [AzureBlob].
     Azure(AzureBlobConfig),
+    /// Config for [GcsBlob].
+    Gcs(GcsBlobConfig),
     #[cfg(feature = "turmoil")]
     /// Config for [crate::turmoil::TurmoilBlob].
     Turmoil(crate::turmoil::BlobConfig),
@@ -125,6 +137,14 @@ pub trait BlobKnobs: std::fmt::Debug + Send + Sync {
     fn read_timeout(&self) -> Duration;
     /// Whether this is running in a "cc" sized cluster.
     fn is_cc_active(&self) -> bool;
+    /// Which S3 endpoints send requests through a pool of HTTP clients.
+    fn http_pool(&self) -> BlobHttpPool {
+        BlobHttpPool::default()
+    }
+    /// See [`crate::s3::BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT`].
+    fn http_pool_max_in_flight_per_client(&self) -> usize {
+        *crate::s3::BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT.default()
+    }
 }
 
 impl BlobConfig {
@@ -134,6 +154,7 @@ impl BlobConfig {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
             BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
             BlobConfig::Azure(config) => Ok(Arc::new(AzureBlob::open(config).await?)),
+            BlobConfig::Gcs(config) => Ok(Arc::new(GcsBlob::open(config).await?)),
             BlobConfig::Mem(tombstone) => {
                 Ok(Arc::new(MemBlob::open(MemBlobConfig::new(tombstone))))
             }
@@ -197,6 +218,22 @@ impl BlobConfig {
                 .await?;
 
                 Ok(BlobConfig::S3(config))
+            }
+            "gcs" => {
+                let bucket = url
+                    .host()
+                    .ok_or_else(|| anyhow!("missing bucket: {}", url.as_str()))?
+                    .to_string();
+                let prefix = url
+                    .path()
+                    .strip_prefix('/')
+                    .unwrap_or_else(|| url.path())
+                    .to_string();
+
+                query_params.clear();
+                let config = GcsBlobConfig::new(bucket, prefix, knobs, metrics).await?;
+
+                Ok(BlobConfig::Gcs(config))
             }
             "mem" => {
                 if !cfg!(debug_assertions) {

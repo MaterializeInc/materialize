@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # This file is for error semantics and evaluation order/short-circuiting, see
-# https://linear.app/materializeinc/issue/STG-54
+# https://linear.app/materializeinc/issue/SQL-795
 #
 
 ########################################################################################################################
@@ -86,6 +86,21 @@ query I
 select coalesce(a, a/b + 1, a/b + 2) from test;
 ----
 1
+
+# A binary function evaluates both arguments before propagating a NULL, so an error in
+# either argument wins over a NULL in the other. The NULL comes from a column so the
+# optimizer cannot fold it away.
+statement ok
+create table null_and_err (a int, b int);
+
+statement ok
+insert into null_and_err values (NULL, 0);
+
+query error Evaluation error: division by zero
+select a + 1/b from null_and_err;
+
+query error Evaluation error: division by zero
+select 1/b + a from null_and_err;
 
 # The following two results are probably wrong (but depends on what error semantics we agree on later).
 query error Evaluation error: division by zero

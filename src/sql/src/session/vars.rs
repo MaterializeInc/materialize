@@ -76,6 +76,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use imbl::OrdMap;
+use mz_auth::user::ExternalUserMetadata;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal, ParameterScope};
 use mz_persist_client::cfg::{
@@ -86,7 +87,7 @@ use mz_pgrepr::TextEncodeSettings;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
-use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
+use mz_repr::user::InternalUserMetadata;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
 use thiserror::Error;
@@ -95,7 +96,7 @@ use uncased::UncasedStr;
 use crate::ast::Ident;
 use crate::session::user::User;
 
-pub(crate) mod constraints;
+pub mod constraints;
 pub(crate) mod definitions;
 pub(crate) mod errors;
 pub(crate) mod polyfill;
@@ -448,6 +449,7 @@ impl SessionVars {
             &SQL_SAFE_UPDATES,
             &REAL_TIME_RECENCY,
             &EMIT_PLAN_INSIGHTS_NOTICE,
+            &EMIT_EXECUTION_TIME_NOTICE,
             &EMIT_TIMESTAMP_NOTICE,
             &EMIT_TRACE_ID_NOTICE,
             &AUTO_ROUTE_CATALOG_QUERIES,
@@ -541,11 +543,21 @@ impl SessionVars {
     /// does not depend on a later transaction commit. Used by `DISCARD ALL`,
     /// which ends the transaction before resetting, so there is no commit left
     /// to promote a staged value. System/role/startup defaults are preserved.
-    pub fn reset_all(&mut self) {
+    ///
+    /// Returns the parameters whose value changed, with their new values.
+    pub fn reset_all(&mut self) -> BTreeMap<&'static str, String> {
+        let mut changed = BTreeMap::new();
         let names: Vec<_> = self.vars.keys().copied().collect();
         for name in names {
-            self.vars[name].reset_durable();
+            let var = &mut self.vars[name];
+            let before = var.value();
+            var.reset_durable();
+            let after = var.value();
+            if before != after {
+                changed.insert(var.name(), after);
+            }
         }
+        changed
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -885,6 +897,11 @@ impl SessionVars {
     /// Returns the value of `emit_plan_insights_notice` configuration parameter.
     pub fn emit_plan_insights_notice(&self) -> bool {
         *self.expect_value(&EMIT_PLAN_INSIGHTS_NOTICE)
+    }
+
+    /// Returns the value of `emit_execution_time_notice` configuration parameter.
+    pub fn emit_execution_time_notice(&self) -> bool {
+        *self.expect_value(&EMIT_EXECUTION_TIME_NOTICE)
     }
 
     /// Returns the value of `emit_timestamp_notice` configuration parameter.
@@ -1248,6 +1265,7 @@ impl SystemVars {
             &STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS,
             &PERSIST_FAST_PATH_LIMIT,
             &METRICS_RETENTION,
+            &DISABLED_METRIC_SINKS,
             &UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP,
             &ENABLE_RBAC_CHECKS,
             &PG_SOURCE_CONNECT_TIMEOUT,
@@ -1443,6 +1461,11 @@ impl SystemVars {
     /// that shouldn't be synced by SystemParameterFrontend.
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
         self.iter().filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
+    }
+
+    /// Returns the [`VarDefinition`] of the named configuration parameter, if it exists.
+    pub fn definition(&self, name: &str) -> Option<&VarDefinition> {
+        self.vars.get(UncasedStr::new(name)).map(|v| &v.definition)
     }
 
     /// Returns an iterator over the configuration parameters that can be overriden per-Session.
@@ -2128,6 +2151,14 @@ impl SystemVars {
         *self.expect_value(&METRICS_RETENTION)
     }
 
+    /// Returns the `disabled_metric_sinks` configuration parameter.
+    pub fn disabled_metric_sinks(&self) -> Vec<String> {
+        self.expect_value::<Vec<Ident>>(&DISABLED_METRIC_SINKS)
+            .into_iter()
+            .map(|s| s.as_str().into())
+            .collect()
+    }
+
     /// Returns the `unsafe_mock_audit_event_timestamp` configuration parameter.
     pub fn unsafe_mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
         *self.expect_value(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
@@ -2433,7 +2464,7 @@ impl SystemVars {
     }
 
     /// Returns whether the named variable is a dyncfg configuration parameter.
-    fn is_dyncfg_var(&self, name: &str) -> bool {
+    pub fn is_dyncfg_var(&self, name: &str) -> bool {
         self.dyncfgs.entries().any(|e| name == e.name())
     }
 }
@@ -2699,7 +2730,11 @@ mod reset_all_tests {
             Some("custom".to_string())
         );
 
-        vars.reset_all();
+        let changed = vars.reset_all();
+        assert_eq!(
+            changed,
+            BTreeMap::from([("application_name", default.clone())])
+        );
 
         // The value falls back to the default, the var is unset, and it will
         // not mutate at a later transaction end.
@@ -2729,7 +2764,11 @@ mod reset_all_tests {
         vars.end_transaction(EndTransactionAction::Commit);
         assert_eq!(vars.application_name(), "custom");
 
-        vars.reset_all();
+        let changed = vars.reset_all();
+        assert_eq!(
+            changed,
+            BTreeMap::from([("application_name", "startup_default".to_string())])
+        );
 
         assert_eq!(vars.application_name(), "startup_default");
         assert_eq!(

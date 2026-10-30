@@ -135,8 +135,12 @@ a  b
 # the new name. This previously tripped an assertion that asserted that a source
 # descriptor never changed; it is in fact okay for the name of a source to
 # change.
+# mz_view_primary_idx reads from mz_data_tbl_primary_idx, so it is dropped and
+# recreated around the drop.
+> DROP INDEX mz_view_primary_idx
 > DROP INDEX mz_data_tbl_primary_idx
 > CREATE DEFAULT INDEX ON renamed_mz_data_tbl
+> CREATE DEFAULT INDEX ON mz_view
 > SELECT * FROM renamed_mz_data_tbl
 a  b
 ------

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
@@ -125,6 +126,7 @@ pub enum AdapterNotice {
         url: url::Url,
     },
     DroppedInUseIndex(DroppedInUseIndex),
+    DroppedIndexReadByInFlightStatements(InFlightIndexReaders),
     PerReplicaLogRead {
         log_names: Vec<String>,
     },
@@ -140,6 +142,7 @@ pub enum AdapterNotice {
     },
     Welcome(String),
     PlanInsights(String),
+    ExecutionTime(ExecutionTime),
     IntrospectionClusterUsage,
     AutoRouteIntrospectionQueriesUsage,
     /// A cluster contains sources that run on only one replica, yet the
@@ -147,10 +150,6 @@ pub enum AdapterNotice {
     SingleReplicaSourcesOnMultiReplicaCluster {
         cluster: String,
         sources: Vec<String>,
-    },
-    /// An OIDC group has no matching Materialize role.
-    OidcGroupSyncUnmatchedGroup {
-        group: String,
     },
     /// An OIDC group maps to a reserved role name (mz_/pg_ prefix).
     OidcGroupSyncReservedRole {
@@ -220,16 +219,17 @@ impl AdapterNotice {
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
             AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
-            AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
+            AdapterNotice::DroppedInUseIndex { .. } => Severity::Warning,
+            AdapterNotice::DroppedIndexReadByInFlightStatements(_) => Severity::Notice,
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
             AdapterNotice::StartupOnlyVarUpdated { .. } => Severity::Warning,
             AdapterNotice::Welcome(_) => Severity::Notice,
             AdapterNotice::PlanInsights(_) => Severity::Notice,
+            AdapterNotice::ExecutionTime(_) => Severity::Notice,
             AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Severity::Warning,
-            AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => Severity::Notice,
             AdapterNotice::OidcGroupSyncReservedRole { .. } => Severity::Warning,
             AdapterNotice::OidcGroupSyncError { .. } => Severity::Warning,
         }
@@ -239,6 +239,19 @@ impl AdapterNotice {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
+            AdapterNotice::ExecutionTime(time) => Some(
+                serde_json::json!({
+                    "kind": time.kind.name(),
+                    "duration_us": u64::try_from(time.elapsed.as_micros()).unwrap_or(u64::MAX),
+                })
+                .to_string(),
+            ),
+            AdapterNotice::DroppedInUseIndex(..) => Some(
+                "The index no longer appears in the catalog, but it is still maintained, using \
+                 memory and CPU, until those objects are dropped or recreated, or replanned at \
+                 the next restart. The drop was allowed because enable_drop_in_use_index is set."
+                    .into(),
+            ),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
                 "Adding replicas to the cluster does not make these sources more fault tolerant \
                  and does not increase their ingestion throughput."
@@ -285,7 +298,7 @@ impl AdapterNotice {
                     .into(),
             ),
             AdapterNotice::OptimizerNotice { notice: _, hint } => Some(hint.clone()),
-            AdapterNotice::DroppedInUseIndex(..) => Some("To free up the resources used by the index, recreate all the above-mentioned objects.".into()),
+            AdapterNotice::DroppedInUseIndex(..) => Some("Drop and recreate those objects to free the index's resources.".into()),
             AdapterNotice::IntrospectionClusterUsage => Some("Use the new name instead.".into()),
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Some("Use the new name instead.".into()),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
@@ -343,17 +356,20 @@ impl AdapterNotice {
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
             AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::from_code("MZ005"),
             AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
-            AdapterNotice::DroppedInUseIndex { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::DroppedInUseIndex { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedIndexReadByInFlightStatements(_) => {
+                SqlState::SUCCESSFUL_COMPLETION
+            }
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::StartupOnlyVarUpdated { .. } => SqlState::WARNING,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
+            AdapterNotice::ExecutionTime(_) => SqlState::from_code("MZ012"),
             AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => SqlState::WARNING,
-            AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::OidcGroupSyncReservedRole { .. } => SqlState::WARNING,
             AdapterNotice::OidcGroupSyncError { .. } => SqlState::WARNING,
         }
@@ -509,8 +525,17 @@ impl fmt::Display for AdapterNotice {
             }) => {
                 write!(
                     f,
-                    "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!",
+                    "index {} was dropped, but these objects still read from it: {}",
+                    index_name.quoted(),
                     separated(", ", dependant_objects)
+                )
+            }
+            AdapterNotice::DroppedIndexReadByInFlightStatements(readers) => {
+                write!(
+                    f,
+                    "index {} is still read by transient dataflows for {}. Those dataflows end when their statements finish, and the index is maintained until then.",
+                    readers.index_name.quoted(),
+                    readers.describe_statements()
                 )
             }
             AdapterNotice::PerReplicaLogRead { log_names } => {
@@ -541,6 +566,17 @@ impl fmt::Display for AdapterNotice {
             ),
             AdapterNotice::Welcome(message) => message.fmt(f),
             AdapterNotice::PlanInsights(message) => message.fmt(f),
+            AdapterNotice::ExecutionTime(time) => {
+                write!(
+                    f,
+                    "execution time: {:.3} ms",
+                    time.elapsed.as_secs_f64() * 1000.0
+                )?;
+                if matches!(time.kind, ExecutionTimeKind::Staged) {
+                    f.write_str(" (staged)")?;
+                }
+                Ok(())
+            }
             AdapterNotice::IntrospectionClusterUsage => write!(
                 f,
                 "The mz_introspection cluster has been renamed to mz_catalog_server."
@@ -567,13 +603,6 @@ impl fmt::Display for AdapterNotice {
                 }
                 Ok(())
             }
-            AdapterNotice::OidcGroupSyncUnmatchedGroup { group } => {
-                write!(
-                    f,
-                    "OIDC group \"{}\" has no matching Materialize role, skipping",
-                    group
-                )
-            }
             AdapterNotice::OidcGroupSyncReservedRole { group } => {
                 write!(
                     f,
@@ -594,8 +623,83 @@ pub struct DroppedInUseIndex {
     pub dependant_objects: Vec<String>,
 }
 
+/// One-shot dataflows that read from a dropped index, by the kind of statement that owns them.
+#[derive(Clone, Debug, Default)]
+pub struct InFlightIndexReaders {
+    pub index_name: String,
+    pub subscribes: usize,
+    pub copy_tos: usize,
+    pub selects: usize,
+    /// Dataflows the system installed itself, such as introspection subscribes.
+    pub system: usize,
+}
+
+impl InFlightIndexReaders {
+    fn describe_statements(&self) -> String {
+        fn part(count: usize, what: &str) -> Option<String> {
+            let plural = if count == 1 { "" } else { "s" };
+            (count > 0).then(|| format!("{count} in-progress {what}{plural}"))
+        }
+        [
+            part(self.subscribes, "SUBSCRIBE statement"),
+            part(self.copy_tos, "COPY TO statement"),
+            part(self.selects, "SELECT statement"),
+            part(self.system, "system dataflow"),
+        ]
+        .into_iter()
+        .flatten()
+        .join(", ")
+    }
+}
+
 impl From<PlanNotice> for AdapterNotice {
     fn from(notice: PlanNotice) -> AdapterNotice {
         AdapterNotice::PlanNotice(notice)
+    }
+}
+
+/// Time from bound-statement execution to its first available result.
+///
+/// Parsing, describing, and binding are excluded, except binding within SQL `EXECUTE`.
+/// Reads and writes use the same boundary. Subsequent row delivery and implicit commit
+/// are excluded. Work performed within execution, including an explicit `COMMIT`, is
+/// included.
+#[derive(Clone, Debug)]
+pub struct ExecutionTime {
+    pub(crate) kind: ExecutionTimeKind,
+    pub(crate) elapsed: Duration,
+}
+
+impl ExecutionTime {
+    /// The time of a statement that cannot return rows.
+    pub fn completed(elapsed: Duration) -> Self {
+        Self {
+            kind: ExecutionTimeKind::Completed,
+            elapsed,
+        }
+    }
+}
+
+/// Where the interval of an [`ExecutionTime`] ends.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ExecutionTimeKind {
+    /// A statement that returns rows has its first row ready. Delivering the rows is excluded.
+    FirstRow,
+    /// A statement that could return rows finished without any.
+    EmptyResult,
+    /// A statement that cannot return rows, such as `SET`, finished executing.
+    Completed,
+    /// The transaction still holds work for a later commit, which the time excludes.
+    Staged,
+}
+
+impl ExecutionTimeKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::FirstRow => "first_row",
+            Self::EmptyResult => "empty_result",
+            Self::Completed => "completed",
+            Self::Staged => "staged",
+        }
     }
 }

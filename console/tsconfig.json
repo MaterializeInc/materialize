@@ -13,7 +13,6 @@
     "sourceMap": true,
     "skipLibCheck": true,
     "target": "ES2022",
-    "baseUrl": "./",
     "paths": {
       "~/*": ["./src/*"],
       "~/img/*": ["./img/*"],

@@ -10,8 +10,8 @@
 import { Button, useTheme } from "@chakra-ui/react";
 import { useSetAtom } from "jotai";
 import { useAtomCallback } from "jotai/utils";
-import { useEffect, useMemo, useState } from "react";
 import React from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useSegment } from "~/analytics/segment";
 import { Cluster, Notice } from "~/api/materialize/types";
@@ -26,7 +26,7 @@ import {
 import {
   calculateCommandDuration,
   doesCommandExceedTimeout,
-  getCommandResultCompletedTime,
+  getCommandResultStartTime,
 } from "../timings";
 import { useShellVirtualizedList } from "../useShellVirtualizedList";
 import {
@@ -130,9 +130,10 @@ const PlanInsightsNotice = ({
     commandOutput,
   );
 
-  const commandStartTimeMs =
-    getCommandResultCompletedTime(commandOutput, commandResultIndex - 1) ??
-    commandOutput.commandSentTimeMs;
+  const { startTimeMs: commandStartTimeMs } = getCommandResultStartTime(
+    commandOutput,
+    commandResultIndex,
+  );
 
   /**
    * We initially check if the notice should be visible based on how long the command took

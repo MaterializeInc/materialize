@@ -377,7 +377,7 @@ async fn try_run_sql(
                         hasher.update(entry);
                     }
                 }
-                let actual = format!("{:x}", hasher.finalize());
+                let actual = hex::encode(hasher.finalize());
                 if &actual != md5 {
                     bail!("wrong hash value: expected:{:?} got:{:?}", md5, actual)
                 } else {

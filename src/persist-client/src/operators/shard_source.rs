@@ -31,6 +31,8 @@ use futures::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::IntCounter;
+use mz_ore::process::halt_with_code;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
@@ -51,8 +53,9 @@ use crate::cfg::{
     RetryParameters, SOURCE_FETCH_CONCURRENCY, SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES,
     USE_CRITICAL_SINCE_SOURCE,
 };
-use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
+use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease, MissingBlobDiagnosis};
 use crate::internal::state::BatchPart;
+use crate::read::READER_LEASE_EXPIRED_EXIT_CODE;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
 
@@ -93,7 +96,8 @@ impl FilterResult {
 /// attempt to trigger a restart: either directly (via a `halt!`) or indirectly with a callback.
 #[derive(Clone)]
 pub enum ErrorHandler {
-    /// Halt the process on error.
+    /// Halt the process on error, with [READER_LEASE_EXPIRED_EXIT_CODE] if a
+    /// reader lost its lease.
     Halt(&'static str),
     /// Signal an error to a higher-level supervisor.
     Signal(Rc<dyn Fn(anyhow::Error) + 'static>),
@@ -119,6 +123,10 @@ impl ErrorHandler {
     /// restart, for example).
     pub async fn report_and_stop(&self, error: anyhow::Error) -> ! {
         match self {
+            ErrorHandler::Halt(name) if error.is::<ReaderLeaseExpired>() => halt_with_code(
+                READER_LEASE_EXPIRED_EXIT_CODE,
+                format_args!("unhandled error in {name}: {error:#}"),
+            ),
             ErrorHandler::Halt(name) => {
                 mz_ore::halt!("unhandled error in {name}: {error:#}")
             }
@@ -127,6 +135,38 @@ impl ErrorHandler {
                 std::future::pending().await
             }
         }
+    }
+}
+
+/// A fetch failed because the reader that leased the part lost its lease.
+#[derive(Debug)]
+struct ReaderLeaseExpired(String);
+
+impl std::fmt::Display for ReaderLeaseExpired {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ReaderLeaseExpired {}
+
+/// The error for a fetch that found its part's blob missing. Counts a lost
+/// lease in `expired_live_read`.
+fn missing_blob_error(
+    blob_key: &str,
+    diagnosis: MissingBlobDiagnosis,
+    expired_live_read: &IntCounter,
+) -> anyhow::Error {
+    let message = format!(
+        "batch fetcher could not fetch batch part {}: {}",
+        blob_key, diagnosis
+    );
+    match diagnosis {
+        MissingBlobDiagnosis::LeaseExpired { .. } => {
+            expired_live_read.inc();
+            anyhow::Error::new(ReaderLeaseExpired(message))
+        }
+        _ => anyhow!(message),
     }
 }
 
@@ -726,11 +766,11 @@ where
                         // deleted... at which point our best option is to request a restart.
                         // Check the state of the minting reader's lease to tell the two cases
                         // apart.
-                        let diagnostics = fetcher.missing_blob_diagnostics(&reader_id).await;
-                        Err(anyhow!(
-                            "batch fetcher could not fetch batch part {}: {}",
-                            blob_key,
-                            diagnostics
+                        let diagnosis = fetcher.missing_blob_diagnostics(&reader_id).await;
+                        Err(missing_blob_error(
+                            &blob_key,
+                            diagnosis,
+                            &fetcher.metrics.lease.expired_live_read,
                         ))
                     }
                 };
@@ -823,7 +863,37 @@ mod tests {
     use crate::cache::PersistClientCache;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::operators::shard_source::shard_source;
+    use crate::read::LeasedReaderId;
     use crate::{Diagnostics, PersistLocation, ShardId};
+
+    #[mz_ore::test]
+    fn test_missing_blob_error_tags_expired_lease() {
+        let expired_live_read = IntCounter::new("expired_live_read", "test").expect("valid");
+        let error = |diagnosis| missing_blob_error("key", diagnosis, &expired_live_read);
+        let reader_id = LeasedReaderId::new();
+
+        let expired = error(MissingBlobDiagnosis::LeaseExpired {
+            reader_id: reader_id.clone(),
+        });
+        assert!(expired.is::<ReaderLeaseExpired>(), "{expired:#}");
+        assert_eq!(expired_live_read.get(), 1);
+
+        let not_lost = [
+            MissingBlobDiagnosis::ShardTombstoned {
+                reader_id: reader_id.clone(),
+            },
+            MissingBlobDiagnosis::LeasePresent {
+                reader_id: reader_id.clone(),
+                lease_state: String::new(),
+            },
+            MissingBlobDiagnosis::Unknown { reader_id },
+        ];
+        for diagnosis in not_lost {
+            let error = error(diagnosis);
+            assert!(!error.is::<ReaderLeaseExpired>(), "{error:#}");
+        }
+        assert_eq!(expired_live_read.get(), 1);
+    }
 
     #[mz_ore::test]
     fn test_lease_manager() {
@@ -1456,7 +1526,11 @@ mod tests {
             let errored = Rc::new(std::cell::Cell::new(false));
             let error_handler = ErrorHandler::signal({
                 let errored = Rc::clone(&errored);
-                move |_err| errored.set(true)
+                move |err: anyhow::Error| {
+                    // The reader's lease is live, so this is not a lost lease.
+                    assert!(!err.is::<ReaderLeaseExpired>(), "{err:#}");
+                    errored.set(true)
+                }
             });
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {

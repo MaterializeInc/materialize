@@ -22,6 +22,9 @@ stores them in your own infrastructure, and ships dashboards to query them:
 - [Grafana](/observability/self-managed/grafana/), the dashboards and query
   interface that ship with the stack.
 
+- [Alerting](/observability/self-managed/alerting/), the bundled alert rules
+  and the Alertmanager that routes them to your receivers.
+
 To configure the stack outside the Materialize Terraform modules, or to see the
 full set of module variables, see the [`materialize-monitoring` Terraform
 installation guide

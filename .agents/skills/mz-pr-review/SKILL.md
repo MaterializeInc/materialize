@@ -5,6 +5,7 @@ description: >
   "review my code", "review my changes", "check my diff", "does this look ok",
   "what do you think of this PR", "code review", or look over changes before
   merging. Also PR number + wants feedback on quality, style, correctness.
+  For changes under `console/`, use mz-console-review instead.
 argument-hint: [base-branch]
 allowed-tools: [Bash, Read, Grep, Glob, Task]
 ---
@@ -35,6 +36,40 @@ The overall developer guide for reviewing changes is defined in `doc/developer/g
 - Red flag: behavior change with no test changes.
 - For more testing guidelines, read `doc/developer/guide-testing.md`
 
+### LIR schema registry
+Applies when the diff changes the serde-visible shape of a type the LIR
+schema reaches: `src/compute-types/src/plan.rs`,
+`src/compute-types/src/plan/**`, a `*Func` payload, or a plan-reachable type
+in `mz-expr` or `mz-repr`.
+- `src/compute-types/tests/snapshots/lir_v{N}.json` is regenerated in the
+  same PR, and the diff matches the intended format change. Red flag: a
+  serde-visible change to a plan type with no snapshot diff.
+- If `LIR_VERSION` in `src/compute-types/src/plan.rs` had shipped, it is
+  bumped and the old `lir_v{N}.json` is left untouched rather than rewritten.
+- `Row` and `EvalError` never appear directly in plan types, only as
+  `StableRow` / `StableEvalError`, enforced by
+  `lir_schema_contains_only_stable_types`.
+
+### Scalar function registry
+Applies when the diff touches `UnaryFunc`, `BinaryFunc`, or `VariadicFunc`
+(`src/expr/src/scalar/func.rs`, `src/expr/src/scalar/func/**`, `#[sqlfunc]`
+bodies).
+- The registry snapshots under `src/compute-types/tests/snapshots/` are
+  regenerated in the same PR. A property change moves `func_registry.json`
+  and the current version's entry in `func_registry_digests.json`, a
+  `#[sqlfunc]` declaration or body change moves `func_registry_source.json`
+  alone, and a change to a hand-written variant's body moves neither.
+- Every new variant with a payload has a `Sample` in
+  `src/expr/src/scalar/func/registry.rs`, with a labeled second sample when a
+  property depends on the payload.
+- A removed function, a changed property, or a `body_fingerprint` change that
+  alters results for some input bumps `LIR_VERSION` in
+  `src/compute-types/src/plan.rs` if that version has shipped, and leaves the
+  old digest in `func_registry_digests.json` untouched. Additions need no
+  bump.
+- The PR description names the added, removed, and changed functions and,
+  for body changes, states whether results change.
+
 ### Code style (Rust)
 - **Imports:** `std` → external crates → `crate::`; one `use` per module; prefer `crate::` over `super::` in non-test code.
 - **Errors:** Structured with `thiserror`; no bare `anyhow!("...")`. `Display` should not print full error chain.
@@ -54,7 +89,7 @@ The overall developer guide for reviewing changes is defined in `doc/developer/g
 - Types holding passwords, keys, tokens, or credentials should use `mz_ore::secure::{SecureString, SecureVec}` or `zeroize::Zeroizing<T>` (from `mz_ore::secure`).
 - Sensitive types should **not** derive `Clone` or `Debug` (use custom `Debug` that redacts).
 - Stack-local buffers holding derived keys, nonces, or HMAC outputs should be wrapped in `Zeroizing<T>`.
-- See `doc/developer/generated/ore/secure.md` for full guidance and `src/ssh-util/src/keys.rs` for a reference implementation.
+- See the module docs in `src/ore/src/secure.rs` for full guidance and `src/ssh-util/src/keys.rs` for a reference implementation.
 
 ### Architecture
 - **Simplicity:** No incidental complexity; simplify redundant logic.

@@ -18,12 +18,15 @@ on:
   pull_request_review:
     types: [submitted]
 
+permissions: {}
+
 concurrency:
   group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   claude:
+    name: claude
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
@@ -32,29 +35,25 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: read
-      id-token: write
+      pull-requests: read # Checks out the PR branch and reads PR context.
+      id-token: write # Exchanges an OIDC token for the Claude GitHub App token.
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout PR branch
-        if: github.event.issue.pull_request
-        run: gh pr checkout ${{ github.event.issue.number }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-
+      # The action checks out the PR branch itself, fetching fork PRs via
+      # `refs/pull/N/head`. NOTE: Checking out the branch in an earlier step
+      # breaks fork PRs, because git refuses to fetch into the checked-out
+      # branch.
       - name: Run Claude Code
         id: claude
-        # We use a fork of anthropics/claude-code-action until it is updated to work with fork PRs
-        # See https://github.com/MaterializeInc/claude-code-action/blob/mz-patches/README.md for details.
-        uses: MaterializeInc/claude-code-action@0433f2aa93835ea8b1de27f6ed7a48724b2d510a
+        uses: anthropics/claude-code-action@8041f1d17e0e7d2f2cfe35002962e9f26237c0bb # v1.0.263
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
-          claude_args: '--allowed-tools Bash(gh pr:*) Edit Read Glob Grep'
+          claude_args: '--allowed-tools "Bash(gh pr:*)" Edit Read Glob Grep'

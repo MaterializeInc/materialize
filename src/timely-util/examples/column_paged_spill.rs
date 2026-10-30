@@ -45,8 +45,8 @@ use mz_timely_util::column_pager::policy::TieredPolicy;
 use mz_timely_util::column_pager::{ColumnPager, set_global_pager};
 use mz_timely_util::columnar::Col2ValPagedBatcher;
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::merge_batcher::PagedChunker;
 use timely::dataflow::InputHandle;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Input;
@@ -54,7 +54,7 @@ use timely::dataflow::operators::probe::{Handle as ProbeHandle, Probe};
 
 type Update = ((u64, u64), u64, i64);
 
-type MyChunker = ColumnChunker<Update>;
+type MyChunker = PagedChunker<Update>;
 type MyBatcher = Col2ValPagedBatcher<u64, u64, u64, i64>;
 type MyBuilder = RcBuilder<OrdValBuilder<Vector<Update>, Column<Update>>>;
 type MySpine = Spine<Rc<OrdValBatch<Vector<Update>>>>;

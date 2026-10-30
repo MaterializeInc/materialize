@@ -22,7 +22,10 @@ class ExcludeConstraints(Check):
     upstream constraints must remain a non-event across them."""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v26.41.0-dev")
+        # `enable_exclude_constraints_option` first shipped in v26.42.0; older
+        # binaries reject the ALTER SYSTEM in initialize() as an unrecognized
+        # parameter. The -dev gate includes the release candidates.
+        return self.base_version >= MzVersion.parse_mz("v26.42.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""

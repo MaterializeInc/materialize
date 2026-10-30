@@ -365,10 +365,12 @@ class MaterializedViewReplacementDropInput(Check):
     """
 
     def _can_run(self, e: Executor) -> bool:
-        # The first version whose expression cache records item versions. A
+        # Requires an expression cache that records item versions. A
         # generation of an earlier version that boots after the apply reuses
         # the expressions cached for the old definition, and crash-loops on
-        # the dropped input.
+        # the dropped input. #38677 was cherry-picked into release-26.41, so
+        # v26.41.0 carries the fix. Only rc.1-rc.3 of that minor lack it, and
+        # the upgrade scenarios select the latest tag of each minor.
         return self.base_version >= MzVersion.parse_mz("v26.41.0-dev")
 
     def initialize(self) -> Testdrive:

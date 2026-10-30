@@ -41,12 +41,12 @@ use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal, Curs
 use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
 use mz_ore::future::yield_now;
 use mz_repr::Diff;
-use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
+use timely::container::PushInto;
 use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::dataflow::operators::{Capability, Operator};
-use timely::{Container, PartialOrder};
+use timely::{ContainerBuilder, PartialOrder};
 use tracing::trace;
 
 /// Joins two arranged collections with the same key type.
@@ -54,12 +54,12 @@ use tracing::trace;
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
 /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
 /// every value returned by the iterator.
-pub(super) fn mz_join_core<'scope, T, Tr1, Tr2, L, I, YFn, C>(
+pub(super) fn mz_join_core<'scope, T, Tr1, Tr2, L, I, YFn, CB>(
     arranged1: Arranged<'scope, Tr1>,
     arranged2: Arranged<'scope, Tr2>,
     result: L,
     yield_fn: YFn,
-) -> Stream<'scope, T, C>
+) -> Stream<'scope, T, CB::Container>
 where
     T: timely::progress::Timestamp + Lattice,
     Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
@@ -69,13 +69,13 @@ where
     L: FnMut(BatchKey<'_, Tr1>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
     I: IntoIterator<Item: Data> + 'static,
     YFn: Fn(Instant, usize) -> bool + 'static,
-    C: Container + SizableContainer + PushInto<(I::Item, T, Diff)> + Data,
+    CB: ContainerBuilder + PushInto<(I::Item, T, Diff)> + 'static,
 {
     let scope = arranged1.stream.scope();
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
 
-    arranged1.stream.binary_frontier(
+    arranged1.stream.binary_frontier::<_, CB, _, _, _, _>(
         arranged2.stream,
         Pipeline,
         Pipeline,
@@ -572,12 +572,12 @@ where
     }
 
     /// Process pending work until none is remaining or `yield_fn` requests a yield.
-    fn process<C, YFn>(
+    fn process<CB, YFn>(
         &mut self,
-        output: &mut OutputBuilderSession<'_, C1::Time, CapacityContainerBuilder<C>>,
+        output: &mut OutputBuilderSession<'_, C1::Time, CB>,
         yield_fn: YFn,
     ) where
-        C: Container + SizableContainer + PushInto<(D, C1::Time, Diff)> + Data,
+        CB: ContainerBuilder + PushInto<(D, C1::Time, Diff)>,
         YFn: Fn(Instant, usize) -> bool,
     {
         let start_time = Instant::now();
@@ -605,7 +605,9 @@ where
             let recovered = old_len - output_buf.len();
             self.produced.update(|x| x - recovered);
 
-            output.session(&cap).give_iterator(output_buf.drain(..));
+            output
+                .session_with_builder(&cap)
+                .give_iterator(output_buf.drain(..));
 
             if done {
                 // We have finished processing a chunk of work. Use this opportunity to truncate

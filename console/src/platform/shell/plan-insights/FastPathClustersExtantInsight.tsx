@@ -100,8 +100,8 @@ const FastPathClustersExtantInsight = ({
         <NoticeExternalLink
           insightVersionedId={VERSIONED_ID}
           href={`${
-            docUrls["/docs/transform-data/troubleshooting/"]
-          }#indexing-and-query-optimization`}
+            docUrls["/docs/serve-results/troubleshooting/expensive-queries/"]
+          }#make-frequent-queries-fast-path`}
           redactedSql={planInsights.redactedSql}
         >
           How to debug index usage

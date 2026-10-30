@@ -1296,6 +1296,7 @@ pub static PG_CLASS: LazyLock<BuiltinView> = LazyLock::new(|| {
         .with_column("relowner", SqlScalarType::Oid.nullable(false))
         .with_column("relam", SqlScalarType::Oid.nullable(false))
         .with_column("reltablespace", SqlScalarType::Oid.nullable(false))
+        .with_column("relpages", SqlScalarType::Int32.nullable(false))
         .with_column("reltuples", SqlScalarType::Float32.nullable(false))
         .with_column("reltoastrelid", SqlScalarType::Oid.nullable(false))
         .with_column("relhasindex", SqlScalarType::Bool.nullable(false))
@@ -1319,7 +1320,7 @@ pub static PG_CLASS: LazyLock<BuiltinView> = LazyLock::new(|| {
     column_comments: BTreeMap::new(),
     sql: "
 SELECT
-    oid, relname, relnamespace, reloftype, relowner, relam, reltablespace, reltuples, reltoastrelid,
+    oid, relname, relnamespace, reloftype, relowner, relam, reltablespace, relpages, reltuples, reltoastrelid,
     relhasindex, relpersistence, relkind, relnatts, relchecks, relhasrules, relhastriggers, relhassubclass,
     relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids, reloptions
 FROM mz_internal.pg_class_all_databases
@@ -2088,6 +2089,10 @@ pub static PG_ACCESS_METHODS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
         .with_column("amname", SqlScalarType::String.nullable(false))
         .with_column("amhandler", SqlScalarType::RegProc.nullable(false))
         .with_column("amtype", SqlScalarType::PgLegacyChar.nullable(false))
+        // NOTE: `amcanorder` was dropped from `pg_am` in PostgreSQL 9.6. Clients that
+        // see our reported `server_version` of 9.5 query it, for example pgjdbc's
+        // `DatabaseMetaData.getIndexInfo`.
+        .with_column("amcanorder", SqlScalarType::Bool.nullable(false))
         .with_key(vec![])
         .finish(),
     column_comments: BTreeMap::new(),
@@ -2095,7 +2100,8 @@ pub static PG_ACCESS_METHODS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
 SELECT NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS amname,
     NULL::pg_catalog.regproc AS amhandler,
-    NULL::pg_catalog.\"char\" AS amtype
+    NULL::pg_catalog.\"char\" AS amtype,
+    NULL::pg_catalog.bool AS amcanorder
 WHERE false",
     access: vec![PUBLIC_SELECT],
     ontology: None,

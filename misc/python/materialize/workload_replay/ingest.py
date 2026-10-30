@@ -17,8 +17,11 @@ import asyncio
 import json
 import random
 import re
+import threading
 import time
 import urllib.parse
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from functools import cache
 from textwrap import dedent
 from typing import Any
@@ -47,6 +50,47 @@ from materialize.workload_replay.util import (
     get_postgres_reference_db_schema_table,
     get_sql_server_reference_db_schema_table,
 )
+
+# Per-row reconnects can overload reference database authentication.
+_reference_connections = threading.local()
+
+
+@contextmanager
+def reuse_reference_connections() -> Iterator[None]:
+    """Reuse reference connections in this thread and close them on exit."""
+    previous = getattr(_reference_connections, "scope", None)
+    with ExitStack() as stack:
+        _reference_connections.scope = (stack, {})
+        try:
+            yield
+        finally:
+            _reference_connections.scope = previous
+
+
+def _connection_open(conn: Any) -> bool:
+    return not getattr(conn, "closed", False) and getattr(conn, "open", True)
+
+
+@contextmanager
+def _reference_connection(
+    key: tuple[str, int, str], connect: Callable[[], Any]
+) -> Iterator[Any]:
+    with ExitStack() as temporary:
+        stack, connections = getattr(_reference_connections, "scope", None) or (
+            temporary,
+            {},
+        )
+        conn = connections.get(key)
+        if conn is None or not _connection_open(conn):
+            conn = connections[key] = connect()
+
+            def close() -> None:
+                # PyMySQL's close raises if a protocol error already closed the socket.
+                if _connection_open(conn):
+                    conn.close()
+
+            stack.callback(close)
+        yield conn
 
 
 def delivery_report(err: KafkaError | None, msg: Any) -> None:
@@ -411,56 +455,61 @@ def ingest(
         ref_database, ref_schema, ref_table = get_postgres_reference_db_schema_table(
             child
         )
-        conn = psycopg.connect(
-            host="127.0.0.1",
-            port=c.default_port("postgres"),
-            user="postgres",
-            password="postgres",
-            dbname=ref_database,
-        )
-        conn.autocommit = True
+        port = c.default_port("postgres")
+        with _reference_connection(
+            ("postgres", port, ref_database),
+            lambda: psycopg.connect(
+                host="127.0.0.1",
+                port=port,
+                user="postgres",
+                password="postgres",
+                dbname=ref_database,
+                autocommit=True,
+            ),
+        ) as conn:
+            col_names = [col.name for col in columns]
 
-        col_names = [col.name for col in columns]
+            with conn.cursor() as cur:
+                copy_stmt = SQL("COPY {}.{} ({}) FROM STDIN").format(
+                    Identifier(ref_schema),
+                    Identifier(ref_table),
+                    SQL(", ").join(map(Identifier, col_names)),
+                )
 
-        with conn.cursor() as cur:
-            copy_stmt = SQL("COPY {}.{} ({}) FROM STDIN").format(
-                Identifier(ref_schema),
-                Identifier(ref_table),
-                SQL(", ").join(map(Identifier, col_names)),
-            )
-
-            with cur.copy(copy_stmt) as copy:
-                for _ in range(num_rows):
-                    row = [col.value(rng, in_query=False) for col in columns]
-                    copy.write_row(row)
+                with cur.copy(copy_stmt) as copy:
+                    for _ in range(num_rows):
+                        row = [col.value(rng, in_query=False) for col in columns]
+                        copy.write_row(row)
 
     elif source["type"] == "mysql":
         ref_database, ref_table = get_mysql_reference_db_table(child)
 
-        conn = pymysql.connect(
-            host="127.0.0.1",
-            user="root",
-            password=MySql.DEFAULT_ROOT_PASSWORD,
-            database=ref_database,
-            port=c.default_port("mysql"),
-            autocommit=False,
-        )
+        port = c.default_port("mysql")
+        with _reference_connection(
+            ("mysql", port, ref_database),
+            lambda: pymysql.connect(
+                host="127.0.0.1",
+                user="root",
+                password=MySql.DEFAULT_ROOT_PASSWORD,
+                database=ref_database,
+                port=port,
+                autocommit=False,
+            ),
+        ) as conn:
+            value_funcs = [col.value for col in columns]
+            rows_sql = []
+            for _ in range(num_rows):
+                row = [fn(rng) for fn in value_funcs]
+                rows_sql.append("(" + ", ".join(row) + ")")
 
-        value_funcs = [col.value for col in columns]
-        rows_sql = []
-        for _ in range(num_rows):
-            row = [fn(rng) for fn in value_funcs]
-            rows_sql.append("(" + ", ".join(row) + ")")
+            stmt = f"INSERT INTO {ref_table} VALUES " + ", ".join(rows_sql)
 
-        stmt = f"INSERT INTO {ref_table} VALUES " + ", ".join(rows_sql)
-
-        with conn.cursor() as cur:
-            cur.execute(stmt)
-        # The connection is opened with autocommit=False, so without this commit
-        # the implicit InnoDB transaction is discarded on close and no rows are
-        # ingested.
-        conn.commit()
-        conn.close()
+            with conn.cursor() as cur:
+                cur.execute(stmt)
+            # The connection is opened with autocommit=False, so without this commit
+            # the implicit InnoDB transaction is discarded on close and no rows are
+            # ingested.
+            conn.commit()
 
     elif source["type"] == "kafka":
         topic = get_kafka_topic(source)

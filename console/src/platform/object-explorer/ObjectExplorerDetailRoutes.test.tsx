@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 
@@ -576,6 +576,48 @@ describe("ObjectExplorerDetailRoutes", () => {
       expect(
         await screen.findByText("An error occurred loading indexes."),
       ).toBeVisible();
+    });
+  });
+
+  describe("Redirects", () => {
+    beforeEach(() => {
+      server.use(isOwnerResponse, objectDetailsResponse);
+    });
+
+    it("sends an unknown tab back to the object overview", async () => {
+      history.pushState(
+        undefined,
+        "",
+        `/materialize/schemas/public/tables/test_table/${OBJECT_ID}/zzz`,
+      );
+      await renderComponent();
+      await waitFor(() =>
+        expect(location.pathname).toEqual(
+          `/materialize/schemas/public/tables/test_table/${OBJECT_ID}`,
+        ),
+      );
+    });
+
+    it("sends an unknown tab on a connection back to its overview", async () => {
+      history.pushState(
+        undefined,
+        "",
+        `/materialize/schemas/public/connections/test_conn/${OBJECT_ID}/zzz`,
+      );
+      await renderComponent();
+      await waitFor(() =>
+        expect(location.pathname).toEqual(
+          `/materialize/schemas/public/connections/test_conn/${OBJECT_ID}`,
+        ),
+      );
+    });
+
+    it("sends an unknown path under a schema back to the schema", async () => {
+      history.pushState(undefined, "", "/materialize/schemas/public/zzz");
+      await renderComponent();
+      await waitFor(() =>
+        expect(location.pathname).toEqual("/materialize/schemas/public"),
+      );
     });
   });
 });

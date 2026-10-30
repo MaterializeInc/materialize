@@ -38,3 +38,5 @@ memory.
 ## Related pages
 
 - [`CREATE SINK`](/sql/create-sink)
+- [Understand the lifecycle of a sink](/export-data/lifecycle-of-a-sink/)
+- [Hydration](/fundamentals/concepts/hydration/)

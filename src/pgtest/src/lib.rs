@@ -19,6 +19,10 @@
 //! arguments. Arguments can be omitted to use defaults.
 //! - `until`: Waits until input messages have been received from the server.
 //! Additional messages are accumulated and returned as well.
+//! - `replace`: Registers a substitution that is applied to the output of every
+//! later `until`, on any connection, to mask values that vary between runs. The
+//! input's first line is a regex and its second line the replacement, which may
+//! use the `$1` capture-group syntax of the `regex` crate.
 //!
 //! The first time a `conn=name` argument is specified, `cluster=name` can also
 //! be specified to set the sessions cluster on initial connection.
@@ -27,11 +31,11 @@
 //! messages sent and received.
 //!
 //! Supported `send` types:
-//! - [`Query`](struct.Query.html)
-//! - [`Parse`](struct.Parse.html)
-//! - [`Describe`](struct.Describe.html)
-//! - [`Bind`](struct.Bind.html)
-//! - [`Execute`](struct.Execute.html)
+//! - [`Query`]
+//! - [`Parse`]
+//! - [`Describe`]
+//! - [`Bind`]
+//! - [`Execute`]
 //! - `Sync`
 //!
 //! Supported `until` arguments:
@@ -104,6 +108,7 @@ use mz_ore::collections::CollectionExt;
 use postgres_protocol::IsNull;
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 struct PgConn {
@@ -522,6 +527,7 @@ pub fn walk(addr: String, user: String, timeout: Duration, dir: &str) {
 
 pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeout: Duration) {
     let mut pgt = PgTest::new(addr, user, timeout).unwrap();
+    let mut replacements: Vec<(Regex, String)> = Vec::new();
     tf.run(|tc| -> String {
         let lines = tc.input.lines();
         let mut args = tc.args.clone();
@@ -654,9 +660,8 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                 if !args.is_empty() {
                     panic!("extra until arguments: {:?}", args);
                 }
-                format!(
-                    "{}\n",
-                    pgt.until(
+                let mut out = pgt
+                    .until(
                         conn,
                         options,
                         lines.collect(),
@@ -665,8 +670,21 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                         &parameter_status,
                     )
                     .unwrap()
-                    .join("\n")
-                )
+                    .join("\n");
+                for (regex, replacement) in &replacements {
+                    out = regex.replace_all(&out, replacement.as_str()).into_owned();
+                }
+                format!("{}\n", out)
+            }
+            "replace" => {
+                let [pattern, replacement] = lines.collect::<Vec<_>>()[..] else {
+                    panic!(
+                        "replace takes two lines, a regex and its replacement: {:?}",
+                        tc.input
+                    );
+                };
+                replacements.push((Regex::new(pattern).unwrap(), replacement.to_string()));
+                String::new()
             }
             _ => panic!("unknown directive {}", tc.input),
         }

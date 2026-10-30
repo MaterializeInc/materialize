@@ -303,6 +303,22 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: catalog-command-transactions
+    topics: [cockroach, iceberg, kafka, mysql, postgres, sql-server]
+    label: Catalog command transactions
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs:
+      - test/parallel-workload
+      - misc/python/materialize/parallel_workload/catalog_transactions.py
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          run: catalog-transactions
+          args: [--case=rename]
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
   - id: cluster-tests
     topics: [kafka, kafka-sink, postgres]
     label: Cluster
@@ -668,6 +684,20 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: lean
+    label: Lean models
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [misc/lean, misc/images/lean]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: lean
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    coverage: skip
+    sanitizer: skip
+    ci_glue_exempt: true
+
   - id: mcp
     label: MCP e2e
     depends_on: build-aarch64
@@ -753,6 +783,24 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: console-nginx-metrics
+        topics: [kafka, mysql, postgres, sql-server]
+        label: "Console nginx metrics"
+        depends_on: build-aarch64
+        timeout_in_minutes: 15
+        inputs:
+          - console/Dockerfile
+          - console/misc/docker/**
+          - test/console/**
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: console
+              run: nginx-metrics
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
       - id: console-sql-test
         topics: [kafka, mysql, postgres, sql-server]
         label: "Console SQL"
@@ -770,6 +818,15 @@ steps:
           queue: hetzner-x86-64-16cpu-32gb
         coverage: skip
         sanitizer: skip
+        # Every test in this suite carries a wall-clock budget sized against a
+        # healthy agent. A degraded one dilates the whole job uniformly, tests
+        # and `yarn install` alike, far enough to blow those budgets while
+        # Materialize itself is healthy. Raising the budgets is not the answer:
+        # a dilated run already spends most of the step timeout.
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
 
       - id: console-e2e-test
         label: "Console E2E/staging"

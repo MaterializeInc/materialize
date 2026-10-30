@@ -20,8 +20,8 @@ import {
 } from "~/api/mocks/buildSqlQueryHandler";
 import server from "~/api/mocks/server";
 import { useAppConfig } from "~/config/useAppConfig";
+import { SUPPORT_URL } from "~/externalUrls";
 import { isSuperUserQueryKeys } from "~/hooks/useIsSuperUser";
-import docUrls from "~/mz-doc-urls.json";
 import { getQueryClient } from "~/queryClient";
 import { renderComponent } from "~/test/utils";
 
@@ -104,7 +104,7 @@ describe("LicenseExpiredBanner", () => {
     ).toBeVisible();
     const supportLink = screen.getByRole("link", { name: "Contact support" });
     expect(supportLink).toBeVisible();
-    expect(supportLink).toHaveAttribute("href", docUrls["/docs/support/"]);
+    expect(supportLink).toHaveAttribute("href", SUPPORT_URL);
   });
 
   it("points community licenses at the license page instead of support", async () => {

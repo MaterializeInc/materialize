@@ -25,7 +25,7 @@ mz-orchestrator = { path = "../orchestrator" }
 mz-persist-client = { path = "../persist-client" }
 mz-ore = { path = "../ore", features = ["process"] }
 mz-repr = { path = "../repr" }
-mz-service = { path = "../service" }
+mz-secrets-cli = { path = "../secrets-cli" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-controller = { path = "../storage-controller" }
 mz-storage-types = { path = "../storage-types" }

@@ -1331,8 +1331,8 @@ mz_compute_operator_hydration_statuses_per_worker  3
 mz_compute_operator_hydration_statuses_per_worker  3
 mz_compute_operator_hydration_statuses_per_worker  3
 mz_connections  3
-mz_console_cluster_utilization_overview  18
-mz_console_cluster_utilization_overview_24h  18
+mz_console_cluster_utilization_overview  21
+mz_console_cluster_utilization_overview_24h  21
 mz_console_cluster_utilization_overview_3h  2
 mz_databases  3
 mz_dataflow_addresses_per_worker  1

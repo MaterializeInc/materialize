@@ -90,11 +90,9 @@ impl FoldConstants {
                 expected_group_size: _,
             } => {
                 // Guard against evaluating an expression that may contain
-                // unmaterializable functions.
-                if group_key.iter().any(|e| e.contains_unmaterializable())
-                    || aggregates
-                        .iter()
-                        .any(|a| a.expr.contains_unmaterializable())
+                // unfoldable functions.
+                if group_key.iter().any(|e| e.contains_unfoldable())
+                    || aggregates.iter().any(|a| a.expr.contains_unfoldable())
                 {
                     return Ok(());
                 }
@@ -168,8 +166,8 @@ impl FoldConstants {
             }
             MirRelationExpr::Map { input, scalars } => {
                 // Guard against evaluating expression that may contain
-                // unmaterializable functions.
-                if scalars.iter().any(|e| e.contains_unmaterializable()) {
+                // unfoldable functions.
+                if scalars.iter().any(|e| e.contains_unfoldable()) {
                     return Ok(());
                 }
 
@@ -213,8 +211,8 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                // Guard against evaluating expression that may contain unmaterializable functions.
-                if exprs.iter().any(|e| e.contains_unmaterializable()) {
+                // Guard against evaluating expression that may contain unfoldable functions.
+                if exprs.iter().any(|e| e.contains_unfoldable()) {
                     return Ok(());
                 }
 
@@ -242,8 +240,8 @@ impl FoldConstants {
             }
             MirRelationExpr::Filter { input, predicates } => {
                 // Guard against evaluating expression that may contain
-                // unmaterializable function calls.
-                if predicates.iter().any(|e| e.contains_unmaterializable()) {
+                // unfoldable function calls.
+                if predicates.iter().any(|e| e.contains_unfoldable()) {
                     return Ok(());
                 }
 
@@ -303,10 +301,10 @@ impl FoldConstants {
                     .iter()
                     .all(|i| matches!(i.as_const(), Some((Ok(_), ..))))
                 {
-                    // Guard against evaluating expression that may contain unmaterializable functions.
+                    // Guard against evaluating expression that may contain unfoldable functions.
                     if equivalences
                         .iter()
-                        .any(|equiv| equiv.iter().any(|e| e.contains_unmaterializable()))
+                        .any(|equiv| equiv.iter().any(|e| e.contains_unfoldable()))
                     {
                         return Ok(());
                     }

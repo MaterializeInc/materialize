@@ -57,7 +57,20 @@ function writePersistedRows<T>(key: string, rows: T[]) {
 export interface SubscribeCollectionStatus {
   error: SubscribeError | undefined;
   snapshotComplete: boolean;
+  /** Rows from an earlier snapshot are served, and no running subscribe has
+   * delivered a newer one yet. */
+  isRefreshing: boolean;
 }
+
+const IDLE_STATUS: SubscribeCollectionStatus = {
+  error: undefined,
+  snapshotComplete: false,
+  isRefreshing: false,
+};
+
+/** The status of a collection that nothing has fed, for a consumer whose
+ * collection is not known yet. */
+export const idleCollectionStatusAtom = atom(() => IDLE_STATUS);
 
 export interface SubscribeCollection<T extends object> {
   collection: Collection<T, string>;
@@ -66,6 +79,9 @@ export interface SubscribeCollection<T extends object> {
    * full current row set is diffed against what's already synced and only the
    * delta is written into the collection. Safe to call before sync starts. */
   applySnapshot: (state: SubscribeState<T>) => void;
+  /** The latest applied rows, including while the collection is paused
+   * between subscribers. */
+  getRows: () => T[];
   /** Seed the collection from the localStorage cache scoped to `scope`
    * (`organizationId|regionId`) and route future writes to that scoped key.
    * Deferred and scoped on purpose: a constant module-level key would seed one
@@ -103,10 +119,7 @@ export function createSubscribeCollection<T extends object>(options: {
   // `hydrate`, then kept current by `applySnapshot`.
   let desired = new Map<string, T>();
 
-  const statusAtom = atom<SubscribeCollectionStatus>({
-    error: undefined,
-    snapshotComplete: false,
-  });
+  const statusAtom = atom<SubscribeCollectionStatus>(IDLE_STATUS);
 
   // Captured when the collection starts syncing; cleared when it pauses.
   type WriteApi = Parameters<
@@ -214,7 +227,8 @@ export function createSubscribeCollection<T extends object>(options: {
     const current = store.get(statusAtom);
     if (
       current.error !== next.error ||
-      current.snapshotComplete !== next.snapshotComplete
+      current.snapshotComplete !== next.snapshotComplete ||
+      current.isRefreshing !== next.isRefreshing
     ) {
       store.set(statusAtom, next);
     }
@@ -227,7 +241,11 @@ export function createSubscribeCollection<T extends object>(options: {
     const isEmptyPreload =
       !state.snapshotComplete && state.data.length === 0 && !state.error;
     if (isEmptyPreload) {
-      writeStatus({ error: undefined, snapshotComplete: lastSnapshotComplete });
+      writeStatus({
+        error: undefined,
+        snapshotComplete: lastSnapshotComplete,
+        isRefreshing: lastSnapshotComplete,
+      });
       return;
     }
 
@@ -240,6 +258,7 @@ export function createSubscribeCollection<T extends object>(options: {
     writeStatus({
       error: state.error,
       snapshotComplete: state.snapshotComplete,
+      isRefreshing: Boolean(state.resubscribing),
     });
   };
 
@@ -296,7 +315,12 @@ export function createSubscribeCollection<T extends object>(options: {
     // On a scope change this also flushes the emptied set, so the collection
     // stops serving the previous scope's rows while the new snapshot loads.
     materialize();
-    writeStatus({ error: undefined, snapshotComplete: lastSnapshotComplete });
+    // Cached rows stand in until the live snapshot arrives.
+    writeStatus({
+      error: undefined,
+      snapshotComplete: lastSnapshotComplete,
+      isRefreshing: lastSnapshotComplete,
+    });
   };
 
   const clearPendingPersist = () => {
@@ -312,7 +336,11 @@ export function createSubscribeCollection<T extends object>(options: {
     lastSnapshotComplete = false;
     liveSnapshotApplied = false;
     materialize();
-    writeStatus({ error: undefined, snapshotComplete: false });
+    writeStatus({
+      error: undefined,
+      snapshotComplete: false,
+      isRefreshing: false,
+    });
   };
 
   const suspendPersistence = () => {
@@ -327,8 +355,52 @@ export function createSubscribeCollection<T extends object>(options: {
     collection,
     statusAtom,
     applySnapshot,
+    getRows: () => Array.from(desired.values()),
     hydrate,
     reset,
     suspendPersistence,
+  };
+}
+
+export interface ScopedSubscribeCollections<T extends object> {
+  /** The collection for `key` under `scope`, created on first use. */
+  get: (scope: string, key: string) => SubscribeCollection<T>;
+  getKey: (row: T) => string;
+}
+
+/**
+ * In-memory collections, one per tenant scope (`organizationId|regionId`) and
+ * key, such as a cluster id. Keys repeat across environments, so a collection
+ * never serves another scope's rows. Rows stay in memory until the scope
+ * changes, which makes returning to a page instant. They are not persisted,
+ * since an entry per key would have no bound in localStorage.
+ */
+export function createScopedSubscribeCollections<T extends object>(options: {
+  /** Prefix of each collection's id. */
+  id: string;
+  getKey: (row: T) => string;
+}): ScopedSubscribeCollections<T> {
+  const { id, getKey } = options;
+  const byKey = new Map<string, SubscribeCollection<T>>();
+  let currentScope: string | undefined;
+  return {
+    get: (scope, key) => {
+      if (scope !== currentScope) {
+        // A return to an earlier scope gets fresh collections, so the dropped
+        // ones are never served again.
+        byKey.clear();
+        currentScope = scope;
+      }
+      let collection = byKey.get(key);
+      if (!collection) {
+        collection = createSubscribeCollection<T>({
+          id: `${id}|${scope}|${key}`,
+          getKey,
+        });
+        byKey.set(key, collection);
+      }
+      return collection;
+    },
+    getKey,
   };
 }

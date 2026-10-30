@@ -48,8 +48,8 @@ use within a [transaction block](/sql/begin/#ddl-only-transactions).
 The use of `CREATE SOURCE` (new syntax) with `CREATE TABLE FROM SOURCE` allows
 for the handling of the upstream DDL changes, specifically adding or dropping
 columns in the upstream tables, without downtime. For details, see [SQL Server:
-Handling upstream schema changes with zero
-downtime](/ingest-data/sql-server/source-versioning/).
+Handle upstream schema
+changes](/ingest-data/sql-server/source-versioning/).
 
 See also [Handling upstream operations](#handling-upstream-operations) for
 additional upstream operation considerations.

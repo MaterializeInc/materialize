@@ -51,8 +51,14 @@ The HTTP API provides two modes with slightly different transactional semantics 
 - **Extended**, which mirrors PostgreSQL's [Extended Query][extended-query] protocol.
     - Supports multiple queries, but only one statement per query string.
     - Supports parameters.
-    - Eagerly commits DDL (e.g. `CREATE TABLE`) in implicit transactions, but
-      not DML (e.g. `INSERT`).
+    - Each query runs in its own implicit transaction, as if it were followed by
+      `Sync` in PostgreSQL's extended query protocol. A failing query does not
+      roll back the queries before it.
+
+Use Simple mode to run several statements without parameters in one
+[transaction](/sql/begin/). Use Extended mode to pass parameters, or to commit
+each statement on its own. To run several statements with parameters in one
+transaction, add `BEGIN` and `COMMIT` queries to an Extended request.
 
 ### OpenAPI spec
 
@@ -120,7 +126,7 @@ Key | Value
 {
     "queries": [
         { "query": "select * from a;" },
-        { "query": "select a + $1 from a;", "params": ["100"] }
+        { "query": "select a + $1 from a;", "params": ["100"] },
         { "query": "select a + $1 from a;", "params": [null] }
     ]
 }
@@ -135,7 +141,7 @@ Result | JSON value
 ---------------------|------------
 Rows | `{"rows": <2D array of JSON-ified results>, "desc": <array of column descriptions>, "notices": <array of notices>}`
 Error | `{"error": <Error object from execution>, "notices": <array of notices>}`
-Ok | `{"ok": <tag>, "notices": <array of notices>}`
+Ok | `{"ok": <tag>, "notices": <array of notices>, "parameters": <array of changed session parameters, omitted if empty>}`
 
 Each committed statement returns exactly one of these values; e.g. in the case
 of "complex responses", such as `INSERT INTO...RETURNING`, the presence of a
@@ -211,6 +217,7 @@ type SqlResult =
 } | {
 	ok: string;
 	notices: Notice[];
+	parameters?: { name: string; value: string }[];
 } | {
 	error: Error;
 	notices: Notice[];

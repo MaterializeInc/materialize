@@ -53,10 +53,11 @@ pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    ColumnDiff, ColumnIndex, ColumnName, KeyDiff, NotNullViolation, ProtoColumnName,
-    ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
-    RelationDescDiff, RelationVersion, RelationVersionSelector, ReprColumnType, ReprRelationType,
-    SemanticType, SqlColumnType, SqlRelationType, UNKNOWN_COLUMN_NAME, VersionedRelationDesc,
+    ColumnDiff, ColumnIndex, ColumnName, KeyDiff, NotNullViolation, ORDINALITY_COL_NAME,
+    ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc,
+    RelationDescBuilder, RelationDescDiff, RelationVersion, RelationVersionSelector,
+    ReprColumnType, ReprRelationType, SemanticType, SqlColumnType, SqlRelationType,
+    UNKNOWN_COLUMN_NAME, VersionedRelationDesc,
 };
 #[cfg(any(test, feature = "proptest"))]
 pub use crate::relation::{
@@ -80,7 +81,7 @@ pub use crate::scalar::{
     PropArray, PropDatum, PropDict, PropList, arb_datum, arb_datum_for_column,
     arb_datum_for_scalar, arb_range_type,
 };
-pub use crate::timestamp::{Timestamp, TimestampManipulation};
+pub use crate::timestamp::{Timestamp, TimestampManipulation, frontier_within_lag};
 pub use crate::update::{
     Rows, RowsBuilder, SharedSlice, UpdateCollection, UpdateCollectionBuilder,
 };

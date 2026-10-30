@@ -3,9 +3,9 @@ title: Agent Skills
 description: "Add Materialize skills to coding agents like Claude Code, Codex, Cursor, and others."
 menu:
   main:
-    parent: "mcp-server"
-    name: "Install skills"
-    weight: 7
+    parent: "developer-tools"
+    name: "Agent Skills"
+    weight: 5
 aliases:
   - /integrations/coding-agent-skills/
 ---
@@ -21,23 +21,75 @@ coding agent access to Materialize documentation and reference material so it
 can provide more accurate assistance when writing queries, setting up sources,
 creating materialized views, and more.
 
-## Skills
-
-{{% include-headless "/headless/agent-skills-table" %}}
-
-## Prerequisites
-
-[Node.js](https://nodejs.org/) (v16 or later) must be installed.
-
 ## Installation
 
-Install the Materialize agent skills with a single command:
+You can install the Materialize agent skills in one of two ways:
+
+- [As a plugin](#install-as-a-plugin), if you use Claude Code or Codex. The
+  plugin installs all the skills at once and can keep them updated
+  automatically.
+- [With `npx skills`](#install-with-npx), for any coding agent that supports
+  the Agent Skills standard.
+
+Choose one method. Installing the skills with both the plugin and `npx skills`
+results in duplicate copies of each skill. If you already have the skills
+installed, see [Migrate an existing
+installation](#migrate-an-existing-installation).
+
+### Install as a plugin
+
+When you install the skills as a plugin, they are namespaced under the plugin
+name, for example `materialize:mz-dbt`.
+
+#### Claude Code
+
+To install the plugin, run:
+
+```
+/plugin marketplace add MaterializeInc/agent-skills
+/plugin install materialize@materialize
+```
+
+Auto-update is off by default for this marketplace. To turn it on, run
+`/plugin`, select **Marketplaces**, choose `materialize`, and select **Enable
+auto-update**. Claude Code then checks for updates in the background and asks
+you to run `/reload-plugins` when there is one.
+
+To update by hand, run:
+
+```
+/plugin marketplace update materialize
+/plugin update materialize@materialize
+/reload-plugins
+```
+
+#### Codex
+
+To install the plugin, run:
+
+```bash
+codex plugin marketplace add MaterializeInc/agent-skills
+codex plugin add materialize@materialize
+```
+
+To update, run:
+
+```bash
+codex plugin marketplace upgrade materialize
+```
+
+### Install with npx
+
+[Node.js](https://nodejs.org/) (v16 or later) must be installed to use `npx
+skills`.
+
+To install the skills, run:
 
 ```bash
 npx skills add MaterializeInc/agent-skills
 ```
 
-## Upgrade skills
+#### Update
 
 We publish upgrades to the Materialize agent skills weekly, so check back
 regularly to pick up the latest documentation and reference material. To upgrade
@@ -54,11 +106,15 @@ repository:
 npx skills update
 ```
 
-## Claude Code plugins
+## Skills
 
-The same repository also serves as a [Claude Code plugin
-marketplace](https://code.claude.com/docs/en/plugin-marketplaces) named
-`materialize`. Its `mz-sql-lsp` plugin registers the
+{{% include-headless "/headless/agent-skills-table" %}}
+
+## SQL language server plugin
+
+The `materialize` [Claude Code plugin
+marketplace](https://code.claude.com/docs/en/plugin-marketplaces) also provides
+the `mz-sql-lsp` plugin, which registers the
 [`mz-deploy`](/developer-tools/mz-deploy/) language server for `.sql` files, so Claude
 Code navigates your project instead of grepping it. See [AI agent
 setup](/developer-tools/mz-deploy/agent-setup/#configuring-for-claude-code) for
@@ -66,18 +122,31 @@ installation and configuration.
 
 ## Reduce permission prompts (Claude Code)
 
-Claude Code prompts before reading files outside your project. Since globally
-installed skills live under `~/.claude/skills/`, if you installed the
-`materialize-docs` skill globally, Claude Code may ask to approve reads each
-time the skill opens a new documentation subdirectory.
+Claude Code prompts before reading files outside your project, so it may ask
+to approve reads each time the `mz-docs` skill opens a new
+documentation subdirectory. To stop these prompts, grant read access to the
+directory where the skill is installed in `~/.claude/settings.json`.
 
-To stop these prompts, grant read access to the `materialize-docs` skill in
-`~/.claude/settings.json`:
+If you installed the skills [as a plugin](#install-as-a-plugin), grant the
+plugin's cache directory. The directory below it changes with every plugin
+update, so grant the parent:
 
 ```json
 {
   "permissions": {
-    "additionalDirectories": ["~/.claude/skills/materialize-docs"]
+    "additionalDirectories": ["~/.claude/plugins/cache/materialize"]
+  }
+}
+```
+
+If you installed the skills globally [with `npx skills`](#install-with-npx),
+they live under `~/.claude/skills/`. Grant the `mz-docs` skill's
+directory:
+
+```json
+{
+  "permissions": {
+    "additionalDirectories": ["~/.claude/skills/mz-docs"]
   }
 }
 ```
@@ -88,6 +157,39 @@ and want to cover them all at once, you can broaden the path to
 
 Claude Code's `auto` permission mode also removes the prompts, but applies to
 all tools rather than just this directory.
+
+## Migrate an existing installation
+
+If you installed the Materialize agent skills before the plugin was available,
+or before the skills were renamed, follow the steps below so that each skill
+appears exactly once. Run the `npx skills` commands in each project where you
+installed the skills, or add `-g` if you installed them globally.
+
+### Switch from `npx skills` to the plugin
+
+Remove the skills that `npx skills` installed, then [install the
+plugin](#install-as-a-plugin). The command below lists both the current and the
+previous skill names, and skips any you don't have:
+
+```bash
+npx skills remove mz-docs mz-dbt mz-debug-freshness mz-deploy mz-health-check mz-ontology-design mz-optimize-memory mz-terraform-provider mz-terraform-self-managed materialize-docs materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
+```
+
+If you granted Claude Code read access to `~/.claude/skills/mz-docs`, replace
+it with the plugin's cache directory as described in [Reduce permission
+prompts](#reduce-permission-prompts-claude-code).
+
+### Update renamed skills
+
+All skills use the `mz-` prefix. For example, `materialize-docs` is now
+`mz-docs`, and `mcp-developer-analysis` is now `mz-health-check`. If you
+installed the skills with `npx skills` before the rename, remove the old copies
+and install the skills again:
+
+```bash
+npx skills remove materialize-docs materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
+npx skills add MaterializeInc/agent-skills
+```
 
 ## Related Pages
 

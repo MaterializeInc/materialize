@@ -72,17 +72,17 @@ from materialize.feature_benchmark.benchmark_result import (
 from materialize.feature_benchmark.executor import Docker
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
 from materialize.feature_benchmark.measurement import MeasurementType
-from materialize.feature_benchmark.scenarios.benchmark_main import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.benchmark_main import *  # noqa: F403
 from materialize.feature_benchmark.scenarios.benchmark_main import (
     Scenario,
 )
-from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.customer import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.scale import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.skew import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.subscribe import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.temporal import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F403
+from materialize.feature_benchmark.scenarios.customer import *  # noqa: F403
+from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F403
+from materialize.feature_benchmark.scenarios.scale import *  # noqa: F403
+from materialize.feature_benchmark.scenarios.skew import *  # noqa: F403
+from materialize.feature_benchmark.scenarios.subscribe import *  # noqa: F403
+from materialize.feature_benchmark.scenarios.temporal import *  # noqa: F403
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
     ProbForMin,
@@ -394,7 +394,20 @@ def create_clusterd_service(
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
 ) -> Clusterd:
-    return Clusterd(image=clusterd_image)
+    # The benchmark cluster is unmanaged, so the enable_unified_cluster system
+    # parameter never reaches it. Key the service's topology off the same
+    # parameter instead, so the benchmark default and any --this-params or
+    # --other-params override apply to the cluster being measured.
+    unified_cluster = (additional_system_parameter_defaults or {}).get(
+        "enable_unified_cluster", "false"
+    ) == "true"
+    # A tagged instance runs the standalone `clusterd` image. Run the same
+    # binary when building from source: the unified `materialized` binary
+    # has a different code layout, which shifted FastPathFilterNoIndex by
+    # 11% between otherwise identical builds.
+    return Clusterd(
+        image=clusterd_image, mzbuild="clusterd", unified_cluster=unified_cluster
+    )
 
 
 def start_overridden_mz_clusterd_and_cockroach(

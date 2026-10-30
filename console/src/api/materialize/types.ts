@@ -40,14 +40,7 @@ export type SqlRequest = SimpleRequest | ExtendedRequest;
 
 // Based on https://github.com/MaterializeInc/materialize/blob/67ceb5670b515887357624709acb904e7f39f42b/src/pgwire/src/message.rs#L446-L456
 export type NoticeSeverity =
-  | "Panic"
-  | "Fatal"
-  | "Error"
-  | "Warning"
-  | "Notice"
-  | "Debug"
-  | "Info"
-  | "Log";
+  "Panic" | "Fatal" | "Error" | "Warning" | "Notice" | "Debug" | "Info" | "Log";
 
 export interface Notice {
   // TODO: Make code required when v0.96 is released
