@@ -9,11 +9,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Brings up the environment and signals setup_complete, then keeps the
-# container alive so Antithesis can run the test commands in it. A failed setup
-# exits non-zero and Kubernetes restarts the pod, which retries it.
+# Brings up the environment and signals setup_complete, then observes pod exits
+# while Antithesis runs test commands. A failed setup exits non-zero and
+# Kubernetes restarts the pod, which retries it.
 
 set -euo pipefail
 
 python3 -m materialize.antithesis.setup
-exec sleep infinity
+exec python3 -m materialize.antithesis.drivers.recovery --observe
