@@ -76,8 +76,16 @@ class TarballUploader:
         if "aarch64" in platform:
             self._upload_latest_redirect(platform.replace("aarch64", "arm64"))
 
-    def deploy_tarball(self, platform: str, binary_path: Path) -> None:
-        """Creates and uploads a tarball containing the binary."""
+    def deploy_tarball(
+        self, platform: str, binary_path: Path, *, update_latest: bool = True
+    ) -> None:
+        """Creates and uploads a tarball containing the binary.
+
+        Set `update_latest` to False to publish only the versioned tarball and
+        leave the `-latest-` redirect pointing where it already does. Callers
+        that publish prereleases must do this: the redirect is the URL our
+        install docs hand to users, so it has to stay on a GA build.
+        """
         tar_path = Path(f"{self.package_name}-{platform}.tar.gz")
         with tarfile.open(str(tar_path), "x:gz") as f:
             f.addfile(self._create_tardir("mz/bin"))
@@ -91,7 +99,8 @@ class TarballUploader:
         print(f"Tarball size: {size}")
 
         self._upload_tarball(tar_path, platform)
-        self._upload_latest_redirect(platform)
+        if update_latest:
+            self._upload_latest_redirect(platform)
 
 
 def is_latest_version(version: TypedVersionBase) -> bool:
