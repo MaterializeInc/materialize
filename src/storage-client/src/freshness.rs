@@ -7,12 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Recording of wallclock freshness histograms for compute collections.
+//! Recording of wallclock freshness histograms, shared by the compute and storage controllers.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use mz_cluster_client::ReplicaId;
 use mz_controller_types::dyncfgs::{
     ENABLE_WALLCLOCK_FRESHNESS_RECORDING, WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE,
     WALLCLOCK_FRESHNESS_PERIOD_INTERVAL, WALLCLOCK_FRESHNESS_VIRTUAL_ARRIVAL_INTERVAL,
@@ -26,8 +27,6 @@ use mz_storage_types::freshness::ResolvedTree;
 use mz_storage_types::freshness::histogram::BucketScheme;
 use mz_storage_types::freshness::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use timely::progress::Antichain;
-
-use crate::controller::ReplicaId;
 
 /// The `measure` of rows that count the delay from arrival to visibility in the output.
 const END_TO_END: &str = "end_to_end";
@@ -45,7 +44,7 @@ enum Start {
 
 /// Freshness recording of one write frontier, the global one of a collection or a replica's.
 #[derive(Debug)]
-pub(super) struct FreshnessRecording {
+pub struct FreshnessRecording {
     start: Start,
     end_to_end: Option<FreshnessRecorder>,
 }
@@ -117,7 +116,7 @@ impl FreshnessRecording {
 }
 
 /// The recorder configuration, `None` if recording is disabled.
-pub(super) fn recorder_config(dyncfg: &ConfigSet) -> Option<RecorderConfig> {
+pub fn recorder_config(dyncfg: &ConfigSet) -> Option<RecorderConfig> {
     if !ENABLE_WALLCLOCK_FRESHNESS_RECORDING.get(dyncfg) {
         return None;
     }
@@ -140,7 +139,7 @@ fn millis(d: Duration) -> u64 {
 }
 
 /// Packs `rows` of a collection's global histogram, or of a replica's if `replica_id` is set.
-pub(super) fn pack_rows(
+pub fn pack_rows(
     rows: Vec<PeriodRow>,
     collection_id: GlobalId,
     replica_id: Option<ReplicaId>,

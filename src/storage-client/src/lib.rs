@@ -11,6 +11,7 @@
 
 pub mod client;
 pub mod controller;
+pub mod freshness;
 pub mod healthcheck;
 pub mod metrics;
 pub mod sink;
