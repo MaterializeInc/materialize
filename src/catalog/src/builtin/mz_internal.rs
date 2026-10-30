@@ -3174,30 +3174,7 @@ pub static MZ_FRONTIERS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinS
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "frontier",
-        description: "Current read/write frontiers for sources, sinks, tables, materialized views, indexes, and subscriptions",
-        links: &const {
-            [OntologyLink {
-                name: "frontier_of",
-                target: "object",
-                properties: LinkProperties::fk_mapped(
-                    "object_id",
-                    "id",
-                    Cardinality::ManyToOne,
-                    mz_repr::SemanticType::GlobalId,
-                    "mz_internal.mz_object_global_ids",
-                ),
-            }]
-        },
-        column_semantic_types: &const {
-            [
-                ("object_id", SemanticType::GlobalId),
-                ("read_frontier", SemanticType::MzTimestamp),
-                ("write_frontier", SemanticType::MzTimestamp),
-            ]
-        },
-    }),
+    ontology: None,
 });
 
 pub static MZ_FRONTIER_OBJECT_PLACEMENT: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -3346,7 +3323,30 @@ WHERE compute_global AND EXISTS (SELECT 1 FROM protected)
 GROUP BY object_id
 HAVING bool_or(read_known) AND bool_or(write_known)",
     access: vec![PUBLIC_SELECT],
-    ontology: MZ_FRONTIERS_RAW.ontology.clone(),
+    ontology: Some(Ontology {
+        entity_name: "frontier",
+        description: "Current read/write frontiers for sources, sinks, tables, materialized views, indexes, and subscriptions",
+        links: &const {
+            [OntologyLink {
+                name: "frontier_of",
+                target: "object",
+                properties: LinkProperties::fk_mapped(
+                    "object_id",
+                    "id",
+                    Cardinality::ManyToOne,
+                    mz_repr::SemanticType::GlobalId,
+                    "mz_internal.mz_object_global_ids",
+                ),
+            }]
+        },
+        column_semantic_types: &const {
+            [
+                ("object_id", SemanticType::GlobalId),
+                ("read_frontier", SemanticType::MzTimestamp),
+                ("write_frontier", SemanticType::MzTimestamp),
+            ]
+        },
+    }),
 });
 
 /// DEPRECATED and scheduled for removal! Use `mz_frontiers` instead.
