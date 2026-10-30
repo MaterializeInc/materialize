@@ -308,6 +308,11 @@ export class SubscribeManager<T extends object, R> implements Connectable {
       return;
     }
     if (this.sqlRequest) {
+      // The server ended the subscribe already sent, as when its target replica
+      // restarts, and the resend streams a new snapshot. Listeners keep the
+      // held state, error included, until the new run updates it, so a
+      // statement that fails every time doesn't flicker.
+      if (this.querySent) this.resetForNewConnection();
       this.socket.send(this.sqlRequest);
       this.querySent = true;
     } else {
