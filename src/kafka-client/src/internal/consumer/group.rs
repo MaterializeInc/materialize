@@ -218,19 +218,22 @@ async fn run(
             }
         }
 
+        // Keep metadata updates that arrive while JoinGroup or SyncGroup awaits.
+        let mut md_rx = inner.cluster.subscribe_metadata();
         let md = refresh(&inner, &topics).await;
         report_missing(&inner, &md, &topics, &mut reported);
-        let counts = partition_counts(&md, &topics);
 
         let joined = tokio::select! {
             _ = cancel.cancelled() => return member_id,
-            r = join_and_sync(&inner, &group_id, &member_id, instance_id.as_deref(), &topics) => r,
+            r = join_and_sync(
+                &inner, &group_id, &member_id, instance_id.as_deref(), &topics, md,
+            ) => r,
         };
-        let (generation, assignment) = match joined {
+        let (generation, assignment, md) = match joined {
             Ok(joined) => {
                 failures = 0;
                 member_id = joined.member_id;
-                (joined.generation, joined.assignment)
+                (joined.generation, joined.assignment, joined.metadata)
             }
             Err(Failure {
                 code,
@@ -274,6 +277,10 @@ async fn run(
                 continue;
             }
         };
+        // The leader refreshes metadata while assigning. Comparing with the
+        // pre-join snapshot would trigger a second rebalance and replay records
+        // if a topic appeared during the join.
+        let counts = partition_counts(&md, &topics);
         *shared.lock().expect("lock poisoned") = MemberIdentity {
             generation_id: generation,
             member_id: member_id.clone(),
@@ -282,8 +289,6 @@ async fn run(
         assign(&inner, assignment);
 
         // Heartbeat until a rebalance is needed.
-        let mut md_rx = inner.cluster.subscribe_metadata();
-        md_rx.borrow_and_update();
         let mut last_ok = Instant::now();
         let mut next_heartbeat = Instant::now() + consumer.heartbeat_interval;
         let mut next_missing_refresh = Instant::now() + MISSING_TOPIC_REFRESH;
@@ -470,6 +475,7 @@ struct Joined {
     generation: i32,
     member_id: String,
     assignment: Vec<(String, Vec<i32>)>,
+    metadata: Arc<MetadataSnapshot>,
 }
 
 /// Encodes a consumer protocol message with its version prefix.
@@ -503,6 +509,7 @@ async fn join_and_sync(
     member_id: &str,
     instance_id: Option<&str>,
     topics: &[String],
+    metadata: Arc<MetadataSnapshot>,
 ) -> Result<Joined, Failure> {
     let settings = Arc::clone(inner.settings());
     let consumer = &settings.consumer;
@@ -595,11 +602,12 @@ async fn join_and_sync(
         ),
     );
 
-    let assignments = if response.leader.as_str() == new_member_id && !response.skip_assignment {
-        leader_assign(inner, &response, &protocol_name).await
-    } else {
-        Vec::new()
-    };
+    let (assignments, metadata) =
+        if response.leader.as_str() == new_member_id && !response.skip_assignment {
+            leader_assign(inner, &response, &protocol_name).await
+        } else {
+            (Vec::new(), metadata)
+        };
     let sync = coordinator
         .request::<SyncGroupRequest, _>(
             |version| {
@@ -640,6 +648,7 @@ async fn join_and_sync(
         generation,
         member_id: new_member_id,
         assignment,
+        metadata,
     })
 }
 
@@ -648,7 +657,7 @@ async fn leader_assign(
     inner: &ConsumerInner,
     response: &JoinGroupResponse,
     protocol_name: &str,
-) -> Vec<SyncGroupRequestAssignment> {
+) -> (Vec<SyncGroupRequestAssignment>, Arc<MetadataSnapshot>) {
     let members: Vec<Member> = response
         .members
         .iter()
@@ -677,7 +686,7 @@ async fn leader_assign(
             members.len()
         ),
     );
-    assignment
+    let assignments = assignment
         .into_iter()
         .map(|(member_id, topics)| {
             let message = ConsumerProtocolAssignment::default().with_assigned_partitions(
@@ -694,7 +703,8 @@ async fn leader_assign(
                 .with_member_id(StrBytes::from_string(member_id))
                 .with_assignment(encode_versioned(&message, CONSUMER_PROTOCOL_VERSION))
         })
-        .collect()
+        .collect();
+    (assignments, md)
 }
 
 async fn heartbeat(

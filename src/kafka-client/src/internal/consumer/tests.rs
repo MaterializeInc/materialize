@@ -1727,6 +1727,105 @@ fn subscribe_missing_topic() {
     }
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn topic_created_during_join_is_not_replayed() {
+    use std::sync::mpsc::{self, Receiver, SyncSender};
+
+    struct DuringJoin {
+        ready: Mutex<Option<(SyncSender<()>, Receiver<()>)>>,
+    }
+
+    impl ClientContext for DuringJoin {
+        fn log(&self, _level: RDKafkaLogLevel, fac: &str, message: &str) {
+            if fac == "JOINGROUP" && message.contains("JoinGroup response:") {
+                let ready = self.ready.lock().unwrap().take();
+                if let Some((joined, created)) = ready {
+                    tokio::task::block_in_place(|| {
+                        joined.send(()).unwrap();
+                        created.recv_timeout(Duration::from_secs(30)).unwrap();
+                    });
+                }
+            }
+        }
+    }
+
+    impl ConsumerContext for DuringJoin {}
+
+    for brokers in test_brokers() {
+        let admin = Admin::new(&brokers);
+        let topic = unique("mzkc-c-during-join");
+        let group = unique("mzkc-group");
+        let mut cfg = config(
+            &brokers,
+            &[
+                ("group.id", group.as_str()),
+                ("auto.offset.reset", "earliest"),
+                ("enable.auto.commit", "false"),
+                ("enable.auto.offset.store", "false"),
+            ],
+        );
+        cfg.set_log_level(RDKafkaLogLevel::Debug);
+        let (joined_tx, joined_rx) = mpsc::sync_channel(0);
+        let (created_tx, created_rx) = mpsc::sync_channel(0);
+        let c: BaseConsumer<DuringJoin> = BaseConsumer::from_config_and_context(
+            &cfg,
+            DuringJoin {
+                ready: Mutex::new(Some((joined_tx, created_rx))),
+            },
+        )
+        .unwrap();
+        c.subscribe(&[&topic]).unwrap();
+
+        // Hold the group between its initial metadata lookup and the leader's
+        // assignment lookup, so those snapshots disagree about this topic.
+        joined_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        admin.create_topic(&topic, 1);
+        let _guard = TopicGuard {
+            cluster: admin.cluster(),
+            name: topic.clone(),
+        };
+        admin.values(&topic, 0, &["hello"]);
+        created_tx.send(()).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            assert!(Instant::now() < deadline, "no message after topic creation");
+            match c.poll(Duration::from_millis(100)) {
+                Some(Ok(m)) => {
+                    assert_eq!(m.offset(), 0);
+                    assert_eq!(m.payload(), Some(&b"hello"[..]));
+                    c.store_offset_from_message(&m).unwrap();
+                    break;
+                }
+                Some(Err(KafkaError::MessageConsumption(
+                    RDKafkaErrorCode::UnknownTopicOrPartition,
+                )))
+                | None => {}
+                Some(Err(e)) => panic!("unexpected consumer error: {e}"),
+            }
+        }
+
+        c.fetch_metadata(Some(&topic), Duration::from_secs(10))
+            .unwrap();
+        assert!(
+            c.poll(Duration::from_secs(2)).is_none(),
+            "metadata refresh replayed an already consumed record"
+        );
+        c.commit_consumer_state(CommitMode::Sync).unwrap();
+        let committed = c
+            .committed_offsets(
+                tpl(&[(&topic, 0, Offset::Invalid)]),
+                Duration::from_secs(10),
+            )
+            .unwrap();
+        assert_eq!(
+            committed.find_partition(&topic, 0).unwrap().offset(),
+            Offset::Offset(1)
+        );
+    }
+}
+
 /// Waits until partition 0's last stable offset equals its high watermark,
 /// i.e. all transaction markers are written, and returns it.
 fn wait_for_stable_end(brokers: &str, topic: &str) -> i64 {
