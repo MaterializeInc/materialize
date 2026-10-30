@@ -197,7 +197,8 @@ USE test;
 
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
-        if name == "default":
+        # TODO(SQL-848): Enable once mixed introspection no longer blocks 0dt.
+        if name in ("default", "introspection-disabled-replica"):
             return
         with c.test_case(name):
             c.workflow(name)
@@ -3441,6 +3442,94 @@ def workflow_caught_up_stability_without_dataflows(c: Composition) -> None:
     )
     c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def _check_0dt_with_introspection_disabled(
+    c: Composition, create_cluster: str, replicas: list[str]
+) -> None:
+    """Runs a 0dt deployment over cluster `nointro`, created by *create_cluster*.
+
+    Reads from each of *replicas* while mz_new is read-only and again after
+    promotion.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    # A replica without introspection reports no hydration times. With a
+    # non-zero stability period, readiness must not wait for them.
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '20s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        f"""
+        {create_cluster};
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1), (2), (3);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER nointro AS SELECT sum(a) FROM t;
+        CREATE INDEX mv_idx IN CLUSTER nointro ON mv (sum);
+        CREATE INDEX t_idx IN CLUSTER nointro ON t (a);
+        """,
+        service="mz_old",
+    )
+
+    def check(service: str, rows: int) -> None:
+        expected = [(rows * (rows + 1) // 2, rows)]
+        for replica in replicas:
+            # Serializable reads may pick a timestamp before the latest writes,
+            # so poll until they are visible.
+            deadline = time.time() + 120
+            while True:
+                with c.sql_cursor(service=service, reuse_connection=False) as cursor:
+                    cursor.execute(b"SET cluster = nointro")
+                    cursor.execute(f"SET cluster_replica = {replica}".encode())
+                    cursor.execute(b"SET transaction_isolation = serializable")
+                    cursor.execute(
+                        b"SELECT (SELECT sum FROM mv), (SELECT count(*) FROM t)"
+                    )
+                    result = cursor.fetchall()
+                if result == expected:
+                    break
+                assert (
+                    time.time() < deadline
+                ), f"{service} replica {replica} returned {result}, expected {expected}"
+                time.sleep(1)
+
+    check("mz_old", 3)
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(
+        DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=300
+    )
+    check("mz_new", 3)
+
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+    c.sql("INSERT INTO t VALUES (4)", service="mz_new")
+    check("mz_new", 4)
+
+
+def workflow_introspection_disabled_cluster(c: Composition) -> None:
+    """Verify 0dt deployment of a cluster whose replicas all have introspection disabled."""
+    _check_0dt_with_introspection_disabled(
+        c,
+        "CREATE CLUSTER nointro (SIZE 'scale=1,workers=1', "
+        "REPLICATION FACTOR 2, INTROSPECTION INTERVAL 0)",
+        ["r1", "r2"],
+    )
+
+
+def workflow_introspection_disabled_replica(c: Composition) -> None:
+    """Verify 0dt deployment of a cluster mixing replicas with and without introspection."""
+    _check_0dt_with_introspection_disabled(
+        c,
+        "CREATE CLUSTER nointro REPLICAS ("
+        "r1 (SIZE 'scale=1,workers=1'), "
+        "r2 (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL 0))",
+        ["r1", "r2"],
+    )
 
 
 def workflow_caught_up_leader_stopped_past_cutoff(c: Composition) -> None:
