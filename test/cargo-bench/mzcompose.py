@@ -382,16 +382,11 @@ def run_benches(
     only in the ancestor is never run, since there is no HEAD result to
     compare it against.
 
-    Benchmarks that regress in the first pass are measured once more, both
-    sides again, restricted to exactly those benchmark ids. Between-process
-    variance on large inputs dwarfs criterion's within-run interval, and a
-    swing that does not reproduce on the spot is not a regression. The rerun
-    costs time proportional to the number of flagged rows, nothing when there
-    are none.
+    First-pass regressions get up to four paired reruns, filtered to those IDs.
+    A clean comparison ends confirmation. Earlier attempts remain in artifacts.
 
     Returns the ancestor, current, and rerun failures, then the targets
-    skipped for identical binaries. A rerun failure is not a failure of the
-    commit under test: the flagged rows keep their first-pass verdict.
+    skipped for identical binaries. Current-side failures also fail the step.
     """
     ancestor_by_key = {(b.package, b.name): b for b in ancestor_built}
     ancestor_target_by_key = {(t.package, t.name): t for t in ancestor_targets}
@@ -466,18 +461,30 @@ def run_benches(
         # id, so an anchored alternation reruns exactly the flagged ids and
         # nothing else.
         pattern = "^(?:" + "|".join(re.escape(id) for id in regressed) + ")$"
-        ancestor_rc, head_rc = run_pair(
-            ancestor_bin,
-            head_bin,
-            env,
-            results_root / RERUN / head_bin.package / head_bin.name,
-            [pattern],
-            f", confirming {len(regressed)} regression(s)",
-            header_suffix,
-        )
-        for rc in (ancestor_rc, head_rc):
-            if rc is not None:
-                rerun_failures.append(TargetFailure(head_target_by_key[key], rc))
+        home = results_root / RERUN / Path(*key)
+        for attempt in range(4):
+            if home.exists():
+                saved = results_root / "attempts" / str(attempt) / Path(*key)
+                saved.parent.mkdir(parents=True, exist_ok=True)
+                home.rename(saved)
+            ancestor_rc, head_rc = run_pair(
+                ancestor_bin,
+                head_bin,
+                env,
+                home,
+                [pattern],
+                f", confirming {len(regressed)} regression(s)",
+                header_suffix,
+            )
+            for rc in (ancestor_rc, head_rc):
+                if rc is not None:
+                    rerun_failures.append(TargetFailure(head_target_by_key[key], rc))
+            if head_rc is not None:
+                current_failures.append(TargetFailure(head_target_by_key[key], head_rc))
+            if ancestor_rc is not None or head_rc is not None:
+                break
+            if not compare(home, threshold).has_regressions:
+                break
     return ancestor_failures, current_failures, rerun_failures, identical
 
 
