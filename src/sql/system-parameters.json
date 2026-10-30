@@ -880,7 +880,7 @@
     {
       "name": "enable_columnar_accumulable_diff",
       "typeName": "boolean",
-      "default": "off",
+      "default": "on",
       "description": "Store the accumulable reduce's accumulators in a columnar arrangement diff, laid out by variant, instead of a columnation stack of fixed-width accumulator enums.",
       "scope": "replica",
       "userVisible": false,
