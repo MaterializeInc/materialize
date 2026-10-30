@@ -50,15 +50,15 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule, PlanError,
+    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
 };
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee,
-    ExplaineeStatement, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
-    SideEffectingFunc, UpdatePrivilege, VariableValue,
+    ExplaineeStatement, PlannedAlterRoleOption, PlannedRoleVariable, SideEffectingFunc,
+    UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
@@ -68,13 +68,10 @@ use mz_sql::session::vars::{
 };
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{
-    ConnectionOption, ConnectionOptionName, Statement, TransactionMode, WithOptionValue,
-};
+use mz_sql_parser::ast::{ConnectionOptionName, Statement, TransactionMode, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::AlterCompatible;
-use mz_storage_types::connections::AwsPrivatelinkConnection;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::sources::SourceConnection;
@@ -154,18 +151,6 @@ where
             ))
         }
         None => StageResult::Immediate(Box::new(build_stage(None))),
-    }
-}
-
-/// Rejects connection options whose values cannot work, independent of any
-/// external system.
-fn check_connection_details(details: &ConnectionDetails) -> Result<(), PlanError> {
-    match details {
-        ConnectionDetails::AwsPrivatelink(privatelink) => {
-            AwsPrivatelinkConnection::check_service_name(&privatelink.service_name)
-                .map_err(PlanError::InvalidPrivatelinkServiceName)
-        }
-        _ => Ok(()),
     }
 }
 
@@ -488,7 +473,9 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
-        if let Err(err) = check_connection_details(&plan.connection.details) {
+        if let Err(err) =
+            catalog::command::connection::check_connection_details(&plan.connection.details)
+        {
             return ctx.retire(Err(AdapterError::PlanError(err)));
         }
 
@@ -2780,116 +2767,22 @@ impl Coordinator {
         drop_options: BTreeSet<ConnectionOptionName>,
         validate: bool,
     ) {
-        let cur_entry = self.catalog().get_entry(&id);
-        let cur_conn = cur_entry.connection().expect("known to be connection");
-        let connection_gid = cur_conn.global_id();
-
-        let inner = || -> Result<Connection, AdapterError> {
-            // Parse statement.
-            let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql)
-                .expect("invalid create sql persisted to catalog")
-                .into_element()
-                .ast
-            {
-                Statement::CreateConnection(stmt) => stmt,
-                _ => unreachable!("proved type is source"),
-            };
-
-            let catalog = self.catalog().for_system_session();
-
-            // Resolve items in statement
-            let (mut create_conn_stmt, resolved_ids) =
-                mz_sql::names::resolve(&catalog, create_conn_stmt)
-                    .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
-
-            // Retain options that are neither set nor dropped.
-            create_conn_stmt
-                .values
-                .retain(|o| !set_options.contains_key(&o.name) && !drop_options.contains(&o.name));
-
-            // Set new values
-            create_conn_stmt.values.extend(
-                set_options
-                    .into_iter()
-                    .map(|(name, value)| ConnectionOption { name, value }),
-            );
-
-            // Open a new catalog, which we will use to re-plan our
-            // statement with the desired config.
-            let mut catalog = self.catalog().for_system_session();
-            catalog.mark_id_unresolvable_for_replanning(id);
-
-            // Re-define our source in terms of the amended statement
-            let plan = match mz_sql::plan::plan(
-                None,
-                &catalog,
-                Statement::CreateConnection(create_conn_stmt),
-                &Params::empty(),
-                &resolved_ids,
-            )
-            .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
-            {
-                (Plan::CreateConnection(plan), _sql_impl_ids) => plan,
-                (p, _) => {
-                    unreachable!("create connection plan is only valid response, got {:?}", p)
-                }
-            };
-
-            // Parse statement.
-            let create_conn_stmt = match mz_sql::parse::parse(&plan.connection.create_sql)
-                .expect("invalid create sql persisted to catalog")
-                .into_element()
-                .ast
-            {
-                Statement::CreateConnection(stmt) => stmt,
-                _ => unreachable!("proved type is source"),
-            };
-
-            let catalog = self.catalog().for_system_session();
-
-            // Resolve items in statement
-            let (_, new_deps) = mz_sql::names::resolve(&catalog, create_conn_stmt)
-                .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
-
-            Ok(Connection {
-                create_sql: plan.connection.create_sql,
-                global_id: cur_conn.global_id,
-                details: plan.connection.details,
-                resolved_ids: new_deps,
-            })
-        };
-
-        let conn = match inner() {
+        let rebuilt = catalog::command::connection::rebuild_connection(
+            &self.catalog().for_session(ctx.session()),
+            ctx.session(),
+            id,
+            set_options,
+            drop_options,
+        );
+        let conn = match rebuilt {
             Ok(conn) => conn,
             Err(e) => {
                 return ctx.retire(Err(e));
             }
         };
 
-        // Replanning uses a system session and discovers retained dependencies
-        // that `check_plan` could not authorize. Check them before secret guards
-        // or validation can resolve a secret.
-        let usage_check = {
-            let catalog = self.catalog().for_session(ctx.session());
-            rbac::check_usage(
-                &catalog,
-                ctx.session(),
-                &conn.resolved_ids,
-                &rbac::CREATE_ITEM_USAGE,
-            )
-        };
-        if let Err(err) = usage_check {
-            return ctx.retire(Err(err.into()));
-        }
+        let connection_gid = conn.global_id();
 
-        // `conn` is the whole re-planned connection, so this also rejects a
-        // stored value the statement did not touch.
-        if let Err(err) = check_connection_details(&conn.details) {
-            return ctx.retire(Err(AdapterError::InvalidAlter("CONNECTION", err)));
-        }
-
-        // Inspect guarded secrets whether or not validation was requested,
-        // before the altered connection is installed in the catalog.
         if let Err(err) = self
             .check_connection_secret_content_guards(&conn.details)
             .await
