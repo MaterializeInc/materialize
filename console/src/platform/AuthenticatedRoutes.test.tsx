@@ -31,6 +31,9 @@ vi.mock("~/layouts/BaseLayout", () => ({
 vi.mock("~/platform/query-history/QueryHistoryRoutes", () => ({
   default: () => <div>Query History</div>,
 }));
+vi.mock("~/hooks/useUiPreview", () => ({
+  useUiPreview: () => ({ isEnabled: false }),
+}));
 
 const SELF_MANAGED_REGION_ID = "local/flexible-deployment";
 const SELF_MANAGED_REGION_SLUG = "local-flexible-deployment";

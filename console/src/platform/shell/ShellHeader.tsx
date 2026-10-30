@@ -27,6 +27,7 @@ import {
 } from "~/api/materialize";
 import { SUBSCRIBE_ERROR_CODE } from "~/api/materialize/SubscribeManager";
 import SchemaSelect, { SchemaOption } from "~/components/SchemaSelect";
+import { UiPreviewToggle } from "~/components/UiPreviewToggle";
 import { useAllClusters } from "~/store/allClusters";
 import { useAllSchemas } from "~/store/allSchemas";
 import BookOpenIcon from "~/svg/BookOpenIcon";
@@ -191,32 +192,38 @@ const ShellHeader = ({
               menuWidth="400px"
             />
           </HStack>
-          <Button
-            flexShrink="0"
-            variant="secondary"
-            aria-label="Tutorial button"
-            title={
-              shellState.tutorialVisible
-                ? "Close Quickstart"
-                : "Open Quickstart"
-            }
-            leftIcon={
-              shellState.tutorialVisible ? (
-                <CloseIcon height="3" width="3" />
-              ) : (
-                <BookOpenIcon />
-              )
-            }
-            borderRadius="3xl"
-            size="sm"
-            _focus={{
-              border: `1px solid ${colors.accent.brightPurple}`,
-              boxShadow: shadows.input.focus,
-            }}
-            onClick={() => setTutorialVisibility(!shellState.tutorialVisible)}
-          >
-            {shellState.tutorialVisible ? "Close Quickstart" : "Quickstart"}
-          </Button>
+          <HStack spacing={2}>
+            <UiPreviewToggle
+              previewKey="modernConsole"
+              label="Try the new SQL worksheet"
+            />
+            <Button
+              flexShrink="0"
+              variant="secondary"
+              aria-label="Tutorial button"
+              title={
+                shellState.tutorialVisible
+                  ? "Close Quickstart"
+                  : "Open Quickstart"
+              }
+              leftIcon={
+                shellState.tutorialVisible ? (
+                  <CloseIcon height="3" width="3" />
+                ) : (
+                  <BookOpenIcon />
+                )
+              }
+              borderRadius="3xl"
+              size="sm"
+              _focus={{
+                border: `1px solid ${colors.accent.brightPurple}`,
+                boxShadow: shadows.input.focus,
+              }}
+              onClick={() => setTutorialVisibility(!shellState.tutorialVisible)}
+            >
+              {shellState.tutorialVisible ? "Close Quickstart" : "Quickstart"}
+            </Button>
+          </HStack>
         </HStack>
         {!isClustersError &&
           // Need to make sure the cluster has loaded before checking if it exists

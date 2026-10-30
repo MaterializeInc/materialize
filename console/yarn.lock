@@ -3284,6 +3284,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@materializeinc/sql-parser@npm:^26.44.1":
+  version: 26.47.1
+  resolution: "@materializeinc/sql-parser@npm:26.47.1"
+  checksum: 10c0/3572a7759d855708d87c47f9f88cb27bbdc5014c64f0037ac8dd6fe4ea90287bc7330fca7e82ab739e6498059723d297cb3a3d986b10665b3c89305a68d2870c
+  languageName: node
+  linkType: hard
+
 "@materializeinc/sql-pretty@npm:^26.44.1":
   version: 26.44.1
   resolution: "@materializeinc/sql-pretty@npm:26.44.1"
@@ -3295,6 +3302,28 @@ __metadata:
   version: 0.1.2
   resolution: "@miragejs/pretender-node-polyfill@npm:0.1.2"
   checksum: 10c0/93c0002cbeea994404e84d122d0cb8a63531dfd6b9b4fb376febf6a2a91e51e6d748627c972c38de6cfe9f80ae88470734577d0397bbb215184d5a332dba2de9
+  languageName: node
+  linkType: hard
+
+"@monaco-editor/loader@npm:^1.5.0":
+  version: 1.7.0
+  resolution: "@monaco-editor/loader@npm:1.7.0"
+  dependencies:
+    state-local: "npm:^1.0.6"
+  checksum: 10c0/1fd3579cb09b669493cf553dfc0723a93483140a44353ce9a739827edfa7b2c6541b254024d15c48176ece749ef666b6d16cce6cf0e4396c7fa1c5a48012d08a
+  languageName: node
+  linkType: hard
+
+"@monaco-editor/react@npm:^4.7.0":
+  version: 4.7.0
+  resolution: "@monaco-editor/react@npm:4.7.0"
+  dependencies:
+    "@monaco-editor/loader": "npm:^1.5.0"
+  peerDependencies:
+    monaco-editor: ">= 0.25.0 < 1"
+    react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+  checksum: 10c0/a4e91c6eda1a71f5fd23871bd801de435490ccbc43934d23cba65cefe2be7e9d02c9a57c4ef80fc9fe99e4d4deea51e5db19cb4e0ecf3f51818dda0eb9cdbf12
   languageName: node
   linkType: hard
 
@@ -5698,6 +5727,13 @@ __metadata:
   version: 1.3.2
   resolution: "@types/triple-beam@npm:1.3.2"
   checksum: 10c0/2e936cff7cde9df7da854a54a5f63e0a434b2ae1d6c1eb6de5f7a0b1107b023b3c272abecbba28614a54b8831226b29e37a49e3e34a7490a6a24d770a5b44eb9
+  languageName: node
+  linkType: hard
+
+"@types/trusted-types@npm:^2.0.7":
+  version: 2.0.7
+  resolution: "@types/trusted-types@npm:2.0.7"
+  checksum: 10c0/4c4855f10de7c6c135e0d32ce462419d8abbbc33713b31d294596c0cc34ae1fa6112a2f9da729c8f7a20707782b0d69da3b1f8df6645b0366d08825ca1522e0c
   languageName: node
   linkType: hard
 
@@ -8281,6 +8317,18 @@ __metadata:
   dependencies:
     domelementtype: "npm:^2.2.0"
   checksum: 10c0/5c199c7468cb052a8b5ab80b13528f0db3d794c64fc050ba793b574e158e67c93f8336e87fd81e9d5ee43b0e04aea4d8b93ed7be4899cb726a1601b3ba18538b
+  languageName: node
+  linkType: hard
+
+"dompurify@npm:3.2.7":
+  version: 3.2.7
+  resolution: "dompurify@npm:3.2.7"
+  dependencies:
+    "@types/trusted-types": "npm:^2.0.7"
+  dependenciesMeta:
+    "@types/trusted-types":
+      optional: true
+  checksum: 10c0/d41bb31a72f1acdf9b84c56723c549924b05d92a39a15bd8c40bec9007ff80d5fccf844bc53ee12af5b69044f9a7ce24a1e71c267a4f49cf38711379ed8c1363
   languageName: node
   linkType: hard
 
@@ -11812,6 +11860,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"marked@npm:14.0.0":
+  version: 14.0.0
+  resolution: "marked@npm:14.0.0"
+  bin:
+    marked: bin/marked.js
+  checksum: 10c0/57a47cb110f7b1a10f398b0a7236f9183aad2dcd5345ee73f2732b6387e585d04cef472bc655d2f84c542296be9728e179aebe3ed7f2f8666b8a0a9dae592876
+  languageName: node
+  linkType: hard
+
 "materialize-console@workspace:.":
   version: 0.0.0-use.local
   resolution: "materialize-console@workspace:."
@@ -11844,7 +11901,9 @@ __metadata:
     "@lezer/common": "npm:^1.5.3"
     "@lezer/highlight": "npm:^1.2.4"
     "@materializeinc/sql-lexer": "npm:^26.44.1"
+    "@materializeinc/sql-parser": "npm:^26.44.1"
     "@materializeinc/sql-pretty": "npm:^26.44.1"
+    "@monaco-editor/react": "npm:^4.7.0"
     "@playwright/test": "npm:^1.63.0"
     "@rehookify/datepicker": "npm:^6.6.8"
     "@rolldown/plugin-babel": "npm:^0.2.4"
@@ -11935,6 +11994,7 @@ __metadata:
     miragejs: "npm:^0.1.48"
     mitt: "npm:^3.0.1"
     module-alias: "npm:^2.3.4"
+    monaco-editor: "npm:^0.55.1"
     msw: "npm:^2.6.4"
     oidc-client-ts: "npm:^3.5.0"
     openapi-fetch: "npm:^0.17.0"
@@ -12482,6 +12542,16 @@ __metadata:
   version: 2.3.4
   resolution: "module-alias@npm:2.3.4"
   checksum: 10c0/c0af11f640410d928db9dd62ba66a39d55475ff5d9e8943bb753b6688a35fd07f0ec950285fb0519d337bcd5bf9503d54ef1d557754a38aa371b095d1197a8b8
+  languageName: node
+  linkType: hard
+
+"monaco-editor@npm:^0.55.1":
+  version: 0.55.1
+  resolution: "monaco-editor@npm:0.55.1"
+  dependencies:
+    dompurify: "npm:3.2.7"
+    marked: "npm:14.0.0"
+  checksum: 10c0/c1a0cf887657b42c8996518bc5ee96bbd39c977f862d2a2b2018427c45f14b0dd25d1452278202056f6b1ead97981282ccacd7d7ad918d8f0ef084159f974a25
   languageName: node
   linkType: hard
 
@@ -14939,6 +15009,13 @@ __metadata:
   version: 0.0.10
   resolution: "stack-trace@npm:0.0.10"
   checksum: 10c0/9ff3dabfad4049b635a85456f927a075c9d0c210e3ea336412d18220b2a86cbb9b13ec46d6c37b70a302a4ea4d49e30e5d4944dd60ae784073f1cde778ac8f4b
+  languageName: node
+  linkType: hard
+
+"state-local@npm:^1.0.6":
+  version: 1.0.7
+  resolution: "state-local@npm:1.0.7"
+  checksum: 10c0/8dc7daeac71844452fafb514a6d6b6f40d7e2b33df398309ea1c7b3948d6110c57f112b7196500a10c54fdde40291488c52c875575670fb5c819602deca48bd9
   languageName: node
   linkType: hard
 

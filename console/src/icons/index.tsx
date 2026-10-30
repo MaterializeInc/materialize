@@ -91,5 +91,6 @@ export { default as VsCodeLogoIcon } from "~/icon/VsCodeLogoIcon.svg?react";
 export { default as WarningIcon } from "~/icon/WarningIcon.svg?react";
 export { default as WebhookIcon } from "~/icon/WebhookIcon.svg?react";
 export { default as WindsurfLogoIcon } from "~/icon/WindsurfLogoIcon.svg?react";
+export { default as WorkflowIcon } from "~/icon/WorkflowIcon.svg?react";
 export { default as ZoomInIcon } from "~/icon/ZoomInIcon.svg?react";
 export { default as ZoomOutIcon } from "~/icon/ZoomOutIcon.svg?react";
