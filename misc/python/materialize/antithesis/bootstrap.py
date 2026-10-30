@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import time
 import uuid
 from typing import Any
@@ -46,6 +48,7 @@ def _serving_target(
     target: str,
     details: dict[str, Any],
 ) -> bool:
+    details["waiting_for"] = "cr_status"
     if not (
         snap.generation is not None
         and snap.observed_generation == snap.generation
@@ -61,15 +64,20 @@ def _serving_target(
         return False
     sets = kube.envd_statefulsets(snap.resource_id)
     details["statefulsets"] = [[s.generation, s.image, s.deleting] for s in sets]
-    if len(sets) != 1 or (
-        sets[0].generation != snap.active or sets[0].image != target or sets[0].deleting
+    active_sets = [s for s in sets if s.generation == snap.active]
+    details["waiting_for"] = "active_statefulset"
+    if len(active_sets) != 1 or (
+        active_sets[0].image != target or active_sets[0].deleting
     ):
         return False
     prefix = f"mz{snap.resource_id}-environmentd-"
     pods = [p for p in kube.envd_pods() if p.name.startswith(prefix)]
-    if len(pods) != 1:
+    details["pod_generations"] = [[p.generation, p.ready] for p in pods]
+    active_pods = [p for p in pods if p.generation == snap.active]
+    details["waiting_for"] = "active_pod"
+    if len(active_pods) != 1:
         return False
-    pod = pods[0]
+    pod = active_pods[0]
     details["pod"] = {
         "generation": pod.generation,
         "image": pod.image,
@@ -81,10 +89,13 @@ def _serving_target(
         and pod.started_at is not None
         and pod.image == target
         and pod.ip is not None
-        and rollouts.leader_statuses([pod]).get(pod.uid) == "IsLeader"
     ):
         return False
+    details["waiting_for"] = "active_leader"
+    if rollouts.leader_statuses([pod]).get(pod.uid) != "IsLeader":
+        return False
     versions = []
+    details["waiting_for"] = "sql_serving"
     for host in (pod.ip, env.sql_host()):
         with sql.connection(
             host, connect_timeout=5, statement_timeout_ms=5_000
@@ -95,9 +106,37 @@ def _serving_target(
     if not versions[0] or versions[0] != versions[1]:
         return False
     expected = rollouts.expected_version(target)
+    details["waiting_for"] = "target_version"
     if expected is not None and versions[0].split(" ")[0].split("+")[0] != expected:
         return False
-    return _identity(kube.snapshot()) == _identity(snap)
+    details["waiting_for"] = "stable_status"
+    if _identity(kube.snapshot()) != _identity(snap):
+        return False
+    details["waiting_for"] = "ready"
+    return True
+
+
+def _record_progress(
+    db: sqlite3.Connection, target: str, details: dict[str, Any]
+) -> None:
+    stable = dict(details)
+    status = stable.get("last_status")
+    if isinstance(status, dict):
+        stable["last_status"] = {
+            key: value for key, value in status.items() if key != "resource_version"
+        }
+    payload = json.dumps(stable, sort_keys=True)
+    previous = db.execute(
+        "SELECT details FROM bootstrap_progress WHERE target = ?", (target,)
+    ).fetchone()
+    if previous is not None and previous[0] == payload:
+        return
+    with db:
+        db.execute(
+            "INSERT OR REPLACE INTO bootstrap_progress VALUES (?, ?)",
+            (target, payload),
+        )
+    print(f"focused bootstrap: {payload}", flush=True)
 
 
 def ensure_target_image() -> None:
@@ -111,6 +150,9 @@ def ensure_target_image() -> None:
         with db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS target_image (target TEXT PRIMARY KEY, request TEXT NOT NULL, deadline REAL NOT NULL, completed INTEGER NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS bootstrap_progress (target TEXT PRIMARY KEY, details TEXT NOT NULL)"
             )
             request = str(
                 uuid.uuid5(
@@ -139,14 +181,18 @@ def ensure_target_image() -> None:
                 details = {"target": target, "last_status": snap.summary()}
                 if _serving_target(kube, env, snap, target, details):
                     if not completed and time.monotonic() >= deadline:
+                        details["waiting_for"] = "deadline"
+                        _record_progress(db, target, details)
                         break
                     with db:
                         db.execute(
                             "UPDATE target_image SET completed = 1 WHERE target = ?",
                             (target,),
                         )
+                    _record_progress(db, target, details)
                     return
                 if time.monotonic() >= deadline:
+                    _record_progress(db, target, details)
                     break
                 changes = {}
                 if (
@@ -160,17 +206,24 @@ def ensure_target_image() -> None:
                         environmentdImageRef=target,
                         requestRollout=request,
                         forceRollout=request,
-                        forcePromote=None,
+                        # This also skips empty-catalog catch-up during Applying,
+                        # before ReadyToPromote can consume the bootstrap budget.
+                        forcePromote=request,
                         rolloutRequestTimeout=rollouts.DEFAULT_ROLLOUT_REQUEST_TIMEOUT,
                     )
                 elif (
-                    snap.reason == "ReadyToPromote"
-                    and snap.generation is not None
+                    snap.generation is not None
                     and snap.observed_generation == snap.generation
                     and snap.request is not None
+                    and snap.spec.get("forcePromote") != snap.request
+                    and (
+                        snap.reason == "ReadyToPromote"
+                        or (snap.reason == "Applying" and snap.request == request)
+                    )
                 ):
                     changes["forcePromote"] = snap.request
                 if changes:
+                    details["request_changes"] = sorted(changes)
                     kube.patch_spec(changes)
             except rollouts.TRANSIENT_ERRORS as error:
                 status = getattr(error, "status", None)
@@ -180,8 +233,12 @@ def ensure_target_image() -> None:
                     and 400 <= status < 500
                     and status not in (408, 409, 429)
                 ):
+                    details["api_error_status"] = status
+                    _record_progress(db, target, details)
                     raise
                 last_error = type(error).__name__
+                details["last_error"] = last_error
+            _record_progress(db, target, details)
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 time.sleep(min(1.0, remaining))

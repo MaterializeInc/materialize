@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import sqlite3
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -331,3 +332,103 @@ def test_pod_image_identity_uses_the_spec_reference_after_status_normalization()
     assert len(observed) == 1
     assert observed[0].image == "environmentd:local"
     assert observed[0].ready and observed[0].started_at == 1
+
+
+@pytest.mark.parametrize("deleting", [False, True])
+def test_active_target_is_not_blocked_by_old_generation_lists(
+    harness, monkeypatch: pytest.MonkeyPatch, deleting
+):
+    harness.api.promote(TARGET)
+    current_sets = harness.api.envd_statefulsets("test")
+    old_set = SimpleNamespace(generation=0, image=BASE, deleting=deleting)
+    monkeypatch.setattr(
+        harness.api, "envd_statefulsets", lambda _: [old_set, *current_sets]
+    )
+    current_pods = harness.api.envd_pods()
+    old_pod = rollouts.EnvdPod(
+        0, "mztest-environmentd-0-0", "old-uid", None, 0, None, False, None, BASE
+    )
+    monkeypatch.setattr(harness.api, "envd_pods", lambda: [old_pod, *current_pods])
+
+    bootstrap.ensure_target_image()
+
+    assert harness.sql_hosts == ["pod-ip", "service"]
+    assert not harness.api.patches
+
+
+def test_bootstrap_persists_waiting_state_without_repeating_unchanged_logs(
+    harness, capsys
+):
+    harness.api.promote(TARGET)
+    harness.api.ready = False
+    harness.api.before_snapshot = lambda: harness.api.obj["metadata"].update(
+        resourceVersion=str(harness.clock.now)
+    )
+
+    with pytest.raises(TimeoutError):
+        bootstrap.ensure_target_image()
+
+    with sqlite3.connect(harness.path) as db:
+        details = json.loads(
+            db.execute("SELECT details FROM bootstrap_progress").fetchone()[0]
+        )
+    assert details["waiting_for"] == "active_pod"
+    assert details["pod"]["ready"] is False
+    assert capsys.readouterr().out.count("focused bootstrap:") == 1
+
+
+def test_bootstrap_records_verified_readiness_before_returning(harness, capsys):
+    harness.api.promote(TARGET)
+
+    bootstrap.ensure_target_image()
+
+    with sqlite3.connect(harness.path) as db:
+        details = json.loads(
+            db.execute("SELECT details FROM bootstrap_progress").fetchone()[0]
+        )
+    assert details["waiting_for"] == "ready"
+    assert details["serving_versions"] == [VERSION, VERSION]
+    assert capsys.readouterr().out.count("focused bootstrap:") == 1
+
+
+def test_initial_upgrade_skips_empty_catalog_catchup(harness):
+    bootstrap.ensure_target_image()
+
+    patch = harness.api.patches[0]
+    assert patch["forcePromote"] == patch["requestRollout"]
+
+
+def test_interrupted_own_applying_request_is_force_promoted(harness):
+    harness.api.outcome = "interrupted"
+    with pytest.raises(KeyboardInterrupt):
+        bootstrap.ensure_target_image()
+    request = harness.api.patches[0]["requestRollout"]
+    harness.api.obj["spec"].update(
+        environmentdImageRef=TARGET,
+        requestRollout=request,
+        forceRollout=request,
+        forcePromote=None,
+    )
+    harness.api.obj["metadata"]["generation"] += 1
+    harness.api.obj["status"]["conditions"][0].update(
+        status="Unknown",
+        reason="Applying",
+        observedGeneration=harness.api.obj["metadata"]["generation"],
+    )
+
+    bootstrap.ensure_target_image()
+
+    assert harness.api.patches[-1] == {"forcePromote": request}
+    assert harness.sql_hosts == ["pod-ip", "service"]
+
+
+def test_bootstrap_does_not_force_another_applying_request(harness):
+    harness.api.promote(TARGET)
+    harness.api.obj["status"]["conditions"][0].update(
+        status="Unknown", reason="Applying"
+    )
+
+    with pytest.raises(TimeoutError):
+        bootstrap.ensure_target_image()
+
+    assert not harness.api.patches
