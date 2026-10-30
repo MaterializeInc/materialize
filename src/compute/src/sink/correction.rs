@@ -100,10 +100,8 @@ impl<D: Data> Correction<D> {
         }
     }
 
-    /// Consolidate the updates before the given `upper`.
-    ///
-    /// This is the expensive half of [`Correction::updates_before`], split out so callers that
-    /// must not run unbounded CPU work inline can perform it elsewhere.
+    /// Consolidate the updates before the given `upper`, for reading them with
+    /// [`Correction::consolidated_updates_before`].
     pub fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
         match self {
             Self::V1(c) => c.consolidate_before(upper),
