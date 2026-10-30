@@ -47,8 +47,9 @@ from urllib.parse import unquote, urlparse
 
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
-    sometimes,
+    always_or_unreachable as always,
+)
+from antithesis.assertions import (
     unreachable,
 )
 
@@ -56,6 +57,7 @@ from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis.drivers import configure, history
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "session_mix"

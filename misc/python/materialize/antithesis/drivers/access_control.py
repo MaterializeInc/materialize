@@ -48,8 +48,6 @@ from typing import Any
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
     always_or_unreachable,
-    reachable,
-    sometimes,
     unreachable,
 )
 
@@ -57,6 +55,7 @@ from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis.drivers import rollouts
 from materialize.antithesis.environment import Environment
 from materialize.antithesis.isolation import AclModel, Key
+from materialize.antithesis.observations import reachable, sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "access_control"

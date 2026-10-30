@@ -41,8 +41,9 @@ from collections.abc import Callable
 
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
-    sometimes,
+    always_or_unreachable as always,
+)
+from antithesis.assertions import (
     unreachable,
 )
 
@@ -56,6 +57,7 @@ from materialize.antithesis.drivers.history import (
     start_watchdog,
 )
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "counters"

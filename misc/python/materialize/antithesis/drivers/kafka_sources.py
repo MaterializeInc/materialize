@@ -55,10 +55,11 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
+from antithesis.assertions import (
     always_or_unreachable,
-    sometimes,
+)
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+    always_or_unreachable as always,
 )
 from confluent_kafka.admin import AdminClient, NewTopic  # type: ignore
 from confluent_kafka.cimpl import (
@@ -92,6 +93,7 @@ from materialize.antithesis.drivers.sources_common import (
 )
 from materialize.antithesis.drivers.sources_common import log as _log
 from materialize.antithesis.endpoints import Endpoints
+from materialize.antithesis.observations import sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "kafka_sources"

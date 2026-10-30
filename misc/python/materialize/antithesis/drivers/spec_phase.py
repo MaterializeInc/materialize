@@ -31,10 +31,11 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
+from antithesis.assertions import (
     always_or_unreachable,
-    sometimes,
+)
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+    always_or_unreachable as always,
 )
 
 from materialize import orchestratord
@@ -49,6 +50,7 @@ from materialize.antithesis.drivers.rollouts import (
     Snapshot,
 )
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import sometimes
 
 # Server-side timeout of one phase-wait watch window. The window ends as soon
 # as the awaited version arrives, so this only bounds how long the lease goes

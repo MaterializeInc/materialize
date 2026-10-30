@@ -69,11 +69,7 @@ from typing import Any
 import psycopg
 import requests
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always_greater_than_or_equal_to,
-    always_less_than_or_equal_to,
     always_or_unreachable,
-    reachable,
-    sometimes,
 )
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
@@ -82,6 +78,7 @@ from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.endpoints import INTERNAL_HTTP_PORT
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import numeric_guidance, reachable, sometimes
 from materialize.antithesis.rng import rng
 
 SCHEMA = "lifecycle"
@@ -581,17 +578,27 @@ def check_readable(
             summary["transient"] += 1
             continue
         attempted_after, _ = ledger(s.db, tbl)
-        always_greater_than_or_equal_to(
+        always_or_unreachable(
+            count >= acked_before,
+            "a live lifecycle collection reflects every acknowledged insert",
+            {**details, "left": count, "right": acked_before},
+        )
+        numeric_guidance(
             count,
             acked_before,
             "a live lifecycle collection reflects every acknowledged insert",
-            details,
+            maximize=False,
         )
-        always_less_than_or_equal_to(
+        always_or_unreachable(
+            count <= attempted_after,
+            "a live lifecycle collection holds no more rows than were attempted",
+            {**details, "left": count, "right": attempted_after},
+        )
+        numeric_guidance(
             count,
             attempted_after,
             "a live lifecycle collection holds no more rows than were attempted",
-            details,
+            maximize=True,
         )
         summary["ok"] += 1
     return summary
