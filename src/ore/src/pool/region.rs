@@ -42,6 +42,7 @@
 //! pool's tests (including the unsafe slot borrows they exercise) run under
 //! the interpreter.
 
+use std::collections::VecDeque;
 use std::io;
 use std::sync::Mutex;
 
@@ -94,17 +95,18 @@ pub(crate) struct Region {
 /// theirs released. Never-allocated slots beyond the high-water mark are
 /// untouched virtual space and fault on first write like cold ones.
 #[derive(Debug)]
-struct SlotAllocator {
-    free_warm: Vec<u32>,
+pub(crate) struct SlotAllocator {
+    /// Oldest free at the front.
+    free_warm: VecDeque<u32>,
     free_cold: Vec<u32>,
     high_water: u32,
     max_slots: u32,
 }
 
 impl SlotAllocator {
-    fn new(max_slots: u32) -> SlotAllocator {
+    pub(crate) fn new(max_slots: u32) -> SlotAllocator {
         SlotAllocator {
-            free_warm: Vec::new(),
+            free_warm: VecDeque::new(),
             free_cold: Vec::new(),
             high_water: 0,
             max_slots,
@@ -114,8 +116,8 @@ impl SlotAllocator {
     /// Allocates a slot index, or `None` when every slot is in use; the flag
     /// reports whether the slot came from the warm list. Warm slots are
     /// preferred, then cold, then never-touched bump slots.
-    fn alloc(&mut self) -> Option<(u32, bool)> {
-        if let Some(slot) = self.free_warm.pop() {
+    pub(crate) fn alloc(&mut self) -> Option<(u32, bool)> {
+        if let Some(slot) = self.free_warm.pop_back() {
             return Some((slot, true));
         }
         if let Some(slot) = self.free_cold.pop() {
@@ -130,13 +132,26 @@ impl SlotAllocator {
     }
 
     /// Returns a previously allocated slot to the warm or cold free list.
-    fn free(&mut self, slot: u32, warm: bool) {
+    pub(crate) fn free(&mut self, slot: u32, warm: bool) {
         crate::soft_assert_no_log!(slot < self.high_water);
         if warm {
-            self.free_warm.push(slot);
+            self.free_warm.push_back(slot);
         } else {
             self.free_cold.push(slot);
         }
+    }
+
+    /// Takes the longest-free slot from the warm free list only, or `None`
+    /// when it is empty. `alloc` takes the most recently freed one, so a
+    /// caller releasing warm slots leaves the ones likeliest to be reused.
+    pub(crate) fn pop_oldest_warm(&mut self) -> Option<u32> {
+        self.free_warm.pop_front()
+    }
+
+    /// Test hook: the number of allocated slots not on a free list.
+    #[cfg(test)]
+    pub(crate) fn in_use(&self) -> usize {
+        usize::cast_from(self.high_water) - self.free_warm.len() - self.free_cold.len()
     }
 }
 
@@ -258,7 +273,7 @@ impl Region {
         let mut slots = self.slots.lock().expect("region allocator poisoned");
         let mut cooled = 0;
         while cooled < want_bytes {
-            let Some(slot) = slots.free_warm.pop() else {
+            let Some(slot) = slots.free_warm.pop_back() else {
                 break;
             };
             let offset = usize::cast_from(slot) * self.class_size;
