@@ -53,7 +53,7 @@ It is pessimistic for a record that only lands in one input, which becomes visib
 Leaves carry a ticker that describes their grid:
 
 * Sources: aligned to the epoch at the ingestion's `TIMESTAMP INTERVAL`, looked up live so `ALTER SOURCE` takes effect without rebuilding downstream dependence. The probe ticker in `src/storage/src/source/probe.rs` rounds probe times down to interval multiples, and the upper after a tick at T is T + 1.
-* Compute introspection collections: aligned to the introspection interval. The interval can differ between replicas of a cluster, and introspection is read through replica-targeted queries, so per-replica freshness rows are the meaningful ones and the global aggregate is not. The controller keeps one tree per collection, using the interval of the most recently added replica with logging, so a replica with a different interval records against the wrong grid. That wrinkle is documented, not solved.
+* Compute introspection collections: aligned to the introspection interval. The interval can differ between replicas of a cluster, and introspection is read through replica-targeted queries, so per-replica freshness rows are the meaningful ones and the global aggregate is not. The controller keeps one tree per collection, using the interval of the most recently added replica with logging, so a replica with a different interval records against the wrong grid. That wrinkle is documented, not solved. An introspection collection's frontier follows the clock of the replica that logs it, so while its cluster has no replica its data does not exist rather than being late, see the correctness requirements.
 * Webhook sources and other storage-managed collections: an unaligned 1s tick. They have no timestamp interval: a write is visible once its batch is appended, and when idle the collection manager advances the upper every `DEFAULT_TICK_MS` (1s), resetting the timer after each write (`src/storage-controller/src/collection_mgmt.rs`).
 * Tables: an unaligned 1s tick. Tables can tick irregularly, up to 1 kHz when inserts bump them, and their freshness otherwise depends on the txn-wal tick. Recording treats them as an epoch-aligned 1s grid for window boundaries, an accepted quirk, while D uses the unaligned bound so it never underestimates.
 * Anything else: continuous wall clock.
@@ -95,6 +95,12 @@ The existing global histogram keeps its samples and buckets, since the new histo
 For a 1 Hz source the value stays about 1s, so existing consumers see the same numbers.
 Objects whose freshness today reads too low change: a REFRESH EVERY 1 minute view reads about 60s instead of 0s, and a 7s x 11s join about 17s instead of 11s.
 Unreadable collections stay Undefined.
+
+The per-minute history and the new histogram place the same event about one minute apart, which user documentation should explain.
+A history row is written at the first maintenance tick after a minute boundary, labeled with that boundary, and holds the maximum over the minute before it (`maybe_record_wallclock_lag` in `src/storage-controller/src/lib.rs`), so its label is the end of the interval it summarizes.
+A histogram period is labeled with its start and holds the arrivals of the minute after it.
+The two also index differently: a history value grows with the age of a stall at observation time, while a histogram records each arrival's own latency, which falls toward the recovery.
+On staging, a source that recovered at 19:29:37 showed the recovery in the histogram period 19:29 and in the history row 19:31, the first row whose minute lies entirely after it.
 
 ## Recording
 
@@ -193,6 +199,10 @@ Local delay and skew may understate and never overstate.
 An input without a freshness tree is skipped, an input whose log cannot answer an arrival counts as ready at the observation, and an input with an empty frontier logs that it is complete from then on.
 Storage-owned collections have no inputs inside Materialize, so their local delay equals their end-to-end latency and their skew is 0.
 
+Local delay picks up infrastructure that a hop depends on.
+On staging, the median persist `consensus_cas` latency of the region's environments rose from 13 ms to about 100 ms at one point in the night, with this environment's CAS rate unchanged.
+At the same minute, the median local delay of every materialized view rose from 15 to 32 ms to 64 to 108 ms, and that of a 100 ms source from 128 ms to about 220 ms, while the local delay of indexes, which do not write to persist, stayed the same.
+
 A log keeps what its consumers have not recorded yet, for as long as the consumer exists, including a consumer whose recording has not started.
 Expiring consumers by age lost the outage it was meant to measure: on staging, a view's replica was dropped for 10.5 minutes, its claim on its input's log expired at 10 minutes, and every arrival of the outage recorded the 5 s the new replica took to hydrate as its local delay.
 Instead, entries older than one period are thinned geometrically by age, keeping one entry per half histogram bucket of age, so a log holds about $2 b \log_2(\text{age} / \text{period})$ old entries plus the recent ones, about 125 for 30 days at 4 buckets per octave and one minute periods.
@@ -202,9 +212,21 @@ Entries older than the histogram retention are dropped, consumer marks are clear
 
 ### Cost
 
-Rows per object and period depend on how many octaves the latencies span.
-In the spike at 4 buckets per octave, a healthy 1s source used 1 to 3 buckets per minute, a 100 ms source 3 to 5, a 7s x 11s join 5, a 100 ms x 1s join about 14 and a REFRESH EVERY 1 minute view 20.
-The existing per-minute history writes one row per object and replica, so typical objects cost 2 to 5 times as many rows, and refresh views and mixed-rate joins more.
+Rows per object, measure and period are the buckets its latencies touch, so they depend on how many octaves the latencies span.
+The arrivals that one frontier advance makes visible lie within one period of each other, so their latencies span a range no wider than the period P and touch at most about $b \log_2(1 + P / 1\,\text{ms})$ buckets, about 64 at 4 buckets per octave and one-minute periods, and fewer the higher the latencies.
+That bound is reached only by a recovery inside the period, where latencies fall from the stall's length to milliseconds.
+
+A night on staging, with 480 objects and ten replica outages, measured the typical cost per object and minute:
+
+* 1.9 end-to-end rows. A healthy object puts a whole period into one or two buckets.
+* 2.3 local rows. Local delay is processing jitter between 1 and 100 ms, which spans six octaves, so a materialized view used 7 to 18 buckets in a median period and up to 30.
+* 1.9 skew rows, for each of the 22 objects with two or more inputs.
+
+The global histogram's persist shard grew by about 3 bytes per row, which is 18 KB per object and day, or 540 KB per object at 30 days of retention.
+The per-replica histogram grew about three quarters as fast.
+The existing per-minute history writes one row per object and replica at about 2.3 bytes, so both histograms together grew about 6.5 times as fast as it did.
+Storage-owned collections write local rows identical to their end-to-end rows, because their local delay equals their end-to-end latency, and they were one in six objects on that environment, so leaving those rows out is a cheap saving.
+`mz_catalog_server` used 0.23 cores during the night and 0.24 the night before, without recording, so its cost did not show above the noise.
 A rollup would cap the cost of long windows and is the first optimization if the Console's queries get expensive.
 
 ## Correctness requirements found by the spike and its validation
@@ -212,10 +234,11 @@ A rollup would cap the cost of long windows and is the first optimization if the
 * Keep a high-water mark of recorded arrivals per collection (and per replica id for the diagnostic), and start every span at max(high-water mark, last_reflected(F)). Without it, ALTER of an interval recomputes last_reflected of the old frontier on the new grid and re-covers arrivals, and a reconnecting replica, whose frontier regresses, re-covers up to its as-of.
 * A replica that is removed with open periods loses them, which leaves a hole in its diagnostic histogram.
 * On environmentd restart, the in-memory open periods are lost, and a dyncfg selects what happens to the arrivals they and the outage covered:
-  * `hole` (default): start from each object's current frontier. The lost arrivals are not recorded, which the histogram shows as missing periods: we failed to record, and the only known bound on their latency is trivial.
+  * `hole` (default): start every recording at the time environmentd started. The arrivals between the last emitted period and that time are not recorded, which the histogram shows as missing arrivals: no controller observed when they became visible, and the only known bound on their latency is trivial. The arrivals after it count with their real latency once a frontier passes them, including the time until the first frontier is observed. Starting at the first observed frontier instead hid post-restart hydration: on staging, the introspection indexes of a replica that hydrated for 11 minutes after a restart reported no frontier until hydration finished, and their recording had a hole for those 11 minutes.
   * `charge`: seed the high-water mark from the maximum emitted period end, and count the lost arrivals when the frontier is next observed. A long outage then reads as a freshness degradation, which matches what queries saw, but arrivals of the open period before the crash, which were already visible, are inflated by up to one period plus the outage.
 * A zero-downtime cutover is a restart for recording. The new generation records nothing while read-only, so it is never a second writer, and after the takeover it halts and reboots writable, starting its recordings under the restart policy. The old generation is fenced at the takeover and cannot write afterwards, and it has no earlier point at which it knows to flush its open periods. Under `hole`, every release therefore leaves a gap of up to one period plus the takeover time. Under `charge`, the same gap reads as a freshness spike on every release, although the old generation served those arrivals fresh until it was fenced, which is why `hole` is the default.
 * A new object starts recording at its creation time: arrivals before creation are not counted, and arrivals during hydration count with their real latency. A new replica's diagnostic starts at the replica's creation time.
+* An introspection collection logs the replicas of its cluster, so while the cluster has no replica nothing exists to log, and the outage is a hole, not latency. Its global recording emits its open periods when the cluster's last replica goes away and starts again at the next replica's creation time. A replica that exists but is slow, for example while it hydrates, delays logs that exist, and that counts as latency. On staging, without this rule, the 66 introspection indexes of two clusters whose replicas were dropped for up to 30 minutes were charged the whole outage, and they alone set the environment's p99.
 * An empty frontier means the object is complete forever. The recorder emits the open periods up to the last arrival and stops. A dropped object discards its open periods.
 * Sources assign timestamps by the clusterd clock, while the controller observes advances by the environmentd clock. When they disagree, an advance can appear to land before its window ends. Clamp the latency to at least the window's length.
 * Carry the live tick interval through `StorageCollections`. The spike used a process-global map.
@@ -243,7 +266,7 @@ The recorder's parameters are dyncfgs:
 
 * D is unbounded (`None`) for refresh schedules without `REFRESH EVERY`, and `REFRESH AT` points next to `REFRESH EVERY` are ignored. Such objects keep today's reported value.
 * When the scan for D is infeasible, the fallback is the refresh period plus the largest assignment and frontier-lag terms of its input, about 62 s for a 1 minute refresh over a table.
-* A recorder starts at the later of its as-of and its creation time. Collections that exist when the controller starts (a restart) start at their first observed frontier under policy `hole`.
+* A recorder starts at the later of its as-of and its creation time. Collections that exist when the controller starts (a restart) start at the controller's start under policy `hole`.
 * Materialized views hand their freshness tree to the storage side for reporting, but only the compute controller writes their histogram rows.
 * Resolved trees are cached behind a generation counter, and D is cached per collection.
 * Each assignment window is charged its worst case, so a 1 s source records about 1 s plus processing for every arrival, not a spread from 0 to 1 s. Staging confirmed this, with a 100 ms source at 108 to 128 ms and a 1 s source at 1.0 to 1.2 s.
