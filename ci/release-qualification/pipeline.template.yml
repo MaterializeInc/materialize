@@ -823,7 +823,7 @@ steps:
         timeout_in_minutes: 240
         agents:
           # building is expensive
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         env:
           # New versions of Docker don't work with GHCR + local builds
           MZ_GHCR: 0
