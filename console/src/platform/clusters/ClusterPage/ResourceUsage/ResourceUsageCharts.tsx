@@ -357,7 +357,7 @@ export const PercentAxis = ({
         width={layout.svgProps.width - rangeStart}
         scale={yScale}
         tickValues={ticks}
-        stroke={colors.border.primary}
+        stroke={colors.border.secondary}
         strokeDasharray="3 3"
         pointerEvents="none"
       />
@@ -921,7 +921,7 @@ export const TimeGridLines = ({ width, xScale }: TimeAxisProps) => {
           x2={x}
           y1="0"
           y2="100%"
-          stroke={colors.border.primary}
+          stroke={colors.border.secondary}
           strokeDasharray="3 3"
         />
       ))}
