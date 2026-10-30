@@ -2833,7 +2833,19 @@ pub fn describe_alter_network_policy(
     Ok(StatementDesc::new(None))
 }
 
-/// Rejects times that are too large.
+/// The largest `REFRESH EVERY` interval.
+///
+/// The next refresh after any time `t` comes before `t + interval`, so this keeps the next refresh
+/// after a replica's expiration within chrono's range (see `check_refresh_time`) until about the
+/// year 234,000.
+const MAX_REFRESH_EVERY_INTERVAL: Duration = Duration::from_secs(10_000_000 * 24 * 60 * 60);
+
+/// Rejects times past the `timestamptz` range, which is also chrono's.
+///
+/// NOTE: A later refresh time can crash-loop the replicas of the materialized view's cluster.
+/// With replica expiration on, compute rounds a dataflow's expiration up to the next refresh and
+/// logs it through `mz_ore::now::to_datetime`, which panics past chrono's range. For the refresh
+/// times a `REFRESH EVERY` schedule computes, `MAX_REFRESH_EVERY_INTERVAL` is the bound.
 fn check_refresh_time(option: &str, ts: Timestamp) -> Result<(), PlanError> {
     let renderable = i64::try_from(ts)
         .ok()
@@ -2978,6 +2990,7 @@ pub fn plan_create_materialized_view(
                     // Reject too-large intervals here to avoid panicking later.
                     if u64::try_from(interval.as_millis()).is_err()
                         || Interval::from_duration(&interval).is_err()
+                        || interval > MAX_REFRESH_EVERY_INTERVAL
                     {
                         sql_bail!("REFRESH interval too large");
                     }
