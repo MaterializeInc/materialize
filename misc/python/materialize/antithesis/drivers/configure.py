@@ -54,6 +54,7 @@ import re
 import sqlite3
 import sys
 import time
+from collections.abc import Collection
 from typing import Any
 
 import psycopg
@@ -217,12 +218,18 @@ def guard_panic(params: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-def update_system_params(namespace: str, updates: dict[str, str]) -> dict[str, Any]:
+def update_system_params(
+    namespace: str,
+    updates: dict[str, str],
+    *,
+    supported_flags: Collection[str],
+) -> dict[str, Any]:
     """Merge `updates` into the ConfigMap in the precedence the module
     docstring gives.
 
     Uses the read `resourceVersion` for optimistic concurrency, so concurrent
-    callers never lose each other's keys. Returns the written map.
+    callers never lose each other's keys. Removes unsupported implementation
+    flags and returns the written map.
     """
     defaults = {
         k: v
@@ -246,7 +253,14 @@ def update_system_params(namespace: str, updates: dict[str, str]) -> dict[str, A
             current = json.loads(data.get(CONFIGMAP_KEY) or "{}")
         except json.JSONDecodeError:
             current = {}
-        merged = guard_panic({**defaults, **current, **updates, **fixed})
+        # A ConfigMap can retain implementation flags removed by an upgrade.
+        merged = guard_panic(
+            {
+                name: value
+                for name, value in {**defaults, **current, **updates, **fixed}.items()
+                if name not in FLIP_FLAGS or name in supported_flags
+            }
+        )
         cm.data = {**data, CONFIGMAP_KEY: json.dumps(merged, indent=2, sort_keys=True)}
         try:
             api.replace_namespaced_config_map(
@@ -272,9 +286,19 @@ def show_or_none(conn: psycopg.Connection, name: str) -> str | None:
     try:
         return show(conn, name)
     except psycopg.Error as e:
-        if sql.classify(e).outcome is sql.Outcome.INDETERMINATE:
-            raise
-        return None
+        if e.sqlstate == "42704":
+            return None
+        raise
+
+
+def implementation_flags(conn: psycopg.Connection) -> dict[str, str]:
+    """Read supported implementation flags from an autocommit connection."""
+    values = {}
+    for name in FLIP_FLAGS:
+        value = show_or_none(conn, name)
+        if value is not None:
+            values[name] = value
+    return values
 
 
 def mz_version(conn: psycopg.Connection) -> str:
@@ -292,11 +316,14 @@ def profile_params(profile: str, version: str) -> dict[str, str]:
     return {k: v for k, v in params.items() if k not in HARNESS_EXCLUDED}
 
 
-def roll_headline() -> dict[str, str]:
+def roll_headline(supported_flags: Collection[str]) -> dict[str, str]:
     short = rng.random() < SHORT_LEASE_P
     return {
-        "enable_upsert_v2": rng.choice(["true", "false"]),
-        "enable_frontend_peek_sequencing": rng.choice(["true", "false"]),
+        **{
+            name: rng.choice(["true", "false"])
+            for name in ("enable_upsert_v2", "enable_frontend_peek_sequencing")
+            if name in supported_flags
+        },
         LEASE_PARAM: rng.choice(SHORT_LEASE_MENU if short else LEASE_MENU),
         MAX_WAIT: rng.choice(MAX_WAIT_MENU),
         "with_0dt_deployment_ddl_check_interval": rng.choice(DDL_CHECK_MENU),
@@ -332,13 +359,15 @@ def report_arms(profile: str, headline: dict[str, str], arms: dict[str, str]) ->
         profile == "test-random", "configure drew the randomized test profile", {}
     )
 
-    upsert_v2 = normalize(headline["enable_upsert_v2"]) == "true"
-    sometimes(upsert_v2, "configure enabled upsert v2", {})
-    sometimes(not upsert_v2, "configure disabled upsert v2", {})
+    if "enable_upsert_v2" in headline:
+        upsert_v2 = normalize(headline["enable_upsert_v2"]) == "true"
+        sometimes(upsert_v2, "configure enabled upsert v2", {})
+        sometimes(not upsert_v2, "configure disabled upsert v2", {})
 
-    peek = normalize(headline["enable_frontend_peek_sequencing"]) == "true"
-    sometimes(peek, "configure enabled frontend peek sequencing", {})
-    sometimes(not peek, "configure disabled frontend peek sequencing", {})
+    if "enable_frontend_peek_sequencing" in headline:
+        peek = normalize(headline["enable_frontend_peek_sequencing"]) == "true"
+        sometimes(peek, "configure enabled frontend peek sequencing", {})
+        sometimes(not peek, "configure disabled frontend peek sequencing", {})
 
     lease = headline["persist_reader_lease_duration"]
     sometimes(lease == "900s", "configure kept the production reader lease", {})
@@ -375,22 +404,33 @@ def report_arms(profile: str, headline: dict[str, str], arms: dict[str, str]) ->
 def wait_until_reflected(host: str, expected: dict[str, str]) -> dict[str, str]:
     """Poll `SHOW` as mz_system until every expected value is in effect.
 
-    Returns the parameters still mismatching at the deadline (empty on success).
+    Return outstanding mismatches and read errors, or an empty map on success.
     """
     deadline = time.monotonic() + SYNC_TIMEOUT_S
-    mismatched: dict[str, str] = dict(expected)
+    mismatched = {
+        name: f"want {value}, not yet read" for name, value in expected.items()
+    }
     while True:
+        observed: dict[str, str] = {}
+        reading: str | None = None
         try:
             with sql.connection(host, internal=True) as conn:
-                mismatched = {}
                 for name, value in expected.items():
+                    reading = name
                     seen = show(conn, name)
                     if normalize(seen) != normalize(value):
-                        mismatched[name] = f"want {value}, have {seen}"
+                        observed[name] = f"want {value}, have {seen}"
+                reading = None
+            mismatched = observed
             if not mismatched:
                 return {}
         except (psycopg.Error, OSError) as e:
+            mismatched.update(observed)
+            operation = f"SHOW {reading}" if reading is not None else "connection"
+            mismatched["<readback>"] = f"{operation}: {e}"
             log(f"waiting for parameters: {e}")
+            if isinstance(e, psycopg.Error) and e.sqlstate == "42704":
+                return mismatched
         if time.monotonic() >= deadline:
             return mismatched
         time.sleep(2)
@@ -435,48 +475,65 @@ def current_flag_value(db: sqlite3.Connection, name: str) -> str | None:
     return row[0] if row else None
 
 
-def roll_flag(env: Environment, db: sqlite3.Connection | None = None) -> str:
-    """Flip one `FLIP_FLAGS` entry in the ConfigMap and record it.
+def roll_flag(env: Environment, db: sqlite3.Connection | None = None) -> str | None:
+    """Flip a supported implementation flag and return its name, or None if none exist.
 
     Does not wait for environmentd to apply the value: it runs under faults,
     and the next `flag_history` reader sees the intended value with its time.
-    Returns the flipped flag name.
     """
-    db = db or open_state()
-    name = rng.choice(FLIP_FLAGS)
-    previous = current_flag_value(db, name)
-    if previous is None:
-        new = rng.choice(["true", "false"])
-    else:
-        new = "false" if previous == "true" else "true"
-    update_system_params(env.endpoints.namespace, {name: new})
-    record_flag(db, name, new, "mid-run")
-    sometimes(
-        name == "enable_upsert_v2",
-        "mid-run roll flipped enable_upsert_v2",
-        {"value": new},
-    )
-    sometimes(
-        name == "enable_upsert_chunked_stash",
-        "mid-run roll flipped enable_upsert_chunked_stash",
-        {"value": new},
-    )
-    sometimes(
-        name == "enable_frontend_peek_sequencing",
-        "mid-run roll flipped enable_frontend_peek_sequencing",
-        {"value": new},
-    )
-    sometimes(
-        name == "enable_frontend_subscribes",
-        "mid-run roll flipped enable_frontend_subscribes",
-        {"value": new},
-    )
-    sometimes(
-        name == "enable_cluster_reconfiguration_lag_gate",
-        "mid-run roll flipped enable_cluster_reconfiguration_lag_gate",
-        {"value": new},
-    )
-    return name
+    with sql.connection(env.sql_host(), internal=True, autocommit=True) as conn:
+        available = implementation_flags(conn)
+    if not available:
+        log("the serving binary has no optional implementation flags to flip")
+        return None
+    owns_db = db is None
+    if db is None:
+        db = open_state()
+    try:
+        name = rng.choice(list(available))
+        previous = current_flag_value(db, name)
+        if previous is None:
+            new = rng.choice(["true", "false"])
+        else:
+            new = "false" if previous == "true" else "true"
+        update_system_params(
+            env.endpoints.namespace, {name: new}, supported_flags=available
+        )
+        record_flag(db, name, new, "mid-run")
+        if "enable_upsert_v2" in available:
+            sometimes(
+                name == "enable_upsert_v2",
+                "mid-run roll flipped enable_upsert_v2",
+                {"value": new},
+            )
+        if "enable_upsert_chunked_stash" in available:
+            sometimes(
+                name == "enable_upsert_chunked_stash",
+                "mid-run roll flipped enable_upsert_chunked_stash",
+                {"value": new},
+            )
+        if "enable_frontend_peek_sequencing" in available:
+            sometimes(
+                name == "enable_frontend_peek_sequencing",
+                "mid-run roll flipped enable_frontend_peek_sequencing",
+                {"value": new},
+            )
+        if "enable_frontend_subscribes" in available:
+            sometimes(
+                name == "enable_frontend_subscribes",
+                "mid-run roll flipped enable_frontend_subscribes",
+                {"value": new},
+            )
+        if "enable_cluster_reconfiguration_lag_gate" in available:
+            sometimes(
+                name == "enable_cluster_reconfiguration_lag_gate",
+                "mid-run roll flipped enable_cluster_reconfiguration_lag_gate",
+                {"value": new},
+            )
+        return name
+    finally:
+        if owns_db:
+            db.close()
 
 
 def main() -> int:
@@ -484,9 +541,11 @@ def main() -> int:
     host = env.sql_host()
     db = open_state()
 
-    with sql.connect_with_retry(host, SQL_TIMEOUT_S, internal=True) as conn:
+    with sql.connect_with_retry(
+        host, SQL_TIMEOUT_S, internal=True, autocommit=True
+    ) as conn:
         version = mz_version(conn)
-        defaults = {name: show_or_none(conn, name) for name in FLIP_FLAGS}
+        defaults = implementation_flags(conn)
 
     profiles = ["production"]
     if MZCOMPOSE_IMPORT_ERROR is None:
@@ -495,12 +554,14 @@ def main() -> int:
         log(f"test profiles unavailable: {MZCOMPOSE_IMPORT_ERROR}")
     profile = rng.choice(profiles)
     base = profile_params(profile, version)
-    headline = roll_headline()
+    headline = roll_headline(defaults)
     arms = roll_arms(headline)
     desired = {**base, **headline, **HARNESS_REQUIRED}
     log(f"profile {profile} on {version}, headline {headline}, arms {arms}")
 
-    written = update_system_params(env.endpoints.namespace, desired)
+    written = update_system_params(
+        env.endpoints.namespace, desired, supported_flags=defaults
+    )
 
     with db:
         db.execute("DELETE FROM profile")
@@ -513,7 +574,7 @@ def main() -> int:
             "INSERT INTO system_params VALUES (?, ?)",
             [(k, str(v)) for k, v in written.items()],
         )
-    for name in FLIP_FLAGS:
+    for name in defaults:
         value = written.get(name, defaults.get(name))
         if value is not None:
             record_flag(db, name, str(value), "first")
