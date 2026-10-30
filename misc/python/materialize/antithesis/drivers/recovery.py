@@ -551,6 +551,9 @@ def _halt_message(
     text: str, selector: _LogSelector, counts: Counter[str] | None = None
 ) -> tuple[str, str] | None:
     counts = counts if counts is not None else Counter()
+    if text.startswith("unable to retrieve container logs for "):
+        counts["runtime_log_unavailable"] += 1
+        return None
     try:
         encoded_len = len(text.encode())
     except UnicodeError:
