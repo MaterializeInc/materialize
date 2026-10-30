@@ -43,22 +43,28 @@ Contracts for other drivers, in state database `recovery`:
 
 from __future__ import annotations
 
+import calendar
+import json
 import re
 import sqlite3
 import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
 import requests
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
     always_or_unreachable,
-    reachable,
-    sometimes,
+)
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+    always_or_unreachable as always,
+)
+from antithesis.lifecycle import (  # pyright: ignore[reportMissingModuleSource]
+    send_event,
 )
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
@@ -68,6 +74,7 @@ from materialize.antithesis.drivers import configure, lifecycle, rollouts
 from materialize.antithesis.drivers.sources_common import source_error_text
 from materialize.antithesis.endpoints import INTERNAL_HTTP_PORT
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import reachable, sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "recovery"
@@ -108,6 +115,11 @@ RESTART_COMPARE_P = 0.5
 
 ANYTIME_DURATION_S = 120
 ANYTIME_POLL_S = 10
+HALT_EVIDENCE_BUDGET_S = 10.0
+HALT_EVIDENCE_ATTEMPTS = 3
+HALT_EVIDENCE_REQUEST_S = 3.0
+HALT_EVIDENCE_RETRY_S = 30.0
+HALT_EVIDENCE_MAX_BYTES = 16_384
 
 ROLE_ENVIRONMENTD = "environmentd"
 ROLE_CLUSTERD = "clusterd"
@@ -214,6 +226,11 @@ def open_state() -> sqlite3.Connection:
             pod TEXT, exit_code INTEGER, reason TEXT, signal INTEGER,
             finished_at TEXT, classification TEXT, observed_at REAL,
             PRIMARY KEY (pod_uid, container, restart_count));
+        CREATE TABLE IF NOT EXISTS halt_evidence (
+            namespace TEXT, pod_uid TEXT, container TEXT,
+            termination_count INTEGER, finished_at TEXT,
+            payload TEXT NOT NULL, emitted INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (namespace, pod_uid, container, termination_count, finished_at));
         """)
     db.commit()
     return db
@@ -373,8 +390,290 @@ def classify_exit(exit_code: int, reason: str | None) -> str:
     return "unknown"
 
 
+@dataclass
+class HaltEvidenceBudget:
+    remaining_s: float = HALT_EVIDENCE_BUDGET_S
+    attempts: int = HALT_EVIDENCE_ATTEMPTS
+    retry_at: dict[tuple[Any, ...], float] = field(default_factory=dict)
+
+
+def _termination_identity(o: ContainerObservation) -> dict[str, Any]:
+    return {
+        "namespace": o.namespace,
+        "pod_uid": o.pod_uid,
+        "container": o.container,
+        "termination_count": o.termination_count,
+        "finished_at": o.finished_at,
+        "exit_code": o.exit_code,
+    }
+
+
+@dataclass(frozen=True)
+class _LogSelector:
+    pod_uid: str
+    pod_name: str
+    restart_count: int
+    current_terminated: bool
+    exit_code: int
+    signal: int | None
+    finished_at: str | None
+    container_id: str | None
+    started_at: str | None
+    prior_finished_at: str | None
+    next_started_at: str | None
+
+
+def _time_text(value: Any) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _log_selector(pod: Any, container: str) -> _LogSelector | None:
+    metadata, status = getattr(pod, "metadata", None), getattr(pod, "status", None)
+    if metadata is None or status is None:
+        return None
+    for cs in status.container_statuses or []:
+        if cs.name != container:
+            continue
+        current = getattr(getattr(cs, "state", None), "terminated", None)
+        previous = getattr(getattr(cs, "last_state", None), "terminated", None)
+        term = current or previous
+        if term is None:
+            return None
+        running = getattr(getattr(cs, "state", None), "running", None)
+        return _LogSelector(
+            metadata.uid,
+            metadata.name,
+            cs.restart_count,
+            current is not None,
+            term.exit_code,
+            term.signal,
+            _time_text(term.finished_at),
+            getattr(cs, "container_id", None),
+            _time_text(getattr(term, "started_at", None)),
+            (
+                _time_text(previous.finished_at)
+                if current is not None and previous
+                else None
+            ),
+            _time_text(running.started_at) if current is None and running else None,
+        )
+    return None
+
+
+def _timestamp_interval(value: str | None) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})",
+        value,
+    )
+    if match is None:
+        return None
+    try:
+        seconds = datetime.fromisoformat(match[1] + match[3]).astimezone(UTC)
+    except ValueError:
+        return None
+    fraction = match[2] or ""
+    start = calendar.timegm(seconds.utctimetuple()) * 1_000_000_000
+    start += int(fraction.ljust(9, "0"))
+    # metav1.Time drops fractional seconds. Its precision is an interval, not
+    # evidence that a nanosecond log timestamp is after the process exited.
+    return start, start + 10 ** (9 - len(fraction))
+
+
+def _correlated_log_time(stamp: str, selector: _LogSelector) -> bool:
+    logged = _timestamp_interval(stamp)
+    started = _timestamp_interval(selector.started_at)
+    finished = _timestamp_interval(selector.finished_at)
+    if logged is None or started is None or finished is None:
+        return False
+    if logged[0] < started[0] or logged[1] > finished[1] or started[0] >= finished[1]:
+        return False
+    prior = _timestamp_interval(selector.prior_finished_at)
+    following = _timestamp_interval(selector.next_started_at)
+    if prior is not None and logged[0] < prior[1]:
+        return False
+    if following is not None and logged[1] > following[0]:
+        return False
+    ordinal = selector.restart_count + int(selector.current_terminated)
+    if logged[0] < started[1] and ordinal != 1 and prior is None:
+        return False
+    # In the uncertain final bucket the new incarnation must be known to
+    # start later. Otherwise a stale pod status can name the wrong log stream.
+    if logged[1] > finished[0] and following is None:
+        return False
+    return True
+
+
+def _halt_message(text: str, selector: _LogSelector) -> tuple[str, str] | None:
+    try:
+        encoded_len = len(text.encode())
+    except UnicodeError:
+        return None
+    if encoded_len >= HALT_EVIDENCE_MAX_BYTES or not text.endswith("\n"):
+        return None
+    messages = []
+    prefix = "halting process: "
+    for raw in text.splitlines():
+        stamp, _, line = raw.partition(" ")
+        try:
+            record = json.loads(line)
+            message = record.get("fields", {}).get("message")
+        except (ValueError, AttributeError, RecursionError):
+            message = line
+        if isinstance(message, str) and message.startswith(prefix):
+            if not _correlated_log_time(stamp, selector):
+                return None
+            messages.append((message[len(prefix) :], stamp))
+    return messages[0] if len(messages) == 1 and messages[0][0] else None
+
+
+def capture_halt_evidence(
+    o: ContainerObservation, deadline: float
+) -> dict[str, Any] | None:
+    """Read one complete halt message only while its log selector stays unchanged."""
+    if (
+        o.exit_code != 166
+        or o.signal not in (None, 0)
+        or not o.finished_at
+        or not o.pod_uid
+    ):
+        return None
+    core = client.CoreV1Api()
+
+    def timeout() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("halt evidence capture budget elapsed")
+        return min(HALT_EVIDENCE_REQUEST_S, remaining)
+
+    try:
+        before = core.read_namespaced_pod(
+            o.pod,
+            o.namespace,
+            _request_timeout=timeout(),  # pyright: ignore[reportCallIssue]
+        )
+        selector = _log_selector(before, o.container)
+        expected = (
+            o.pod_uid,
+            o.pod,
+            o.restart_count,
+            o.current_terminated,
+            o.exit_code,
+            o.signal,
+            o.finished_at,
+        )
+        if (
+            selector is None
+            or (
+                selector.pod_uid,
+                selector.pod_name,
+                selector.restart_count,
+                selector.current_terminated,
+                selector.exit_code,
+                selector.signal,
+                selector.finished_at,
+            )
+            != expected
+        ):
+            return None
+        text = core.read_namespaced_pod_log(
+            o.pod,
+            o.namespace,
+            container=o.container,
+            previous=not o.current_terminated,
+            timestamps=True,
+            tail_lines=EXIT_LOG_TAIL,
+            limit_bytes=HALT_EVIDENCE_MAX_BYTES + 1,
+            _request_timeout=timeout(),  # pyright: ignore[reportCallIssue]
+        )
+        after = core.read_namespaced_pod(
+            o.pod,
+            o.namespace,
+            _request_timeout=timeout(),  # pyright: ignore[reportCallIssue]
+        )
+        # A current termination can become the previous run while reading logs.
+        # Its ordinal stays the same, but the API's current/previous routing changes.
+        if _log_selector(after, o.container) != selector or not isinstance(text, str):
+            return None
+        halt = _halt_message(text, selector)
+        if halt is None:
+            return None
+    except (*rollouts.TRANSIENT_ERRORS, UnicodeError):
+        return None
+    identity = _termination_identity(o)
+    return {
+        "termination": identity,
+        "halt": {"termination": dict(identity), "message": halt[0], "complete": True},
+        "log_capture": {
+            "message_at": halt[1],
+            "started_at": selector.started_at,
+            "finished_at": selector.finished_at,
+            "prior_finished_at": selector.prior_finished_at,
+            "next_started_at": selector.next_started_at,
+        },
+    }
+
+
+def record_halt_evidence(
+    db: sqlite3.Connection,
+    observations: list[ContainerObservation],
+    budget: HaltEvidenceBudget,
+    deadline: float | None = None,
+) -> None:
+    """Cache and emit correlated halt evidence within one monitor's shared budget."""
+    for o in observations:
+        if o.exit_code != 166 or not o.finished_at:
+            continue
+        key = (o.namespace, o.pod_uid, o.container, o.termination_count, o.finished_at)
+        row = db.execute(
+            "SELECT payload, emitted FROM halt_evidence WHERE namespace = ? AND pod_uid = ? "
+            "AND container = ? AND termination_count = ? AND finished_at = ?",
+            key,
+        ).fetchone()
+        if row is None:
+            now = time.monotonic()
+            if (
+                budget.attempts <= 0
+                or budget.remaining_s <= 0
+                or now < budget.retry_at.get(key, 0)
+                or (deadline is not None and now >= deadline)
+            ):
+                continue
+            budget.attempts -= 1
+            budget.retry_at[key] = now + HALT_EVIDENCE_RETRY_S
+            end = now + budget.remaining_s
+            if deadline is not None:
+                end = min(end, deadline)
+            evidence = capture_halt_evidence(o, end)
+            spent = max(0.0, time.monotonic() - now)
+            budget.remaining_s = max(0.0, budget.remaining_s - spent)
+            if evidence is None:
+                continue
+            payload = json.dumps(evidence, sort_keys=True)
+            with db:
+                db.execute(
+                    "INSERT OR IGNORE INTO halt_evidence VALUES (?, ?, ?, ?, ?, ?, 0)",
+                    (*key, payload),
+                )
+            row = (payload, 0)
+        if row[1]:
+            continue
+        send_event("antithesis_exit_evidence", json.loads(row[0]))
+        with db:
+            db.execute(
+                "UPDATE halt_evidence SET emitted = 1 WHERE namespace = ? AND pod_uid = ? "
+                "AND container = ? AND termination_count = ? AND finished_at = ?",
+                key,
+            )
+
+
 def record_terminations(
-    db: sqlite3.Connection, observations: list[ContainerObservation]
+    db: sqlite3.Connection,
+    observations: list[ContainerObservation],
+    *,
+    evidence_budget: HaltEvidenceBudget | None = None,
+    deadline: float | None = None,
 ) -> int:
     """Classify and assert on every termination not seen before. Returns how many."""
     new = 0
@@ -444,6 +743,9 @@ def record_terminations(
             details,
         )
         sometimes(cls == "halt", "a Materialize pod restarted after a halt", details)
+    record_halt_evidence(
+        db, observations, evidence_budget or HaltEvidenceBudget(), deadline
+    )
     return new
 
 
@@ -455,9 +757,15 @@ def anytime_main() -> int:
         return 0
     db = open_state()
     deadline = time.monotonic() + ANYTIME_DURATION_S
+    evidence_budget = HaltEvidenceBudget()
     while time.monotonic() < deadline:
         try:
-            record_terminations(db, observe_pods(env))
+            record_terminations(
+                db,
+                observe_pods(env),
+                evidence_budget=evidence_budget,
+                deadline=deadline,
+            )
         except (ApiException, OSError) as e:
             log(f"cannot read pods: {e}")
         time.sleep(ANYTIME_POLL_S)

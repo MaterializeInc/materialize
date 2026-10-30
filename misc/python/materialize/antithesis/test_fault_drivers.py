@@ -9,18 +9,429 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import sqlite3
 import threading
 from contextlib import contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import urllib3
 
 pytest.importorskip("antithesis")
 
 from materialize.antithesis import quiet
-from materialize.antithesis.drivers import canaries, recovery, rollouts
+from materialize.antithesis.drivers import canaries, recovery, resource_kills, rollouts
+
+
+@pytest.fixture
+def halt_capture(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    finished = "2026-10-30T12:00:00.900000000+00:00"
+    term = SimpleNamespace(
+        exit_code=166,
+        signal=0,
+        finished_at=finished,
+        started_at="2026-10-30T11:59:59+00:00",
+    )
+    status = SimpleNamespace(
+        name="environmentd",
+        restart_count=0,
+        state=SimpleNamespace(terminated=term, running=None),
+        last_state=SimpleNamespace(terminated=None),
+        container_id="container-id",
+    )
+    pod = SimpleNamespace(
+        metadata=SimpleNamespace(name="envd", uid="pod-uid"),
+        status=SimpleNamespace(container_statuses=[status]),
+    )
+    observation = recovery.ContainerObservation(
+        role="environmentd",
+        namespace="mz",
+        pod="envd",
+        pod_uid="pod-uid",
+        container="environmentd",
+        restart_count=0,
+        exit_code=166,
+        reason="Error",
+        signal=0,
+        finished_at=finished,
+        waiting_reason=None,
+        current_terminated=True,
+    )
+    message = "fenced out old deployment; rebooting as leader"
+    text = (
+        "2026-10-30T12:00:00.800000000Z "
+        + json.dumps({"fields": {"message": f"halting process: {message}"}})
+        + "\n"
+    )
+    core = Mock()
+    core.read_namespaced_pod.return_value = pod
+    core.read_namespaced_pod_log.return_value = text
+    monkeypatch.setattr(recovery.client, "CoreV1Api", lambda: core)
+    db = sqlite3.connect(":memory:")
+    monkeypatch.setattr(recovery.state, "open_db", lambda _: db)
+    recovery.open_state()
+    emitted = Mock()
+    monkeypatch.setattr(recovery, "send_event", emitted)
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(recovery.time, "monotonic", lambda: clock.now)
+    return SimpleNamespace(
+        observation=observation,
+        pod=pod,
+        core=core,
+        db=db,
+        emitted=emitted,
+        clock=clock,
+        text=text,
+        message=message,
+    )
+
+
+@pytest.mark.parametrize("current", [True, False])
+def test_halt_capture_uses_the_stable_current_or_previous_log(
+    halt_capture: SimpleNamespace, current: bool
+) -> None:
+    o = halt_capture.observation
+    if not current:
+        o = replace(o, current_terminated=False, restart_count=1)
+        cs = halt_capture.pod.status.container_statuses[0]
+        cs.restart_count = 1
+        cs.last_state.terminated = cs.state.terminated
+        cs.state.terminated = None
+        cs.state.running = SimpleNamespace(started_at="2026-10-30T12:00:01+00:00")
+    result = recovery.capture_halt_evidence(o, 10)
+    assert result is not None
+    assert result["halt"]["message"] == halt_capture.message
+    assert result["halt"]["complete"] is True
+    assert result["termination"] == result["halt"]["termination"]
+    assert result["termination"]["termination_count"] == 1
+    call = halt_capture.core.read_namespaced_pod_log.call_args
+    assert call.kwargs["previous"] is (not current)
+    assert call.kwargs["timestamps"] is True
+    assert call.kwargs["limit_bytes"] == recovery.HALT_EVIDENCE_MAX_BYTES + 1
+    assert call.kwargs["tail_lines"] == recovery.EXIT_LOG_TAIL
+    assert 0 < call.kwargs["_request_timeout"] <= recovery.HALT_EVIDENCE_REQUEST_S
+
+
+@pytest.mark.parametrize(
+    "change", ["uid", "restart", "selector", "finished", "container_id"]
+)
+def test_halt_capture_rejects_log_routing_changes(
+    halt_capture: SimpleNamespace, change: str
+) -> None:
+    after = copy.deepcopy(halt_capture.pod)
+    cs = after.status.container_statuses[0]
+    if change == "uid":
+        after.metadata.uid = "replacement-uid"
+    elif change == "restart":
+        cs.restart_count += 1
+    elif change == "selector":
+        cs.restart_count += 1
+        cs.last_state.terminated = cs.state.terminated
+        cs.state.terminated = None
+    elif change == "finished":
+        cs.state.terminated.finished_at = "2026-10-30T12:00:10+00:00"
+    else:
+        cs.container_id = "replacement-container"
+    halt_capture.core.read_namespaced_pod.side_effect = [halt_capture.pod, after]
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+
+
+def test_halt_capture_rejects_an_already_stale_observation(
+    halt_capture: SimpleNamespace,
+) -> None:
+    halt_capture.pod.metadata.uid = "replacement-uid"
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    halt_capture.core.read_namespaced_pod_log.assert_not_called()
+
+
+def test_halt_capture_cannot_explain_an_exit_by_signal(
+    halt_capture: SimpleNamespace,
+) -> None:
+    o = replace(halt_capture.observation, signal=38)
+    assert recovery.capture_halt_evidence(o, 10) is None
+    halt_capture.core.read_namespaced_pod.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "next_start,accepted",
+    [
+        ("2026-10-30T12:00:01+00:00", True),
+        ("2026-10-30T12:00:00.950000000+00:00", True),
+        ("2026-10-30T12:00:00+00:00", False),
+        ("2026-10-30T12:00:00.800000000+00:00", False),
+    ],
+)
+def test_halt_capture_models_whole_second_exit_precision(
+    halt_capture: SimpleNamespace, next_start: str, accepted: bool
+) -> None:
+    finished = "2026-10-30T12:00:00+00:00"
+    o = replace(
+        halt_capture.observation,
+        finished_at=finished,
+        current_terminated=False,
+        restart_count=1,
+    )
+    cs = halt_capture.pod.status.container_statuses[0]
+    cs.state.terminated.finished_at = finished
+    cs.last_state.terminated = cs.state.terminated
+    cs.state.terminated = None
+    cs.state.running = SimpleNamespace(started_at=next_start)
+    cs.restart_count = 1
+    result = recovery.capture_halt_evidence(o, 10)
+    assert (result is not None) is accepted
+
+
+def test_halt_capture_defers_an_ambiguous_current_exit_until_a_later_sample(
+    halt_capture: SimpleNamespace,
+) -> None:
+    finished = "2026-10-30T12:00:00+00:00"
+    halt_capture.pod.status.container_statuses[0].state.terminated.finished_at = (
+        finished
+    )
+    o = replace(halt_capture.observation, finished_at=finished)
+    assert recovery.capture_halt_evidence(o, 10) is None
+
+
+@pytest.mark.parametrize(
+    "prior_finished,accepted",
+    [(None, False), ("2026-10-30T11:59:59Z", True), ("2026-10-30T12:00:00Z", False)],
+)
+def test_halt_capture_rejects_overlapping_start_precision(
+    halt_capture: SimpleNamespace, prior_finished: str | None, accepted: bool
+) -> None:
+    cs = halt_capture.pod.status.container_statuses[0]
+    cs.restart_count = 1
+    cs.state.terminated.started_at = "2026-10-30T12:00:00+00:00"
+    if prior_finished is not None:
+        cs.last_state.terminated = SimpleNamespace(finished_at=prior_finished)
+    o = replace(halt_capture.observation, restart_count=1)
+    assert (recovery.capture_halt_evidence(o, 10) is not None) is accepted
+
+
+@pytest.mark.parametrize(
+    "stamp,precision_ns",
+    [
+        ("2026-10-30T12:00:00Z", 1_000_000_000),
+        ("2026-10-30T12:00:00.123Z", 1_000_000),
+        ("2026-10-30T12:00:00.123456Z", 1_000),
+        ("2026-10-30T12:00:00.123456789Z", 1),
+    ],
+)
+def test_kubernetes_timestamp_precision_is_an_interval(
+    stamp: str, precision_ns: int
+) -> None:
+    interval = recovery._timestamp_interval(stamp)
+    assert interval is not None
+    assert interval[1] - interval[0] == precision_ns
+
+
+def test_kubernetes_timestamp_intervals_normalize_offsets() -> None:
+    assert recovery._timestamp_interval("2026-10-30T13:00:00.123+01:00") == (
+        recovery._timestamp_interval("2026-10-30T12:00:00.123Z")
+    )
+
+
+@pytest.mark.parametrize("stage", ["before", "log", "after"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        recovery.ApiException(status=503),
+        urllib3.exceptions.ReadTimeoutError(
+            urllib3.HTTPConnectionPool("localhost"), "/log", "read timed out"
+        ),
+        urllib3.exceptions.MaxRetryError(
+            urllib3.HTTPConnectionPool("localhost"),
+            "/log",
+            TimeoutError("read timed out"),
+        ),
+    ],
+    ids=["api", "read_timeout", "max_retry"],
+)
+def test_halt_capture_api_faults_remain_missing_evidence(
+    halt_capture: SimpleNamespace, stage: str, error: Exception
+) -> None:
+    if stage == "before":
+        halt_capture.core.read_namespaced_pod.side_effect = error
+    elif stage == "after":
+        halt_capture.core.read_namespaced_pod.side_effect = [halt_capture.pod, error]
+    else:
+        halt_capture.core.read_namespaced_pod_log.side_effect = error
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    halt_capture.emitted.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "kind", ["empty", "truncated", "oversized", "multiple", "nonutf8", "deep"]
+)
+def test_halt_capture_requires_one_complete_message(
+    halt_capture: SimpleNamespace, kind: str
+) -> None:
+    text = halt_capture.text
+    if kind == "empty":
+        text = ""
+    elif kind == "truncated":
+        text = text.rstrip("\n")
+    elif kind == "oversized":
+        text = "x" * recovery.HALT_EVIDENCE_MAX_BYTES + "\n" + text
+    elif kind == "multiple":
+        text += text
+    elif kind == "nonutf8":
+        text = "\ud800\n"
+    else:
+        text = "2026-10-30T12:00:00Z " + "[" * 1100 + "]" * 1100 + "\n"
+    halt_capture.core.read_namespaced_pod_log.return_value = text
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+
+
+def test_halt_capture_makes_no_requests_after_its_deadline(
+    halt_capture: SimpleNamespace,
+) -> None:
+    assert recovery.capture_halt_evidence(halt_capture.observation, 0) is None
+    halt_capture.core.read_namespaced_pod.assert_not_called()
+
+
+def test_halt_evidence_is_cached_and_emitted_once(
+    halt_capture: SimpleNamespace,
+) -> None:
+    budget = recovery.HaltEvidenceBudget()
+    for _ in range(2):
+        recovery.record_halt_evidence(
+            halt_capture.db, [halt_capture.observation], budget
+        )
+    assert halt_capture.core.read_namespaced_pod_log.call_count == 1
+    halt_capture.emitted.assert_called_once()
+    assert halt_capture.emitted.call_args.args[0] == "antithesis_exit_evidence"
+    assert halt_capture.db.execute("SELECT emitted FROM halt_evidence").fetchall() == [
+        (1,)
+    ]
+
+
+def test_halt_evidence_retries_missing_logs_without_polling_flood(
+    halt_capture: SimpleNamespace,
+) -> None:
+    budget = recovery.HaltEvidenceBudget()
+    halt_capture.core.read_namespaced_pod_log.side_effect = ["", halt_capture.text]
+    for now in (0, 1, recovery.HALT_EVIDENCE_RETRY_S):
+        halt_capture.clock.now = now
+        recovery.record_halt_evidence(
+            halt_capture.db, [halt_capture.observation], budget
+        )
+    assert halt_capture.core.read_namespaced_pod_log.call_count == 2
+    halt_capture.emitted.assert_called_once()
+
+
+def test_halt_evidence_has_a_shared_attempt_limit(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    capture = Mock(return_value=None)
+    monkeypatch.setattr(recovery, "capture_halt_evidence", capture)
+    observations = [
+        replace(halt_capture.observation, pod_uid=f"pod-{i}") for i in range(20)
+    ]
+    budget = recovery.HaltEvidenceBudget()
+    for _ in range(2):
+        recovery.record_halt_evidence(halt_capture.db, observations, budget)
+    assert capture.call_count == recovery.HALT_EVIDENCE_ATTEMPTS
+    halt_capture.emitted.assert_not_called()
+
+
+def test_halt_evidence_has_a_shared_time_limit(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    def capture(*args):
+        halt_capture.clock.now += 5
+        return None
+
+    calls = Mock(side_effect=capture)
+    monkeypatch.setattr(recovery, "capture_halt_evidence", calls)
+    observations = [
+        replace(halt_capture.observation, pod_uid=f"pod-{i}") for i in range(20)
+    ]
+    recovery.record_halt_evidence(
+        halt_capture.db, observations, recovery.HaltEvidenceBudget(attempts=20)
+    )
+    assert calls.call_count == 2
+
+
+def test_halt_evidence_can_emit_a_cached_record_after_interruption(
+    halt_capture: SimpleNamespace,
+) -> None:
+    budget = recovery.HaltEvidenceBudget()
+    halt_capture.emitted.side_effect = [KeyboardInterrupt, None]
+    with pytest.raises(KeyboardInterrupt):
+        recovery.record_halt_evidence(
+            halt_capture.db, [halt_capture.observation], budget
+        )
+    recovery.record_halt_evidence(halt_capture.db, [halt_capture.observation], budget)
+    assert halt_capture.core.read_namespaced_pod_log.call_count == 1
+    assert halt_capture.emitted.call_count == 2
+    assert halt_capture.db.execute("SELECT emitted FROM halt_evidence").fetchall() == [
+        (1,)
+    ]
+
+
+@pytest.mark.parametrize("kind", ["node", "pressure"])
+def test_resource_sizing_findings_are_harness_errors(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    db = sqlite3.connect(":memory:")
+    db.execute(
+        "CREATE TABLE seen (key TEXT PRIMARY KEY, kind TEXT, details TEXT, at REAL)"
+    )
+    finding = resource_kills.Finding(kind, "finding", {"reason": "memory pressure"})
+    product = Mock()
+    health = Mock()
+    monkeypatch.setattr(resource_kills, "always", product)
+    monkeypatch.setattr(resource_kills, "harness_error", health, raising=False)
+    monkeypatch.setattr(resource_kills, "node_memory", lambda: {})
+    resource_kills.check_once(db, Mock(sample=lambda: ([finding], True)))
+    assert not any(call.args[0] is False for call in product.call_args_list)
+    assert health.call_count == 1
+    assert health.call_args.args[1] == resource_kills.MESSAGES[kind]
+
+
+def test_own_limit_oom_remains_a_product_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = sqlite3.connect(":memory:")
+    db.execute(
+        "CREATE TABLE seen (key TEXT PRIMARY KEY, kind TEXT, details TEXT, at REAL)"
+    )
+    finding = resource_kills.Finding("limit", "finding", {"memory_limit": "1Gi"})
+    product = Mock()
+    monkeypatch.setattr(resource_kills, "always", product)
+    monkeypatch.setattr(resource_kills, "node_memory", lambda: {})
+    resource_kills.check_once(db, Mock(sample=lambda: ([finding], True)))
+    assert any(
+        call.args[:2] == (False, resource_kills.MSG_LIMIT)
+        for call in product.call_args_list
+    )
+
+
+def test_incomplete_resource_attribution_is_retried_without_a_product_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = sqlite3.connect(":memory:")
+    db.execute(
+        "CREATE TABLE seen (key TEXT PRIMARY KEY, kind TEXT, details TEXT, at REAL)"
+    )
+    finding = resource_kills.Finding("limit", "finding", {"memory_limit": "1Gi"})
+    product = Mock()
+    evidence = Mock()
+    monkeypatch.setattr(resource_kills, "always", product)
+    monkeypatch.setattr(resource_kills, "send_event", evidence, raising=False)
+    monkeypatch.setattr(resource_kills, "node_memory", lambda: {})
+    resource_kills.check_once(db, Mock(sample=lambda: ([finding], False)))
+    product.assert_not_called()
+    assert evidence.call_args.args[0] == "workload_harness_unresolved"
+    assert evidence.call_args.args[1]["details"]["finding"] == "finding"
+    assert db.execute("SELECT count(*) FROM seen").fetchone() == (0,)
+    resource_kills.check_once(db, Mock(sample=lambda: ([finding], True)))
+    assert any(call.args[0] is False for call in product.call_args_list)
 
 
 def snapshot(reason: str, request: str = "r0") -> rollouts.Snapshot:

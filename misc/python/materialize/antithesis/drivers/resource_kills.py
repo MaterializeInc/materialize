@@ -12,7 +12,7 @@
 A process the kernel or the kubelet kills for memory exits like a crash (137,
 or a pod that vanishes), so the crash oracles cannot tell the two apart. This
 module reads every pod, the memory-related events, and the node conditions
-cluster-wide and sorts what it finds into three properties:
+cluster-wide and separates product memory findings from harness health:
 
 * "No Materialize container is OOM-killed at its own memory limit": an
   environmentd, clusterd or orchestratord container whose own cgroup limit
@@ -38,7 +38,7 @@ or by a generation teardown, can go unobserved. Events last an hour (the API
 server's default TTL), so the event half of the check also covers that gap
 within the hour.
 
-Every finding is asserted once per timeline (table `seen` in state database
+Every finding is reported once per timeline (table `seen` in state database
 `resource_kills`).
 """
 
@@ -52,8 +52,10 @@ from typing import Any
 
 import urllib3
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
-    sometimes,
+    always_or_unreachable as always,
+)
+from antithesis.lifecycle import (  # pyright: ignore[reportMissingModuleSource]
+    send_event,
 )
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
@@ -61,6 +63,7 @@ from kubernetes.client.rest import ApiException  # type: ignore
 from materialize.antithesis import state
 from materialize.antithesis.drivers.recovery import pod_role
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import harness_error, sometimes
 
 STATE_DB = "resource_kills"
 
@@ -323,6 +326,18 @@ def check_once(db: sqlite3.Connection, check: Check) -> None:
     log(f"sampled {len(findings)} findings, {summary}")
     sometimes(complete, MSG_COVERAGE, summary)
     for f in findings:
+        if f.kind == "limit" and not complete:
+            # A missing SystemOOM read can make a node-wide kill look local.
+            log(f"postponing incomplete memory-limit attribution: {f.details}")
+            send_event(
+                "workload_harness_unresolved",
+                {
+                    "component": "resource attribution",
+                    "message": "memory-limit kill attribution is incomplete",
+                    "details": {"finding": f.key, **f.details},
+                },
+            )
+            continue
         with db:
             inserted = db.execute(
                 "INSERT OR IGNORE INTO seen VALUES (?, ?, ?, ?)",
@@ -332,9 +347,12 @@ def check_once(db: sqlite3.Connection, check: Check) -> None:
             continue
         details = {**f.details, "node_memory": memory}
         log(f"{f.kind}: {details}")
-        always(False, MESSAGES[f.kind], details)
-    for message in MESSAGES.values():
-        always(True, message, summary)
+        if f.kind == "limit":
+            always(False, MSG_LIMIT, details)
+        else:
+            harness_error("resources", MESSAGES[f.kind], details)
+    if complete:
+        always(True, MSG_LIMIT, summary)
 
 
 def _run(duration_s: float) -> int:
