@@ -10,7 +10,9 @@
 # Lean 4 toolchain for the Lake project in `misc/lean`. The toolchain comes
 # from that project's `lean-toolchain`, so a local elan install and this image
 # use the same Lean version. The project's dependencies are built into
-# `/workspace/.lake` at image build time.
+# `/mz/misc/lean/.lake` at image build time. The project sits at its
+# repository path because `lakefile.lean` finds design doc models relative to
+# itself, in `/mz/doc/developer/design`.
 
 MZFROM debian-base
 
@@ -28,7 +30,7 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-COPY lean-toolchain /workspace/
+COPY lean-toolchain /mz/misc/lean/
 
 # NOTE: the toolchain is kept whole although checking proofs needs only part of
 # it. Batteries, a dependency of Aesop and Mathlib, has the `runLinter`
@@ -43,9 +45,9 @@ RUN case "$(uname -m)" in \
         "https://github.com/leanprover/elan/releases/download/$ELAN_VERSION/elan-$triple.tar.gz" \
     && echo "$sha256  /tmp/elan.tar.gz" | sha256sum -c - \
     && tar -C /tmp -xzf /tmp/elan.tar.gz \
-    && /tmp/elan-init -y --no-modify-path --default-toolchain "$(cat /workspace/lean-toolchain)" \
+    && /tmp/elan-init -y --no-modify-path --default-toolchain "$(cat /mz/misc/lean/lean-toolchain)" \
     && rm /tmp/elan.tar.gz /tmp/elan-init \
-    && elan toolchain install "$(cat /workspace/lean-toolchain)" \
+    && elan toolchain install "$(cat /mz/misc/lean/lean-toolchain)" \
     && chmod -R a+rX "$ELAN_HOME" \
     && lean --version
 
@@ -53,9 +55,9 @@ RUN case "$(uname -m)" in \
 # and Lake then re-clones the baked dependencies.
 RUN git config --system --add safe.directory '*'
 
-WORKDIR /workspace
+WORKDIR /mz/misc/lean
 
-COPY lakefile.toml lake-manifest.json /workspace/
+COPY lakefile.lean lake-manifest.json /mz/misc/lean/
 
 # Builds the dependency closure. Building the placeholder library alone only
 # clones the dependencies, because Lake compiles just the modules a target
@@ -68,7 +70,7 @@ RUN mkdir Mz \
     && targets="$(jq -r '.packages[] | "@" + .name' lake-manifest.json)" \
     && lake build $targets \
     && rm -rf Mz Mz.lean .lake/build \
-    && chmod -R a+rwX /workspace
+    && chmod -R a+rwX /mz/misc/lean
 
 COPY mz-lake /usr/local/bin/
 
