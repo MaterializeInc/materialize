@@ -161,6 +161,251 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+# Shared routes must authorize their dependents' secrets even when the route
+# itself has no dependencies and the dependent has no active source or sink.
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_aws_privatelink_connections = 5;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION ssh_route TO SSH TUNNEL (HOST 'original.invalid', USER 'mz');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CONNECTION ssh_route OWNER TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SECRET ssh_route_password AS 'secret';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION ssh_route_pg TO POSTGRES (HOST 'postgres', DATABASE 'postgres', USER 'postgres', PASSWORD SECRET ssh_route_password, SSH TUNNEL ssh_route) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+# This dependent reaches the same secret through a separate AWS connection.
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION ssh_route_aws TO AWS (REGION 'us-east-1', ACCESS KEY ID 'AKIAEXAMPLE', SECRET ACCESS KEY SECRET ssh_route_password) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION ssh_route_kafka TO KAFKA (BROKER 'broker:9092' USING SSH TUNNEL ssh_route, SECURITY PROTOCOL SASL_PLAINTEXT, AWS CONNECTION ssh_route_aws) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION ssh_route SET (HOST 'redirected.invalid') WITH (VALIDATE = false);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.ssh_route_password"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.ssh_route_password"
+
+simple conn=joe,user=joe
+ALTER CONNECTION ssh_route SET (HOST 'redirected.invalid') WITH (VALIDATE = true);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.ssh_route_password"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.ssh_route_password"
+
+simple conn=mz_system,user=mz_system
+SELECT create_sql LIKE '%original.invalid%' FROM mz_connections WHERE name = 'ssh_route';
+----
+t
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET ssh_route_password TO other;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+ALTER CONNECTION ssh_route SET (HOST 'redirected.invalid') WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SECRET ssh_route_password FROM other;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CONNECTION ssh_route_pg OWNER TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION ssh_route SET (HOST 'redirected.invalid') WITH (VALIDATE = false);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.ssh_route_password"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.ssh_route_password"
+
+simple conn=joe,user=joe
+DROP CONNECTION ssh_route_pg;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION ssh_route SET (HOST 'redirected.invalid') WITH (VALIDATE = false);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.ssh_route_password"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.ssh_route_password"
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION ssh_route_kafka;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION ssh_route_aws;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION ssh_route SET (HOST 'redirected.invalid') WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION ssh_route;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP SECRET ssh_route_password;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION private_route TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CONNECTION private_route OWNER TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SECRET private_route_password AS 'secret';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION private_route_pg TO POSTGRES (HOST 'postgres', DATABASE 'postgres', USER 'postgres', PASSWORD SECRET private_route_password, AWS PRIVATELINK private_route) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+# This dependent reaches the same secret through a separate AWS connection.
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION private_route_aws TO AWS (REGION 'us-east-1', ACCESS KEY ID 'AKIAEXAMPLE', SECRET ACCESS KEY SECRET private_route_password) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION private_route_kafka TO KAFKA (BROKER 'broker:9092' USING AWS PRIVATELINK private_route, SECURITY PROTOCOL SASL_PLAINTEXT, AWS CONNECTION private_route_aws) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION private_route SET (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abd') WITH (VALIDATE = false);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.private_route_password"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.private_route_password"
+
+simple conn=joe,user=joe
+ALTER CONNECTION private_route SET (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abd') WITH (VALIDATE = true);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.private_route_password"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.private_route_password"
+
+simple conn=mz_system,user=mz_system
+SELECT create_sql LIKE '%vpce-svc-0e123abc123198abc%' FROM mz_connections WHERE name = 'private_route';
+----
+t
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET private_route_password TO other;
+----
+COMPLETE 0
+
+simple conn=child,user=child
+ALTER CONNECTION private_route SET (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abd') WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SECRET private_route_password FROM other;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CONNECTION private_route_pg OWNER TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION private_route SET (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abd') WITH (VALIDATE = false);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.private_route_password"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.private_route_password"
+
+simple conn=joe,user=joe
+DROP CONNECTION private_route_pg;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION private_route SET (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abd') WITH (VALIDATE = false);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.private_route_password"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.private_route_password"
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION private_route_kafka;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION private_route_aws;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION private_route SET (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abd') WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION private_route;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP SECRET private_route_password;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET max_aws_privatelink_connections;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
 # CREATE DATABASE
 
 simple conn=joe,user=joe
