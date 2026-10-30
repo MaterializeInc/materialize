@@ -132,6 +132,8 @@ table.inline-headings {
 
 .sidebar-wrapper {
     flex: 1;
+    // Follows <main> in the source (see baseof.html), but is shown before it.
+    order: -1;
 
     @media(max-width: 850px) {
         position: fixed;
@@ -215,34 +217,30 @@ table.inline-headings {
             color: var(--highlight);
             text-decoration: none;
 
-            svg {
-                color: var(--divider-light);
-
-                .darker {
-                    color: var(--highlight);
-                }
+            .expander {
+                background-color: var(--highlight);
             }
         }
 
-        svg {
+        // A mask, not an inline <svg>, because the sidebar repeats this icon
+        // on every entry with children, on every page.
+        .expander {
             position: absolute;
             right: 6px;
             top: 50%;
+            width: 14px;
+            height: 34px;
             transform: translateY(-50%);
-            color: var(--divider-light);
+            background-color: var(--sub);
+            // White is opaque whether the mask is read by alpha or by luminance.
+            $icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -10 14 34' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 4L9 7L5 10'/%3E%3C/svg%3E");
+            -webkit-mask: $icon center / contain no-repeat;
+            mask: $icon center / contain no-repeat;
             transition: transform 0.2s ease-out;
-
-            .darker {
-                color: var(--sub);
-            }
-
-            &:hover {
-                stroke-width: 2;
-            }
         }
     }
 
-    li.open > a svg {
+    li.open > a .expander {
         transform: translateY(-50%) rotate(90deg);
     }
 
