@@ -42,11 +42,11 @@ Note that the improved hydration times are most impactful for workloads that spi
 
 This change has been rolled out to all Materialize Cloud environments and applies to all existing and new clusters. It will be enabled by default in Materialize Self-Managed in the coming weeks.
 
-### Improved Freshness page in the Console {#v26.48-freshness-page}
+### Track environment wide Freshness, using the new Freshness page in the Console {#v26.48-freshness-page}
 
 <red>*Materialize Cloud only*</red>
 
-The Console's new **Freshness** page lets you track aggregate freshness across your environment. Filter by cluster, time range, and object type to see p90, p99, p99.9, and pMax freshness across the objects. If you're not meeting your freshness target, use the page to find the lagging objects, and start to debug why. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
+The Console's new **Freshness** page lets you track aggregate freshness across your environment. Filter by cluster or schema, time range, and object type to see p90, p99, p99.9, and pMax freshness across the objects. If you're not meeting your freshness target, use the page to find the lagging objects, and start to debug why. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
 
 ![Freshness page filtered to the materialized views on one cluster over 6 hours, showing p90, p99, p99.9, and pMAX lag, a lag over time chart with a 2-second threshold line, and a table of the objects that exceeded it](/images/releases/v2648_freshness.png)
 
