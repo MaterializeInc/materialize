@@ -86,6 +86,11 @@ WHERE id LIKE 'u%'
 
 A source in the result isn't ingesting data. The `error` column shows why.
 
+While a source is stalled, some queries can still serve stale results instead
+of waiting. See [Serving during source stalls](/serve-results/source-stalls/)
+for which query shapes keep serving and the patterns that keep serving
+available through the outage.
+
 ### Check for hydrating objects
 
 ```mzsql
