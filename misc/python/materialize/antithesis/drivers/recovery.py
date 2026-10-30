@@ -120,6 +120,7 @@ HALT_EVIDENCE_ATTEMPTS = 3
 HALT_EVIDENCE_REQUEST_S = 3.0
 HALT_EVIDENCE_RETRY_S = 30.0
 HALT_EVIDENCE_MAX_BYTES = 16_384
+HALT_EVIDENCE_TAILS = (200, 20, 1)
 
 ROLE_ENVIRONMENTD = "environmentd"
 ROLE_CLUSTERD = "clusterd"
@@ -577,26 +578,35 @@ def capture_halt_evidence(
             != expected
         ):
             return None
-        text = core.read_namespaced_pod_log(
-            o.pod,
-            o.namespace,
-            container=o.container,
-            previous=not o.current_terminated,
-            timestamps=True,
-            tail_lines=EXIT_LOG_TAIL,
-            limit_bytes=HALT_EVIDENCE_MAX_BYTES + 1,
-            _request_timeout=timeout(),  # pyright: ignore[reportCallIssue]
-        )
-        after = core.read_namespaced_pod(
-            o.pod,
-            o.namespace,
-            _request_timeout=timeout(),  # pyright: ignore[reportCallIssue]
-        )
-        # A current termination can become the previous run while reading logs.
-        # Its ordinal stays the same, but the API's current/previous routing changes.
-        if _log_selector(after, o.container) != selector or not isinstance(text, str):
-            return None
-        halt = _halt_message(text, selector)
+        halt = None
+        for tail_lines in HALT_EVIDENCE_TAILS:
+            text = core.read_namespaced_pod_log(
+                o.pod,
+                o.namespace,
+                container=o.container,
+                previous=not o.current_terminated,
+                timestamps=True,
+                tail_lines=tail_lines,
+                limit_bytes=HALT_EVIDENCE_MAX_BYTES + 1,
+                _request_timeout=timeout(),  # pyright: ignore[reportCallIssue]
+            )
+            after = core.read_namespaced_pod(
+                o.pod,
+                o.namespace,
+                _request_timeout=timeout(),  # pyright: ignore[reportCallIssue]
+            )
+            # A current termination can become the previous run while reading logs.
+            # Its ordinal stays the same, but the API's current/previous routing changes.
+            if _log_selector(after, o.container) != selector or not isinstance(
+                text, str
+            ):
+                return None
+            # A byte cap can omit the final halt line. Shrink only capped tails,
+            # since shrinking complete logs could hide conflicting halt messages.
+            if len(text.encode()) >= HALT_EVIDENCE_MAX_BYTES:
+                continue
+            halt = _halt_message(text, selector)
+            break
         if halt is None:
             return None
     except (*rollouts.TRANSIENT_ERRORS, UnicodeError):
