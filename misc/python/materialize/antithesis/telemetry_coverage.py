@@ -11,13 +11,10 @@
 
 from __future__ import annotations
 
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    sometimes,
-)
-
 from materialize.antithesis import coverage_model, telemetry
 from materialize.antithesis import serializability as sz
 from materialize.antithesis.ivm_model import WriteOp
+from materialize.antithesis.observations import sometimes
 
 
 def history_checked(ops: list[sz.Op], report: sz.Report, read_ids: set[int]) -> None:
