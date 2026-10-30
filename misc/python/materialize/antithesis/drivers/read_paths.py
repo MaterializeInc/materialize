@@ -45,9 +45,9 @@ from typing import Any
 
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
-    reachable,
-    sometimes,
+    always_or_unreachable as always,
+)
+from antithesis.assertions import (
     unreachable,
 )
 
@@ -66,6 +66,7 @@ from materialize.antithesis.drivers.sources_common import (
     timeline_choice,
 )
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import reachable, sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "read_paths"

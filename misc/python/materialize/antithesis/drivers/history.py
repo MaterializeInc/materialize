@@ -64,18 +64,19 @@ from dataclasses import dataclass
 from typing import Any
 
 import psycopg
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
+from antithesis.assertions import (
     always_or_unreachable,
-    reachable,
-    sometimes,
     unreachable,
+)
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+    always_or_unreachable as always,
 )
 
 from materialize.antithesis import ddl_hold, sql, state, telemetry, telemetry_coverage
 from materialize.antithesis import serializability as sz
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import reachable, sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "history"

@@ -30,9 +30,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    reachable,
-)
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
@@ -56,6 +53,7 @@ from materialize.antithesis.drivers.rollouts import (
 )
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import reachable
 from materialize.antithesis.rng import rng
 from materialize.antithesis.state import open_db
 
