@@ -73,6 +73,7 @@ copyright_files=$(grep -vE \
     -e '^src/storage-types/src/snapshots/.*' \
     -e '^src/repr/src/adt/snapshots/.*' \
     -e '^src/environmentd/tests/testdata/timezones/.*\.csv' \
+    -e '^misc/python/materialize/testdata/.*\.csv' \
     -e '^src/fivetran-destination/proto/(common|destination_sdk)\.proto$' \
     -e '^test/fivetran-destination/.*\/00-README$' \
     -e '^console/CLOUD_REF$' \
