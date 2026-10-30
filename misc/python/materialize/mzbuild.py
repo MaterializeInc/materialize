@@ -1463,7 +1463,7 @@ class ResolvedImage:
 class DependencySet:
     """A set of `ResolvedImage`s.
 
-    Iterating over a dependency set yields the contained images in an arbitrary
+    Iterating over a dependency set yields the contained images in topological
     order. Indexing a dependency set yields the image with the specified name.
     """
 
@@ -1525,6 +1525,10 @@ class DependencySet:
                             deps_to_build.append(dep)
                     except Exception:
                         deps_to_build.append(dep)
+
+        # Unpublished images can depend on published images that also need building.
+        build_names = {dep.name for dep in deps_to_build}
+        deps_to_build = [dep for dep in self if dep.name in build_names]
 
         # Don't attempt to build in CI, as our timeouts and small machines won't allow it anyway
         if ui.env_is_truthy("CI") and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD"):
