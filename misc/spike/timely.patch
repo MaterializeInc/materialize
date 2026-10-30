@@ -1,0 +1,208 @@
+diff --git a/timely/src/progress/subgraph.rs b/timely/src/progress/subgraph.rs
+index d863132f..d8bdf243 100644
+--- a/timely/src/progress/subgraph.rs
++++ b/timely/src/progress/subgraph.rs
+@@ -715,7 +715,10 @@ impl<T: Timestamp> PerOperatorState<T> {
+                 l.log(crate::logging::ScheduleEvent::start(self.id));
+             }
+ 
+-            let incomplete = operator.schedule();
++            let incomplete = {
++                let _current = crate::scheduling::current::enter(self.id);
++                operator.schedule()
++            };
+ 
+             // Perhaps log information about the stop of the schedule call.
+             if let Some(l) = self.logging.as_mut() {
+diff --git a/timely/src/scheduling/current.rs b/timely/src/scheduling/current.rs
+new file mode 100644
+index 00000000..bfc10378
+--- /dev/null
++++ b/timely/src/scheduling/current.rs
+@@ -0,0 +1,90 @@
++//! The operator the current thread is scheduling.
++//!
++//! Timely records the identifier of each operator for the duration of its `schedule` call, the
++//! same identifier that `ScheduleEvent` reports. Code that runs without a handle to the operator,
++//! such as a global allocator attributing allocations, can read it with [`operator_id`].
++//!
++//! The identifier names an operator within one worker. Peer workers of a computation build the
++//! same dataflows in the same order, so an identifier names the same operator on each of them,
++//! but it means nothing beyond that computation. The value assumes one computation is stepped on
++//! a thread at a time. A host that steps several workers of unrelated computations on one thread
++//! has to tell them apart itself.
++//!
++//! The current operator is whoever is running, not whoever owns the data. An allocation made by
++//! one operator and handed to another, such as a buffer pushed through `Pipeline`, is attributed
++//! to the operator that made it. Work outside any operator, such as communication in
++//! `Worker::step` and dataflow construction, has no current operator.
++//!
++//! Work that happens on behalf of an operator outside its `schedule` call, for example trace
++//! maintenance driven by the host application, can claim that operator with [`enter`]. Hold the
++//! guard in a scoped binding around that work, and never across a call to `Worker::step`.
++//!
++//! Reading and writing the value does not allocate where the platform provides native
++//! thread-locals. Elsewhere, the first access on a thread may allocate.
++
++use std::cell::Cell;
++use std::marker::PhantomData;
++
++thread_local! {
++    // The identifier plus one, or zero outside any operator. Const-initialized and without
++    // `Drop`, so reading it never allocates or registers a destructor, which a global allocator
++    // relies on to avoid reentrancy.
++    static CURRENT: Cell<usize> = const { Cell::new(0) };
++}
++
++/// The identifier of the innermost operator this thread is scheduling, if any.
++#[inline]
++pub fn operator_id() -> Option<usize> {
++    CURRENT.with(|c| c.get().checked_sub(1))
++}
++
++/// Marks `id` as the operator this thread is scheduling until the returned guard drops.
++///
++/// Guards nest: dropping one restores the operator that was current when it was created. Guards
++/// must drop in reverse creation order, which holding them in scoped bindings ensures.
++#[inline]
++pub fn enter(id: usize) -> Guard {
++    Guard { previous: CURRENT.with(|c| c.replace(id + 1)), _not_send: PhantomData }
++}
++
++/// Restores the previously current operator on drop. See [`enter`].
++///
++/// A guard restores the thread it was created on, so it cannot move to another thread:
++///
++/// ```compile_fail
++/// fn assert_send<T: Send>(_: T) {}
++/// assert_send(timely::scheduling::current::enter(0));
++/// ```
++#[must_use = "the operator is current only until the guard drops"]
++pub struct Guard {
++    previous: usize,
++    // Dropped on another thread, the guard would overwrite that thread's current operator.
++    _not_send: PhantomData<*const ()>,
++}
++
++impl Drop for Guard {
++    #[inline]
++    fn drop(&mut self) {
++        CURRENT.with(|c| c.set(self.previous));
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn guards_nest_and_restore() {
++        assert_eq!(operator_id(), None);
++        {
++            let _outer = enter(3);
++            assert_eq!(operator_id(), Some(3));
++            {
++                let _inner = enter(0);
++                assert_eq!(operator_id(), Some(0));
++            }
++            assert_eq!(operator_id(), Some(3));
++        }
++        assert_eq!(operator_id(), None);
++    }
++}
+diff --git a/timely/src/scheduling/mod.rs b/timely/src/scheduling/mod.rs
+index ec46ddbf..cf3c351d 100644
+--- a/timely/src/scheduling/mod.rs
++++ b/timely/src/scheduling/mod.rs
+@@ -1,6 +1,7 @@
+ //! Types and traits to activate and schedule fibers.
+ 
+ pub mod activate;
++pub mod current;
+ 
+ pub use self::activate::{Activations, Activator, ActivateOnDrop, SyncActivator};
+ 
+diff --git a/timely/src/worker.rs b/timely/src/worker.rs
+index 2ec4fbeb..c6685e04 100644
+--- a/timely/src/worker.rs
++++ b/timely/src/worker.rs
+@@ -741,7 +741,10 @@ impl Wrapper {
+             l.log(crate::logging::ScheduleEvent::start(self.identifier));
+         }
+ 
+-        let incomplete = self.operate.as_mut().map(|op| op.schedule()).unwrap_or(false);
++        let incomplete = {
++            let _current = crate::scheduling::current::enter(self.identifier);
++            self.operate.as_mut().map(|op| op.schedule()).unwrap_or(false)
++        };
+         if !incomplete {
+             self.operate = None;
+             self.resources = None;
+diff --git a/timely/tests/current_operator.rs b/timely/tests/current_operator.rs
+new file mode 100644
+index 00000000..9d42f7f9
+--- /dev/null
++++ b/timely/tests/current_operator.rs
+@@ -0,0 +1,62 @@
++use std::cell::Cell;
++use std::rc::Rc;
++
++use timely::dataflow::channels::pact::Pipeline;
++use timely::dataflow::operators::generic::Operator;
++use timely::dataflow::operators::{Input, Probe};
++use timely::dataflow::InputHandle;
++use timely::scheduling::current;
++
++/// An operator observes its own global identifier while scheduled, also inside a nested region,
++/// and nothing is current between steps.
++#[test]
++fn operator_is_current_while_scheduled() {
++    timely::execute_directly(|worker| {
++        let mut input = InputHandle::new();
++        let outer_runs = Rc::new(Cell::new(0usize));
++        let inner_runs = Rc::new(Cell::new(0usize));
++        let probe = worker.dataflow::<u64, _, _>(|scope| {
++            let outer_observed = Rc::clone(&outer_runs);
++            let inner_observed = Rc::clone(&inner_runs);
++            let stream = scope
++                .input_from(&mut input)
++                .container::<Vec<u64>>()
++                .unary(Pipeline, "Outer", move |_cap, info| {
++                    move |records, output| {
++                        assert_eq!(current::operator_id(), Some(info.global_id));
++                        outer_observed.set(outer_observed.get() + 1);
++                        records.for_each(|time, data| output.session(&time).give_container(data));
++                    }
++                });
++            scope
++                .region(|inner| {
++                    use timely::dataflow::operators::{Enter, Leave};
++                    stream
++                        .enter(inner)
++                        .unary(Pipeline, "Inner", move |_cap, info| {
++                            move |records, output| {
++                                // The innermost operator, not the region scheduling it.
++                                assert_eq!(current::operator_id(), Some(info.global_id));
++                                inner_observed.set(inner_observed.get() + 1);
++                                records.for_each(|time, data| {
++                                    output.session(&time).give_container(data)
++                                });
++                            }
++                        })
++                        .leave(scope)
++                })
++                .probe()
++                .0
++        });
++
++        for round in 0..3 {
++            input.send(round);
++            input.advance_to(round + 1);
++            while probe.less_than(&(round + 1)) {
++                worker.step();
++                assert_eq!(current::operator_id(), None);
++            }
++        }
++        assert!(outer_runs.get() > 0 && inner_runs.get() > 0, "both operators ran");
++    });
++}

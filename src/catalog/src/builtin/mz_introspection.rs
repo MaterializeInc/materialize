@@ -248,6 +248,24 @@ pub static MZ_CLUSTER_PROMETHEUS_METRICS: LazyLock<BuiltinLog> = LazyLock::new(|
     }),
 });
 
+pub static MZ_HEAP_LIVE_PER_OPERATOR: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
+    name: "mz_heap_live_per_operator",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::LOG_MZ_HEAP_LIVE_PER_OPERATOR_OID,
+    variant: LogVariant::Compute(ComputeLog::HeapLive),
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+pub static MZ_HEAP_STACKS: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
+    name: "mz_heap_stacks",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::LOG_MZ_HEAP_STACKS_OID,
+    variant: LogVariant::Compute(ComputeLog::HeapStacks),
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
 pub static MZ_CLUSTER_REPLICA_RESOURCE_USAGE: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_cluster_replica_resource_usage",
     schema: MZ_INTROSPECTION_SCHEMA,
