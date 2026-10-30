@@ -387,6 +387,29 @@ def test_coverage_events_and_cumulative_snapshots_are_not_summed() -> None:
     ]
 
 
+def test_repeated_coverage_inventories_keep_each_unresolved_callsite_once() -> None:
+    first = {
+        "kind": "sometimes",
+        "file": "driver.py",
+        "line": 7,
+        "reason": "message is not a string literal",
+    }
+    sites = [first, {**first, "line": 11}, {**first, "file": "other.py"}]
+    snapshots = [
+        {
+            "coverage_catalog_available": True,
+            "coverage_targets": [],
+            "coverage_catalog_unresolved": [dict(site) for site in sites],
+        }
+        for _ in range(39)
+    ]
+
+    report = findings.summarize([passing()], events=snapshots)
+
+    assert report["verdict"] == "no_product_findings"
+    assert report["incomplete_coverage"]["unresolved_targets"] == sites
+
+
 @pytest.mark.parametrize(
     "disposition,verdict",
     [

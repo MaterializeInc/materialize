@@ -371,7 +371,9 @@ def summarize(
                                 "event": copy.deepcopy(dict(event)),
                             }
                         )
-                unresolved_targets.extend(dynamic)
+                for target in dynamic:
+                    if target not in unresolved_targets:
+                        unresolved_targets.append(target)
     ids = set()
     matched_exits = set()
     for prop in props:
