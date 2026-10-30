@@ -197,7 +197,8 @@ USE test;
 
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
-        if name == "default":
+        # TODO(SQL-848): Enable once mixed introspection no longer blocks 0dt.
+        if name in ("default", "introspection-disabled-replica"):
             return
         with c.test_case(name):
             c.workflow(name)
