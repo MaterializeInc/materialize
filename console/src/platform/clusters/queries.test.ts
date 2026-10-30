@@ -120,6 +120,18 @@ describe("useOwners", () => {
     );
   });
 
+  it("names an owner by its role id", async () => {
+    server.use(buildOwnersHandler());
+    const { result } = await renderUseOwners();
+
+    await waitFor(() =>
+      expect(result.current.ownerName(UNOWNED_ROLE_ID)).toBe(
+        "someone_elses_role",
+      ),
+    );
+    expect(result.current.ownerName(UNKNOWN_ROLE_ID)).toBeUndefined();
+  });
+
   it("returns false for a role the user cannot act as", async () => {
     server.use(buildOwnersHandler());
     const { result } = await renderUseOwners();
