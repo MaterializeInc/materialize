@@ -9,7 +9,7 @@
 
 import { show, showNewMessage } from "@intercom/messenger-js-sdk";
 import { QueryClient } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
@@ -28,7 +28,19 @@ import {
 import { incidentIOQueryKeys } from "~/queries/incident-io";
 import { renderComponent } from "~/test/utils";
 
+import { submitTicket } from "./submitTicket";
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
+import { TICKET_TYPES } from "./ticketForm";
+
+const mockFlags: Record<string, boolean> = vi.hoisted(() => ({}));
+
+vi.mock("~/hooks/useFlags", () => ({
+  useFlags: () => mockFlags,
+}));
+
+vi.mock("./submitTicket", () => ({
+  submitTicket: vi.fn(async () => ({ sent: false })),
+}));
 
 vi.mock("@intercom/messenger-js-sdk", () => ({
   Intercom: vi.fn(),
@@ -313,7 +325,7 @@ describe("SupportPage", () => {
       expect(
         await screen.findByRole("button", { name: "Replica keeps restarting" }),
       ).toBeVisible();
-      expect(screen.getByText("#4821")).toBeVisible();
+      expect(screen.getByText("#4821 · opened by you")).toBeVisible();
       expect(screen.getByText("Waiting on you")).toBeVisible();
       expect(
         screen.getByRole("button", { name: "RBAC for a dbt service account" }),
@@ -366,70 +378,182 @@ describe("SupportPage", () => {
         screen.getByRole("link", { name: "Reply in Help Center ↗" }),
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
     });
+  });
 
-    it("opens a ticket from the form", async () => {
-      let createdWith: unknown;
-      server.use(
-        ticketsHandler([]),
-        http.post(TICKETS_URL, async ({ request }) => {
-          createdWith = await request.json();
-          return HttpResponse.json(buildTicket({ title: "Sink is lagging" }), {
-            status: 201,
-          });
-        }),
-      );
+  describe("the ticket form", () => {
+    beforeEach(() => {
+      mockFlags["support-ticket-form-cns-201"] = true;
+    });
+
+    afterEach(() => {
+      delete mockFlags["support-ticket-form-cns-201"];
+    });
+
+    it("keeps the Messenger and email links while the form is off", async () => {
+      delete mockFlags["support-ticket-form-cns-201"];
+      await renderComponent(<SupportPage />);
+
+      expect(
+        await screen.findByRole("link", { name: "Open a ticket" }),
+      ).toHaveAttribute("href", SUPPORT_MAILTO);
+      expect(
+        screen.getByRole("link", { name: "Report a production outage" }),
+      ).toHaveAttribute("href", OUTAGE_MAILTO);
+    });
+
+    it("validates required fields and submits a support request", async () => {
       const user = userEvent.setup();
       await renderComponent(<SupportPage />);
 
-      await screen.findByTestId("support-tickets-empty");
-      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.click(
+        await screen.findByRole("button", { name: "Open a ticket" }),
+      );
       expect(showNewMessage).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText(/Email/)).not.toBeInTheDocument();
 
       await user.click(
         await screen.findByRole("button", { name: "Open ticket" }),
       );
-      expect(await screen.findByText("A title is required.")).toBeVisible();
+      const title = screen.getByRole("textbox", { name: /Subject/ });
+      expect(await screen.findByText("A subject is required.")).toBeVisible();
+      expect(screen.getByText("Describe what happened.")).toBeVisible();
+      expect(title).toHaveAttribute("aria-invalid", "true");
+      expect(submitTicket).not.toHaveBeenCalled();
 
-      await user.type(screen.getByLabelText("Title"), "Sink is lagging");
-      await user.selectOptions(screen.getByLabelText("Severity"), "high");
+      await user.type(title, "Sink is lagging");
+      await user.click(screen.getByRole("radio", { name: /^High/ }));
       await user.type(
-        screen.getByLabelText("What's happening?"),
+        screen.getByRole("textbox", { name: /What happened/ }),
         "Kafka sink is 10 minutes behind.",
+      );
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      await waitFor(() => expect(submitTicket).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(submitTicket).mock.calls[0][0]).toMatchObject({
+        ticketTypeId: TICKET_TYPES.supportRequest,
+        title: "Sink is lagging",
+        severity: "high",
+        attributes: { Priority: "High" },
+      });
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(sent).toHaveTextContent(/Preview only: .* nothing was sent/);
+      expect(sent).toHaveTextContent("Sink is lagging");
+      expect(
+        within(sent).getByRole("link", { name: "View in Help Center ↗" }),
+      ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
+    });
+
+    it("leaves out environment details when unchecked", async () => {
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      await user.click(
+        await screen.findByRole("button", { name: "Open a ticket" }),
+      );
+      expect(await screen.findByTestId("support-ticket-context")).toBeVisible();
+      await user.click(
+        screen.getByRole("checkbox", { name: /Include environment details/ }),
+      );
+      expect(
+        screen.queryByTestId("support-ticket-context"),
+      ).not.toBeInTheDocument();
+
+      await user.type(
+        screen.getByRole("textbox", { name: /Subject/ }),
+        "Question",
+      );
+      await user.type(
+        screen.getByRole("textbox", { name: /What happened/ }),
+        "How do I size a cluster?",
+      );
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      await waitFor(() => expect(submitTicket).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(submitTicket).mock.calls[0][0].description).not.toMatch(
+        /Organization ID/,
+      );
+    });
+
+    it("opens an urgent ticket from the outage button", async () => {
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      await user.click(
+        await screen.findByRole("button", {
+          name: "Report a production outage",
+        }),
+      );
+
+      expect(
+        await screen.findByRole("radio", { name: /^Urgent/ }),
+      ).toBeChecked();
+      expect(
+        screen.getByTestId("support-ticket-urgent-notice"),
+      ).toHaveTextContent(/Urgent tickets page on-call/);
+
+      await user.type(
+        screen.getByRole("textbox", { name: /Subject/ }),
+        "Everything is down",
+      );
+      await user.type(
+        screen.getByRole("textbox", { name: /What happened/ }),
+        "Queries time out in every cluster.",
       );
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
       await waitFor(() =>
-        expect(createdWith).toMatchObject({
-          title: "Sink is lagging",
-          description: "Kafka sink is 10 minutes behind.",
-          severity: "high",
-          environmentType: "production",
+        expect(vi.mocked(submitTicket).mock.calls[0]?.[0]).toMatchObject({
+          ticketTypeId: TICKET_TYPES.productionOutage,
+          severity: "urgent",
+          attributes: {},
         }),
       );
-      expect(await screen.findByText(/Ticket #4821 opened/)).toBeVisible();
     });
 
-    it("keeps the form open with an error when creating fails", async () => {
-      server.use(
-        ticketsHandler([]),
-        http.post(TICKETS_URL, () => HttpResponse.json({}, { status: 502 })),
-      );
+    it("asks who the user is when the Messenger can't identify them", async () => {
+      server.use(intercomJwtHandler(503));
       const user = userEvent.setup();
       await renderComponent(<SupportPage />);
 
-      await screen.findByTestId("support-tickets-empty");
-      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
-      await user.type(await screen.findByLabelText("Title"), "Sink is lagging");
-      await user.type(
-        screen.getByLabelText("What's happening?"),
-        "Kafka sink is 10 minutes behind.",
+      await user.click(
+        await screen.findByRole("button", { name: "Open a ticket" }),
       );
+      const email = await screen.findByRole("textbox", { name: /Email/ });
+      await user.type(email, "not-an-email");
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
       expect(
-        await screen.findByText(/Your ticket couldn't be opened/),
+        await screen.findByText("Enter a valid email address."),
       ).toBeVisible();
-      expect(screen.getByLabelText("Title")).toHaveValue("Sink is lagging");
+      expect(screen.getByText("A company is required.")).toBeVisible();
+
+      await user.clear(email);
+      await user.type(email, "ada@example.com");
+      await user.type(
+        screen.getByRole("textbox", { name: /Company/ }),
+        "Example Corp",
+      );
+      await user.type(
+        screen.getByRole("textbox", { name: /Subject/ }),
+        "Question about sinks",
+      );
+      await user.type(
+        screen.getByRole("textbox", { name: /What happened/ }),
+        "How do I size a sink cluster?",
+      );
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      await waitFor(() =>
+        expect(vi.mocked(submitTicket).mock.calls[0]?.[0]).toMatchObject({
+          ticketTypeId: TICKET_TYPES.supportRequestVisitor,
+          contact: { email: "ada@example.com" },
+          attributes: {
+            Priority: "Medium",
+            "Company Name": "Example Corp",
+            "Materialize Platform": "Materialize Cloud",
+          },
+        }),
+      );
     });
   });
 });

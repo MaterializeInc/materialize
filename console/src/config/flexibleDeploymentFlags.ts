@@ -16,6 +16,8 @@ export const disabledFlexibleDeploymentFlags: Record<string, boolean> = {
   "freshness-page-CNS164": false,
   // The support page relies on the Cloud org and Intercom identity.
   "support-page-cns-147": false,
+  // Ticket submission from the console isn't connected yet.
+  "support-ticket-form-cns-201": false,
   // Self-managed has no preview toggle, so a true flag would ship the
   // redesign to everyone.
   "cluster-details-page-cns-173": false,

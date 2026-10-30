@@ -43,6 +43,7 @@ import {
   SUPPORT_EMAIL,
   SUPPORT_PLANS_URL,
 } from "~/externalUrls";
+import { useFlags } from "~/hooks/useFlags";
 import {
   openIntercomMessenger,
   openIntercomNewConversation,
@@ -61,12 +62,10 @@ import { useSummary } from "~/queries/incident-io";
 import { currentRegionIdAtom } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
+import { NewSupportTicketDrawer } from "./NewSupportTicketDrawer";
 import { useSupportTickets } from "./queries";
-import {
-  NewSupportTicketModal,
-  SupportTicketModal,
-  SupportTicketsTable,
-} from "./SupportTickets";
+import { SupportTicketModal, SupportTicketsTable } from "./SupportTickets";
+import { TicketSeverity } from "./ticketForm";
 
 export const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}`;
 export const OUTAGE_MAILTO = `${SUPPORT_MAILTO}?subject=${encodeURIComponent(
@@ -251,6 +250,7 @@ const AnswerItem = ({
 const SupportPage = () => {
   const { colors } = useTheme<MaterializeTheme>();
   const organizationId = useMaybeCurrentOrganizationId()?.data;
+  const { organization } = useCurrentOrganization();
   const isIntercomIdentified = useIsIntercomIdentified();
   const hasIntercomJwt = useHasIntercomJwt();
   const unreadCount = useIntercomUnreadCount();
@@ -259,13 +259,20 @@ const SupportPage = () => {
   // they answer, "Open a ticket" uses the Messenger and the tickets card
   // links to Help Center.
   const areTicketsAvailable = ticketsQuery.isSuccess;
-  const [isTicketFormOpen, setIsTicketFormOpen] = React.useState(false);
+  const flags = useFlags();
+  // The form's submission isn't connected yet (see submitTicket), so it's
+  // behind its own flag until it is.
+  const isTicketFormEnabled = Boolean(flags["support-ticket-form-cns-201"]);
+  const [ticketFormSeverity, setTicketFormSeverity] =
+    React.useState<TicketSeverity | null>(null);
   const [selectedTicketId, setSelectedTicketId] = React.useState<string | null>(
     null,
   );
-  const outageHint = isIntercomIdentified
-    ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
-    : "Chat is unavailable, so these open an email to support.";
+  const outageHint = isTicketFormEnabled
+    ? "Opens an Urgent ticket, which pages our on-call engineers."
+    : isIntercomIdentified
+      ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
+      : "Chat is unavailable, so these open an email to support.";
 
   return (
     <MainContentContainer>
@@ -275,11 +282,11 @@ const SupportPage = () => {
           <OrganizationSummary organizationId={organizationId} />
         </VStack>
         <HStack spacing="2" flexWrap="wrap">
-          {areTicketsAvailable ? (
+          {isTicketFormEnabled ? (
             <Button
               variant="primary"
               size="sm"
-              onClick={() => setIsTicketFormOpen(true)}
+              onClick={() => setTicketFormSeverity("normal")}
             >
               Open a ticket
             </Button>
@@ -297,20 +304,32 @@ const SupportPage = () => {
               Open a ticket
             </Button>
           )}
-          <Button
-            as="a"
-            href={OUTAGE_MAILTO}
-            onClick={preferIntercom(
-              hasIntercomJwt,
-              openIntercomNewConversation,
-            )}
-            variant="outline"
-            size="sm"
-            color={colors.accent.red}
-            borderColor={colors.border.error}
-          >
-            Report a production outage
-          </Button>
+          {isTicketFormEnabled ? (
+            <Button
+              onClick={() => setTicketFormSeverity("urgent")}
+              variant="outline"
+              size="sm"
+              color={colors.accent.red}
+              borderColor={colors.border.error}
+            >
+              Report a production outage
+            </Button>
+          ) : (
+            <Button
+              as="a"
+              href={OUTAGE_MAILTO}
+              onClick={preferIntercom(
+                hasIntercomJwt,
+                openIntercomNewConversation,
+              )}
+              variant="outline"
+              size="sm"
+              color={colors.accent.red}
+              borderColor={colors.border.error}
+            >
+              Report a production outage
+            </Button>
+          )}
           <Tooltip label={outageHint} lineHeight={1.2} hasArrow>
             <Box
               as="span"
@@ -332,7 +351,16 @@ const SupportPage = () => {
         <Flex gap="5" flexWrap="wrap" align="flex-start">
           <VStack flex="999 1 520px" minW="0" spacing="4" align="stretch">
             <Card as="section" aria-label="Your tickets">
-              <CardTitle as="h2" fontSize="md" pb="0">
+              <CardTitle
+                as="h2"
+                fontSize="md"
+                pb="0"
+                display="flex"
+                alignItems="center"
+                justifyContent="space-between"
+                gap="2"
+                flexWrap="wrap"
+              >
                 <HStack as="span" spacing="2" flexWrap="wrap">
                   <span>Your tickets</span>
                   {unreadCount > 0 && (
@@ -349,26 +377,25 @@ const SupportPage = () => {
                     </Tag>
                   )}
                 </HStack>
+                {areTicketsAvailable && (
+                  <TextLink
+                    href={HELP_CENTER_TICKETS_URL}
+                    {...EXTERNAL_LINK_PROPS}
+                    textStyle="text-small"
+                    fontWeight="500"
+                  >
+                    All tickets in Help Center ↗
+                  </TextLink>
+                )}
               </CardTitle>
               <CardContent>
                 {ticketsQuery.isPending ? (
                   <LoadingContainer minHeight="24" />
                 ) : areTicketsAvailable ? (
-                  <VStack spacing="3" align="stretch">
-                    <SupportTicketsTable
-                      tickets={ticketsQuery.data.data}
-                      onSelect={setSelectedTicketId}
-                    />
-                    <TextLink
-                      href={HELP_CENTER_TICKETS_URL}
-                      {...EXTERNAL_LINK_PROPS}
-                      textStyle="text-small"
-                      fontWeight="500"
-                      alignSelf="start"
-                    >
-                      All tickets in Help Center ↗
-                    </TextLink>
-                  </VStack>
+                  <SupportTicketsTable
+                    tickets={ticketsQuery.data.data}
+                    onSelect={setSelectedTicketId}
+                  />
                 ) : (
                   <VStack spacing="3" align="start">
                     <Text
@@ -513,10 +540,14 @@ const SupportPage = () => {
           </VStack>
         </Flex>
       </VStack>
-      <NewSupportTicketModal
-        isOpen={isTicketFormOpen}
-        onClose={() => setIsTicketFormOpen(false)}
+      <NewSupportTicketDrawer
+        isOpen={ticketFormSeverity !== null}
+        onClose={() => setTicketFormSeverity(null)}
+        onReportOutage={() => setTicketFormSeverity("urgent")}
         organizationId={organizationId}
+        organizationName={organization?.name}
+        isAnonymous={!hasIntercomJwt}
+        defaultSeverity={ticketFormSeverity ?? "normal"}
       />
       <SupportTicketModal
         ticketId={selectedTicketId}
