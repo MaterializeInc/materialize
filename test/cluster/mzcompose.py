@@ -4036,7 +4036,14 @@ def workflow_test_profile_fetch(c: Composition) -> None:
         check = make_check(403, "heap profiling not activated")
         check(code, text)
 
-    # Test fetching heap profiles. Heap profiling should be activated by default.
+    # The allocation tracker serves `heap`. jemalloc's profiler starts inactive.
+    test_get("heap", make_ok_check(""))
+    test_post({"action": "dump_jeheap"}, check_profiling_disabled)
+    test_post({"action": "dump_sym_mzfg"}, check_profiling_disabled)
+    test_post({"action": "mem_fg"}, check_profiling_disabled)
+
+    # Activate jemalloc's profiler and fetch its profiles.
+    test_post({"action": "activate"}, make_ok_check("Jemalloc profiling active"))
     test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
     test_post(
         {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
@@ -4045,9 +4052,8 @@ def workflow_test_profile_fetch(c: Composition) -> None:
         {"action": "mem_fg"},
         make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
     )
-    test_get("heap", make_ok_check(""))
 
-    # Test fetching CPU profiles. This disables memory profiling!
+    # Test fetching CPU profiles. This pauses jemalloc's profiler while it runs.
     test_post(
         {"action": "time_fg", "time_secs": "1", "hz": "1"},
         make_ok_check(
@@ -4071,11 +4077,12 @@ def workflow_test_profile_fetch(c: Composition) -> None:
         make_ok_check("Jemalloc profiling enabled but inactive"),
     )
 
-    # Test that fetching heap profiles is forbidden.
+    # Test that fetching jemalloc's profiles is forbidden. The tracker keeps
+    # serving `heap`.
     test_post({"action": "dump_jeheap"}, check_profiling_disabled)
     test_post({"action": "dump_sym_mzfg"}, check_profiling_disabled)
     test_post({"action": "mem_fg"}, check_profiling_disabled)
-    test_get("heap", check_profiling_disabled)
+    test_get("heap", make_ok_check(""))
 
     # Activate memory profiling again.
     test_post({"action": "activate"}, make_ok_check("Jemalloc profiling active"))
