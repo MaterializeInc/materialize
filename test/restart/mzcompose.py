@@ -1752,10 +1752,10 @@ def workflow_wallclock_freshness_restart_policy(c: Composition) -> None:
 
     Under `charge`, recordings resume at the last emitted period end, so the
     periods across the restart are contiguous and each holds exactly one
-    minute of one-millisecond arrivals. Under `hole`, they resume at the first
-    observed frontier, and the arrivals in between are missing from some
-    period. The outage is longer than a period, so it always crosses a period
-    end.
+    minute of one-millisecond arrivals. Under `hole`, they resume at the
+    controller's start, and the arrivals during the outage are missing from
+    some period. The outage is longer than a period, so it always crosses a
+    period end. Storage-owned objects record only `end_to_end`.
     """
     names = ["freshness_tbl", "freshness_lg", "freshness_lg_tbl", "freshness_idx"]
     name_list = ", ".join(f"'{name}'" for name in names)
@@ -1857,8 +1857,8 @@ def workflow_wallclock_freshness_restart_policy(c: Composition) -> None:
             )
 
             recorded = periods()
-            expected_keys = {
-                (name, measure) for name in names for measure in ["end_to_end", "local"]
+            expected_keys = {(name, "end_to_end") for name in names} | {
+                ("freshness_idx", "local")
             }
             assert {
                 (name, measure)
