@@ -77,6 +77,7 @@ OTHER_CLUSTER = configure.SHARED_CLUSTER
 GROUPS = 8
 KEYSPACE = 128
 MAX_ROWS = 300
+INITIAL_ROWS = 4
 VALUES = (-(2**31) + 1, -1, 0, 1, 2**31 - 1)
 
 AGG_SQL = (
@@ -220,17 +221,30 @@ def ensure_objects(host: str) -> bool:
                         f"CREATE MATERIALIZED VIEW IF NOT EXISTS {SCHEMA}.{rel.name}"
                         f" IN CLUSTER {CLUSTER} AS {rel.definition}",
                     )
+            # Index presence marks setup complete. Seed first so a failed setup
+            # can be retried without accepting an empty initial workload.
+            conn.execute(
+                f"INSERT INTO {SCHEMA}.dim"
+                f" SELECT g, 'label-' || g FROM generate_series(0, {GROUPS - 1}) AS g"
+                f" WHERE NOT EXISTS (SELECT 1 FROM {SCHEMA}.dim)".encode()
+            )
+            initial = [
+                (rng.randrange(KEYSPACE), rng.randrange(GROUPS), _value())
+                for _ in range(INITIAL_ROWS)
+            ]
+            values = ", ".join("(%s, %s, %s)" for _ in initial)
+            conn.execute(
+                f"INSERT INTO {SCHEMA}.t"
+                f" SELECT * FROM (VALUES {values}) AS seed(k, g, v)"
+                f" WHERE NOT EXISTS (SELECT 1 FROM {SCHEMA}.t)".encode(),
+                tuple(value for row in initial for value in row),
+            )
+            for rel in RELATIONS:
                 key = rel.columns.split(",")[0].strip()
                 _ddl(
                     conn,
                     f"CREATE INDEX IF NOT EXISTS {rel.name}_idx IN CLUSTER {CLUSTER}"
                     f" ON {SCHEMA}.{rel.name} ({key})",
-                )
-            row = conn.execute(f"SELECT count(*) FROM {SCHEMA}.dim".encode()).fetchone()
-            if row is not None and int(row[0]) == 0:
-                conn.execute(
-                    f"INSERT INTO {SCHEMA}.dim"
-                    f" SELECT g, 'label-' || g FROM generate_series(0, {GROUPS - 1}) AS g".encode()
                 )
         return True
     except (psycopg.Error, OSError) as e:

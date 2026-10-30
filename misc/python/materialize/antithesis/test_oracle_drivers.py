@@ -12,9 +12,11 @@ from __future__ import annotations
 import sqlite3
 import threading
 from collections import Counter
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
+import psycopg
 import pytest
 
 pytest.importorskip("antithesis")
@@ -24,6 +26,86 @@ from kubernetes import client
 from materialize.antithesis import ivm_model as model
 from materialize.antithesis import quiet
 from materialize.antithesis.drivers import ivm, pod_restarts, read_paths
+
+
+@pytest.fixture
+def read_path_setup(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    setup = SimpleNamespace(objects=set(), rows=[], statements=[], fail=None)
+
+    def execute(query: str | bytes, params=()) -> Mock:
+        statement = query.decode() if isinstance(query, bytes) else query
+        setup.statements.append(statement)
+        if setup.fail is not None and setup.fail in statement:
+            setup.fail = None
+            raise psycopg.OperationalError("setup connection reset")
+        if statement.startswith("CREATE"):
+            words = statement.split()
+            name = words[words.index("EXISTS") + 1]
+            setup.objects.add(name.rsplit(".", 1)[-1])
+        if statement.startswith("INSERT INTO read_paths.t"):
+            if not setup.rows or "WHERE NOT EXISTS" not in statement:
+                setup.rows.extend(
+                    tuple(params[i : i + 3]) for i in range(0, len(params), 3)
+                )
+        return Mock(fetchone=lambda: (0,))
+
+    conn = Mock(execute=execute)
+    monkeypatch.setattr(
+        read_paths, "_connect", lambda *args, **kwargs: nullcontext(conn)
+    )
+    monkeypatch.setattr(
+        read_paths,
+        "_objects_present",
+        lambda _: set(read_paths.OBJECTS) <= setup.objects,
+    )
+    monkeypatch.setattr(read_paths, "unreachable", lambda *args: None)
+    return setup
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_read_path_initialization_seeds_before_indexes_complete(
+    read_path_setup: SimpleNamespace, partial: bool
+) -> None:
+    if partial:
+        read_path_setup.objects.update({"t", "dim", "agg", "joined", "topk"})
+    assert read_paths.ensure_objects("host")
+    assert len(read_path_setup.rows) == 4
+    assert all(
+        0 <= k < read_paths.KEYSPACE and 0 <= g < read_paths.GROUPS
+        for k, g, _ in read_path_setup.rows
+    )
+    seed = next(
+        i
+        for i, statement in enumerate(read_path_setup.statements)
+        if statement.startswith("INSERT INTO read_paths.t")
+    )
+    assert all(
+        i > seed
+        for i, statement in enumerate(read_path_setup.statements)
+        if statement.startswith("CREATE INDEX")
+    )
+
+
+def test_read_path_initialization_retry_does_not_duplicate_seed(
+    read_path_setup: SimpleNamespace,
+) -> None:
+    read_path_setup.fail = "CREATE INDEX"
+    assert not read_paths.ensure_objects("host")
+    assert len(read_path_setup.rows) == 4
+    initial = list(read_path_setup.rows)
+    assert read_paths.ensure_objects("host")
+    assert read_path_setup.rows == initial
+
+
+def test_completed_read_path_setup_preserves_empty_churn(
+    read_path_setup: SimpleNamespace,
+) -> None:
+    assert read_paths.ensure_objects("host")
+    read_path_setup.rows.clear()
+    read_path_setup.statements.clear()
+    assert read_paths.ensure_objects("host")
+    assert read_path_setup.rows == []
+    assert read_path_setup.statements == []
 
 
 def test_read_path_kills_wait_for_quiet_periods(
