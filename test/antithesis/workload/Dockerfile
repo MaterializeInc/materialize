@@ -21,8 +21,10 @@ RUN mkdir -p /symbols && ln -s /usr/local/bin/persistcli /symbols/persistcli
 ENV MZ_ROOT=/usr/local/share/materialize
 ENV PYTHONPATH=/usr/local/share/materialize/misc/python
 ENV PYTHONUNBUFFERED=1
+ENV MZ_ANTITHESIS_COVERAGE_CATALOG=/opt/antithesis/coverage-catalog.json
 
 COPY misc/python /usr/local/share/materialize/misc/python
+COPY src/ore/src/antithesis.rs /usr/local/share/materialize/src/ore/src/antithesis.rs
 
 # Only the packages the workload imports, at the versions the rest of the
 # repository pins. Constraint files cannot carry extras or pip options, so
@@ -37,6 +39,9 @@ RUN grep -v -e '\[' -e '^--' /usr/local/share/materialize/misc/python/requiremen
 # assertions a run never reaches are still reported.
 RUN mkdir -p /opt/antithesis/catalog \
     && ln -s /usr/local/share/materialize/misc/python/materialize/antithesis /opt/antithesis/catalog/materialize-antithesis
+RUN python3 -m materialize.antithesis.observations \
+    --source /usr/local/share/materialize/misc/python/materialize/antithesis \
+    --output /opt/antithesis/coverage-catalog.json
 
 COPY test /opt/antithesis/commands
 RUN python3 -m materialize.antithesis.templates \
