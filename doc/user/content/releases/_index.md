@@ -20,6 +20,14 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.48.1
+*Released to Materialize Cloud: 2026-10-29* <br>
+*Released to Materialize Self-Managed: 2026-10-30* <br>
+
+### Bug Fixes {#v26.48.1-bug-fixes}
+- Fixed a security vulnerability in the `rustls-webpki` dependency (RUSTSEC-2026-0382), where certificate verification could accept certificate paths containing distrusted emSign intermediates whose private keys are publicly known.
+- Fixed a security vulnerability in the `ctutils` dependency (RUSTSEC-2026-0385), where operations intended to run in constant time could branch on secret values, potentially leaking them through side channels.
+
 ## v26.47.1
 *Released to Materialize Cloud: 2026-10-29* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
