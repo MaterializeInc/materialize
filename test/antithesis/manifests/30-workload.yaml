@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 # The workload pod. Its entrypoint creates the Materialize CR, waits for the
-# environment to serve SQL, emits `setup_complete`, and then idles while
-# Antithesis runs the test commands under /opt/antithesis/test/v1/.
+# environment to serve SQL, emits `setup_complete`, and then observes pod exits
+# while Antithesis runs test commands under /opt/antithesis/test/v1/.
 
 apiVersion: v1
 kind: ServiceAccount
