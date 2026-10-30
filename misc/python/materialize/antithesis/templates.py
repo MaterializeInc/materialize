@@ -164,6 +164,9 @@ def initialize(name: str | None = None) -> int:
     """Configure the timeline and seed only the chosen template's workloads."""
     name = name or os.environ.get(PROFILE_ENV, "main")
     selected = profile(name)
+    if not enabled_driver("rollouts", name):
+        bootstrap = importlib.import_module("materialize.antithesis.bootstrap")
+        bootstrap.ensure_target_image()
     configure = importlib.import_module(f"{_DRIVERS}.configure")
     status = configure.main()
     db = configure.open_state()
