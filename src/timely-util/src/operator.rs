@@ -23,7 +23,7 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Batcher;
 use differential_dataflow::{AsCollection, Collection, Hashable, VecCollection};
-use timely::container::{DrainContainer, PushInto};
+use timely::container::{CapacityContainerBuilder, DrainContainer, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::{
@@ -594,7 +594,16 @@ where
         .worker()
         .logger_for("differential/arrange")
         .map(Into::into);
-    stream.unary_frontier(pact, name, |_cap, info| {
+    let mut builder = OperatorBuilderRc::new(name.into(), stream.scope());
+    let info = builder.operator_info();
+    let mut input = builder.new_input(stream, pact);
+    // The operator only acts on frontier changes while it holds capabilities, and it holds
+    // capabilities whenever it buffers updates.
+    builder.set_notify_for(0, FrontierInterest::IfCapability);
+    let (output, output_stream) = builder.new_output();
+    let mut output =
+        OutputBuilder::<_, CapacityContainerBuilder<Vec<Vec<Ba::Output>>>>::from(output);
+    builder.build(move |_capabilities| {
         // Acquire a logger for arrange events.
 
         let mut batcher = Ba::new(logger, info.global_id);
@@ -605,7 +614,9 @@ where
         let mut capabilities = Antichain::<Capability<Ba::Time>>::new();
         let mut prev_frontier = Antichain::from_elem(Ba::Time::minimum());
 
-        move |(input, frontier), output| {
+        move |frontiers| {
+            let frontier = &frontiers[0];
+            let mut output = output.activate();
             input.for_each(|cap, data| {
                 capabilities.insert(cap.retain(0));
                 chunker.push_into(data);
@@ -675,7 +686,8 @@ where
                 prev_frontier.extend(frontier.frontier().iter().cloned());
             }
         }
-    })
+    });
+    output_stream
 }
 
 /// Merge the contents of multiple streams and combine the containers using a container builder.
