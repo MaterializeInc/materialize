@@ -566,11 +566,11 @@ CREATE MATERIALIZED VIEW v IN CLUSTER bar AS SELECT 1
 CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], replacement_for: None, in_cluster: Some(Unresolved(Ident("bar"))), in_cluster_replica: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] })
 
 parse-statement
-CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
+CREATE MATERIALIZED VIEW v IN CLUSTER [u1] AS SELECT 1
 ----
-CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
+CREATE MATERIALIZED VIEW v IN CLUSTER [u1] AS SELECT 1
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], replacement_for: None, in_cluster: Some(Resolved("1")), in_cluster_replica: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], replacement_for: None, in_cluster: Some(Resolved("u1")), in_cluster_replica: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] })
 
 parse-statement
 CREATE MATERIALIZED VIEW v (n) WITH (PARTITION BY (n)) AS SELECT 1
@@ -609,11 +609,11 @@ CREATE REPLACEMENT MATERIALIZED VIEW v FOR [u1 AS a.b.c] AS SELECT * FROM t
 CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], replacement_for: Some(Id("u1", UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]), None)), in_cluster: None, in_cluster_replica: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] })
 
 parse-statement
-CREATE OR REPLACE MATERIALIZED VIEW v IN CLUSTER [1] WITH (REFRESH EVERY '1 day' ALIGNED TO '2023-12-11 11:00', ASSERT NOT NULL x, REFRESH AT mz_now(), REFRESH ON COMMIT, REFRESH = AT CREATION) AS SELECT * FROM t;
+CREATE OR REPLACE MATERIALIZED VIEW v IN CLUSTER [u1] WITH (REFRESH EVERY '1 day' ALIGNED TO '2023-12-11 11:00', ASSERT NOT NULL x, REFRESH AT mz_now(), REFRESH ON COMMIT, REFRESH = AT CREATION) AS SELECT * FROM t;
 ----
-CREATE OR REPLACE MATERIALIZED VIEW v IN CLUSTER [1] WITH (REFRESH = EVERY '1 day' ALIGNED TO '2023-12-11 11:00', ASSERT NOT NULL = x, REFRESH = AT mz_now(), REFRESH = ON COMMIT, REFRESH = AT CREATION) AS SELECT * FROM t
+CREATE OR REPLACE MATERIALIZED VIEW v IN CLUSTER [u1] WITH (REFRESH = EVERY '1 day' ALIGNED TO '2023-12-11 11:00', ASSERT NOT NULL = x, REFRESH = AT mz_now(), REFRESH = ON COMMIT, REFRESH = AT CREATION) AS SELECT * FROM t
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Replace, name: UnresolvedItemName([Ident("v")]), columns: [], replacement_for: None, in_cluster: Some(Resolved("1")), in_cluster_replica: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [MaterializedViewOption { name: Refresh, value: Some(Refresh(Every(RefreshEveryOptionValue { interval: IntervalValue { value: "1 day", precision_high: Year, precision_low: Second, fsec_max_precision: None }, aligned_to: Some(Value(String("2023-12-11 11:00"))) }))) }, MaterializedViewOption { name: AssertNotNull, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("x")]))) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(At(RefreshAtOptionValue { time: Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }) }))) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(OnCommit)) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(AtCreation)) }] })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Replace, name: UnresolvedItemName([Ident("v")]), columns: [], replacement_for: None, in_cluster: Some(Resolved("u1")), in_cluster_replica: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [MaterializedViewOption { name: Refresh, value: Some(Refresh(Every(RefreshEveryOptionValue { interval: IntervalValue { value: "1 day", precision_high: Year, precision_low: Second, fsec_max_precision: None }, aligned_to: Some(Value(String("2023-12-11 11:00"))) }))) }, MaterializedViewOption { name: AssertNotNull, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("x")]))) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(At(RefreshAtOptionValue { time: Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }) }))) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(OnCommit)) }, MaterializedViewOption { name: Refresh, value: Some(Refresh(AtCreation)) }] })
 
 parse-statement roundtrip
 CREATE OR REPLACE MATERIALIZED VIEW v WITH (ASSERT NOT NULL a, ASSERT NOT NULL = b, RETAIN HISTORY = FOR '1s') AS SELECT 1
@@ -1265,11 +1265,11 @@ CREATE INDEX foo IN CLUSTER bar ON myschema.bar (a, b)
 CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Unresolved(Ident("bar"))), on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
-CREATE INDEX foo IN CLUSTER [1] ON myschema.bar (a, b)
+CREATE INDEX foo IN CLUSTER [u1] ON myschema.bar (a, b)
 ----
-CREATE INDEX foo IN CLUSTER [1] ON myschema.bar (a, b)
+CREATE INDEX foo IN CLUSTER [u1] ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Resolved("1")), on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Resolved("u1")), on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab

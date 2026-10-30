@@ -4499,11 +4499,9 @@ impl<'a> Parser<'a> {
     fn parse_raw_ident_str(&mut self) -> Result<String, ParserError> {
         let id = match self.next_token() {
             Some(Token::Ident(id)) => id.into_inner(),
-            Some(Token::Number(n)) => n,
             _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
         };
-        // A resolved name renders as `[id]`; an empty id (e.g. `[""]`) would
-        // display as `[]` and fail to reparse. Reject it.
+        // Match `parse_identifier`, which rejects zero-length identifiers.
         if id.is_empty() {
             return parser_err!(self, self.peek_prev_pos(), "expected id");
         }
@@ -7541,10 +7539,7 @@ impl<'a> Parser<'a> {
 
     fn parse_raw_name(&mut self) -> Result<RawItemName, ParserError> {
         if self.consume_token(&Token::LBracket) {
-            let id = match self.next_token() {
-                Some(Token::Ident(id)) => id.into_inner(),
-                _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
-            };
+            let id = self.parse_raw_ident_str()?;
             self.expect_keyword(AS)?;
             let name = self.parse_item_name()?;
             // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?

@@ -957,13 +957,38 @@ fn test_quoted_special_grammar_function_name_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
-fn test_resolved_cluster_name_empty_id_rejected() {
-    // A resolved cluster name renders as `[id]`; an empty id (`[""]`) would
-    // display as `[]` and fail to reparse, so it must be rejected at parse time.
-    // A non-empty resolved id still round-trips. Regression for the
-    // parse_display_roundtrip finding `SHOW SINKS IN CLUSTER[""]`.
-    assert!(parse_statements("SHOW SINKS IN CLUSTER[\"\"]").is_err());
+fn test_bracketed_name_empty_id_rejected() {
+    for sql in [
+        "SHOW SINKS IN CLUSTER[\"\"]",
+        "COMMENT ON NETWORK POLICY [\"\"] IS 'x'",
+        "SELECT * FROM [\"\" AS foo.bar]",
+    ] {
+        assert!(parse_statements(sql).is_err(), "accepted empty id: {sql}");
+    }
     assert_display_roundtrips("SHOW SINKS IN CLUSTER[u1]");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_bracketed_name_numeric_id_rejected() {
+    for id in [
+        "1".to_owned(),
+        "1.5".to_owned(),
+        "1e2".to_owned(),
+        "1".repeat(300),
+        format!("1.{}", "1".repeat(300)),
+    ] {
+        for sql in [
+            format!("CREATE INDEX i IN CLUSTER [{id}] ON t (a)"),
+            format!("COMMENT ON NETWORK POLICY [{id}] IS 'x'"),
+            format!("SELECT * FROM [{id} AS foo.bar]"),
+        ] {
+            assert!(
+                parse_statements(&sql).is_err(),
+                "accepted numeric id: {sql}"
+            );
+        }
+    }
 }
 
 #[mz_ore::test]

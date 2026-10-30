@@ -90,8 +90,8 @@ Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { 
 
 # An id that is a keyword must stay quoted when displayed: `[<id> AS …]` only
 # accepts an identifier token, so a bare keyword id fails to reparse
-# (SQL-769). Applies to every position that takes a raw item name, including a
-# cast's type.
+# (SQL-769). This is a fuzzer-only requirement. Real catalog IDs have a prefix
+# followed by digits and cannot collide with keywords.
 parse-statement
 SELECT * FROM ["row" AS materialize.public.foo]
 ----
@@ -111,8 +111,7 @@ SELECT listbar::["row" AS linger.over]::[aabortkafka AS linger.over] = cte
 ----
 SELECT listbar::["row" AS linger.over]::[aabortkafka AS linger.over] = cte
 
-# The same applies to the `[<id>]` resolved cluster and network policy names,
-# which accept an identifier or a number token. A numeric id stays bare.
+# The same applies to the `[<id>]` resolved cluster and network policy names.
 parse-statement
 CREATE INDEX i IN CLUSTER ["row"] ON t (a)
 ----
@@ -126,3 +125,13 @@ COMMENT ON NETWORK POLICY ["row"] IS 'x'
 COMMENT ON NETWORK POLICY ["row"] IS 'x'
 =>
 Comment(CommentStatement { object: NetworkPolicy { name: Resolved("row") }, comment: Some("x") })
+
+parse-statement roundtrip
+SELECT 'a'::["in" AS "integer"."fast"]
+----
+SELECT 'a'::["in" AS "integer"."fast"]
+
+parse-statement roundtrip
+COMMENT ON NETWORK POLICY ["1"] IS 'x'
+----
+COMMENT ON NETWORK POLICY ["1"] IS 'x'

@@ -107,20 +107,12 @@ impl RawItemName {
     }
 }
 
-/// Writes the id of a bracketed raw name (`[<id> AS …]`, `[<id>]`) so that it
-/// reparses to the same string.
-///
-/// The parser takes only an identifier token there (and, when `allow_number`,
-/// a number token), so a crafted id with spaces or any keyword (e.g. `row`,
-/// which lexes as a keyword token) must be quoted. Any keyword counts, not
-/// only the reserved ones `Ident::can_be_printed_bare` checks. A normal global
-/// id like `u1` is printed bare in every mode — including the stable mode
-/// `pg_get_viewdef` renders in, which would otherwise force-quote it.
-fn write_bracketed_id<W: fmt::Write>(f: &mut AstFormatter<W>, id: &str, allow_number: bool) {
+/// Writes an ID so it reparses in a bracketed reference.
+fn write_bracketed_id<W: fmt::Write>(f: &mut AstFormatter<W>, id: &str) {
     let ident = Ident::new_unchecked(id);
-    let is_number = !id.is_empty() && id.chars().all(|ch| ch.is_ascii_digit());
-    if (ident.has_only_bare_chars() && ident.as_keyword().is_none()) || (allow_number && is_number)
-    {
+    // Bracketed IDs require an identifier token, so even non-reserved keywords
+    // need quoting. Keep ordinary IDs bare in the stable mode used by pg_get_viewdef.
+    if ident.has_only_bare_chars() && ident.as_keyword().is_none() {
         f.write_str(id);
     } else {
         f.write_str(ident.to_ast_string_stable());
@@ -133,7 +125,7 @@ impl AstDisplay for RawItemName {
             RawItemName::Name(o) => f.write_node(o),
             RawItemName::Id(id, o, v) => {
                 f.write_str("[");
-                write_bracketed_id(f, id, false);
+                write_bracketed_id(f, id);
                 f.write_str(" AS ");
                 f.write_node(o);
                 if let Some(v) = v {
@@ -173,7 +165,7 @@ impl AstDisplay for RawClusterName {
             RawClusterName::Unresolved(id) => f.write_node(id),
             RawClusterName::Resolved(id) => {
                 f.write_str("[");
-                write_bracketed_id(f, id, true);
+                write_bracketed_id(f, id);
                 f.write_str("]");
             }
         }
@@ -207,7 +199,7 @@ impl AstDisplay for RawNetworkPolicyName {
             RawNetworkPolicyName::Unresolved(id) => f.write_node(id),
             RawNetworkPolicyName::Resolved(id) => {
                 f.write_str("[");
-                write_bracketed_id(f, id, true);
+                write_bracketed_id(f, id);
                 f.write_str("]");
             }
         }
