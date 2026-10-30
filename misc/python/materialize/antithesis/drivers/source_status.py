@@ -46,8 +46,7 @@ from typing import Any
 
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
-    sometimes,
+    always_or_unreachable as always,
 )
 
 from materialize.antithesis import sql, state
@@ -62,6 +61,7 @@ from materialize.antithesis.drivers.sources_common import (
     mz_now_ms,
 )
 from materialize.antithesis.drivers.sources_common import log as _log
+from materialize.antithesis.observations import sometimes
 
 STATE_DB = "source_status"
 

@@ -88,11 +88,11 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
+from antithesis.assertions import (
     always_or_unreachable,
-    reachable,
-    sometimes,
+)
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+    always_or_unreachable as always,
 )
 from kubernetes.client.rest import ApiException  # type: ignore
 
@@ -100,6 +100,7 @@ from materialize.antithesis import remap_frontiers, sql, state, telemetry
 from materialize.antithesis.drivers import lifecycle, postgres_sources
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.observations import reachable, sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "shard_audit"

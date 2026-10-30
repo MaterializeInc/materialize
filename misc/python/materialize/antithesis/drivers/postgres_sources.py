@@ -82,10 +82,11 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 import psycopg
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    always,
+from antithesis.assertions import (
     always_or_unreachable,
-    sometimes,
+)
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+    always_or_unreachable as always,
 )
 
 from materialize.antithesis import (
@@ -124,6 +125,7 @@ from materialize.antithesis.drivers.sources_common import (
 )
 from materialize.antithesis.drivers.sources_common import log as _log
 from materialize.antithesis.endpoints import Endpoints
+from materialize.antithesis.observations import sometimes
 from materialize.antithesis.rng import rng
 
 STATE_DB = "postgres_sources"
