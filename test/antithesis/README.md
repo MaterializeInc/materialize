@@ -207,11 +207,11 @@ dead pod as a Materialize bug:
 Run the harness unit tests without a Kubernetes cluster:
 
 ```
-bin/pyactivate -m pip install antithesis==0.4.0
+bin/pyactivate -m pip install -r misc/python/materialize/antithesis/requirements.txt
 bin/pyactivate -m pytest -q misc/python/materialize/antithesis
 ```
 
-The SDK version matches the workload Dockerfile. Driver tests skip when this
+The SDK pin is shared with the workload image. Driver tests skip when this
 optional SDK is absent. Pure model tests remain available without it.
 
 ```
@@ -256,9 +256,20 @@ arguments and to refuse rollbacks.
 ## Submitting to Antithesis
 
 CI builds the images on PRs labeled `ci-antithesis` (see `ci/README.md`) and
-pushes them to the Antithesis registry. The step's `antithesis-images.json`
-artifact lists the references, including the upgrade base images. Render the
-manifests against them, then validate and launch:
+pushes them to the Antithesis registry. The step requires `MZ_CI_LICENSE_KEY`
+to render and publish the config image against those exact references.
+The step's `antithesis-images.json` artifact lists the images, upgrade base
+images, and a `config` reference pinned to its pushed digest. Download the
+artifact and launch without a local registry login:
+
+```
+snouty launch --launcher basic_k8s_test \
+    --config-image "$(jq -r '.config' antithesis-images.json)" \
+    --param "antithesis.images=$(jq -r 'del(.config, ."upgrade-base-version") | [.[]] | join(";")' antithesis-images.json)" \
+    --duration <minutes> ...
+```
+
+To render and validate the manifests locally:
 
 ```
 bin/pyactivate -m materialize.antithesis.render --output test/antithesis/config/manifests \
@@ -267,7 +278,7 @@ bin/pyactivate -m materialize.antithesis.render --output test/antithesis/config/
     [--upgrade-from-environmentd-image <upgrade-base-environmentd> \
      --upgrade-from-clusterd-image <upgrade-base-clusterd>]
 snouty validate test/antithesis/config
-snouty launch --webhook basic_k8s_test --config test/antithesis/config --duration <minutes> ...
+snouty launch --launcher basic_k8s_test --config test/antithesis/config --duration <minutes> ...
 ```
 
 snouty builds the config image (`FROM scratch` with the rendered manifests under

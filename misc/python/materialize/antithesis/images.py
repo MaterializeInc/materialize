@@ -26,6 +26,8 @@ JSON. With
 `--upgrade-base`, it also builds and pushes the base images for the release
 `upgrade_base_version` picks, unless the registry already has them. It expects
 `docker login` for the registry to have happened already.
+`--config` adds a config image pinned to its pushed digest, and requires
+`MZ_CI_LICENSE_KEY` and the destination `CONFIG_REGISTRY`.
 """
 
 from __future__ import annotations
@@ -33,9 +35,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from materialize import MZ_ROOT, mzbuild, rustc_flags, spawn
@@ -45,6 +49,9 @@ from materialize.xcompile import Arch
 
 IMAGES = ["environmentd", "clusterd", "orchestratord", "antithesis-workload"]
 UPGRADE_BASE_IMAGES = ["environmentd", "clusterd"]
+CONFIG_REGISTRY = (
+    "us-central1-docker.pkg.dev/molten-verve-216720/materialize-repository"
+)
 
 # Appended to the base images' Dockerfiles at the release tag. The build
 # environment is not part of an mzbuild fingerprint, so without a source change
@@ -186,6 +193,72 @@ def publish_upgrade_base(registry: str, arch: Arch) -> dict[str, str]:
     }
 
 
+def config_publish_preflight(registry: str) -> None:
+    """Validate the config image destination and required license environment."""
+    # Config images contain the license, so restrict their destination to CI's registry.
+    if registry != CONFIG_REGISTRY:
+        raise ValueError(
+            "config images must be published to the Antithesis CI registry"
+        )
+    if not os.environ.get("MZ_CI_LICENSE_KEY"):
+        raise ValueError("MZ_CI_LICENSE_KEY must be set to publish a config image")
+
+
+def publish_config(refs: dict[str, str], registry: str, tag: str, root: Path) -> str:
+    """Publish a rendered config against the given image references and return its digest."""
+    config_publish_preflight(registry)
+    base_keys = ("upgrade-base-environmentd", "upgrade-base-clusterd")
+    if (base_keys[0] in refs) != (base_keys[1] in refs):
+        raise ValueError("the upgrade-base images must be given together")
+    ref = f"{registry}/antithesis-config:{tag}"
+    with tempfile.TemporaryDirectory(prefix="mz-antithesis-config-") as directory:
+        context = Path(directory)
+        if context.resolve().is_relative_to(root.resolve()):
+            raise ValueError("config staging must be outside the source checkout")
+        command: list[str | Path] = [
+            "bin/pyactivate",
+            "-m",
+            "materialize.antithesis.render",
+            "--output",
+            context / "manifests",
+            "--environmentd-image",
+            refs["environmentd"],
+            "--clusterd-image",
+            refs["clusterd"],
+            "--orchestratord-image",
+            refs["orchestratord"],
+            "--workload-image",
+            refs["antithesis-workload"],
+        ]
+        if base_keys[0] in refs:
+            command.extend(
+                [
+                    "--upgrade-from-environmentd-image",
+                    refs[base_keys[0]],
+                    "--upgrade-from-clusterd-image",
+                    refs[base_keys[1]],
+                ]
+            )
+        spawn.runv(command, cwd=root)
+        (context / "Dockerfile").write_text("FROM scratch\nCOPY manifests /manifests\n")
+        spawn.runv(["docker", "build", "--tag", ref, context])
+        spawn.runv(["docker", "push", ref])
+    digests = json.loads(
+        spawn.capture(
+            ["docker", "image", "inspect", ref, "--format", "{{json .RepoDigests}}"]
+        )
+    )
+    pattern = re.escape(f"{registry}/antithesis-config") + r"@sha256:[0-9a-f]{64}"
+    matches = {
+        digest
+        for digest in digests or []
+        if isinstance(digest, str) and re.fullmatch(pattern, digest)
+    }
+    if len(matches) != 1:
+        raise RuntimeError("the pushed config image must have one registry digest")
+    return matches.pop()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", required=True)
@@ -205,17 +278,30 @@ def main() -> int:
         help="also publish environmentd and clusterd at the upgrade base release",
     )
     parser.add_argument(
+        "--config",
+        action="store_true",
+        help="also render and publish the licensed Kubernetes config to the Antithesis CI registry",
+    )
+    parser.add_argument(
         "--output", type=Path, help="also write the references to this JSON file"
     )
     args = parser.parse_args()
+    if args.config:
+        try:
+            config_publish_preflight(args.registry)
+        except ValueError as error:
+            parser.error(str(error))
+    tag = target_tag(args.commit)
     refs = publish(
         acquire(args.root, args.arch),
         args.registry,
-        target_tag(args.commit),
+        tag,
         push=True,
     )
     if args.upgrade_base:
         refs.update(publish_upgrade_base(args.registry, args.arch))
+    if args.config:
+        refs["config"] = publish_config(refs, args.registry, tag, args.root)
     rendered = json.dumps(refs, indent=2)
     print(rendered)
     if args.output:
