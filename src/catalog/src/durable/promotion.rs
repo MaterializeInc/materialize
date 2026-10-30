@@ -17,7 +17,6 @@ use mz_controller_types::ClusterId;
 use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::{RawClusterName, Statement};
 use serde::Deserialize;
-use uuid::Uuid;
 
 use super::objects::serialization::ProtoType;
 use super::objects::state_update::StateUpdateKindJson;
@@ -60,34 +59,6 @@ enum ClusterVariant {
 #[derive(Deserialize)]
 struct Item {
     definition: proto::CatalogItem,
-}
-
-/// Collects cleanup authority from the consolidated snapshot admitted by the
-/// generation CAS. Only this stable field is decoded before catalog migrations.
-pub(super) fn ephemeral_owners<'a>(
-    snapshot: impl IntoIterator<Item = &'a StateUpdateKindJson>,
-) -> Result<BTreeSet<Uuid>, CatalogError> {
-    #[derive(Deserialize)]
-    struct Record {
-        value: Owner,
-    }
-    #[derive(Deserialize)]
-    struct Owner {
-        ephemeral_owner_session: Option<Uuid>,
-    }
-
-    let mut owners = BTreeSet::new();
-    for update in snapshot {
-        if update.kind() == "Item" {
-            let record = update.try_to_serde::<Record>().map_err(|error| {
-                DurableCatalogError::NotWritable(format!(
-                    "cannot capture promotion cleanup owners: {error}"
-                ))
-            })?;
-            owners.extend(record.value.ephemeral_owner_session);
-        }
-    }
-    Ok(owners)
 }
 
 /// Selects realization metadata and protection owned by the given deployments.
@@ -507,24 +478,6 @@ mod tests {
                 "{row:?}"
             );
         }
-    }
-
-    #[mz_ore::test]
-    fn cleanup_uses_only_owner_field_before_migration() {
-        let owner = Uuid::new_v4();
-        let item = |value| {
-            StateUpdateKindJson::from_serde(serde_json::json!({
-                "kind": "Item", "value": value
-            }))
-        };
-        let temporary = item(serde_json::json!({"ephemeral_owner_session": owner}));
-        let permanent = item(serde_json::json!({}));
-        assert_eq!(
-            ephemeral_owners([&temporary, &permanent]).expect("decode sparse owner records"),
-            BTreeSet::from([owner]),
-        );
-        let malformed = item(serde_json::json!({"ephemeral_owner_session": "not a UUID"}));
-        assert!(ephemeral_owners([&malformed]).is_err());
     }
 
     #[mz_ore::test]

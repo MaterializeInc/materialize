@@ -299,7 +299,7 @@ impl Catalog {
         }
     }
 
-    /// Attempts durable retirement of a prewarming deployment.
+    /// Attempts durable retirement of a non-active deployment.
     ///
     /// Returns false on contention. Callers must retry outside the coordinator
     /// loop and preserve the target identity. The durable layer validates serving

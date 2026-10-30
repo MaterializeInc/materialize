@@ -564,9 +564,11 @@ stale-generation target T <= B -> may land before barrier, never after it
 stale-generation target T > B  -> catalog advance observes fence before txns CAS
 ```
 
-A system-table write before the barrier is included in the reset. A user-table write remains
-visible to later reads. Let `C_f` be the new generation's catalog fence commit
-and B its barrier write. Bootstrap applies the catalog upper to the oracle
+For exclusive legacy handover, a system-table write before the barrier is included
+in the reset. A user-table write remains visible to later reads. Protected
+promotion does not fence retained members or authorize a shared-table reset.
+Protected exclusion requires explicit retirement. Let `C_f` be an applicable
+catalog fence or retirement commit and B a subsequent barrier write. Bootstrap applies the catalog upper to the oracle
 before allocating B, so `B > C_f`. After the barrier, a stale generation could
 land only at `T >= B+1`. Its cached catalog upper is `<= C_f`, hence
 `T+1 > C_f >= cached upper`. Its preceding `advance_upper(T+1)` cannot be a
@@ -575,8 +577,12 @@ This proof is independent of W and does not require T to become the new R.
 
 Shared configuration rows describe the active deployment. Writable bootstrap
 reconciles desired-minus-current at the WAL fence timestamp B and conditionally
-appends the differences at B+1, after advancing the catalog upper to B+2. Success
-excludes intervening WAL writes. A definitive conflict requires fresh snapshots,
+appends the differences at B+1, after advancing the catalog upper to B+2. Check
+active authority at that synchronized catalog prefix before appending. Later
+promotions cannot precede B+2, so this authorizes B+1 without excluding other
+writers. Losing active authority skips the write, not the retained controller.
+The newly active controller reconciles its own local configuration on promotion.
+Success excludes intervening WAL writes. A definitive conflict requires fresh snapshots,
 not replayed differences. Reconciliation completes before readiness and does not
 depend on compute queries. Prewarming skips shared reconciliation even though its
 catalog handle can write protection. Private replacement-shard backfill remains

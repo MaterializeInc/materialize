@@ -18,8 +18,8 @@ use mz_catalog::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
 use mz_catalog::durable::{
-    CatalogError, DEFAULT_ADAPTER_ID, DurableCatalogError, Snapshot, TestCatalogStateBuilder,
-    Transaction, test_bootstrap_args,
+    CatalogError, DEFAULT_ADAPTER_ID, DurableCatalogError, FenceError, Snapshot,
+    TestCatalogStateBuilder, Transaction, test_bootstrap_args,
 };
 use mz_controller_types::ClusterId;
 use mz_ore::now::SYSTEM_TIME;
@@ -211,13 +211,20 @@ async fn warm_promotion_rejects_managed_replica_pins_before_fencing() {
     cluster.config.variant = ClusterVariant::Unmanaged;
     tx.update_cluster(cluster.id, cluster).unwrap();
     commit(tx).await;
-    let promoted = next
+    let mut promoted = next
         .unwrap_build()
         .await
         .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
         .await
         .unwrap();
-    assert!(active.sync_to_current_updates().await.is_err());
+    active.sync_to_current_updates().await.unwrap();
+    assert!(promoted.retire_deployment(7).await.unwrap());
+    assert!(matches!(
+        active.sync_to_current_updates().await,
+        Err(CatalogError::Durable(DurableCatalogError::Fence(
+            FenceError::DeploymentRetired { generation: 7 }
+        )))
+    ));
     pending.expire().await;
     promoted.expire().await;
     active.expire().await;
@@ -718,12 +725,12 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         .update_client_read_requirements(warm_client, BTreeMap::from([(input, Some(20.into()))]))
         .unwrap();
 
-    // Only the externally authorized ordinary open advances the durable fence.
+    // Promotion changes active authority without retiring protected members.
     let promoted = pending_builder
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME().into(), &bootstrap)
+        .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
         .await
         .unwrap();
     let ts = prepared.upper();
@@ -740,10 +747,39 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         StateUpdateKind::ActiveDeploymentGeneration(8)
     ) && update.diff == StateDiff::Addition));
     let promoted_snapshot = pending.snapshot().await.unwrap();
+    assert_eq!(
+        promoted_snapshot.client_read_requirements,
+        retired.client_read_requirements
+    );
+    assert_eq!(
+        promoted_snapshot.client_incarnations,
+        retired.client_incarnations
+    );
+    assert_eq!(promoted_snapshot.cluster_replicas, retired.cluster_replicas);
+    assert_eq!(promoted_snapshot.cluster_runtimes, retired.cluster_runtimes);
+    assert_eq!(
+        promoted_snapshot.replica_system_configurations,
+        retired.replica_system_configurations
+    );
+    assert_eq!(
+        promoted_snapshot.cluster_replica_declarations,
+        retired.cluster_replica_declarations
+    );
+    assert_eq!(promoted_snapshot.written_plans, retired.written_plans);
+    active.sync_to_current_updates().await.unwrap();
+    assert!(
+        !active
+            .client_incarnation_retirement()
+            .unwrap()
+            .is_retired(active_client)
+    );
+
+    // Explicit retirement removes only the predecessor's realization metadata
+    // and protection, preserving shared declarations and the SQL index plan.
+    assert!(pending.retire_deployment(7).await.unwrap());
+    pending.sync_to_current_updates().await.unwrap();
+    let promoted_snapshot = pending.snapshot().await.unwrap();
     assert_eq!(promoted_snapshot.client_read_requirements, protected);
-    // This fixture retired its private membership before promotion. The fence
-    // now removes the active deployment's metadata, not shared declarations or
-    // the SQL index's selected plan.
     assert!(promoted_snapshot.cluster_replicas.is_empty());
     assert!(promoted_snapshot.cluster_runtimes.is_empty());
     assert!(promoted_snapshot.replica_system_configurations.is_empty());
@@ -758,7 +794,12 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
                 .unwrap()
         )
     );
-    assert!(active.sync_to_current_updates().await.is_err());
+    assert!(matches!(
+        active.sync_to_current_updates().await,
+        Err(CatalogError::Durable(DurableCatalogError::Fence(
+            FenceError::DeploymentRetired { generation: 7 }
+        )))
+    ));
     assert!(active.client_incarnation_retirement().is_err());
     let retirement = pending.client_incarnation_retirement().unwrap();
     assert!(retirement.is_retired(active_client));
@@ -779,16 +820,26 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
             .deployment_generation,
         8
     );
-    let successor = pending_builder
+    let mut successor = pending_builder
         .with_deploy_generation(9)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME().into(), &bootstrap)
+        .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
         .await
         .unwrap();
+    pending.sync_to_current_updates().await.unwrap();
+    assert!(
+        !pending
+            .client_incarnation_retirement()
+            .unwrap()
+            .is_retired(warm_client)
+    );
+    assert!(successor.retire_deployment(8).await.unwrap());
     assert!(matches!(
         pending.sync_to_current_updates().await,
-        Err(CatalogError::Durable(DurableCatalogError::Fence(_)))
+        Err(CatalogError::Durable(DurableCatalogError::Fence(
+            FenceError::DeploymentRetired { generation: 8 }
+        )))
     ));
     successor.expire().await;
     pending.expire().await;

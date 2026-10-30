@@ -49,24 +49,9 @@ impl crate::catalog::OpenCatalogResult {
             )
             .into());
         }
-        self.catalog.initialize_storage_metadata().await?;
-        let mut infrastructure = self
-            .catalog
-            .complete_table_infrastructure(
-                persist.clone(),
-                Arc::new(mz_txn_wal::metrics::Metrics::new(metrics)),
-                oracle,
-            )
-            .await?;
         self.catalog
-            .reconcile_deployment_configuration(
-                &persist,
-                &mut infrastructure,
-                &self.builtin_table_updates,
-                oracle,
-            )
+            .complete_deployment_activation(persist, metrics, oracle)
             .await?;
-        drop(infrastructure);
         Ok(self.catalog)
     }
 

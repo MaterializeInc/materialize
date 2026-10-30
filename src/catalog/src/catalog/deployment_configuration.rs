@@ -26,14 +26,55 @@ use crate::builtin::{
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogError, TableInfrastructure};
 
 impl Catalog {
-    /// Reconciles shared configuration from this active initializer's inputs.
-    ///
-    /// Call after table infrastructure completion and before launching children.
-    /// `snapshot` is the builtin snapshot returned by catalog open. Replica-size
-    /// rows are derived here. Only the active deployment's initializer calls this,
-    /// including when its controller restarts through durable join admission.
-    /// Serving adapters never call this. Pending, savepoint and read-only handles
-    /// cannot publish configuration. This performs no ongoing maintenance.
+    /// Publishes this controller's local configuration after becoming active.
+    /// Does not initialize shared catalog projections or replace serving adapters.
+    pub async fn complete_deployment_activation(
+        &mut self,
+        persist: mz_persist_client::PersistClient,
+        metrics: &mz_ore::metrics::MetricsRegistry,
+        oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
+    ) -> Result<(), CatalogError> {
+        if self.state().active_deployment_generation() != Some(self.state().deployment_generation())
+        {
+            return Ok(());
+        }
+        self.initialize_storage_metadata().await?;
+        let mut infrastructure = self
+            .complete_table_infrastructure(
+                persist.clone(),
+                Arc::new(mz_txn_wal::metrics::Metrics::new(metrics)),
+                oracle,
+            )
+            .await?;
+        // Infrastructure completion follows catalog updates. A later promotion
+        // can make this retained controller inactive before reconciliation starts.
+        if self.state().active_deployment_generation() != Some(self.state().deployment_generation())
+        {
+            return Ok(());
+        }
+        let mut snapshot = Vec::new();
+        for ip in &self.state.egress_addresses {
+            snapshot.push(
+                self.state
+                    .resolve_builtin_table_update(self.state.pack_egress_ip_update(ip)?),
+            );
+        }
+        if !self.state.license_key.id.is_empty() {
+            snapshot.push(
+                self.state.resolve_builtin_table_update(
+                    self.state
+                        .pack_license_key_update(&self.state.license_key)?,
+                ),
+            );
+        }
+        self.reconcile_deployment_configuration(&persist, &mut infrastructure, &snapshot, oracle)
+            .await
+    }
+
+    /// Reconciles the active initializer's configuration tables after WAL setup.
+    /// `snapshot` supplies desired egress and license rows. Replica sizes come
+    /// from local configuration. Pending, savepoint and read-only callers are
+    /// rejected. Losing authority during reconciliation skips the stale write.
     pub async fn reconcile_deployment_configuration(
         &self,
         persist: &mz_persist_client::PersistClient,
@@ -72,8 +113,11 @@ impl Catalog {
                 || storage.is_read_only()
                 || storage.is_savepoint()
                 || (initial_seed && storage.is_join())
-                || self.state().active_deployment_generation()
-                    != Some(self.state().deployment_generation())
+            {
+                return Err(CatalogError::ReadOnly);
+            }
+            if self.state().active_deployment_generation()
+                != Some(self.state().deployment_generation())
             {
                 return Err(CatalogError::ReadOnly);
             }
@@ -236,6 +280,16 @@ impl Catalog {
                 }
                 let timestamp = fence.step_forward();
                 self.advance_upper(timestamp.step_forward()).await?;
+                // The synchronized prefix covers B+1. Later promotions must
+                // land at B+2 or beyond, so this check authorizes exactly this
+                // WAL timestamp, not a later retry. Retained writers are not
+                // fenced merely by losing active execution authority.
+                if !initial_seed
+                    && self.storage().await.active_deployment_generation()
+                        != self.state().deployment_generation()
+                {
+                    return Ok(());
+                }
                 txn.tidy(std::mem::take(&mut infrastructure.tidy));
                 // Snapshot at B requires WAL upper > B. Success at B+1 proves
                 // there was no intervening write to invalidate any of the diffs.

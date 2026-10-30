@@ -195,34 +195,19 @@ impl FenceableToken {
         }
     }
 
-    /// Returns `Err` if `token` fences out `self`, `Ok` otherwise.
+    /// Protected participants survive changes of active generation. Their
+    /// membership retirement is checked separately at completed catalog prefixes.
+    /// Exclusive participants remain fenced by a newer token.
     fn maybe_fence(&mut self, token: FenceToken, protected: bool) -> Result<(), FenceError> {
         match self {
-            FenceableToken::Initializing {
-                durable_token,
-                current_deploy_generation,
-                ..
-            } => {
-                match durable_token {
-                    Some(durable_token) => {
-                        *durable_token = max(durable_token.clone(), token.clone());
-                    }
-                    None => {
-                        *durable_token = Some(token.clone());
-                    }
-                }
-                if let Some(current_deploy_generation) = current_deploy_generation {
-                    if *current_deploy_generation < token.deploy_generation {
-                        *self = FenceableToken::Fenced {
-                            current_token: FenceToken {
-                                deploy_generation: *current_deploy_generation,
-                                epoch: token.epoch,
-                            },
-                            fence_token: token,
-                        };
-                        self.validate()?;
-                    }
-                }
+            FenceableToken::Initializing { durable_token, .. } => {
+                *durable_token = Some(match durable_token.take() {
+                    Some(observed) => max(observed, token),
+                    None => token,
+                });
+                // A reconstructed snapshot may deliver its fence before its
+                // protection configuration. Pre-open authority is checked only
+                // after the complete prefix establishes which rules apply.
             }
             FenceableToken::Unfenced {
                 current_token,
@@ -232,9 +217,7 @@ impl FenceableToken {
                     Some(observed) => max(observed, token.clone()),
                     None => token.clone(),
                 });
-                if current_token.deploy_generation < token.deploy_generation
-                    || (!protected && *current_token < token)
-                {
+                if !protected && *current_token < token {
                     *self = FenceableToken::Fenced {
                         current_token: current_token.clone(),
                         fence_token: token,
@@ -376,6 +359,9 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
     /// Whether explicit retirement forbids this deployment from participating.
     fn deployment_is_retired(&self, generation: u64) -> bool;
 
+    /// Whether the applied prefix uses membership-based read protection.
+    fn read_protection_enabled(&self) -> bool;
+
     /// Format authorization from the applied catalog prefix, when protected.
     fn persist_target(&self) -> Option<&semver::Version>;
 
@@ -472,8 +458,21 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         let generation = match &self.fenceable_token {
             FenceableToken::Initializing {
                 current_deploy_generation,
-                ..
-            } => *current_deploy_generation,
+                durable_token,
+            } => {
+                if !self.update_applier.read_protection_enabled()
+                    && let (Some(current), Some(durable)) =
+                        (current_deploy_generation, durable_token)
+                    && *current < durable.deploy_generation
+                {
+                    return Err(FenceError::DeployGeneration {
+                        current_generation: *current,
+                        fence_generation: durable.deploy_generation,
+                    }
+                    .into());
+                }
+                *current_deploy_generation
+            }
             _ => self
                 .fenceable_token
                 .token()
@@ -1177,6 +1176,12 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
             .is_some_and(|admission| admission.retired.contains(&generation))
     }
 
+    fn read_protection_enabled(&self) -> bool {
+        self.configs
+            .get(READ_PROTECTION_CONFIG)
+            .is_some_and(|value| *value != 0)
+    }
+
     fn persist_target(&self) -> Option<&semver::Version> {
         self.configs
             .get(READ_PROTECTION_CONFIG)
@@ -1263,7 +1268,8 @@ enum OpenPurpose<'a> {
     Promotion(&'a BootstrapArgs),
     Join,
     Prewarm(&'a str),
-    JoinAdmittedPrewarm(&'a str),
+    Admit,
+    JoinAdmitted(&'a str),
 }
 
 impl UnopenedPersistCatalogState {
@@ -1434,13 +1440,14 @@ impl UnopenedPersistCatalogState {
     ) -> Result<Box<PersistCatalogState>, CatalogError> {
         let bootstrap_args = match purpose {
             OpenPurpose::Bootstrap(args) | OpenPurpose::Promotion(args) => Some(args),
-            OpenPurpose::Join | OpenPurpose::Prewarm(_) | OpenPurpose::JoinAdmittedPrewarm(_) => {
-                None
-            }
+            OpenPurpose::Join
+            | OpenPurpose::Prewarm(_)
+            | OpenPurpose::Admit
+            | OpenPurpose::JoinAdmitted(_) => None,
         };
         let join = bootstrap_args.is_none();
         let prewarming_plan_build = match purpose {
-            OpenPurpose::Prewarm(build) | OpenPurpose::JoinAdmittedPrewarm(build) => {
+            OpenPurpose::Prewarm(build) | OpenPurpose::JoinAdmitted(build) => {
                 let version = build.parse::<semver::Version>().map_err(|_| {
                     DurableCatalogError::NotWritable("invalid prewarming plan namespace".into())
                 })?;
@@ -1455,6 +1462,14 @@ impl UnopenedPersistCatalogState {
                 Some(build.to_owned())
             }
             _ => None,
+        };
+        // Replica prewarming retains its private metadata namespace. An admitted
+        // SQL adapter is an ordinary shared writer, but still joins without
+        // initialization or migrations.
+        let prewarming_plan_build = if matches!(purpose, OpenPurpose::Prewarm(_)) {
+            prewarming_plan_build
+        } else {
+            None
         };
         // It would be nice to use `initial_ts` here, but it comes from the system clock, not the
         // timestamp oracle.
@@ -1487,9 +1502,7 @@ impl UnopenedPersistCatalogState {
 
         let read_only = matches!(self.mode, Mode::Readonly);
 
-        let promoted;
         let protected;
-        let cleanup_owners;
         let deferred_admission_updates;
         // Admit this generation with a compare-and-append.
         loop {
@@ -1545,7 +1558,7 @@ impl UnopenedPersistCatalogState {
                 .configs
                 .get(READ_PROTECTION_CONFIG)
                 .is_some_and(|v| *v != 0);
-            if join {
+            if join || (protection_enabled && matches!(self.mode, Mode::Writable)) {
                 if !self.is_initialized_inner() {
                     return Err(DurableCatalogError::Uninitialized.into());
                 }
@@ -1566,11 +1579,7 @@ impl UnopenedPersistCatalogState {
             let durable_generation = self.fenceable_token.token().map(|t| t.deploy_generation);
             let (mut fence_updates, current_fenceable_token) = self
                 .fenceable_token
-                .generate_unfenced_token(
-                    self.mode,
-                    !protection_enabled && !join,
-                    prewarming_plan_build.is_none(),
-                )?
+                .generate_unfenced_token(self.mode, !protection_enabled && !join, !join)?
                 .ok_or_else(|| {
                     DurableCatalogError::Internal(
                         "catalog should not have fenced before opening".to_string(),
@@ -1580,6 +1589,27 @@ impl UnopenedPersistCatalogState {
                 .token()
                 .expect("admitted token")
                 .deploy_generation;
+            if !join
+                && protection_enabled
+                && durable_generation.is_some_and(|generation| generation > admitted_generation)
+            {
+                return Err(DurableCatalogError::NotWritable(
+                    "cannot move active execution authority to an older deployment".into(),
+                )
+                .into());
+            }
+            // Bootstrap may initialize or resume its own generation, but shared
+            // execution authority changes only through explicit promotion.
+            if protection_enabled
+                && matches!(self.mode, Mode::Writable)
+                && matches!(purpose, OpenPurpose::Bootstrap(_))
+                && durable_generation != Some(admitted_generation)
+            {
+                return Err(DurableCatalogError::NotWritable(
+                    "protected catalogs change active authority only through promotion".into(),
+                )
+                .into());
+            }
             if controller_pending && durable_generation != Some(admitted_generation) {
                 return Err(DurableCatalogError::NotWritable(
                     "unfinished initialization requires its original deployment generation".into(),
@@ -1591,8 +1621,9 @@ impl UnopenedPersistCatalogState {
                 && matches!(
                     purpose,
                     OpenPurpose::Promotion(_)
+                        | OpenPurpose::Admit
                         | OpenPurpose::Prewarm(_)
-                        | OpenPurpose::JoinAdmittedPrewarm(_)
+                        | OpenPurpose::JoinAdmitted(_)
                 )
             {
                 // Revalidate on every CAS attempt. A serving writer can add a
@@ -1601,8 +1632,7 @@ impl UnopenedPersistCatalogState {
                     self.snapshot.iter().map(|(kind, _, _)| kind),
                 )?;
             }
-            if join
-                && prewarming_plan_build.is_none()
+            if matches!(purpose, OpenPurpose::Join)
                 && durable_generation != Some(admitted_generation)
             {
                 return Err(DurableCatalogError::NotWritable(
@@ -1616,7 +1646,7 @@ impl UnopenedPersistCatalogState {
                 ?current_fenceable_token,
                 "fencing previous catalogs"
             );
-            let promoting = prewarming_plan_build.is_none()
+            let promoting = !join
                 && durable_generation.is_some_and(|generation| generation < admitted_generation);
             let defer_admission = matches!(self.mode, Mode::Writable)
                 && !protection_enabled
@@ -1628,7 +1658,7 @@ impl UnopenedPersistCatalogState {
             let mut admission_updates = Vec::new();
             let admission = if matches!(self.mode, Mode::Writable) {
                 let previous = self.update_applier.deployment_admission.as_ref();
-                if matches!(purpose, OpenPurpose::JoinAdmittedPrewarm(_))
+                if matches!(purpose, OpenPurpose::JoinAdmitted(_))
                     && !previous.is_some_and(|admission| {
                         admission.members.contains_key(&admitted_generation)
                     })
@@ -1654,7 +1684,7 @@ impl UnopenedPersistCatalogState {
                     admitted_generation,
                     self.persist_client.build_version(),
                     !protection_enabled && !join,
-                    promoting.then_some(admitted_generation),
+                    (!protection_enabled && promoting).then_some(admitted_generation),
                 )?;
                 if previous != Some(&admission) {
                     if let Some(previous) = previous {
@@ -1675,27 +1705,12 @@ impl UnopenedPersistCatalogState {
             if !defer_admission {
                 fence_updates.append(&mut admission_updates);
             }
-            let mut fence_updates: Vec<_> = fence_updates
+            let fence_updates: Vec<_> = fence_updates
                 .into_iter()
                 .map(|(row, diff)| (StateUpdateKindJson::from(row), diff))
                 .collect();
-            // Recollect on every CAS attempt. Only the successful attempt's
-            // snapshot grants cleanup authority, not subsequent publications.
-            let owners = if protection_enabled && promoting {
-                fence_updates.extend(
-                    super::promotion::retired_realizations(
-                        self.snapshot.iter().map(|(kind, _, _)| kind),
-                        ..admitted_generation,
-                    )?
-                    .into_iter()
-                    .map(|row| (row, Diff::MINUS_ONE)),
-                );
-                Some(super::promotion::ephemeral_owners(
-                    self.snapshot.iter().map(|(kind, _, _)| kind),
-                )?)
-            } else {
-                None
-            };
+            // Protected promotion changes execution authority, not membership
+            // or reader lifetime. Explicit retirement owns their cleanup.
             if matches!(self.mode, Mode::Writable) {
                 match self.compare_and_append(fence_updates, commit_ts).await {
                     Ok(upper) => {
@@ -1718,12 +1733,15 @@ impl UnopenedPersistCatalogState {
                         .map_err(|error| DurableCatalogError::NotWritable(error.to_string()))?;
                 }
             }
-            promoted = promoting;
-            cleanup_owners = owners;
             deferred_admission_updates = admission_updates;
             self.fenceable_token = current_fenceable_token;
             break;
         }
+
+        // Surviving admitted versions still depend on the current shared schema
+        // and content version. Promotion reconstructs it without migrations or
+        // shared initialization, just like a joining adapter.
+        let join = join || (protected && matches!(purpose, OpenPurpose::Promotion(_)));
 
         if !join && matches!(self.mode, Mode::Writable) {
             // One-time migration: The catalog previously used `CONTROLLER_CRITICAL_SINCE` for its
@@ -1874,14 +1892,16 @@ impl UnopenedPersistCatalogState {
                     txn.set_setting("migration_version".into(), old_version.map(Into::into))?;
                 }
 
-                // Exclusive opens invalidate every previous owner. Protected
-                // promotion only invalidates owners in its admitted snapshot.
-                // Keep that set fixed when retrying against newer publications.
-                if (!protected || promoted) && mode != Mode::Readonly {
-                    txn.remove_ephemeral_items_for_owners(cleanup_owners.as_ref());
+                // Only an exclusive open invalidates every previous owner.
+                if !protected && mode != Mode::Readonly {
+                    txn.remove_ephemeral_items_for_owners(None);
                 }
 
-                txn.set_catalog_content_version(catalog_content_version.clone())?;
+                // Protected participants share the initialized schema. A restart
+                // must not raise the content floor above surviving older builds.
+                if !protected {
+                    txn.set_catalog_content_version(catalog_content_version.clone())?;
+                }
                 txn
             } else {
                 initialize::initialize(
@@ -2107,7 +2127,13 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .await?)
     }
 
-    async fn join_admitted_prewarming(
+    async fn admit(self: Box<Self>) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        Ok(self
+            .open_inner(Mode::Writable, Timestamp::minimum(), OpenPurpose::Admit)
+            .await?)
+    }
+
+    async fn join_admitted(
         self: Box<Self>,
         plan_build: &str,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
@@ -2115,7 +2141,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .open_inner(
                 Mode::Writable,
                 Timestamp::minimum(),
-                OpenPurpose::JoinAdmittedPrewarm(plan_build),
+                OpenPurpose::JoinAdmitted(plan_build),
             )
             .await?)
     }
@@ -2506,6 +2532,10 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
             .is_some_and(|admission| admission.retired.contains(&generation))
     }
 
+    fn read_protection_enabled(&self) -> bool {
+        self.protected
+    }
+
     fn persist_target(&self) -> Option<&semver::Version> {
         self.protected
             .then_some(self.deployment_admission.as_ref())
@@ -2690,21 +2720,16 @@ impl CatalogSnapshotReader {
 }
 
 impl PersistHandle<StateUpdateKind, CatalogStateInner> {
-    fn prewarming_namespace(&self) -> Result<Option<String>, CatalogError> {
+    fn prewarming_namespace(&self) -> Option<String> {
         let own = self.fenceable_token.token().expect("opened identity");
         let active = self
             .fenceable_token
             .durable_token()
             .expect("opened authority");
         if self.mode == Mode::Writable && own.deploy_generation > active.deploy_generation {
-            self.prewarming_plan_build.clone().map(Some).ok_or_else(|| {
-                DurableCatalogError::NotWritable(
-                    "pending writer has no prewarming authority".into(),
-                )
-                .into()
-            })
+            self.prewarming_plan_build.clone()
         } else {
-            Ok(None)
+            None
         }
     }
 
@@ -2723,7 +2748,7 @@ impl PersistHandle<StateUpdateKind, CatalogStateInner> {
             .token()
             .expect("opened catalog has a generation")
             .deploy_generation;
-        let namespace = self.prewarming_namespace()?;
+        let namespace = self.prewarming_namespace();
         Transaction::new(self, snapshot, commit_ts, generation, namespace)
     }
 }
@@ -2948,6 +2973,13 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     fn synced_upper(&self) -> Timestamp {
         self.upper
     }
+
+    fn active_deployment_generation(&self) -> u64 {
+        self.fenceable_token
+            .durable_token()
+            .expect("opened authority")
+            .deploy_generation
+    }
 }
 
 #[async_trait]
@@ -3071,7 +3103,7 @@ impl DurableCatalogState for PersistCatalogState {
             .token()
             .expect("opened catalog has a generation")
             .deploy_generation;
-        let namespace = self.prewarming_namespace()?;
+        let namespace = self.prewarming_namespace();
         Transaction::new(self, snapshot, commit_ts, generation, namespace)
             .map(DryRunTransaction::new)
     }

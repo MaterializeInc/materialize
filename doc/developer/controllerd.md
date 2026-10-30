@@ -19,6 +19,9 @@ with a user allowed to create databases and schemas. The default metadata URL is
 `postgres://root@localhost:26257/materialize_controllerd`, **not** environmentd's
 `materialize` database. Alternatively, create a dedicated PostgreSQL database
 first and pass `--postgres postgres://USER@localhost/materialize_controllerd`.
+PostgreSQL's default 100-connection limit can be too small for the per-process
+pools. Size `max_connections` and server memory for all participating controllers,
+adapters and replicas.
 `MZDEV_POSTGRES` and `MZDEV_BLOB` are honored, so check these variables before
 starting. A fresh state directory rejects existing metadata schemas rather than
 converting an environmentd environment.
@@ -47,6 +50,13 @@ starting services. The process backend tries the configured relay ports and fall
 back to available ports. The controller uses the assigned endpoint for its own
 Persist client and every managed adapter and replica. Inspect `/api/inventory`
 for the relay's assigned endpoints and observed process status.
+
+For version coexistence, keep each version's `controllerd`, `adapterd`, `clusterd`
+and `pubsubd` executables in a separate, fixed directory. Select it with
+`--controller-binaries-directory /absolute/path/to/version`. This skips building
+and leaves the shared `mzbuild/bin` symlinks unchanged. It cannot be combined with
+`--build-only`. Keep relay selection independent of these deployment directories,
+using one provisioner and an explicit fixed `--pubsubd-image` or external relay.
 
 For an existing, environment-scoped external relay, pass
 `--pubsub-url http://HOST:PORT`. The launcher does not probe, adopt, start or stop
@@ -169,6 +179,36 @@ A restarted controller re-probes readiness rather than attaching the prior
 controller's sample to an unverified process. Readiness can briefly become unknown
 while existing SQL sessions and committed processes continue running.
 
+
+## Retire one deployment
+
+Inventory distinguishes this controller's `generation` from the catalog's
+`active_generation`. Promotion changes active execution authority, not SQL write
+permission for other admitted deployments.
+
+Promotion does not retire the previous deployment. To retire generation 1 through
+an active controller listening on port 6883, then stop that generation's local
+processes:
+
+```sh
+bin/controllerd --retire-generation 1 --controller-url http://127.0.0.1:6883
+```
+
+Use the same `--controller-data-directory` as startup. The launcher sends the
+selected environment ID to `POST /api/deployments/1/retire`. Controllerd rejects a
+mismatched environment or an attempt to retire the active generation. A successful
+response acknowledges durable retirement, not completed process cleanup.
+
+After verifying that receipt, the launcher stops the retired generation's
+controller, adapters and replicas. It does not build, reset data, stop surviving
+generations, or stop the shared relay. Cleanup also works when the retired
+controller has already exited. Retry the same command after a partial cleanup.
+An unconfirmed retirement stops no local processes.
+
+Transfer relay provisioning to a surviving controller before retiring its current
+provisioner, following the shared-relay rules above. Retained pubsub keeps running,
+but an external-mode controller does not automatically become its provisioner.
+Do not use `--stop` for a single deployment: it stops the whole environment.
 
 ## Inspect Persist collections
 

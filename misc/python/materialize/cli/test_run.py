@@ -116,6 +116,72 @@ def test_controller_launch_and_restart(launcher, tmp_path, monkeypatch, optimize
     assert not (tmp_path / "mzdata").exists()
 
 
+def test_controller_prebuilt_versions_keep_binary_selection_independent(
+    launcher, tmp_path, monkeypatch
+):
+    shared = tmp_path / "mzbuild/bin/pubsubd"
+    shared.parent.mkdir(parents=True)
+    shared.symlink_to(tmp_path / "original-relay")
+    for version in ("old", "new"):
+        directory = tmp_path / version
+        directory.mkdir()
+        for name in ("controllerd", "adapterd", "clusterd", "pubsubd"):
+            binary = directory / name
+            binary.write_text(version)
+            binary.chmod(0o755)
+        monkeypatch.setattr(
+            run.sys,
+            "argv",
+            ["run", "controllerd", "--controller-binaries-directory", str(directory)],
+        )
+        assert run.main() == 0
+        command = launcher[5].call_args.args[0]
+        assert command[0] == str(directory / "controllerd")
+        for name in ("adapterd", "clusterd", "pubsubd"):
+            assert f"--{name}-image={directory / name}" in command
+        launcher[1].assert_called_with(
+            [str(directory / "adapterd"), "--version"], text=True
+        )
+        assert shared.readlink() == tmp_path / "original-relay"
+    launcher[0].assert_not_called()
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_controller_prebuilt_rejects_unusable_binary(
+    launcher, tmp_path, monkeypatch, missing
+):
+    directory = tmp_path / "prebuilt"
+    directory.mkdir()
+    for name in ("controllerd", "adapterd", "clusterd", "pubsubd"):
+        if name == "pubsubd" and missing:
+            continue
+        binary = directory / name
+        binary.touch()
+        binary.chmod(0o600 if name == "pubsubd" else 0o755)
+    monkeypatch.setattr(
+        run.sys,
+        "argv",
+        ["run", "controllerd", "--controller-binaries-directory", str(directory)],
+    )
+    with pytest.raises(UIError, match="missing or non-executable.*pubsubd"):
+        run.main()
+    launcher[0].assert_not_called()
+    launcher[3].assert_not_called()
+    launcher[5].assert_not_called()
+
+
+@pytest.mark.parametrize("args", [["environmentd"], ["controllerd", "--build-only"]])
+def test_controller_prebuilt_rejects_inapplicable_commands(launcher, monkeypatch, args):
+    monkeypatch.setattr(
+        run.sys,
+        "argv",
+        ["run", *args, "--controller-binaries-directory", "/unused"],
+    )
+    with pytest.raises(UIError, match="--controller-binaries-directory requires"):
+        run.main()
+    launcher[0].assert_not_called()
+
+
 def test_controller_reset_defaults_after_state_deletion(
     launcher, monkeypatch, tmp_path
 ):
@@ -595,6 +661,11 @@ def test_controller_reset_stops_recovered_children_before_metadata(
             [sys.executable, "-c", "import time; time.sleep(120)"]
         )
         processes.extend([adapter, relay, external])
+        monkeypatch.setattr(
+            run.psutil,
+            "process_iter",
+            lambda: (psutil.Process(process.pid) for process in processes),
+        )
         for ordinal, process in enumerate([adapter, relay]):
             if ordinal == 0 and not pid_record:
                 continue
@@ -776,6 +847,7 @@ def test_retire_scoped_selection(retirement, launcher, monkeypatch, controller_p
     assert run.main() == 0
     post.assert_called_once_with(
         "http://active:6882/api/deployments/0/retire",
+        json={"environment_id": "selected"},
         timeout=30,
         allow_redirects=False,
     )

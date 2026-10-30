@@ -221,9 +221,19 @@ impl Fixture {
     }
 
     async fn append_type_row(&self, catalog: &mut Catalog, row: Row) {
+        self.append_row(catalog, &crate::builtin::MZ_TYPES, row)
+            .await;
+    }
+
+    async fn append_row(
+        &self,
+        catalog: &mut Catalog,
+        builtin: &'static crate::builtin::BuiltinTable,
+        row: Row,
+    ) {
         let mut infrastructure = self.infrastructure(catalog).await;
-        let id = catalog.resolve_builtin_table(&crate::builtin::MZ_TYPES);
-        let table = catalog.get_entry(&id).table().expect("mz_types table");
+        let id = catalog.resolve_builtin_table(builtin);
+        let table = catalog.get_entry(&id).table().expect("builtin table");
         let shard = infrastructure.routes[&table.global_id_writes()];
         let write = self.oracle.write_ts().await;
         catalog
@@ -254,9 +264,17 @@ impl Fixture {
     }
 
     async fn types(&self, catalog: &mut Catalog) -> Vec<(Row, i64)> {
+        self.rows(catalog, &crate::builtin::MZ_TYPES).await
+    }
+
+    async fn rows(
+        &self,
+        catalog: &mut Catalog,
+        builtin: &'static crate::builtin::BuiltinTable,
+    ) -> Vec<(Row, i64)> {
         let infrastructure = self.infrastructure(catalog).await;
-        let id = catalog.resolve_builtin_table(&crate::builtin::MZ_TYPES);
-        let table = catalog.get_entry(&id).table().expect("mz_types table");
+        let id = catalog.resolve_builtin_table(builtin);
+        let table = catalog.get_entry(&id).table().expect("builtin table table");
         let shard = infrastructure.routes[&table.global_id_writes()];
         let mut reader = self
             .persist
@@ -268,18 +286,18 @@ impl Fixture {
                 false,
             )
             .await
-            .expect("mz_types reader");
+            .expect("builtin table reader");
         let snapshot = infrastructure
             .txns
             .read_cache()
             .data_snapshot(shard, infrastructure.completed_at)
             .snapshot_and_fetch(&mut reader)
             .await
-            .expect("mz_types snapshot");
+            .expect("builtin table snapshot");
         reader.expire().await;
         let mut rows: Vec<_> = snapshot
             .into_iter()
-            .map(|((data, ()), _, diff)| (data.0.expect("valid mz_types row"), diff))
+            .map(|((data, ()), _, diff)| (data.0.expect("valid builtin table row"), diff))
             .collect();
         differential_dataflow::consolidation::consolidate(&mut rows);
         rows
@@ -521,4 +539,78 @@ async fn unmarked_catalog_cannot_initialize() {
         "rejected initialization must not mint storage mappings"
     );
     storage.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn delayed_configuration_reconciliation_respects_promotion() {
+    let fixture = Fixture::new().await;
+    let initial = fixture
+        .initialize(fixture.open(fixture.durable(true).await).await)
+        .await;
+    initial.expire().await;
+    let storage = fixture
+        .builder()
+        .unwrap_build()
+        .await
+        .admit()
+        .await
+        .expect("restart admission");
+    let mut opened = fixture.open(storage).await;
+    let mut infrastructure = fixture.infrastructure(&mut opened.catalog).await;
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+    let oracle = PausedBootstrapOracle {
+        inner: fixture.oracle.as_ref(),
+        pause: Mutex::new(Some((started_tx, resume_rx))),
+    };
+    let reconcile = opened.catalog.reconcile_deployment_configuration(
+        &fixture.persist,
+        &mut infrastructure,
+        &opened.builtin_table_updates,
+        &oracle,
+    );
+    let peer = async {
+        started_rx
+            .await
+            .expect("reconciliation passed its entry check");
+        let storage = fixture
+            .builder()
+            .with_deploy_generation(1)
+            .unwrap_build()
+            .await
+            .open_for_promotion(
+                fixture.oracle.write_ts().await.timestamp,
+                &Fixture::bootstrap(false),
+            )
+            .await
+            .expect("promote the peer deployment");
+        let mut active = fixture.open(storage).await.catalog;
+        let table = &crate::builtin::MZ_CLUSTER_REPLICA_SIZES;
+        let mut expected = fixture.rows(&mut active, table).await;
+        let extra = expected.first_mut().expect("seeded sizes");
+        extra.1 += 1;
+        fixture
+            .append_row(&mut active, table, extra.0.clone())
+            .await;
+        resume_tx.send(()).expect("resume old controller");
+        (active, expected)
+    };
+    let (result, (mut active, expected)) =
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            tokio::join!(reconcile, peer)
+        })
+        .await
+        .expect("promotion and reconciliation make progress");
+    result.expect("old controller remains available after losing configuration authority");
+    assert_eq!(
+        fixture
+            .rows(&mut active, &crate::builtin::MZ_CLUSTER_REPLICA_SIZES)
+            .await,
+        expected,
+        "old controller must preserve configuration published after promotion"
+    );
+    drop(infrastructure);
+    opened.catalog.expire().await;
+    active.expire().await;
 }

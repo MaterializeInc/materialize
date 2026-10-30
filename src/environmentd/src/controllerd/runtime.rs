@@ -44,7 +44,9 @@ pub async fn run(
         "development adapter plan namespace requires the build metadata from adapterd --version"
     );
     let listener = tokio::net::TcpListener::bind(http_listen_addr).await?;
-    let mut catalog = super::open_catalog(&config, &adapter_sizes).await?;
+    let (mut catalog, oracle) = super::open_catalog(&config, &adapter_sizes).await?;
+    let mut was_active =
+        catalog.state().active_deployment_generation() == Some(config.controller.deploy_generation);
     let persist = config
         .catalog_config
         .persist_clients
@@ -72,7 +74,7 @@ pub async fn run(
     let replicas = config.controller.orchestrator.namespace("cluster");
     let mut replica_metrics = super::metrics::ReplicaMetrics::new(
         &catalog,
-        persist,
+        persist.clone(),
         config.controller.deploy_generation,
         std::sync::Arc::clone(&replicas),
     )?;
@@ -127,6 +129,14 @@ pub async fn run(
             }
             _ = interval.tick() => {
                 catalog.sync_to_current_updates().await?;
+                let active = catalog.state().active_deployment_generation()
+                    == Some(config.controller.deploy_generation);
+                if active && !was_active {
+                    catalog.complete_deployment_activation(
+                        persist.clone(), &config.metrics_registry, oracle.as_ref(),
+                    ).await?;
+                }
+                was_active = active;
                 if let Some(relay) = &mut pubsub { relay.reconcile(); }
                 catalog.system_config().dyncfg_updates().apply(&config.system_dyncfgs);
                 let mut follower = catalog.replica_config();
@@ -209,10 +219,49 @@ async fn administer(
             Action::Inventory => {
                 return Ok(json!({
                     "generation": launch.generation,
+                    "active_generation": catalog.state().active_deployment_generation(),
+                    "environment_id": catalog.config().environment_id.to_string(),
                     "pubsub": pubsub.map(|relay| relay.inventory()),
                     "adapters": observations.adapters(catalog, launch, sizes),
                     "replicas": observations.replicas(catalog, launch.generation),
                 }));
+            }
+            Action::RetireDeployment {
+                generation,
+                environment_id,
+            } => {
+                // Bind the mutation itself to the launcher's selected environment,
+                // not only the receipt it checks before local process cleanup.
+                if environment_id != &catalog.config().environment_id.to_string() {
+                    return Err(ApiError {
+                        status: StatusCode::CONFLICT,
+                        message: "environment identity does not match this controller".into(),
+                    });
+                }
+                match catalog.try_retire_deployment(*generation).await {
+                    Ok(true) => {
+                        return Ok(json!({
+                            "retired": generation,
+                            "environment_id": catalog.config().environment_id.to_string(),
+                        }));
+                    }
+                    Ok(false) if attempt < 2 => continue,
+                    Ok(false) => {
+                        return Err(ApiError {
+                            status: StatusCode::CONFLICT,
+                            message: "catalog changed; retry the request".into(),
+                        });
+                    }
+                    Err(mz_catalog::durable::CatalogError::Durable(
+                        mz_catalog::durable::DurableCatalogError::NotWritable(reason),
+                    )) => {
+                        return Err(ApiError {
+                            status: StatusCode::CONFLICT,
+                            message: reason,
+                        });
+                    }
+                    Err(error) => return Err(catalog_error(error.into())),
+                }
             }
             Action::Collections(filters) => {
                 return Ok(super::collections::inspect(catalog, filters));
@@ -257,7 +306,10 @@ async fn administer(
                         json!({"id": declaration.id.to_string(), "name": name, "size": size})
                     }
                     Action::DropAdapter { id } => json!({"dropped": id.to_string()}),
-                    Action::ListAdapters | Action::Inventory | Action::Collections(_) => {
+                    Action::ListAdapters
+                    | Action::Inventory
+                    | Action::Collections(_)
+                    | Action::RetireDeployment { .. } => {
                         unreachable!("listing returns before mutation")
                     }
                 });

@@ -80,9 +80,6 @@ impl DeploymentAdmission {
         if self.retired.contains(&generation) {
             return Ok(());
         }
-        if generation < active {
-            return Err(reject("only a prewarming deployment can be retired".into()));
-        }
         self.members.remove(&generation);
         self.retired.insert(generation);
         self.update_target()

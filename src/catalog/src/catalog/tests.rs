@@ -2330,35 +2330,61 @@ async fn test_multi_subscriber_catalog() {
         .await
         .expect("same-generation reader survives");
 
-    let promoted = crate::durable::TestCatalogStateBuilder::new(persist_client)
+    let mut promoted = crate::durable::TestCatalogStateBuilder::new(persist_client)
         .with_organization_id(organization_id)
         .with_deploy_generation(1)
         .build()
         .await
         .expect("build promotion")
-        .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap_args)
+        .open_for_promotion(mz_ore::now::SYSTEM_TIME().into(), &bootstrap_args)
         .await
         .expect("promote generation");
+
+    writer_catalog
+        .sync_to_current_updates()
+        .await
+        .expect("writer survives promotion");
+    writer_catalog_peer
+        .sync_to_current_updates()
+        .await
+        .expect("peer survives promotion");
+    read_only_catalog
+        .sync_to_current_updates()
+        .await
+        .expect("reader survives promotion");
+    assert!(
+        promoted
+            .retire_deployment(0)
+            .await
+            .expect("retire predecessor")
+    );
 
     let write_fence_err = writer_catalog
         .sync_to_current_updates()
         .await
-        .expect_err("sync_to_current_updates for fencer");
+        .expect_err("writer observes explicit retirement");
     assert!(matches!(
         write_fence_err,
-        CatalogError::Durable(DurableCatalogError::Fence(
-            FenceError::DeployGeneration { .. }
-        ))
+        CatalogError::Durable(DurableCatalogError::Fence(FenceError::DeploymentRetired {
+            generation: 0
+        }))
     ));
     let read_fence_err = read_only_catalog
         .sync_to_current_updates()
         .await
-        .expect_err("sync_to_current_updates after fencer");
+        .expect_err("reader observes explicit retirement");
     assert!(matches!(
         read_fence_err,
-        CatalogError::Durable(DurableCatalogError::Fence(
-            FenceError::DeployGeneration { .. }
-        ))
+        CatalogError::Durable(DurableCatalogError::Fence(FenceError::DeploymentRetired {
+            generation: 0
+        }))
+    ));
+
+    assert!(matches!(
+        writer_catalog_peer.sync_to_current_updates().await,
+        Err(CatalogError::Durable(DurableCatalogError::Fence(
+            FenceError::DeploymentRetired { generation: 0 }
+        )))
     ));
 
     writer_catalog.expire().await;

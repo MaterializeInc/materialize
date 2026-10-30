@@ -259,9 +259,15 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         plan_build: &str,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
-    /// Joins a prewarming deployment already admitted by its initializer.
-    /// Unlike `join_prewarming`, this cannot admit a new deployment member.
-    async fn join_admitted_prewarming(
+    /// Admits a compatible deployment to an initialized protected catalog.
+    /// Does not promote, initialize, migrate, or retire other participants.
+    /// Deployment initializers call this before launching joining SQL adapters.
+    async fn admit(self: Box<Self>) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+
+    /// Joins an already-admitted deployment as a shared catalog writer.
+    /// Does not initialize, migrate, promote, or admit a new deployment member.
+    /// Replica prewarming uses `join_prewarming` for its private write namespace.
+    async fn join_admitted(
         self: Box<Self>,
         plan_build: &str,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
@@ -502,6 +508,10 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// [`Self::sync_to_current_updates`] drains through this upper, whereas
     /// [`Self::sync_updates`] can leave a suffix queued beyond its target.
     fn synced_upper(&self) -> Timestamp;
+
+    /// Output-write authority at this handle's synchronized prefix, without I/O.
+    /// To authorize a write at `t`, first successfully advance the upper past `t`.
+    fn active_deployment_generation(&self) -> u64;
 }
 
 /// Owned durable input for independent catalog reconstruction, with no persist handles.

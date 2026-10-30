@@ -16,16 +16,19 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, StateC
 use mz_catalog::durable::{BootstrapArgs, CatalogTimestampOracle};
 use mz_repr::Timestamp;
 
-/// Opens a fresh deployment or reconstructs an initialized same-generation one.
+/// Initializes a fresh environment or admits a compatible deployment.
 ///
 /// Restart joins without migrations or positive snapshot publication. The launcher
 /// must pair same-build children and preserve deployment configuration. Explicitly
 /// pending controller initialization resumes before child launch. Unmarked existing
-/// environments remain join-only. This does not implement upgrades.
+/// environments remain join-only. Admission never promotes or retires a peer.
 pub async fn open_catalog(
     config: &crate::Config,
     adapter_sizes: &std::collections::BTreeMap<String, super::provisioning::AdapterAllocation>,
-) -> anyhow::Result<Catalog> {
+) -> anyhow::Result<(
+    Catalog,
+    Arc<dyn mz_timestamp_oracle::TimestampOracle<Timestamp> + Send + Sync>,
+)> {
     ensure!(
         config.joined_adapter_id.is_none(),
         "controller cannot be an adapter joiner"
@@ -136,9 +139,9 @@ pub async fn open_catalog(
             )
             .await?
     } else {
-        // Joining validates generation and schema compatibility without promoting
-        // the controller or running replacement migrations.
-        openable.join().await?
+        // Only the deployment initializer admits membership. Children join that
+        // membership without changing active execution authority.
+        openable.admit().await?
     };
     oracle.apply_write(storage.current_upper().await).await;
     let boot_ts = oracle.write_ts().await.timestamp;
@@ -205,14 +208,20 @@ pub async fn open_catalog(
     let catalog = if initialize {
         super::initialize_fresh(catalog_config, oracle.as_ref()).await?
     } else {
-        Catalog::open(catalog_config)
-            .await?
-            .complete_deployment_restart(persist, &config.metrics_registry, oracle.as_ref())
-            .await?
+        let catalog = Catalog::open(catalog_config).await?;
+        if catalog.catalog.state().active_deployment_generation()
+            == Some(config.controller.deploy_generation)
+        {
+            catalog
+                .complete_deployment_restart(persist, &config.metrics_registry, oracle.as_ref())
+                .await?
+        } else {
+            catalog.catalog
+        }
     };
     ensure!(
         catalog.state().catalog_read_protection_enabled(),
         "controllerd requires catalog-following execution"
     );
-    Ok(catalog)
+    Ok((catalog, oracle))
 }

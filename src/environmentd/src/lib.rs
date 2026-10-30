@@ -700,17 +700,24 @@ impl Listeners {
 
         // Perform preflight checks.
         //
-        // Preflight checks determine whether to boot in read-only mode or not.
-        let read_only = preflight::preflight_0dt(
-            openable_adapter_storage.as_mut(),
-            config.controller.deploy_generation,
-        )
-        .await?;
-
-        let protected_prewarming = read_only
-            && openable_adapter_storage
-                .catalog_read_protection_enabled()
-                .await?;
+        // Managed SQL adapters are full writers in every admitted generation.
+        // Catch-up controls promotion readiness, not their permission to serve.
+        // Durable join below validates membership, compatibility and retirement.
+        let needs_catchup = if config.joined_adapter_id.is_some() {
+            openable_adapter_storage.get_deployment_generation().await?
+                < config.controller.deploy_generation
+        } else {
+            preflight::preflight_0dt(
+                openable_adapter_storage.as_mut(),
+                config.controller.deploy_generation,
+            )
+            .await?
+        };
+        let read_only = needs_catchup && config.joined_adapter_id.is_none();
+        let protected = openable_adapter_storage
+            .catalog_read_protection_enabled()
+            .await?;
+        let protected_prewarming = read_only && protected;
 
         let bootstrap_args = BootstrapArgs {
             controller_initialization: false,
@@ -721,7 +728,7 @@ impl Listeners {
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
 
-        let (caught_up_trigger, bootstrapped) = if read_only && config.joined_adapter_id.is_none() {
+        let (caught_up_trigger, bootstrapped) = if needs_catchup {
             let (caught_up_trigger, caught_up_receiver) = mz_ore::channel::trigger::channel();
             let (bootstrapped, bootstrapped_receiver) = tokio::sync::oneshot::channel();
             let catchup_config = CatchupConfig {
@@ -732,7 +739,7 @@ impl Listeners {
                 deployment_state: deployment_state.clone(),
                 catalog_metrics: Arc::clone(&config.catalog_config.metrics),
                 timestamp_oracle: catalog_timestamp_oracle.clone(),
-                native_prewarming: protected_prewarming,
+                native_prewarming: protected,
                 caught_up_max_wait: with_0dt_deployment_max_wait,
                 panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
                 bootstrap_args: bootstrap_args.clone(),
@@ -770,20 +777,18 @@ impl Listeners {
             )
             .into());
         }
-        let mut adapter_storage = if protected_prewarming {
+        let mut adapter_storage = if config.joined_adapter_id.is_some() {
             let build =
                 mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO).to_string();
-            if config.joined_adapter_id.is_some() {
-                openable_adapter_storage
-                    .join_admitted_prewarming(&build)
-                    .await?
-            } else {
-                openable_adapter_storage.join_prewarming(&build).await?
+            let adapter_storage = openable_adapter_storage.join_admitted(&build).await?;
+            if !needs_catchup {
+                deployment_state.set_is_leader();
             }
-        } else if config.joined_adapter_id.is_some() {
-            let adapter_storage = openable_adapter_storage.join().await?;
-            deployment_state.set_is_leader();
             adapter_storage
+        } else if protected_prewarming {
+            let build =
+                mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO).to_string();
+            openable_adapter_storage.join_prewarming(&build).await?
         } else if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
@@ -871,7 +876,7 @@ impl Listeners {
                     Some(catalog_timestamp_oracle.clone()),
                 )
                 .await?
-                .join_admitted_prewarming(
+                .join_admitted(
                     &mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO)
                         .to_string(),
                 )

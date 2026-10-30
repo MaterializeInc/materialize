@@ -653,81 +653,179 @@ async fn test_retirement_retracts_raw_rows_and_fences_before_unreadable_suffix()
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
-async fn test_deployment_admission_promotion_and_restart() {
+async fn test_two_versions_write_until_explicit_retirement() {
+    async fn create_database(catalog: &mut dyn DurableCatalogState, name: &str) {
+        catalog
+            .sync_to_current_updates()
+            .await
+            .expect("follow peer DDL");
+        let mut txn = catalog
+            .transaction()
+            .await
+            .expect("admitted writer transaction");
+        txn.insert_user_database(
+            name,
+            mz_repr::role_id::RoleId::System(1),
+            Vec::new(),
+            &Default::default(),
+        )
+        .expect("stage shared DDL");
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts)
+            .await
+            .expect("admitted version can commit shared DDL");
+    }
+
     let v1 = semver::Version::new(26, 1, 0);
     let v2 = semver::Version::new(26, 2, 0);
     let organization_id = Uuid::new_v4();
     let mut cache = PersistClientCache::new_no_metrics();
-    let (active_cfg, active_builder) =
-        admission_participant(&mut cache, organization_id, 1, &v1).await;
-    let mut active = bootstrap_admission(active_builder).await;
-    assert_eq!(active_cfg.state_version_target(), v1);
-
-    let (pending_cfg, pending_builder) =
-        admission_participant(&mut cache, organization_id, 2, &v2).await;
-    let error = pending_builder
+    let (_, old_builder) = admission_participant(&mut cache, organization_id, 1, &v1).await;
+    let mut old = bootstrap_admission(old_builder.clone()).await;
+    let (new_cfg, new_builder) = admission_participant(&mut cache, organization_id, 2, &v2).await;
+    let error = new_builder
         .clone()
         .unwrap_build()
         .await
-        .join_admitted_prewarming(&v2.to_string())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .err()
-        .expect("a joining adapter cannot initialize deployment membership");
+        .expect("bootstrap must not promote a protected deployment");
+    assert!(
+        error.to_string().contains("only through promotion"),
+        "{error}"
+    );
+    let error = new_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .join_admitted(&v2.to_string())
+        .await
+        .err()
+        .expect("a joining SQL adapter cannot initialize deployment membership");
     assert!(
         error
             .to_string()
             .contains("joining requires an initialized deployment"),
         "{error}"
     );
-    let pending = pending_builder
+    assert_eq!(new_cfg.state_version_target(), v1);
+    let new = new_builder
+        .clone()
         .unwrap_build()
         .await
-        .join_prewarming(&v2.to_string())
+        .admit()
         .await
-        .expect("compatible deployment can prewarm");
-    assert_eq!(pending_cfg.state_version_target(), v1);
-    pending.expire().await;
-
-    let (restart_cfg, restart_builder) =
-        admission_participant(&mut cache, organization_id, 2, &v2).await;
-    let restart = restart_builder.clone().unwrap_build().await;
-    assert_eq!(restart_cfg.state_version_target(), v1);
-    let restart = restart
-        .join_admitted_prewarming(&v2.to_string())
+        .expect("admit compatible version");
+    new.expire().await;
+    let mut new = new_builder
+        .clone()
+        .unwrap_build()
         .await
-        .expect("admitted deployment can restart prewarming");
-    assert_eq!(restart_cfg.state_version_target(), v1);
-    restart.expire().await;
+        .join_admitted(&v2.to_string())
+        .await
+        .expect("join admitted SQL writer");
+    create_database(old.as_mut(), "writer_old_before").await;
+    create_database(new.as_mut(), "writer_new_before").await;
+    new.expire().await;
 
-    let promoted = restart_builder
+    let mut promoted = new_builder
+        .clone()
         .unwrap_build()
         .await
         .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .expect("compatible deployment can promote");
-    assert_eq!(restart_cfg.state_version_target(), v2);
-    // A different process's target changes only when it observes committed policy.
-    assert_eq!(pending_cfg.state_version_target(), v1);
-    assert_eq!(active_cfg.state_version_target(), v1);
-    let error = active
+        .expect("switch execution authority without retiring writers");
+    assert_eq!(
+        new_cfg.state_version_target(),
+        v1,
+        "old member still constrains shared format"
+    );
+    let repeated = new_builder
+        .unwrap_build()
+        .await
+        .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .expect("repeated promotion preserves surviving versions");
+    assert_eq!(new_cfg.state_version_target(), v1);
+    repeated.expire().await;
+    create_database(old.as_mut(), "writer_old_after").await;
+    create_database(promoted.as_mut(), "writer_new_after").await;
+    old.expire().await;
+
+    let mut old = old_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .join_admitted(&v1.to_string())
+        .await
+        .expect("admitted older deployment can restart after promotion");
+    old.sync_to_current_updates()
+        .await
+        .expect("old writer sees both versions' commits");
+    let snapshot = old.snapshot().await.expect("shared catalog snapshot");
+    let names: std::collections::BTreeSet<_> = snapshot
+        .databases
+        .values()
+        .filter(|db| db.name.starts_with("writer_"))
+        .map(|db| db.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from([
+            "writer_old_before",
+            "writer_new_before",
+            "writer_old_after",
+            "writer_new_after",
+        ])
+    );
+
+    let error = old_builder
+        .unwrap_build()
+        .await
+        .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .err()
+        .expect("old deployment cannot roll back active execution authority");
+    assert!(error.to_string().contains("older deployment"), "{error}");
+
+    assert!(
+        promoted
+            .retire_deployment(1)
+            .await
+            .expect("explicitly retire old deployment")
+    );
+    assert!(
+        promoted
+            .retire_deployment(1)
+            .await
+            .expect("retirement is idempotent")
+    );
+    assert_eq!(new_cfg.state_version_target(), v2);
+    let error = old
         .sync_to_current_updates()
         .await
-        .expect_err("promotion fences the old deployment");
+        .expect_err("retirement fences old writer");
     assert!(
-        matches!(error, CatalogError::Durable(DurableCatalogError::Fence(_))),
+        matches!(
+            error,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::DeploymentRetired {
+                generation: 1
+            }))
+        ),
         "{error}"
     );
-    assert_eq!(active_cfg.state_version_target(), v1);
-    active.expire().await;
-
+    create_database(promoted.as_mut(), "writer_new_survives_retirement").await;
+    old.expire().await;
     let (follower_cfg, follower_builder) =
         admission_participant(&mut cache, organization_id, 2, &v2).await;
-    let follower = follower_builder.unwrap_build().await;
-    assert_eq!(follower_cfg.state_version_target(), v2);
-    let follower = follower
+    let follower = follower_builder
+        .unwrap_build()
+        .await
         .join_active()
         .await
-        .expect("same-version follower can join the active deployment");
+        .expect("fresh active follower observes the advanced format");
     assert_eq!(follower_cfg.state_version_target(), v2);
     follower.expire().await;
     promoted.expire().await;
@@ -764,12 +862,23 @@ async fn test_deployment_admission_preserves_pending_version_requirement() {
     promoter.expire().await;
     active.expire().await;
 
-    let promoted = promoter_builder
+    let mut promoted = promoter_builder
         .unwrap_build()
         .await
         .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .expect("compatible deployment can promote");
+    assert_eq!(
+        promoter_cfg.state_version_target(),
+        v1,
+        "promotion retains the older member"
+    );
+    assert!(
+        promoted
+            .retire_deployment(1)
+            .await
+            .expect("explicitly retire the old version")
+    );
     assert_eq!(promoter_cfg.state_version_target(), v2);
     pending
         .sync_to_current_updates()
@@ -830,12 +939,23 @@ async fn test_deployment_admission_rejections_do_not_publish_target() {
     assert_eq!(old_cfg.state_version_target(), v1);
     let (promoter_cfg, promoter_builder) =
         admission_participant(&mut cache, organization_id, 2, &v2).await;
-    let promoted = promoter_builder
+    let mut promoted = promoter_builder
         .unwrap_build()
         .await
         .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .expect("compatible deployment can promote");
+    assert_eq!(
+        promoter_cfg.state_version_target(),
+        v1,
+        "promotion retains the older member"
+    );
+    assert!(
+        promoted
+            .retire_deployment(1)
+            .await
+            .expect("explicitly retire the old version")
+    );
     assert_eq!(promoter_cfg.state_version_target(), v2);
     let error = old
         .join_prewarming(&v1.to_string())

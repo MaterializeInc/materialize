@@ -72,11 +72,11 @@ impl TimestampOracle<Timestamp> for TestOracle {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported OpenSSL calls
-async fn promotion_cleanup_is_scoped_to_admitted_owners() {
+async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
     use std::collections::BTreeMap;
 
-    use mz_catalog::durable::Transaction;
-    use mz_catalog::durable::objects::{DurableType, Item};
+    use mz_catalog::durable::objects::{ClientRealization, DurableType, Item};
+    use mz_catalog::durable::{DEFAULT_ADAPTER_ID, FenceError, Transaction};
     use mz_persist_client::ShardId;
     use mz_repr::role_id::RoleId;
     use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
@@ -138,6 +138,16 @@ async fn promotion_cleanup_is_scoped_to_admitted_owners() {
     txn.set_config("catalog_read_protection_enabled".into(), Some(1))
         .unwrap();
     insert(&mut txn, 1000, old_owner, old_shard);
+    txn.set_collection_compaction_bound(GlobalId::User(1000), Some(10.into()))
+        .unwrap();
+    let old_client = txn
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
+    txn.grant_client_read_requirements(
+        old_client,
+        BTreeMap::from([(GlobalId::User(1000), 10.into())]),
+    )
+    .unwrap();
     commit(txn).await;
 
     let next = builder.with_deploy_generation(8);
@@ -148,45 +158,120 @@ async fn promotion_cleanup_is_scoped_to_admitted_owners() {
         .join_prewarming("0.0.0+pending")
         .await
         .unwrap();
-    let promotion = next.unwrap_build().await;
-    let fence_gate = Arc::new(Notify::new());
-    *oracle.completion_gate.lock().unwrap() = Some(Arc::clone(&fence_gate));
-    let opening = mz_ore::task::spawn(|| "promotion with publications", async move {
-        promotion
-            .open_for_promotion(1_000.into(), &test_bootstrap_args())
-            .await
-    });
-    tokio::time::timeout(Duration::from_secs(5), oracle.completion_started.notified())
+    let mut promoted = next
+        .unwrap_build()
+        .await
+        .open_for_promotion(1_000.into(), &test_bootstrap_args())
         .await
         .unwrap();
-    // The fence is durable, but open has not yet acknowledged its oracle write.
-    *oracle.completion_gate.lock().unwrap() = None;
-    assert!(active.sync_to_current_updates().await.is_err());
+    active.sync_to_current_updates().await.unwrap();
+    assert!(
+        !active
+            .client_incarnation_retirement()
+            .unwrap()
+            .is_retired(old_client)
+    );
+    let mut txn = active.transaction().await.unwrap();
+    txn.set_config("predecessor_still_writable".into(), Some(1))
+        .unwrap();
+    commit(txn).await;
     peer.sync_to_current_updates().await.unwrap();
     let fresh_owner = Uuid::new_v4();
     let fresh_shard = ShardId::new();
     let mut txn = peer.transaction().await.unwrap();
     insert(&mut txn, 2000, fresh_owner, fresh_shard);
+    let fresh_client = txn
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
+    txn.grant_client_read_requirements(
+        fresh_client,
+        BTreeMap::from([(GlobalId::User(1000), 20.into())]),
+    )
+    .unwrap();
     commit(txn).await;
 
-    // Also race the cleanup commit itself, after it has assembled its snapshot.
+    // Race the explicit retirement after it has selected its cleanup snapshot.
     let cleanup_gate = Arc::new(Notify::new());
     *oracle.allocation_gate.lock().unwrap() = Some(Arc::clone(&cleanup_gate));
-    fence_gate.notify_one();
+    let retiring = mz_ore::task::spawn(|| "retirement with concurrent publication", async move {
+        let retired = promoted.retire_deployment(7).await.unwrap();
+        (promoted, retired)
+    });
     tokio::time::timeout(Duration::from_secs(5), oracle.allocation_started.notified())
         .await
         .unwrap();
-    peer.sync_to_current_updates().await.unwrap();
+    let later_owner = Uuid::new_v4();
     let later_shard = ShardId::new();
     let mut txn = peer.transaction().await.unwrap();
-    insert(&mut txn, 3000, Uuid::new_v4(), later_shard);
+    insert(&mut txn, 3000, later_owner, later_shard);
     commit(txn).await;
     cleanup_gate.notify_one();
-
-    let mut promoted = tokio::time::timeout(Duration::from_secs(5), opening)
+    let (mut promoted, retired) = tokio::time::timeout(Duration::from_secs(5), retiring)
         .await
-        .unwrap()
         .unwrap();
+    assert!(
+        !retired,
+        "retirement must retry after a competing publication"
+    );
+    active.sync_to_current_updates().await.unwrap();
+    assert!(
+        !active
+            .client_incarnation_retirement()
+            .unwrap()
+            .is_retired(old_client)
+    );
+
+    // Exclusion is durable before acknowledgement, which waits for the oracle.
+    let completion_gate = Arc::new(Notify::new());
+    *oracle.completion_gate.lock().unwrap() = Some(Arc::clone(&completion_gate));
+    let retiring = mz_ore::task::spawn(|| "retirement oracle completion", async move {
+        assert!(promoted.retire_deployment(7).await.unwrap());
+        promoted
+    });
+    tokio::time::timeout(Duration::from_secs(5), oracle.completion_started.notified())
+        .await
+        .unwrap();
+    assert!(
+        !retiring.is_finished(),
+        "retirement acknowledged before oracle completion"
+    );
+    assert!(matches!(
+        active.sync_to_current_updates().await,
+        Err(CatalogError::Durable(DurableCatalogError::Fence(
+            FenceError::DeploymentRetired { generation: 7 }
+        )))
+    ));
+    peer.sync_to_current_updates().await.unwrap();
+    let retirement = peer.client_incarnation_retirement().unwrap();
+    assert!(retirement.is_retired(old_client));
+    assert!(!retirement.is_retired(fresh_client));
+    *oracle.completion_gate.lock().unwrap() = None;
+    completion_gate.notify_one();
+    let mut promoted = tokio::time::timeout(Duration::from_secs(5), retiring)
+        .await
+        .unwrap();
+    let committed = promoted.current_upper().await.step_back().unwrap();
+    assert!(oracle.read_ts().await >= committed);
+    // The surviving grant still constrains compaction after retirement.
+    promoted.sync_to_current_updates().await.unwrap();
+    let mut txn = promoted.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(GlobalId::User(1000), Some(20.into()))
+        .unwrap();
+    commit(txn).await;
+    let mut txn = promoted.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(GlobalId::User(1000), Some(21.into()))
+        .unwrap();
+    let ts = txn.upper();
+    let _ = txn.get_and_commit_op_updates();
+    assert!(matches!(
+        txn.commit(ts).await,
+        Err(CatalogError::Durable(
+            DurableCatalogError::InvalidReadProtection(_)
+        ))
+    ));
+
+    // Session ownership is not deployment ownership. Retirement must not
+    // invent an all-session temporary-object cleanup policy.
     let snapshot = promoted.snapshot().await.unwrap();
     let owners: Vec<_> = snapshot
         .items
@@ -194,15 +279,18 @@ async fn promotion_cleanup_is_scoped_to_admitted_owners() {
         .map(|(key, value)| Item::from_key_value(key, value))
         .filter_map(|item| item.ephemeral_owner_session)
         .collect();
-    assert_eq!(owners.len(), 2);
-    assert!(!owners.contains(&old_owner));
+    assert_eq!(owners.len(), 3);
+    assert!(owners.contains(&old_owner));
     assert!(owners.contains(&fresh_owner));
-    assert_eq!(snapshot.comments.len(), 2);
+    assert!(owners.contains(&later_owner));
+    assert_eq!(snapshot.comments.len(), 3);
     promoted.sync_to_current_updates().await.unwrap();
     let txn = promoted.transaction().await.unwrap();
     assert_eq!(
         txn.get_collection_metadata(),
         BTreeMap::from([
+            (GlobalId::User(1000), old_shard),
+            (GlobalId::User(1001), old_shard),
             (GlobalId::User(2000), fresh_shard),
             (GlobalId::User(2001), fresh_shard),
             (GlobalId::User(3000), later_shard),
@@ -211,7 +299,7 @@ async fn promotion_cleanup_is_scoped_to_admitted_owners() {
     );
     assert_eq!(
         txn.get_unfinalized_shards(),
-        std::collections::BTreeSet::from([old_shard])
+        std::collections::BTreeSet::new()
     );
     drop(txn);
     active.expire().await;

@@ -610,9 +610,9 @@ async fn check_joined_serving_open(
         .with_deploy_generation(pending_generation)
         .unwrap_build()
         .await
-        .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+        .open_for_promotion(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
         .await
-        .expect("authorize writable bootstrap");
+        .expect("explicitly promote the compatible writer");
     let bootstrapped = Catalog::open(crate::config::Config {
         storage,
         metrics_registry: &mz_ore::metrics::MetricsRegistry::new(),
@@ -629,7 +629,8 @@ async fn check_joined_serving_open(
             .expect("read bootstrap migration marker");
         assert_eq!(
             crate::catalog::migrate::get_migration_version(&tx),
-            Some(build_info.semver_version())
+            Some(source_version),
+            "promotion preserves the shared schema while older members survive"
         );
     }
     assert!(bootstrapped.current_upper().await > upper);

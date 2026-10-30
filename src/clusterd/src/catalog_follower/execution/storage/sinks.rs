@@ -252,10 +252,11 @@ impl ReplicaEnactment {
                     &BTreeMap::from([(definition.from, frontier)]),
                 )
                 .await?;
-            // Grant publication can consume concurrent DDL. Do not combine its
-            // current authority with a superseded definition or shard mapping.
+            // Grant publication can consume DDL or a change of active deployment.
+            // Recheck authority as well as the definition and shard mappings.
             let current = current_sink_definition(catalog, cluster, id);
-            if current.as_ref() != Some(&definition)
+            if !self.has_output_write_authority(catalog)
+                || current.as_ref() != Some(&definition)
                 || (matches!(definition.connection, StorageSinkConnection::Kafka(_))
                     && !self.kafka_eligible(catalog, cluster))
                 || catalog

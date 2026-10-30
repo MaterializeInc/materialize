@@ -214,6 +214,11 @@ def main() -> int:
         help="Separate local controller state (never use environmentd's mzdata)",
     )
     parser.add_argument(
+        "--controller-binaries-directory",
+        type=pathlib.Path,
+        help="Run prebuilt controllerd, adapterd, clusterd and pubsubd from this directory without building or updating shared binary symlinks",
+    )
+    parser.add_argument(
         "--stop",
         action="store_true",
         help="Stop the selected controller environment without building or resetting it",
@@ -227,9 +232,22 @@ def main() -> int:
         default='{"1":{"cpu_limit":1,"memory_limit":"4 GiB"}}',
         help="Controller adapter size allocations as JSON (must include size 1 for fresh initialization)",
     )
-    parser.add_argument("--retire-generation", type=_generation)
-    parser.add_argument("--controller-url", default="http://127.0.0.1:6882")
+    parser.add_argument(
+        "--retire-generation",
+        type=_generation,
+        help="Commit retirement through controller HTTP, then stop only that generation's local processes",
+    )
+    parser.add_argument(
+        "--controller-url",
+        default="http://127.0.0.1:6882",
+        help="Active controller HTTP address for retirement (default: http://127.0.0.1:6882)",
+    )
     args = parser.parse_intermixed_args()
+    if args.controller_binaries_directory is not None:
+        if args.program != "controllerd" or args.build_only:
+            raise UIError(
+                "--controller-binaries-directory requires controllerd and cannot be combined with --build-only"
+            )
     if args.retire_generation is not None:
         if args.program != "controllerd" or args.stop or args.reset or args.build_only:
             raise UIError(
@@ -275,7 +293,24 @@ def main() -> int:
             if args.program == "controllerd"
             else [args.program]
         )
-        build_retcode, built_programs = build_func(args, extra_programs=extra_programs)
+        if args.controller_binaries_directory is None:
+            build_retcode, built_programs = build_func(
+                args, extra_programs=extra_programs
+            )
+        else:
+            directory = args.controller_binaries_directory.resolve()
+            built_programs = [
+                str(directory / program)
+                for program in (*REQUIRED_SERVICES, *extra_programs)
+            ]
+            for program in built_programs:
+                if not pathlib.Path(program).is_file() or not os.access(
+                    program, os.X_OK
+                ):
+                    raise UIError(
+                        f"missing or non-executable controller binary: {program}"
+                    )
+            build_retcode = 0
 
         if args.build_only:
             return build_retcode
@@ -292,21 +327,26 @@ def main() -> int:
         else:
             command = []
 
-        mzbuild = MZ_ROOT / "mzbuild"
-        mzbuild.mkdir(exist_ok=True)
+        if args.controller_binaries_directory is not None:
+            # Keep each deployment's selected binaries independent of later launches.
+            binaries_dir = directory
+            binaries = built_programs
+        else:
+            mzbuild = MZ_ROOT / "mzbuild"
+            mzbuild.mkdir(exist_ok=True)
 
-        # Move all built programs into the same directory to make it easier for
-        # downstream consumers.
-        binaries_dir = mzbuild / "bin"
-        binaries_dir.mkdir(exist_ok=True)
-        binaries = []
-        for program in built_programs:
-            src_path = pathlib.Path(program)
-            dst_path = binaries_dir / src_path.name
-            if os.path.lexists(dst_path) and os.path.islink(dst_path):
-                os.unlink(dst_path)
-            os.symlink(src_path, dst_path)
-            binaries.append(str(dst_path))
+            # Move all built programs into the same directory to make it easier for
+            # downstream consumers.
+            binaries_dir = mzbuild / "bin"
+            binaries_dir.mkdir(exist_ok=True)
+            binaries = []
+            for program in built_programs:
+                src_path = pathlib.Path(program)
+                dst_path = binaries_dir / src_path.name
+                if os.path.lexists(dst_path) and os.path.islink(dst_path):
+                    os.unlink(dst_path)
+                os.symlink(src_path, dst_path)
+                binaries.append(str(dst_path))
 
         # HACK(parkmycar): The last program is the one requested by the user.
         command.append(binaries[-1])
@@ -589,6 +629,8 @@ def _controller_args(
         f"--adapter-plan-build={builds[0]}",
         f"--adapter-sizes={args.adapter_sizes}",
     ]
+    if args.controller_binaries_directory is not None:
+        command.append(f"--clusterd-image={binaries / 'clusterd'}")
     if args.pubsub_url is None:
         command.append(f"--pubsubd-image={binaries / 'pubsubd'}")
     else:
@@ -795,6 +837,7 @@ def _retire_controller_generation(
     try:
         response = requests.post(
             f"{controller_url.rstrip('/')}/api/deployments/{generation}/retire",
+            json={"environment_id": environment_id},
             timeout=30,
             allow_redirects=False,
         )

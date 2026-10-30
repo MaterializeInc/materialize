@@ -165,6 +165,15 @@ impl Coordinator {
                 .advance_upper(advance_to)
                 .await
                 .unwrap_or_terminate("unable to authorize builtin configuration publication");
+            if self
+                .catalog()
+                .storage()
+                .await
+                .active_deployment_generation()
+                != self.catalog().state().deployment_generation()
+            {
+                return;
+            }
             match self
                 .table_write_handle
                 .append(write_ts, advance_to, appends)

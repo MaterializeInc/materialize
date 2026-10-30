@@ -15,7 +15,7 @@ use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use mz_repr::AdapterId;
 use serde::Deserialize;
@@ -25,9 +25,18 @@ use tokio::sync::{mpsc, oneshot};
 #[derive(Debug)]
 pub(super) enum Action {
     ListAdapters,
-    CreateAdapter { name: String, size: String },
-    DropAdapter { id: AdapterId },
+    CreateAdapter {
+        name: String,
+        size: String,
+    },
+    DropAdapter {
+        id: AdapterId,
+    },
     Inventory,
+    RetireDeployment {
+        generation: u64,
+        environment_id: String,
+    },
     Collections(super::collections::Filters),
 }
 
@@ -87,6 +96,10 @@ fn router(sender: mpsc::Sender<Command>) -> Router {
         .route("/api/adapters", get(list_adapters).post(create_adapter))
         .route("/api/adapters/{id}", delete(drop_adapter))
         .route("/api/inventory", get(inventory))
+        .route(
+            "/api/deployments/{generation}/retire",
+            post(retire_deployment),
+        )
         .route("/api/collections", get(collections))
         .fallback(|| async {
             ApiError {
@@ -146,6 +159,31 @@ async fn drop_adapter(
     dispatch(sender, Action::DropAdapter { id }).await
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetireDeployment {
+    environment_id: String,
+}
+
+async fn retire_deployment(
+    State(sender): State<mpsc::Sender<Command>>,
+    path: Result<Path<u64>, PathRejection>,
+    body: Result<Json<RetireDeployment>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Path(generation) =
+        path.map_err(|_| ApiError::bad_request("invalid deployment generation"))?;
+    let Json(RetireDeployment { environment_id }) =
+        body.map_err(|_| ApiError::bad_request("expected JSON with string field environment_id"))?;
+    dispatch(
+        sender,
+        Action::RetireDeployment {
+            generation,
+            environment_id,
+        },
+    )
+    .await
+}
+
 async fn inventory(State(sender): State<mpsc::Sender<Command>>) -> Result<Response, ApiError> {
     dispatch(sender, Action::Inventory).await
 }
@@ -203,6 +241,11 @@ mod tests {
             ("DELETE", "/api/adapters/a1", ""),
             ("GET", "/api/inventory", ""),
             (
+                "POST",
+                "/api/deployments/7/retire",
+                r#"{"environment_id":"selected"}"#,
+            ),
+            (
                 "GET",
                 "/api/collections?id=s%25&name=%25mz%5C_catalog.%25",
                 "",
@@ -215,6 +258,17 @@ mod tests {
                     ("GET", "/api/adapters", Action::ListAdapters)
                     | ("GET", "/api/inventory", Action::Inventory)
                     | ("GET", _, Action::Collections(_)) => (),
+                    (
+                        "POST",
+                        _,
+                        Action::RetireDeployment {
+                            generation,
+                            environment_id,
+                        },
+                    ) => {
+                        assert_eq!(generation, 7);
+                        assert_eq!(environment_id, "selected");
+                    }
                     ("POST", _, Action::CreateAdapter { name, size }) => {
                         assert_eq!(name, "example");
                         assert_eq!(size, "small");
@@ -250,6 +304,24 @@ mod tests {
                 "/api/adapters",
                 r#"{"name":"x","size":"s","extra":true}"#,
                 invalid_json,
+            ),
+            (
+                "POST",
+                "/api/deployments/-1/retire",
+                "",
+                "invalid deployment generation",
+            ),
+            (
+                "POST",
+                "/api/deployments/not-a-generation/retire",
+                "",
+                "invalid deployment generation",
+            ),
+            (
+                "POST",
+                "/api/deployments/7/retire",
+                "{}",
+                "expected JSON with string field environment_id",
             ),
             ("DELETE", "/api/adapters/u1", "", "invalid adapter ID"),
             ("DELETE", "/api/adapters/%FF", "", "invalid adapter ID"),
