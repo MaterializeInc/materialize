@@ -209,6 +209,14 @@ def delete_recorded(
                 "UPDATE restarts SET outcome = ?, role = ? WHERE seq = ?",
                 (outcome, observed_role, seq),
             )
+        telemetry.interleaving_progress(
+            "disruption",
+            action="delete",
+            outcome=outcome,
+            role=observed_role,
+            pod_uid=uid,
+            cluster_id=cluster_id,
+        )
         if outcome == "acked":
             assert completed is not None
             telemetry.fault_observed(
@@ -421,11 +429,24 @@ def interleaving_disruption(
                 ):
                     return
                 kube.patch_spec({"forcePromote": snap.request})
+                telemetry.interleaving_progress(
+                    "disruption",
+                    action="promote",
+                    outcome="requested",
+                    request=snap.request,
+                )
                 stop = min(deadline, time.monotonic() + 15.0)
                 while time.monotonic() < stop:
                     started = time.monotonic()
                     observed = kube.snapshot()
                     if observed.reason == "Promoting":
+                        telemetry.interleaving_progress(
+                            "disruption",
+                            action="promote",
+                            outcome="observed",
+                            phase=observed.reason,
+                            request=observed.request,
+                        )
                         telemetry.phase_observed(
                             observed.reason,
                             observed.active,
