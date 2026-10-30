@@ -65,6 +65,7 @@ PROFILES = {
             "history",
             "ivm",
             "postgres_sources",
+            "read_paths",
             "read_only_isolation",
             "rollouts",
             "shard_audit",
