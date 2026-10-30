@@ -15,7 +15,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -52,6 +52,7 @@ _IDENTITY_FIELDS = (
     "termination_count",
     "finished_at",
 )
+_EvidenceKey = tuple[tuple[Any, ...], tuple[datetime, int] | None]
 
 
 def _string(literal: str) -> str:
@@ -105,6 +106,20 @@ def load_halt_rules(source: Path | None = None) -> tuple[HaltRule, ...]:
     return tuple(rules)
 
 
+def _timestamp_key(value: Any) -> tuple[datetime, int]:
+    if not isinstance(value, str):
+        raise ValueError("termination timestamp is missing")
+    match = re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.(\d{1,9}))?(?:Z|[+-]\d{2}:\d{2})",
+        value,
+    )
+    if match is None:
+        raise ValueError("termination timestamp needs an RFC3339 timezone")
+    instant = datetime.fromisoformat(value).astimezone(UTC).replace(microsecond=0)
+    fraction = int((match[1] or "").ljust(9, "0"))
+    return instant, fraction
+
+
 def _termination(value: Any) -> tuple[Any, ...]:
     if not isinstance(value, Mapping):
         raise ValueError("termination identity is missing")
@@ -118,10 +133,10 @@ def _termination(value: Any) -> tuple[Any, ...]:
         raise ValueError("termination_count must identify a completed termination")
     if type(value.get("exit_code")) is not int or value["exit_code"] != 166:
         raise ValueError("termination evidence is not for exit 166")
-    finished = datetime.fromisoformat(value["finished_at"])
-    if finished.tzinfo is None:
-        raise ValueError("termination finished_at has no timezone")
-    return tuple(value[field] for field in _IDENTITY_FIELDS)
+    return (
+        *(value[field] for field in _IDENTITY_FIELDS[:-1]),
+        _timestamp_key(value["finished_at"]),
+    )
 
 
 def native_exit(prop: Mapping[str, Any]) -> tuple[str, str, int] | None:
@@ -145,6 +160,9 @@ def classify_exit_property(
     Each occurrence supplies a Kubernetes termination identity and a complete
     halt message bound to that same termination. A valid unexpected halt is
     product evidence even when other occurrences remain unexplained.
+
+    `log_capture.message_at`, when present, is the terminated incarnation's
+    halt-log timestamp. An evidence-observation timestamp cannot identify it.
     """
     attribution = native_exit(prop)
     if attribution is None:
@@ -178,8 +196,7 @@ def classify_exit_property(
             "unresolved", "native exit occurrence evidence is not a list"
         )
 
-    covered: dict[tuple[Any, ...], tuple[tuple[Any, ...], str]] = {}
-    unexpected = False
+    messages: dict[_EvidenceKey, set[str]] = {}
     errors = []
     for occurrence in occurrences:
         try:
@@ -198,19 +215,45 @@ def classify_exit_property(
             message = halt.get("message")
             if not isinstance(message, str) or not message:
                 raise ValueError("halt message is missing")
-            # A different timestamp cannot make the same pod restart a second occurrence.
-            identity = termination[:-1]
+            captured_at = None
+            if "log_capture" in occurrence:
+                capture = occurrence["log_capture"]
+                if not isinstance(capture, Mapping):
+                    raise ValueError("halt log capture is not an object")
+                captured_at = _timestamp_key(capture.get("message_at"))
+            # Forks reuse Kubernetes identities. Keep the exit time and the
+            # precise halt timestamp so independent fork exits remain distinct.
+            identity = (termination, captured_at)
             message = message.removeprefix("halting process: ")
-            if identity in covered:
-                if covered[identity] != (termination, message):
-                    raise ValueError("termination evidence conflicts")
-                continue
-            covered[identity] = (termination, message)
-            if not any(all(part in message for part in rule.matches) for rule in rules):
-                unexpected = True
+            messages.setdefault(identity, set()).add(message)
         except (TypeError, ValueError) as error:
             errors.append(str(error))
 
+    timestamped: dict[tuple[Any, ...], list[_EvidenceKey]] = {}
+    for identity in messages:
+        if identity[1] is not None:
+            timestamped.setdefault(identity[0], []).append(identity)
+    conflicting: set[_EvidenceKey] = set()
+    for termination, scoped in timestamped.items():
+        unscoped = (termination, None)
+        if unscoped not in messages:
+            continue
+        scoped_messages = set().union(*(messages[key] for key in scoped))
+        if not messages[unscoped] <= scoped_messages:
+            conflicting.update(scoped)
+            errors.append("untimestamped halt evidence conflicts with captured forks")
+        del messages[unscoped]
+
+    covered = []
+    for identity, reasons in messages.items():
+        if len(reasons) != 1 or identity in conflicting:
+            errors.append("termination evidence conflicts")
+            continue
+        covered.append(next(iter(reasons)))
+    unexpected = any(
+        not any(all(part in message for part in rule.matches) for rule in rules)
+        for message in covered
+    )
     count = len(covered)
     if unexpected:
         return ExitDisposition(
