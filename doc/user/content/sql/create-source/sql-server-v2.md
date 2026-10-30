@@ -1,6 +1,6 @@
 ---
 title: "CREATE SOURCE: SQL Server"
-description: "Connecting Materialize to a SQL Server database for Change Data Capture (CDC)."
+description: "Creates a source from SQL Server 2016+ using the new syntax, which handles upstream column changes without downtime."
 pagerank: 40
 menu:
   main:

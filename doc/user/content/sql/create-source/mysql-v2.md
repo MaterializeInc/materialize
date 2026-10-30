@@ -1,6 +1,6 @@
 ---
 title: "CREATE SOURCE: MySQL (New Syntax)"
-description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
+description: "Creates a source from MySQL 8.0.1+ using the new syntax, which handles upstream column changes without downtime."
 pagerank: 40
 menu:
     main:
