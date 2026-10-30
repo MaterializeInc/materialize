@@ -107,4 +107,8 @@ On Linux, we link against jemalloc and mimalloc by default, wrapped in the alloc
 environmentd and balancerd use jemalloc, every other process, including clusterd, uses mimalloc.
 `MZ_ALLOCATOR=jemalloc` or `MZ_ALLOCATOR=mimalloc` overrides the choice, and clusterd processes spawned by a local environmentd inherit it.
 jemalloc is built with its `_rjem_` symbol prefix, so it reads `_RJEM_MALLOC_CONF`, not `MALLOC_CONF`.
-Compile with `--no-default-features` to use the system allocator.
+
+`MZ_ALLOCATOR=system` switches to the system allocator at runtime, still tracked, so tools that preload their own `malloc` work on a default build, for example `MZ_ALLOCATOR=system heaptrack target/optimized/clusterd ...`.
+To run every clusterd of a local environmentd under heaptrack, start `MZ_ALLOCATOR=system bin/environmentd ... -- --orchestrator-process-wrapper='<script> %N'`, where the script shifts off the process name in `$1` and runs `exec heaptrack -o <dir>/$1 "$@"`.
+The clusterd processes inherit `MZ_ALLOCATOR`, and each writes `<dir>/<process name>.zst`.
+Compile with `--no-default-features` to drop the allocators and the tracker.
