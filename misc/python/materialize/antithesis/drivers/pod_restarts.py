@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -117,12 +118,33 @@ def delete_recorded(
     uid: str | None,
     grace: int | None,
     reason: str,
+    cluster_id: str = "",
+    victim_generation: int | None = None,
+    deadline: float | None = None,
 ) -> bool:
     """Delete a pod, recording the attempt first. Returns whether the API acknowledged it.
 
     `uid`, when given, is sent as a delete precondition, so a pod recreated
     under the same name since it was listed is left alone.
     """
+    if deadline is not None and time.monotonic() >= deadline:
+        return False
+    if uid:
+        recovery.preserve_pod_exit(
+            kube.env,
+            namespace=namespace,
+            pod=pod,
+            uid=uid,
+            deadline=min(time.monotonic() + 2.0, deadline or float("inf")),
+        )
+    bind_role = role in ("environmentd_active", "environmentd_candidate")
+    before = (
+        kube.try_snapshot()
+        if bind_role and uid and victim_generation is not None
+        else None
+    )
+    if deadline is not None and time.monotonic() >= deadline:
+        return False
     db = open_restarts(kube.env.endpoints)
     try:
         started = time.monotonic()
@@ -141,7 +163,13 @@ def delete_recorded(
                 body=client.V1DeleteOptions(
                     preconditions=client.V1Preconditions(uid=uid) if uid else None
                 ),
-                _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+                _request_timeout=(  # pyright: ignore[reportCallIssue]
+                    K8S_TIMEOUT_SECONDS
+                    if deadline is None
+                    else min(
+                        K8S_TIMEOUT_SECONDS, max(0.001, deadline - time.monotonic())
+                    )
+                ),
             )
             outcome = "acked"
         except ApiException as e:
@@ -154,11 +182,41 @@ def delete_recorded(
         except TRANSIENT_ERRORS as e:
             log(f"deleting pod {namespace}/{pod} failed: {e}")
             outcome = "unknown"
+        completed = time.monotonic() if outcome == "acked" else None
+        observed_role = role
+        if bind_role and outcome == "acked":
+            observed_role = "environmentd"
+            after = (
+                kube.try_snapshot()
+                if before is not None
+                and (deadline is None or time.monotonic() < deadline)
+                else None
+            )
+            if (
+                before is not None
+                and after is not None
+                and before.active is not None
+                and before.active == after.active
+                and before.resource_id is not None
+                and before.resource_id == after.resource_id
+            ):
+                if victim_generation == before.active:
+                    observed_role = "environmentd_active"
+                elif victim_generation == before.active + 1:
+                    observed_role = "environmentd_candidate"
         with db:
-            db.execute("UPDATE restarts SET outcome = ? WHERE seq = ?", (outcome, seq))
+            db.execute(
+                "UPDATE restarts SET outcome = ?, role = ? WHERE seq = ?",
+                (outcome, observed_role, seq),
+            )
         if outcome == "acked":
+            assert completed is not None
             telemetry.fault_observed(
-                role, started, time.monotonic(), key=f"pod_restarts:{seq}"
+                observed_role,
+                started,
+                completed,
+                key=f"pod_restarts:{seq}",
+                cluster_id=cluster_id,
             )
         return outcome == "acked"
     finally:
@@ -277,9 +335,13 @@ class Victim:
     namespace: str
     pod: str
     uid: str | None
+    cluster_id: str = ""
+    generation: int | None = None
 
 
-def pick_victim(kube: Kube, target: str) -> Victim | None:
+def pick_victim(
+    kube: Kube, target: str, *, cluster_id: str | None = None
+) -> Victim | None:
     if target.startswith("environmentd_"):
         snap = kube.try_snapshot()
         if snap is None or snap.active is None:
@@ -289,7 +351,13 @@ def pick_victim(kube: Kube, target: str) -> Victim | None:
         if not envd:
             return None
         chosen = rng.choice(envd)
-        return Victim(target, kube.namespace, chosen.name, chosen.uid)
+        return Victim(
+            target,
+            kube.namespace,
+            chosen.name,
+            chosen.uid,
+            generation=chosen.generation,
+        )
     namespace = kube.operator_namespace if target == "orchestratord" else kube.namespace
     candidates = []
     for pod in kube.core.list_namespaced_pod(
@@ -302,9 +370,126 @@ def pick_victim(kube: Kube, target: str) -> Victim | None:
             namespace, kube.operator_namespace, metadata.labels or {}
         )
         if role == target and metadata.deletion_timestamp is None:
+            ids = {
+                str(value)
+                for key, value in (metadata.labels or {}).items()
+                if key.endswith("/cluster-id")
+            }
+            observed_id = next(iter(ids)) if len(ids) == 1 else ""
+            if (
+                cluster_id is not None
+                and target == "clusterd"
+                and observed_id != cluster_id
+            ):
+                continue
             assert metadata.name is not None
-            candidates.append(Victim(target, namespace, metadata.name, metadata.uid))
+            candidates.append(
+                Victim(target, namespace, metadata.name, metadata.uid, observed_id)
+            )
     return rng.choice(candidates) if candidates else None
+
+
+def interleaving_disruption(
+    kube: Kube, *, cluster_id: str, deadline: float
+) -> Callable[[], None] | None:
+    """Choose a bounded disruption for a staged transaction and its maintained cluster."""
+    if quiet_period_active(kube.env.endpoints) or time.monotonic() >= deadline:
+        return None
+    rolling = templates.enabled_driver("rollouts") or templates.enabled_driver(
+        "spec_phase"
+    )
+    snap = kube.try_snapshot() if rolling else None
+    if (
+        snap is not None
+        and snap.reason == "ReadyToPromote"
+        and snap.request is not None
+        and snap.generation is not None
+        and snap.observed_generation == snap.generation
+        and rng.random() < 0.5
+    ):
+
+        def promote() -> None:
+            if quiet_period_active(kube.env.endpoints) or time.monotonic() >= deadline:
+                return
+            try:
+                current = kube.snapshot()
+                if (
+                    current.reason != "ReadyToPromote"
+                    or current.request != snap.request
+                    or current.generation != snap.generation
+                    or current.observed_generation != current.generation
+                ):
+                    return
+                kube.patch_spec({"forcePromote": snap.request})
+                stop = min(deadline, time.monotonic() + 15.0)
+                while time.monotonic() < stop:
+                    started = time.monotonic()
+                    observed = kube.snapshot()
+                    if observed.reason == "Promoting":
+                        telemetry.phase_observed(
+                            observed.reason,
+                            observed.active,
+                            observed.request,
+                            started=started,
+                            force=True,
+                        )
+                    if observed.request != snap.request or observed.reason in (
+                        "Promoting",
+                        "Applied",
+                    ):
+                        return
+                    time.sleep(min(0.25, max(0.0, stop - time.monotonic())))
+            except TRANSIENT_ERRORS as error:
+                log(f"interleaving promotion unavailable: {type(error).__name__}")
+
+        return promote
+    roles = ["environmentd_active", "clusterd"]
+    if rolling:
+        roles.append("environmentd_candidate")
+    try:
+        for role in rng.sample(roles, len(roles)):
+            victim = pick_victim(kube, role, cluster_id=cluster_id)
+            if victim is None:
+                continue
+            grace = rng.choice([0, 1])
+
+            def delete(victim: Victim = victim, grace: int = grace) -> None:
+                if (
+                    quiet_period_active(kube.env.endpoints)
+                    or time.monotonic() >= deadline
+                ):
+                    return
+                if rolling:
+                    started = time.monotonic()
+                    observed = kube.try_snapshot()
+                    if observed is not None:
+                        telemetry.phase_observed(
+                            observed.reason,
+                            observed.active,
+                            observed.request,
+                            started=started,
+                            force=True,
+                        )
+                if time.monotonic() >= deadline:
+                    return
+                delete_recorded(
+                    kube,
+                    origin="interleavings",
+                    role=victim.role,
+                    namespace=victim.namespace,
+                    pod=victim.pod,
+                    uid=victim.uid,
+                    grace=grace,
+                    reason="staged transaction",
+                    cluster_id=victim.cluster_id,
+                    victim_generation=victim.generation,
+                    deadline=deadline,
+                )
+
+            return delete
+    except TRANSIENT_ERRORS as error:
+        log(f"interleaving target unavailable: {type(error).__name__}")
+    return None
 
 
 @dataclass(frozen=True)
@@ -504,6 +689,8 @@ def driver_main() -> int:
         uid=victim.uid,
         grace=grace,
         reason=trigger,
+        cluster_id=victim.cluster_id,
+        victim_generation=victim.generation,
     ):
         return 0
     details = {

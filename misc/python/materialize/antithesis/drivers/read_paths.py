@@ -696,6 +696,7 @@ def _kill_replica_pod(env: Environment, conn: psycopg.Connection) -> None:
         uid=victim.metadata.uid,
         grace=rng.choice(GRACE_MENU),
         reason="read path comparisons",
+        cluster_id=cluster_id,
     )
     if acked:
         reachable(
