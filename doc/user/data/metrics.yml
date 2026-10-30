@@ -273,6 +273,31 @@ metrics:
   - source
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_connection_duration_seconds_bucket
+  help: >-
+    Time from accepting a connection until it closes, for connections that reach
+    proxying.
+  labels:
+  - le
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_duration_seconds_count
+  help: >-
+    Time from accepting a connection until it closes, for connections that reach
+    proxying.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_duration_seconds_sum
+  help: >-
+    Time from accepting a connection until it closes, for connections that reach
+    proxying.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_high_watermark
   help: Connections at which balancerd leaves load balancer rotation, 0 if disabled.
   source: src/balancerd/src/lib.rs
@@ -291,8 +316,36 @@ metrics:
   help: Count of connections refused because the connection limit was reached.
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_connection_setup_duration_seconds_bucket
+  help: >-
+    Time from accepting a connection until proxying it to environmentd begins, for
+    connections that reach proxying.
+  labels:
+  - le
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_setup_duration_seconds_count
+  help: >-
+    Time from accepting a connection until proxying it to environmentd begins, for
+    connections that reach proxying.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_setup_duration_seconds_sum
+  help: >-
+    Time from accepting a connection until proxying it to environmentd begins, for
+    connections that reach proxying.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_status
-  help: Count of completed network connections, by status
+  help: >-
+    Count of completed network connections, by status. `error` means balancerd or
+    its backend could not serve the connection. Connections the client ended or failed
+    count as `success`.
   labels:
   - source
   - status
@@ -351,6 +404,34 @@ metrics:
   labels:
   - has_sni
   - tenant
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_tls_handshake_failures_total
+  help: >-
+    Count of client TLS handshakes that failed. Rises when clients reject the
+    certificate balancerd presents, as well as with scanners and misconfigured clients,
+    none of which count as an `error` connection status.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_upstream_connect_duration_seconds_bucket
+  help: Time to open a TCP connection to environmentd, for connections that succeed.
+  labels:
+  - le
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_upstream_connect_duration_seconds_count
+  help: Time to open a TCP connection to environmentd, for connections that succeed.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_upstream_connect_duration_seconds_sum
+  help: Time to open a TCP connection to environmentd, for connections that succeed.
+  labels:
+  - source
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_bytes_read_total
