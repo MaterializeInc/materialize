@@ -432,3 +432,99 @@ def test_bootstrap_does_not_force_another_applying_request(harness):
         bootstrap.ensure_target_image()
 
     assert not harness.api.patches
+
+
+@pytest.fixture
+def failed_target(harness, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_SECONDS", 10.0)
+    harness.api.outcome = "interrupted"
+    with pytest.raises(KeyboardInterrupt):
+        bootstrap.ensure_target_image()
+    request = harness.api.patches[0]["requestRollout"]
+    harness.api.obj["spec"].update(
+        environmentdImageRef=TARGET,
+        requestRollout=request,
+        forceRollout=request,
+        forcePromote=request,
+    )
+    harness.api.obj["metadata"]["generation"] += 1
+    harness.api.obj["status"]["conditions"][0].update(
+        status="False",
+        reason="FailedDeploy",
+        observedGeneration=harness.api.obj["metadata"]["generation"],
+    )
+    harness.clock.now = 1.0
+    return harness
+
+
+@pytest.mark.parametrize(
+    "reason", ["FailedDeploy", "RolloutTimeout", "WaitingForApproval"]
+)
+def test_failed_own_bootstrap_retries_within_original_deadline(failed_target, reason):
+    failed_target.api.obj["status"]["conditions"][0]["reason"] = reason
+    old_request = failed_target.api.obj["spec"]["requestRollout"]
+
+    bootstrap.ensure_target_image()
+
+    retry = failed_target.api.patches[-1]
+    assert retry["requestRollout"] != old_request
+    assert retry["forceRollout"] == retry["forcePromote"] == retry["requestRollout"]
+    assert failed_target.sql_hosts == ["pod-ip", "service"]
+    with sqlite3.connect(failed_target.path) as db:
+        assert db.execute(
+            "SELECT deadline, completed FROM target_image"
+        ).fetchone() == (
+            10.0,
+            1,
+        )
+
+
+@pytest.mark.parametrize("outcome", ["landed", "not_landed", "interrupted"])
+def test_failed_bootstrap_reuses_persisted_retry_after_lost_response(
+    failed_target, outcome
+):
+    failed_target.api.outcome = outcome
+    if outcome == "interrupted":
+        with pytest.raises(KeyboardInterrupt):
+            bootstrap.ensure_target_image()
+        bootstrap.ensure_target_image()
+    else:
+        bootstrap.ensure_target_image()
+
+    retries = failed_target.api.patches[1:]
+    assert len(retries) == (1 if outcome == "landed" else 2)
+    assert len({patch["requestRollout"] for patch in retries}) == 1
+    with sqlite3.connect(failed_target.path) as db:
+        assert db.execute("SELECT deadline FROM target_image").fetchone() == (10.0,)
+
+
+@pytest.mark.parametrize("foreign", [False, True])
+def test_bootstrap_does_not_retry_stale_or_foreign_failure(failed_target, foreign):
+    if foreign:
+        failed_target.api.obj["spec"]["requestRollout"] = "another-request"
+    else:
+        failed_target.api.obj["status"]["conditions"][0]["observedGeneration"] = 0
+
+    with pytest.raises(TimeoutError):
+        bootstrap.ensure_target_image()
+
+    assert len(failed_target.api.patches) == 1
+
+
+def test_bootstrap_retries_a_failed_target_at_most_once(
+    failed_target, monkeypatch: pytest.MonkeyPatch
+):
+    patch = failed_target.api.patch_spec
+
+    def fail_again(changes):
+        patch(changes)
+        failed_target.api.obj["status"]["conditions"][0].update(
+            status="False", reason="FailedDeploy"
+        )
+
+    monkeypatch.setattr(failed_target.api, "patch_spec", fail_again)
+    with pytest.raises(TimeoutError):
+        bootstrap.ensure_target_image()
+
+    assert len(failed_target.api.patches) == 2
+    assert failed_target.clock.now == 10.0
