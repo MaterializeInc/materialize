@@ -21,16 +21,12 @@ import sys
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
-    unreachable,
-)
-
-from materialize.antithesis import ivm_model, quiet, state
+from materialize.antithesis import ivm_model, observations, quiet, state
 
 PROFILE_ENV = "MZ_ANTITHESIS_TEMPLATE_PROFILE"
 STATE_DB = "telemetry"
@@ -38,6 +34,7 @@ EVENT_CAP = 4096
 EVENT_RETENTION_S = 3600.0
 PHASE_SAMPLE_S = 5.0
 ACTIVE_CAP = 256
+HEALTH_DIAGNOSTIC_CAPACITY = 128
 
 _FAMILIES = frozenset(
     {
@@ -122,6 +119,9 @@ class Recorder:
     command: str
     lock: threading.Lock = field(default_factory=threading.Lock)
     counts: Counter[tuple[str, str, str]] = field(default_factory=Counter)
+    observations: Counter[tuple[str, bool]] = field(default_factory=Counter)
+    harness_errors: int = 0
+    health_diagnostics: Counter[tuple[str, str, str]] = field(default_factory=Counter)
     calls: int = 0
     metric_errors: int = 0
     phase_sample: tuple[tuple[str, int | None, str | None], float] | None = None
@@ -165,9 +165,10 @@ def _failed(operation: str, error: Exception) -> None:
     print(
         f"telemetry: {operation}: {type(error).__name__}", file=sys.stderr, flush=True
     )
-    unreachable(
-        "workload telemetry records measurements without errors",
-        {"operation": operation, "error": type(error).__name__},
+    observations.harness_error(
+        "telemetry",
+        operation,
+        {"error": type(error).__name__},
     )
 
 
@@ -182,6 +183,7 @@ def _open() -> sqlite3.Connection:
             no_comparison INTEGER NOT NULL DEFAULT 0, uninstrumented INTEGER NOT NULL DEFAULT 0,
             wall_s REAL NOT NULL DEFAULT 0, cpu_s REAL NOT NULL DEFAULT 0,
             child_cpu_s REAL NOT NULL DEFAULT 0, metric_errors INTEGER NOT NULL DEFAULT 0,
+            harness_errors INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (profile, command));
         CREATE TABLE IF NOT EXISTS active_commands (
             invocation TEXT PRIMARY KEY, profile TEXT, command TEXT,
@@ -197,6 +199,14 @@ def _open() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS coverage (
             profile TEXT, phase TEXT, role TEXT, family TEXT, path TEXT, outcome TEXT,
             hits INTEGER NOT NULL, PRIMARY KEY (profile, phase, role, family, path, outcome));
+        CREATE TABLE IF NOT EXISTS observations (
+            profile TEXT, command TEXT, message TEXT, observed INTEGER,
+            evaluations INTEGER NOT NULL,
+            PRIMARY KEY (profile, command, message, observed));
+        CREATE TABLE IF NOT EXISTS harness_diagnostics (
+            profile TEXT, command TEXT, component TEXT, message TEXT, details TEXT,
+            occurrences INTEGER NOT NULL,
+            PRIMARY KEY (profile, command, component, message, details));
     """)
     return db
 
@@ -367,6 +377,32 @@ def events_between(start: float, end: float) -> list[Event]:
     return _db_call("read observations", read, [])
 
 
+def observation(message: str, condition: bool) -> None:
+    """Count every evaluated coverage target, including false conditions."""
+    recorder = _recorder
+    if recorder is not None:
+        with recorder.lock:
+            recorder.observations[(message, condition)] += 1
+
+
+def record_harness_error(record: Mapping[str, Any]) -> None:
+    """Count invalidity in memory without depending on the failing database."""
+    recorder = _recorder
+    if recorder is not None:
+        with recorder.lock:
+            recorder.harness_errors += 1
+            key = (
+                str(record["component"]),
+                str(record["message"]),
+                json.dumps(record["details"], sort_keys=True),
+            )
+            if (
+                key in recorder.health_diagnostics
+                or len(recorder.health_diagnostics) < HEALTH_DIAGNOSTIC_CAPACITY
+            ):
+                recorder.health_diagnostics[key] += 1
+
+
 def record_coverage(cases: Iterable[tuple[str, str, str, str, str]]) -> None:
     """Aggregate verified combinations without retaining raw operation histories."""
     recorder = _recorder
@@ -450,6 +486,9 @@ def _finish(
         counts = dict(recorder.counts)
         calls = recorder.calls
         metric_errors = recorder.metric_errors
+        observation_counts = dict(recorder.observations)
+        harness_errors = recorder.harness_errors
+        health_diagnostics = dict(recorder.health_diagnostics)
     checked = sum(n for (_, _, outcome), n in counts.items() if outcome != "skipped")
     checker = (
         recorder.command.startswith(("anytime_", "eventually_", "finally_"))
@@ -462,7 +501,7 @@ def _finish(
         db.execute(
             "UPDATE commands SET completed = completed + ?, errors = errors + ?, interrupted = interrupted + ?,"
             " no_comparison = no_comparison + ?, uninstrumented = uninstrumented + ?,"
-            " wall_s = wall_s + ?, cpu_s = cpu_s + ?, child_cpu_s = child_cpu_s + ?, metric_errors = metric_errors + ?"
+            " wall_s = wall_s + ?, cpu_s = cpu_s + ?, child_cpu_s = child_cpu_s + ?, metric_errors = metric_errors + ?, harness_errors = harness_errors + ?"
             " WHERE profile = ? AND command = ?",
             (
                 int(status == "completed"),
@@ -474,6 +513,7 @@ def _finish(
                 cpu_s,
                 child_cpu_s,
                 metric_errors,
+                harness_errors,
                 recorder.profile,
                 recorder.command,
             ),
@@ -486,6 +526,31 @@ def _finish(
                 for key, n in counts.items()
             ),
         )
+        db.executemany(
+            "INSERT INTO observations VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT (profile, command, message, observed)"
+            " DO UPDATE SET evaluations = evaluations + excluded.evaluations",
+            (
+                (recorder.profile, recorder.command, message, condition, count)
+                for (message, condition), count in observation_counts.items()
+            ),
+        )
+        diagnostic_count = db.execute(
+            "SELECT count(*) FROM harness_diagnostics"
+        ).fetchone()[0]
+        for (component, message, details), count in health_diagnostics.items():
+            key = (recorder.profile, recorder.command, component, message, details)
+            updated = db.execute(
+                "UPDATE harness_diagnostics SET occurrences = occurrences + ?"
+                " WHERE profile = ? AND command = ? AND component = ? AND message = ? AND details = ?",
+                (count, *key),
+            ).rowcount
+            if not updated and diagnostic_count < HEALTH_DIAGNOSTIC_CAPACITY:
+                db.execute(
+                    "INSERT INTO harness_diagnostics VALUES (?, ?, ?, ?, ?, ?)",
+                    (*key, count),
+                )
+                diagnostic_count += 1
 
     _db_call("finish command", record, None)
 
@@ -543,6 +608,26 @@ def run_command(profile: str, source: str | Path) -> int:
             _command_lock.release()
 
 
+def _unavailable_health(reason: str) -> dict[str, Any]:
+    try:
+        first_error = observations.durable_health()
+    except Exception as error:
+        first_error = {
+            "valid": False,
+            "component": "telemetry",
+            "message": "durable harness health is unavailable",
+            "details": {"error": type(error).__name__},
+        }
+    return {
+        "valid": False,
+        "errors": None,
+        "diagnostics": [],
+        "diagnostics_omitted": None,
+        "first_error": first_error,
+        "reason": reason,
+    }
+
+
 def summary() -> dict[str, Any]:
     """Summarize observed timeline work, excluding unmeasured SUT CPU usage."""
     now = time.monotonic()
@@ -572,7 +657,28 @@ def summary() -> dict[str, Any]:
         pruned = db.execute(
             "SELECT value FROM metadata WHERE key = 'events_pruned'"
         ).fetchone()
+        catalog = observations.catalog()
+        observed = rows("observations")
+        targets = {}
+        if catalog is not None:
+            targets = {
+                target["message"]: {**target, "observed": 0, "not_observed": 0}
+                for target in catalog["targets"]
+            }
+        for row in observed:
+            target = targets.setdefault(
+                row["message"],
+                {"message": row["message"], "observed": 0, "not_observed": 0},
+            )
+            key = "observed" if row["observed"] else "not_observed"
+            target[key] += row["evaluations"]
+        diagnostics = rows("harness_diagnostics")
+        for diagnostic in diagnostics:
+            diagnostic["details"] = json.loads(diagnostic["details"])
+        health_errors = sum(command["harness_errors"] for command in commands)
+        durable_error = observations.durable_health()
         return {
+            "telemetry_available": True,
             "observed_timeline_s": elapsed,
             "workload_self_cpu_s": sum(r["cpu_s"] for r in commands),
             "workload_child_cpu_s": sum(r["child_cpu_s"] for r in commands),
@@ -595,17 +701,40 @@ def summary() -> dict[str, Any]:
             "commands": commands,
             "comparisons": comparisons,
             "coverage": coverage,
+            "observations": observed,
+            "coverage_targets": [targets[key] for key in sorted(targets)],
+            "coverage_catalog_available": catalog is not None,
+            "coverage_catalog_unresolved": (
+                catalog["unresolved"] if catalog is not None else []
+            ),
+            "harness_health": {
+                "valid": health_errors == 0 and durable_error is None,
+                "errors": health_errors,
+                "diagnostics": diagnostics,
+                "diagnostics_omitted": health_errors
+                - sum(row["occurrences"] for row in diagnostics),
+                "first_error": durable_error,
+            },
         }
 
     result = _db_call("summarize", read, {})
-    if result:
-        try:
-            result["quiet_fraction"] = quiet.recent_quiet_fraction(
-                result["observed_timeline_s"]
-            )
-        except Exception as e:
-            _failed("quiet fraction", e)
-            result["quiet_fraction"] = None
+    if not result:
+        return {
+            "telemetry_available": False,
+            "harness_health": _unavailable_health("telemetry summary is unavailable"),
+        }
+    try:
+        result["quiet_fraction"] = quiet.recent_quiet_fraction(
+            result["observed_timeline_s"]
+        )
+    except Exception as e:
+        _failed("quiet fraction", e)
+        result["quiet_fraction"] = None
+        health = result["harness_health"]
+        invalid = _unavailable_health("quiet fraction is unavailable")
+        invalid["diagnostics"] = health["diagnostics"]
+        invalid["first_error"] = health["first_error"] or invalid["first_error"]
+        result["harness_health"] = invalid
     return result
 
 
