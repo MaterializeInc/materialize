@@ -386,6 +386,19 @@ class Writer:
         resolves only after COMMIT. A callback failure invalidates harness health.
         Returns whether the connection is still usable.
         """
+        if before_commit is None:
+            return self._write(kind=kind)
+        with telemetry.interleaving("held_ivm", kind=kind):
+            usable = self._write(kind=kind, before_commit=before_commit)
+            telemetry.interleaving_progress("end", outcome="completed", usable=usable)
+            return usable
+
+    def _write(
+        self,
+        *,
+        before_commit: Callable[[], None] | None = None,
+        kind: str | None = None,
+    ) -> bool:
         kind = self.pick() if kind is None else kind
         with self.db:
             op = self.db.execute(
@@ -433,6 +446,9 @@ class Writer:
                 "UPDATE writes SET complete_rt = ?, outcome = ? WHERE op_id = ?",
                 (time.monotonic(), outcome, op),
             )
+        telemetry.interleaving_progress(
+            "write", write_id=op, kind=kind, outcome=outcome
+        )
         return usable
 
 

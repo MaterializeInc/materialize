@@ -119,6 +119,8 @@ disruption. Atomic read-modify-write statements race it in autocommit mode,
 because Materialize does not support `INSERT ... SELECT` in an explicit
 transaction. Ordinary writers and fault scheduling continue alongside these
 commands.
+The `antithesis_interleaving` events identify round modes, SQL outcomes, and
+disruption outcomes.
 
 Raw observations are capped at 4096 events and one hour of history. The
 summary reports pruned events, making missing measurement history visible.
