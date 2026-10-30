@@ -76,6 +76,8 @@ disruptions = [
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test that the system is able to make progress in the face of PubSub disruptions."""
+    # Kafka reports running only after the million-key upsert source rehydrates.
+    c.sanity_restart_max_retries = 300
     parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
 
     args = parser.parse_args()

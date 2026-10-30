@@ -25,6 +25,7 @@ import argparse
 import copy
 import hashlib
 import os
+import re
 import sys
 import threading
 import traceback
@@ -388,6 +389,9 @@ so it is executed.""",
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
     prioritize_pipeline(pipeline, args.priority)
+    # Before `switch_jobs_to_aws`, so that steps on the default queue are
+    # switched too.
+    set_default_agents_queue(pipeline)
     switch_jobs_to_aws(pipeline, args.priority)
     # After `switch_jobs_to_aws`, so that the queue a step ends up on is the one
     # that gets sized up. The other order lets the aarch64 to x86_64 fallback
@@ -395,7 +399,6 @@ so it is executed.""",
     increase_agents_timeouts(pipeline, args.sanitizer, args.coverage)
     permit_rerunning_successful_steps(pipeline)
     set_retry_on_agent_lost(pipeline)
-    set_default_agents_queue(pipeline)
     unparallelize(pipeline)
     expand_parallel_concurrency_groups(pipeline)
     set_parallelism_name(pipeline)
@@ -571,7 +574,9 @@ def increase_agents_timeouts(
             if step.get("id") == "build-aarch64":
                 step["name"] = "Build aarch64 with coverage"
             if step.get("id") == "cargo-test":
-                step["agents"]["queue"] = "hetzner-x86-64-dedi-32cpu-128gb"
+                # Keep a step that `switch_jobs_to_aws` moved on AWS.
+                if step["agents"]["queue"].startswith("hetzner-"):
+                    step["agents"]["queue"] = "hetzner-x86-64-dedi-32cpu-128gb"
                 step.pop("parallelism", None)
     else:
         for step in steps(pipeline):
@@ -589,13 +594,18 @@ def rewrite_step_dependency(step: dict[str, Any], old: str, new: str) -> None:
         step["depends_on"] = [new if dep == old else dep for dep in d]
 
 
+# Matches the purpose suffix of a dedicated queue, for example `-doctests` in
+# hetzner-x86-64-16cpu-32gb-doctests.
+HETZNER_DEDICATED_QUEUE_SUFFIX = re.compile(r"(?<=gb)-[a-z-]+$")
+
+
 def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     """Switch jobs to AWS if Hetzner is currently overloaded"""
     # If Hetzner is entirely broken, you have to take these actions to switch everything back to AWS:
     # - CI_FORCE_SWITCH_TO_AWS env variable to 1
     # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in https://buildkite.com/materialize/test/settings/steps and other pipelines
-    # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in ci/mkpipeline.sh
 
+    force = ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "1")
     stuck: set[str] = set()
     # TODO(def-): Remove me when Hetzner fixes its aarch64 availability
     stuck.update(
@@ -607,7 +617,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
         ]
     )
 
-    if ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0"):
+    if force:
         stuck = set(
             {
                 "hetzner-x86-64-16cpu-32gb",
@@ -702,8 +712,14 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
             continue
 
         agent = step["agents"].get("queue", None)
-        if not agent in stuck:
+        if not agent or not agent.startswith("hetzner-"):
             continue
+        # Dedicated queues like hetzner-x86-64-16cpu-32gb-doctests are separate
+        # agent pools, so they only count as stuck by their own name, but they
+        # map to AWS like the machine size they are named after.
+        if agent not in stuck and not force:
+            continue
+        agent = HETZNER_DEDICATED_QUEUE_SUFFIX.sub("", agent)
 
         if agent == "hetzner-aarch64-2cpu-4gb":
             if "hetzner-x86-64-2cpu-4gb" not in stuck:
@@ -748,11 +764,14 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
             "hetzner-x86-64-dedi-16cpu-64gb",
         ):
             step["agents"]["queue"] = "linux-x86_64-large"
-        elif agent in (
-            "hetzner-x86-64-dedi-32cpu-128gb",
-            "hetzner-x86-64-dedi-48cpu-192gb",
-        ):
+        elif agent == "hetzner-x86-64-dedi-32cpu-128gb":
             step["agents"]["queue"] = "builder-linux-x86_64"
+        elif agent == "hetzner-x86-64-dedi-48cpu-192gb":
+            step["agents"]["queue"] = "l-builder-linux-x86_64"
+        else:
+            print(
+                f"+++ WARNING: No AWS fallback for Hetzner queue {step['agents']['queue']}, keeping it"
+            )
 
 
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
