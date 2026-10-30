@@ -342,6 +342,12 @@ pub enum AdapterError {
     ReplacementSchemaMismatch(RelationDescDiff),
     /// A replacement does not declare a schema, but its target does.
     ReplacementSchemaNotDeclared,
+    /// A key declared for a materialized view does not follow from the keys the
+    /// optimizer can prove for its query.
+    MaterializedViewKeyNotProven {
+        key: Vec<String>,
+        proven_keys: Vec<Vec<String>>,
+    },
     /// Attempt to replace a sealed materialized view.
     ReplaceMaterializedViewSealed {
         name: String,
@@ -782,6 +788,20 @@ impl AdapterError {
                 }
                 Some(lines.join("\n"))
             }
+            AdapterError::MaterializedViewKeyNotProven { proven_keys, .. } => {
+                if proven_keys.is_empty() {
+                    Some("No key can be proven for the query.".into())
+                } else {
+                    let keys = proven_keys
+                        .iter()
+                        .map(|key| format!("({})", key.join(", ")))
+                        .join(", ");
+                    Some(format!(
+                        "A declared key must contain one of the keys that can be proven for the \
+                         query: {keys}."
+                    ))
+                }
+            }
             AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
                 "The materialized view's contents are final for all future times, so they can \
                  no longer be changed. See \
@@ -1152,6 +1172,7 @@ impl AdapterError {
             AdapterError::AlterClusterWaitOnScheduledCluster => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ReplacementSchemaNotDeclared => SqlState::INVALID_TABLE_DEFINITION,
+            AdapterError::MaterializedViewKeyNotProven { .. } => SqlState::INVALID_TABLE_DEFINITION,
             AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
                 SqlState::INVALID_PASSWORD
             }
@@ -1685,6 +1706,13 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "replacement must declare its schema because its target does"
+                )
+            }
+            AdapterError::MaterializedViewKeyNotProven { key, .. } => {
+                write!(
+                    f,
+                    "cannot prove that ({}) is a key of the materialized view",
+                    key.join(", ")
                 )
             }
             AdapterError::ImpossibleTimestampConstraints { .. } => {
