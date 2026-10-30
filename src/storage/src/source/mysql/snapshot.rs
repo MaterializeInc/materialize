@@ -131,7 +131,6 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
@@ -143,7 +142,7 @@ use tracing::trace;
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
-use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{SharedFuel, SignaledFuture, SourceMessage, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 use super::schemas::verify_schemas;
@@ -692,7 +691,7 @@ pub(crate) fn render<'scope>(
     source_outputs: Vec<SourceOutputInfo>,
     metrics: MySqlSnapshotMetrics,
 ) -> (
-    StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
+    Vec<StackedCollection<'scope, GtidPartition, Result<SourceMessage, DataflowError>>>,
     StreamVec<'scope, GtidPartition, RewindRequest>,
     StreamVec<'scope, GtidPartition, ReplicationError>,
     PressOnDropButton,
@@ -702,7 +701,16 @@ pub(crate) fn render<'scope>(
 
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
-    let (raw_handle, raw_data) = builder.new_output::<FueledBuilder<_>>();
+    // One data output port per source export, in output index order. All ports advance in
+    // lockstep. Every export observes the same frontier.
+    let export_count = config.source_exports.len();
+    let mut raw_handles = Vec::with_capacity(export_count);
+    let mut raw_streams = Vec::with_capacity(export_count);
+    for _ in 0..export_count {
+        let (handle, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        raw_handles.push(handle);
+        raw_streams.push(stream);
+    }
     let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -754,12 +762,10 @@ pub(crate) fn render<'scope>(
         builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
-                let [
-                    data_cap_set,
-                    rewind_cap_set,
-                    definite_error_cap_set,
-                    snapshot_cap_set,
-                ]: &mut [_; 4] = caps.try_into().unwrap();
+                let (data_cap_sets, caps) = caps.split_at_mut(export_count);
+                let [rewind_cap_set, definite_error_cap_set, snapshot_cap_set]: &mut [_; 3] =
+                    caps.try_into().unwrap();
+                let mut raw_handles = SharedFuel::new(raw_handles);
 
                 let id = config.id;
                 let worker_id = config.worker_id;
@@ -812,8 +818,8 @@ pub(crate) fn render<'scope>(
                         return Ok(return_definite_error(
                             DefiniteError::ServerConfigurationError(err.to_string()),
                             &all_outputs,
-                            &raw_handle,
-                            data_cap_set,
+                            &mut raw_handles,
+                            data_cap_sets,
                             &definite_error_handle,
                             definite_error_cap_set,
                         )
@@ -895,13 +901,11 @@ pub(crate) fn render<'scope>(
                     if !config.responsible_for(&output.table_name) {
                         continue;
                     }
-                    let update = (
-                        (output.output_index, Err(err.clone().into())),
-                        GtidPartition::minimum(),
-                        Diff::ONE,
-                    );
-                    let size = update.fuel_size();
-                    raw_handle.give_fueled(&data_cap_set[0], update, size).await;
+                    let output_index = output.output_index;
+                    let update = (Err(err.clone().into()), GtidPartition::minimum(), Diff::ONE);
+                    raw_handles
+                        .give(output_index, &data_cap_sets[output_index][0], update)
+                        .await;
                     tracing::warn!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
                                 due to schema mismatch");
                 }
@@ -918,8 +922,8 @@ pub(crate) fn render<'scope>(
                         return Ok(return_definite_error(
                             DefiniteError::UnsupportedGtidState(err.to_string()),
                             &all_outputs,
-                            &raw_handle,
-                            data_cap_set,
+                            &mut raw_handles,
+                            data_cap_sets,
                             &definite_error_handle,
                             definite_error_cap_set,
                         )
@@ -1077,13 +1081,11 @@ pub(crate) fn render<'scope>(
                                 }
                                 Err(err) => Err(err)?,
                             };
-                            let update = (
-                                (output.output_index, event),
-                                GtidPartition::minimum(),
-                                Diff::ONE,
-                            );
-                            let size = update.fuel_size();
-                            raw_handle.give_fueled(&data_cap_set[0], update, size).await;
+                            let output_index = output.output_index;
+                            let update = (event, GtidPartition::minimum(), Diff::ONE);
+                            raw_handles
+                                .give(output_index, &data_cap_sets[output_index][0], update)
+                                .await;
                         }
                         // This overcounting maintains existing behavior but will be removed once readers no longer rely on the value.
                         snapshot_staged_total += u64::cast_from(outputs.len());
@@ -1131,7 +1133,10 @@ pub(crate) fn render<'scope>(
     let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (
-        raw_data.as_collection(),
+        raw_streams
+            .into_iter()
+            .map(|stream| stream.as_collection())
+            .collect(),
         rewinds,
         errors,
         button.press_on_drop(),
