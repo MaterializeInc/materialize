@@ -19,6 +19,7 @@ use proptest::sample::select;
 use proptest::strategy::Union;
 
 use super::histogram::{BucketScheme, add_span};
+use super::local::{LocalDelayRecorder, VisibilityLog};
 use super::period::{DAY_MS, PeriodBook};
 use super::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use super::*;
@@ -1010,21 +1011,315 @@ fn period_length_change_keeps_arrivals_in_their_period() {
     }
 }
 
+fn bucket_counts(rows: &[PeriodRow]) -> BTreeMap<i32, u64> {
+    let mut counts = BTreeMap::new();
+    for row in rows {
+        *counts.entry(row.bucket).or_default() += row.count;
+    }
+    counts
+}
+
+#[mz_ore::test]
+fn visibility_log_visible_at() {
+    let mut log = VisibilityLog::default();
+    assert_eq!(log.visible_at(1), None);
+    log.record(1000, 1010);
+    log.record(2000, 2020);
+    // A regressing or repeated value is ignored.
+    log.record(2000, 2500);
+    log.record(1500, 2600);
+    // The earliest observation with `reflected >= arrival`.
+    assert_eq!(log.visible_at(1), Some(1010));
+    assert_eq!(log.visible_at(1000), Some(1010));
+    assert_eq!(log.visible_at(1001), Some(2020));
+    assert_eq!(log.visible_at(2000), Some(2020));
+    assert_eq!(log.visible_at(2001), None);
+    // Pruned entries answer with the observation of the last pruned entry, and the rest stay
+    // correct.
+    log.prune_through(1000);
+    assert_eq!(log.visible_at(1000), Some(1010));
+    assert_eq!(log.visible_at(1001), Some(2020));
+    log.prune_through(5000);
+    assert_eq!(log.visible_at(1), Some(2020));
+    assert_eq!(log.visible_at(2000), Some(2020));
+    assert_eq!(log.visible_at(6000), None);
+}
+
+#[mz_ore::test]
+fn local_chain_attributes_hops() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let (mut log_a, mut log_b) = (VisibilityLog::default(), VisibilityLog::default());
+    let mut local_a = LocalDelayRecorder::new(0);
+    let mut local_b = LocalDelayRecorder::new(0);
+    let mut local_c = LocalDelayRecorder::new(0);
+    let mut end_to_end_c = FreshnessRecorder::new(0);
+    let (mut rows_a, mut rows_b, mut rows_c, mut rows_e2e) = (vec![], vec![], vec![], vec![]);
+    for w in (1000..=200_000u64).step_by(1000) {
+        // A is a 1 s source, B shows each tick 3 s later, and C shows it as B does.
+        log_a.record(w, w + 1);
+        rows_a.extend(local_a.observe(&tree, &at(w + 1), w + 1, &[], &cfg));
+        log_b.record(w, w + 3001);
+        rows_b.extend(local_b.observe(&tree, &at(w + 1), w + 3001, &[&log_a], &cfg));
+        rows_c.extend(local_c.observe(&tree, &at(w + 1), w + 3001, &[&log_b], &cfg));
+        rows_e2e.extend(end_to_end_c.observe(&tree, &at(w + 1), w + 3001, &cfg));
+    }
+    let empty = Antichain::new();
+    rows_a.extend(local_a.observe(&tree, &empty, 300_000, &[], &cfg));
+    rows_b.extend(local_b.observe(&tree, &empty, 300_000, &[&log_a], &cfg));
+    rows_c.extend(local_c.observe(&tree, &empty, 300_000, &[&log_b], &cfg));
+    rows_e2e.extend(end_to_end_c.observe(&tree, &empty, 300_000, &cfg));
+
+    let s = scheme(4);
+    // A window of 1 s ending at w becomes visible at w + 1, so the oldest arrival waited 1001 ms.
+    assert_eq!(
+        bucket_counts(&rows_a),
+        BTreeMap::from([(s.bucket(1001), 200_000)])
+    );
+    assert_eq!(
+        bucket_counts(&rows_b),
+        BTreeMap::from([(s.bucket(3000), 200_000)])
+    );
+    // C adds nothing on top of B, which is the bucket of 1 ms.
+    assert_eq!(
+        bucket_counts(&rows_c),
+        BTreeMap::from([(s.bucket(1), 200_000)])
+    );
+    // End to end includes the hops of B and C.
+    assert_eq!(
+        bucket_counts(&rows_e2e),
+        BTreeMap::from([(s.bucket(4001), 200_000)])
+    );
+}
+
+#[mz_ore::test]
+fn local_join_uses_slowest_input() {
+    let tree = ResolvedTree::Min(vec![aligned(7000), aligned(11000)]);
+    let cfg = config(4);
+    for swap in [false, true] {
+        let (mut fast, mut slow) = (VisibilityLog::default(), VisibilityLog::default());
+        fast.record(7000, 7100);
+        slow.record(7000, 7500);
+        let inputs = if swap { [&slow, &fast] } else { [&fast, &slow] };
+        let mut recorder = LocalDelayRecorder::new(0);
+        let mut rows = recorder.observe(&tree, &at(11_001), 8000, &inputs, &cfg);
+        rows.extend(recorder.observe(&tree, &Antichain::new(), 8000, &inputs, &cfg));
+        // The slow input, observed at 7500, decides.
+        assert_eq!(
+            bucket_counts(&rows),
+            BTreeMap::from([(scheme(4).bucket(500), 7000)])
+        );
+    }
+}
+
+#[mz_ore::test]
+fn local_missing_input_entry_understates() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut observed = VisibilityLog::default();
+    observed.record(1000, 1100);
+    observed.record(2000, 2200);
+    let missing = VisibilityLog::default();
+    let mut pruned = VisibilityLog::default();
+    pruned.record(1000, 1100);
+    pruned.record(2000, 2200);
+    pruned.prune_through(1000);
+    let s = scheme(4);
+    let run = |log: &VisibilityLog| {
+        let mut recorder = LocalDelayRecorder::new(0);
+        let mut rows = Vec::new();
+        for (frontier, now) in [(1001, 1500), (2001, 2500)] {
+            rows.extend(recorder.observe(&tree, &at(frontier), now, &[log], &cfg));
+        }
+        rows.extend(recorder.observe(&tree, &Antichain::new(), 3000, &[log], &cfg));
+        bucket_counts(&rows)
+    };
+    // With entries the delays are 400 ms and 300 ms.
+    assert_eq!(
+        run(&observed),
+        BTreeMap::from([(s.bucket(400), 1000), (s.bucket(300), 1000)])
+    );
+    // Without any, the input counts as ready when the object advanced, a delay of 0.
+    assert_eq!(run(&missing), BTreeMap::from([(s.bucket(1), 2000)]));
+    // The pruned log answers the first window with its last pruned entry.
+    assert_eq!(run(&pruned), run(&observed));
+}
+
+#[mz_ore::test]
+fn local_input_entry_inside_window_is_not_split() {
+    // The object has windows ending at 7000, 14000 and 21000. The input's entry at 15000 falls
+    // inside the last one, which is only visible in the input with the entry at 21000.
+    let tree = aligned(7000);
+    let mut log = VisibilityLog::default();
+    log.record(15_000, 21_100);
+    log.record(21_000, 21_500);
+    let mut recorder = LocalDelayRecorder::new(0);
+    let mut rows = recorder.observe(&tree, &at(21_001), 22_000, &[&log], &config(4));
+    rows.extend(recorder.observe(&tree, &Antichain::new(), 22_000, &[&log], &config(4)));
+    let s = scheme(4);
+    // The first two windows are ready at 21100, the last at 21500.
+    assert_eq!(
+        bucket_counts(&rows),
+        BTreeMap::from([(s.bucket(900), 14_000), (s.bucket(500), 7_000)])
+    );
+}
+
+#[mz_ore::test]
+fn local_negative_delay_clamps() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut log = VisibilityLog::default();
+    log.record(1000, 5000);
+    let mut recorder = LocalDelayRecorder::new(0);
+    let mut rows = recorder.observe(&tree, &at(1001), 1500, &[&log], &cfg);
+    rows.extend(recorder.observe(&tree, &Antichain::new(), 1500, &[&log], &cfg));
+    assert_eq!(
+        bucket_counts(&rows),
+        BTreeMap::from([(scheme(4).bucket(1), 1000)])
+    );
+}
+
+/// A 1 s source feeds `refreshed`, a REFRESH EVERY 10 s object that shows each refresh 2 s after
+/// it is due. A plain object `plain` reads `refreshed` and advances with it. Returns the local
+/// rows of `refreshed` and of `plain`.
+fn refresh_chain() -> (Vec<PeriodRow>, Vec<PeriodRow>) {
+    let tree = refresh(every(10_000), aligned(1000));
+    let cfg = config(4);
+    let mut log_a = VisibilityLog::default();
+    let mut log_refreshed = VisibilityLog::default();
+    let mut local_refreshed = LocalDelayRecorder::new(0);
+    let mut local_plain = LocalDelayRecorder::new(0);
+    let (mut rows_refreshed, mut rows_plain) = (vec![], vec![]);
+    let mut next_a = 1000;
+    for k in 1..=20u64 {
+        let refresh_ts = 10_000 * k;
+        let now = refresh_ts + 2000;
+        // The source ticks every second up to the refresh and a bit beyond.
+        while next_a <= now {
+            log_a.record(next_a, next_a + 1);
+            next_a += 1000;
+        }
+        let frontier = at(refresh_ts + 1);
+        assert_eq!(
+            tree.last_reflected(Timestamp::from(refresh_ts + 1)),
+            Some(refresh_ts)
+        );
+        rows_refreshed.extend(local_refreshed.observe(&tree, &frontier, now, &[&log_a], &cfg));
+        log_refreshed.record(refresh_ts, now);
+        rows_plain.extend(local_plain.observe(&tree, &frontier, now, &[&log_refreshed], &cfg));
+    }
+    let empty = Antichain::new();
+    rows_refreshed.extend(local_refreshed.observe(&tree, &empty, 300_000, &[&log_a], &cfg));
+    rows_plain.extend(local_plain.observe(&tree, &empty, 300_000, &[&log_refreshed], &cfg));
+    (rows_refreshed, rows_plain)
+}
+
+#[mz_ore::test]
+fn local_refresh_object_carries_wait() {
+    // The object is the refresh view over a plain input. An arrival ending at w is visible in
+    // the input at w + 1 and in the object at the refresh time + 2 s, so the wait lands on it.
+    let (rows, _) = refresh_chain();
+    let s = scheme(4);
+    assert_eq!(bucket_counts(&rows).values().sum::<u64>(), 200_000);
+    let (lowest, highest) = (
+        *bucket_counts(&rows).keys().next().unwrap(),
+        *bucket_counts(&rows).keys().last().unwrap(),
+    );
+    // The newest window of a refresh waits 1999 ms, the oldest 10 s + 999 ms.
+    assert_eq!(lowest, s.bucket(1999));
+    assert_eq!(highest, s.bucket(10_999));
+}
+
+#[mz_ore::test]
+fn local_refresh_input_does_not_leak_wait() {
+    // A plain object over the refresh view sees the data when the view shows it, so it adds 0.
+    let (_, rows) = refresh_chain();
+    assert_eq!(
+        bucket_counts(&rows),
+        BTreeMap::from([(scheme(4).bucket(1), 200_000)])
+    );
+}
+
+fn arb_local_tree() -> impl Strategy<Value = ResolvedTree> {
+    proptest::sample::select(vec![
+        aligned(1000),
+        ResolvedTree::Min(vec![aligned(7000), aligned(11000)]),
+        ResolvedTree::Leaf(Ticker::Continuous),
+        ResolvedTree::Min(vec![unaligned(300), aligned(1000)]),
+        refresh(every(5000), aligned(1000)),
+        ResolvedTree::Min(vec![refresh(every(7000), aligned(1000)), aligned(3000)]),
+    ])
+}
+
+fn arb_log() -> impl Strategy<Value = VisibilityLog> {
+    proptest::collection::vec((1u64..30_000, 0u64..40_000), 0..12).prop_map(|steps| {
+        let (mut reflected, mut observed) = (0, 0);
+        let mut log = VisibilityLog::default();
+        for (dr, dt) in steps {
+            reflected += dr;
+            observed += dt;
+            log.record(reflected, observed);
+        }
+        log
+    })
+}
+
+#[mz_ore::test]
+fn local_counts_match_end_to_end() {
+    let strategy = (
+        arb_local_tree(),
+        proptest::collection::vec((1u64..30_000, 0u64..40_000), 1..10),
+        proptest::collection::vec(arb_log(), 0..3),
+        proptest::sample::select(vec![1u64, 3]),
+    );
+    proptest!(ProptestConfig::with_cases(64), |((tree, steps, logs, interval_ms) in strategy)| {
+        let cfg = RecorderConfig { interval_ms, period_ms: 10_000, ..config(4) };
+        let inputs: Vec<&VisibilityLog> = logs.iter().collect();
+        let mut end_to_end = FreshnessRecorder::new(0);
+        let mut local = LocalDelayRecorder::new(0);
+        let (mut rows_e2e, mut rows_local) = (vec![], vec![]);
+        let (mut frontier, mut now) = (1, 0);
+        for (df, dt) in steps {
+            frontier += df;
+            now += dt;
+            rows_e2e.extend(end_to_end.observe(&tree, &at(frontier), now, &cfg));
+            rows_local.extend(local.observe(&tree, &at(frontier), now, &inputs, &cfg));
+        }
+        rows_e2e.extend(end_to_end.observe(&tree, &Antichain::new(), now, &cfg));
+        rows_local.extend(local.observe(&tree, &Antichain::new(), now, &inputs, &cfg));
+        prop_assert_eq!(period_totals(&rows_local), period_totals(&rows_e2e));
+        if inputs.is_empty() {
+            // Without inputs, local delay is the end-to-end latency.
+            prop_assert_eq!(rows_local, rows_e2e);
+        }
+    });
+}
+
 #[mz_ore::test]
 fn debug_output_stays_small() {
     let tree = ResolvedTree::Leaf(Ticker::Continuous);
+    let mut log = VisibilityLog::default();
+    for t in 1..10_000 {
+        log.record(t, t);
+    }
     let mut end_to_end = FreshnessRecorder::new(0);
+    let mut local = LocalDelayRecorder::new(0);
     for t in 1..1_000 {
         let cfg = config(4);
         assert!(end_to_end.observe(&tree, &at(t + 1), t, &cfg).is_empty());
+        assert!(
+            local
+                .observe(&tree, &at(t + 1), t, &[&log], &cfg)
+                .is_empty()
+        );
     }
     let end_to_end = format!("{end_to_end:?}");
     assert!(end_to_end.contains("open_periods: 1"), "{end_to_end}");
-    assert!(
-        end_to_end.len() < 1024,
-        "{} bytes: {end_to_end}",
-        end_to_end.len()
-    );
+    let log = format!("{log:?}");
+    assert!(log.contains("len: 9999"), "{log}");
+    for debug in [end_to_end, format!("{local:?}"), log] {
+        assert!(debug.len() < 1024, "{} bytes: {debug}", debug.len());
+    }
 }
 
 /// Advances `book` and returns the closed periods with the arrivals added to each, and the
@@ -1198,19 +1493,58 @@ fn finish_emits_open_periods() {
     let tree = aligned(1000);
     let cfg = config(4);
     let mut recorder = FreshnessRecorder::new(0);
+    let mut local = LocalDelayRecorder::new(0);
     assert!(
         recorder
             .observe(&tree, &at(30_001), 30_001, &cfg)
             .is_empty()
     );
+    assert!(
+        local
+            .observe(&tree, &at(30_001), 30_001, &[], &cfg)
+            .is_empty()
+    );
     let rows = recorder.finish();
     assert_eq!(period_totals(&rows), BTreeMap::from([(0, 30_000)]));
+    assert_eq!(local.finish(), rows);
     assert!(
         recorder
             .observe(&tree, &at(90_001), 90_001, &cfg)
             .is_empty()
     );
     assert!(recorder.finish().is_empty());
+}
+
+#[mz_ore::test]
+fn local_long_input_outage_uses_last_pruned_observation() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let start = NOW_MS - NOW_MS % 1000 - 2 * 3_600_000;
+    let end = start + 2 * 3_600_000;
+    // The input shows each window 100 ms after it ends, for two hours, while the object is stuck
+    // at `start`. The input's log keeps the entries of the last ten minutes.
+    let mut log = VisibilityLog::default();
+    for w in (start + 1000..=end).step_by(1000) {
+        log.record(w, w + 100);
+    }
+    let now = end + 100;
+    let cutoff = now - 600_000;
+    log.prune_through(cutoff - 1100);
+    let mut recorder = LocalDelayRecorder::new(start);
+    let mut rows = recorder.observe(&tree, &at(end + 1), now, &[&log], &cfg);
+    rows.extend(recorder.finish());
+    let counts = bucket_counts(&rows);
+    let total: u64 = counts.values().sum();
+    assert_eq!(total, end - start);
+    // The pruned arrivals were visible in the input at the latest when its last pruned entry
+    // was observed, just before the cutoff, not when the object advanced.
+    let last_pruned_observed = cutoff - 1000;
+    let pruned: u64 = counts
+        .range(cfg.scheme.bucket(now - last_pruned_observed)..)
+        .map(|(_, c)| c)
+        .sum();
+    assert!(pruned >= end - start - 600_000, "{counts:?}");
+    assert!(counts.get(&0).copied().unwrap_or(0) <= 1000, "{counts:?}");
 }
 
 #[mz_ore::test]
