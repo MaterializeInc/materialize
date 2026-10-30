@@ -24,6 +24,25 @@ from materialize.antithesis import templates
 SOURCE = Path(__file__).resolve().parents[4] / "test/antithesis/workload/test/main"
 
 
+@pytest.mark.parametrize("role_name", ["workload", "workload-operator"])
+def test_workload_can_read_termination_logs_without_mutating_them(
+    role_name: str,
+) -> None:
+    resources = yaml.safe_load_all(
+        (MZ_ROOT / "test/antithesis/manifests/30-workload.yaml").read_text()
+    )
+    role = next(
+        resource
+        for resource in resources
+        if resource["kind"] == "Role" and resource["metadata"]["name"] == role_name
+    )
+    log_rules = [rule for rule in role["rules"] if "pods/log" in rule["resources"]]
+    assert len(log_rules) == 1
+    assert log_rules[0]["apiGroups"] == [""]
+    assert log_rules[0]["resources"] == ["pods/log"]
+    assert log_rules[0]["verbs"] == ["get"]
+
+
 def test_workload_context_carries_authoritative_halt_policy(tmp_path: Path) -> None:
     definition = yaml.safe_load(
         (MZ_ROOT / "test/antithesis/workload/mzbuild.yml").read_text()

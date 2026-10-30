@@ -69,7 +69,7 @@ from antithesis.lifecycle import (  # pyright: ignore[reportMissingModuleSource]
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
-from materialize.antithesis import crash_loops, sql, state
+from materialize.antithesis import crash_loops, observations, sql, state
 from materialize.antithesis.drivers import configure, lifecycle, rollouts
 from materialize.antithesis.drivers.sources_common import source_error_text
 from materialize.antithesis.endpoints import INTERNAL_HTTP_PORT
@@ -609,7 +609,18 @@ def capture_halt_evidence(
             break
         if halt is None:
             return None
-    except (*rollouts.TRANSIENT_ERRORS, UnicodeError):
+    except (*rollouts.TRANSIENT_ERRORS, UnicodeError) as error:
+        if isinstance(error, ApiException) and getattr(error, "status", None) == 403:
+            observations.harness_error(
+                "halt evidence",
+                "workload service account cannot read termination evidence",
+                {
+                    "namespace": o.namespace,
+                    "pod": o.pod,
+                    "container": o.container,
+                    "status": 403,
+                },
+            )
         return None
     identity = _termination_identity(o)
     return {
