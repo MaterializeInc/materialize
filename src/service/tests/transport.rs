@@ -11,9 +11,10 @@
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Once};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::future;
 use mz_ore::assert_none;
@@ -665,14 +666,10 @@ impl<In: Message, Out: Message> GenericClient<In, Out> for ChannelHandler<In, Ou
         result.map_err(|_| anyhow!("client channel disconnected"))
     }
 
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe.
-    async fn recv(&mut self) -> anyhow::Result<Option<Out>> {
-        // `mpsc::Receiver::recv` is cancel safe.
-        match self.rx.recv().await {
-            Some(resp) => Ok(Some(resp)),
-            None => bail!("client channel disconnected"),
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<anyhow::Result<Option<Out>>> {
+        match ready!(self.rx.poll_recv(cx)) {
+            Some(resp) => Poll::Ready(Ok(Some(resp))),
+            None => Poll::Ready(Err(anyhow!("client channel disconnected"))),
         }
     }
 }
@@ -695,12 +692,12 @@ impl GenericClient<i32, i32> for OneOutputHandler {
         Ok(())
     }
 
-    async fn recv(&mut self) -> anyhow::Result<Option<i32>> {
+    fn poll_recv(&mut self, _cx: &mut Context<'_>) -> Poll<anyhow::Result<Option<i32>>> {
         if self.done {
-            future::pending().await
+            Poll::Pending
         } else {
             self.done = true;
-            Ok(Some(123))
+            Poll::Ready(Ok(Some(123)))
         }
     }
 }

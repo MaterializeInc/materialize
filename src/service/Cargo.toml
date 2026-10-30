@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-stream.workspace = true
 async-trait.workspace = true
 bincode.workspace = true
 futures.workspace = true
@@ -25,7 +24,6 @@ semver = { workspace = true, features = ["serde"] }
 serde.workspace = true
 sysinfo.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
