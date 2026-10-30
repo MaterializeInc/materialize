@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -54,6 +55,73 @@ def test_hooks_do_nothing_outside_a_measured_command(tmp_path: Path) -> None:
     telemetry.record_coverage([("Promoting", "clusterd", "append", "table", "acked")])
     assert telemetry.events_between(0, 10) == []
     assert not (tmp_path / "state").exists()
+
+
+def test_replica_fault_events_keep_the_actual_cluster_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(telemetry, "_recorder", telemetry.Recorder("main", "driver"))
+    monkeypatch.setattr(telemetry.time, "monotonic", lambda: 100.0)
+    telemetry.fault_observed("clusterd", 95, 96, "delete", cluster_id="u3")
+    assert telemetry.events_between(90, 100) == [
+        telemetry.Event("fault", 95, 96, role="clusterd", cluster_id="u3")
+    ]
+
+
+def test_existing_event_ledgers_migrate_without_inventing_cluster_identity() -> None:
+    with state.open_db(telemetry.STATE_DB) as db:
+        db.execute(
+            "CREATE TABLE events (id INTEGER PRIMARY KEY, profile TEXT, kind TEXT,"
+            " started REAL, completed REAL, phase TEXT, role TEXT, event_key TEXT,"
+            " UNIQUE (profile, kind, event_key))"
+        )
+        db.execute(
+            "INSERT INTO events VALUES (1, 'main', 'fault', 1, 2, '', 'clusterd', 'old')"
+        )
+    for _ in range(2):
+        db = telemetry._open()
+        try:
+            assert db.execute("SELECT cluster_id FROM events").fetchone() == ("",)
+        finally:
+            db.close()
+
+
+def test_short_transaction_can_request_a_fresh_sample_of_an_observed_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(telemetry, "_recorder", telemetry.Recorder("main", "driver"))
+    clock = [100.0]
+    monkeypatch.setattr(telemetry.time, "monotonic", lambda: clock[0])
+    telemetry.phase_observed("Promoting", 2, "request")
+    clock[0] = 101.0
+    telemetry.phase_observed("Promoting", 2, "request")
+    assert telemetry.events_between(100.5, 101.5) == []
+    telemetry.phase_observed("Promoting", 2, "request", started=100.9, force=True)
+    observed = telemetry.events_between(100.5, 101.5)
+    assert len(observed) == 1
+    assert (observed[0].started, observed[0].completed, observed[0].phase) == (
+        100.9,
+        101.0,
+        "Promoting",
+    )
+
+
+def test_cluster_identity_cache_retries_unknown_identity_and_keeps_successes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(telemetry, "_recorder", telemetry.Recorder("main", "driver"))
+    connection = Mock()
+    connection.execute.return_value.fetchone.side_effect = [None, ("u3",)]
+
+    @contextmanager
+    def connect(*args, **kwargs):
+        yield connection
+
+    monkeypatch.setattr(telemetry.sql, "connection", connect)
+    assert telemetry.resolve_cluster_id("host", "owned") is None
+    assert telemetry.resolve_cluster_id("host", "owned") == "u3"
+    assert telemetry.resolve_cluster_id("host", "owned") == "u3"
+    assert connection.execute.call_count == 2
 
 
 def test_concurrent_comparisons_are_counted_and_normalized(tmp_path: Path) -> None:
