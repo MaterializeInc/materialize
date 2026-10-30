@@ -3191,6 +3191,12 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
+        # Read when a replica process installs its pool, at its first config
+        # apply with a spill gate on. A flip reaches processes that install
+        # afterwards, so the processes of one replica can differ.
+        self.flags_with_values["enable_column_paged_batcher_file_extents"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         # Fractions of the *cgroup* memory limit, which under mzcompose's
         # process orchestrator is the whole container budget shared by
         # environmentd and every replica, not one replica's allowance. A
@@ -3294,6 +3300,8 @@ class FlipFlagsAction(Action):
             "enable_lgalloc_eager_reclamation",
             "enable_s3_tables_region_check",
             "lgalloc_background_interval",
+            "column_paged_batcher_file_release_interval",
+            "column_paged_batcher_file_release_bytes",
             "lgalloc_file_growth_dampener",
             "lgalloc_local_buffer_bytes",
             "lgalloc_slow_clear_bytes",

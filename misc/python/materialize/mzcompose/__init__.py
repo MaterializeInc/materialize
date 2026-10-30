@@ -347,6 +347,20 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_column_paged_batcher_spill", "false", ["true", "false"]
         ),
+        # On by default so CI exercises the file-backed extent store wherever
+        # a replica has a scratch directory. Off in production while it earns
+        # trust.
+        *(
+            [
+                VariableSystemParameter(
+                    "enable_column_paged_batcher_file_extents",
+                    "true",
+                    ["true", "false"],
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.47.0-dev")
+            else []
+        ),
         # On by default so CI exercises the columnar accumulable diff layout, which
         # is off in production while it earns trust.
         VariableSystemParameter(
@@ -784,6 +798,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "column_paged_batcher_spill_worker_fraction",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
+    "column_paged_batcher_file_release_interval",
+    "column_paged_batcher_file_release_bytes",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",

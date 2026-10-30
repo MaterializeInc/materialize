@@ -134,13 +134,47 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether the buffer pool may use the scratch directory as its extent
+/// store. Takes effect only at pool installation, see `apply_pool_config` in
+/// `mz_timely_util::pool_config`.
+pub const ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS: Config<bool> = Config::new(
+    "enable_column_paged_batcher_file_extents",
+    false,
+    "Use the scratch directory as the buffer pool's extent store when one exists. \
+     Read once at pool installation.",
+    ParameterScope::Replica,
+);
+
+/// How often the buffer pool's spill threads release free extent slots of
+/// the file store back to the filesystem. The default follows
+/// [`LGALLOC_BACKGROUND_INTERVAL`].
+pub const COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL: Config<Duration> = Config::new(
+    "column_paged_batcher_file_release_interval",
+    Duration::from_secs(1),
+    "Interval at which the buffer pool releases free file store slots to the filesystem.",
+    ParameterScope::Replica,
+);
+
+/// The most bytes of free file store slots the buffer pool releases per
+/// extent class and [`COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL`]. Zero
+/// disables the release, so the store keeps freed slots allocated until an
+/// allocation needs their room. The default follows
+/// [`LGALLOC_SLOW_CLEAR_BYTES`].
+pub const COLUMN_PAGED_BATCHER_FILE_RELEASE_BYTES: Config<usize> = Config::new(
+    "column_paged_batcher_file_release_bytes",
+    128 << 20,
+    "Bytes of free file store slots the buffer pool releases per extent class and interval. \
+     Zero disables the release.",
+    ParameterScope::Replica,
+);
+
 /// The youngest chunk generation whose spilled bodies are compressed.
 ///
 /// A chunk at generational depth `d` is rewritten with frequency
 /// proportional to `2^-d` under geometric merging, so compressing shallow
 /// generations buys pool bytes back for only a short stay at a guaranteed
 /// near-term codec round-trip. Generations below the floor spill under the
-/// identity codec: fully budgeted and swap-backed, with encode and decode
+/// identity codec: fully budgeted and backed, with encode and decode
 /// reduced to copies. The default exempts only fresh (depth 0) chunks. A
 /// chunk that outlives a merge untouched ages a generation regardless, and
 /// an identity-coded body at or past the floor is re-spilled compressed at
@@ -890,6 +924,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMNAR_MERGE_BATCHER)
         .add(&ENABLE_COLUMNAR_ACCUMULABLE_DIFF)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
+        .add(&ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS)
+        .add(&COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL)
+        .add(&COLUMN_PAGED_BATCHER_FILE_RELEASE_BYTES)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)
         .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
