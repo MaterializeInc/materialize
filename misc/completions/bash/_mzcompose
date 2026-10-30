@@ -42,7 +42,7 @@ _shtab_mzcompose_unpause_option_strings=(-h --help)
 _shtab_mzcompose_up_option_strings=(-h --help)
 _shtab_mzcompose_web_option_strings=(-h --help)
 _shtab_mzcompose_completion_option_strings=(-h --help)
-_shtab_mzcompose_option_strings=(-h --help --mz-quiet --find --preserve-ports --project-name --host-network --sanity-restart-mz --ignore-docker-version --dev --release --optimized --coverage --sanitizer --arch --image-registry --image-prefix)
+_shtab_mzcompose_option_strings=(-h --help --mz-quiet --find --preserve-ports --project-name --host-network --sanity-restart-mz --ignore-docker-version --dev --release --optimized --coverage --sanitizer --antithesis --arch --image-registry --image-prefix)
 
 
 
@@ -129,6 +129,7 @@ _shtab_mzcompose___dev_nargs=0
 _shtab_mzcompose___release_nargs=0
 _shtab_mzcompose___optimized_nargs=0
 _shtab_mzcompose___coverage_nargs=0
+_shtab_mzcompose___antithesis_nargs=0
 
 
 # $1=COMP_WORDS[1]

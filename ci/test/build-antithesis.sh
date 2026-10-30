@@ -19,6 +19,7 @@ set -euo pipefail
 
 : "${CI_ANTITHESIS:?build-antithesis.sh expects CI_ANTITHESIS=1}"
 : "${ANTITHESIS_GCP_SERVICE_ACCOUNT_JSON:?the Antithesis registry credential is not set}"
+: "${MZ_CI_LICENSE_KEY:?the license required for the Antithesis config image is not set}"
 
 registry=us-central1-docker.pkg.dev/molten-verve-216720/materialize-repository
 bin/pyactivate -m ci.test.build
@@ -27,5 +28,5 @@ echo "--- Pushing images to the Antithesis registry"
 docker login -u _json_key --password-stdin "https://${registry%%/*}" \
     <<< "$ANTITHESIS_GCP_SERVICE_ACCOUNT_JSON"
 bin/pyactivate -m materialize.antithesis.images --registry "$registry" --commit "$BUILDKITE_COMMIT" \
-    --upgrade-base --output antithesis-images.json
+    --upgrade-base --config --output antithesis-images.json
 buildkite-agent artifact upload antithesis-images.json

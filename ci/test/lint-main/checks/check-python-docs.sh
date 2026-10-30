@@ -19,6 +19,7 @@ cd "$(dirname "$0")/../../../.."
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
   if [[ ! "${MZDEV_NO_PYTHON_DOCTEST:-}" ]]; then
+    ci/test/install-antithesis-sdk.sh
     try bin/pyactivate -m pytest -qq --doctest-modules misc/python
   fi
 fi
