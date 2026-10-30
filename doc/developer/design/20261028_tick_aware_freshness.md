@@ -222,9 +222,13 @@ A night on staging, with 480 objects and ten replica outages, measured the typic
 * 2.3 local rows. Local delay is processing jitter between 1 and 100 ms, which spans six octaves, so a materialized view used 7 to 18 buckets in a median period and up to 30.
 * 1.9 skew rows, for each of the 22 objects with two or more inputs.
 
-The global histogram's persist shard grew by about 3 bytes per row, which is 18 KB per object and day, or 540 KB per object at 30 days of retention.
-The per-replica histogram grew about three quarters as fast.
-The existing per-minute history writes one row per object and replica at about 2.3 bytes, so both histograms together grew about 6.5 times as fast as it did.
+Rows per object and minute are the constant to plan with, because the bytes depend on where the rows are.
+In persist, sorted and compressed, the global histogram's shard grew by about 3 bytes per row, which is 18 KB per object and day, or 540 KB per object at 30 days of retention.
+The per-replica histogram grew about three quarters as fast, and both together grew about 6.5 times as fast as the existing per-minute history, which writes one row per object and replica at about 2.3 bytes.
+Anything that decodes the rows pays far more per row: a row holds two timestamps, an object id of about 10 characters, a measure, two integers and labels, which is roughly 60 bytes as a packed row before the time and diff of an update, an estimate from the row encoding, not a measurement.
+At that size a day of one object is about 6,200 rows and 370 KB of packed rows, and 30 days about 11 MB, which a Console query over a month of one object decodes unless persist's filter pushdown on `period_start` and `object_id` skips parts.
+Nothing maintains the histograms in memory today: on staging the only index over the wallclock relations was the existing one on `mz_wallclock_global_lag_recent_history`.
+An index over a whole environment's histograms would hold every row decoded, about 3 million rows and 180 MB of packed rows per day for 480 objects before times, diffs and arrangement overhead, so the Console should read the histograms through queries scoped to objects and windows.
 Storage-owned collections, one in six objects on that environment, wrote local rows identical to their end-to-end rows in that build, and they no longer write them.
 `mz_catalog_server` used 0.23 cores during the night and 0.24 the night before, without recording, so its cost did not show above the noise.
 A rollup would cap the cost of long windows and is the first optimization if the Console's queries get expensive.
