@@ -155,7 +155,6 @@ where
     }
 }
 
-#[async_trait]
 impl<Cmd, Resp> GenericClient<Cmd, Resp> for GuestClusterClient<Cmd, Resp>
 where
     Cmd: fmt::Debug + Send + TryIntoProtocolNonce,
@@ -232,7 +231,6 @@ where
     }
 }
 
-#[async_trait]
 impl<C> GenericClient<C::Command, C::Response> for ClusterClient<C>
 where
     C: ClusterSpec,

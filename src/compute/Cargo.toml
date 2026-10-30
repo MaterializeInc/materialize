@@ -37,6 +37,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 mz-row-spine = { path = "../row-spine" }
 mz-rocksdb = { path = "../rocksdb" }
+mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-operators = { path = "../storage-operators" }
