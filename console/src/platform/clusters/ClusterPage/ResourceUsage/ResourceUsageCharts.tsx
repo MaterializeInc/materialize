@@ -53,7 +53,7 @@ import {
 } from "./resourceUsageModel";
 import {
   CHART_MARGIN,
-  percentScale,
+  percentChart,
   useStatusStyles,
 } from "./resourceUsageStyles";
 
@@ -63,10 +63,6 @@ export type PercentScale = ReturnType<typeof scaleLinear<number>>;
 
 export type Layout = ReturnType<typeof buildXYGraphLayoutProps>;
 
-// 0 to 100% keeps 168px on an axis that tops out at 125%.
-const PLOT_HEIGHT_PX = 210;
-const PLOT_SVG_HEIGHT_PX =
-  CHART_MARGIN.top + PLOT_HEIGHT_PX + CHART_MARGIN.bottom;
 // Room above a chart with no headroom, such as the status rows, for its
 // header.
 const INSET_HEADER_PX = 32;
@@ -501,15 +497,6 @@ export const CpuChart = ({
   headerAction,
 }: CpuChartProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const layout = React.useMemo(
-    () =>
-      buildXYGraphLayoutProps({
-        width,
-        height: PLOT_SVG_HEIGHT_PX,
-        margin: CHART_MARGIN,
-      }),
-    [width],
-  );
   const peak = React.useMemo(
     () =>
       max(series, (replica) =>
@@ -518,9 +505,9 @@ export const CpuChart = ({
     [series],
   );
   const isOverflowing = peak > 100;
-  const { yScale, ticks } = React.useMemo(
-    () => percentScale(peak, layout),
-    [peak, layout],
+  const { layout, yScale, ticks } = React.useMemo(
+    () => percentChart(peak, width),
+    [peak, width],
   );
 
   return (
@@ -711,15 +698,6 @@ export const MemoryChart = ({
   hasHeapLimit,
 }: MemoryChartProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const layout = React.useMemo(
-    () =>
-      buildXYGraphLayoutProps({
-        width,
-        height: PLOT_SVG_HEIGHT_PX,
-        margin: CHART_MARGIN,
-      }),
-    [width],
-  );
   const peak = React.useMemo(
     () =>
       max(series, (replica) =>
@@ -727,9 +705,9 @@ export const MemoryChart = ({
       ) ?? 0,
     [series],
   );
-  const { yScale, ticks } = React.useMemo(
-    () => percentScale(peak, layout),
-    [peak, layout],
+  const { layout, yScale, ticks } = React.useMemo(
+    () => percentChart(peak, width),
+    [peak, width],
   );
   const { hasSplit, hasSwap, ramLimit } = React.useMemo(() => {
     const seriesData = series.map((replica) => replica.data);

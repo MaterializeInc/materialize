@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { percentAxisTicks, percentAxisTop } from "./resourceUsageStyles";
+import {
+  percentAxisTicks,
+  percentAxisTop,
+  percentChart,
+} from "./resourceUsageStyles";
 
 describe("percentAxisTop", () => {
   it.each([
@@ -25,13 +29,15 @@ describe("percentAxisTop", () => {
 });
 
 describe("percentAxisTicks", () => {
-  it("labels every 25% up to seven steps", () => {
+  it("labels every 25% below the top", () => {
     expect(percentAxisTicks(125)).toEqual([25, 50, 75, 100]);
-    expect(percentAxisTicks(175)).toEqual([25, 50, 75, 100, 125, 150]);
+    expect(percentAxisTicks(200)).toEqual([25, 50, 75, 100, 125, 150, 175]);
   });
+});
 
-  it("thins the labels on a taller axis", () => {
-    expect(percentAxisTicks(200)).toEqual([50, 100, 150]);
-    expect(percentAxisTicks(400)).toEqual([75, 150, 225, 300, 375]);
+describe("percentChart", () => {
+  it("grows 42px per 25% step so every chart shares one scale", () => {
+    expect(percentChart(90, 500).yScale.range()).toEqual([210, 0]);
+    expect(percentChart(175, 500).yScale.range()).toEqual([336, 0]);
   });
 });

@@ -74,7 +74,7 @@ import {
   TimeGridLines,
   TimeScale,
 } from "./ResourceUsageCharts";
-import { CHART_MARGIN, percentScale } from "./resourceUsageStyles";
+import { CHART_MARGIN, percentChart } from "./resourceUsageStyles";
 import { useReplicaProcessSamples } from "./useReplicaProcessSamples";
 
 // The per-process history is raw per-minute samples, so the drawer reads at
@@ -83,8 +83,6 @@ const MAX_WINDOW_MINUTES = 24 * 60;
 // The theme's chart palette has five strong colors. Past five processes, only
 // the ones that stand out get a color; the rest stay grey but named.
 const MAX_COLORED_PROCESSES = 5;
-// 0 to 100% keeps 150px on an axis that tops out at 125%.
-const PLOT_HEIGHT_PX = 188;
 // The most processes the tooltip lists before summarizing the rest.
 const TOOLTIP_PROCESS_LIMIT = 6;
 
@@ -668,15 +666,6 @@ const ProcessLineChart = ({
   ) => void;
   onLeave: () => void;
 }) => {
-  const layout = React.useMemo(
-    () =>
-      buildXYGraphLayoutProps({
-        width,
-        height: CHART_MARGIN.top + PLOT_HEIGHT_PX + CHART_MARGIN.bottom,
-        margin: CHART_MARGIN,
-      }),
-    [width],
-  );
   const lines = React.useMemo(
     () =>
       processIds.map((processId) => ({
@@ -692,9 +681,9 @@ const ProcessLineChart = ({
     () => max(lines, ({ points }) => max(points, ({ value }) => value)) ?? 0,
     [lines],
   );
-  const { yScale, ticks } = React.useMemo(
-    () => percentScale(peak, layout),
-    [peak, layout],
+  const { layout, yScale, ticks } = React.useMemo(
+    () => percentChart(peak, width),
+    [peak, width],
   );
 
   return (

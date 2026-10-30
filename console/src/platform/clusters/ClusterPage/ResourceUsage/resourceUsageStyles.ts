@@ -24,10 +24,12 @@ export const CHART_MARGIN = { top: 0, right: 40, bottom: 0, left: 0 };
 export const PERCENT_TICKS = [0, 25, 50, 75, 100];
 
 const PERCENT_TICK_STEP = 25;
+// The gap between two rules. Every percent chart shares it, so a percentage
+// point is the same height on each, and a taller axis makes a taller chart.
+const PERCENT_TICK_STEP_PX = 42;
 // Clear space above the highest reading, which a chart's header floats over.
 const HEADROOM_PERCENT = 25;
 const MIN_AXIS_TOP_PERCENT = 125;
-const MAX_PERCENT_TICK_STEPS = 7;
 
 /** The first 25% line at least 25 points above `peak`, and never under 125%. */
 export const percentAxisTop = (peak: number) =>
@@ -37,26 +39,28 @@ export const percentAxisTop = (peak: number) =>
       PERCENT_TICK_STEP,
   );
 
-/**
- * The labeled lines strictly between 0 and `top`: every 25%, or every 50%,
- * 75% and so on once an axis spans more than seven 25% steps.
- */
+/** The 25% lines strictly between 0 and `top`. */
 export const percentAxisTicks = (top: number) => {
-  const step =
-    Math.ceil(top / PERCENT_TICK_STEP / MAX_PERCENT_TICK_STEPS) *
-    PERCENT_TICK_STEP;
   const ticks: number[] = [];
-  for (let tick = step; tick < top; tick += step) ticks.push(tick);
+  for (let tick = PERCENT_TICK_STEP; tick < top; tick += PERCENT_TICK_STEP) {
+    ticks.push(tick);
+  }
   return ticks;
 };
 
-/** A scale from 0 to `percentAxisTop(peak)`. */
-export const percentScale = (
-  peak: number,
-  layout: ReturnType<typeof buildXYGraphLayoutProps>,
-) => {
+/** A chart `width` wide and as tall as `percentAxisTop(peak)` needs. */
+export const percentChart = (peak: number, width: number) => {
   const top = percentAxisTop(peak);
+  const layout = buildXYGraphLayoutProps({
+    width,
+    height:
+      CHART_MARGIN.top +
+      (top / PERCENT_TICK_STEP) * PERCENT_TICK_STEP_PX +
+      CHART_MARGIN.bottom,
+    margin: CHART_MARGIN,
+  });
   return {
+    layout,
     yScale: scaleLinear<number>({
       domain: [0, top],
       range: layout.yScaleRange,
