@@ -10,12 +10,7 @@
 import {
   Box,
   Button,
-  FormControl,
-  FormErrorMessage,
-  FormHelperText,
-  FormLabel,
   HStack,
-  Input,
   ModalBody,
   ModalCloseButton,
   ModalContent,
@@ -27,35 +22,22 @@ import {
   Tbody,
   Td,
   Text,
-  Textarea,
   Th,
   Thead,
   Tr,
   useTheme,
   VStack,
 } from "@chakra-ui/react";
-import { useAtomValue } from "jotai";
 import React from "react";
-import { useForm } from "react-hook-form";
 
-import {
-  SupportTicket,
-  SupportTicketEnvironmentType,
-  SupportTicketSeverity,
-} from "~/api/cloudGlobalApi";
+import { SupportTicket } from "~/api/cloudGlobalApi";
 import { Alert } from "~/components/Alert";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import { Modal } from "~/components/Modal";
-import SimpleSelect from "~/components/SimpleSelect";
-import { HELP_CENTER_TICKETS_URL, SUPPORT_EMAIL } from "~/externalUrls";
-import { useToast } from "~/hooks/useToast";
-import {
-  currentEnvironmentState,
-  currentRegionIdAtom,
-} from "~/store/environments";
+import { HELP_CENTER_TICKETS_URL } from "~/externalUrls";
 import { MaterializeTheme } from "~/theme";
 
-import { useCreateSupportTicket, useSupportTicket } from "./queries";
+import { useSupportTicket } from "./queries";
 import { formatRelativeTime, htmlToText } from "./supportTicketUtils";
 
 const EXTERNAL_LINK_PROPS = {
@@ -63,14 +45,30 @@ const EXTERNAL_LINK_PROPS = {
   rel: "noopener noreferrer",
 } as const;
 
-const TicketStateTag = ({ ticket }: { ticket: SupportTicket }) => {
+/** Colors a ticket's state the way the Help Center groups them. */
+const useStateColors = (ticket: SupportTicket) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const state = (ticket.state ?? "").toLowerCase();
+  if (!ticket.open || /resolved|closed/.test(state)) {
+    return { bg: colors.green[50], color: colors.green[600] };
+  }
+  if (/waiting on you|waiting on customer/.test(state)) {
+    return { bg: colors.background.warn, color: colors.foreground.primary };
+  }
+  if (/progress/.test(state)) {
+    return { bg: colors.background.info, color: colors.accent.blue };
+  }
+  return { bg: colors.background.tertiary, color: colors.foreground.primary };
+};
+
+const TicketStateTag = ({ ticket }: { ticket: SupportTicket }) => {
+  const stateColors = useStateColors(ticket);
   return (
     <Tag
       size="sm"
       borderRadius="md"
-      bg={ticket.open ? colors.background.info : colors.background.tertiary}
-      color={colors.foreground.primary}
+      bg={stateColors.bg}
+      color={stateColors.color}
       fontWeight="500"
       whiteSpace="nowrap"
     >
@@ -133,7 +131,7 @@ export const SupportTicketsTable = ({
                       textStyle="text-small"
                       color={colors.foreground.secondary}
                     >
-                      #{ticket.number}
+                      #{ticket.number} · opened by you
                     </Text>
                   )}
                 </VStack>
@@ -283,231 +281,6 @@ export const SupportTicketModal = ({
             </Button>
           </HStack>
         </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-};
-
-const SEVERITY_OPTIONS: { value: SupportTicketSeverity; label: string }[] = [
-  { value: "high", label: "High: key features seriously impaired" },
-  { value: "normal", label: "Normal: some impact, a workaround exists" },
-  { value: "low", label: "Low: little or no impact, or a question" },
-];
-
-const ENVIRONMENT_OPTIONS: {
-  value: SupportTicketEnvironmentType;
-  label: string;
-}[] = [
-  { value: "production", label: "Production" },
-  { value: "staging", label: "Staging" },
-  { value: "development", label: "Development" },
-];
-
-type TicketFormState = {
-  title: string;
-  severity: SupportTicketSeverity;
-  environmentType: SupportTicketEnvironmentType;
-  description: string;
-};
-
-/** Context the console knows, attached so the customer doesn't retype it. */
-const useTicketContext = () => {
-  const regionId = useAtomValue(currentRegionIdAtom);
-  const environment = useAtomValue(currentEnvironmentState);
-  const environmentVersion =
-    environment?.state === "enabled" && environment.status.health === "healthy"
-      ? `v${environment.status.version.crateVersion.version}`
-      : undefined;
-  return { region: regionId ?? undefined, environmentVersion };
-};
-
-const NewSupportTicketForm = ({
-  organizationId,
-  onClose,
-}: {
-  organizationId?: string;
-  onClose: () => void;
-}) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  const toast = useToast();
-  const context = useTicketContext();
-  const createTicket = useCreateSupportTicket();
-  const { register, handleSubmit, formState } = useForm<TicketFormState>({
-    mode: "onTouched",
-    defaultValues: {
-      title: "",
-      severity: "normal",
-      environmentType: "production",
-      description: "",
-    },
-  });
-
-  const onSubmit = (values: TicketFormState) => {
-    createTicket.mutate(
-      {
-        title: values.title.trim(),
-        description: values.description.trim(),
-        severity: values.severity,
-        environmentType: values.environmentType,
-        region: context.region,
-        environmentVersion: context.environmentVersion,
-      },
-      {
-        onSuccess: (ticket) => {
-          toast({
-            description: ticket.number
-              ? `Ticket #${ticket.number} opened. We'll reply by email and in Help Center.`
-              : "Ticket opened. We'll reply by email and in Help Center.",
-          });
-          onClose();
-        },
-      },
-    );
-  };
-
-  const attached = [
-    organizationId && `org ID ${organizationId}`,
-    context.region && `region ${context.region}`,
-    context.environmentVersion && `version ${context.environmentVersion}`,
-  ].filter(Boolean);
-
-  return (
-    <form onSubmit={handleSubmit(onSubmit)}>
-      <ModalHeader>Open a ticket</ModalHeader>
-      <ModalCloseButton />
-      <ModalBody>
-        <VStack spacing="4" align="stretch">
-          <Text textStyle="text-small" color={colors.foreground.secondary}>
-            Production down with no workaround? Close this and use{" "}
-            <Text as="span" fontWeight="500">
-              Report a production outage
-            </Text>{" "}
-            instead, so on-call is paged.
-          </Text>
-          {createTicket.isError && (
-            <Alert
-              variant="error"
-              minWidth="0"
-              message={`Your ticket couldn't be opened. Try again, or email ${SUPPORT_EMAIL}.`}
-            />
-          )}
-          <FormControl isInvalid={!!formState.errors.title}>
-            <FormLabel fontSize="sm">Title</FormLabel>
-            <Input
-              {...register("title", {
-                validate: (value) =>
-                  value.trim().length > 0 || "A title is required.",
-                maxLength: {
-                  value: 200,
-                  message: "Keep the title under 200 characters.",
-                },
-              })}
-              placeholder="e.g. Replica keeps restarting"
-              autoFocus
-              size="sm"
-              variant={formState.errors.title ? "error" : "default"}
-            />
-            <FormErrorMessage>
-              {formState.errors.title?.message}
-            </FormErrorMessage>
-          </FormControl>
-          <HStack spacing="4" align="start" flexWrap="wrap">
-            <FormControl flex="1 1 240px">
-              <FormLabel fontSize="sm">Severity</FormLabel>
-              <SimpleSelect {...register("severity")} size="sm">
-                {SEVERITY_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </SimpleSelect>
-            </FormControl>
-            <FormControl flex="1 1 160px">
-              <FormLabel fontSize="sm">Environment</FormLabel>
-              <SimpleSelect {...register("environmentType")} size="sm">
-                {ENVIRONMENT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </SimpleSelect>
-            </FormControl>
-          </HStack>
-          <FormControl isInvalid={!!formState.errors.description}>
-            <FormLabel fontSize="sm">What&apos;s happening?</FormLabel>
-            <Textarea
-              {...register("description", {
-                validate: (value) =>
-                  value.trim().length > 0 || "Describe the problem.",
-                maxLength: {
-                  value: 10000,
-                  message: "Keep the description under 10,000 characters.",
-                },
-              })}
-              rows={6}
-              size="sm"
-              placeholder="What you expected, what happened instead, and the name of the cluster or object involved."
-            />
-            <FormErrorMessage>
-              {formState.errors.description?.message}
-            </FormErrorMessage>
-            {attached.length > 0 && (
-              <FormHelperText data-testid="support-ticket-context">
-                We&apos;ll attach your {attached.join(", ")}.
-              </FormHelperText>
-            )}
-          </FormControl>
-        </VStack>
-      </ModalBody>
-      <ModalFooter>
-        <HStack spacing="2">
-          <Button variant="secondary" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            size="sm"
-            isLoading={createTicket.isPending}
-          >
-            Open ticket
-          </Button>
-        </HStack>
-      </ModalFooter>
-    </form>
-  );
-};
-
-export interface NewSupportTicketModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  organizationId?: string;
-}
-
-export const NewSupportTicketModal = ({
-  isOpen,
-  onClose,
-  organizationId,
-}: NewSupportTicketModalProps) => {
-  const { shadows } = useTheme<MaterializeTheme>();
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} size="xl">
-      <ModalOverlay />
-      <ModalContent shadow={shadows.level4}>
-        <React.Suspense
-          fallback={
-            <ModalBody>
-              <LoadingContainer />
-            </ModalBody>
-          }
-        >
-          {isOpen && (
-            <NewSupportTicketForm
-              organizationId={organizationId}
-              onClose={onClose}
-            />
-          )}
-        </React.Suspense>
       </ModalContent>
     </Modal>
   );
