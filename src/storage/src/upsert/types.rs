@@ -1063,6 +1063,7 @@ impl FuzzUpsertParts {
             &mz_persist_client::ShardId::new(),
             mz_storage_types::sources::SourceEnvelope::CdcV2,
             timely::progress::Antichain::from_elem(mz_repr::Timestamp::MIN),
+            timely::progress::Antichain::from_elem(mz_repr::Timestamp::MIN),
         );
         UpsertState::new(
             crate::upsert::memory::InMemoryHashMap::default(),
@@ -1087,6 +1088,7 @@ impl FuzzUpsertParts {
             id,
             &mz_persist_client::ShardId::new(),
             mz_storage_types::sources::SourceEnvelope::CdcV2,
+            timely::progress::Antichain::from_elem(mz_repr::Timestamp::MIN),
             timely::progress::Antichain::from_elem(mz_repr::Timestamp::MIN),
         );
         crate::source::SourceExportCreationConfig {
