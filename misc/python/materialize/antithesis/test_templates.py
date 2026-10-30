@@ -16,10 +16,31 @@ from types import ModuleType
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
+from materialize import MZ_ROOT, mzbuild
 from materialize.antithesis import templates
 
 SOURCE = Path(__file__).resolve().parents[4] / "test/antithesis/workload/test/main"
+
+
+def test_workload_context_carries_authoritative_halt_policy(tmp_path: Path) -> None:
+    definition = yaml.safe_load(
+        (MZ_ROOT / "test/antithesis/workload/mzbuild.yml").read_text()
+    )
+    actions = [
+        action
+        for action in definition["pre-image"]
+        if action.get("source") == "src/ore/src"
+    ]
+    assert len(actions) == 1
+    config = dict(actions[0])
+    assert config.pop("type") == "copy"
+    action = mzbuild.Copy(MagicMock(root=MZ_ROOT), tmp_path, config)
+    assert "src/ore/src/antithesis.rs" in action.inputs()
+    action.run(None)
+    policy = Path("src/ore/src/antithesis.rs")
+    assert (tmp_path / policy).read_bytes() == (MZ_ROOT / policy).read_bytes()
 
 
 def test_mixed_template_keeps_every_authoritative_command(tmp_path: Path) -> None:

@@ -19,3 +19,7 @@ pre-image:
     source: misc/python
     destination: misc/python
     matching: requirements.txt
+  - type: copy
+    source: src/ore/src
+    destination: src/ore/src
+    matching: antithesis.rs
