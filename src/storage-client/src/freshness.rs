@@ -73,8 +73,11 @@ enum Start {
 #[derive(Debug)]
 pub struct FreshnessRecording {
     start: Start,
-    /// The recorders of all measures. They start together, so their per-period counts agree.
-    recorders: Option<(FreshnessRecorder, LocalDelayRecorder)>,
+    /// Whether the local delay and skew are recorded, see [`Self::end_to_end_only`].
+    local: bool,
+    /// The recorders of all recorded measures. They start together, so their per-period counts
+    /// agree.
+    recorders: Option<(FreshnessRecorder, Option<LocalDelayRecorder>)>,
 }
 
 impl FreshnessRecording {
@@ -87,6 +90,7 @@ impl FreshnessRecording {
     pub fn created(as_of: Antichain<Timestamp>, created_ms: u64) -> Self {
         FreshnessRecording {
             start: Start::Created(as_of, created_ms),
+            local: true,
             recorders: None,
         }
     }
@@ -97,22 +101,33 @@ impl FreshnessRecording {
     pub fn at_first_observation(built_ms: u64) -> Self {
         FreshnessRecording {
             start: Start::FirstObservation(built_ms),
+            local: true,
             recorders: None,
         }
     }
 
-    fn recorders(start_ms: u64) -> (FreshnessRecorder, LocalDelayRecorder) {
+    /// Records only the end-to-end latency, for a collection without inputs inside Materialize,
+    /// whose local delay is its end-to-end latency.
+    pub fn end_to_end_only(mut self) -> Self {
+        self.local = false;
+        self
+    }
+
+    fn recorders(&self, start_ms: u64) -> (FreshnessRecorder, Option<LocalDelayRecorder>) {
         (
             FreshnessRecorder::new(start_ms),
-            LocalDelayRecorder::new(start_ms),
+            self.local.then(|| LocalDelayRecorder::new(start_ms)),
         )
     }
 
     /// The last arrival recorded so far, `None` before the recording starts. The input logs
     /// passed to [`Self::observe`] need to answer only the arrivals above it.
     pub fn recorded_through(&self) -> Option<u64> {
-        let (_, local) = self.recorders.as_ref()?;
-        Some(local.high_water_ms())
+        let (end_to_end, local) = self.recorders.as_ref()?;
+        Some(match local {
+            Some(local) => local.high_water_ms(),
+            None => end_to_end.high_water_ms(),
+        })
     }
 
     /// Records a write frontier observed at `now_ms` and returns the rows of closed periods of
@@ -147,11 +162,14 @@ impl FreshnessRecording {
             let Some(start) = start else {
                 return Vec::new();
             };
-            self.recorders = Some(Self::recorders(start));
+            self.recorders = Some(self.recorders(start));
         }
         let (end_to_end, local) = self.recorders.as_mut().expect("initialized above");
         let end_to_end = end_to_end.observe(tree, frontier, now_ms, config);
-        let local = local.observe(tree, needed, frontier, now_ms, inputs, config);
+        let local = local
+            .as_mut()
+            .map(|local| local.observe(tree, needed, frontier, now_ms, inputs, config))
+            .unwrap_or_default();
         tag(end_to_end, local)
     }
 
@@ -161,7 +179,11 @@ impl FreshnessRecording {
         let Some((end_to_end, local)) = self.recorders.as_mut() else {
             return Vec::new();
         };
-        tag(end_to_end.finish(), local.finish())
+        let local = local
+            .as_mut()
+            .map(LocalDelayRecorder::finish)
+            .unwrap_or_default();
+        tag(end_to_end.finish(), local)
     }
 }
 
@@ -307,7 +329,7 @@ mod tests {
     use mz_storage_types::freshness::{ResolvedTree, Ticker};
     use timely::progress::Antichain;
 
-    use super::SharedVisibilityLog;
+    use super::{FreshnessRecording, Measure, SharedVisibilityLog};
 
     #[mz_ore::test]
     fn visibility_log_is_pruned_by_age() {
@@ -358,5 +380,27 @@ mod tests {
         let copy = log.input_log(Some(5_000_000));
         assert_eq!(copy.visible_at(5_000_001), Some(2005));
         assert_eq!(copy.visible_at(u64::MAX), Some(2005));
+    }
+
+    #[mz_ore::test]
+    fn end_to_end_only_records_no_local_rows() {
+        let tree = ResolvedTree::Leaf(Ticker::Aligned { interval_ms: 1000 });
+        let config = RecorderConfig {
+            scheme: BucketScheme::new(4).expect("power of two"),
+            interval_ms: 1,
+            period_ms: 60_000,
+            retention_ms: 30 * 24 * 60 * 60 * 1000,
+        };
+        let frontier = |ms: u64| Antichain::from_elem(Timestamp::from(ms));
+        let mut recording = FreshnessRecording::created(frontier(0), 0).end_to_end_only();
+        let mut rows = recording.observe(&tree, &tree, &frontier(90_001), 90_005, &[], &config);
+        assert_eq!(recording.recorded_through(), Some(90_000));
+        rows.extend(recording.finish());
+        assert!(
+            rows.iter()
+                .all(|(measure, _)| *measure == Measure::EndToEnd),
+            "{rows:?}"
+        );
+        assert_eq!(rows.iter().map(|(_, row)| row.count).sum::<u64>(), 90_000);
     }
 }

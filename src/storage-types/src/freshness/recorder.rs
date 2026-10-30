@@ -63,6 +63,11 @@ impl FreshnessRecorder {
         }
     }
 
+    /// The last arrival recorded so far, or the start.
+    pub fn high_water_ms(&self) -> u64 {
+        self.book.high_water_ms()
+    }
+
     /// Records a write frontier observed at `now_ms` and returns the rows of periods that closed.
     ///
     /// Rows of one period are adjacent and sorted by bucket. An empty frontier closes all open

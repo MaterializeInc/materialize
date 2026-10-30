@@ -3108,7 +3108,7 @@ where
             .collection_frontiers(id)
             .map(|frontiers| frontiers.implied_capability)
             .unwrap_or_else(|_| Antichain::from_elem(Timestamp::MIN));
-        Some(FreshnessRecording::created(since, (self.now)()))
+        Some(FreshnessRecording::created(since, (self.now)()).end_to_end_only())
     }
 
     /// Ends the freshness recording of a collection that is dropped and returns the
@@ -3150,11 +3150,11 @@ where
         if let Some(log) = self.storage_collections.visibility_log(id) {
             log.record(&tree, frontier, now_ms, &config);
         }
-        // Storage collections have no direct inputs, so their local delay is their end-to-end
-        // latency and they have no skew.
         let rows = collection
             .freshness
-            .get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms))
+            .get_or_insert_with(|| {
+                FreshnessRecording::at_first_observation(now_ms).end_to_end_only()
+            })
             .observe(&tree, &tree, frontier, now_ms, &[], &config);
         if rows.is_empty() {
             return Vec::new();
