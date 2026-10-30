@@ -76,6 +76,7 @@ For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/mysql/)
 ### Guides {#v26.48-guides}
 - [Fine tune for sub-second freshness](/transform-data/freshness/subsecond-freshness/)
 - [Troubleshooting Iceberg sinks](/export-data/iceberg-troubleshooting/)
+- [Iceberg sinks with S3-compatible storage and REST catalogs](/export-data/iceberg-rest/)
 - [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/)
 
 ### Bug Fixes {#v26.48-bug-fixes}
