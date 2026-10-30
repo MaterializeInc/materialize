@@ -18,6 +18,75 @@ import pytest
 from materialize import mzbuild
 
 
+@pytest.mark.parametrize(
+    "profile", [mzbuild.Profile.OPTIMIZED, mzbuild.Profile.RELEASE]
+)
+@pytest.mark.parametrize("antithesis", [False, True])
+@pytest.mark.parametrize("strip", [False, True])
+def test_cargo_export_normalizes_antithesis_symbols_on_copy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: mzbuild.Profile,
+    antithesis: bool,
+    strip: bool,
+) -> None:
+    rd = Mock(
+        root=tmp_path,
+        profile=profile,
+        antithesis=antithesis,
+    )
+    rd.cargo_target_dir.return_value = tmp_path / "cargo"
+    rd.tool.side_effect = lambda tool: [tool]
+    source = tmp_path / "cargo" / profile.name.lower() / "probe"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"cached artifact")
+    context = tmp_path / "context"
+    exported = context / "probe"
+    commands = []
+
+    def normalize(command: list[Any], **kwargs: Any) -> None:
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"normalized export")
+
+    monkeypatch.setattr(mzbuild.spawn, "runv", normalize)
+    mzbuild.CargoBuild(rd, context, {"bin": "probe", "strip": strip}).build({})
+
+    if strip and not antithesis:
+        assert commands == [["strip", "--strip-debug", exported]]
+    else:
+        assert commands == [
+            [
+                "objcopy",
+                *(["--decompress-debug-sections"] if antithesis else []),
+                "-R",
+                ".debug_pubnames",
+                "-R",
+                ".debug_pubtypes",
+                exported,
+            ]
+        ]
+    assert source.read_bytes() == b"cached artifact"
+    assert exported.read_bytes() == b"normalized export"
+
+
+@pytest.mark.parametrize("antithesis", [False, True])
+def test_symbol_export_revision_invalidates_only_antithesis_images(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, antithesis: bool
+) -> None:
+    rd = Mock(root=tmp_path, antithesis=antithesis)
+    (tmp_path / "mzbuild.yml").write_text("name: probe\n")
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+    image = mzbuild.Image(rd, tmp_path)
+    image._context_files_cache = {"mzbuild.yml", "Dockerfile"}
+
+    monkeypatch.setattr(mzbuild, "ANTITHESIS_EXPORT_VERSION", 1, raising=False)
+    before = mzbuild.ResolvedImage(image, []).fingerprint()
+    monkeypatch.setattr(mzbuild, "ANTITHESIS_EXPORT_VERSION", 2)
+    after = mzbuild.ResolvedImage(image, []).fingerprint()
+
+    assert (before != after) == antithesis
+
+
 @pytest.mark.parametrize("base_state", ["missing", "pull_error", "remote", "local"])
 def test_acquire_builds_missing_images_after_their_dependencies(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, base_state: str

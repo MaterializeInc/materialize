@@ -53,6 +53,9 @@ from materialize.xcompile import Arch, target
 
 GHCR_PREFIX = "ghcr.io/materializeinc/"
 
+# Bump when the Antithesis binary export format changes so images are rebuilt.
+ANTITHESIS_EXPORT_VERSION = 1
+
 
 class RustIncrementalBuildFailure(Exception):
     """A build failure that corrupted incremental artifacts explain. Recovering
@@ -910,6 +913,14 @@ class CargoBuild(CargoPreImage):
                 spawn.runv(
                     [
                         *self.rd.tool("objcopy"),
+                        # Use plain DWARF without requiring the symbol extractor
+                        # to support our linker's zstd compression. Normalize the
+                        # exported copy to preserve Cargo's cached artifact.
+                        *(
+                            ["--decompress-debug-sections"]
+                            if self.rd.antithesis
+                            else []
+                        ),
                         "-R",
                         ".debug_pubnames",
                         "-R",
@@ -1444,6 +1455,7 @@ class ResolvedImage:
         # fingerprint of every existing image.
         if self.image.rd.antithesis:
             self_hash.update(b"antithesis=1")
+            self_hash.update(f"antithesis_export={ANTITHESIS_EXPORT_VERSION}".encode())
             self_hash.update(
                 f"antithesis_env={sorted(rustc_flags.antithesis_env.items())}".encode()
             )
