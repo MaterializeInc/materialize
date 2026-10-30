@@ -116,10 +116,21 @@ def test_initialization_seeds_only_the_selected_workloads(
 ) -> None:
     modules = {
         name: MagicMock()
-        for name in ("configure", "rollouts", *templates.PROFILES["main"].setup)
+        for name in (
+            "bootstrap",
+            "configure",
+            "rollouts",
+            *templates.PROFILES["main"].setup,
+        )
     }
     configure = modules["configure"]
-    configure.main.return_value = 7
+
+    def configure_main() -> int:
+        if not templates.enabled_driver("rollouts", name):
+            modules["bootstrap"].ensure_target_image.assert_called_once()
+        return 7
+
+    configure.main.side_effect = configure_main
     monkeypatch.setenv(templates.PROFILE_ENV, name)
     imported = []
 
@@ -130,7 +141,15 @@ def test_initialization_seeds_only_the_selected_workloads(
 
     monkeypatch.setattr(templates.importlib, "import_module", import_module)
     assert templates.initialize() == 7
-    assert imported == ["configure", "rollouts", *templates.PROFILES[name].setup]
+    assert imported == [
+        *(["bootstrap"] if not templates.enabled_driver("rollouts", name) else []),
+        "configure",
+        "rollouts",
+        *templates.PROFILES[name].setup,
+    ]
+    assert modules["bootstrap"].ensure_target_image.called is (
+        not templates.enabled_driver("rollouts", name)
+    )
     modules["rollouts"].seed_serving_version.assert_called_once()
     for driver in templates.PROFILES["main"].setup:
         assert modules[driver].setup_main.called is (
@@ -140,6 +159,35 @@ def test_initialization_seeds_only_the_selected_workloads(
         "INSERT OR REPLACE INTO profile VALUES ('workload_template', ?)", (name,)
     )
     configure.open_state.return_value.close.assert_called_once()
+
+
+@pytest.mark.parametrize("name", ["transactions", "cdc"])
+def test_failed_target_bootstrap_stops_before_configuration_or_data_setup(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    modules = {
+        driver: MagicMock()
+        for driver in (
+            "bootstrap",
+            "configure",
+            "rollouts",
+            *templates.PROFILES["main"].setup,
+        )
+    }
+    modules["bootstrap"].ensure_target_image.side_effect = TimeoutError(
+        "target did not become ready"
+    )
+    monkeypatch.setattr(
+        templates.importlib,
+        "import_module",
+        lambda module: modules[module.rsplit(".", 1)[1]],
+    )
+    with pytest.raises(TimeoutError, match="target did not become ready"):
+        templates.initialize(name)
+    modules["configure"].main.assert_not_called()
+    modules["rollouts"].seed_serving_version.assert_not_called()
+    for driver in templates.PROFILES["main"].setup:
+        modules[driver].setup_main.assert_not_called()
 
 
 def test_generation_rejects_overwriting_command_sources(tmp_path: Path) -> None:

@@ -299,6 +299,8 @@ class EnvdPod:
     """Container start, in seconds, from the kubelet's clock."""
     ready: bool
     last_exit_code: int | None
+    image: str | None = None
+    """The pod spec reference, before kubelet image-name normalization."""
 
     def incarnation(self) -> tuple[str, int, int | None, str | None]:
         return (self.uid, self.restart_count, self.started_at, self.ip)
@@ -434,6 +436,18 @@ class Kube:
                     started_at=started_at,
                     ready=bool(statuses) and all(s.ready for s in statuses),
                     last_exit_code=last_exit_code,
+                    image=(
+                        next(
+                            (
+                                c.image
+                                for c in pod.spec.containers
+                                if c.name == "environmentd"
+                            ),
+                            None,
+                        )
+                        if pod.spec is not None
+                        else None
+                    ),
                 )
             )
         return result
