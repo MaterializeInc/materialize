@@ -52,6 +52,7 @@ use tokio::sync::mpsc;
 
 use crate::controller::replica::ReplicaConfig;
 use crate::controller::{ComputeControllerResponse, IntrospectionUpdates};
+use crate::logging::{LogVariant, TimelyLog};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::{ComputeResponse, FrontiersResponse};
@@ -562,6 +563,10 @@ impl Recorded {
     }
 }
 
+/// The log collection of a [`FreshnessHarness::with_log`], with a 1 s ingestion leaf.
+const LOG: GlobalId = GlobalId::System(1000);
+const LOG_VARIANT: LogVariant = LogVariant::Timely(TimelyLog::Operates);
+
 /// An instance whose clock reads `clock` and that resolves every ingestion to a 1 s ticker.
 struct FreshnessHarness {
     instance: Instance,
@@ -572,6 +577,23 @@ struct FreshnessHarness {
 
 impl FreshnessHarness {
     fn new(recording: bool, read_only: bool) -> Self {
+        Self::build(recording, read_only, Vec::new())
+    }
+
+    /// A recording harness with the log collection [`LOG`].
+    fn with_log() -> Self {
+        let log = (
+            LOG_VARIANT,
+            LOG,
+            SharedCollectionState::new(ac(0)),
+            Some(FreshnessTree::Leaf(FreshnessLeaf::Ingestion(
+                GlobalId::User(1),
+            ))),
+        );
+        Self::build(true, false, vec![log])
+    }
+
+    fn build(recording: bool, read_only: bool, logs: Vec<super::ArrangedLog>) -> Self {
         let clock = Arc::new(AtomicU64::new(T0));
         let now = {
             let clock = Arc::clone(&clock);
@@ -595,7 +617,7 @@ impl FreshnessHarness {
             &DUMMY_BUILD_INFO,
             Arc::new(TickerStorage(Arc::new(FixedTickers(1000)))),
             PersistLocation::new_in_mem(),
-            Vec::new(),
+            logs,
             metrics,
             now.clone(),
             WallclockLagFn::new(now),
@@ -627,12 +649,19 @@ impl FreshnessHarness {
     }
 
     fn add_replica(&mut self, id: ReplicaId) {
+        self.add_replica_with_logs(id, BTreeMap::new());
+    }
+
+    /// Adds a replica that maintains the log collections `index_logs`.
+    fn add_replica_with_logs(&mut self, id: ReplicaId, index_logs: BTreeMap<LogVariant, GlobalId>) {
+        let mut logging = crate::logging::LoggingConfig::default();
+        logging.index_logs = index_logs;
         let config = ReplicaConfig {
             // Nothing listens there, so the replica task keeps retrying in the background.
             location: ClusterReplicaLocation {
                 ctl_addrs: vec!["127.0.0.1:1".into()],
             },
-            logging: Default::default(),
+            logging,
             grpc_client: Default::default(),
             expiration_offset: None,
             arrangement_dictionary_compression: false,
@@ -930,4 +959,63 @@ async fn freshness_replica_outage_is_charged_in_day_pieces() {
     assert!((30..=33).contains(&periods.len()), "{periods:?}");
     // The rows are the pieces times the buckets they touch.
     assert!(after.counts.len() <= 200, "{} rows", after.counts.len());
+}
+
+/// A log collection is recorded per replica only, from the replica's creation until it goes
+/// away, when its open periods are emitted.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn freshness_log_collections_record_per_replica_only() {
+    let mut h = FreshnessHarness::with_log();
+    h.instance.initialization_complete();
+    let r1 = ReplicaId::User(1);
+    h.add_replica_with_logs(r1, BTreeMap::from([(LOG_VARIANT, LOG)]));
+    for s in 1..=90 {
+        h.set_now(T0 + s * 1000 + 5);
+        h.report(r1, LOG, T0 + s * 1000 + 1);
+    }
+    h.instance.remove_replica(r1).expect("replica exists");
+    let recorded = h.recorded();
+    assert_eq!(recorded.periods(None), vec![], "global");
+    assert_eq!(
+        recorded.periods(Some(r1)),
+        vec![
+            (T0, T0 + 60_000, 60_000),
+            (T0 + 60_000, T0 + 120_000, 30_000)
+        ],
+        "replica"
+    );
+}
+
+/// A rehydrated replica's logs start over, so its recording of a log collection ends with the
+/// old replica and a new one starts at the rehydration.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn freshness_rehydration_restarts_log_collection_recordings() {
+    let mut h = FreshnessHarness::with_log();
+    h.instance.initialization_complete();
+    let r1 = ReplicaId::User(1);
+    h.add_replica_with_logs(r1, BTreeMap::from([(LOG_VARIANT, LOG)]));
+    for s in 1..=90 {
+        h.set_now(T0 + s * 1000 + 5);
+        h.report(r1, LOG, T0 + s * 1000 + 1);
+    }
+    h.instance.rehydrate_replica(r1);
+    h.report(r1, LOG, 1);
+    for s in 91..=180 {
+        h.set_now(T0 + s * 1000 + 5);
+        h.report(r1, LOG, T0 + s * 1000 + 1);
+    }
+    let recorded = h.recorded();
+    assert_eq!(recorded.periods(None), vec![], "global");
+    assert_eq!(
+        recorded.periods(Some(r1)),
+        vec![
+            (T0, T0 + 60_000, 60_000),
+            (T0 + 60_000, T0 + 120_000, 30_000),
+            (T0 + 90_005, T0 + 120_000, 29_995),
+            (T0 + 120_000, T0 + 180_000, 60_000),
+        ],
+        "replica"
+    );
 }

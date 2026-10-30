@@ -1461,10 +1461,14 @@ impl Instance {
         let epoch = replica.epoch + 1;
         let dyncfg_override = replica.dyncfg_override.clone();
         // The rehydrated replica reports frontiers from the as-of again, so keeping the
-        // recordings, with their high-water marks, keeps it from counting arrivals twice.
+        // recordings, with their high-water marks, keeps it from counting arrivals twice. The
+        // logs of the rehydrated replica start over, so `remove_replica` ends the recordings of
+        // log collections and new ones start at the replica's creation.
+        let collections = &self.collections;
         let freshness: BTreeMap<_, _> = replica
             .collections
             .iter_mut()
+            .filter(|(id, _)| collections.get(id).is_none_or(|c| !c.log_collection))
             .filter_map(|(id, c)| Some((*id, c.freshness.take()?)))
             .collect();
 
@@ -2063,6 +2067,11 @@ impl Instance {
         let Some(collection) = self.collections.get_mut(&id).filter(|c| !c.dropped) else {
             return;
         };
+        // A log collection logs one replica, so its contents differ between replicas and a
+        // global histogram of it would mix unrelated frontiers.
+        if replica_id.is_none() && collection.log_collection {
+            return;
+        }
         // Resolved at every observation, so a changed tick interval takes effect at once.
         let Some(tree) = collection
             .freshness_tree
