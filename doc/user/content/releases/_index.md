@@ -20,6 +20,14 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.47.2
+*Released to Materialize Cloud: 2026-10-29* <br>
+*Released to Materialize Self-Managed: 2026-10-30* <br>
+
+### Bug Fixes {#v26.47.2-bug-fixes}
+- Fixed PostgreSQL sources where a table whose ingestion had ended in an error — an upstream `TRUNCATE`, an incompatible schema change, or a dropped upstream table — resumed from its last position after a restart and silently skipped every upstream change made while it was in error, leaving the table with incorrect contents.
+- Fixed PostgreSQL sources where an upstream `TRUNCATE` applied while a newly added table was still snapshotting left that table serving stale rows without reporting an error.
+
 ## v26.47.1
 *Released to Materialize Cloud: 2026-10-29* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
