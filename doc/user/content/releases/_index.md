@@ -56,8 +56,8 @@ Every Kafka sink now attaches a `materialize-sink-id` header to each message by 
 
 The `HEADERS` option is also now generally available, after being in private preview. `HEADERS` adds the entries of a `map[text => text]` or `map[text => bytea]` column as headers on every message the sink produces, so you can attach custom headers to each message using data in Materialize. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
 
-### Safely drop upstream `NOT NULL` constraints in your MySQL sources {#v26.48-exclude-not-null-constraints}
-Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a MySQL source, as it already did for PostgreSQL sources. Every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
+### Drop upstream `NOT NULL` constraints from your MySQL database, without downtime in Materialize {#v26.48-exclude-not-null-constraints}
+Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a MySQL source, as it already did for PostgreSQL sources. When turned on, every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
 
 ```mzsql
 CREATE TABLE orders
