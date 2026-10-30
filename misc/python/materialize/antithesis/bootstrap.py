@@ -139,6 +139,16 @@ def _record_progress(
     print(f"focused bootstrap: {payload}", flush=True)
 
 
+def _request_changes(request: str) -> dict[str, Any]:
+    return {
+        "requestRollout": request,
+        "forceRollout": request,
+        # Catch-up must be skipped during Applying, before ReadyToPromote.
+        "forcePromote": request,
+        "rolloutRequestTimeout": rollouts.DEFAULT_ROLLOUT_REQUEST_TIMEOUT,
+    }
+
+
 def ensure_target_image() -> None:
     """Require the active target image to serve SQL within one persistent bootstrap budget."""
     env = Environment()
@@ -153,6 +163,9 @@ def ensure_target_image() -> None:
             )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS bootstrap_progress (target TEXT PRIMARY KEY, details TEXT NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS bootstrap_retry (target TEXT PRIMARY KEY, previous_request TEXT NOT NULL, request TEXT NOT NULL)"
             )
             request = str(
                 uuid.uuid5(
@@ -204,24 +217,55 @@ def ensure_target_image() -> None:
                     # Intent precedes the API call, so a lost response retries the same rollout.
                     changes.update(
                         environmentdImageRef=target,
-                        requestRollout=request,
-                        forceRollout=request,
-                        # This also skips empty-catalog catch-up during Applying,
-                        # before ReadyToPromote can consume the bootstrap budget.
-                        forcePromote=request,
-                        rolloutRequestTimeout=rollouts.DEFAULT_ROLLOUT_REQUEST_TIMEOUT,
+                        **_request_changes(request),
                     )
-                elif (
-                    snap.generation is not None
-                    and snap.observed_generation == snap.generation
-                    and snap.request is not None
-                    and snap.spec.get("forcePromote") != snap.request
-                    and (
-                        snap.reason == "ReadyToPromote"
-                        or (snap.reason == "Applying" and snap.request == request)
-                    )
-                ):
-                    changes["forcePromote"] = snap.request
+                else:
+                    retry = db.execute(
+                        "SELECT previous_request, request FROM bootstrap_retry WHERE target = ?",
+                        (target,),
+                    ).fetchone()
+                    if (
+                        retry is not None
+                        and snap.request == retry[0]
+                        and request == retry[1]
+                    ):
+                        changes.update(_request_changes(request))
+                    elif (
+                        snap.generation is not None
+                        and snap.observed_generation == snap.generation
+                        and snap.request is not None
+                    ):
+                        if (
+                            retry is None
+                            and snap.request == request
+                            and snap.condition_status == "False"
+                            and snap.reason
+                            in ("FailedDeploy", "RolloutTimeout", "WaitingForApproval")
+                        ):
+                            next_request = str(
+                                uuid.uuid5(
+                                    uuid.NAMESPACE_URL,
+                                    f"antithesis-bootstrap-retry:{request}",
+                                )
+                            )
+                            # A rejected rollout needs a fresh request. Persist one retry
+                            # before sending it, retaining the original bootstrap deadline.
+                            with db:
+                                db.execute(
+                                    "INSERT INTO bootstrap_retry VALUES (?, ?, ?)",
+                                    (target, request, next_request),
+                                )
+                                db.execute(
+                                    "UPDATE target_image SET request = ?, completed = 0 WHERE target = ?",
+                                    (next_request, target),
+                                )
+                            request, completed = next_request, False
+                            changes.update(_request_changes(request))
+                        elif snap.spec.get("forcePromote") != snap.request and (
+                            snap.reason == "ReadyToPromote"
+                            or (snap.reason == "Applying" and snap.request == request)
+                        ):
+                            changes["forcePromote"] = snap.request
                 if changes:
                     details["request_changes"] = sorted(changes)
                     kube.patch_spec(changes)
