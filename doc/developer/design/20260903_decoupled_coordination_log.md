@@ -16,18 +16,73 @@ M2 remains closed within its approved scope. Preserve native execution and the
 
 ## Current implementation and next action
 
-The worktree separates already-admitted SQL writers from private replica
-prewarming transactions. This is unfinished and unverified. A real durable-API
-witness exercises shared DDL from two semantic versions, promotion, old-version
-restart and explicit retirement. Before the change it fails on the pending
-writer's shared-DDL restriction.
+The worktree admits compatible full SQL writers, retains them across promotion,
+and fences them only on explicit retirement. Controller startup does not promote
+or repeat shared initialization. Promotion activates its local configuration
+through the existing controller loop and catalog/WAL protocol. A reproduced stale
+controller overwrite is fixed by checking active authority at the synchronized
+prefix covering the configuration write timestamp.
 
-Admission and promotion are now separate from the private transaction namespace.
-The focused check is `/tmp/m3-full-writer-join.log`. Inspect its result before
-syncing the worker. Next preserve old membership, protection and compatibility
-bounds through promotion until explicit retirement, then connect the working path
-through controllerd and adapterd. Return to the local two-version demonstration
-as soon as that path is usable.
+Strict all-target Clippy and the default `bin/controllerd --build-only` passed.
+The linker initially exhausted disk. Removing disposable incremental cache and
+repeating the same build succeeded (`local-controller-build-repeat.log`).
+Generation 0 is running from fixed v26.46.0-dev.0 artifacts through launcher task385.
+It serves DDL, indexed reads and table writes. Controller-only restart preserved
+adapter/replica PIDs and data. Pinning the relay binary replaced that relay while
+preserving its endpoint (`local-artifact-pinning-pass.json`).
+
+Next: build a v26.47.0-dev.0 development artifact set from this prototype, changing
+only environmentd/clusterd package versions for validation. Preserve the artifacts
+and restore those temporary manifest/lock changes afterward. Use
+`--controller-binaries-directory` for both deployments, one relay provisioner and
+`--pubsub-url` for the candidate. Execute writes/DDL before and after promotion,
+then explicit retirement while checking survivor sessions and replica PIDs. This
+is a two-development-version test, not compatibility with an older released binary.
+The required distinct-version walkthrough remains unexecuted.
+
+Catalog library, read-protection/oracle integration, and initialization/race tests
+passed. Runtime all-target compilation passed. Evidence logs:
+`local-catalog-lib-corrected.log`, `local-compute-protection-corrected.log`,
+`local-read-write-corrected.log`, `local-activation-boundary.log`, and
+`local-activation-check.log`. The full library pass precedes the configuration
+repair, which has targeted coverage. Runtime review found no extra authority leak.
+Its objection to restarting the promoted adapter is rejected: the prompt explicitly
+allows that brief restart. Surviving sessions on other adapters remain required.
+
+Controller HTTP exposes `POST /api/deployments/{generation}/retire` with required
+JSON `environment_id`. It validates that identity before mutation and returns a
+receipt after durable retirement. Launcher commit `9465b60cd0` plus worktree safety
+changes implement `--retire-generation`, validate the receipt, then stop only that
+generation. Python tests, Black and Ruff pass (`local-prebuilt-launcher.log`). Real HTTP
+rejects wrong-environment and active-generation retirement
+(`local-retirement-rejections.json`). Successful retirement remains unverified. Never use environment-wide `--stop` for this.
+Keep one managed relay provisioner and hand it off explicitly before retiring its
+controller. Agent74/task359 has the process-lifetime evidence.
+
+Private local PostgreSQL18 is running in `aj-m3-full-writer-postgres` on loopback
+26257. Its credential URL file is `full-writer/local-postgres-url.txt` under the
+local evidence directory. The fresh `materialize_controllerd` runtime database has
+its own `full-writer/local-runtime-postgres-url.txt` file for `MZDEV_POSTGRES`.
+The default controller state directory now holds the live generation-0 environment.
+PostgreSQL uses max_connections=1000 and a 2GiB memory limit. Its default 100 slots
+were saturated by mostly idle pooled connections. Do not print credentials.
+This is separate from the scratch DB.
+
+Scratch SSO expired, but Aljoscha explicitly authorized local VM verification
+instead. Scratch is an optimization, not a blocker. This VM has 18GiB RAM and limited
+free disk, so keep heavy jobs serial and monitor resources. Prior local `/tmp` logs
+are no longer present. Confirm remote job state before any future worker sync.
+
+Temporary-item cleanup remains unimplemented. Aljoscha proposes reusing
+`mz_sessions_raw` session-to-execution ownership. Agent77/task378 confirmed the
+serving path rejects retired TEMP DDL through CAS conflict and refresh, but
+`Catalog::transact` does not itself validate a supplied execution incarnation.
+First TEMP DDL needs failure-preserving durable session-publication completion.
+Retirement must clean durable Items before removing their session mapping. Use
+`remove_ephemeral_items_for_owners`, not local-only `drop_temp_items`. The retired
+row sweep also needs incremental observations rather than repeated full snapshots.
+Normal disconnect already drops Items before retracting its session. Do not guess
+ownership from missing rows or introduce new session catalog records.
 
 Reuse existing sink-specific reconciliation: inactive generations have no desired
 external sinks, and the follower stops their attempts without stopping queries or
@@ -76,7 +131,5 @@ Validated off-worker evidence is in the local `startup-spin/` subdirectory:
 - `committed-initialization-frontiers-pass.json.gz`: restart/recovery witnesses.
 - `frontier-retirement-pass.json.gz`: authorized cleanup and restart preservation.
 
-Current lifecycle baseline logs: `/tmp/m3-full-writer-before.log` and
-`/tmp/m3-full-writer-before-repeat.log`. Detailed previous evidence remains in the
-existing archive and [follow-up inventory](20260903_decoupled_coordination_followups.md),
+Detailed previous evidence remains in the existing archive and [follow-up inventory](20260903_decoupled_coordination_followups.md),
 not as additional M3 scope.
