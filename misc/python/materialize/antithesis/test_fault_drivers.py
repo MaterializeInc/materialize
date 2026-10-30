@@ -16,6 +16,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -32,6 +33,7 @@ def halt_capture(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     finished = "2026-10-30T12:00:00.900000000+00:00"
     term = SimpleNamespace(
         exit_code=166,
+        reason="Error",
         signal=0,
         finished_at=finished,
         started_at="2026-10-30T11:59:59+00:00",
@@ -39,12 +41,17 @@ def halt_capture(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     status = SimpleNamespace(
         name="environmentd",
         restart_count=0,
-        state=SimpleNamespace(terminated=term, running=None),
+        state=SimpleNamespace(terminated=term, running=None, waiting=None),
         last_state=SimpleNamespace(terminated=None),
         container_id="container-id",
     )
     pod = SimpleNamespace(
-        metadata=SimpleNamespace(name="envd", uid="pod-uid"),
+        metadata=SimpleNamespace(
+            name="envd",
+            uid="pod-uid",
+            deletion_timestamp=None,
+            labels={"materialize.cloud/app": "environmentd"},
+        ),
         status=SimpleNamespace(container_statuses=[status]),
     )
     observation = recovery.ContainerObservation(
@@ -452,7 +459,64 @@ def test_halt_evidence_retries_missing_logs_without_polling_flood(
             halt_capture.db, [halt_capture.observation], budget
         )
     assert halt_capture.core.read_namespaced_pod_log.call_count == 2
-    halt_capture.emitted.assert_called_once()
+    assert [call.args[0] for call in halt_capture.emitted.call_args_list] == [
+        "antithesis_exit_evidence_missing",
+        "antithesis_exit_evidence",
+    ]
+
+
+def test_missing_halt_diagnostics_are_deduplicated_and_allow_later_capture(
+    halt_capture: SimpleNamespace,
+) -> None:
+    from materialize.antithesis import findings
+
+    budget = recovery.HaltEvidenceBudget()
+    halt_capture.core.read_namespaced_pod_log.side_effect = ["", "", halt_capture.text]
+    for now in (0, 30, 60):
+        halt_capture.clock.now = now
+        recovery.record_halt_evidence(
+            halt_capture.db, [halt_capture.observation], budget
+        )
+    events = [
+        {call.args[0]: call.args[1]} for call in halt_capture.emitted.call_args_list
+    ]
+    missing = [
+        event["antithesis_exit_evidence_missing"]
+        for event in events
+        if "antithesis_exit_evidence_missing" in event
+    ]
+    captured = [
+        event["antithesis_exit_evidence"]
+        for event in events
+        if "antithesis_exit_evidence" in event
+    ]
+    assert len(missing) == len(captured) == 1
+    assert missing[0]["termination"] == captured[0]["termination"]
+    assert missing[0]["counts"]["pod_reads"] == 2
+    assert missing[0]["counts"]["log_reads"] == 1
+    assert "uncorrelated_or_incomplete_log" in missing[0]["reasons"]
+    report = findings.summarize(
+        [
+            {
+                "id": "check",
+                "name": "probe",
+                "group": "Always: Always",
+                "status": "Passing",
+                "example_count": 1,
+                "counterexample_count": 0,
+            },
+            {
+                "id": "exit",
+                "name": "No unexpected container exits: container: environmentd, namespace: mz, exit code: 166",
+                "group": "No unexpected container exits",
+                "status": "Failing",
+                "example_count": 0,
+                "counterexample_count": 1,
+            },
+        ],
+        events=events,
+    )
+    assert report["verdict"] == "no_product_findings"
 
 
 def test_halt_evidence_has_a_shared_attempt_limit(
@@ -467,13 +531,16 @@ def test_halt_evidence_has_a_shared_attempt_limit(
     for _ in range(2):
         recovery.record_halt_evidence(halt_capture.db, observations, budget)
     assert capture.call_count == recovery.HALT_EVIDENCE_ATTEMPTS
-    halt_capture.emitted.assert_not_called()
+    assert all(
+        call.args[0] == "antithesis_exit_evidence_missing"
+        for call in halt_capture.emitted.call_args_list
+    )
 
 
 def test_halt_evidence_has_a_shared_time_limit(
     monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
 ) -> None:
-    def capture(*args):
+    def capture(*args, **kwargs):
         halt_capture.clock.now += 5
         return None
 
@@ -503,6 +570,266 @@ def test_halt_evidence_can_emit_a_cached_record_after_interruption(
     assert halt_capture.db.execute("SELECT emitted FROM halt_evidence").fetchall() == [
         (1,)
     ]
+
+
+def test_halt_budget_renews_without_retrying_the_same_exit_early(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    capture = Mock(return_value=None)
+    monkeypatch.setattr(recovery, "capture_halt_evidence", capture)
+    observed = [replace(halt_capture.observation, pod_uid=f"pod-{i}") for i in range(6)]
+    budget = recovery.HaltEvidenceBudget()
+    recovery.record_halt_evidence(halt_capture.db, observed, budget)
+    assert capture.call_count == recovery.HALT_EVIDENCE_ATTEMPTS
+    halt_capture.clock.now = recovery.HALT_EVIDENCE_WINDOW_S
+    recovery.record_halt_evidence(halt_capture.db, observed, budget)
+    assert capture.call_count == 2 * recovery.HALT_EVIDENCE_ATTEMPTS
+    assert [call.args[0].pod_uid for call in capture.call_args_list] == [
+        f"pod-{i}" for i in range(6)
+    ]
+
+
+def test_passive_observer_samples_and_emits_a_halt_without_a_test_command(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    stop = threading.Event()
+    samples = 0
+
+    def observe(env, **kwargs):
+        nonlocal samples
+        samples += 1
+        return [halt_capture.observation]
+
+    def wait(timeout):
+        halt_capture.clock.now += timeout
+        if samples == 4:
+            stop.set()
+        return stop.is_set()
+
+    monkeypatch.setattr(stop, "wait", wait)
+    monkeypatch.setenv("MZ_ANTITHESIS_TEMPLATE_PROFILE", "observer")
+    monkeypatch.setattr(recovery, "Environment", lambda: SimpleNamespace())
+    monkeypatch.setattr(recovery, "open_state", lambda: halt_capture.db)
+    monkeypatch.setattr(recovery, "observe_pods", observe)
+    monkeypatch.setattr(recovery, "always_or_unreachable", Mock())
+    monkeypatch.setattr(recovery, "sometimes", Mock())
+    monkeypatch.setattr(recovery.observations, "durable_health", lambda: None)
+
+    assert recovery.observer_main(stop=stop) == 0
+
+    assert samples == 4
+    assert halt_capture.core.read_namespaced_pod_log.call_count == 1
+    emitted = [
+        call.args
+        for call in halt_capture.emitted.call_args_list
+        if call.args[0] == "antithesis_exit_evidence"
+    ]
+    assert len(emitted) == 1
+    status = [
+        call.args[1]
+        for call in halt_capture.emitted.call_args_list
+        if call.args[0] == "antithesis_exit_observer"
+    ]
+    assert status[-1]["samples"] == 4
+    health = [
+        call.args[1]
+        for call in halt_capture.emitted.call_args_list
+        if call.args[0] == "harness_health"
+    ]
+    assert health[-1]["valid"] is True
+
+
+def test_anytime_exit_audit_reuses_a_recent_passive_sample(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    with halt_capture.db:
+        halt_capture.db.execute(
+            "INSERT INTO exit_observer VALUES (1, ?, ?)",
+            (0.0, json.dumps({"samples": 7})),
+        )
+    observe = Mock()
+    monkeypatch.setattr(recovery, "open_state", lambda: halt_capture.db)
+    monkeypatch.setattr(recovery, "observe_pods", observe)
+    monkeypatch.setattr(recovery, "Environment", Mock())
+
+    assert recovery.anytime_main() == 0
+
+    observe.assert_not_called()
+
+
+def test_capture_records_a_missing_evidence_reason(
+    halt_capture: SimpleNamespace,
+) -> None:
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    halt_capture.core.read_namespaced_pod_log.return_value = ""
+    assert (
+        recovery.capture_halt_evidence(halt_capture.observation, 10, stats=counts)
+        is None
+    )
+    assert counts["uncorrelated_or_incomplete_log"] == 1
+    assert counts["pod_reads"] == 2
+    assert counts["log_reads"] == 1
+
+
+def test_predelete_capture_is_targeted_and_keeps_the_uid_precondition(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    monkeypatch.setattr(recovery, "open_state", lambda: halt_capture.db)
+    env = SimpleNamespace(endpoints=SimpleNamespace(operator_namespace="operator"))
+    recovery.preserve_pod_exit(
+        cast(recovery.Environment, env),
+        namespace="mz",
+        pod="envd",
+        uid="pod-uid",
+        deadline=2,
+    )
+    halt_capture.core.list_namespaced_pod.assert_not_called()
+    assert halt_capture.core.read_namespaced_pod.call_count == 3
+    assert halt_capture.core.read_namespaced_pod_log.call_count == 1
+    assert halt_capture.emitted.call_args.args[0] == "antithesis_exit_evidence"
+
+
+@pytest.mark.parametrize("stale", [True, False])
+def test_predelete_capture_does_no_log_io_for_stale_or_live_pods(
+    halt_capture: SimpleNamespace, stale: bool
+) -> None:
+    if stale:
+        halt_capture.pod.metadata.uid = "replacement"
+    else:
+        halt_capture.pod.status.container_statuses[0].state.terminated = None
+    env = SimpleNamespace(endpoints=SimpleNamespace(operator_namespace="operator"))
+    recovery.preserve_pod_exit(
+        cast(recovery.Environment, env),
+        namespace="mz",
+        pod="envd",
+        uid="pod-uid",
+        deadline=2,
+    )
+    halt_capture.core.read_namespaced_pod_log.assert_not_called()
+    assert halt_capture.core.read_namespaced_pod.call_count == 1
+
+
+def test_predelete_capture_does_not_spend_an_expired_delete_budget(
+    halt_capture: SimpleNamespace,
+) -> None:
+    recovery.preserve_pod_exit(
+        cast(recovery.Environment, SimpleNamespace()),
+        namespace="mz",
+        pod="envd",
+        uid="pod-uid",
+        deadline=0,
+    )
+    halt_capture.core.read_namespaced_pod.assert_not_called()
+
+
+def test_observer_detects_a_changed_previous_container_id(
+    halt_capture: SimpleNamespace,
+) -> None:
+    cs = halt_capture.pod.status.container_statuses[0]
+    cs.state.terminated.container_id = "terminated-id"
+    after = copy.deepcopy(halt_capture.pod)
+    after.status.container_statuses[0].state.terminated.container_id = "different-id"
+    halt_capture.core.read_namespaced_pod.side_effect = [halt_capture.pod, after]
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+
+
+def test_passive_observer_survives_a_transient_api_outage(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    stop = threading.Event()
+    waits = 0
+
+    def wait(timeout):
+        nonlocal waits
+        waits += 1
+        halt_capture.clock.now += timeout
+        if waits == 2:
+            stop.set()
+        return stop.is_set()
+
+    observe = Mock(side_effect=[recovery.ApiException(status=503), []])
+    health_error = Mock()
+    monkeypatch.setattr(stop, "wait", wait)
+    monkeypatch.setenv("MZ_ANTITHESIS_TEMPLATE_PROFILE", "observer")
+    monkeypatch.setattr(recovery, "Environment", Mock())
+    monkeypatch.setattr(recovery, "open_state", lambda: halt_capture.db)
+    monkeypatch.setattr(recovery, "observe_pods", observe)
+    monkeypatch.setattr(observations, "harness_error", health_error)
+    monkeypatch.setattr(observations, "durable_health", lambda: None)
+
+    assert recovery.observer_main(stop=stop) == 0
+
+    assert observe.call_count == 2
+    health_error.assert_not_called()
+    stopped = halt_capture.emitted.call_args.args[1]
+    assert stopped["samples"] == 1
+    assert stopped["counts"]["api_or_log_unavailable"] == 1
+    health = [
+        call.args[1]
+        for call in halt_capture.emitted.call_args_list
+        if call.args[0] == "harness_health"
+    ]
+    assert health[-1]["valid"] is True
+
+
+def test_passive_observer_reports_permanent_denial_and_stops(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    observe = Mock(side_effect=recovery.ApiException(status=403))
+    health_error = Mock()
+    monkeypatch.setenv("MZ_ANTITHESIS_TEMPLATE_PROFILE", "observer")
+    monkeypatch.setattr(recovery, "Environment", Mock())
+    monkeypatch.setattr(recovery, "open_state", lambda: halt_capture.db)
+    monkeypatch.setattr(recovery, "observe_pods", observe)
+    monkeypatch.setattr(observations, "harness_error", health_error)
+    monkeypatch.setattr(observations, "durable_health", lambda: None)
+
+    assert recovery.observer_main() == 1
+
+    assert observe.call_count == 1
+    health_error.assert_called_once()
+    failed = halt_capture.emitted.call_args.args[1]
+    assert failed["mode"] == "failed"
+    health = [
+        call.args[1]
+        for call in halt_capture.emitted.call_args_list
+        if call.args[0] == "harness_health"
+    ]
+    assert health[-1]["valid"] is False
+
+
+def test_passive_observer_bounds_steady_state_api_calls(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    stop = threading.Event()
+    waits = 0
+
+    def wait(timeout):
+        nonlocal waits
+        waits += 1
+        halt_capture.clock.now += timeout
+        if waits == 5:
+            stop.set()
+        return stop.is_set()
+
+    halt_capture.core.list_namespaced_pod.return_value = SimpleNamespace(items=[])
+    env = SimpleNamespace(
+        endpoints=SimpleNamespace(namespace="mz", operator_namespace="op")
+    )
+    monkeypatch.setattr(stop, "wait", wait)
+    monkeypatch.setenv("MZ_ANTITHESIS_TEMPLATE_PROFILE", "observer")
+    monkeypatch.setattr(recovery, "Environment", lambda: env)
+    monkeypatch.setattr(recovery, "open_state", lambda: halt_capture.db)
+    monkeypatch.setattr(observations, "durable_health", lambda: None)
+
+    assert recovery.observer_main(stop=stop) == 0
+
+    assert halt_capture.clock.now == 5 * recovery.OBSERVER_POLL_S
+    assert halt_capture.core.list_namespaced_pod.call_count == 10
+    halt_capture.core.read_namespaced_pod_log.assert_not_called()
+    assert halt_capture.emitted.call_args.args[1]["counts"]["pod_lists"] == 10
 
 
 @pytest.mark.parametrize("kind", ["node", "pressure"])
