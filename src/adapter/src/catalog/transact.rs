@@ -791,7 +791,7 @@ impl Catalog {
         })
     }
 
-    /// Captures matching in-memory and durable baselines before DDL preparation yields.
+    /// Returns in-memory catalog state and a durable snapshot of the same catalog revision.
     pub(crate) async fn ddl_transaction_snapshot(&self) -> (CatalogState, Snapshot) {
         let mut storage = self.storage().await;
         let tx = storage
