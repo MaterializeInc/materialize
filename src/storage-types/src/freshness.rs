@@ -10,7 +10,6 @@
 //! Controller-side description of how an object's output frontier follows arrival time.
 
 pub mod histogram;
-pub mod local;
 mod period;
 pub mod recorder;
 
