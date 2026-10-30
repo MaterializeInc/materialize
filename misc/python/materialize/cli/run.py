@@ -14,6 +14,7 @@ import atexit
 import json
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import signal
@@ -27,6 +28,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import psutil
 import psycopg
+import requests
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
 from materialize.mzcompose import (
@@ -87,6 +89,14 @@ def update_sqlite_repo() -> None:
                 str(path),
             ]
         )
+
+
+def _generation(value: str) -> int:
+    if not re.fullmatch(r"[0-9]+", value) or int(value) > 2**64 - 1:
+        raise argparse.ArgumentTypeError(
+            "generation must be an unsigned 64-bit integer"
+        )
+    return int(value)
 
 
 def main() -> int:
@@ -217,7 +227,17 @@ def main() -> int:
         default='{"1":{"cpu_limit":1,"memory_limit":"4 GiB"}}',
         help="Controller adapter size allocations as JSON (must include size 1 for fresh initialization)",
     )
+    parser.add_argument("--retire-generation", type=_generation)
+    parser.add_argument("--controller-url", default="http://127.0.0.1:6882")
     args = parser.parse_intermixed_args()
+    if args.retire_generation is not None:
+        if args.program != "controllerd" or args.stop or args.reset or args.build_only:
+            raise UIError(
+                "--retire-generation requires controllerd and cannot be combined with --stop, --reset, or --build-only"
+            )
+        return _retire_controller_generation(
+            args.controller_data_directory, args.controller_url, args.retire_generation
+        )
     if args.program == "controllerd" and args.reset and args.stop:
         raise UIError("choose --reset to start fresh or --stop to preserve state")
     if args.stop:
@@ -763,11 +783,46 @@ def _terminate_controller_processes(processes: list[psutil.Process]) -> None:
         raise UIError("some environment processes did not stop")
 
 
+def _retire_controller_generation(
+    directory: pathlib.Path, controller_url: str, generation: int
+) -> int:
+    data = directory.resolve()
+    if data == MZDATA.resolve():
+        raise UIError("controllerd requires state separate from environmentd's mzdata")
+    environment_id = _controller_environment_id(data)
+    # Require the pinned location even when the retired controller is already gone.
+    _controller_metadata_directory(data, environment_id)
+    try:
+        response = requests.post(
+            f"{controller_url.rstrip('/')}/api/deployments/{generation}/retire",
+            timeout=30,
+            allow_redirects=False,
+        )
+        if response.status_code != 200:
+            raise UIError("retirement was not confirmed; no local processes stopped")
+        receipt = response.json()
+    except (requests.RequestException, ValueError):
+        # URLs and response bodies can contain credentials. Never echo either.
+        raise UIError("retirement request failed; no local processes stopped") from None
+    if (
+        not isinstance(receipt, dict)
+        or type(receipt.get("retired")) is not int
+        or receipt["retired"] != generation
+        or receipt.get("environment_id") != environment_id
+    ):
+        raise UIError("retirement receipt mismatch; no local processes stopped")
+    return _stop_controller_environment(
+        data, generation=generation, expected_identity=environment_id
+    )
+
+
 def _stop_controller_environment(
     directory: pathlib.Path,
     *,
     recovered_identity: str | None = None,
     recovered_metadata: set[pathlib.Path] | None = None,
+    generation: int | None = None,
+    expected_identity: str | None = None,
 ) -> int:
     data = directory.resolve()
     if data == MZDATA.resolve():
@@ -776,6 +831,10 @@ def _stop_controller_environment(
         print("No initialized controller environment to stop")
         return 0
     environment_id = recovered_identity or _controller_environment_id(data)
+    if expected_identity is not None and environment_id != expected_identity:
+        raise UIError(
+            "controller environment identity changed; no local processes stopped"
+        )
     if pathlib.Path(environment_id).name != environment_id or environment_id in (
         ".",
         "..",
@@ -807,6 +866,19 @@ def _stop_controller_environment(
                 continue
             if process.uids().real != os.getuid():
                 raise UIError("selected controller belongs to another user")
+            if generation is not None:
+                value = _command_option(command, "--deploy-generation")
+                if value is None:
+                    try:
+                        value = process.environ().get("DEPLOY_GENERATION", "0")
+                    except psutil.AccessDenied:
+                        raise UIError("cannot read controller generation") from None
+                try:
+                    controller_generation = _generation(value)
+                except argparse.ArgumentTypeError:
+                    raise UIError("invalid controller generation") from None
+                if controller_generation != generation:
+                    continue
             controllers.append(process)
             if not location_recorded:
                 try:
@@ -825,6 +897,11 @@ def _stop_controller_environment(
     children: dict[int, psutil.Process] = {}
     for metadata in directories:
         for pid_file in metadata.glob("*/*.pid"):
+            if generation is not None and not re.fullmatch(
+                rf"(adapter-adapter-a(0|[1-9][0-9]*)|cluster-[su](0|[1-9][0-9]*)-replica-[su](0|[1-9][0-9]*))-gen-{generation}",
+                pid_file.parent.name,
+            ):
+                continue
             if pid_file.is_symlink() or pid_file.parent.is_symlink():
                 errors.append(f"unexpected symlink in process metadata: {pid_file}")
                 continue
@@ -860,7 +937,10 @@ def _stop_controller_environment(
             "Stopped verified processes, but could not verify all records: "
             + "; ".join(errors)
         )
-    print(f"Stopped local environment {environment_id}; data and declarations retained")
+    scope = "" if generation is None else f" generation {generation}"
+    print(
+        f"Stopped local environment {environment_id}{scope}; data and declarations retained"
+    )
     return 0
 
 

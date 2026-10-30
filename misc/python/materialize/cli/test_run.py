@@ -486,24 +486,25 @@ while True: time.sleep(1)
             process.wait(timeout=10)
 
 
-def test_controller_stop_rejects_stale_and_invalid_identities(tmp_path):
+@pytest.mark.parametrize("generation", [None, 0])
+def test_controller_stop_rejects_stale_and_invalid_identities(tmp_path, generation):
     data = tmp_path / "environment"
     data.mkdir()
     environment_id = f"local-az1-{uuid.uuid4()}-0"
     (data / "environment-id").write_text(environment_id)
     metadata = tmp_path / f"environmentd-{environment_id}"
-    service = metadata / "adapter-a1"
+    service = metadata / "adapter-adapter-a1-gen-0"
     service.mkdir(parents=True)
     (data / "process-metadata-directory").write_text(str(metadata))
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
     try:
         stale = int(psutil.Process(process.pid).create_time()) - 1
         (service / "0.pid").write_text(f"{process.pid}\n{stale}\n")
-        assert run._stop_controller_environment(data) == 0
+        assert run._stop_controller_environment(data, generation=generation) == 0
         assert process.poll() is None
         (service / "0.pid").write_text("0\n0\n")
         with pytest.raises(UIError, match="invalid process identity"):
-            run._stop_controller_environment(data)
+            run._stop_controller_environment(data, generation=generation)
         assert process.poll() is None
     finally:
         process.terminate()
@@ -680,3 +681,241 @@ def test_controller_reset_refuses_another_worktree(monkeypatch, tmp_path):
     finally:
         other.terminate()
         other.wait(timeout=10)
+
+
+@pytest.fixture
+def retirement(launcher, monkeypatch, tmp_path):
+    data = tmp_path / "environment"
+    data.mkdir()
+    (data / "environment-id").write_text("selected")
+    metadata = tmp_path / "original-temp/environmentd-selected"
+    metadata.mkdir(parents=True)
+    (data / "process-metadata-directory").write_text(str(metadata))
+    monkeypatch.setattr(
+        run.sys,
+        "argv",
+        [
+            "run",
+            "controllerd",
+            "--controller-data-directory",
+            str(data),
+            "--retire-generation",
+            "0",
+            "--controller-url",
+            "http://active:6882",
+        ],
+    )
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"retired": 0, "environment_id": "selected"}
+    post = MagicMock(return_value=response)
+    monkeypatch.setattr(run.requests, "post", post)
+    stop = MagicMock()
+    monkeypatch.setattr(run, "_terminate_controller_processes", stop)
+    monkeypatch.setattr(run.psutil, "process_iter", lambda: iter(()))
+    return data, metadata, post, stop
+
+
+@pytest.mark.parametrize("controller_present", [False, True])
+def test_retire_scoped_selection(retirement, launcher, monkeypatch, controller_present):
+    data, metadata, post, stop = retirement
+    controllers = []
+    for args, env in [
+        ([], {}),
+        ([], {"DEPLOY_GENERATION": "1"}),
+        (["--deploy-generation=0"], {"DEPLOY_GENERATION": "1"}),
+        (["--deploy-generation", "1"], {"DEPLOY_GENERATION": "0"}),
+        (["--deploy-generation=10"], {}),
+    ]:
+        process = MagicMock()
+        process.cmdline.return_value = [
+            "controllerd",
+            "--environment-id=selected",
+            f"--orchestrator-process-secrets-directory={data}/secrets",
+            *args,
+        ]
+        process.environ.return_value = env
+        process.uids.return_value.real = os.getuid()
+        controllers.append(process)
+    monkeypatch.setattr(
+        run.psutil,
+        "process_iter",
+        lambda: iter(controllers if controller_present else []),
+    )
+    services = [
+        "adapter-adapter-a1-gen-0",
+        "cluster-u1-replica-s2-gen-0",
+        "cluster-s1-replica-u2-gen-0",
+        "persist-pubsub-relay",
+        "adapter-adapter-a1-gen-1",
+        "cluster-u1-replica-u2-gen-10",
+        "unrelated-adapter-a1-gen-0",
+        "adapter-adapter-a01-gen-0",
+        "cluster-u1-replica-u2-gen-0-extra",
+        "adapter-adapter-a2-gen-0",
+    ]
+    processes = {}
+    for pid, name in enumerate(services, 100):
+        directory = metadata / name
+        directory.mkdir()
+        (directory / "0.pid").write_text(f"{pid} 42")
+        process = MagicMock(pid=pid)
+        process.create_time.return_value = 43 if pid == 109 else 42
+        process.uids.return_value.real = os.getuid()
+        process.children.return_value = []
+        processes[pid] = process
+    wrapper_child = MagicMock(pid=200)
+    processes[100].children.return_value = [wrapper_child]
+
+    def inspect(pid):
+        assert (
+            stop.call_count == 1
+        )  # Controllers stopped before reading child identities.
+        return processes[pid]
+
+    monkeypatch.setattr(run.psutil, "Process", inspect)
+    assert run.main() == 0
+    post.assert_called_once_with(
+        "http://active:6882/api/deployments/0/retire",
+        timeout=30,
+        allow_redirects=False,
+    )
+    assert stop.call_args_list[0].args[0] == (
+        [controllers[0], controllers[2]] if controller_present else []
+    )
+    assert set(stop.call_args_list[1].args[0]) == {
+        processes[100],
+        processes[101],
+        processes[102],
+        wrapper_child,
+    }
+    assert len(list(metadata.glob("*/*.pid"))) == len(services)
+    assert (data / "environment-id").read_text() == "selected"
+    for mock in launcher:
+        mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "network",
+        "timeout",
+        "409",
+        "500",
+        "redirect",
+        "malformed",
+        "environment",
+        "generation",
+        "boolean",
+        "string",
+        "list",
+        "missing",
+        "changed",
+    ],
+)
+def test_retirement_failure_stops_nothing(retirement, failure):
+    data, _, post, stop = retirement
+    response = post.return_value
+    if failure == "network":
+        post.side_effect = run.requests.ConnectionError("secret")
+    elif failure == "timeout":
+        post.side_effect = run.requests.Timeout("secret")
+    elif failure in ("409", "500", "redirect"):
+        response.status_code = 302 if failure == "redirect" else int(failure)
+    elif failure == "malformed":
+        response.json.side_effect = ValueError("secret")
+    elif failure == "environment":
+        response.json.return_value["environment_id"] = "other"
+    elif failure in ("generation", "boolean", "string"):
+        response.json.return_value["retired"] = {
+            "generation": 1,
+            "boolean": False,
+            "string": "0",
+        }[failure]
+    elif failure == "list":
+        response.json.return_value = []
+    elif failure == "missing":
+        response.json.return_value = {}
+    elif failure == "changed":
+
+        def changed():
+            (data / "environment-id").write_text("other")
+            return {"retired": 0, "environment_id": "selected"}
+
+        response.json.side_effect = changed
+    with pytest.raises(UIError) as error:
+        run.main()
+    assert "secret" not in str(error.value)
+    stop.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "program,flags",
+    [
+        ("controllerd", ["--stop"]),
+        ("controllerd", ["--reset"]),
+        ("controllerd", ["--build-only"]),
+        ("environmentd", []),
+        ("adapterd", []),
+    ],
+)
+def test_retirement_incompatible_actions(launcher, monkeypatch, program, flags):
+    monkeypatch.setattr(
+        run.sys,
+        "argv",
+        [
+            "run",
+            program,
+            "--retire-generation",
+            "1",
+            *flags,
+        ],
+    )
+    with pytest.raises(UIError, match="--retire-generation requires"):
+        run.main()
+    for mock in launcher:
+        mock.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["-1", str(2**64), "1.0", "+1"])
+def test_retirement_requires_u64(launcher, monkeypatch, value):
+    monkeypatch.setattr(
+        run.sys,
+        "argv",
+        [
+            "run",
+            "controllerd",
+            f"--retire-generation={value}",
+        ],
+    )
+    with pytest.raises(SystemExit) as error:
+        run.main()
+    assert error.value.code == 2
+    for mock in launcher:
+        mock.assert_not_called()
+
+
+def test_retirement_requires_pinned_metadata(retirement):
+    data, _, post, stop = retirement
+    (data / "process-metadata-directory").unlink()
+    with pytest.raises(UIError, match="missing process metadata location"):
+        run.main()
+    post.assert_not_called()
+    stop.assert_not_called()
+
+
+def test_retirement_unreadable_controller_generation_stops_nothing(
+    retirement, monkeypatch
+):
+    data, _, _, stop = retirement
+    process = MagicMock()
+    process.cmdline.return_value = [
+        "controllerd",
+        "--environment-id=selected",
+        f"--orchestrator-process-secrets-directory={data}/secrets",
+    ]
+    process.uids.return_value.real = os.getuid()
+    process.environ.side_effect = psutil.AccessDenied(pid=123)
+    monkeypatch.setattr(run.psutil, "process_iter", lambda: iter([process]))
+    with pytest.raises(UIError, match="cannot read controller generation"):
+        run.main()
+    stop.assert_not_called()
