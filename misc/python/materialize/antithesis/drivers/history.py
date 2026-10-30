@@ -72,7 +72,14 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     always_or_unreachable as always,
 )
 
-from materialize.antithesis import ddl_hold, sql, state, telemetry, telemetry_coverage
+from materialize.antithesis import (
+    ddl_hold,
+    quiet,
+    sql,
+    state,
+    telemetry,
+    telemetry_coverage,
+)
 from materialize.antithesis import serializability as sz
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.environment import Environment
@@ -620,11 +627,16 @@ def _write(
     epoch: int,
     key: int,
     read_key: int | None,
+    *,
+    before_commit: Callable[[], None] | None = None,
+    on_invoke: Callable[[], None] | None = None,
 ) -> bool:
     """Append one fresh value to `key`, counting `read_key` if given.
 
     Returns whether the epoch's tables are missing on the active generation.
     """
+    if before_commit is not None and read_key is not None:
+        raise ValueError("a held history transaction must be an append")
     conn = session.ensure()
     kind = "w" if read_key is None else "rmw"
     op_id, _ = _begin(db, session, epoch, kind, key, read_key)
@@ -639,8 +651,15 @@ def _write(
         message = "client history: read-modify-write INSERT ... SELECT returns only classified errors"
     outcome = "ok"
     missing = False
+    if on_invoke is not None:
+        on_invoke()
     try:
-        conn.execute(statement.encode())
+        if before_commit is None:
+            conn.execute(statement.encode())
+        else:
+            with conn.transaction():
+                conn.execute(statement.encode())
+                before_commit()
     except Exception as e:
         c = sql.classify(e)
         if c.outcome == sql.Outcome.REJECTED:
@@ -703,13 +722,18 @@ def _choose_paths(on_derived_cluster: bool) -> list[ReadPath]:
 
 
 def _read(
-    db: sqlite3.Connection, session: Session, epoch: int, txn_prob: float
+    db: sqlite3.Connection,
+    session: Session,
+    epoch: int,
+    txn_prob: float,
+    *,
+    paths: list[ReadPath] | None = None,
 ) -> bool:
     """Read a subset of keys with `mz_now()`. Returns whether the epoch's
     tables are missing on the active generation."""
     conn = session.ensure()
-    on_derived_cluster = rng.random() < 0.5
-    paths = _choose_paths(on_derived_cluster)
+    on_derived_cluster = paths is not None or rng.random() < 0.5
+    paths = _choose_paths(on_derived_cluster) if paths is None else paths
     as_txn = len(paths) > 1 and rng.random() < txn_prob
     if on_derived_cluster:
         conn.execute(f"SET cluster = {DERIVED_CLUSTER}".encode())
@@ -856,6 +880,153 @@ def client_history_driver() -> int:
             time.sleep(rng.uniform(0.1, 2.0))
     session.reset()
     log(f"finished {ops} operations")
+    return 0
+
+
+def _overlap_write(
+    write: Callable[[Callable[[], None]], None],
+    disrupt: Callable[[], None],
+    *,
+    race_commit: bool,
+    deadline: float,
+    hold_transaction: bool = True,
+) -> bool:
+    if time.monotonic() >= deadline:
+        return False
+    staged, ready, release, done = (threading.Event() for _ in range(4))
+    errors: list[BaseException] = []
+
+    def before_commit() -> None:
+        staged.set()
+        ready.set()
+        if hold_transaction:
+            release.wait(max(0.0, deadline - time.monotonic()))
+
+    def worker() -> None:
+        try:
+            write(before_commit)
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            done.set()
+            ready.set()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    try:
+        ready.wait(max(0.0, deadline - time.monotonic()))
+        if staged.is_set() and not done.is_set() and time.monotonic() < deadline:
+            if race_commit:
+                release.set()
+            disrupt()
+    finally:
+        release.set()
+        thread.join(max(0.0, deadline - time.monotonic()))
+    if errors:
+        raise errors[0]
+    return done.is_set()
+
+
+def interleaved_round(
+    db: sqlite3.Connection,
+    host: str,
+    epoch: int,
+    key: int,
+    read_key: int | None,
+    disrupt: Callable[[], None],
+    *,
+    race_commit: bool,
+    deadline: float,
+) -> bool:
+    """Overlap a real transaction with a disruption, then check its epoch and key."""
+
+    def write(before_commit: Callable[[], None]) -> None:
+        writer_db = open_state()
+        writer = Session(Targets(host, 0.0), [1.0, 0.0, 0.0])
+        try:
+            if read_key is None:
+                _write(
+                    writer_db, writer, epoch, key, read_key, before_commit=before_commit
+                )
+            else:
+                _write(writer_db, writer, epoch, key, read_key, on_invoke=before_commit)
+        finally:
+            writer.reset()
+            writer_db.close()
+
+    if not _overlap_write(
+        write,
+        disrupt,
+        race_commit=race_commit,
+        deadline=deadline,
+        hold_transaction=read_key is None,
+    ):
+        log("interleaving write remains indeterminate at the command deadline")
+        return False
+    if time.monotonic() >= deadline:
+        return False
+    reader = Session(Targets(host, 0.0), [1.0, 0.0, 0.0])
+    try:
+        _read(db, reader, epoch, rng.choice([0.0, 1.0]), paths=_paths(key, True))
+    finally:
+        reader.reset()
+    covered = _check_epoch(
+        db,
+        epoch,
+        "interleaving",
+        cluster_id=_coverage_cluster_id(host),
+    )
+    read_ids = {
+        int(row[0])
+        for row in db.execute(
+            "SELECT op_id FROM ops WHERE epoch = ? AND kind = 'r' AND outcome = 'ok' AND checked = 0",
+            (epoch,),
+        )
+    }
+    _assert_timestamp_order(db, read_ids)
+    _mark_checked(db, covered)
+    return True
+
+
+def interleaving_driver() -> int:
+    from materialize.antithesis.drivers import pod_restarts, rollouts
+
+    budget = DRIVER_BUDGET_S[1]
+    start_watchdog(budget + WATCHDOG_GRACE_S)
+    deadline = time.monotonic() + budget
+    env = Environment()
+    host = env.sql_host()
+    db = open_state()
+    try:
+        if quiet.active_quiet_period():
+            return 0
+        epoch = _epoch_for_op(db, host, False)
+        if epoch is None:
+            return 0
+        cluster_id = telemetry.resolve_cluster_id(host, DERIVED_CLUSTER)
+        if cluster_id is None:
+            return 0
+        disrupt = pod_restarts.interleaving_disruption(
+            rollouts.Kube(env), cluster_id=cluster_id, deadline=deadline
+        )
+        if disrupt is None:
+            return 0
+        key = rng.choice([INDEXED_KEY, MV_KEY, *JOIN_KEYS])
+        read_key = rng.randrange(KEYS) if rng.random() < 0.5 else None
+        interleaved_round(
+            db,
+            host,
+            epoch,
+            key,
+            read_key,
+            disrupt,
+            race_commit=rng.choice([False, True]),
+            deadline=deadline,
+        )
+    except (psycopg.Error, OSError) as error:
+        log(f"interleaving unavailable: {type(error).__name__}")
+    finally:
+        db.close()
     return 0
 
 
@@ -1094,7 +1265,20 @@ def _assert_timestamp_order(db: sqlite3.Connection, only: set[int] | None) -> No
     )
 
 
-def _check_epoch(db: sqlite3.Connection, epoch: int, scope: str) -> list[int]:
+def _coverage_cluster_id(host: str | None = None) -> str | None:
+    if not telemetry.enabled():
+        return None
+    if host is None:
+        try:
+            host = Environment().sql_host()
+        except Exception:
+            return None
+    return telemetry.resolve_cluster_id(host, DERIVED_CLUSTER)
+
+
+def _check_epoch(
+    db: sqlite3.Connection, epoch: int, scope: str, *, cluster_id: str | None = None
+) -> list[int]:
     """Check one epoch. Returns the ids of the completed operations it covered."""
     ops = _load_epoch(db, epoch)
     started = time.monotonic()
@@ -1112,7 +1296,12 @@ def _check_epoch(db: sqlite3.Connection, epoch: int, scope: str) -> list[int]:
             (epoch,),
         )
     }
-    telemetry_coverage.history_checked(ops, report, new_reads)
+    telemetry_coverage.history_checked(
+        ops,
+        report,
+        new_reads,
+        cluster_id=cluster_id,
+    )
     return [op.op_id for op in ops if op.complete is not None]
 
 
@@ -1127,6 +1316,7 @@ def client_history_check() -> int:
     """Check the newest epochs that gained completed operations since the last check."""
     start_watchdog(CHECK_WATCHDOG_S)
     db = open_state()
+    cluster_id = _coverage_cluster_id()
     epochs = [
         int(r[0])
         for r in db.execute(
@@ -1148,7 +1338,7 @@ def client_history_check() -> int:
     }
     covered: list[int] = []
     for epoch in sorted(epochs):
-        covered.extend(_check_epoch(db, epoch, "anytime"))
+        covered.extend(_check_epoch(db, epoch, "anytime", cluster_id=cluster_id))
     _assert_timestamp_order(db, new_reads)
     _mark_checked(db, covered)
     log(f"checked epochs {sorted(epochs)}")
@@ -1251,8 +1441,9 @@ def client_history_final() -> int:
             {"epoch": epoch},
         )
     covered: list[int] = []
+    cluster_id = _coverage_cluster_id(host) if host is not None else None
     for epoch in epochs:
-        covered.extend(_check_epoch(db, epoch, "finally"))
+        covered.extend(_check_epoch(db, epoch, "finally", cluster_id=cluster_id))
     _assert_timestamp_order(db, None)
     _mark_checked(db, covered)
     return 0

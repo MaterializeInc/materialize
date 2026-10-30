@@ -41,6 +41,8 @@ import sqlite3
 import threading
 import time
 from collections import Counter
+from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -54,7 +56,14 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 )
 
 from materialize.antithesis import ivm_model as model
-from materialize.antithesis import quiet, sql, state, telemetry, telemetry_coverage
+from materialize.antithesis import (
+    observations,
+    quiet,
+    sql,
+    state,
+    telemetry,
+    telemetry_coverage,
+)
 from materialize.antithesis.drivers import configure, history, pod_restarts
 from materialize.antithesis.drivers.recovery import observe_pods
 from materialize.antithesis.drivers.rollouts import (
@@ -108,6 +117,7 @@ STATEMENT_TIMEOUT_MS = 45_000
 CONNECT_DEADLINE_S = 30.0
 LOAD_BUDGET_S = (10.0, 60.0)
 LOAD_OPS_MENU = (10, 50, 200)
+INTERLEAVING_BUDGET_S = 90.0
 SETUP_OPS = 40
 WATCHDOG_GRACE_S = 120.0
 FINAL_CHECK_BUDGET_S = 300.0
@@ -364,9 +374,19 @@ class Writer:
         assert kind == "e_delete"
         return f"DELETE FROM {s}.e WHERE src = %s", (rng.randrange(NODES),)
 
-    def write(self) -> bool:
-        """Run one recorded write. Returns whether the connection is still usable."""
-        kind = self.pick()
+    def write(
+        self,
+        *,
+        before_commit: Callable[[], None] | None = None,
+        kind: str | None = None,
+    ) -> bool:
+        """Run one recorded write, optionally disrupting it before COMMIT.
+
+        A callback runs after DML inside an explicit transaction. The ledger
+        resolves only after COMMIT. A callback failure invalidates harness health.
+        Returns whether the connection is still usable.
+        """
+        kind = self.pick() if kind is None else kind
         with self.db:
             op = self.db.execute(
                 "INSERT INTO writes (kind, invoke_rt, outcome) VALUES (?, ?, 'pending')",
@@ -375,20 +395,39 @@ class Writer:
         assert op is not None
         text, params = self.statement(kind, op)
         usable = True
+        callback_failed = False
         try:
-            self.conn.execute(text.encode(), params)
+            with (
+                self.conn.transaction() if before_commit is not None else nullcontext()
+            ):
+                self.conn.execute(text.encode(), params)
+                if before_commit is not None:
+                    try:
+                        before_commit()
+                    except Exception as error:
+                        callback_failed = True
+                        observations.harness_error(
+                            "ivm interleaving",
+                            "disruption callback failed",
+                            {"error": type(error).__name__},
+                        )
+                        raise
             outcome = "ok"
         except Exception as e:
-            c = classify_read(e)
-            if c.outcome is sql.Outcome.VIOLATION:
-                unreachable(
-                    "ivm writes: DML returns only classified errors",
-                    {"kind": kind, "sqlstate": c.sqlstate, "template": c.template},
+            if callback_failed:
+                outcome = "indeterminate" if self.conn.closed else "rejected"
+                usable = False
+            else:
+                c = classify_read(e)
+                if c.outcome is sql.Outcome.VIOLATION:
+                    unreachable(
+                        "ivm writes: DML returns only classified errors",
+                        {"kind": kind, "sqlstate": c.sqlstate, "template": c.template},
+                    )
+                outcome = (
+                    "rejected" if c.outcome is sql.Outcome.REJECTED else "indeterminate"
                 )
-            outcome = (
-                "rejected" if c.outcome is sql.Outcome.REJECTED else "indeterminate"
-            )
-            usable = not self.conn.closed and outcome == "rejected"
+                usable = not self.conn.closed and outcome == "rejected"
         with self.db:
             self.db.execute(
                 "UPDATE writes SET complete_rt = ?, outcome = ? WHERE op_id = ?",
@@ -468,6 +507,51 @@ def load_main() -> int:
     return 0
 
 
+def interleaving_main() -> int:
+    """Disrupt a staged tracked write, then check its effects through SUBSCRIBE."""
+    history.start_watchdog(INTERLEAVING_BUDGET_S + CHECK_BUDGET_S + WATCHDOG_GRACE_S)
+    env = Environment()
+    try:
+        host = env.sql_host()
+    except Exception as error:
+        log(f"no environmentd host: {error}")
+        return 0
+    db = open_state()
+    try:
+        if not ensure_objects(host, db):
+            return 0
+        deadline = time.monotonic() + INTERLEAVING_BUDGET_S
+        try:
+            with _connect(host, META_CLUSTER) as meta:
+                cid = _cluster_id(meta)
+            if cid is None:
+                return 0
+            before_commit = pod_restarts.interleaving_disruption(
+                Kube(env), cluster_id=cid, deadline=deadline
+            )
+            if before_commit is None:
+                return 0
+            with _connect(host, CLUSTER) as conn:
+                writer = Writer(db, conn, {}, 0)
+                writer.refresh()
+                kinds = [
+                    f"{table}_insert"
+                    for table in ("t", "d")
+                    if writer.counts[table] < MAX_ROWS[table]
+                ]
+                if not kinds or time.monotonic() >= deadline:
+                    return 0
+                writer.write(before_commit=before_commit, kind=rng.choice(kinds))
+        except (psycopg.Error, OSError) as error:
+            _note_read_error(error, "interleaved write", None)
+            return 0
+        # An indeterminate COMMIT still needs its later stream observation.
+        _check_windows(env, host, db)
+    finally:
+        db.close()
+    return 0
+
+
 def _active_generation(env: Environment) -> int | None:
     try:
         snap = Kube(env).try_snapshot()
@@ -536,6 +620,7 @@ def _kill_replica_pod(env: Environment, cid: str) -> bool:
         uid=victim.metadata.uid,
         grace=rng.choice(GRACE_MENU),
         reason="ivm subscribe window",
+        cluster_id=cid,
     )
     if acked:
         reachable(
@@ -620,6 +705,7 @@ class Window:
         self.db = db
         self.budget = budget
         self.gen = gen
+        self.cluster_id: str | None = None
         """The active environmentd generation when the window started, if known."""
         self.phase = "setup"
         self.kill_at: float | None = None
@@ -681,6 +767,7 @@ class Window:
     def run(self) -> None:
         with _connect(self.host, META_CLUSTER) as meta:
             cid = _cluster_id(meta)
+            self.cluster_id = cid
             if cid is None:
                 log("ivm_c does not exist")
                 return
@@ -934,7 +1021,9 @@ def _check_writes(w: Window, db: sqlite3.Connection, details: dict[str, Any]) ->
             and all(s.negative is None for s in w.checker.stats.values())
             and not any(model.write_id_violations(w.seen_ids, ledger).values())
         )
-        telemetry_coverage.ivm_checked(list(ledger.values()), w.closed_ids, passed)
+        telemetry_coverage.ivm_checked(
+            list(ledger.values()), w.closed_ids, passed, cluster_id=w.cluster_id
+        )
     with db:
         for op_id, times in w.seen_ids.items():
             exact = sorted(t for t in times if t is not None)
@@ -1011,17 +1100,7 @@ def _maybe_save_resume(w: Window, db: sqlite3.Connection) -> None:
     _save_resume(db, s.frontier - 1, w.gen, dict(s.state))
 
 
-def check_main() -> int:
-    history.start_watchdog(CHECK_BUDGET_S + WATCHDOG_GRACE_S)
-    env = Environment()
-    try:
-        host = env.sql_host()
-    except Exception as e:
-        log(f"no environmentd host: {e}")
-        return 0
-    db = open_state()
-    if not ensure_objects(host, db):
-        return 0
+def _check_windows(env: Environment, host: str, db: sqlite3.Connection) -> None:
     kill_p = timeline_choice(db, "kill_p", KILL_P_MENU)
     end = time.monotonic() + CHECK_BUDGET_S
     while end - time.monotonic() > MIN_WINDOW_S:
@@ -1036,6 +1115,22 @@ def check_main() -> int:
             _maybe_save_resume(w, db)
         if not w.clean:
             time.sleep(1.0)
+
+
+def check_main() -> int:
+    history.start_watchdog(CHECK_BUDGET_S + WATCHDOG_GRACE_S)
+    env = Environment()
+    try:
+        host = env.sql_host()
+    except Exception as e:
+        log(f"no environmentd host: {e}")
+        return 0
+    db = open_state()
+    try:
+        if ensure_objects(host, db):
+            _check_windows(env, host, db)
+    finally:
+        db.close()
     return 0
 
 
