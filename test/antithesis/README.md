@@ -45,7 +45,7 @@ The image generates four templates from the authoritative commands in
 | `main` | Full mixed workload, including interactions between subsystems | Postgres, Kafka sources, Kafka sinks, IVM |
 | `transactions` | Client histories, contended counters, session mix, read paths, access control | None. Session mix creates its own RTR source when needed. |
 | `cdc` | Postgres and Kafka sources, Kafka sinks, source progress, shard audits | Postgres, Kafka sources, Kafka sinks |
-| `rollouts` | Deployment scenarios, spec-phase changes, histories, counters, access control, Postgres, IVM, generation isolation | Postgres, IVM |
+| `rollouts` | Deployment scenarios, spec-phase changes, histories, counters, read paths, access control, Postgres, IVM, generation isolation | Postgres, IVM |
 
 Health checks, resource checks, and pod restarts remain available in each
 template. Restart triggers are restricted to workloads that template can
@@ -106,9 +106,19 @@ phase-GET or acknowledged pod-delete interval must fit within the write's
 unresolved interval. The matrix records observed phase, kill role, write
 family, read path, and outcome.
 A phase and a kill can occur at different points of that same interval.
+Replica exposure requires the deleted pod's cluster id to match the checked
+workload. Missing cluster identity receives no replica credit.
 Standalone guidance events expose witnessed combinations to Antithesis.
 Coverage observations and the generated inventory distinguish observed,
 not-yet-observed, and never-evaluated targets without creating product failures.
+
+History and IVM interleaving commands stage generated writes, trigger a pod
+delete or promote an observed ready rollout, then use the existing correctness
+oracles to check later reads. Append transactions can remain open across the
+disruption. Atomic read-modify-write statements race it in autocommit mode,
+because Materialize does not support `INSERT ... SELECT` in an explicit
+transaction. Ordinary writers and fault scheduling continue alongside these
+commands.
 
 Raw observations are capped at 4096 events and one hour of history. The
 summary reports pruned events, making missing measurement history visible.
@@ -186,6 +196,14 @@ cannot establish a complete run assessment.
 Native halt exits are accepted only when complete, termination-correlated evidence
 explains every reported occurrence using the reviewed product policy. The workload
 emits this evidence as `antithesis_exit_evidence` events when it can capture it.
+After setup, a passive observer samples both namespaces every two seconds.
+It reports API and capture costs through `antithesis_exit_observer`, and
+per-incarnation capture failures through `antithesis_exit_evidence_missing`.
+Missing diagnostics do not invalidate a later successful capture. An anytime
+command audits the observer and samples only when its heartbeat is stale.
+Capture uses at most three attempts and ten seconds per 30-second observer
+window. Truncated logs, changed incarnations, and ambiguous termination
+timestamps remain unresolved.
 An optional `--exit-evidence` JSON file can supply the same occurrence records,
 keyed by native property ID. An unexplained exit remains unresolved.
 Native aborts with potentially matching designed-panic observations remain
