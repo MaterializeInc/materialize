@@ -73,6 +73,20 @@ def test_mixed_template_keeps_every_authoritative_command(tmp_path: Path) -> Non
         assert all(p.stat().st_mode & 0o111 for p in paths)
 
 
+def test_all_profiles_can_audit_the_passive_exit_observer(tmp_path: Path) -> None:
+    templates.generate(SOURCE, tmp_path)
+    for name in templates.PROFILES:
+        assert (tmp_path / name / "anytime_pod_exits.py").exists()
+    entrypoint = (MZ_ROOT / "test/antithesis/workload/entrypoint.sh").read_text()
+    assert (
+        "exec python3 -m materialize.antithesis.drivers.recovery --observe"
+        in entrypoint
+    )
+    assert entrypoint.index("materialize.antithesis.setup") < entrypoint.index(
+        "--observe"
+    )
+
+
 def test_focused_templates_omit_unrelated_workloads(tmp_path: Path) -> None:
     templates.generate(SOURCE, tmp_path)
     transactions = {p.name for p in (tmp_path / "transactions").iterdir()}
@@ -91,6 +105,8 @@ def test_focused_templates_omit_unrelated_workloads(tmp_path: Path) -> None:
     assert "parallel_driver_spec_phase.py" in rollouts
     assert "parallel_driver_pg_upstream.py" in rollouts
     assert "parallel_driver_ivm_writes.py" in rollouts
+    assert "parallel_driver_read_paths_load.py" in rollouts
+    assert "anytime_read_paths_agree.py" in rollouts
     assert "parallel_driver_kafka_sink_writes.py" not in rollouts
 
 
