@@ -314,9 +314,9 @@ def benchmark(
     When `compare_against` is set, an older reference version is run first and
     its stats are compared against the current version. Otherwise only the
     current version is run, which still exercises that the workload replays
-    without crashing.
+    without crashing. Performance failures require the same metric to exceed
+    its threshold in two fresh reference/current pairs. Query errors are not retried.
     """
-    import random
 
     services = [
         "materialized",
@@ -348,22 +348,24 @@ def benchmark(
 
     print_workload_stats(file, workload)
 
-    stats_old = None
-    old_version = None
-    if compare_against:
-        tag = resolve_tag(compare_against)
-        print(f"-- Running against materialized:{tag} (reference)")
+    filename = posixpath.relpath(file, LOCATION)
+    tag = resolve_tag(compare_against) if compare_against else None
+    if compare_against and tag is None:
+        raise ValueError(f"Could not resolve reference {compare_against}")
+
+    def run(image: str | None) -> tuple[dict[str, Any], str]:
+        print(f"-- Running against {image or 'current materialized'}")
         random.seed(seed)
         with c.override(
             Materialized(
-                image=f"{image_registry()}/materialized:{tag}",
+                image=image,
                 cluster_replica_size=cluster_replica_sizes,
                 ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
                 environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
                 additional_system_parameter_defaults=additional_system_parameter_defaults,
             )
         ):
-            stats_old = test(
+            stats = test(
                 c,
                 workload,
                 file,
@@ -379,82 +381,79 @@ def benchmark(
                 True,
                 max_concurrent_queries,
             )
-            old_version = c.query_mz_version()
+            version = c.query_mz_version()
         try:
             c.kill(*services)
         except:
             pass
         c.rm(*services, destroy_volumes=True)
         c.rm_volumes("mzdata")
-    print("-- Running against current materialized")
-    random.seed(seed)
-    with c.override(
-        Materialized(
-            image=None,
-            cluster_replica_size=cluster_replica_sizes,
-            ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
-            environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
-            additional_system_parameter_defaults=additional_system_parameter_defaults,
-        )
-    ):
-        stats_new = test(
-            c,
-            workload,
-            file,
-            factor_initial_data,
-            factor_ingestions,
-            factor_queries,
-            runtime,
-            verbose,
-            True,
-            True,
-            early_initial_data,
-            True,
-            True,
-            max_concurrent_queries,
-        )
-        new_version = c.query_mz_version()
-    try:
-        c.kill(*services)
-    except:
-        pass
-    c.rm(*services, destroy_volumes=True)
-    c.rm_volumes("mzdata")
-    filename = posixpath.relpath(file, LOCATION)
+        return stats, version
 
-    if stats_old is None or old_version is None:
+    if tag is None:
+        _, new_version = run(None)
         print(f"-- Ran {new_version} without a reference version to compare against")
         return
 
-    print(f"-- Comparing {old_version} against {new_version}")
-    plot_docker_stats_compare(
-        stats_old=stats_old,
-        stats_new=stats_new,
-        file=filename,
-        old_version=old_version,
-        new_version=new_version,
-    )
-    failures: list[TestFailureDetails] = []
-    failures.extend(compare_table(filename, stats_old, stats_new))
+    pending_regressions: set[str] = set()
+    tables = []
+    for attempt in range(1, 3):
+        print(f"-- Comparison attempt {attempt} for {filename}")
+        stats_old, old_version = run(f"{image_registry()}/materialized:{tag}")
+        stats_new, new_version = run(None)
+        print(f"-- Comparing {old_version} against {new_version}")
+        plot_docker_stats_compare(
+            stats_old=stats_old,
+            stats_new=stats_new,
+            file=f"{filename}_attempt_{attempt}",
+            old_version=old_version,
+            new_version=new_version,
+        )
+        table, regressions = compare_table(stats_old, stats_new)
+        print(table)
+        tables.append(f"Attempt {attempt}\n{table}")
 
-    if "errors" in stats_old["queries"]:
-        new_errors = []
-        for error, occurrences in stats_new["queries"]["errors"].items():
-            if error in stats_old["queries"]["errors"]:
-                continue
-            # Random data can't satisfy every cast in captured queries.
-            # E.g. text "bar" cast to bigint, or "005V" cast to uuid.
-            if "invalid input syntax for type" in error:
-                continue
-            new_errors.append(f"{error} in queries: {occurrences}")
-        if new_errors:
-            failures.append(
-                TestFailureDetails(
-                    message=f"Workload {filename} has new errors",
-                    details="\n".join(new_errors),
-                    test_class_name_override=filename,
+        if "errors" in stats_old["queries"]:
+            new_errors = []
+            for error, occurrences in stats_new["queries"]["errors"].items():
+                if error in stats_old["queries"]["errors"]:
+                    continue
+                # Random data can't satisfy every cast in captured queries.
+                # E.g. text "bar" cast to bigint, or "005V" cast to uuid.
+                if "invalid input syntax for type" in error:
+                    continue
+                new_errors.append(f"{error} in queries: {occurrences}")
+            if new_errors:
+                raise FailedTestExecutionError(
+                    errors=[
+                        TestFailureDetails(
+                            message=f"Workload {filename} has new errors",
+                            details="\n".join(new_errors),
+                            test_class_name_override=filename,
+                        )
+                    ]
                 )
-            )
 
-    if failures:
-        raise FailedTestExecutionError(errors=failures)
+        if attempt == 1:
+            pending_regressions = regressions
+        else:
+            pending_regressions &= regressions
+        if not pending_regressions:
+            if attempt > 1:
+                print("-- Performance regressions did not reproduce")
+            return
+        if attempt == 1:
+            # An unusually fast reference can cause a false regression too.
+            # Rerun both versions, not just the current version.
+            print("-- Confirming performance regressions with a fresh pair of runs")
+
+    raise FailedTestExecutionError(
+        errors=[
+            TestFailureDetails(
+                message=f"Workload {filename} regressed",
+                details=f"Confirmed metrics: {', '.join(sorted(pending_regressions))}\n\n"
+                + "\n\n".join(tables),
+                test_class_name_override=filename,
+            )
+        ]
+    )
