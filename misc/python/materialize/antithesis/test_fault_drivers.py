@@ -23,7 +23,7 @@ import urllib3
 
 pytest.importorskip("antithesis")
 
-from materialize.antithesis import quiet
+from materialize.antithesis import observations, quiet
 from materialize.antithesis.drivers import canaries, recovery, resource_kills, rollouts
 
 
@@ -262,6 +262,43 @@ def test_halt_capture_api_faults_remain_missing_evidence(
         halt_capture.core.read_namespaced_pod_log.side_effect = error
     assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
     halt_capture.emitted.assert_not_called()
+
+
+@pytest.mark.parametrize("stage", ["before", "log", "after"])
+def test_halt_capture_reports_forbidden_reads_as_invalid_harness_health(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace, stage: str
+) -> None:
+    health_error = Mock()
+    monkeypatch.setattr(observations, "harness_error", health_error)
+    forbidden = recovery.ApiException(status=403)
+    if stage == "before":
+        halt_capture.core.read_namespaced_pod.side_effect = forbidden
+    elif stage == "after":
+        halt_capture.core.read_namespaced_pod.side_effect = [
+            halt_capture.pod,
+            forbidden,
+        ]
+    else:
+        halt_capture.core.read_namespaced_pod_log.side_effect = forbidden
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    health_error.assert_called_once_with(
+        "halt evidence",
+        "workload service account cannot read termination evidence",
+        {"namespace": "mz", "pod": "envd", "container": "environmentd", "status": 403},
+    )
+    halt_capture.emitted.assert_not_called()
+
+
+def test_halt_capture_keeps_api_outages_out_of_invalid_harness_health(
+    monkeypatch: pytest.MonkeyPatch, halt_capture: SimpleNamespace
+) -> None:
+    health_error = Mock()
+    monkeypatch.setattr(observations, "harness_error", health_error)
+    halt_capture.core.read_namespaced_pod_log.side_effect = recovery.ApiException(
+        status=503
+    )
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    health_error.assert_not_called()
 
 
 @pytest.mark.parametrize(
