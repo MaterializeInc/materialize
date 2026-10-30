@@ -26,7 +26,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
-from materialize.antithesis import ivm_model, observations, quiet, state
+import psycopg
+
+from materialize.antithesis import ivm_model, observations, quiet, sql, state
 
 PROFILE_ENV = "MZ_ANTITHESIS_TEMPLATE_PROFILE"
 STATE_DB = "telemetry"
@@ -125,6 +127,7 @@ class Recorder:
     calls: int = 0
     metric_errors: int = 0
     phase_sample: tuple[tuple[str, int | None, str | None], float] | None = None
+    cluster_ids: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
 _recorder: Recorder | None = None
@@ -138,6 +141,7 @@ class Event:
     completed: float
     phase: str = ""
     role: str = ""
+    cluster_id: str = ""
 
 
 def enabled() -> bool:
@@ -194,6 +198,7 @@ def _open() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY, profile TEXT, kind TEXT, started REAL, completed REAL,
             phase TEXT NOT NULL, role TEXT NOT NULL, event_key TEXT NOT NULL,
+            cluster_id TEXT NOT NULL DEFAULT '',
             UNIQUE (profile, kind, event_key));
         CREATE INDEX IF NOT EXISTS event_times ON events (profile, completed, started);
         CREATE TABLE IF NOT EXISTS coverage (
@@ -208,6 +213,15 @@ def _open() -> sqlite3.Connection:
             occurrences INTEGER NOT NULL,
             PRIMARY KEY (profile, command, component, message, details));
     """)
+    if "cluster_id" not in {row[1] for row in db.execute("PRAGMA table_info(events)")}:
+        db.execute("BEGIN IMMEDIATE")
+        if "cluster_id" not in {
+            row[1] for row in db.execute("PRAGMA table_info(events)")
+        }:
+            db.execute(
+                "ALTER TABLE events ADD COLUMN cluster_id TEXT NOT NULL DEFAULT ''"
+            )
+        db.commit()
     return db
 
 
@@ -293,6 +307,7 @@ def phase_observed(
     request: str | None,
     *,
     started: float | None = None,
+    force: bool = False,
 ) -> None:
     """Record an observed rollout phase, throttling repeated samples of one state."""
     recorder = _recorder
@@ -311,7 +326,8 @@ def phase_observed(
     with recorder.lock:
         previous = recorder.phase_sample
         if (
-            previous is not None
+            not force
+            and previous is not None
             and previous[0] == key
             and now - previous[1] < PHASE_SAMPLE_S
         ):
@@ -325,8 +341,12 @@ def phase_observed(
             "SELECT event_key, completed FROM events WHERE profile = ? AND kind = 'phase' ORDER BY id DESC LIMIT 1",
             (recorder.profile,),
         ).fetchone()
-        if previous is None or not (
-            previous[0].startswith(digest) and now - previous[1] < PHASE_SAMPLE_S
+        if (
+            force
+            or previous is None
+            or not (
+                previous[0].startswith(digest) and now - previous[1] < PHASE_SAMPLE_S
+            )
         ):
             db.execute(
                 "INSERT OR IGNORE INTO events (profile, kind, started, completed, phase, role, event_key) VALUES (?, 'phase', ?, ?, ?, '', ?)",
@@ -337,7 +357,9 @@ def phase_observed(
     _db_call("phase observation", record, None)
 
 
-def fault_observed(role: str, started: float, completed: float, key: str) -> None:
+def fault_observed(
+    role: str, started: float, completed: float, key: str, *, cluster_id: str = ""
+) -> None:
     """Record one acknowledged harness fault, deduplicated by its durable key."""
     recorder = _recorder
     if recorder is None:
@@ -349,12 +371,46 @@ def fault_observed(role: str, started: float, completed: float, key: str) -> Non
 
     def record(db: sqlite3.Connection) -> None:
         db.execute(
-            "INSERT OR IGNORE INTO events (profile, kind, started, completed, phase, role, event_key) VALUES (?, 'fault', ?, ?, '', ?, ?)",
-            (recorder.profile, started, completed, _label(role, _ROLES), digest),
+            "INSERT OR IGNORE INTO events (profile, kind, started, completed, phase, role, event_key, cluster_id) VALUES (?, 'fault', ?, ?, '', ?, ?, ?)",
+            (
+                recorder.profile,
+                started,
+                completed,
+                _label(role, _ROLES),
+                digest,
+                cluster_id,
+            ),
         )
         _prune_events(db, time.monotonic())
 
     _db_call("fault observation", record, None)
+
+
+def resolve_cluster_id(host: str, name: str) -> str | None:
+    """Resolve an oracle's cluster identity, caching successful lookups for this command."""
+    recorder = _recorder
+    if recorder is None:
+        return None
+    key = (host, name)
+    with recorder.lock:
+        known = recorder.cluster_ids.get(key)
+    if known is not None:
+        return known
+    try:
+        with sql.connection(
+            host, connect_timeout=3, statement_timeout_ms=3_000
+        ) as conn:
+            row = conn.execute(
+                "SELECT id FROM mz_catalog.mz_clusters WHERE name = %s", (name,)
+            ).fetchone()
+    except (psycopg.Error, OSError):
+        return None
+    if row is None:
+        return None
+    result = str(row[0])
+    with recorder.lock:
+        recorder.cluster_ids[key] = result
+    return result
 
 
 def events_between(start: float, end: float) -> list[Event]:
@@ -368,7 +424,7 @@ def events_between(start: float, end: float) -> list[Event]:
         return [
             Event(*row)
             for row in db.execute(
-                "SELECT kind, started, completed, phase, role FROM events"
+                "SELECT kind, started, completed, phase, role, cluster_id FROM events"
                 " WHERE profile = ? AND started <= ? AND completed >= ? ORDER BY started, id",
                 (recorder.profile, end, start),
             )

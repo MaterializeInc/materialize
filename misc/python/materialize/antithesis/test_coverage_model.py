@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+import pytest
+
 from materialize.antithesis import coverage_model as m
 from materialize.antithesis import serializability as sz
 from materialize.antithesis.ivm_model import WriteOp
@@ -23,6 +25,7 @@ class Event:
     completed: float
     phase: str = ""
     role: str = ""
+    cluster_id: str = ""
 
 
 def history() -> list[sz.Op]:
@@ -134,7 +137,48 @@ def test_subscribe_witness_requires_a_closed_read_requested_after_the_exposure()
 
 def test_subscribe_can_resolve_a_lost_write_ack_after_a_replica_delete() -> None:
     write = WriteOp(1, "indeterminate", 1, 2, None)
-    event = Event("fault", 3, 4, role="clusterd")
-    assert m.stream_cases([write], {1: (5, 6)}, [event]) == {
+    event = Event("fault", 3, 4, role="clusterd", cluster_id="u1")
+    assert m.stream_cases([write], {1: (5, 6)}, [event], cluster_id="u1") == {
         ("", "clusterd", "ivm", "subscribe", "indeterminate")
+    }
+
+
+def test_replica_delete_without_oracle_cluster_never_receives_credit() -> None:
+    event = Event("fault", 2, 3, role="clusterd", cluster_id="u1")
+    assert not m.history_cases(history(), [event], {2})
+    assert not m.stream_cases([WriteOp(1, "ok", 1, 4, 10)], {1: (5, 6)}, [event])
+
+
+@pytest.mark.parametrize(
+    "oracle_cluster,event_cluster,expected",
+    [("u1", "u1", True), ("u1", "u2", False), ("u1", "", False), ("", "", False)],
+)
+def test_replica_exposure_is_bound_to_the_verified_cluster(
+    oracle_cluster: str, event_cluster: str, expected: bool
+) -> None:
+    event = Event("fault", 2, 3, role="clusterd", cluster_id=event_cluster)
+    assert (
+        bool(m.history_cases(history(), [event], {2}, cluster_id=oracle_cluster))
+        is expected
+    )
+    assert (
+        bool(
+            m.stream_cases(
+                [WriteOp(1, "ok", 1, 4, 10)],
+                {1: (5, 6)},
+                [event],
+                cluster_id=oracle_cluster,
+            )
+        )
+        is expected
+    )
+
+
+def test_unrelated_replica_does_not_erase_a_real_promotion_witness() -> None:
+    events = [
+        Event("fault", 2, 3, role="clusterd", cluster_id="u2"),
+        Event("phase", 2, 3, phase="Promoting"),
+    ]
+    assert m.history_cases(history(), events, {2}, cluster_id="u1") == {
+        ("Promoting", "", "rmw", "mv", "acked")
     }
