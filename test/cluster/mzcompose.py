@@ -3302,6 +3302,25 @@ def workflow_test_optimizer_metrics(c: Composition) -> None:
     assert 0 < time < 10, f"got {time}"
 
 
+def workflow_test_dropped_role_begin(c: Composition) -> None:
+    c.up("materialized")
+    c.sql("CREATE ROLE dropped_role")
+
+    with c.sql_connection(user="dropped_role") as conn:
+        conn.autocommit = False
+        c.sql("DROP ROLE dropped_role")
+
+        # Psycopg first sends an implicit BEGIN. Duplicate error responses
+        # mask the dropped-role error with a client-side InternalError.
+        try:
+            conn.execute("SELECT 1")
+        except psycopg.errors.InsufficientPrivilege as e:
+            assert "was concurrently dropped" in str(e), str(e)
+            assert conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        else:
+            raise AssertionError("query succeeded after its role was dropped")
+
+
 def workflow_test_pgwire_metrics(c: Composition) -> None:
     """Test metrics collected in the Adapter frontend, i.e., `pgwire.rs`"""
 
