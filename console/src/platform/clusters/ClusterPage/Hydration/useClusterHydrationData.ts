@@ -79,9 +79,16 @@ export function useClusterHydrationData({
       ),
     [cluster.replicas, replicaHistory.data, startMs],
   );
-  const statusHistory = useReplicaStatusHistory(
-    replicas.map(({ id }) => id),
+  // The current replicas' status loads at once. Dropped replicas are only
+  // known after the replica history, and their status no longer changes, so
+  // a query of their own keeps them from refetching the current replicas'.
+  const currentStatus = useReplicaStatusHistory(
+    currentReplicaIds,
     replicaStatusesUpdatedAt(cluster.replicas),
+  );
+  const droppedStatus = useReplicaStatusHistory(
+    replicas.filter(({ isCurrent }) => !isCurrent).map(({ id }) => id),
+    undefined,
   );
   const episodes = useClusterHydrationEpisodes({
     clusterId: cluster.id,
@@ -122,7 +129,10 @@ export function useClusterHydrationData({
   ]);
 
   const derived = React.useMemo(() => {
-    const transitions = statusHistory.data?.transitions ?? [];
+    const transitions = [
+      ...(currentStatus.data?.transitions ?? []),
+      ...(droppedStatus.data?.transitions ?? []),
+    ];
     const bootTimes = replicaBootTimes(transitions, replicas);
     // Objects created after a time weren't on the cluster then. Ones created
     // before the window have no row, so they count throughout.
@@ -145,7 +155,10 @@ export function useClusterHydrationData({
     );
     const unfinished = findUnfinishedHydrations({
       transitions,
-      oomKills: statusHistory.data?.oomKills ?? [],
+      oomKills: [
+        ...(currentStatus.data?.oomKills ?? []),
+        ...(droppedStatus.data?.oomKills ?? []),
+      ],
       hydrations: allHydrations,
       replicas,
       bootTimes,
@@ -164,9 +177,23 @@ export function useClusterHydrationData({
         return limit === undefined ? [] : [[replica.id, limit]];
       }),
     );
-    return { bootTimes, hydrations, unfinished, heapLimitBytesById, startMs };
+    const allocationById = new Map(
+      replicas.flatMap(({ id, size }) => {
+        const allocation = size ? allocations.data?.get(size) : undefined;
+        return allocation ? [[id, allocation]] : [];
+      }),
+    );
+    return {
+      bootTimes,
+      hydrations,
+      unfinished,
+      heapLimitBytesById,
+      allocationById,
+      startMs,
+    };
   }, [
-    statusHistory.data,
+    currentStatus.data,
+    droppedStatus.data,
     objects,
     createdObjects,
     episodes.data,
@@ -182,19 +209,21 @@ export function useClusterHydrationData({
     replicas,
     ...derived,
     progressByReplicaId: progress.progressByReplicaId,
-    isProgressLoading: !progress.snapshotComplete,
-    isLoading:
+    /** Live progress and the current replicas' status, which say where each stands. */
+    isProgressLoading: !progress.snapshotComplete || currentStatus.isLoading,
+    /** The hydration history. Dropped replicas' restarts fill in later. */
+    isHistoryLoading:
+      hasHistory === null ||
       replicaHistory.isLoading ||
-      statusHistory.isLoading ||
       (hasHistory === true &&
         (episodes.isLoading ||
           (!createdObjects && !creationTimes.isError && !isObjectsError))),
     createdObjects,
-    isError:
-      replicaHistory.isError ||
-      statusHistory.isError ||
-      episodes.isError ||
-      progress.isError,
+    /** The cluster's indexes and materialized views, undefined until known. */
+    objectCount: hasObjects ? objects.length : undefined,
+    isProgressError: progress.isError || currentStatus.isError,
+    isHistoryError:
+      replicaHistory.isError || droppedStatus.isError || episodes.isError,
     isCreatedObjectsError: creationTimes.isError || isObjectsError,
   };
 }

@@ -14,7 +14,13 @@ import React from "react";
 import SimpleSelect from "~/components/SimpleSelect";
 
 export interface ReplicaSelectProps {
-  replicas: Array<{ id: string; name: string; size: string | null }>;
+  replicas: Array<{
+    id: string;
+    name: string;
+    size: string | null;
+    /** A dropped replica, offered for its history. */
+    isRetired?: boolean;
+  }>;
   /** The selected replica's name, or undefined for all replicas. */
   value: string | undefined;
   onChange: (replicaName: string | undefined) => void;
@@ -45,13 +51,17 @@ export const ReplicaSelect = ({
         onChange={(event) => onChange(event.target.value || undefined)}
       >
         {includeAll && <option value="">All replicas</option>}
-        {sort(replicas, ({ name }) => name).map(
-          ({ id: replicaId, name, size }) => (
-            <option key={replicaId} value={name}>
-              {size ? `${name} · ${size}` : name}
-            </option>
-          ),
-        )}
+        {sort(
+          replicas,
+          ({ isRetired }) => Boolean(isRetired),
+          ({ name }) => name,
+        ).map(({ id: replicaId, name, size, isRetired }) => (
+          <option key={replicaId} value={name}>
+            {[name, size, isRetired ? "retired" : undefined]
+              .filter(Boolean)
+              .join(" · ")}
+          </option>
+        ))}
       </SimpleSelect>
     </HStack>
   );
