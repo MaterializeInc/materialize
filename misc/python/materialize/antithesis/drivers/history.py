@@ -99,6 +99,8 @@ DERIVED_CLUSTER = configure.SHARED_CLUSTER
 DRIVER_BUDGET_S = (10.0, 90.0)
 """Range of the wall-clock budget of one driver invocation."""
 DRIVER_MAX_OPS = 400
+# Keep unresolved identities after this retry budget, while allowing new rounds.
+INTERLEAVING_FOLLOWUP_ATTEMPTS = 6
 EPOCH_MAX_OPS = 1500
 """Operations per epoch. Keeps each read to a few kilobytes and each
 dependency graph to a few thousand nodes."""
@@ -287,6 +289,10 @@ def open_state() -> sqlite3.Connection:
         )
         db.execute("CREATE INDEX IF NOT EXISTS ops_epoch ON ops (epoch)")
         db.execute("CREATE INDEX IF NOT EXISTS ops_checked ON ops (checked, epoch)")
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS interleaving_followups ("
+            " write_id INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0)"
+        )
         db.execute(
             "CREATE TABLE IF NOT EXISTS timeline_params ("
             " slot INTEGER PRIMARY KEY CHECK (slot = 0), params TEXT NOT NULL)"
@@ -630,6 +636,7 @@ def _write(
     *,
     before_commit: Callable[[], None] | None = None,
     on_invoke: Callable[[], None] | None = None,
+    follow_up: bool = False,
 ) -> bool:
     """Append one fresh value to `key`, counting `read_key` if given.
 
@@ -640,6 +647,11 @@ def _write(
     conn = session.ensure()
     kind = "w" if read_key is None else "rmw"
     op_id, _ = _begin(db, session, epoch, kind, key, read_key)
+    if follow_up:
+        with db:
+            db.execute(
+                "INSERT INTO interleaving_followups (write_id) VALUES (?)", (op_id,)
+            )
     if read_key is None:
         statement = f"INSERT INTO {_table(epoch, key)} (v) VALUES ({op_id})"
         message = "client history: INSERT of a fresh id returns only classified errors"
@@ -891,6 +903,8 @@ def _overlap_write(
     deadline: float,
     hold_transaction: bool = True,
 ) -> bool:
+    from materialize.antithesis.drivers.pod_restarts import InterleavingDisruption
+
     if time.monotonic() >= deadline:
         return False
     staged, ready, release, done = (threading.Event() for _ in range(4))
@@ -916,9 +930,15 @@ def _overlap_write(
     try:
         ready.wait(max(0.0, deadline - time.monotonic()))
         if staged.is_set() and not done.is_set() and time.monotonic() < deadline:
-            if race_commit:
-                release.set()
-            disrupt()
+            if isinstance(disrupt, InterleavingDisruption):
+                disrupt.run(
+                    lambda: not done.is_set(),
+                    release.set if race_commit else lambda: None,
+                )
+            else:
+                if race_commit:
+                    release.set()
+                disrupt()
     finally:
         release.set()
         thread.join(max(0.0, deadline - time.monotonic()))
@@ -939,27 +959,45 @@ def _interleaved_round(
     deadline: float,
     round_id: str | None = None,
 ) -> bool:
+    written_ids: list[int] = []
+
     def write(before_commit: Callable[[], None]) -> None:
         writer_db = open_state()
         writer = Session(Targets(host, 0.0), [1.0, 0.0, 0.0])
         try:
             if read_key is None:
                 _write(
-                    writer_db, writer, epoch, key, read_key, before_commit=before_commit
+                    writer_db,
+                    writer,
+                    epoch,
+                    key,
+                    read_key,
+                    before_commit=before_commit,
+                    follow_up=True,
                 )
             else:
-                _write(writer_db, writer, epoch, key, read_key, on_invoke=before_commit)
+                _write(
+                    writer_db,
+                    writer,
+                    epoch,
+                    key,
+                    read_key,
+                    on_invoke=before_commit,
+                    follow_up=True,
+                )
             written = writer_db.execute(
                 "SELECT op_id, outcome FROM ops WHERE epoch = ? AND session = ? ORDER BY op_id DESC LIMIT 1",
                 (epoch, writer.name),
             ).fetchone()
-            if written is not None and round_id is not None:
-                telemetry.interleaving_progress(
-                    "write",
-                    expected_round=round_id,
-                    write_id=written[0],
-                    outcome=written[1],
-                )
+            if written is not None:
+                written_ids.append(int(written[0]))
+                if round_id is not None:
+                    telemetry.interleaving_progress(
+                        "write",
+                        expected_round=round_id,
+                        write_id=written[0],
+                        outcome=written[1],
+                    )
         finally:
             writer.reset()
             writer_db.close()
@@ -973,17 +1011,68 @@ def _interleaved_round(
     ):
         log("interleaving write remains indeterminate at the command deadline")
         return False
-    if time.monotonic() >= deadline:
+    if not written_ids:
         return False
+    return _follow_up_interleaving(db, host, written_ids[0], deadline)
+
+
+def _follow_up_interleaving(
+    db: sqlite3.Connection, host: str, write_id: int, deadline: float
+) -> bool:
+    row = db.execute(
+        "SELECT epoch, wkey, outcome FROM ops WHERE op_id = ?", (write_id,)
+    ).fetchone()
+    if row is None:
+        return False
+    epoch, key = int(row[0]), int(row[1])
+    if (
+        row[2] == "rejected"
+        or db.execute(
+            "SELECT 1 FROM dropped_generations WHERE gen = ?", (epoch,)
+        ).fetchone()
+    ):
+        with db:
+            db.execute(
+                "DELETE FROM interleaving_followups WHERE write_id = ?", (write_id,)
+            )
+        return True
+    with db:
+        db.execute(
+            "UPDATE interleaving_followups SET attempts = attempts + 1 WHERE write_id = ?",
+            (write_id,),
+        )
     reader = Session(Targets(host, 0.0), [1.0, 0.0, 0.0])
     try:
-        _read(db, reader, epoch, rng.choice([0.0, 1.0]), paths=_paths(key, True))
+        for _ in range(3):
+            if time.monotonic() >= deadline:
+                return False
+            try:
+                missing = _read(
+                    db, reader, epoch, rng.choice([0.0, 1.0]), paths=_paths(key, True)
+                )
+            except (psycopg.Error, OSError):
+                missing = False
+                reader.reset()
+            read_back = db.execute(
+                "SELECT op_id, outcome, observed FROM ops WHERE epoch = ? AND session = ?"
+                " AND kind = 'r' ORDER BY op_id DESC LIMIT 1",
+                (epoch, reader.name),
+            ).fetchone()
+            if read_back is not None and read_back[1] == "ok":
+                break
+            if missing:
+                # Epoch rotation can retire the target before this command resumes.
+                with db:
+                    db.execute(
+                        "DELETE FROM interleaving_followups WHERE write_id = ?",
+                        (write_id,),
+                    )
+                return False
+            time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+        else:
+            return False
     finally:
         reader.reset()
-    read_back = db.execute(
-        "SELECT op_id, outcome FROM ops WHERE epoch = ? AND session = ? AND kind = 'r' ORDER BY op_id DESC LIMIT 1",
-        (epoch, reader.name),
-    ).fetchone()
     covered = _check_epoch(
         db,
         epoch,
@@ -999,11 +1088,21 @@ def _interleaved_round(
     }
     _assert_timestamp_order(db, read_ids)
     _mark_checked(db, covered)
+    observed_write = any(
+        write_id in values for _, _, values, _ in json.loads(read_back[2])
+    )
+    if observed_write:
+        with db:
+            db.execute(
+                "DELETE FROM interleaving_followups WHERE write_id = ?", (write_id,)
+            )
     telemetry.interleaving_progress(
         "checked",
         epoch=epoch,
-        read_id=read_back[0] if read_back is not None else None,
-        successful_reads=int(read_back is not None and read_back[1] == "ok"),
+        write_id=write_id,
+        read_id=read_back[0],
+        successful_reads=1,
+        observed_write=observed_write,
     )
     return True
 
@@ -1056,6 +1155,18 @@ def interleaving_driver() -> int:
     db = open_state()
     try:
         if quiet.active_quiet_period():
+            return 0
+        for (write_id,) in db.execute(
+            "SELECT write_id FROM interleaving_followups WHERE attempts < ?"
+            " ORDER BY write_id LIMIT 4",
+            (INTERLEAVING_FOLLOWUP_ATTEMPTS,),
+        ).fetchall():
+            if not _follow_up_interleaving(db, host, int(write_id), deadline):
+                return 0
+        if db.execute(
+            "SELECT 1 FROM interleaving_followups WHERE attempts < ? LIMIT 1",
+            (INTERLEAVING_FOLLOWUP_ATTEMPTS,),
+        ).fetchone():
             return 0
         epoch = _epoch_for_op(db, host, False)
         if epoch is None:
