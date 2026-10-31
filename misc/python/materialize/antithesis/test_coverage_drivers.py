@@ -347,55 +347,6 @@ def test_replica_interleavings_select_only_the_oracle_cluster(
     assert (victim.pod, victim.cluster_id) == ("owned", "u3")
 
 
-def test_interleaving_promotion_revalidates_the_observed_request(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(pod_restarts.templates, "enabled_driver", lambda *args: True)
-    monkeypatch.setattr(pod_restarts, "quiet_period_active", lambda *args: False)
-    monkeypatch.setattr(pod_restarts.rng, "random", lambda: 0.0)
-    initial = pod_restarts.Snapshot(
-        {
-            "metadata": {"generation": 1},
-            "spec": {"requestRollout": "one"},
-            "status": {
-                "conditions": [
-                    {
-                        "type": "UpToDate",
-                        "reason": "ReadyToPromote",
-                        "observedGeneration": 1,
-                    }
-                ]
-            },
-        }
-    )
-    later = pod_restarts.Snapshot(
-        {
-            "metadata": {"generation": 2},
-            "spec": {"requestRollout": "two"},
-            "status": {
-                "conditions": [
-                    {
-                        "type": "UpToDate",
-                        "reason": "ReadyToPromote",
-                        "observedGeneration": 2,
-                    }
-                ]
-            },
-        }
-    )
-    kube = Mock()
-    kube.try_snapshot.return_value = initial
-    kube.snapshot.return_value = later
-    action = pod_restarts.interleaving_disruption(
-        kube,
-        cluster_id="u3",
-        deadline=time.monotonic() + 2,
-    )
-    assert action is not None
-    action()
-    kube.patch_spec.assert_not_called()
-
-
 @pytest.mark.parametrize(
     "profile,triggers,candidate",
     [
@@ -651,7 +602,8 @@ def test_ivm_interleaving_checks_the_same_write_after_disruption(
     monkeypatch.setattr(pod_restarts, "interleaving_disruption", selection)
     observed = []
 
-    def check(env_arg, host, db):
+    def check(env_arg, host, db, *, allow_faults=True):
+        assert not allow_faults
         assert env_arg is env and host == "host" and db is ivm_write.db
         assert ivm_write.events == ["begin", "insert", "disrupt", "commit"]
         observed.extend(db.execute("SELECT op_id, outcome FROM writes"))

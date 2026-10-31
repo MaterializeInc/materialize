@@ -113,8 +113,11 @@ Coverage observations and the generated inventory distinguish observed,
 not-yet-observed, and never-evaluated targets without creating product failures.
 
 History and IVM interleaving commands stage generated writes, trigger a pod
-delete or promote an observed ready rollout, then use the existing correctness
-oracles to check later reads. Append transactions can remain open across the
+delete or promote their owned ready rollout, then use the existing correctness
+oracles to check later reads. The manual-promotion request is journaled and
+resumed across invocations, and its target is revalidated at the staged write.
+History retains unresolved write IDs for bounded priority follow-up reads.
+Append transactions can remain open across the
 disruption. Atomic read-modify-write statements race it in autocommit mode,
 because Materialize does not support `INSERT ... SELECT` in an explicit
 transaction. Ordinary writers and fault scheduling continue alongside these
