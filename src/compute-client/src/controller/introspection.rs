@@ -56,6 +56,10 @@ struct IntrospectionSink {
     wallclock_lag_history_tx: AppendOnlySender,
     /// Sender for [`IntrospectionType::WallclockLagHistogram`] updates.
     wallclock_lag_histogram_tx: AppendOnlySender,
+    /// Sender for [`IntrospectionType::WallclockFreshnessHistogram`] updates.
+    wallclock_freshness_histogram_tx: AppendOnlySender,
+    /// Sender for [`IntrospectionType::ReplicaWallclockFreshnessHistogram`] updates.
+    replica_wallclock_freshness_histogram_tx: AppendOnlySender,
 }
 
 impl IntrospectionSink {
@@ -74,6 +78,10 @@ impl IntrospectionSink {
                 .append_only_introspection_tx(WallclockLagHistory),
             wallclock_lag_histogram_tx: storage_controller
                 .append_only_introspection_tx(WallclockLagHistogram),
+            wallclock_freshness_histogram_tx: storage_controller
+                .append_only_introspection_tx(WallclockFreshnessHistogram),
+            replica_wallclock_freshness_histogram_tx: storage_controller
+                .append_only_introspection_tx(ReplicaWallclockFreshnessHistogram),
         }
     }
 
@@ -100,6 +108,12 @@ impl IntrospectionSink {
             }
             WallclockLagHistory => send_append_only(&self.wallclock_lag_history_tx, updates),
             WallclockLagHistogram => send_append_only(&self.wallclock_lag_histogram_tx, updates),
+            WallclockFreshnessHistogram => {
+                send_append_only(&self.wallclock_freshness_histogram_tx, updates);
+            }
+            ReplicaWallclockFreshnessHistogram => {
+                send_append_only(&self.replica_wallclock_freshness_histogram_tx, updates);
+            }
             _ => panic!("unexpected introspection type: {type_:?}"),
         }
     }

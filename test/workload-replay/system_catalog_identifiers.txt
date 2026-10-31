@@ -1116,6 +1116,9 @@ mz_version
 mz_version_num
 mz_views
 mz_views_ind
+mz_wallclock_freshness_progress
+mz_wallclock_global_freshness_histogram
+mz_wallclock_global_freshness_histogram_raw
 mz_wallclock_global_lag
 mz_wallclock_global_lag_histogram
 mz_wallclock_global_lag_histogram_raw
@@ -1123,6 +1126,8 @@ mz_wallclock_global_lag_history
 mz_wallclock_global_lag_recent_history
 mz_wallclock_global_lag_recent_history_ind
 mz_wallclock_lag_history
+mz_wallclock_replica_freshness_histogram
+mz_wallclock_replica_freshness_histogram_raw
 mz_webhook_sources
 mz_webhook_sources_ind
 _name

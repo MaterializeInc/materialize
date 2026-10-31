@@ -1267,3 +1267,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17138  jq
 17139  mz_builtin_columns
 17140  mz_builtin_index_columns
+17141  mz_wallclock_global_freshness_histogram_raw
+17142  mz_wallclock_global_freshness_histogram
+17143  mz_wallclock_replica_freshness_histogram_raw
+17144  mz_wallclock_replica_freshness_histogram
+17145  mz_wallclock_freshness_progress

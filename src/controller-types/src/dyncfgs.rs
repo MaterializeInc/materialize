@@ -42,6 +42,49 @@ pub const WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL: Config<Duration> = Config::ne
     ParameterScope::Environment,
 );
 
+pub const ENABLE_WALLCLOCK_FRESHNESS_REPORTING: Config<bool> = Config::new(
+    "enable_wallclock_freshness_reporting",
+    false,
+    "Report tick-aware wallclock freshness for objects.",
+    ParameterScope::Environment,
+);
+
+pub const ENABLE_WALLCLOCK_FRESHNESS_RECORDING: Config<bool> = Config::new(
+    "enable_wallclock_freshness_recording",
+    false,
+    "Record wallclock freshness histograms in `WallclockFreshnessHistogram` and \
+    `ReplicaWallclockFreshnessHistogram` introspection.",
+    ParameterScope::Environment,
+);
+
+pub const WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE: Config<u32> = Config::new(
+    "wallclock_freshness_buckets_per_octave",
+    4,
+    "The number of histogram buckets per power of two of latency. Must be a power of two.",
+    ParameterScope::Environment,
+);
+
+pub const WALLCLOCK_FRESHNESS_VIRTUAL_ARRIVAL_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_freshness_virtual_arrival_interval",
+    Duration::from_millis(1),
+    "The spacing of virtual arrivals that weight the wallclock freshness histograms.",
+    ParameterScope::Environment,
+);
+
+pub const WALLCLOCK_FRESHNESS_PERIOD_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_freshness_period_interval",
+    Duration::from_secs(60),
+    "The period interval of histograms in wallclock freshness introspection.",
+    ParameterScope::Environment,
+);
+
+pub const WALLCLOCK_FRESHNESS_RESTART_POLICY: Config<&'static str> = Config::new(
+    "wallclock_freshness_restart_policy",
+    "hole",
+    "How the wallclock freshness recorder treats the time between the last recorded period and a restart.",
+    ParameterScope::Environment,
+);
+
 // The four configs below make up the `TimelyConfig` of a replica's `clusterd`
 // processes. They are replica-scoped: `Controller::provision_replica` resolves
 // them against the replica's scoped overrides and bakes the result into the
@@ -100,6 +143,12 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_0DT_DEPLOYMENT_SOURCES)
         .add(&WALLCLOCK_LAG_RECORDING_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL)
+        .add(&ENABLE_WALLCLOCK_FRESHNESS_REPORTING)
+        .add(&ENABLE_WALLCLOCK_FRESHNESS_RECORDING)
+        .add(&WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE)
+        .add(&WALLCLOCK_FRESHNESS_VIRTUAL_ARRIVAL_INTERVAL)
+        .add(&WALLCLOCK_FRESHNESS_PERIOD_INTERVAL)
+        .add(&WALLCLOCK_FRESHNESS_RESTART_POLICY)
         .add(&ENABLE_TIMELY_ZERO_COPY)
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)

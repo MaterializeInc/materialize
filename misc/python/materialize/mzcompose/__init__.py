@@ -135,6 +135,8 @@ def get_minimal_system_parameters(
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         "enable_try_cast": "true",
+        "enable_wallclock_freshness_reporting": "true",
+        "enable_wallclock_freshness_recording": "true",
         # Introspection goldens depend on the replica topology, so tests need
         # one consistent value rather than a varying one.
         "enable_unified_cluster": (
@@ -901,6 +903,11 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "replica_metrics_history_retention_interval",
     "wallclock_lag_history_retention_interval",
     "wallclock_global_lag_histogram_retention_interval",
+    "wallclock_freshness_histogram_retention_interval",
+    "wallclock_freshness_buckets_per_octave",
+    "wallclock_freshness_virtual_arrival_interval",
+    "wallclock_freshness_period_interval",
+    "wallclock_freshness_restart_policy",
     "kafka_client_id_enrichment_rules",
     "kafka_poll_max_wait",
     "kafka_default_aws_privatelink_endpoint_identification_algorithm",

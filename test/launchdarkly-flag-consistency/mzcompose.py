@@ -297,6 +297,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_unified_cluster
     enable_union_cancellation_after_relation_cse
     enable_unlimited_retain_history
+    enable_wallclock_freshness_recording
+    enable_wallclock_freshness_reporting
     enable_will_distinct_propagation
     enable_with_ordinality_legacy_fallback
     grpc_client_connect_timeout
@@ -451,6 +453,11 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     upsert_rocksdb_write_buffer_manager_cluster_memory_fraction
     upsert_rocksdb_write_buffer_manager_memory_bytes
     user_id_pool_batch_size
+    wallclock_freshness_buckets_per_octave
+    wallclock_freshness_histogram_retention_interval
+    wallclock_freshness_period_interval
+    wallclock_freshness_restart_policy
+    wallclock_freshness_virtual_arrival_interval
     wallclock_global_lag_histogram_retention_interval
     wallclock_lag_histogram_period_interval
     wallclock_lag_history_retention_interval
