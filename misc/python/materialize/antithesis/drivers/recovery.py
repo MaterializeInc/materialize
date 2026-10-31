@@ -130,6 +130,7 @@ HALT_EVIDENCE_ATTEMPTS = 3
 HALT_EVIDENCE_WINDOW_S = 30.0
 HALT_EVIDENCE_REQUEST_S = 3.0
 HALT_EVIDENCE_RETRY_S = 30.0
+HALT_EVIDENCE_ROUTING_RETRY_S = OBSERVER_POLL_S
 HALT_EVIDENCE_MAX_BYTES = 16_384
 HALT_EVIDENCE_TAILS = (200, 20, 1)
 HALT_MISSING_CAPACITY = 2048
@@ -138,6 +139,7 @@ ROLE_ENVIRONMENTD = "environmentd"
 ROLE_CLUSTERD = "clusterd"
 ROLE_ORCHESTRATORD = "orchestratord"
 OPERATOR_APP_NAME = "materialize-operator"
+READER_LEASE_EXPIRED_EXIT_CODE = 168
 
 # A probe per statement family that drivers record in `retry_ledger`. Each is
 # self-contained: it creates what it needs under `SCHEMA` and cleans up.
@@ -414,6 +416,11 @@ def classify_exit(exit_code: int, reason: str | None) -> str:
         return "clean"
     if exit_code == 166:
         return "halt"
+    if exit_code == READER_LEASE_EXPIRED_EXIT_CODE:
+        # src/persist-client/src/read.rs reserves this code for a live reader
+        # losing its persist lease. Naming the cause does not accept the exit
+        # as designed in the independent native-exit check.
+        return "reader_lease_expired"
     if exit_code in (137, 143):
         return "killed"
     if exit_code in (101, 134):
@@ -580,8 +587,37 @@ def _termination_file_key(selector: _LogSelector | None) -> tuple[Any, ...] | No
     )
 
 
+def _selector_summary(
+    selector: _LogSelector | ContainerObservation | None,
+) -> dict[str, Any] | None:
+    if selector is None:
+        return None
+    result = {}
+    for name in (
+        "pod_uid",
+        "pod_name",
+        "restart_count",
+        "current_terminated",
+        "exit_code",
+        "signal",
+        "finished_at",
+        "container_id",
+        "routing_container_id",
+        "started_at",
+    ):
+        value = getattr(selector, name, None)
+        if name == "pod_name" and isinstance(selector, ContainerObservation):
+            value = selector.pod
+        result[name] = value[:256] if isinstance(value, str) else value
+    return result
+
+
 def capture_halt_evidence(
-    o: ContainerObservation, deadline: float, *, stats: Counter[str] | None = None
+    o: ContainerObservation,
+    deadline: float,
+    *,
+    stats: Counter[str] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Capture a complete halt reason bound to a stable container termination."""
     counts = stats if stats is not None else Counter()
@@ -594,6 +630,19 @@ def capture_halt_evidence(
         counts["invalid_termination"] += 1
         return None
     core = client.CoreV1Api()
+
+    def routing_changed(
+        stage: str,
+        expected: _LogSelector | ContainerObservation,
+        observed: _LogSelector | None,
+    ) -> None:
+        counts["routing_changed"] += 1
+        if diagnostics is not None:
+            diagnostics["selector_mismatch"] = {
+                "stage": stage,
+                "expected": _selector_summary(expected),
+                "observed": _selector_summary(observed),
+            }
 
     def timeout() -> float:
         remaining = deadline - time.monotonic()
@@ -633,7 +682,7 @@ def capture_halt_evidence(
             )
             != expected
         ):
-            counts["routing_changed"] += 1
+            routing_changed("before_capture", o, selector)
             return None
         if selector.termination_message:
             try:
@@ -659,10 +708,9 @@ def capture_halt_evidence(
             )
             # Kubernetes binds the message to this terminated container ID.
             # Current-to-previous routing may change while that identity stays fixed.
-            if _termination_file_key(
-                _log_selector(after, o.container)
-            ) != _termination_file_key(selector):
-                counts["routing_changed"] += 1
+            after_selector = _log_selector(after, o.container)
+            if _termination_file_key(after_selector) != _termination_file_key(selector):
+                routing_changed("after_termination_file", selector, after_selector)
                 return None
             identity = {
                 **_termination_identity(o),
@@ -707,10 +755,11 @@ def capture_halt_evidence(
             )
             # A current termination can become the previous run while reading logs.
             # Its ordinal stays the same, but the API's current/previous routing changes.
-            if _log_selector(after, o.container) != selector or not isinstance(
-                text, str
-            ):
-                counts["routing_changed"] += 1
+            after_selector = _log_selector(after, o.container)
+            if after_selector != selector or not isinstance(text, str):
+                routing_changed("after_log", selector, after_selector)
+                if diagnostics is not None and not isinstance(text, str):
+                    diagnostics["log_body_type"] = type(text).__name__
                 return None
             # A byte cap can omit the final halt line. Shrink only capped tails,
             # since shrinking complete logs could hide conflicting halt messages.
@@ -755,7 +804,10 @@ def capture_halt_evidence(
 
 
 def _record_missing_halt(
-    db: sqlite3.Connection, o: ContainerObservation, delta: dict[str, int]
+    db: sqlite3.Connection,
+    o: ContainerObservation,
+    delta: dict[str, int],
+    diagnostics: dict[str, Any],
 ) -> None:
     reasons = sorted(set(delta) - {"pod_reads", "log_reads"}) or ["capture_unavailable"]
     reason_key = json.dumps(reasons)
@@ -771,6 +823,7 @@ def _record_missing_halt(
         "termination": _termination_identity(o),
         "reasons": reasons,
         "counts": delta,
+        **diagnostics,
     }
     with db:
         db.execute(
@@ -851,19 +904,23 @@ def record_halt_evidence(
             if deadline is not None:
                 end = min(end, deadline)
             before = dict(budget.stats)
-            evidence = capture_halt_evidence(o, end, stats=budget.stats)
+            diagnostics: dict[str, Any] = {}
+            evidence = capture_halt_evidence(
+                o, end, stats=budget.stats, diagnostics=diagnostics
+            )
             spent = max(0.0, time.monotonic() - now)
             budget.remaining_s = max(0.0, budget.remaining_s - spent)
             if evidence is None:
-                _record_missing_halt(
-                    db,
-                    o,
-                    {
-                        reason: count - before.get(reason, 0)
-                        for reason, count in budget.stats.items()
-                        if count > before.get(reason, 0)
-                    },
-                )
+                delta = {
+                    reason: count - before.get(reason, 0)
+                    for reason, count in budget.stats.items()
+                    if count > before.get(reason, 0)
+                }
+                if delta.get("routing_changed"):
+                    budget.retry_at[key] = (
+                        time.monotonic() + HALT_EVIDENCE_ROUTING_RETRY_S
+                    )
+                _record_missing_halt(db, o, delta, diagnostics)
                 continue
             payload = json.dumps(evidence, sort_keys=True)
             with db:
@@ -961,6 +1018,11 @@ def record_terminations(
             details,
         )
         sometimes(cls == "halt", "a Materialize pod restarted after a halt", details)
+        sometimes(
+            cls == "reader_lease_expired",
+            "a Materialize pod restarted after its persist reader lease expired",
+            details,
+        )
     record_halt_evidence(
         db, observations, evidence_budget or HaltEvidenceBudget(), deadline
     )
