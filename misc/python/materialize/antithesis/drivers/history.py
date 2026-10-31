@@ -1036,6 +1036,8 @@ def _follow_up_interleaving(
                 "DELETE FROM interleaving_followups WHERE write_id = ?", (write_id,)
             )
         return True
+    if time.monotonic() >= deadline:
+        return False
     with db:
         db.execute(
             "UPDATE interleaving_followups SET attempts = attempts + 1 WHERE write_id = ?",
