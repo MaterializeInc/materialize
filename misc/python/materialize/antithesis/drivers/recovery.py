@@ -1224,6 +1224,11 @@ class Recovery:
     def details(self, **extra: Any) -> dict[str, Any]:
         return {"mode": self.mode, "timings": dict(self.timings), **extra}
 
+    def cleanup_aggregate_fixtures(self) -> tuple[bool, Any]:
+        from materialize.antithesis.drivers import aggregate_retractions
+
+        return aggregate_retractions.cleanup_abandoned(self.host)
+
     def canary(self) -> tuple[bool, Any]:
         rows(self.host, "SELECT 1")
         rows(self.host, "SELECT 1", internal=True)
@@ -1761,16 +1766,34 @@ class Recovery:
             self.details(),
         )
 
-        ok, info, took = poll(wedge, self.hydrated, "hydration")
-        self.timings["hydration"] = took
-        always(
-            ok, "every collection hydrates after faults stop", self.details(info=info)
+        ok, info, took = poll(
+            CHECK_BUDGET_S,
+            self.cleanup_aggregate_fixtures,
+            "abandoned aggregate fixtures",
         )
-        sometimes(
-            ok and took <= CHECK_BUDGET_S,
-            "every collection hydrated within the tight budget after faults stop",
-            self.details(),
-        )
+        self.timings["aggregate_fixtures"] = took
+        if not ok:
+            from materialize.antithesis import telemetry
+
+            telemetry.comparison("recovery", "full", None)
+            log(
+                f"collection recovery is incomplete until modeled poison fixtures are removed: {info}"
+            )
+        collections_ready = ok
+
+        if collections_ready:
+            ok, info, took = poll(wedge, self.hydrated, "hydration")
+            self.timings["hydration"] = took
+            always(
+                ok,
+                "every collection hydrates after faults stop",
+                self.details(info=info),
+            )
+            sometimes(
+                ok and took <= CHECK_BUDGET_S,
+                "every collection hydrated within the tight budget after faults stop",
+                self.details(),
+            )
 
         ok, info, took = poll(wedge, self.reconfigurations_settled, "reconfigurations")
         self.timings["reconfig"] = took
@@ -1806,31 +1829,32 @@ class Recovery:
             self.details(info=info),
         )
 
-        ok, info, took = poll(wedge, self.frontiers_advance, "frontiers")
-        self.timings["frontiers"] = took
-        always(
-            ok,
-            "every collection frontier advances after faults stop",
-            self.details(info=info),
-        )
-        sometimes(
-            ok and took <= CHECK_BUDGET_S,
-            "every collection frontier advanced within the tight budget after faults stop",
-            self.details(),
-        )
+        if collections_ready:
+            ok, info, took = poll(wedge, self.frontiers_advance, "frontiers")
+            self.timings["frontiers"] = took
+            always(
+                ok,
+                "every collection frontier advances after faults stop",
+                self.details(info=info),
+            )
+            sometimes(
+                ok and took <= CHECK_BUDGET_S,
+                "every collection frontier advanced within the tight budget after faults stop",
+                self.details(),
+            )
 
-        ok, info, took = poll(wedge, self.collections_readable, "readable")
-        self.timings["readable"] = took
-        always(
-            ok,
-            "every live table and materialized view is readable after faults stop",
-            self.details(info=info),
-        )
-        sometimes(
-            ok and took <= CHECK_BUDGET_S,
-            "every live table and materialized view was readable within the tight budget after faults stop",
-            self.details(),
-        )
+            ok, info, took = poll(wedge, self.collections_readable, "readable")
+            self.timings["readable"] = took
+            always(
+                ok,
+                "every live table and materialized view is readable after faults stop",
+                self.details(info=info),
+            )
+            sometimes(
+                ok and took <= CHECK_BUDGET_S,
+                "every live table and materialized view was readable within the tight budget after faults stop",
+                self.details(),
+            )
         try:
             s = lifecycle.Session(self.env, lifecycle.open_state())
             lifecycle.check_readable(s, f"recovery-{self.mode}", require_success=True)
@@ -1891,7 +1915,7 @@ class Recovery:
             self.details(window_s=CRASHLOOP_WINDOW_S, took_s=took),
         )
 
-        if rng.random() < RESTART_COMPARE_P:
+        if collections_ready and rng.random() < RESTART_COMPARE_P:
             try:
                 self.restart_and_compare()
             except (psycopg.Error, OSError, ApiException) as e:

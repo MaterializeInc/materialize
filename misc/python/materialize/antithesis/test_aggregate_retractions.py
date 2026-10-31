@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import random
 import sqlite3
+import threading
 import time
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import psycopg
@@ -22,6 +24,7 @@ pytest.importorskip("antithesis")
 
 from materialize.antithesis import aggregate_retractions_model as model
 from materialize.antithesis.drivers import aggregate_retractions as driver
+from materialize.antithesis.drivers import recovery
 
 
 def assert_product(condition, message, details):
@@ -219,3 +222,267 @@ def test_slot_reclamation_is_bounded_and_old_owner_cannot_release_a_new_epoch(
         "SELECT epoch FROM slots WHERE slot = ?", (third.number,)
     ).fetchone() == (third.epoch,)
     db.close()
+
+
+@pytest.fixture
+def poisoned_fixture(monkeypatch):
+    db = sqlite3.connect(":memory:")
+    slot = driver.Slot(0, 42)
+    name = "v0_e42"
+    objects = {name: "u42", "unrelated_error": "u99"}
+    dropped = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def execute(self, query, params: Any = None):
+            query = query.decode() if isinstance(query, bytes) else query
+            if query.startswith("SELECT v.id"):
+                identity = objects.get(params[1])
+                return Mock(fetchone=lambda: (identity,) if identity else None)
+            if query.startswith("DROP MATERIALIZED VIEW"):
+                target = query.split()[-1].split(".")[-1]
+                dropped.append(target)
+                objects.pop(target, None)
+            return Mock()
+
+    conn: Any = Connection()
+    monkeypatch.setattr(driver, "_connect", lambda host: conn)
+    monkeypatch.setattr(driver.ddl_hold, "active", lambda: False)
+    monkeypatch.setattr(driver, "_process_marker", lambda pid: "original-owner")
+    driver._arm_poison(db, conn, slot)
+    monkeypatch.setattr(driver, "_process_marker", lambda pid: None)
+    yield db, slot, conn, objects, dropped
+    db.close()
+
+
+def test_interrupted_poison_cleanup_removes_only_its_exact_fixture_before_health(
+    monkeypatch, poisoned_fixture
+):
+    db, slot, conn, objects, dropped = poisoned_fixture
+    check = recovery.Recovery.__new__(recovery.Recovery)
+    check.host = "host"
+    check.exempt = set()
+
+    def rows(host, query, *args, **kwargs):
+        if query.startswith("SELECT d.name"):
+            return [
+                ("materialize", driver.SCHEMA, name, "materialized-view", 1)
+                for name in objects
+            ]
+        if "unrelated_error" in query:
+            raise psycopg.errors.InternalError_("real unrelated product error")
+        raise psycopg.errors.IntervalFieldOverflow("interval out of range")
+
+    monkeypatch.setattr(recovery, "rows", rows)
+    before, info = check.collections_readable()
+    assert not before and len(info["unreadable"]) == 2
+    complete, _ = driver.cleanup_abandoned("host", db)
+    assert complete
+    assert dropped == ["v0_e42"]
+    after, info = check.collections_readable()
+    assert not after
+    assert [failure[0] for failure in info["unreadable"]] == [
+        "materialize.aggregate_retractions.unrelated_error"
+    ]
+    assert "unrelated_error" in objects
+
+
+def test_a_live_poison_owner_is_not_cleaned(monkeypatch, poisoned_fixture):
+    db, _, _, objects, dropped = poisoned_fixture
+    monkeypatch.setattr(driver, "_process_marker", lambda pid: "original-owner")
+    complete, _ = driver.cleanup_abandoned("host", db)
+    assert not complete
+    assert not dropped
+    assert "v0_e42" in objects
+    assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (1,)
+
+
+def test_same_name_replacement_is_left_to_ordinary_product_oracles(poisoned_fixture):
+    db, _, _, objects, dropped = poisoned_fixture
+    objects["v0_e42"] = "new-incarnation"
+    complete, details = driver.cleanup_abandoned("host", db)
+    assert complete and details["replaced"] == 1
+    assert objects["v0_e42"] == "new-incarnation"
+    assert not dropped
+
+
+def test_pid_reuse_does_not_keep_an_abandoned_fixture_live(
+    monkeypatch, poisoned_fixture
+):
+    db, _, _, _, dropped = poisoned_fixture
+    monkeypatch.setattr(driver, "_process_marker", lambda pid: "new-process-start")
+    assert driver.cleanup_abandoned("host", db)[0]
+    assert dropped == ["v0_e42"]
+
+
+def test_unknown_drop_response_retains_poison_journal_for_retry(
+    monkeypatch, poisoned_fixture
+):
+    db, _, conn, _, dropped = poisoned_fixture
+    execute = conn.execute
+
+    def lose_drop_response(query, params=None):
+        text = query.decode() if isinstance(query, bytes) else query
+        if text.startswith("DROP MATERIALIZED VIEW"):
+            raise psycopg.OperationalError("DROP response lost")
+        return execute(query, params)
+
+    monkeypatch.setattr(conn, "execute", lose_drop_response)
+    assert not driver.cleanup_abandoned("host", db)[0]
+    assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (1,)
+    monkeypatch.setattr(conn, "execute", execute)
+    assert driver.cleanup_abandoned("host", db)[0]
+    assert dropped == ["v0_e42"]
+
+
+def test_lost_poison_insert_response_keeps_durable_intent(
+    monkeypatch, poisoned_fixture
+):
+    db, slot, _, _, _ = poisoned_fixture
+    db.execute("DELETE FROM poison_intents")
+    db.commit()
+    monkeypatch.setattr(driver, "_process_marker", lambda pid: "current-owner")
+    monkeypatch.setattr(driver, "_prepare", Mock())
+    monkeypatch.setattr(driver, "_peek", Mock())
+    monkeypatch.setattr(driver, "_begin_stream", lambda *args: 10)
+    monkeypatch.setattr(driver, "_snapshot", Mock())
+
+    def lose_poison_response(conn, current_slot, batch, values):
+        if batch == 1:
+            assert db.execute(
+                "SELECT view_id, phase FROM poison_intents WHERE epoch=?", (slot.epoch,)
+            ).fetchone() == ("u42", "armed")
+            raise psycopg.OperationalError("poison may have committed")
+
+    monkeypatch.setattr(driver, "_insert", lose_poison_response)
+    with pytest.raises(psycopg.OperationalError):
+        driver.run_round(
+            "host", slot, model.generate(random.Random(3)), time.monotonic() + 30, db=db
+        )
+    assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (1,)
+
+
+def test_verified_repair_retires_intent_only_after_fresh_stream_check(
+    monkeypatch, poisoned_fixture
+):
+    db, slot, _, _, _ = poisoned_fixture
+    db.execute("DELETE FROM poison_intents")
+    db.commit()
+    monkeypatch.setattr(driver, "_process_marker", lambda pid: "current-owner")
+    monkeypatch.setattr(driver, "_prepare", Mock())
+    monkeypatch.setattr(driver, "_peek", Mock(return_value=True))
+    monkeypatch.setattr(driver, "_begin_stream", lambda *args: 10)
+    monkeypatch.setattr(driver, "_insert", Mock())
+    monkeypatch.setattr(driver, "_poison", Mock(return_value="expected overflow"))
+    monkeypatch.setattr(driver, "_old_stream_stays_failed", Mock())
+    snapshots = 0
+
+    def snapshot(*args):
+        nonlocal snapshots
+        snapshots += 1
+        if snapshots == 2:
+            assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (1,)
+
+    monkeypatch.setattr(driver, "_snapshot", snapshot)
+    driver.run_round(
+        "host", slot, model.generate(random.Random(3)), time.monotonic() + 30, db=db
+    )
+    assert snapshots == 2
+    assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (0,)
+
+
+def test_unexpected_product_error_in_cleanup_is_reported_not_allowlisted(
+    monkeypatch, poisoned_fixture
+):
+    db, _, conn, _, _ = poisoned_fixture
+    violation = Mock()
+    monkeypatch.setattr(driver, "unreachable", violation)
+    monkeypatch.setattr(
+        conn,
+        "execute",
+        Mock(
+            side_effect=psycopg.errors.InternalError_("unexpected controller failure")
+        ),
+    )
+    assert not driver.cleanup_abandoned("host", db)[0]
+    violation.assert_called_once()
+    assert violation.call_args.args[1]["phase"] == "abandoned poison cleanup"
+    assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (1,)
+
+
+def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(monkeypatch):
+    check = recovery.Recovery.__new__(recovery.Recovery)
+    check.host = "host"
+    check.env = Mock()
+    check.db = Mock()
+    check.mode = "test"
+    check.timings = {}
+    check.restarts_lock = threading.Lock()
+    check.restarts = Mock(started=time.monotonic() - 1000)
+    check.sampling_done = threading.Event()
+    observed = []
+
+    def good(name):
+        def execute():
+            observed.append(name)
+            return True, {}
+
+        return execute
+
+    for name in (
+        "canary",
+        "cr_up_to_date",
+        "replicas_online",
+        "reconfigurations_settled",
+        "hung_alters",
+        "no_crash_loop",
+    ):
+        setattr(check, name, good(name))
+    check.cleanup_aggregate_fixtures = lambda: (False, {"owner_still_active": True})
+    check.hydrated = Mock(side_effect=AssertionError("poison hydration checked"))
+    check.frontiers_advance = Mock(
+        side_effect=AssertionError("poison frontier checked")
+    )
+    check.collections_readable = Mock(
+        side_effect=AssertionError("poison readability checked")
+    )
+    check.restart_and_compare = Mock(
+        side_effect=AssertionError("poison restart snapshot checked")
+    )
+    check.drain_replacements = Mock()
+    check.retry_ledger = Mock()
+
+    def self_check(route):
+        observed.append(route)
+        return True, ""
+
+    check.self_check = self_check
+    monkeypatch.setattr(
+        recovery, "poll", lambda budget, callback, label: (*callback(), 0)
+    )
+    monkeypatch.setattr(recovery, "always", assert_product)
+    monkeypatch.setattr(recovery, "sometimes", Mock())
+    monkeypatch.setattr(recovery, "observe_pods", lambda env: [])
+    monkeypatch.setattr(recovery, "record_terminations", Mock())
+    monkeypatch.setattr(recovery.lifecycle, "Session", Mock())
+    monkeypatch.setattr(recovery.lifecycle, "open_state", Mock())
+    monkeypatch.setattr(recovery.lifecycle, "check_readable", Mock())
+    monkeypatch.setattr(recovery.rng, "random", lambda: 0)
+    assert check.run() == 0
+    assert "reconfigurations_settled" in observed
+    assert "hung_alters" in observed
+    assert "/api/catalog/check" in observed
+    assert "/api/coordinator/check" in observed
+    assert "no_crash_loop" in observed
+    check.retry_ledger.assert_called_once()
+    check.drain_replacements.assert_called_once()
+    check.hydrated.assert_not_called()
+    check.frontiers_advance.assert_not_called()
+    check.collections_readable.assert_not_called()
+    check.restart_and_compare.assert_not_called()
+    assert check.sampling_done.is_set()
