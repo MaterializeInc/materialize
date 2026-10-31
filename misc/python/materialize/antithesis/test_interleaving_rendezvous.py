@@ -261,6 +261,39 @@ def test_delete_abandons_sql_that_finishes_during_restart_journaling(
     sqlite3.Connection.close(db)
 
 
+def test_delete_exposure_starts_after_preparation_and_commit_release(monkeypatch):
+    now = [1.0]
+    db = sqlite3.connect(":memory:")
+    monkeypatch.setattr(pod_restarts, "open_db", lambda *args: db)
+    monkeypatch.setattr(pod_restarts.time, "monotonic", lambda: now[0])
+    observed = Mock()
+    monkeypatch.setattr(pod_restarts.telemetry, "fault_observed", observed)
+    kube = Mock()
+
+    def release():
+        now[0] = 5.0
+
+    def delete(*args, **kwargs):
+        now[0] = 6.0
+
+    kube.core.delete_namespaced_pod.side_effect = delete
+    assert pod_restarts.delete_recorded(
+        kube,
+        origin="test",
+        role="clusterd",
+        namespace="ns",
+        pod="pod",
+        uid=None,
+        grace=0,
+        reason="race",
+        cluster_id="u2",
+        before_delete=release,
+    )
+    observed.assert_called_once_with(
+        "clusterd", 5.0, 6.0, key="pod_restarts:1", cluster_id="u2"
+    )
+
+
 def test_ready_callback_rejects_a_changed_request_generation(rendezvous):
     deadline = time.monotonic() + 5
     assert (

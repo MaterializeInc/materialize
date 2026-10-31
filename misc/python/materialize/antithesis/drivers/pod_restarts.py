@@ -173,6 +173,8 @@ def delete_recorded(
         try:
             if before_delete is not None:
                 before_delete()
+            # Journal and callback work precede the actual fault request.
+            started = time.monotonic()
             kube.core.delete_namespaced_pod(
                 pod,
                 namespace,
