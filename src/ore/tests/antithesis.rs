@@ -13,13 +13,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![cfg(feature = "antithesis")]
+#[cfg(any(
+    feature = "antithesis",
+    all(feature = "process", feature = "tracing", target_os = "linux")
+))]
+use std::{fs, process::Command};
 
-use std::fs;
-use std::process::Command;
-
+#[cfg(feature = "antithesis")]
 use serde_json::{Value, json};
 
+#[cfg(feature = "antithesis")]
 #[mz_ore::test]
 fn coverage_does_not_assert_product_failures() {
     const CHILD: &str = "MZ_ANTITHESIS_OBSERVATION_PROBE";
@@ -103,4 +106,149 @@ fn coverage_does_not_assert_product_failures() {
         );
     }
     assert!(assertions.iter().all(|event| event["must_hit"] == false));
+}
+
+#[cfg(all(feature = "process", feature = "tracing", target_os = "linux"))]
+#[mz_ore::test]
+fn halt_records_full_message_only_in_antithesis_builds() {
+    const CHILD: &str = "MZ_ANTITHESIS_HALT_PROBE";
+    if let Some(mode) = std::env::var_os(CHILD) {
+        #[cfg(feature = "antithesis")]
+        mz_ore::antithesis::init();
+        match mode.to_str().expect("probe mode") {
+            "designed" | "absent" | "symlink" | "append" => {
+                mz_ore::halt!("fenced out old deployment; rebooting as leader")
+            }
+            "unknown" => mz_ore::halt!("unreviewed halt with Unicode \u{2603} and a newline\nEND"),
+            "oversize" => mz_ore::halt!("{}", "x".repeat(4096)),
+            "restart" => mz_ore::restart_in_place!("probe restart"),
+            "lease" => mz_ore::process::halt_with_code(168, format_args!("probe expired lease")),
+            "direct" => mz_ore::process::exit_thread_safe(167),
+            mode => panic!("unknown probe mode: {mode}"),
+        }
+    }
+
+    let directory = tempfile::tempdir().expect("create halt output directory");
+    for (mode, code) in [
+        ("designed", 166),
+        ("unknown", 166),
+        ("oversize", 166),
+        ("restart", 75),
+        ("lease", 168),
+        ("direct", 167),
+        ("absent", 166),
+        ("symlink", 166),
+        ("append", 166),
+    ] {
+        let output = directory.path().join(format!("{mode}.termination"));
+        let sdk = directory.path().join(format!("{mode}.sdk"));
+        match mode {
+            "absent" => {}
+            "symlink" => {
+                let target = directory.path().join("symlink-target");
+                fs::write(&target, b"sentinel").expect("create symlink target");
+                std::os::unix::fs::symlink(target, &output).expect("create symlink");
+            }
+            "append" => fs::write(&output, b"existing\n").expect("create nonempty file"),
+            _ => fs::write(&output, b"").expect("create existing termination file"),
+        }
+        let result = Command::new(std::env::current_exe().expect("current test executable"))
+            .args([
+                "--exact",
+                "halt_records_full_message_only_in_antithesis_builds",
+            ])
+            .env(CHILD, mode)
+            .env("MZ_ANTITHESIS_TERMINATION_LOG", &output)
+            .env("ANTITHESIS_SDK_LOCAL_OUTPUT", &sdk)
+            .output()
+            .expect("run halt probe");
+        assert_eq!(result.status.code(), Some(code), "{mode}: {result:?}");
+        if mode == "absent" {
+            assert!(
+                !output.exists(),
+                "halt recorder created its own evidence file"
+            );
+            continue;
+        }
+        let record = fs::read_to_string(&output).expect("read termination file");
+        if mode == "symlink" {
+            assert_eq!(record, "sentinel", "halt recorder followed a symlink");
+            continue;
+        }
+        if mode == "append" {
+            if cfg!(feature = "antithesis") {
+                assert!(record.starts_with("existing\nMZHALT1 0 166 "), "{record:?}");
+            } else {
+                assert_eq!(record, "existing\n");
+            }
+            continue;
+        }
+        if !cfg!(feature = "antithesis") || code != 166 {
+            assert!(record.is_empty(), "unexpected termination I/O: {mode}");
+            continue;
+        }
+        assert!(
+            record.len() < 4096 && record.ends_with(" END\n"),
+            "{mode}: {record:?}"
+        );
+        if mode == "oversize" {
+            assert!(record.contains(" INVALID oversize END\n"), "{record:?}");
+            continue;
+        }
+        let fields = record.split_ascii_whitespace().collect::<Vec<_>>();
+        assert_eq!(fields.len(), 9, "{record:?}");
+        assert_eq!(&fields[..3], &["MZHALT1", "0", "166"]);
+        assert!(fields[3].parse::<u128>().expect("nanosecond timestamp") > 0);
+        let decode = |hex: &str| {
+            let bytes = hex
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    u8::from_str_radix(std::str::from_utf8(pair).expect("hex text"), 16)
+                        .expect("hex byte")
+                })
+                .collect::<Vec<_>>();
+            String::from_utf8(bytes).expect("UTF8 field")
+        };
+        let location = decode(fields[6]);
+        let message = decode(fields[7]);
+        assert_eq!(
+            location.len(),
+            fields[4].parse::<usize>().expect("location length")
+        );
+        assert_eq!(
+            message.len(),
+            fields[5].parse::<usize>().expect("message length")
+        );
+        assert!(
+            location.starts_with("src/ore/tests/antithesis.rs:"),
+            "{location}"
+        );
+        assert_eq!(
+            message,
+            if mode == "designed" {
+                "fenced out old deployment; rebooting as leader"
+            } else {
+                "unreviewed halt with Unicode \u{2603} and a newline\nEND"
+            }
+        );
+        #[cfg(feature = "antithesis")]
+        if mode == "unknown" {
+            assert!(
+                fs::read_to_string(sdk)
+                    .expect("read SDK events")
+                    .lines()
+                    .any(|line| {
+                        let event: Value = serde_json::from_str(line).expect("parse SDK event");
+                        event.get("antithesis_assert").is_some_and(|assertion| {
+                            assertion["message"]
+                                == "Materialize process halted for an unexpected reason"
+                                && assertion["hit"] == true
+                                && assertion["condition"] == false
+                        })
+                    }),
+                "unknown halt lost its product assertion"
+            );
+        }
+    }
 }
