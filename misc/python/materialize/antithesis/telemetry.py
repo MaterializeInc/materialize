@@ -50,6 +50,10 @@ HEALTH_DIAGNOSTIC_CAPACITY = 128
 _FAMILIES = frozenset(
     {
         "history",
+        "aggregate_retractions",
+        "atomic_commits",
+        "bounded_subscribe",
+        "index_handover",
         "counters",
         "read_paths",
         "ivm",
