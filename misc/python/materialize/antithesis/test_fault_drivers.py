@@ -25,7 +25,7 @@ import urllib3
 
 pytest.importorskip("antithesis")
 
-from materialize.antithesis import observations, quiet
+from materialize.antithesis import exit_evidence, observations, quiet
 from materialize.antithesis.drivers import canaries, recovery, resource_kills, rollouts
 
 
@@ -229,6 +229,42 @@ def test_halt_capture_uses_the_stable_current_or_previous_log(
     assert call.kwargs["limit_bytes"] == recovery.HALT_EVIDENCE_MAX_BYTES + 1
     assert call.kwargs["tail_lines"] == recovery.HALT_EVIDENCE_TAILS[0]
     assert 0 < call.kwargs["_request_timeout"] <= recovery.HALT_EVIDENCE_REQUEST_S
+
+
+@pytest.mark.parametrize(
+    "code,classification,explained",
+    [(168, "reader_lease_expired", True), (169, "unknown", False)],
+)
+def test_reader_lease_exit_has_an_explanation_without_accepting_unknown_codes(
+    halt_capture: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    code: int,
+    classification: str,
+    explained: bool,
+) -> None:
+    verdict, coverage = Mock(), Mock()
+    monkeypatch.setattr(recovery, "always_or_unreachable", verdict)
+    monkeypatch.setattr(recovery, "sometimes", coverage)
+    observed = replace(halt_capture.observation, exit_code=code)
+
+    assert recovery.record_terminations(halt_capture.db, [observed]) == 1
+
+    assert halt_capture.db.execute(
+        "SELECT classification FROM terminations"
+    ).fetchone() == (classification,)
+    assert verdict.call_args.args[0] is explained
+    assert any(
+        call.args[0] is explained and "reader lease expired" in call.args[1]
+        for call in coverage.call_args_list
+    )
+
+
+def test_explaining_reader_lease_expiration_does_not_allowlist_native_exit() -> None:
+    prop = {
+        "name": "No unexpected container exits: container: clusterd, namespace: mz , exit code: 168",
+        "counterexample_count": 1,
+    }
+    assert exit_evidence.classify_exit_property(prop, []).disposition == "product"
 
 
 @pytest.mark.parametrize(
@@ -600,6 +636,76 @@ def test_halt_evidence_retries_missing_logs_without_polling_flood(
         "antithesis_exit_evidence_missing",
         "antithesis_exit_evidence",
     ]
+
+
+def test_halt_evidence_retries_changed_route_for_the_same_incarnation(
+    halt_capture: SimpleNamespace,
+) -> None:
+    cs = halt_capture.pod.status.container_statuses[0]
+    cs.state.terminated.container_id = "cri-o://terminated"
+    cs.state.terminated.message = _termination_frame(halt_capture.message)
+    cs.last_state.terminated = cs.state.terminated
+    cs.state.terminated = None
+    cs.state.running = SimpleNamespace(started_at="2026-10-30T12:00:01Z")
+    cs.restart_count = 1
+    cs.container_id = "cri-o://replacement"
+    budget = recovery.HaltEvidenceBudget()
+    recovery.record_halt_evidence(halt_capture.db, [halt_capture.observation], budget)
+    halt_capture.clock.now = recovery.OBSERVER_POLL_S
+    refreshed = replace(
+        halt_capture.observation, current_terminated=False, restart_count=1
+    )
+    recovery.record_halt_evidence(halt_capture.db, [refreshed], budget)
+
+    events = halt_capture.emitted.call_args_list
+    assert [call.args[0] for call in events] == [
+        "antithesis_exit_evidence_missing",
+        "antithesis_exit_evidence",
+    ]
+    mismatch = events[0].args[1]["selector_mismatch"]
+    assert mismatch["stage"] == "before_capture"
+    assert mismatch["expected"]["current_terminated"] is True
+    assert mismatch["observed"]["current_terminated"] is False
+    assert mismatch["observed"]["container_id"] == "cri-o://terminated"
+    assert events[1].args[1]["termination"]["container_id"] == "cri-o://terminated"
+    assert events[1].args[1]["termination"]["termination_count"] == 1
+    halt_capture.core.read_namespaced_pod_log.assert_not_called()
+    assert halt_capture.core.read_namespaced_pod.call_count == 3
+
+
+@pytest.mark.parametrize("change", ["uid", "finished"])
+def test_changed_route_retries_keep_rejecting_replacement_terminations(
+    halt_capture: SimpleNamespace, change: str
+) -> None:
+    term = halt_capture.pod.status.container_statuses[0].state.terminated
+    term.container_id = "cri-o://replacement"
+    term.message = _termination_frame(halt_capture.message)
+    if change == "uid":
+        halt_capture.pod.metadata.uid = "replacement-uid"
+    else:
+        term.finished_at = "2026-10-30T12:00:02Z"
+    budget = recovery.HaltEvidenceBudget()
+    for now in (0, 2, 4, 6, 8, 10):
+        halt_capture.clock.now = now
+        recovery.record_halt_evidence(
+            halt_capture.db, [halt_capture.observation], budget
+        )
+
+    assert halt_capture.core.read_namespaced_pod.call_count == 3
+    assert budget.attempts == 0
+    assert budget.stats["routing_changed"] == 3
+    halt_capture.emitted.assert_called_once()
+    missing = halt_capture.emitted.call_args.args[1]
+    assert missing["reasons"] == ["routing_changed"]
+    mismatch = missing["selector_mismatch"]
+    assert mismatch["expected"]["pod_uid"] == "pod-uid"
+    assert mismatch["observed"]["container_id"] == "cri-o://replacement"
+    if change == "uid":
+        assert mismatch["observed"]["pod_uid"] == "replacement-uid"
+    else:
+        assert mismatch["observed"]["finished_at"] == "2026-10-30T12:00:02Z"
+    assert halt_capture.db.execute("SELECT * FROM halt_evidence").fetchall() == []
+    halt_capture.core.read_namespaced_pod_log.assert_not_called()
 
 
 def test_missing_halt_diagnostics_are_deduplicated_and_allow_later_capture(
