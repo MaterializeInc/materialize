@@ -593,6 +593,113 @@ async fn test_auth_expiry() {
     );
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
+async fn test_auth_frontegg_access_token_expiry() {
+    // A pgwire session authenticated with an access token cannot be refreshed,
+    // so it must end when the token expires.
+    const VALID_FOR_SECS: i64 = 5;
+
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let frontegg_user = "user@_.com";
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        "frontegg-mock".to_owned(),
+        encoding_key.clone(),
+        decoding_key.clone(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        None,
+        SYSTEM_TIME.clone(),
+        VALID_FOR_SECS,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key,
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg_auth(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+    // Mint the token after startup so it is still valid when connecting.
+    let claims = Claims {
+        exp: SYSTEM_TIME.as_secs() + VALID_FOR_SECS,
+        email: Some(frontegg_user.to_string()),
+        iss: "frontegg-mock".to_string(),
+        sub: Uuid::new_v4(),
+        user_id: None,
+        tenant_id,
+        roles: Vec::new(),
+        permissions: Vec::new(),
+        token_type: ClaimTokenType::UserToken,
+        metadata: None,
+        unknown_claims: Default::default(),
+    };
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &claims,
+        &encoding_key,
+    )
+    .unwrap();
+    let pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(&token)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        frontegg_user
+    );
+
+    tokio::time::sleep(Duration::from_secs(
+        (VALID_FOR_SECS + 1).try_into().unwrap(),
+    ))
+    .await;
+    let err = pg_client
+        .query_one("SELECT current_user", &[])
+        .await
+        .unwrap_err();
+    // The server ends the session with a FATAL "authentication expired" while
+    // the client is idle, so the client only sees the closed connection.
+    assert!(err.is_closed(), "{err}");
+}
+
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
