@@ -29,9 +29,6 @@ join matches nothing and returns both keys' values.
 * read a random subset of keys with `mz_now()`, through the tables and the
   derived paths, in one statement or in one read-only transaction.
 
-Materialize rejects write transactions that touch two tables (`wrong set of
-locks acquired`), so every write transaction appends to exactly one key.
-
 A session connects through the public Service, or directly to an
 environmentd pod of the active generation or of the other one during a
 rollout. Whatever a pod answers joins the history, so a stale or read-only
