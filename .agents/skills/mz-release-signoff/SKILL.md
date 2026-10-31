@@ -24,6 +24,8 @@ mcp__grafana__list_datasources with type "prometheus"
 
 Reading the bot request also needs the Slack MCP server, but a user-pasted dashboard link or version string is enough to proceed without it.
 
+**Without the Grafana MCP server, the mz-grafana skill's CLI does the same work.** `query` and `instant` run PromQL against a datasource by stack and region, `panels <uid>` lists a dashboard's panels and their queries for the roster, `metric-names --prefix` confirms a metric exists before an empty result is read as zero, and `prom-explore-url` builds evidence links. Its `panels` output omits text panel content, so read the two `Signing off on Releases` panels below from the dashboard JSON instead: `GET /api/dashboards/uid/<uid>`, then `.dashboard.panels[] | select(.type=="text") | .options.content`.
+
 ## Read the panel instructions, then apply this skill
 
 Two dashboards carry their own `Signing off on Releases` text panel, and they say different things. Read both at the start of every run, because they are maintained separately from this skill:
@@ -67,7 +69,9 @@ count by (mz_version) (group by (namespace, mz_version)
 
 Run it as a range query with a 6h step. The `-dev` exclusion drops personal development environments, which run arbitrary old builds and only add noise. The `max_over_time` window matches the step for the reason given under *Step 2*, and it also changes how a transition reads: an environment that upgrades mid-bucket is counted under both versions, so the counts in that one bucket sum to more than the fleet. That is the boundary bucket announcing itself, not an error.
 
-Two facts come out of this. The release under test is the highest `vX.Y.0-rc.N` present, and the boundary per stack is the step where the previous version disappears and it appears. Expect two boundaries for the same release, because a later `rc` usually supersedes an earlier one, and both are the new release for sign-off purposes.
+Two facts come out of this. The release under test is the highest `vX.Y.0-rc.N` present, and the boundary per stack is the step where the previous version disappears and it appears.
+
+The previous release differs by stack. The canaries run the previous weekly's final version, for example v26.47.0, while staging runs release candidates only, so its previous release is the previous weekly's last RC, for example v26.47.0-rc.5. A final version seen on a handful of staging environments comes from environments outside the release rollout and is not the baseline. Expect two boundaries for the same release, because a later `rc` usually supersedes an earlier one, and both are the new release for sign-off purposes.
 
 A second, sharper boundary marker is the process count doubling. Zero-downtime upgrades run the old and new generation side by side, so any per-pod series count roughly doubles for one bucket:
 
@@ -92,7 +96,7 @@ This derivation is a one-shot whose output is pinned for the rest of the run, so
 
 Count the rows before pinning them. This list is the entire production selector for the rest of the run, and a canary region holds one or two environments, so a namespace lost to one missed scrape puts the whole prod sweep on half the fleet with nothing downstream to catch it. Expect one row per canary organization per region.
 
-The canary organizations are `Materialize Production Sandbox` and `Materialize Production Analytics`. Which regions carry which has changed over time, so always derive rather than assume, and note that the bot's links and Prometheus have disagreed on this. Sources and Sinks historically inspected only the sandbox environment.
+The canary organizations are `Materialize Production Sandbox` and `Materialize Production Analytics`. The datasource table under *Areas* lists which regions carry which. Derive the list anyway, and check its row count against that table before pinning it. Sources and Sinks historically inspected only the sandbox environment.
 
 The canonical canary list lives in `MaterializeInc/release`, in `templates/issue.md`, as the `--environment` arguments to `bin/deploy upgrade production`. The `storage-overview` sign-off panel points instead at `MaterializeInc/cloud/.github/ISSUE_TEMPLATE/03-release.md`, which no longer exists.
 
@@ -104,6 +108,8 @@ sum(rate(<metric>[6h]) * on(namespace) group_left()
 ```
 
 Escaping note: write `-rc[.]` rather than `-rc\\.` so the expression survives JSON encoding unchanged.
+
+When the comparison is between two RCs of the same release, pin staging to the environments that both RC deploys upgraded rather than joining on version, so before and after describe the same fleet. The mz-release tool records each deploy's upgraded environments in its cache under `deploy_staging.rollout_state.regions[<region>].envs[]`. Drop environments whose `final_state` is not `Success` in either deploy, such as `InvalidUpgrade`, and every staging namespace that is in neither record, which on v26.48.0-rc.3 meant 23 of up to 37 rc-labelled namespaces in us-east-1 and 4 of 17 in eu-west-1.
 
 **Never read `v2_mz_compute_cluster_status` at an instant. Wrap every use of it in `max_over_time` over the window it is being read across.** For the two range queries that is the step; for Step 2's one-shot derivation it is the analysis window. It comes from the promsql exporter, so one missed scrape leaves a namespace with no series at that timestamp, and each of the three places this workflow reads it then fails silently and in the direction of health: the staging join drops every pod of that namespace from the aggregate, Step 2's derivation drops it from the pinned production selector, and Step 1's boundary query reports its version as having disappeared. On the v26.40.0-rc.3 run the staging working-set sum read 161 GB instead of 229 GB and swap read 0 instead of 57 GB at one bucket, because a single customer environment had no status sample at that instant. Widening the lookback closes all three. Dropping the staging join instead is not an option, since development environments run at roughly a quarter of staging clusterd CPU.
 
@@ -199,6 +205,8 @@ State the verdict first, then the method, then the findings. The method matters 
 
 Separate release-blocking findings from notes. A note is something worth a second look next release that does not survive Step 6 as a regression. Give each note its magnitude and the reason it is not conclusive, so the next person can compare against it rather than rediscover it.
 
+**Running the areas in parallel.** The five areas are independent sweeps with the same boundaries, so one agent per area works well when they share a written brief that fixes the release and previous versions per stack, the boundaries and windows, the pinned namespace lists, and the known noise environments. Have each write its section to a file and reply with a short summary, then re-run every headline number yourself before it goes into the report or a post: a sub-sweep's summary has disagreed with its own table.
+
 Sign-off happens in the bot's thread. As of August 2026 there is a proposal to sign off by reacting to each team's message rather than replying, which was not yet confirmed; check the thread's convention before posting, and never post to Slack without the user asking.
 
 ## Areas
@@ -213,6 +221,7 @@ The bot links one dashboard per area. All are on `grafana.dev.materialize.com`.
 | Persist | `persist` | `m3U1U6ZVk` | `references/persist.md` |
 | Adapter | `environmentd-health` | `mR1Kg1d4z` | `references/adapter.md` |
 | Reference | `release-health` | `zKe0K0N4z` | `references/reference-dashboards.md` |
+| Reference | `networking-top-50` | `axhjnp` | `references/reference-dashboards.md` |
 | Reference | `networking` | `bHQE8bN4k` | `references/reference-dashboards.md` |
 
 Each reference names the metrics, their types and labels, the invariants that hold at any fleet size, and the hazards specific to that area. Read the one for the area you are verifying before running a single query. The `Storage` label the bot still uses refers to work now split between Sources and Sinks and Persist.
@@ -223,14 +232,18 @@ The bot links production only, but staging is a larger and earlier sample of the
 
 Datasource UIDs, which the dashboards take as the `datasource` variable:
 
-| Stack | Region | UID |
-|---|---|---|
-| Production | us-east-1 | `2K85O21Vz` |
-| Production | eu-west-1 | `E0J0O2J4k` |
-| Production | us-west-2 | `ee2e6227-dc2d-4ca5-bb58-ca826fd6d614` |
-| Staging | us-east-1 | `Ks85Oh14z` |
-| Staging | eu-west-1 | `JKT0Oh1Vk` |
-| Staging | us-west-2 | `c979f3ee-16d0-44f1-9f24-9e208e0326d9` |
+| Stack | Region | UID | Canary environments |
+|---|---|---|---|
+| Production | us-east-1 | `2K85O21Vz` | Sandbox, Analytics |
+| Production | eu-west-1 | `E0J0O2J4k` | Sandbox, Analytics |
+| Production | us-west-2 | `ee2e6227-dc2d-4ca5-bb58-ca826fd6d614` | Sandbox |
+| Staging | us-east-1 | `Ks85Oh14z` | none |
+| Staging | eu-west-1 | `JKT0Oh1Vk` | none |
+| Staging | us-west-2 | `c979f3ee-16d0-44f1-9f24-9e208e0326d9` | none |
+
+The networking area has two dashboards with the same 48 panels, panel IDs and template variables. `axhjnp` is a copy of `bHQE8bN4k`, made on 2026-10-10, that limits 20 per-pod panels to the top 50 pods with `topk(50)`, and the bot's links have pointed at it since then. Either serves the sweep; use `bHQE8bN4k` when a pod outside the top 50 matters.
+
+The canary environments are the namespaces `environment-88f4bc01-67b2-4ae7-b53e-6c264993152c-0` (Materialize Production Sandbox) and `environment-b65cc970-ba71-43fd-bbea-5b4841bc9742-0` (Materialize Production Analytics). The release tool's rollout records show this split in every canary deploy from v26.13.0 to v26.48.0, with Analytics deleted in us-west-2. The bot's eu-west-1 links name only Sandbox, so add Analytics there by hand. Staging has no canaries; its environment set comes from the rollout records, as described under *Step 2*.
 
 Staging us-west-2 held no compute environments in August 2026, so `v2_mz_compute_cluster_status` returns nothing there. Confirm it is still empty rather than reporting a region as clean.
 
@@ -267,6 +280,24 @@ That turns "is this empty panel a regression or a rename?" into a lookup. A name
 **The catalog covers only this repository's Rust tree.** It holds no `v2_mz_*`, which the promsql exporter derives from SQL, no `container_*`, `kube_*`, or `kubelet_*` from cAdvisor and kube-state-metrics, and no cloud-side names such as `mz_envd_up` or `mz_external_*`. Those families are confirmed against Prometheus with `list_prometheus_metric_names`, and they are where the sweep has actually been bitten: the compute dashboard's scratch-disk panels plot `kubelet_volume_stats_used_bytes`, which resolves to five series in a single namespace in both production and staging us-east-1 and none of them a `clusterd` volume, so those panels render blank in both stacks.
 
 The diff survives that blind spot, because both sides share it and a dynamically named metric is missing from both catalogs and so never appears in either list. The diff therefore never reports a rename that did not happen. It can still miss one, so an empty result that the diff does not explain is not yet cleared. Confirm it against Prometheus with `list_prometheus_metric_names` before reporting the metric as zero.
+
+Some panels return no series for reasons that predate any release under test. Read an empty result on one of these as expected, not as a regression:
+
+| Panels | Dashboard | Metric | Empty since | Change |
+|---|---|---|---|---|
+| `Stash (CRDB) Query Latencies` | `environmentd-health` | `mz_query_latency_bucket` | v0.97.0, 2024-04 | deleted with the stash in #26647 |
+| `Avg Transaction Commit Latency`, `Avg Sync Latency` and their by-env variants | `environmentd-health` | `mz_catalog_transaction_commit_latency_seconds`, `mz_catalog_sync_latency_seconds` | v26.36.0, 2026-08-01 on the canaries | converted to histograms in #37926 |
+| `#workers spilling to disk`, `% source-workers spilling to disk` | `storage-upsert-sources`, `storage-overview` | `mz_storage_upsert_state_rocksdb_autospill_in_use` | v0.147.16, 2025-07 | autospill backend removed in commit `18fb1f796d` |
+| RocksDB multi get and multi put panels, merge-snapshot panels | `storage-upsert-sources` | `mz_storage_rocksdb_multi_get_*`, `mz_storage_rocksdb_multi_put_*`, `mz_storage_upsert_merge_snapshot_*` | intermittent | recorded only by the legacy upsert operator |
+| Backpressure panels | `storage-upsert-sources` | `mz_storage_upsert_backpressure_*` | intermittent | registered only when `storage_dataflow_max_inflight_bytes` is set |
+| `Disk Usage % (requires env)` | `persist` | `kubelet_volume_stats_*` | 2026-06-26 | not traced |
+| 34 `CPU Throttling + Environmentd Down`, arm A | `release-health` | `mz_envd_up` | before 2026-05 | exporter series carry a `v2_` prefix |
+
+- **Catalog latency panels:** #37926 kept the metric names but made them histograms, so Prometheus exposes `_bucket`, `_sum` and `_count` and the bare names the panels divide have no series. Divide the `_sum` rate by the `_count` rate instead.
+- **Legacy upsert panels:** the state backend in `src/storage/src/upsert/types.rs` records these; the v2 operator, chosen per dataflow by the `enable_upsert_v2` dyncfg, does not. On the us-east-1 Sandbox canary the merge-snapshot series existed only on 2026-09-01, 09-02 and 10-12 between late May and 2026-10-30, so empty is their normal state.
+- **Backpressure panels:** `src/storage/src/render/sources.rs` creates these metrics only when `storage_dataflow_max_inflight_bytes` yields a limit. On the same canary they had series from 2026-08-31 to 09-19 and on 10-12.
+- **Disk Usage:** `kubelet_volume_stats_used_bytes` had series for some production us-east-1 environments until 2026-06-26 and has had none since. The cloud change behind it was not found.
+- **`mz_envd_up`:** the cloud Prometheus relabel rule in `infra/prometheus/prometheus.py` renames the promsql exporter's series with a `v2_` prefix, and the unprefixed name has had no series in Prometheus's retained history, which starts in late May 2026. The panel's other arms already read `v2_mz_envd_up`.
 
 When a name resolves in neither the catalog nor Prometheus, the panel that plots it is dead, and the reference should record that rather than the metric. `git log -S<name> --all -- src/` settles which kind of dead it is, and the two kinds read differently in a report. `mz_query_latency` was real, added in #22049 and deleted in #26647 along with the stash, so the `environmentd-health` panel that still plots its `_bucket` family has been empty since that deletion. `mz_persist_columnar_validation_count` and `mz_txn_placeholder_schema_apply` have never appeared in this repository at all, yet both are live arms of the persist dashboard's `should be small` panel, and the working spelling of the first sits beside it on the same panel as `mz_persist_columnar_op_count` with `op="validation"` and `result="invalid"`.
 
