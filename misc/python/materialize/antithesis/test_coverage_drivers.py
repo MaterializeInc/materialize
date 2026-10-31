@@ -73,6 +73,49 @@ def test_only_completed_correct_history_comparisons_credit_interleavings(
         record.assert_not_called()
 
 
+@pytest.mark.parametrize("path", ["index", "mv", "join_mv"])
+@pytest.mark.parametrize("exposure", ["Applied", "Promoting", "delete"])
+def test_maintained_read_disruption_witness_requires_a_promotion_or_fault(
+    monkeypatch: pytest.MonkeyPatch, path: str, exposure: str
+) -> None:
+    operations = [
+        sz.Op(1, sz.Kind.APPEND, sz.Outcome.OK, 1, 4, write_key=0),
+        sz.Op(
+            2,
+            sz.Kind.READ,
+            sz.Outcome.OK,
+            5,
+            6,
+            observations=(sz.Observation(0, path, (1,)),),
+        ),
+    ]
+    phase = "Promoting" if exposure == "Promoting" else "Applied"
+    events = [telemetry.Event("phase", 2, 2, phase=phase)]
+    if exposure == "delete":
+        events.append(
+            telemetry.Event("fault", 2.5, 3, role="clusterd", cluster_id="u1")
+        )
+    monkeypatch.setattr(telemetry, "enabled", lambda: True)
+    monkeypatch.setattr(telemetry, "events_between", lambda *args: events)
+    monkeypatch.setattr(telemetry, "comparison", Mock())
+    record, guidance = Mock(), Mock()
+    monkeypatch.setattr(telemetry, "record_coverage", record)
+    monkeypatch.setattr(telemetry_coverage, "sometimes", guidance)
+
+    telemetry_coverage.history_checked(operations, sz.Report(), {2}, cluster_id="u1")
+
+    record.assert_called_once_with(
+        {(phase, "clusterd" if exposure == "delete" else "", "append", path, "acked")}
+    )
+    observed = [
+        call.args[0]
+        for call in guidance.call_args_list
+        if call.args[1]
+        == "coverage: a maintained read path checked a write exposed to an observed disruption"
+    ]
+    assert observed == [exposure != "Applied"]
+
+
 @pytest.mark.parametrize(
     "error",
     [
