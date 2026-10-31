@@ -46,7 +46,7 @@ def open_state() -> sqlite3.Connection:
         db.execute(
             "CREATE TABLE IF NOT EXISTS plans (id INTEGER PRIMARY KEY AUTOINCREMENT,"
             " shards TEXT NOT NULL, value INTEGER NOT NULL, outcome TEXT NOT NULL,"
-            " retired INTEGER NOT NULL DEFAULT 0)"
+            " retired INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0)"
         )
     return db
 
@@ -54,7 +54,9 @@ def open_state() -> sqlite3.Connection:
 def load_plans(db: sqlite3.Connection) -> dict[int, Plan]:
     return {
         marker: Plan(tuple(json.loads(shards)), value, outcome, bool(retired))
-        for marker, shards, value, outcome, retired in db.execute("SELECT * FROM plans")
+        for marker, shards, value, outcome, retired in db.execute(
+            "SELECT id, shards, value, outcome, retired FROM plans"
+        )
     }
 
 
@@ -102,6 +104,21 @@ def check(
     if still_held is not None and not still_held():
         held = None
     errors = violations(plans, rows, uncommitted=held)
+    visible = {int(row[1]) for row in rows}
+    if not errors:
+        with db:
+            db.executemany(
+                "UPDATE plans SET outcome = 'observed' WHERE id = ?"
+                " AND outcome = 'indeterminate'",
+                [(marker,) for marker in visible],
+            )
+            # A definite rejection racing the read contradicts presence,
+            # regardless of when the snapshot selected its timestamp.
+            errors.extend(
+                f"observed transaction reported rejected {marker}"
+                for marker, outcome in db.execute("SELECT id, outcome FROM plans")
+                if marker in visible and outcome == "rejected"
+            )
     always(
         not errors,
         "atomic commits: one snapshot preserves complete transaction markers across tables",
@@ -110,13 +127,6 @@ def check(
     telemetry.comparison("atomic_commits", "table", not errors, max(1, len(plans)))
     if errors:
         return False
-    visible = {int(row[1]) for row in rows}
-    with db:
-        db.executemany(
-            "UPDATE plans SET outcome = 'observed' WHERE id = ?"
-            " AND outcome = 'indeterminate'",
-            [(marker,) for marker in visible],
-        )
     sometimes(
         any(
             len(plan.shards) > 1 and marker in visible and not plan.retired
@@ -136,24 +146,37 @@ def check(
 def _prune(db: sqlite3.Connection, conn: psycopg.Connection, deadline: float) -> bool:
     if db.execute("SELECT count(*) FROM plans").fetchone()[0] < MAX_PLANS:
         return True
-    if db.execute(
-        "SELECT 1 FROM plans WHERE outcome = 'indeterminate' LIMIT 1"
-    ).fetchone():
+    markers = [
+        marker
+        for (marker,) in db.execute(
+            "SELECT id FROM plans WHERE outcome <> 'indeterminate' AND finalized = 1 ORDER BY id"
+        )
+    ]
+    if not markers:
         return False
-    cutoff = db.execute("SELECT max(id) FROM plans").fetchone()[0]
     # DELETE is a single-statement transaction in Materialize. Retire checked
     # writes before cleanup, which may remove only some participating tables.
+    # An observed writer must finalize before retirement so its late response
+    # can still contradict the durable observation.
     with db:
-        db.execute("UPDATE plans SET retired = 1")
+        db.executemany(
+            "UPDATE plans SET retired = 1 WHERE id = ?",
+            [(marker,) for marker in markers],
+        )
     for shard in range(TABLES):
         # A timed-out DELETE can commit after this process disappears.
-        # Its fixed cutoff must not erase the next invocation's markers.
+        # Its immutable IDs must not erase unknown or future markers.
         _execute(
-            conn, deadline, f"DELETE FROM {SCHEMA}.t{shard} WHERE id <= %s", (cutoff,)
+            conn,
+            deadline,
+            f"DELETE FROM {SCHEMA}.t{shard} WHERE id = ANY(%s::bigint[])",
+            (markers,),
         )
     with db:
-        db.execute("DELETE FROM plans WHERE id <= ?", (cutoff,))
-    return True
+        db.executemany(
+            "DELETE FROM plans WHERE id = ?", [(marker,) for marker in markers]
+        )
+    return db.execute("SELECT count(*) FROM plans").fetchone()[0] < MAX_PLANS
 
 
 def write(
@@ -195,7 +218,20 @@ def write(
                 else "indeterminate"
             )
         with db:
-            db.execute("UPDATE plans SET outcome = ? WHERE id = ?", (outcome, marker))
+            db.execute(
+                "UPDATE plans SET outcome = CASE WHEN outcome = 'observed' THEN outcome ELSE ? END,"
+                " finalized = 1 WHERE id = ?",
+                (outcome, marker),
+            )
+            recorded = db.execute(
+                "SELECT outcome FROM plans WHERE id = ?", (marker,)
+            ).fetchone()
+        if recorded is not None and recorded[0] == "observed":
+            always(
+                outcome != "rejected",
+                "atomic commits: an observed committed transaction is never reported rejected",
+                {"marker": marker, "outcome": outcome},
+            )
     finally:
         db.close()
 
