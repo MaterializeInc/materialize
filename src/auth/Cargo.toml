@@ -19,6 +19,7 @@ proptest.workspace = true
 static_assertions.workspace = true
 aws-lc-rs.workspace = true
 itertools.workspace = true
+jsonwebtoken.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 

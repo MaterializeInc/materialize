@@ -31,9 +31,9 @@ use mz_adapter::{
     PeekResponseUnary, metrics, verify_datum_desc,
 };
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
-use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_auth::user::ExternalUserMetadata;
+use mz_auth::{Authenticated, is_jwt};
 use mz_authenticator::{Authenticator, GenericOidcAuthenticator};
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::cast::CastFrom;
@@ -705,12 +705,6 @@ where
             conn.flush().await
         }
     }
-}
-
-/// Decides if a given password is a JWT by checking
-/// if we can decode its header.
-fn is_jwt(password: &str) -> bool {
-    jsonwebtoken::decode_header(password).is_ok()
 }
 
 /// Returns (name, value) session settings pairs from an options value.
@@ -4077,23 +4071,6 @@ mod test {
         for test in tests {
             let got = split_options(test.input);
             assert_eq!(got, test.expect, "input: {}", test.input);
-        }
-    }
-
-    #[mz_ore::test]
-    fn test_is_jwt() {
-        // A real JWT header decodes successfully.
-        assert!(is_jwt("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature"));
-        // Not JWTs: plain strings, wrong segment count, non-JSON headers.
-        for s in [
-            "",
-            "secure_password",
-            "p4ss.w0rd",
-            "aaa.bbb.ccc",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig.extra",
-        ] {
-            assert!(!is_jwt(s), "is_jwt({s:?})");
         }
     }
 }
