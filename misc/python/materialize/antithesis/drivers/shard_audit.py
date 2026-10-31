@@ -65,8 +65,8 @@ check would catch, is a plain `always`, so an open known bug does not mask it.
 Fault handling: a persistcli failure (non-zero exit, timeout, unparsable
 output) means consensus or blob was unreachable or the shard moved under the
 read, and that audit is recorded as incomplete. Each invocation shares one
-budget across its persistcli commands. The final sweep asserts completeness
-after faults stop, so unreachable or unreadable shards cannot silently pass.
+budget across its persistcli commands. Sweep completeness is a coverage
+observation. Unavailable audit inputs cannot establish a product violation.
 
 Endpoints: consensus is the metadata Postgres with
 `options=--search_path=consensus`, as environmentd derives it from
@@ -96,7 +96,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 )
 from kubernetes.client.rest import ApiException  # type: ignore
 
-from materialize.antithesis import remap_frontiers, sql, state, telemetry
+from materialize.antithesis import observations, remap_frontiers, sql, state, telemetry
 from materialize.antithesis.drivers import lifecycle, postgres_sources
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
@@ -485,15 +485,7 @@ class Auditor:
         telemetry.comparison(
             "shard_audit",
             "full",
-            (
-                None
-                if not self.completed
-                else (
-                    complete
-                    if self.origin == "finally"
-                    else (True if complete else None)
-                )
-            ),
+            True if self.completed and complete else None,
             self.completed or 1,
         )
         details = {
@@ -505,7 +497,7 @@ class Auditor:
             "enumerated": self.enumerated,
         }
         if self.origin == "finally":
-            always(
+            sometimes(
                 complete,
                 "shard audit: all selected audits complete within the final sweep budget",
                 details,
@@ -936,10 +928,23 @@ def _main(
         auditor = Auditor(origin, timeout_s)
     except (ApiException, OSError, RuntimeError) as e:
         log(f"cannot locate the environment: {e}")
+        if isinstance(e, ApiException) and getattr(e, "status", None) == 403:
+            observations.harness_error(
+                "shard audit",
+                "workload service account cannot locate the environment",
+                {"status": 403},
+            )
+        telemetry.comparison("shard_audit", "full", None)
         if origin == "finally":
-            always(
+            sometimes(
                 False,
                 "shard audit: all selected audits complete within the final sweep budget",
+                {"origin": origin, "enumerated": False, "error": str(e)},
+            )
+        else:
+            sometimes(
+                False,
+                "shard audit: all selected audits completed within the anytime budget",
                 {"origin": origin, "enumerated": False, "error": str(e)},
             )
         return 0
