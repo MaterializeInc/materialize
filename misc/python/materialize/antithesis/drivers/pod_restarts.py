@@ -556,6 +556,23 @@ def _owned_interleaving(
         db = rollouts.requests_db(kube.env)
         lease = rollouts.CrLease(kube.env)
         acquired = False
+
+        def retry_unsent() -> None:
+            try:
+                lease.renew()
+                current = rollout_steps.load(db)
+                if (
+                    current is not None
+                    and current.owner == "interleavings"
+                    and current.scenario_id == scenario_id
+                    and current.stage == "cleanup"
+                    and time.monotonic() < current.deadline
+                ):
+                    current.stage = "start"
+                    rollout_steps.save(db, current)
+            except (rollouts.LeaseLost, sqlite3.OperationalError) as error:
+                log(f"retaining interleaving trial unavailable: {type(error).__name__}")
+
         try:
             acquired = lease.acquire()
             if not acquired or not pending() or quiet_period_active(kube.env.endpoints):
@@ -587,15 +604,23 @@ def _owned_interleaving(
             current.stage = "cleanup"
             rollout_steps.save(db, current)
             if not pending() or time.monotonic() >= deadline:
+                retry_unsent()
                 return
             if victim is not None:
-                _delete_interleaved(kube, victim, deadline, pending, release_commit)
+                sent = _delete_interleaved(
+                    kube, victim, deadline, pending, release_commit
+                )
+                if not sent:
+                    retry_unsent()
                 return
             ctx = rollouts.Ctx(kube.env, kube, db, rollouts.timeline_params(db), lease)
+            patch_sent = False
 
             def before_patch() -> None:
+                nonlocal patch_sent
                 if not pending() or time.monotonic() >= deadline:
                     raise _WriteCompleted
+                patch_sent = True
                 release_commit()
 
             rollouts.submit_patch(
@@ -604,6 +629,9 @@ def _owned_interleaving(
                 {"forcePromote": request},
                 before_patch=before_patch,
             )
+            if not patch_sent:
+                retry_unsent()
+                return
             telemetry.interleaving_progress(
                 "disruption", action="promote", outcome="requested", request=request
             )
@@ -637,6 +665,7 @@ def _owned_interleaving(
                     return
                 time.sleep(min(0.25, max(0.0, stop - time.monotonic())))
         except _WriteCompleted:
+            retry_unsent()
             return
         except TRANSIENT_ERRORS as error:
             log(f"interleaving action unavailable: {type(error).__name__}")
@@ -661,9 +690,17 @@ def _delete_interleaved(
     deadline: float,
     pending: Callable[[], bool],
     release_commit: Callable[[], None],
-) -> None:
+) -> bool:
+    """Return whether the delete reached its API boundary."""
     if time.monotonic() >= deadline or quiet_period_active(kube.env.endpoints):
-        return
+        return False
+    sent = False
+
+    def before_delete() -> None:
+        nonlocal sent
+        sent = True
+        release_commit()
+
     delete_recorded(
         kube,
         origin="interleavings",
@@ -677,8 +714,9 @@ def _delete_interleaved(
         victim_generation=victim.generation,
         deadline=deadline,
         still_pending=pending,
-        before_delete=release_commit,
+        before_delete=before_delete,
     )
+    return sent
 
 
 def interleaving_disruption(

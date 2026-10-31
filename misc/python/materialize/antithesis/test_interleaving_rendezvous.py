@@ -88,7 +88,12 @@ def test_victim_is_selected_inside_the_staged_write(monkeypatch):
     pick = Mock(
         return_value=pod_restarts.Victim("clusterd", "ns", "new-pod", "new-uid", "u2")
     )
-    delete = Mock()
+
+    def acknowledged(*args, **kwargs):
+        kwargs["before_delete"]()
+        return True
+
+    delete = Mock(side_effect=acknowledged)
     monkeypatch.setattr(pod_restarts, "pick_victim", pick)
     monkeypatch.setattr(pod_restarts, "delete_recorded", delete)
     action = pod_restarts.interleaving_disruption(
@@ -339,7 +344,12 @@ def test_candidate_delete_is_journaled_once_and_uses_the_staged_uid(
             "environmentd_candidate", "ns", "pod", "live-uid", generation=6
         )
     )
-    delete = Mock()
+
+    def acknowledged(*args, **kwargs):
+        kwargs["before_delete"]()
+        return True
+
+    delete = Mock(side_effect=acknowledged)
     monkeypatch.setattr(pod_restarts, "pick_victim", pick)
     monkeypatch.setattr(pod_restarts, "delete_recorded", delete)
     pick.assert_not_called()
@@ -379,6 +389,116 @@ def test_sql_completion_during_patch_journaling_cancels_the_promotion(rendezvous
     release = Mock()
     action.run(pending, release)
     release.assert_not_called()
+    assert len(rendezvous.calls) == 1
+    retry = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=deadline
+    )
+    assert retry is not None
+    assert len(rendezvous.calls) == 1
+
+
+@pytest.mark.parametrize("sent,acked", [(False, False), (True, True), (True, False)])
+def test_candidate_rendezvous_retries_only_a_positively_unsent_delete(
+    rendezvous, monkeypatch, sent, acked
+):
+    monkeypatch.setattr(
+        pod_restarts.rng,
+        "choice",
+        lambda items: (
+            "environmentd_candidate" if "environmentd_candidate" in items else items[0]
+        ),
+    )
+    deadline = time.monotonic() + 5
+    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    rendezvous.phase("ReadyToPromote")
+    action = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=deadline
+    )
+    assert action is not None
+    monkeypatch.setattr(
+        pod_restarts,
+        "pick_victim",
+        Mock(
+            return_value=pod_restarts.Victim(
+                "environmentd_candidate", "ns", "pod", "uid", generation=6
+            )
+        ),
+    )
+
+    def delete(*args, **kwargs):
+        if sent:
+            kwargs["before_delete"]()
+        return acked
+
+    monkeypatch.setattr(pod_restarts, "delete_recorded", delete)
+    action()
+    retry = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=deadline
+    )
+    if sent:
+        assert retry is None
+        assert rendezvous.obj["spec"]["rolloutStrategy"] == "WaitUntilReady"
+    else:
+        assert retry is not None
+        assert len(rendezvous.calls) == 1
+        assert rendezvous.obj["spec"]["rolloutStrategy"] == "ManuallyPromote"
+
+
+def test_unsent_retry_cannot_rewrite_the_scenario_after_losing_its_lease(
+    rendezvous, monkeypatch
+):
+    deadline = time.monotonic() + 5
+    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    rendezvous.phase("ReadyToPromote")
+    action = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=deadline
+    )
+    assert action is not None
+    lost = [False]
+    original = rollouts.CrLease.renew
+
+    def renew(lease):
+        if lost[0]:
+            raise rollouts.LeaseLost("another invocation holds the lease")
+        return original(lease)
+
+    monkeypatch.setattr(rollouts.CrLease, "renew", renew)
+    checks = []
+
+    def pending():
+        checks.append(True)
+        if len(checks) >= 4:
+            lost[0] = True
+            return False
+        return True
+
+    action.run(pending, Mock())
+    db = rollouts.requests_db(rendezvous.env)
+    scenario = rollout_steps.load(db)
+    assert scenario is not None and scenario.stage == "cleanup"
+    assert len(rendezvous.calls) == 1
+    db.close()
+
+
+def test_an_unavailable_final_promotion_snapshot_preserves_the_ready_trial(
+    rendezvous,
+):
+    deadline = time.monotonic() + 5
+    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    rendezvous.phase("ReadyToPromote")
+    action = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=deadline
+    )
+    assert action is not None
+    original = rendezvous.try_snapshot
+    rendezvous.try_snapshot = Mock(side_effect=[original(), None, None])
+    action()
+    rendezvous.try_snapshot = original
+    assert len(rendezvous.calls) == 1
+    retry = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=deadline
+    )
+    assert retry is not None
     assert len(rendezvous.calls) == 1
 
 
@@ -593,3 +713,54 @@ def test_resumed_followup_emits_its_own_operation_identity(monkeypatch, observed
     assert events[1]["observed_write"] is observed
     assert events[1]["successful_reads"] == 1 and events[1]["read_id"] == 2
     assert events[2]["outcome"] == "completed"
+
+
+def test_an_earlier_followup_cannot_spend_the_next_ids_budget_without_a_read(
+    monkeypatch,
+):
+    class State(sqlite3.Connection):
+        def close(self):
+            pass
+
+    db = sqlite3.connect(":memory:", factory=State)
+    monkeypatch.setattr(history.state, "open_db", lambda *args: db)
+    history.open_state()
+    with db:
+        for key in (0, 1):
+            db.execute(
+                "INSERT INTO ops (epoch, kind, session, isolation, endpoint, invoke_rt, complete_rt, outcome, wkey) VALUES (7, 'w', 'writer', 'strict serializable', 'service', 0, 1, 'indeterminate', ?)",
+                (key,),
+            )
+            db.execute(
+                "INSERT INTO interleaving_followups (write_id) VALUES (?)", (key + 1,)
+            )
+    env, now = Mock(), [1.0]
+    env.sql_host.return_value = "host"
+    monkeypatch.setattr(history, "Environment", lambda: env)
+    monkeypatch.setattr(history, "start_watchdog", Mock())
+    monkeypatch.setattr(history.quiet, "active_quiet_period", lambda: False)
+    monkeypatch.setattr(history.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(history.telemetry, "_recorder", None)
+    monkeypatch.setattr(history, "_coverage_cluster_id", lambda *args: "u2")
+    monkeypatch.setattr(history, "_assert_timestamp_order", Mock())
+    reads = []
+
+    def read(db_arg, session, epoch, txn_prob, *, paths):
+        reads.append({path.key for path in paths})
+        session.name = "reader"
+        with db_arg:
+            db_arg.execute(
+                "INSERT INTO ops (epoch, kind, session, isolation, endpoint, invoke_rt, complete_rt, outcome, observed) VALUES (?, 'r', 'reader', 'strict serializable', 'service', 1, 2, 'ok', ?)",
+                (epoch, json.dumps([[0, "index", [1], []]])),
+            )
+
+    def checked(*args, **kwargs):
+        now[0] += history.DRIVER_BUDGET_S[1]
+        return []
+
+    monkeypatch.setattr(history, "_read", read)
+    monkeypatch.setattr(history, "_check_epoch", checked)
+    assert history.interleaving_driver() == 0
+    assert reads == [{0}]
+    assert db.execute("SELECT * FROM interleaving_followups").fetchall() == [(2, 0)]
+    sqlite3.Connection.close(db)
