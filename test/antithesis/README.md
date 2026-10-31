@@ -207,8 +207,13 @@ cadence across profiles. A heartbeat older than ten seconds claims a fallback
 sample, with at most one fallback every 30 seconds. Healthy audits load no
 Kubernetes or SQL client, and require no separately scheduled command.
 Capture uses at most three attempts and ten seconds per 30-second observer
-window. Truncated logs, changed incarnations, and ambiguous termination
-timestamps remain unresolved.
+window. The target and rebuilt upgrade-base binaries also write framed halt
+records to the container termination file before exiting. The observer prefers
+that status-owned record, verifies its container ID and lifetime, and rechecks
+the same termination before emitting evidence. Complete log capture remains a
+fallback for images without a record. Partial, conflicting, or size-capped
+records remain unresolved. Evidence from the two channels is never added to
+inflate the number of explained exits.
 An optional `--exit-evidence` JSON file can supply the same occurrence records,
 keyed by native property ID. An unexplained exit remains unresolved.
 Native aborts with potentially matching designed-panic observations remain

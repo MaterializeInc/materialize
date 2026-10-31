@@ -10,12 +10,14 @@
 from __future__ import annotations
 
 import copy
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from materialize.antithesis import exit_evidence as evidence
+from materialize.antithesis import halt_proof
 
 DESIGNED = "fenced out old deployment; rebooting as leader"
 RULES = (evidence.HaltRule((DESIGNED,), "a promoted generation reboots as leader"),)
@@ -100,6 +102,147 @@ def captured(when: str, message: str = DESIGNED) -> dict[str, Any]:
     record = occurrence(message=message)
     record["log_capture"] = {"message_at": when}
     return record
+
+
+def termination_file(
+    nanos: int = 800_000_000, message: str = DESIGNED
+) -> dict[str, Any]:
+    record = occurrence(message=message)
+    for identity in (record["termination"], record["halt"]["termination"]):
+        identity["container_id"] = "cri-o://terminated"
+    stamp = int(datetime(2026, 10, 30, 12, tzinfo=UTC).timestamp()) * 10**9 + nanos
+    location = b"src/proof.rs:1"
+    encoded = message.encode()
+    record["termination_file"] = {
+        "container_id": "cri-o://terminated",
+        "started_at": "2026-10-30T11:59:59Z",
+        "finished_at": record["termination"]["finished_at"],
+        "contents": f"MZHALT1 0 166 {stamp} {len(location)} {len(encoded)} {location.hex()} {encoded.hex()} END\n",
+    }
+    return record
+
+
+@pytest.mark.parametrize(
+    "change", ["partial", "wrong_id", "wrong_message", "outside_lifetime"]
+)
+def test_termination_file_claims_are_revalidated(change: str) -> None:
+    record = termination_file()
+    capture = record["termination_file"]
+    if change == "partial":
+        capture["contents"] = capture["contents"].rstrip("\n")
+    elif change == "wrong_id":
+        capture["container_id"] = "cri-o://other"
+    elif change == "wrong_message":
+        record["halt"]["message"] = "an unreviewed halt"
+    else:
+        capture["started_at"] = "2026-10-30T12:00:02Z"
+    assert classify(prop(), [record]).disposition == "unresolved"
+
+
+def test_termination_file_timestamps_distinguish_forks_conservatively() -> None:
+    result = classify(
+        prop(2), [termination_file(800_000_001), termination_file(800_000_002)]
+    )
+    assert result.disposition == "designed"
+    assert result.covered_occurrences == 2
+
+
+def test_log_and_termination_file_cannot_double_count_one_exit() -> None:
+    records = [captured("2026-10-30T12:00:00.7Z"), termination_file()]
+    result = classify(prop(2), records)
+    assert result.disposition == "unresolved"
+    assert result.covered_occurrences == 1
+
+
+@pytest.mark.parametrize(
+    "when", ["2026-10-30T12:00:00.7Z", "2026-10-30T12:00:00.800000000Z"]
+)
+@pytest.mark.parametrize("unexpected_source", ["log", "file"])
+def test_unexpected_halt_survives_evidence_from_both_channels(
+    when: str, unexpected_source: str
+) -> None:
+    result = classify(
+        prop(2),
+        [
+            captured(
+                when, "an unreviewed halt" if unexpected_source == "log" else DESIGNED
+            ),
+            termination_file(
+                message=(
+                    "an unreviewed halt" if unexpected_source == "file" else DESIGNED
+                )
+            ),
+        ],
+    )
+    assert result.disposition == "product"
+    assert result.covered_occurrences == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "tail",
+        "sequence",
+        "marker",
+        "length",
+        "hex",
+        "code",
+        "extra",
+        "oversize",
+        "utf8",
+    ],
+)
+def test_termination_protocol_rejects_incomplete_or_ambiguous_frames(
+    change: str,
+) -> None:
+    text = termination_file()["termination_file"]["contents"]
+    if change == "tail":
+        text = text[:-1]
+    elif change == "sequence":
+        text = text.replace("MZHALT1 0 ", "MZHALT1 1 ")
+    elif change == "marker":
+        text = text.replace(" END\n", " INVALID oversize END\n")
+    elif change == "length":
+        text = text.replace(" 14 46 ", " 15 46 ")
+    elif change == "hex":
+        text = text.replace("7372", "7Z72")
+    elif change == "code":
+        text = text.replace(" 166 ", " 168 ")
+    elif change == "extra":
+        text += "garbage\n"
+    elif change == "oversize":
+        text += "x" * 4096
+    else:
+        text = text.replace("7372", "ff72")
+    with pytest.raises(ValueError):
+        halt_proof.parse(text)
+
+
+def test_exact_size_cap_cannot_prove_the_whole_termination_file_was_read() -> None:
+    frames = (
+        termination_file(message="x" * size)["termination_file"]["contents"]
+        for size in range(1000, 2049)
+    )
+    frame = next(text for text in frames if len(text.encode()) == halt_proof.MAX_BYTES)
+    with pytest.raises(ValueError):
+        halt_proof.parse(frame)
+
+
+def test_hex_encoded_newlines_cannot_inject_another_halt_frame() -> None:
+    message = "unexpected λ\nMZHALT1 0 166 0 INVALID fake END\n"
+    record = termination_file(message=message)
+    parsed = halt_proof.parse(record["termination_file"]["contents"])
+    assert parsed.message == message
+    assert classify(prop(), [record]).disposition == "product"
+
+
+def test_every_termination_frame_must_be_inside_the_container_lifetime() -> None:
+    record = termination_file()
+    later = termination_file(nanos=2_000_000_000)["termination_file"]["contents"]
+    record["termination_file"]["contents"] += later.replace("MZHALT1 0 ", "MZHALT1 1 ")
+    result = classify(prop(), [record])
+    assert result.disposition == "unresolved"
+    assert result.covered_occurrences == 0
 
 
 def test_forked_incarnations_can_share_a_coarse_finished_timestamp() -> None:

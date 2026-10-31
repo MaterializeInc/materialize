@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from materialize import MZ_ROOT
+from materialize.antithesis import halt_proof
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,7 @@ _IDENTITY_FIELDS = (
     "termination_count",
     "finished_at",
 )
-_EvidenceKey = tuple[tuple[Any, ...], tuple[datetime, int] | None]
+_EvidenceKey = tuple[tuple[Any, ...], tuple[datetime, int] | None, str]
 
 
 def _string(literal: str) -> str:
@@ -216,14 +217,47 @@ def classify_exit_property(
             if not isinstance(message, str) or not message:
                 raise ValueError("halt message is missing")
             captured_at = None
+            channel = "unscoped"
             if "log_capture" in occurrence:
                 capture = occurrence["log_capture"]
                 if not isinstance(capture, Mapping):
                     raise ValueError("halt log capture is not an object")
                 captured_at = _timestamp_key(capture.get("message_at"))
+                channel = "log"
+            if "termination_file" in occurrence:
+                if "log_capture" in occurrence:
+                    raise ValueError("halt capture names two evidence channels")
+                capture = occurrence["termination_file"]
+                if not isinstance(capture, Mapping):
+                    raise ValueError("halt termination file capture is not an object")
+                container_id = capture.get("container_id")
+                if (
+                    not isinstance(container_id, str)
+                    or not container_id
+                    or occurrence["termination"].get("container_id") != container_id
+                    or halt["termination"].get("container_id") != container_id
+                ):
+                    raise ValueError(
+                        "halt termination file has another container identity"
+                    )
+                contents = capture.get("contents")
+                if not isinstance(contents, str):
+                    raise ValueError("halt termination file contents are missing")
+                proof = halt_proof.parse(contents)
+                if proof.message != message:
+                    raise ValueError("halt termination file message differs")
+                if _timestamp_key(capture.get("finished_at")) != termination[-1]:
+                    raise ValueError(
+                        "halt termination file has another termination time"
+                    )
+                halt_proof.validate_lifetime(
+                    proof, capture.get("started_at"), capture.get("finished_at")
+                )
+                captured_at = _timestamp_key(proof.recorded_at)
+                channel = "file"
             # Forks reuse Kubernetes identities. Keep the exit time and the
             # precise halt timestamp so independent fork exits remain distinct.
-            identity = (termination, captured_at)
+            identity = (termination, captured_at, channel)
             message = message.removeprefix("halting process: ")
             messages.setdefault(identity, set()).add(message)
         except (TypeError, ValueError) as error:
@@ -235,7 +269,7 @@ def classify_exit_property(
             timestamped.setdefault(identity[0], []).append(identity)
     conflicting: set[_EvidenceKey] = set()
     for termination, scoped in timestamped.items():
-        unscoped = (termination, None)
+        unscoped = (termination, None, "unscoped")
         if unscoped not in messages:
             continue
         scoped_messages = set().union(*(messages[key] for key in scoped))
@@ -249,12 +283,19 @@ def classify_exit_property(
         if len(reasons) != 1 or identity in conflicting:
             errors.append("termination evidence conflicts")
             continue
-        covered.append(next(iter(reasons)))
+        covered.append((identity, next(iter(reasons))))
     unexpected = any(
         not any(all(part in message for part in rule.matches) for rule in rules)
-        for message in covered
+        for _, message in covered
     )
-    count = len(covered)
+    by_termination: dict[tuple[Any, ...], dict[str, set[_EvidenceKey]]] = {}
+    for identity, _ in covered:
+        by_termination.setdefault(identity[0], {}).setdefault(identity[2], set()).add(
+            identity
+        )
+    # The log and file writes have different timestamps within one halt call.
+    # Count the larger independently observed set, without adding the channels.
+    count = sum(max(map(len, scoped.values())) for scoped in by_termination.values())
     if unexpected:
         return ExitDisposition(
             "product", "an exit-correlated halt is not a reviewed designed halt", count

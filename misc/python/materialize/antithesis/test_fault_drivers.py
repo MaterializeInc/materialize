@@ -15,6 +15,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
@@ -95,6 +96,113 @@ def halt_capture(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         text=text,
         message=message,
     )
+
+
+def _termination_frame(message: str, sequence: int = 0) -> str:
+    location = b"src/proof.rs:1"
+    encoded = message.encode()
+    stamp = (
+        int(datetime(2026, 10, 30, 12, tzinfo=UTC).timestamp()) * 10**9 + 800_000_000
+    )
+    return (
+        f"MZHALT1 {sequence} 166 {stamp} {len(location)} {len(encoded)} "
+        f"{location.hex()} {encoded.hex()} END\n"
+    )
+
+
+@pytest.mark.parametrize("current", [False, True])
+def test_halt_capture_uses_incarnation_bound_file_when_runtime_logs_are_unavailable(
+    halt_capture: SimpleNamespace, current: bool
+) -> None:
+    o = halt_capture.observation
+    cs = halt_capture.pod.status.container_statuses[0]
+    term = cs.state.terminated
+    term.container_id = "cri-o://terminated"
+    term.message = _termination_frame(halt_capture.message)
+    if not current:
+        o = replace(o, current_terminated=False, restart_count=1)
+        cs.restart_count = 1
+        cs.last_state.terminated = term
+        cs.state.terminated = None
+        cs.state.running = SimpleNamespace(started_at="2026-10-30T12:00:00+00:00")
+    halt_capture.core.read_namespaced_pod_log.side_effect = RuntimeError("unavailable")
+
+    result = recovery.capture_halt_evidence(o, 10)
+
+    assert result is not None
+    assert result["halt"]["message"] == halt_capture.message
+    assert result["termination"]["container_id"] == "cri-o://terminated"
+    assert result["halt"]["termination"] == result["termination"]
+    assert result["termination_file"]["contents"] == term.message
+    assert "log_capture" not in result
+    halt_capture.core.read_namespaced_pod_log.assert_not_called()
+    assert halt_capture.core.read_namespaced_pod.call_count == 2
+
+
+@pytest.mark.parametrize("change", ["truncated", "conflicting", "container_id", "time"])
+def test_halt_file_evidence_cannot_fall_back_to_a_conflicting_log(
+    halt_capture: SimpleNamespace, change: str
+) -> None:
+    term = halt_capture.pod.status.container_statuses[0].state.terminated
+    term.container_id = "cri-o://terminated"
+    term.message = _termination_frame(halt_capture.message)
+    if change == "truncated":
+        term.message = term.message.rstrip("\n")
+    elif change == "conflicting":
+        term.message += _termination_frame("an unexpected halt", 1)
+    elif change == "container_id":
+        term.container_id = None
+    else:
+        term.started_at = "2026-10-30T12:00:02Z"
+
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    halt_capture.core.read_namespaced_pod_log.assert_not_called()
+
+
+def test_halt_file_evidence_survives_current_to_previous_routing_change(
+    halt_capture: SimpleNamespace,
+) -> None:
+    cs = halt_capture.pod.status.container_statuses[0]
+    cs.state.terminated.container_id = "cri-o://terminated"
+    cs.state.terminated.message = _termination_frame(halt_capture.message)
+    after = copy.deepcopy(halt_capture.pod)
+    after_cs = after.status.container_statuses[0]
+    after_cs.restart_count = 1
+    after_cs.last_state.terminated = after_cs.state.terminated
+    after_cs.state.terminated = None
+    after_cs.container_id = "cri-o://replacement"
+    after_cs.state.running = SimpleNamespace(started_at="2026-10-30T12:00:01Z")
+    halt_capture.core.read_namespaced_pod.side_effect = [halt_capture.pod, after]
+
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is not None
+    halt_capture.core.read_namespaced_pod_log.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "change", ["uid", "ordinal", "container_id", "contents", "finished"]
+)
+def test_halt_file_rejects_changed_termination_identity(
+    halt_capture: SimpleNamespace, change: str
+) -> None:
+    cs = halt_capture.pod.status.container_statuses[0]
+    cs.state.terminated.container_id = "cri-o://terminated"
+    cs.state.terminated.message = _termination_frame(halt_capture.message)
+    after = copy.deepcopy(halt_capture.pod)
+    after_cs = after.status.container_statuses[0]
+    if change == "uid":
+        after.metadata.uid = "replacement-uid"
+    elif change == "ordinal":
+        after_cs.restart_count += 1
+    elif change == "container_id":
+        after_cs.state.terminated.container_id = "cri-o://replacement"
+    elif change == "contents":
+        after_cs.state.terminated.message = _termination_frame("an unexpected halt")
+    else:
+        after_cs.state.terminated.finished_at = "2026-10-30T12:00:01Z"
+    halt_capture.core.read_namespaced_pod.side_effect = [halt_capture.pod, after]
+
+    assert recovery.capture_halt_evidence(halt_capture.observation, 10) is None
+    halt_capture.core.read_namespaced_pod_log.assert_not_called()
 
 
 @pytest.mark.parametrize("current", [True, False])
