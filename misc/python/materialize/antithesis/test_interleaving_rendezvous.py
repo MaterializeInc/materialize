@@ -14,6 +14,7 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -47,6 +48,9 @@ def rendezvous(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             }
             self.calls = []
             self.lose_response = False
+            self.now = [10.0]
+            self.pauses: list[float] = []
+            self.on_pause: Callable[[], None] = lambda: None
 
         def snapshot(self):
             return rollouts.Snapshot(copy.deepcopy(self.obj))
@@ -78,7 +82,135 @@ def rendezvous(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(pod_restarts, "quiet_period_active", lambda *args: False)
     monkeypatch.setattr(pod_restarts.rng, "random", lambda: 0.0)
     monkeypatch.setattr(pod_restarts.rng, "choice", lambda items: items[0])
-    return Kube()
+    kube = Kube()
+
+    def sleep(seconds):
+        kube.now[0] += seconds
+        kube.pauses.append(seconds)
+        kube.on_pause()
+
+    monkeypatch.setattr(pod_restarts.time, "monotonic", lambda: kube.now[0])
+    monkeypatch.setattr(pod_restarts.time, "sleep", sleep)
+    return kube
+
+
+def prepare_rendezvous(kube):
+    assert (
+        pod_restarts.interleaving_disruption(
+            kube, cluster_id="u2", deadline=time.monotonic() + 1
+        )
+        is None
+    )
+    return time.monotonic() + 5
+
+
+def test_owned_preparation_waits_for_ready_without_releasing_its_lease(
+    rendezvous, monkeypatch
+):
+    competing = []
+
+    def advance():
+        lease = rollouts.CrLease(rendezvous.env)
+        competing.append(lease.acquire())
+        lease.db.close()
+        rendezvous.phase("ReadyToPromote")
+
+    rendezvous.on_pause = advance
+    monkeypatch.setattr(
+        history,
+        "Session",
+        Mock(side_effect=AssertionError("SQL opened while preparing rollout")),
+    )
+    action = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=time.monotonic() + 5
+    )
+    assert action is not None
+    assert competing == [False]
+    assert len(rendezvous.calls) == 1
+    assert rendezvous.obj["spec"]["rolloutStrategy"] == "ManuallyPromote"
+
+
+def test_owned_preparation_stops_for_quiet_and_resumes_the_same_request(
+    rendezvous, monkeypatch
+):
+    quiet = [False]
+    monkeypatch.setattr(pod_restarts, "quiet_period_active", lambda *args: quiet[0])
+    rendezvous.on_pause = lambda: quiet.__setitem__(0, True)
+    deadline = time.monotonic() + 5
+    assert (
+        pod_restarts.interleaving_disruption(
+            rendezvous, cluster_id="u2", deadline=deadline
+        )
+        is None
+    )
+    assert quiet[0]
+    requested = rendezvous.obj["spec"]["requestRollout"]
+    assert requested != "initial"
+    quiet[0] = False
+    rendezvous.phase("ReadyToPromote")
+    assert (
+        pod_restarts.interleaving_disruption(
+            rendezvous, cluster_id="u2", deadline=deadline
+        )
+        is not None
+    )
+    assert rendezvous.obj["spec"]["requestRollout"] == requested
+    assert len(rendezvous.calls) == 1
+
+
+@pytest.mark.parametrize("changed", ["request", "spec", "resource", "generation"])
+def test_owned_preparation_does_not_adopt_a_superseding_request(rendezvous, changed):
+    def supersede():
+        if changed == "request":
+            rendezvous.obj["spec"]["requestRollout"] = "foreign"
+        elif changed == "spec":
+            rendezvous.obj["spec"]["environmentdImageRef"] = "foreign-image"
+        elif changed == "resource":
+            rendezvous.obj["status"]["resourceId"] = "foreign-environment"
+        else:
+            rendezvous.obj["metadata"]["generation"] += 1
+        rendezvous.phase("ReadyToPromote")
+
+    rendezvous.on_pause = supersede
+    assert (
+        pod_restarts.interleaving_disruption(
+            rendezvous, cluster_id="u2", deadline=time.monotonic() + 5
+        )
+        is None
+    )
+    if changed == "request":
+        assert rendezvous.obj["spec"]["requestRollout"] == "foreign"
+    assert len(rendezvous.calls) == 1
+    db = rollouts.requests_db(rendezvous.env)
+    assert rollout_steps.load(db) is None
+    db.close()
+
+
+def test_owned_preparation_fences_itself_after_losing_the_lease(
+    rendezvous, monkeypatch
+):
+    lost = [False]
+    original = rollouts.CrLease.renew
+
+    def renew(lease):
+        if lost[0]:
+            raise rollouts.LeaseLost("another invocation owns this rollout")
+        return original(lease)
+
+    monkeypatch.setattr(rollouts.CrLease, "renew", renew)
+    rendezvous.on_pause = lambda: lost.__setitem__(0, True)
+    assert (
+        pod_restarts.interleaving_disruption(
+            rendezvous, cluster_id="u2", deadline=time.monotonic() + 5
+        )
+        is None
+    )
+    assert lost[0]
+    assert len(rendezvous.calls) == 1
+    db = rollouts.requests_db(rendezvous.env)
+    scenario = rollout_steps.load(db)
+    assert scenario is not None and scenario.owner == "interleavings"
+    db.close()
 
 
 def test_victim_is_selected_inside_the_staged_write(monkeypatch):
@@ -109,27 +241,21 @@ def test_owned_rollout_resumes_the_exact_request_after_a_lost_patch_response(
     rendezvous,
 ):
     rendezvous.lose_response = True
-    deadline = time.monotonic() + 5
-    assert (
-        pod_restarts.interleaving_disruption(
-            rendezvous, cluster_id="u2", deadline=deadline
-        )
-        is None
-    )
+    prepare_rendezvous(rendezvous)
     requested = rendezvous.obj["spec"]["requestRollout"]
     assert requested != "initial"
     assert rendezvous.obj["spec"]["rolloutStrategy"] == "ManuallyPromote"
     rendezvous.phase("Applying")
     assert (
         pod_restarts.interleaving_disruption(
-            rendezvous, cluster_id="u2", deadline=deadline
+            rendezvous, cluster_id="u2", deadline=time.monotonic() + 1
         )
         is None
     )
     rendezvous.phase("ReadyToPromote")
     assert (
         pod_restarts.interleaving_disruption(
-            rendezvous, cluster_id="u2", deadline=deadline
+            rendezvous, cluster_id="u2", deadline=time.monotonic() + 5
         )
         is not None
     )
@@ -300,13 +426,7 @@ def test_delete_exposure_starts_after_preparation_and_commit_release(monkeypatch
 
 
 def test_ready_callback_rejects_a_changed_request_generation(rendezvous):
-    deadline = time.monotonic() + 5
-    assert (
-        pod_restarts.interleaving_disruption(
-            rendezvous, cluster_id="u2", deadline=deadline
-        )
-        is None
-    )
+    deadline = prepare_rendezvous(rendezvous)
     rendezvous.phase("ReadyToPromote")
     action = pod_restarts.interleaving_disruption(
         rendezvous, cluster_id="u2", deadline=deadline
@@ -327,13 +447,7 @@ def test_candidate_delete_is_journaled_once_and_uses_the_staged_uid(
             "environmentd_candidate" if "environmentd_candidate" in items else items[0]
         ),
     )
-    deadline = time.monotonic() + 5
-    assert (
-        pod_restarts.interleaving_disruption(
-            rendezvous, cluster_id="u2", deadline=deadline
-        )
-        is None
-    )
+    deadline = prepare_rendezvous(rendezvous)
     rendezvous.phase("ReadyToPromote")
     action = pod_restarts.interleaving_disruption(
         rendezvous, cluster_id="u2", deadline=deadline
@@ -361,8 +475,7 @@ def test_candidate_delete_is_journaled_once_and_uses_the_staged_uid(
 
 
 def test_completed_sql_does_not_trigger_a_late_owned_promotion(rendezvous):
-    deadline = time.monotonic() + 5
-    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    deadline = prepare_rendezvous(rendezvous)
     rendezvous.phase("ReadyToPromote")
     action = pod_restarts.interleaving_disruption(
         rendezvous, cluster_id="u2", deadline=deadline
@@ -373,8 +486,7 @@ def test_completed_sql_does_not_trigger_a_late_owned_promotion(rendezvous):
 
 
 def test_sql_completion_during_patch_journaling_cancels_the_promotion(rendezvous):
-    deadline = time.monotonic() + 5
-    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    deadline = prepare_rendezvous(rendezvous)
     rendezvous.phase("ReadyToPromote")
     action = pod_restarts.interleaving_disruption(
         rendezvous, cluster_id="u2", deadline=deadline
@@ -408,8 +520,7 @@ def test_candidate_rendezvous_retries_only_a_positively_unsent_delete(
             "environmentd_candidate" if "environmentd_candidate" in items else items[0]
         ),
     )
-    deadline = time.monotonic() + 5
-    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    deadline = prepare_rendezvous(rendezvous)
     rendezvous.phase("ReadyToPromote")
     action = pod_restarts.interleaving_disruption(
         rendezvous, cluster_id="u2", deadline=deadline
@@ -447,8 +558,7 @@ def test_candidate_rendezvous_retries_only_a_positively_unsent_delete(
 def test_unsent_retry_cannot_rewrite_the_scenario_after_losing_its_lease(
     rendezvous, monkeypatch
 ):
-    deadline = time.monotonic() + 5
-    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    deadline = prepare_rendezvous(rendezvous)
     rendezvous.phase("ReadyToPromote")
     action = pod_restarts.interleaving_disruption(
         rendezvous, cluster_id="u2", deadline=deadline
@@ -483,8 +593,7 @@ def test_unsent_retry_cannot_rewrite_the_scenario_after_losing_its_lease(
 def test_an_unavailable_final_promotion_snapshot_preserves_the_ready_trial(
     rendezvous,
 ):
-    deadline = time.monotonic() + 5
-    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    deadline = prepare_rendezvous(rendezvous)
     rendezvous.phase("ReadyToPromote")
     action = pod_restarts.interleaving_disruption(
         rendezvous, cluster_id="u2", deadline=deadline
@@ -503,8 +612,7 @@ def test_an_unavailable_final_promotion_snapshot_preserves_the_ready_trial(
 
 
 def test_resumption_does_not_adopt_a_changed_spec_under_the_same_request(rendezvous):
-    deadline = time.monotonic() + 5
-    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    deadline = prepare_rendezvous(rendezvous)
     rendezvous.obj["spec"]["environmentdImageRef"] = "foreign-image"
     rendezvous.phase("ReadyToPromote")
     assert (
@@ -517,8 +625,7 @@ def test_resumption_does_not_adopt_a_changed_spec_under_the_same_request(rendezv
 
 
 def test_cleanup_restores_only_the_owned_manual_request(rendezvous, monkeypatch):
-    deadline = time.monotonic() + 5
-    pod_restarts.interleaving_disruption(rendezvous, cluster_id="u2", deadline=deadline)
+    deadline = prepare_rendezvous(rendezvous)
     rendezvous.phase("ReadyToPromote")
     action = pod_restarts.interleaving_disruption(
         rendezvous, cluster_id="u2", deadline=deadline
