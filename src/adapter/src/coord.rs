@@ -5647,6 +5647,27 @@ struct DeferredPlanStatement {
     ps: PlanStatement,
 }
 
+impl DeferredPlanStatement {
+    /// Reports whether the statement is the commit or rollback that ends an implicit transaction.
+    ///
+    /// `SessionClient::end_transaction` clears the session's transaction when that statement
+    /// returns, whatever the result. A `COMMIT` or `ROLLBACK` statement in an explicit transaction
+    /// leaves its transaction open for the client to end.
+    fn ends_implicit_transaction(&self) -> bool {
+        // Only `Command::Commit`, which `SessionClient::end_transaction` sends, plans an implicit
+        // commit or rollback.
+        matches!(
+            &self.ps,
+            PlanStatement::Plan {
+                plan:
+                    plan::Plan::CommitTransaction(plan::CommitTransactionPlan { transaction_type })
+                    | plan::Plan::AbortTransaction(plan::AbortTransactionPlan { transaction_type }),
+                ..
+            } if transaction_type.is_implicit()
+        )
+    }
+}
+
 #[derive(Debug)]
 enum PlanStatement {
     Statement {
