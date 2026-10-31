@@ -61,7 +61,10 @@ def history_checked(
         details,
     )
     sometimes(
-        any(path in ("index", "mv", "join_mv") for _, _, _, path, _ in cases),
+        any(
+            path in ("index", "mv", "join_mv") and (p == "Promoting" or bool(r))
+            for p, r, _, path, _ in cases
+        ),
         "coverage: a maintained read path checked a write exposed to an observed disruption",
         details,
     )
