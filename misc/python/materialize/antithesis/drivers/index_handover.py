@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import time
 from collections import Counter
 from collections.abc import Sequence
@@ -409,6 +410,18 @@ def _cleanup(
             f"index handover: cleanup of {schema_name(run)} deferred: {error}",
             flush=True,
         )
+        if isinstance(error, psycopg.Error):
+            classified = sql.classify(error)
+            always(
+                classified.outcome is not sql.Outcome.VIOLATION,
+                "index handover: SQL returns only classified errors",
+                {
+                    "sqlstate": classified.sqlstate,
+                    "template": classified.template,
+                    "phase": "cleanup",
+                    "run": run,
+                },
+            )
 
 
 def _reap(host: str, db: sqlite3.Connection, deadline: float) -> None:
@@ -629,7 +642,14 @@ def run_round(
         if settled:
             with db:
                 db.execute("UPDATE runs SET settled=1 WHERE id=?", (run,))
-        _cleanup(host, db, run)
+        failure = sys.exception()
+        try:
+            _cleanup(host, db, run)
+        except Exception:
+            # Cleanup reports its own SQL violation. Preserve the first
+            # oracle exception when the local assertion SDK raises.
+            if failure is None:
+                raise
 
 
 def main() -> int:
