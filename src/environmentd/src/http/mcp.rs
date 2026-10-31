@@ -2063,6 +2063,19 @@ impl TableReferenceCollector {
 }
 
 impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
+    fn visit_cte_block(&mut self, block: &'ast mz_sql_parser::ast::CteBlock<Raw>) {
+        if let mz_sql_parser::ast::CteBlock::MutuallyRecursive(block) = block {
+            // All bindings are visible throughout a mutually recursive block.
+            self.cte_names.extend(
+                block
+                    .ctes
+                    .iter()
+                    .map(|cte| cte.name.as_str().to_lowercase()),
+            );
+        }
+        visit::visit_cte_block(self, block);
+    }
+
     fn visit_cte(&mut self, cte: &'ast mz_sql_parser::ast::Cte<Raw>) {
         // Track CTE names so we don't treat them as table references
         self.cte_names
@@ -2080,7 +2093,7 @@ impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
                         let table_name = parts.last().unwrap().as_str().to_lowercase();
 
                         // Skip if this is a CTE reference, not a real table
-                        if self.cte_names.contains(&table_name) {
+                        if parts.len() == 1 && self.cte_names.contains(&table_name) {
                             visit::visit_table_factor(self, table_factor);
                             return;
                         }
@@ -2097,6 +2110,29 @@ impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
             }
         }
         visit::visit_table_factor(self, table_factor);
+    }
+
+    fn visit_set_expr(&mut self, set_expr: &'ast mz_sql_parser::ast::SetExpr<Raw>) {
+        // TABLE name is represented as a SetExpr rather than a TableFactor.
+        if let mz_sql_parser::ast::SetExpr::Table(name) = set_expr {
+            match name {
+                RawItemName::Name(n) | RawItemName::Id(_, n, _) => {
+                    let parts = &n.0;
+                    if !parts.is_empty() {
+                        let table_name = parts.last().unwrap().as_str().to_lowercase();
+                        if !(parts.len() == 1 && self.cte_names.contains(&table_name)) {
+                            let schema = if parts.len() >= 2 {
+                                Some(parts[parts.len() - 2].as_str().to_lowercase())
+                            } else {
+                                None
+                            };
+                            self.tables.push((schema, table_name));
+                        }
+                    }
+                }
+            }
+        }
+        visit::visit_set_expr(self, set_expr);
     }
 }
 
@@ -2546,6 +2582,105 @@ mod tests {
                 "SELECT * FROM mz_catalog.mz_tables JOIN public.user_data ON true"
             )
             .is_err()
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_qualified_name_matching_cte() {
+        assert!(
+            validate_system_catalog_query(
+                "WITH mz_tables AS (SELECT * FROM mz_catalog.mz_tables) \
+                 SELECT * FROM mz_catalog.mz_tables"
+            )
+            .is_ok()
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_table_expression() {
+        assert!(validate_system_catalog_query("TABLE mz_catalog.mz_tables").is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_mutually_recursive_table() {
+        assert!(
+            validate_system_catalog_query(
+                "WITH MUTUALLY RECURSIVE \
+                 t (id text) AS (SELECT id FROM mz_catalog.mz_tables), \
+                 u (id text) AS (TABLE t) \
+                 TABLE u"
+            )
+            .is_ok()
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_mutually_recursive_forward_table() {
+        assert!(
+            validate_system_catalog_query(
+                "WITH MUTUALLY RECURSIVE \
+                 t (id text) AS (TABLE u), \
+                 u (id text) AS (SELECT id FROM mz_catalog.mz_tables) \
+                 TABLE t"
+            )
+            .is_ok()
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_rejects_table_reference() {
+        let err = validate_system_catalog_query("TABLE public.user_data")
+            .expect_err("non-system TABLE reference must be rejected");
+        let McpRequestError::QueryValidationFailed(message) = err else {
+            panic!("expected query validation error");
+        };
+        assert_eq!(
+            message,
+            "Query references non-system tables: public.user_data. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed."
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_rejects_qualified_reference_matching_cte() {
+        let err = validate_system_catalog_query(
+            "WITH user_data AS (SELECT 1) SELECT * FROM public.user_data",
+        )
+        .expect_err("qualified non-system reference must be rejected");
+        let McpRequestError::QueryValidationFailed(message) = err else {
+            panic!("expected query validation error");
+        };
+        assert_eq!(
+            message,
+            "Query references non-system tables: public.user_data. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed."
+        );
+    }
+
+    fn collect_table_references_for_test(sql: &str) -> Vec<(Option<String>, String)> {
+        let statements = parse_with_limit(sql)
+            .expect("query must fit size limit")
+            .expect("query must parse");
+        let mut collector = TableReferenceCollector::new();
+        for statement in &statements {
+            collector.visit_statement(&statement.ast);
+        }
+        collector.tables
+    }
+
+    #[mz_ore::test]
+    fn test_table_reference_collector_table_expression() {
+        assert_eq!(
+            collect_table_references_for_test("TABLE public.user_data"),
+            vec![(Some("public".to_string()), "user_data".to_string())]
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_table_reference_collector_qualified_name_matching_cte() {
+        assert_eq!(
+            collect_table_references_for_test(
+                "WITH user_data AS (SELECT 1) SELECT * FROM public.user_data"
+            ),
+            vec![(Some("public".to_string()), "user_data".to_string())]
         );
     }
 
