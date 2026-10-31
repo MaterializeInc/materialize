@@ -30,7 +30,14 @@ from typing import Any, TypeVar
 
 import psycopg
 
-from materialize.antithesis import ivm_model, observations, quiet, sql, state
+from materialize.antithesis import (
+    exit_audit,
+    ivm_model,
+    observations,
+    quiet,
+    sql,
+    state,
+)
 
 PROFILE_ENV = "MZ_ANTITHESIS_TEMPLATE_PROFILE"
 STATE_DB = "telemetry"
@@ -666,6 +673,16 @@ def _child_cpu() -> float:
     return usage.ru_utime + usage.ru_stime
 
 
+def _audit_exit_observer() -> None:
+    try:
+        exit_audit.main()
+    except Exception as error:
+        _failed("exit observer audit", error)
+        observations.send_event(
+            "harness_health", _unavailable_health("exit observer audit failed")
+        )
+
+
 def run_command(profile: str, source: str | Path) -> int:
     """Run an authoritative command, preserving its result and measuring its work."""
     global _recorder
@@ -679,6 +696,7 @@ def run_command(profile: str, source: str | Path) -> int:
     invocation = _begin(recorder, started)
     status = "error"
     try:
+        _audit_exit_observer()
         try:
             runpy.run_path(str(source), run_name="__main__")
             code = 0
@@ -697,6 +715,7 @@ def run_command(profile: str, source: str | Path) -> int:
         return code
     finally:
         try:
+            _audit_exit_observer()
             _finish(
                 recorder,
                 invocation,

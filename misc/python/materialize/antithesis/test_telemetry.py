@@ -29,6 +29,7 @@ from materialize.antithesis import observations, quiet, state, telemetry
 
 @pytest.fixture(autouse=True)
 def local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(telemetry.exit_audit, "main", lambda: 0)
     for key, value in {
         "ENVIRONMENT": "telemetry",
         "KAFKA_BROKER": "unused",
@@ -269,6 +270,16 @@ def test_command_exceptions_are_not_hidden(tmp_path: Path) -> None:
 def test_killed_command_is_reaped_without_crediting_its_completion(
     tmp_path: Path,
 ) -> None:
+    db = state.open_db(telemetry.exit_audit.STATE_DB)
+    try:
+        telemetry.exit_audit.initialize(db)
+        with db:
+            db.execute(
+                "INSERT INTO exit_observer VALUES (1, ?, '{}')",
+                (telemetry.time.monotonic(),),
+            )
+    finally:
+        db.close()
     source = command(
         tmp_path,
         "anytime_watchdog",
