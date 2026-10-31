@@ -53,6 +53,9 @@ from materialize.xcompile import Arch, target
 
 GHCR_PREFIX = "ghcr.io/materializeinc/"
 
+# Bump when the Antithesis binary export format changes so images are rebuilt.
+ANTITHESIS_EXPORT_VERSION = 1
+
 
 class RustIncrementalBuildFailure(Exception):
     """A build failure that corrupted incremental artifacts explain. Recovering
@@ -222,6 +225,7 @@ class RepositoryDetails:
         coverage: Whether the repository has code coverage instrumentation
             enabled.
         sanitizer: Whether to use a sanitizer (address, hwaddress, cfi, thread, leak, memory, none)
+        antithesis: Whether to build with Antithesis instrumentation and SDK.
         cargo_workspace: The `cargo.Workspace` associated with the repository.
         image_registry: The Docker image registry to pull images from and push
             images to.
@@ -237,12 +241,14 @@ class RepositoryDetails:
         sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
+        antithesis: bool = False,
     ):
         self.root = root
         self.arch = arch
         self.profile = profile
         self.coverage = coverage
         self.sanitizer = sanitizer
+        self.antithesis = antithesis
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
@@ -689,6 +695,8 @@ class CargoPreImage(PreImage):
             flags += "coverage"
         if self.rd.sanitizer != Sanitizer.none:
             flags += self.rd.sanitizer.value
+        if self.rd.antithesis:
+            flags += "antithesis"
         flags.sort()
         return ",".join(flags)
 
@@ -728,7 +736,11 @@ class CargoBuild(CargoPreImage):
             else (
                 rustc_flags.sanitizer[rd.sanitizer]
                 if rd.sanitizer != Sanitizer.none
-                else ["--cfg=tokio_unstable"]
+                else (
+                    list(rustc_flags.antithesis)
+                    if rd.antithesis
+                    else ["--cfg=tokio_unstable"]
+                )
             )
         )
         cflags = (
@@ -765,6 +777,7 @@ class CargoBuild(CargoPreImage):
             rd.profile == Profile.RELEASE
             and rd.sanitizer == Sanitizer.none
             and not rd.coverage
+            and not rd.antithesis
         ):
             rustflags += [
                 "-Clinker-plugin-lto",
@@ -785,6 +798,9 @@ class CargoBuild(CargoPreImage):
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
             }
+
+        if rd.antithesis:
+            extra_env = {**extra_env, **rustc_flags.antithesis_env}
 
         cargo_build = rd.build(
             "build", channel=None, rustflags=rustflags, extra_env=extra_env
@@ -810,6 +826,9 @@ class CargoBuild(CargoPreImage):
             cargo_build.extend(
                 ["--jobs", str(round(multiprocessing.cpu_count() * 2 / 3))]
             )
+        features = list(features or [])
+        if rd.antithesis:
+            features.append("mz-ore/antithesis")
         if features:
             cargo_build.append(f"--features={','.join(features)}")
 
@@ -872,7 +891,9 @@ class CargoBuild(CargoPreImage):
             exe_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(src, exe_path)
 
-            if self.strip:
+            # Antithesis symbolizes coverage from the DWARF in the shipped
+            # binary, so the antithesis flavor never strips debug info.
+            if self.strip and not self.rd.antithesis:
                 # The debug information is large enough that it slows down CI,
                 # since we're packaging these binaries up into Docker images and
                 # shipping them around.
@@ -892,6 +913,14 @@ class CargoBuild(CargoPreImage):
                 spawn.runv(
                     [
                         *self.rd.tool("objcopy"),
+                        # Use plain DWARF without requiring the symbol extractor
+                        # to support our linker's zstd compression. Normalize the
+                        # exported copy to preserve Cargo's cached artifact.
+                        *(
+                            ["--decompress-debug-sections"]
+                            if self.rd.antithesis
+                            else []
+                        ),
                         "-R",
                         ".debug_pubnames",
                         "-R",
@@ -1155,6 +1184,7 @@ class ResolvedImage:
             "ARCH_GCC": str(self.image.rd.arch),
             "ARCH_GO": self.image.rd.arch.go_str(),
             "CI_SANITIZER": str(self.image.rd.sanitizer),
+            "ANTITHESIS": "1" if self.image.rd.antithesis else "",
         }
         f = self.write_dockerfile()
 
@@ -1421,6 +1451,14 @@ class ResolvedImage:
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
         self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
+        # Hashed only when set so that enabling the flag does not change the
+        # fingerprint of every existing image.
+        if self.image.rd.antithesis:
+            self_hash.update(b"antithesis=1")
+            self_hash.update(f"antithesis_export={ANTITHESIS_EXPORT_VERSION}".encode())
+            self_hash.update(
+                f"antithesis_env={sorted(rustc_flags.antithesis_env.items())}".encode()
+            )
         # This exists to make sure all hashes from before we had a GHCR mirror are invalidated, so that we rebuild when an image doesn't exist on GHCR yet
         self_hash.update(b"mirror=ghcr")
 
@@ -1437,7 +1475,7 @@ class ResolvedImage:
 class DependencySet:
     """A set of `ResolvedImage`s.
 
-    Iterating over a dependency set yields the contained images in an arbitrary
+    Iterating over a dependency set yields the contained images in topological
     order. Indexing a dependency set yields the image with the specified name.
     """
 
@@ -1499,6 +1537,10 @@ class DependencySet:
                             deps_to_build.append(dep)
                     except Exception:
                         deps_to_build.append(dep)
+
+        # Unpublished images can depend on published images that also need building.
+        build_names = {dep.name for dep in deps_to_build}
+        deps_to_build = [dep for dep in self if dep.name in build_names]
 
         # Don't attempt to build in CI, as our timeouts and small machines won't allow it anyway
         if ui.env_is_truthy("CI") and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD"):
@@ -1610,6 +1652,7 @@ class Repository:
         image_registry: The Docker image registry to pull images from and push
             images to.
         image_prefix: A prefix to apply to all Docker image names.
+        antithesis: Whether to build with Antithesis instrumentation and SDK.
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
@@ -1627,6 +1670,7 @@ class Repository:
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = image_registry(),
         image_prefix: str = "",
+        antithesis: bool = False,
     ):
         self.rd = RepositoryDetails(
             root,
@@ -1636,6 +1680,7 @@ class Repository:
             sanitizer,
             image_registry,
             image_prefix,
+            antithesis,
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
@@ -1711,6 +1756,12 @@ class Repository:
             type=Sanitizer,
             choices=Sanitizer,
         )
+        parser.add_argument(
+            "--antithesis",
+            help="whether to build with Antithesis instrumentation and SDK",
+            default=ui.env_is_truthy("CI_ANTITHESIS"),
+            action="store_true",
+        )
 
         def _parse_arch(s: str) -> Arch:
             try:
@@ -1765,6 +1816,7 @@ class Repository:
             image_registry=args.image_registry,
             image_prefix=args.image_prefix,
             arch=args.arch,
+            antithesis=args.antithesis,
         )
 
     @property
