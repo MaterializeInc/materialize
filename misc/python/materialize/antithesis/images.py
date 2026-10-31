@@ -33,6 +33,7 @@ JSON. With
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -57,6 +58,65 @@ CONFIG_REGISTRY = (
 # environment is not part of an mzbuild fingerprint, so without a source change
 # `mzimage acquire` would pull the published release image instead of building.
 UPGRADE_BASE_LABEL = "LABEL io.materialize.antithesis.aws-lc-jitter-entropy=disabled"
+HALT_EVIDENCE_SOURCE = MZ_ROOT / "src" / "ore" / "src" / "halt_evidence.rs"
+UPGRADE_BASE_ORIGINAL_HALT = r"""macro_rules! halt {
+    ($($arg:expr),* $(,)?) => {{
+        $crate::__private::tracing::warn!("halting process: {}", format!($($arg),*));
+        $crate::process::exit_thread_safe($crate::process::HALT_EXIT_CODE);
+    }}
+}"""
+UPGRADE_BASE_RECORDED_HALT = r"""macro_rules! halt {
+    ($($arg:expr),* $(,)?) => {{
+        let message = format!($($arg),*);
+        $crate::__private::tracing::warn!("halting process: {}", message);
+        $crate::process::record_halt(
+            $crate::process::HALT_EXIT_CODE,
+            ::std::concat!(::std::file!(), ":", ::std::line!()),
+            &message,
+        );
+        $crate::process::exit_thread_safe($crate::process::HALT_EXIT_CODE);
+    }}
+}"""
+UPGRADE_BASE_RECORDER = """#[cfg(target_os = "linux")]
+mod halt_evidence {
+%s
+}
+
+/// Records bounded halt evidence in Antithesis upgrade-base builds.
+#[doc(hidden)]
+pub fn record_halt(code: i32, location: &str, message: &str) {
+    #[cfg(target_os = "linux")]
+    halt_evidence::record(code, location, message);
+    #[cfg(not(target_os = "linux"))]
+    let _ = (code, location, message);
+}
+"""
+
+
+def upgrade_base_patch_digest() -> str:
+    sources = [
+        HALT_EVIDENCE_SOURCE.read_text(),
+        UPGRADE_BASE_ORIGINAL_HALT,
+        UPGRADE_BASE_RECORDED_HALT,
+        UPGRADE_BASE_RECORDER,
+        UPGRADE_BASE_LABEL,
+    ]
+    return hashlib.sha256("\0".join(sources).encode()).hexdigest()[:16]
+
+
+def patch_upgrade_base_halt_proof(worktree: Path) -> None:
+    """Add only the halt recorder to the freshly checked-out release source."""
+    path = worktree / "src" / "ore" / "src" / "process.rs"
+    original = path.read_text()
+    if (
+        original.count(UPGRADE_BASE_ORIGINAL_HALT) != 1
+        or "pub fn record_halt(" in original
+    ):
+        raise ValueError("upgrade-base process.rs has an unsupported halt macro")
+    recorded = original.replace(UPGRADE_BASE_ORIGINAL_HALT, UPGRADE_BASE_RECORDED_HALT)
+    path.write_text(
+        recorded + "\n" + UPGRADE_BASE_RECORDER % HALT_EVIDENCE_SOURCE.read_text()
+    )
 
 
 def acquire(root: Path, arch: Arch = Arch.host()) -> dict[str, str]:
@@ -108,7 +168,9 @@ def target_tag(commit: str) -> str:
 
 
 def upgrade_base_tag(version: MzVersion) -> str:
-    return image_tag(version, "antithesis.upgrade-base")
+    return image_tag(
+        version, f"antithesis.upgrade-base.halt1.{upgrade_base_patch_digest()}"
+    )
 
 
 def build_upgrade_base(
@@ -128,11 +190,16 @@ def build_upgrade_base(
         ["git", "worktree", "add", "--detach", str(worktree), str(version)],
         cwd=MZ_ROOT,
     )
+    patch_upgrade_base_halt_proof(worktree)
+    proof_label = (
+        f"LABEL io.materialize.antithesis.halt-proof={upgrade_base_patch_digest()}"
+    )
     for name in UPGRADE_BASE_IMAGES:
         dockerfile = worktree / "src" / name / "ci" / "Dockerfile"
         text = dockerfile.read_text()
-        if UPGRADE_BASE_LABEL not in text:
-            dockerfile.write_text(text.rstrip("\n") + "\n" + UPGRADE_BASE_LABEL + "\n")
+        dockerfile.write_text(
+            text.rstrip("\n") + "\n" + UPGRADE_BASE_LABEL + "\n" + proof_label + "\n"
+        )
     env = {
         **os.environ,
         **rustc_flags.antithesis_env,
