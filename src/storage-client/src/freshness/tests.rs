@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -19,51 +20,127 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::freshness::histogram::BucketScheme;
 use mz_storage_types::freshness::recorder::{PeriodRow, RecorderConfig};
-use mz_storage_types::freshness::{ResolvedTree, Ticker};
+use mz_storage_types::freshness::{
+    FreshnessLeaf, FreshnessTree, ResolvedTree, Ticker, TickerLookup,
+};
 use timely::progress::Antichain;
 
 use super::{
-    AssignmentBoundCache, FreshnessRecording, FreshnessSeeds, Measure, RestartPolicy,
-    SeedCollector, SharedVisibilityLog, pack_rows, recording_after_restart, reported_lag,
+    AssignmentBoundCache, ConsumedVisibilityLog, FreshnessRecording, FreshnessSeeds, Measure,
+    ResolvedTreeCache, RestartPolicy, SeedCollector, SharedVisibilityLog, pack_rows,
+    recording_after_restart, reported_lag,
 };
 use crate::controller::WallclockLag;
 
-#[mz_ore::test]
-fn visibility_log_is_pruned_by_age() {
-    let tree = ResolvedTree::Leaf(Ticker::Aligned { interval_ms: 1000 });
-    let config = RecorderConfig {
+fn visibility_config() -> RecorderConfig {
+    RecorderConfig {
         scheme: BucketScheme::new(4).expect("power of two"),
         interval_ms: 1,
         period_ms: 60_000,
         retention_ms: 30 * 24 * 60 * 60 * 1000,
-    };
-    let log = SharedVisibilityLog::default();
-    assert_eq!(log.input_log(None).visible_at(1), None);
-    // One advance per second for 15 minutes, observed 5 ms after each tick.
-    for s in 1..=900u64 {
-        let frontier = Antichain::from_elem(Timestamp::from(s * 1000 + 1));
-        log.record(&tree, &frontier, s * 1000 + 5, &config);
     }
-    let copy = log.input_log(None);
-    // Ten minutes are kept, and older arrivals are answered by the last pruned entry.
-    assert_eq!(copy.visible_at(300_000), Some(300_005));
-    assert_eq!(copy.visible_at(299_000), Some(299_005));
-    assert_eq!(copy.visible_at(1), Some(299_005));
+}
+
+/// Records an advance that reflects the arrivals through `s` seconds, observed 5 ms after the
+/// tick.
+fn record_tick(log: &mut ConsumedVisibilityLog, s: u64) {
+    let tree = ResolvedTree::Leaf(Ticker::Aligned { interval_ms: 1000 });
+    let frontier = Antichain::from_elem(Timestamp::from(s * 1000 + 1));
+    log.record(&tree, &frontier, s * 1000 + 5, &visibility_config());
+}
+
+#[mz_ore::test]
+fn visibility_log_thins_what_a_waiting_consumer_keeps() {
+    let mut log = ConsumedVisibilityLog::default();
+    let consumer = (GlobalId::User(1), None);
+    assert_eq!(log.read(consumer, None).visible_at(1), None);
+    // One advance per second for 15 minutes. The consumer's recording has not started, so it
+    // keeps everything, thinned by age.
+    for s in 1..=900u64 {
+        record_tick(&mut log, s);
+        log.read(consumer, None);
+    }
+    // The last minute, and two entries per bucket of the age beyond it, four buckets per
+    // doubling.
+    assert!(log.len() <= 61 + 2 * 4 * 4 + 1, "{}", log.len());
+    let copy = log.read(consumer, None);
+    // The oldest entry stays, recent arrivals are answered exactly, and thinned ones by a later
+    // observation.
+    assert_eq!(copy.visible_at(1), Some(1005));
     assert_eq!(copy.visible_at(900_000), Some(900_005));
-    // A copy for a consumer answers what it has not recorded yet exactly.
-    let copy = log.input_log(Some(600_000));
-    assert_eq!(copy.visible_at(600_001), Some(601_005));
+    assert_eq!(copy.visible_at(850_000), Some(850_005));
+    let thinned = copy.visible_at(300_000).unwrap();
+    assert!(thinned >= 300_005, "{thinned}");
+    // A copy for a consumer answers what it has not recorded yet like the log.
+    let copy = log.read(consumer, Some(600_000));
+    assert_eq!(copy.visible_at(899_000), Some(899_005));
+}
+
+#[mz_ore::test]
+fn visibility_log_is_pruned_through_consumers() {
+    let mut log = ConsumedVisibilityLog::default();
+    // Without consumers, only the last entry stays.
+    for s in 1..=10 {
+        record_tick(&mut log, s);
+    }
+    assert_eq!(log.len(), 1);
+    assert_eq!(
+        log.read((GlobalId::User(9), None), None).visible_at(10_000),
+        Some(10_005)
+    );
+    log.deregister((GlobalId::User(9), None));
+
+    // Registered consumers keep everything before their first read.
+    let a = (GlobalId::User(1), None);
+    let b = (GlobalId::User(2), Some(ReplicaId::User(1)));
+    log.register(a);
+    log.register(b);
+    for s in 11..=20 {
+        record_tick(&mut log, s);
+    }
+    assert_eq!(log.len(), 11);
+
+    // The log keeps what the consumer that recorded the least still needs.
+    log.read(a, Some(15_000));
+    let before = log.read(b, Some(13_000));
+    record_tick(&mut log, 21);
+    assert_eq!(log.len(), 8);
+    let after = log.read(b, Some(13_000));
+    for arrival in 13_001..=20_000 {
+        assert_eq!(after.visible_at(arrival), before.visible_at(arrival));
+    }
+
+    // A deregistered consumer keeps nothing alive.
+    log.deregister(b);
+    record_tick(&mut log, 22);
+    assert_eq!(log.len(), 7);
+    assert_eq!(log.read(a, Some(15_000)).visible_at(15_001), Some(16_005));
+
+    // The last entry stays, even if every consumer recorded past it.
+    log.read(a, Some(u64::MAX));
+    record_tick(&mut log, 23);
+    assert_eq!(log.len(), 1);
+    assert_eq!(log.read(a, Some(22_000)).visible_at(23_000), Some(23_005));
+
+    // A consumer that stops reading keeps what it needs until it is deregistered, thinned by
+    // age.
+    log.read(a, Some(23_000));
+    for s in 24..=700 {
+        record_tick(&mut log, s);
+    }
+    assert!(log.len() <= 61 + 2 * 4 * 4 + 1, "{}", log.len());
+    let late = log.read(a, Some(23_000));
+    assert_eq!(late.visible_at(24_000), Some(24_005));
+    assert_eq!(late.visible_at(700_000), Some(700_005));
+    log.deregister(a);
+    record_tick(&mut log, 701);
+    assert_eq!(log.len(), 1);
 }
 
 #[mz_ore::test]
 fn closed_collection_stays_visible_from_its_close() {
     let tree = ResolvedTree::Leaf(Ticker::Aligned { interval_ms: 1000 });
-    let config = RecorderConfig {
-        scheme: BucketScheme::new(4).expect("power of two"),
-        interval_ms: 1,
-        period_ms: 60_000,
-        retention_ms: 30 * 24 * 60 * 60 * 1000,
-    };
+    let config = visibility_config();
     let log = SharedVisibilityLog::default();
     log.record(
         &tree,
@@ -72,9 +149,9 @@ fn closed_collection_stays_visible_from_its_close() {
         &config,
     );
     log.record(&tree, &Antichain::new(), 2005, &config);
-    // Later observations, which prune by age, keep the close.
+    // Later observations, which prune, keep the close.
     log.record(&tree, &Antichain::new(), 10_000_000, &config);
-    let copy = log.input_log(Some(5_000_000));
+    let copy = log.with(|log| log.read((GlobalId::User(1), None), Some(5_000_000)));
     assert_eq!(copy.visible_at(5_000_001), Some(2005));
     assert_eq!(copy.visible_at(u64::MAX), Some(2005));
 }
@@ -99,6 +176,72 @@ fn end_to_end_only_records_no_local_rows() {
         "{rows:?}"
     );
     assert_eq!(rows.iter().map(|(_, row)| row.count).sum::<u64>(), 90_000);
+}
+
+#[mz_ore::test]
+fn resolved_tree_cache_follows_generation() {
+    struct Counting {
+        interval_ms: Cell<u64>,
+        generation: Cell<u64>,
+        lookups: Cell<u64>,
+    }
+    impl TickerLookup for Counting {
+        fn ingestion_ticker(&self, _: GlobalId) -> Option<Ticker> {
+            self.lookups.set(self.lookups.get() + 1);
+            Some(Ticker::Aligned {
+                interval_ms: self.interval_ms.get(),
+            })
+        }
+        fn generation(&self) -> u64 {
+            self.generation.get()
+        }
+    }
+    let lookup = Counting {
+        interval_ms: Cell::new(1000),
+        generation: Cell::new(0),
+        lookups: Cell::new(0),
+    };
+    let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(GlobalId::User(1)));
+    let other = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(GlobalId::User(2)));
+    let mut cache = ResolvedTreeCache::default();
+
+    assert_eq!(
+        cache.resolve(&tree, &lookup).as_deref(),
+        Some(&aligned(1000))
+    );
+    assert_eq!(
+        cache.resolve(&tree, &lookup).as_deref(),
+        Some(&aligned(1000))
+    );
+    assert_eq!(lookup.lookups.get(), 1, "unchanged generation and tree");
+
+    cache.resolve(&other, &lookup);
+    assert_eq!(lookup.lookups.get(), 2, "changed tree");
+
+    lookup.interval_ms.set(250);
+    lookup.generation.set(1);
+    assert_eq!(
+        cache.resolve(&other, &lookup).as_deref(),
+        Some(&aligned(250))
+    );
+    assert_eq!(lookup.lookups.get(), 3, "changed generation");
+
+    // `resolve_with` fetches the tree only when the generation changed.
+    let mut cache = ResolvedTreeCache::default();
+    let mut fetches = 0;
+    for _ in 0..3 {
+        cache.resolve_with(&lookup, || {
+            fetches += 1;
+            Some(tree.clone())
+        });
+    }
+    assert_eq!(fetches, 1);
+    lookup.generation.set(2);
+    let resolved = cache.resolve_with(&lookup, || {
+        fetches += 1;
+        None
+    });
+    assert_eq!((fetches, resolved), (2, None));
 }
 
 fn aligned(ms: u64) -> ResolvedTree {

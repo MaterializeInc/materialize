@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::iter;
 use std::num::NonZeroI64;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{self, AtomicU64};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -331,6 +332,9 @@ pub trait StorageCollections: Debug + Sync {
 
     /// Resolves the current tick intervals of ingestions. Reads live values, so the result
     /// reflects later calls to [`StorageCollections::update_ingestion_timestamp_interval`].
+    ///
+    /// Its generation also changes whenever [`StorageCollections::freshness_tree`] of some
+    /// collection changes, so a cached tree and its resolution stay valid while it is unchanged.
     fn ticker_lookup(&self) -> Arc<dyn TickerLookup + Send + Sync>;
 
     /// The restart seeds of freshness recordings, which the write tasks of the freshness
@@ -442,6 +446,9 @@ pub struct StorageCollectionsImpl {
     holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<Timestamp>)>,
 
     freshness_seeds: FreshnessSeeds,
+    /// The tick intervals of ingestions, kept outside `collections` so that resolving freshness
+    /// trees does not contend on its lock.
+    ingestion_tickers: Arc<IngestionTickers>,
 
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
@@ -595,6 +602,7 @@ impl StorageCollectionsImpl {
             cmd_tx,
             holds_tx,
             freshness_seeds: FreshnessSeeds::default(),
+            ingestion_tickers: Arc::default(),
             _background_task: Arc::new(background_task.abort_on_drop()),
             _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
         }
@@ -2070,10 +2078,6 @@ impl StorageCollections for StorageCollectionsImpl {
             };
 
             let freshness_tree = freshness_tree_for(id, &description);
-            let timestamp_interval = match &description.data_source {
-                DataSource::Ingestion(ingestion) => Some(ingestion.desc.timestamp_interval),
-                _ => None,
-            };
 
             let ingestion_remap_collection_id = match &description.data_source {
                 DataSource::Ingestion(desc) => Some(desc.remap_collection_id),
@@ -2084,7 +2088,6 @@ impl StorageCollections for StorageCollectionsImpl {
                 description.primary,
                 time_dependence,
                 freshness_tree,
-                timestamp_interval,
                 ingestion_remap_collection_id,
                 initial_since,
                 write_frontier.clone(),
@@ -2129,6 +2132,9 @@ impl StorageCollections for StorageCollectionsImpl {
                 DataSource::Ingestion(ingestion) => {
                     self_collections.insert(id, collection_state);
                     link_remap_freshness(&mut self_collections, id, ingestion.remap_collection_id);
+                    // After linking, so that the generation change covers the remap tree.
+                    self.ingestion_tickers
+                        .insert(id, ingestion.desc.timestamp_interval);
                 }
                 DataSource::Sink { .. } => {
                     self_collections.insert(id, collection_state);
@@ -2281,7 +2287,6 @@ impl StorageCollections for StorageCollectionsImpl {
                 None,
                 existing.time_dependence.clone(),
                 existing.freshness_tree.clone(),
-                None,
                 existing.ingestion_remap_collection_id.clone(),
                 implied_capability,
                 write_frontier,
@@ -2369,6 +2374,7 @@ impl StorageCollections for StorageCollectionsImpl {
                 }
             }
 
+            self.ingestion_tickers.remove(id);
             finalized_policies.push((id, ReadPolicy::ValidFrom(Antichain::new())));
         }
 
@@ -2483,6 +2489,7 @@ impl StorageCollections for StorageCollectionsImpl {
         let mut collections = self.collections.lock().expect("lock poisoned");
         if let Some(collection) = collections.get_mut(&id) {
             collection.freshness_tree = tree;
+            self.ingestion_tickers.bump();
         }
     }
 
@@ -2492,7 +2499,7 @@ impl StorageCollections for StorageCollectionsImpl {
     }
 
     fn ticker_lookup(&self) -> Arc<dyn TickerLookup + Send + Sync> {
-        Arc::new(CollectionTickers(Arc::clone(&self.collections)))
+        Arc::<IngestionTickers>::clone(&self.ingestion_tickers)
     }
 
     fn freshness_seeds(&self) -> FreshnessSeeds {
@@ -2500,8 +2507,7 @@ impl StorageCollections for StorageCollectionsImpl {
     }
 
     fn update_ingestion_timestamp_interval(&self, id: GlobalId, interval: Duration) {
-        let mut collections = self.collections.lock().expect("lock poisoned");
-        set_timestamp_interval(&mut collections, id, interval);
+        self.ingestion_tickers.update(id, interval);
     }
 
     fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
@@ -2520,6 +2526,7 @@ impl StorageCollections for StorageCollectionsImpl {
             cmd_tx: _,
             holds_tx: _,
             freshness_seeds: _,
+            ingestion_tickers,
             _background_task: _,
             _finalize_shards_task: _,
         } = self;
@@ -2541,6 +2548,7 @@ impl StorageCollections for StorageCollectionsImpl {
             .map(|(id, c)| (id.to_string(), format!("{c:?}")))
             .collect();
         let config = format!("{:?}", config.lock().expect("poisoned"));
+        let ingestion_tickers = format!("{ingestion_tickers:?}");
 
         Ok(serde_json::json!({
             "envd_epoch": envd_epoch,
@@ -2551,6 +2559,7 @@ impl StorageCollections for StorageCollectionsImpl {
             "config": config,
             "initial_txn_upper": initial_txn_upper,
             "persist_location": format!("{persist_location:?}"),
+            "ingestion_tickers": ingestion_tickers,
         }))
     }
 }
@@ -2675,30 +2684,59 @@ impl SinceHandleWrapper {
     }
 }
 
-/// Resolves ingestion tickers from the live collection state.
-#[derive(Debug)]
-struct CollectionTickers(Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState>>>);
+/// The live tick intervals of ingestions, and a generation that changes with them and with the
+/// freshness tree of any collection.
+#[derive(Debug, Default)]
+struct IngestionTickers {
+    intervals: RwLock<BTreeMap<GlobalId, Duration>>,
+    generation: AtomicU64,
+}
 
-impl TickerLookup for CollectionTickers {
+impl IngestionTickers {
+    /// Registers the ingestion `id` with its tick interval.
+    fn insert(&self, id: GlobalId, interval: Duration) {
+        self.intervals
+            .write()
+            .expect("lock poisoned")
+            .insert(id, interval);
+        self.bump();
+    }
+
+    /// Records the new `interval` of `id` if it is a registered ingestion.
+    fn update(&self, id: GlobalId, interval: Duration) {
+        let mut intervals = self.intervals.write().expect("lock poisoned");
+        if let Some(current) = intervals.get_mut(&id) {
+            *current = interval;
+            drop(intervals);
+            self.bump();
+        }
+    }
+
+    /// Forgets the ingestion `id`.
+    fn remove(&self, id: GlobalId) {
+        let removed = self.intervals.write().expect("lock poisoned").remove(&id);
+        if removed.is_some() {
+            self.bump();
+        }
+    }
+
+    /// Changes the generation. Must be called after the change it announces is visible, so that
+    /// a reader that observes the new generation also observes the change.
+    fn bump(&self) {
+        self.generation.fetch_add(1, atomic::Ordering::SeqCst);
+    }
+}
+
+impl TickerLookup for IngestionTickers {
     fn ingestion_ticker(&self, id: GlobalId) -> Option<Ticker> {
-        let collections = self.0.lock().expect("lock poisoned");
-        let interval = collections.get(&id)?.timestamp_interval?;
+        let interval = *self.intervals.read().expect("lock poisoned").get(&id)?;
         // Saturate intervals beyond `u64` milliseconds, they are not meaningful.
         let interval_ms = u64::try_from(interval.as_millis()).unwrap_or(u64::MAX);
         Some(Ticker::Aligned { interval_ms })
     }
-}
 
-/// Records `interval` for `id` if it is an ingestion.
-fn set_timestamp_interval(
-    collections: &mut BTreeMap<GlobalId, CollectionState>,
-    id: GlobalId,
-    interval: Duration,
-) {
-    if let Some(state) = collections.get_mut(&id)
-        && state.timestamp_interval.is_some()
-    {
-        state.timestamp_interval = Some(interval);
+    fn generation(&self) -> u64 {
+        self.generation.load(atomic::Ordering::SeqCst)
     }
 }
 
@@ -2769,9 +2807,6 @@ struct CollectionState {
     time_dependence: Option<TimeDependence>,
     /// Description of how this collection's frontier follows arrival time.
     freshness_tree: Option<FreshnessTree>,
-    /// The tick interval of this collection if it is an ingestion. Updated by
-    /// [`StorageCollections::update_ingestion_timestamp_interval`].
-    timestamp_interval: Option<Duration>,
     /// The ID of the source remap/progress collection, if this is an ingestion.
     ingestion_remap_collection_id: Option<GlobalId>,
     /// When this collection made arrivals visible. The controller that writes the collection
@@ -2809,7 +2844,6 @@ impl CollectionState {
         primary: Option<GlobalId>,
         time_dependence: Option<TimeDependence>,
         freshness_tree: Option<FreshnessTree>,
-        timestamp_interval: Option<Duration>,
         ingestion_remap_collection_id: Option<GlobalId>,
         since: Antichain<Timestamp>,
         write_frontier: Antichain<Timestamp>,
@@ -2822,7 +2856,6 @@ impl CollectionState {
             primary,
             time_dependence,
             freshness_tree,
-            timestamp_interval,
             ingestion_remap_collection_id,
             visibility_log: SharedVisibilityLog::default(),
             read_capabilities,
@@ -3493,55 +3526,47 @@ mod tests {
 
     #[mz_ore::test]
     fn freshness_tree_follows_alter() {
-        let metadata = CollectionMetadata {
-            persist_location: PersistLocation {
-                blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
-                consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
-            },
-            data_shard: ShardId::new(),
-            relation_desc: RelationDesc::empty(),
-            txns_shard: None,
-        };
-        let state = |interval| {
-            CollectionState::new(
-                None,
-                None,
-                None,
-                interval,
-                None,
-                Antichain::from_elem(Timestamp::MIN),
-                Antichain::from_elem(Timestamp::MIN),
-                Vec::new(),
-                metadata.clone(),
-            )
-        };
         let ingestion = GlobalId::User(1);
         let table = GlobalId::User(2);
-        let collections = Arc::new(Mutex::new(BTreeMap::from([
-            (ingestion, state(Some(Duration::from_millis(1000)))),
-            (table, state(None)),
-        ])));
-        let lookup = CollectionTickers(Arc::clone(&collections));
+        let lookup = IngestionTickers::default();
+        lookup.insert(ingestion, Duration::from_millis(1000));
 
         assert_eq!(
             lookup.ingestion_ticker(ingestion),
             Some(Ticker::Aligned { interval_ms: 1000 })
         );
         assert_eq!(lookup.ingestion_ticker(table), None);
-        assert_eq!(lookup.ingestion_ticker(GlobalId::User(3)), None);
 
-        // The lookup reads live values.
-        {
-            let mut collections = collections.lock().expect("lock poisoned");
-            set_timestamp_interval(&mut collections, ingestion, Duration::from_millis(250));
-            // Only ingestions have an interval.
-            set_timestamp_interval(&mut collections, table, Duration::from_millis(250));
-        }
+        // The lookup reads live values, and announces the change through its generation.
+        let generation = lookup.generation();
+        lookup.update(ingestion, Duration::from_millis(250));
+        assert_ne!(lookup.generation(), generation);
         assert_eq!(
             lookup.ingestion_ticker(ingestion),
             Some(Ticker::Aligned { interval_ms: 250 })
         );
+
+        // Only ingestions have an interval.
+        let generation = lookup.generation();
+        lookup.update(table, Duration::from_millis(250));
+        assert_eq!(lookup.generation(), generation);
         assert_eq!(lookup.ingestion_ticker(table), None);
+
+        // A cached resolution picks up the change at its next use.
+        let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(ingestion));
+        let mut cache = crate::freshness::ResolvedTreeCache::default();
+        let leaf = |interval_ms| {
+            Some(mz_storage_types::freshness::ResolvedTree::Leaf(
+                Ticker::Aligned { interval_ms },
+            ))
+        };
+        assert_eq!(cache.resolve(&tree, &lookup).as_deref(), leaf(250).as_ref());
+        lookup.update(ingestion, Duration::from_millis(500));
+        assert_eq!(cache.resolve(&tree, &lookup).as_deref(), leaf(500).as_ref());
+
+        lookup.remove(ingestion);
+        assert_eq!(lookup.ingestion_ticker(ingestion), None);
+        assert_eq!(cache.resolve(&tree, &lookup), None);
     }
 
     #[mz_ore::test]
@@ -3580,7 +3605,6 @@ mod tests {
                 None,
                 None,
                 tree,
-                None,
                 None,
                 Antichain::from_elem(Timestamp::MIN),
                 Antichain::from_elem(Timestamp::MIN),

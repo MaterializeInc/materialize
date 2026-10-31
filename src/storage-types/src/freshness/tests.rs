@@ -112,6 +112,9 @@ fn resolve_unknown_ingestion_is_none() {
         fn ingestion_ticker(&self, _: GlobalId) -> Option<Ticker> {
             None
         }
+        fn generation(&self) -> u64 {
+            0
+        }
     }
     let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(GlobalId::User(1)));
     assert!(tree.resolve(&Empty).is_none());
@@ -3088,4 +3091,123 @@ fn split_skew_past_the_step_budget_understates() {
     );
     let skew_max = bucket_counts(&rows.skew).into_keys().last().unwrap();
     assert!(skew_max <= s.bucket(4800), "{skew_max}");
+}
+
+#[mz_ore::test]
+fn thinning_bounds_log_size_over_a_day() {
+    let period_ms = 60_000;
+    let mut log = VisibilityLog::default();
+    // An advance per second for a day, thinned at every observation.
+    for s in 1..=DAY_MS / 1000 {
+        log.record(s * 1000 + 1, Some(s * 1000), s * 1000 + 5);
+        log.thin(s * 1000 + 5, period_ms, &scheme(4));
+        // The entries of the last period, two per bucket of the age beyond it, the last one.
+        let doublings = u64::from((s * 1000 / period_ms).max(1).ilog2()) + 1;
+        let bound = 61 + 2 * 4 * doublings + 1;
+        assert!(
+            u64::try_from(log.len()).unwrap() <= bound,
+            "{s}: {} > {bound}",
+            log.len()
+        );
+    }
+    // The oldest entry stays, recent ones are exact.
+    assert_eq!(log.visible_at(1), Some(1005));
+    assert_eq!(log.visible_at(DAY_MS - 30_000), Some(DAY_MS - 30_000 + 5));
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn thinning_never_overstates() {
+    let strategy = (
+        select(vec![3u64, 5, 7, 11, 13]),
+        select(vec![2u64, 3, 5, 7]),
+        0u64..30,
+        0u64..30,
+        select(vec![10u64, 50, 200]),
+        500u64..3000,
+    );
+    proptest!(ProptestConfig::with_cases(64), |((i1, i2, d1, d2, period, stall_end) in strategy)| {
+        // Two sources and a join that stalls, so that it reads entries older than the period.
+        let (t1, t2) = (aligned(i1), aligned(i2));
+        let join = ResolvedTree::Min(vec![t1.clone(), t2.clone()]);
+        let end = 4000;
+        let h1 = leaf_history(i1, d1, end, None, 0);
+        let h2 = leaf_history(i2, d2, end, None, 0);
+        let history = held(&derived_history(&[&h1, &h2], 5), (100, stall_end));
+        let (full1, full2) = (log_of(&t1, &h1), log_of(&t2, &h2));
+        let cfg = config(4);
+        let (mut full, mut thinned) = (LocalDelayRecorder::new(0), LocalDelayRecorder::new(0));
+        let (mut rows_full, mut rows_thinned) = (LocalRows::default(), LocalRows::default());
+        for (o, f) in &history {
+            let inputs = [
+                LocalInput { tree: &t1, log: &full1 },
+                LocalInput { tree: &t2, log: &full2 },
+            ];
+            let rows = full.observe(&join, &join, &at(*f), *o, &inputs, &cfg);
+            rows_full.local.extend(rows.local);
+            rows_full.skew.extend(rows.skew);
+            // The logs as thinned when this observation reads them.
+            let (mut thin1, mut thin2) = (full1.clone(), full2.clone());
+            thin1.thin(*o, period, &cfg.scheme);
+            thin2.thin(*o, period, &cfg.scheme);
+            let inputs = [
+                LocalInput { tree: &t1, log: &thin1 },
+                LocalInput { tree: &t2, log: &thin2 },
+            ];
+            let rows = thinned.observe(&join, &join, &at(*f), *o, &inputs, &cfg);
+            rows_thinned.local.extend(rows.local);
+            rows_thinned.skew.extend(rows.skew);
+        }
+        for (low, high) in [
+            (&rows_thinned.local, &rows_full.local),
+            (&rows_thinned.skew, &rows_full.skew),
+        ] {
+            let (low, high) = (bucket_counts(low), bucket_counts(high));
+            prop_assert!(dominated_by(&low, &high), "{low:?} > {high:?}");
+        }
+    });
+}
+
+#[mz_ore::test]
+fn thinned_frontier_answer_does_not_lengthen_skew() {
+    // A join of a 7 s and an 11 s source. The window (0, 7000] needs timestamp 11000. The 7 s
+    // source shows it at 7010 and passes 11000 at 14010. The 11 s source shows it at 13000,
+    // late, so the skew is 1010 ms, below the 3000 ms on-time skew.
+    let (l7, l11) = (aligned(7000), aligned(11_000));
+    let join = ResolvedTree::Min(vec![l7.clone(), l11.clone()]);
+    let mut log7 = VisibilityLog::default();
+    for k in 1..=4 {
+        log7.record(k * 7000 + 1, Some(k * 7000), k * 7000 + 10);
+    }
+    let mut log11 = VisibilityLog::default();
+    log11.record(11_001, Some(11_000), 13_000);
+    // The join reads at 200 s, when the entries observed at 7010 and 14010 are of the same age
+    // bucket, so thinning keeps only the first of them, and 14010 is answered by 21010.
+    let now = 200_000;
+    let mut thinned7 = log7.clone();
+    thinned7.thin(now, 1000, &scheme(4));
+    assert_eq!(thinned7.passed_at(11_000), Some(21_010));
+    assert_eq!(thinned7.visible_at(7000), Some(7010));
+    let cfg = config(4);
+    let skew = |log7: &VisibilityLog| {
+        let inputs = [
+            LocalInput {
+                tree: &l7,
+                log: log7,
+            },
+            LocalInput {
+                tree: &l11,
+                log: &log11,
+            },
+        ];
+        let mut recorder = LocalDelayRecorder::new(0);
+        let mut rows = recorder.observe(&join, &join, &at(11_001), now, &inputs, &cfg);
+        rows.skew.extend(recorder.finish().skew);
+        bucket_counts(&rows.skew)
+    };
+    let s = scheme(4);
+    assert_eq!(skew(&log7), BTreeMap::from([(s.bucket(1010), 7000)]));
+    // The later frontier answer moves the 7 s source's arrival readiness along, so the skew
+    // shrinks instead of growing to the on-time skew.
+    assert_eq!(skew(&thinned7), BTreeMap::from([(s.bucket(1), 7000)]));
 }
