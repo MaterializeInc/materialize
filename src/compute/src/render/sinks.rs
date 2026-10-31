@@ -32,6 +32,7 @@ use crate::logging::compute::LogDataflowErrors;
 use crate::render::columnar::columnar_to_vec;
 use crate::render::context::{Context, distinct_errs_collection};
 use crate::render::errors::DataflowErrorSer;
+use crate::render::inline_region::{InlineRegion, InlineRegionScope};
 use crate::render::{RenderTimestamp, StartSignal};
 
 impl<'g, T: RenderTimestamp> Context<'g, T> {
@@ -151,7 +152,7 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             }
             ComputeSinkConnection::MetricSink(_) => format!("MetricSink({:?})", sink_id),
         };
-        outer_scope.clone().region_named(&region_name, |inner| {
+        outer_scope.clone().inline_named(&region_name, |inner| {
             let sink_render = get_sink_render_for(&sink.connection);
 
             let sink_token = sink_render.render_sink(
@@ -160,8 +161,8 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
                 sink_id,
                 self.as_of_frontier.clone(),
                 start_signal,
-                ok_collection.enter_region(inner),
-                err_collection.enter_region(inner),
+                ok_collection.enter_inline(inner),
+                err_collection.enter_inline(inner),
                 output_probe,
             );
 

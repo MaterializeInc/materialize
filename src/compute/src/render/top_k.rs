@@ -53,6 +53,7 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
+use crate::render::inline_region::{InlineRegion, InlineRegionScope};
 use crate::typedefs::{ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 use mz_row_spine::{
     DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder,
@@ -114,9 +115,9 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 
         // We create a new region to compartmentalize the topk logic.
         let outer_scope = ok_input.scope();
-        let bundle = outer_scope.clone().region_named("TopK", |inner| {
-            let ok_input = ok_input.enter_region(inner);
-            let mut err_collection = err_input.enter_region(inner);
+        let bundle = outer_scope.clone().inline_named("TopK", |inner| {
+            let ok_input = ok_input.enter_inline(inner);
+            let mut err_collection = err_input.enter_inline(inner);
 
             // Determine if there should be errors due to limit evaluation; update `err_collection`.
             // TODO(vmarcos): We evaluate the limit expression below for each input update. There

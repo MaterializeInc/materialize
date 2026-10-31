@@ -42,6 +42,7 @@ use crate::render::RenderTimestamp;
 use crate::render::columnar::{ColCollection, flat_map_datums, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
+use crate::render::inline_region::{InlineRegion, InlineRegionScope};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -55,7 +56,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         join_plan: DeltaJoinPlan,
     ) -> CollectionBundle<'scope, T> {
         // We create a new region to contain the dataflow paths for the delta join.
-        let (oks, errs) = self.scope.clone().region_named("Join(Delta)", |inner| {
+        // The region is inline (see `inline_region`), so entering a collection into it is free.
+        let (oks, errs) = self.scope.clone().inline_named("Join(Delta)", |inner| {
             // Our plan is to iterate through each input relation, and attempt
             // to find a plan that maximally uses existing keys (better: uses
             // existing arrangements, to which we have access).
@@ -103,7 +105,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // from `inputs[relation]` and reflects all strictly prior updates and
                 // concurrent updates from relations prior to `relation`.
                 let name = format!("delta path {}", source_relation);
-                let path_results = inner.clone().region_named(&name, |region| {
+                let path_results = inner.clone().inline_named(&name, |region| {
                     // The plan is to move through each relation, starting from `relation` and in the order
                     // indicated in `orders[relation]`. At each moment, we will have the columns from the
                     // subset of relations encountered so far, and we will have applied as much as we can
@@ -232,9 +234,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
                     inner_errs.push(
                         differential_dataflow::collection::concatenate(region, region_errs)
-                            .leave_region(inner),
+                            .leave_inline(inner),
                     );
-                    update_stream.leave_region(inner)
+                    update_stream.leave_inline(inner)
                 });
 
                 join_results.push(path_results);
@@ -243,9 +245,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             // Concatenate the results of each delta query as the accumulated results.
             (
                 differential_dataflow::collection::concatenate(inner, join_results)
-                    .leave_region(self.scope),
+                    .leave_inline(self.scope),
                 differential_dataflow::collection::concatenate(inner, inner_errs)
-                    .leave_region(self.scope),
+                    .leave_inline(self.scope),
             )
         });
         // The delta join is `Vec`-internal throughout, so the concatenated node output is

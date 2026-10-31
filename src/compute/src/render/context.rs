@@ -54,6 +54,7 @@ use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, M
 use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
+use crate::render::inline_region::InlineRegion;
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
@@ -189,11 +190,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Brings the underlying arrangements and collections into a region.
-    pub fn enter_region<'a>(
+    pub fn enter_region(
         &self,
-        region: Scope<'a, T>,
+        region: Scope<'scope, T>,
         bindings: Option<&std::collections::BTreeSet<Id>>,
-    ) -> Context<'a, T> {
+    ) -> Context<'scope, T> {
         let bindings = self
             .bindings
             .iter()
@@ -375,32 +376,32 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     }
 
     /// Brings the arrangement flavor into a region.
-    pub fn enter_region<'a>(&self, region: Scope<'a, T>) -> ArrangementFlavor<'a, T> {
+    pub fn enter_region(&self, region: Scope<'scope, T>) -> ArrangementFlavor<'scope, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
-                oks.clone().enter_region(region),
-                errs.clone().enter_region(region),
+                oks.clone().enter_inline(region),
+                errs.clone().enter_inline(region),
             ),
             ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
                 *gid,
-                oks.clone().enter_region(region),
-                errs.clone().enter_region(region),
+                oks.clone().enter_inline(region),
+                errs.clone().enter_inline(region),
             ),
         }
     }
 }
 impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// Extracts the arrangement flavor from a region.
-    pub fn leave_region<'outer>(&self, outer: Scope<'outer, T>) -> ArrangementFlavor<'outer, T> {
+    pub fn leave_region(&self, outer: Scope<'scope, T>) -> ArrangementFlavor<'scope, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
-                oks.clone().leave_region(outer),
-                errs.clone().leave_region(outer),
+                oks.clone().leave_inline(outer),
+                errs.clone().leave_inline(outer),
             ),
             ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
                 *gid,
-                oks.clone().leave_region(outer),
-                errs.clone().leave_region(outer),
+                oks.clone().leave_inline(outer),
+                errs.clone().leave_inline(outer),
             ),
         }
     }
@@ -549,12 +550,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     }
 
     /// Brings the collection bundle into a region.
-    pub fn enter_region<'inner>(&self, region: Scope<'inner, T>) -> CollectionBundle<'inner, T> {
+    pub fn enter_region(&self, region: Scope<'scope, T>) -> CollectionBundle<'scope, T> {
         CollectionBundle {
             collection: self.collection.as_ref().map(|(oks, errs)| {
                 (
-                    oks.clone().enter_region(region),
-                    errs.clone().enter_region(region),
+                    oks.clone().enter_inline(region),
+                    errs.clone().enter_inline(region),
                 )
             }),
             arranged: self
@@ -568,12 +569,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
 impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Extracts the collection bundle from a region.
-    pub fn leave_region<'outer>(&self, outer: Scope<'outer, T>) -> CollectionBundle<'outer, T> {
+    pub fn leave_region(&self, outer: Scope<'scope, T>) -> CollectionBundle<'scope, T> {
         CollectionBundle {
             collection: self.collection.as_ref().map(|(oks, errs)| {
                 (
-                    oks.clone().leave_region(outer),
-                    errs.clone().leave_region(outer),
+                    oks.clone().leave_inline(outer),
+                    errs.clone().leave_inline(outer),
                 )
             }),
             arranged: self

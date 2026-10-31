@@ -47,6 +47,7 @@ use crate::render::RenderTimestamp;
 use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
+use crate::render::inline_region::{InlineRegion, InlineRegionScope};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowRowSpine};
@@ -287,7 +288,7 @@ where
         inputs: Vec<CollectionBundle<'scope, T>>,
         linear_plan: LinearJoinPlan,
     ) -> CollectionBundle<'scope, T> {
-        self.scope.clone().region_named("Join(Linear)", |inner| {
+        self.scope.clone().inline_named("Join(Linear)", |inner| {
             self.render_join_inner(inputs, linear_plan, inner)
         })
     }
@@ -296,7 +297,7 @@ where
         &self,
         inputs: Vec<CollectionBundle<'scope, T>>,
         linear_plan: LinearJoinPlan,
-        inner: Scope<'_, T>,
+        inner: Scope<'scope, T>,
     ) -> CollectionBundle<'scope, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
@@ -312,12 +313,12 @@ where
         // We can use an arrangement if it exists and an initial closure does not.
         let mut joined = match (arrangement, linear_plan.initial_closure) {
             (Some(ArrangementFlavor::Local(oks, errs)), None) => {
-                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
-                JoinedFlavor::Local(oks.enter_region(inner))
+                errors.push(errs.as_collection(|k, _v| k.clone()).enter_inline(inner));
+                JoinedFlavor::Local(oks.enter_inline(inner))
             }
             (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
-                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
-                JoinedFlavor::Trace(oks.enter_region(inner))
+                errors.push(errs.as_collection(|k, _v| k.clone()).enter_inline(inner));
+                JoinedFlavor::Trace(oks.enter_inline(inner))
             }
             (_, initial_closure) => {
                 // TODO: extract closure from the first stage in the join plan, should it exist.
@@ -331,8 +332,8 @@ where
                         inputs[linear_plan.source_relation].as_specific_collection(Some(key))
                     }
                 };
-                errors.push(errs.enter_region(inner));
-                let joined = joined.enter_region(inner);
+                errors.push(errs.enter_inline(inner));
+                let joined = joined.enter_inline(inner);
 
                 // In the current code this should always be `None`, but we have this here should
                 // we change that and want to know what we should be doing.
