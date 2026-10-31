@@ -41,6 +41,7 @@ use hickory_resolver::{Resolver, TokioResolver};
 use hyper::StatusCode;
 use hyper_util::rt::TokioIo;
 use launchdarkly_server_sdk as ld;
+use mz_auth::is_jwt;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
@@ -1962,18 +1963,29 @@ impl BalancerResolver {
 
                         // balancerd only needs the validated tenant_id to route
                         // the connection; group extraction happens in
-                        // environmentd, so skip it here.
-                        let auth_response = auth.authenticate(user, &password, None).await;
-                        let auth_session = match auth_response {
-                            Ok((auth_session, _)) => auth_session,
-                            Err(e) => {
-                                warn!("pgwire connection failed authentication: {}", e);
-                                return Err(ResolveError::InvalidPassword);
+                        // environmentd, so skip it here. An access token carries
+                        // its tenant, so it needs no exchange with Frontegg.
+                        // environmentd validates the password again either way.
+                        let tenant_id = if is_jwt(&password) {
+                            match auth.validate_access_token(&password, Some(user), None) {
+                                Ok((claims, _)) => claims.tenant_id,
+                                Err(e) => {
+                                    warn!("pgwire connection failed authentication: {}", e);
+                                    return Err(ResolveError::InvalidPassword);
+                                }
+                            }
+                        } else {
+                            match auth.authenticate(user, &password, None).await {
+                                Ok((auth_session, _)) => auth_session.tenant_id(),
+                                Err(e) => {
+                                    warn!("pgwire connection failed authentication: {}", e);
+                                    return Err(ResolveError::InvalidPassword);
+                                }
                             }
                         };
 
                         let hostname_with_port =
-                            addr_template.replace("{}", &auth_session.tenant_id().to_string());
+                            addr_template.replace("{}", &tenant_id.to_string());
                         let (hostname, port_str) = hostname_with_port
                             .rsplit_once(':')
                             .ok_or_else(|| anyhow::anyhow!("port required in addr_template"))?;
@@ -1987,7 +1999,7 @@ impl BalancerResolver {
                             .resolve_addr(hostname, port)
                             .await
                             .map_err(ResolveError::Upstream)?;
-                        let tenant = auth_session.tenant_id().to_string();
+                        let tenant = tenant_id.to_string();
                         debug!("Frontegg resolved tenant: {}", tenant);
                         ResolvedAddr {
                             addr,

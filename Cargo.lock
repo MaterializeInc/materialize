@@ -6583,6 +6583,7 @@ dependencies = [
  "launchdarkly-server-sdk",
  "mz-alloc",
  "mz-alloc-default",
+ "mz-auth",
  "mz-build-info",
  "mz-dyncfg",
  "mz-dyncfg-file",
