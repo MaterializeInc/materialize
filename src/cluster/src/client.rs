@@ -331,45 +331,8 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
         // means that no arrangement merge effort is exerted and merging occurs only in response to
         // updates.
         if config.arrangement_exert_proportionality > 0 {
-            let merge_effort = Some(1000);
-
-            // ExertionLogic defines a function to determine if a spine is sufficiently tidied.
-            // Its arguments are an iterator over the index of a layer, the count of batches in the
-            // layer and the length of batches at the layer. The iterator enumerates layers from the
-            // largest to the smallest layer.
-
-            let arc: ExertionLogic = Arc::new(move |layers| {
-                EXERT_POLICY_CALLS.fetch_add(1, Ordering::Relaxed);
-                let mut prop = config.arrangement_exert_proportionality;
-
-                // Layers are ordered from largest to smallest.
-                // Skip to the largest occupied layer.
-                let layers = layers
-                    .iter()
-                    .copied()
-                    .skip_while(|(_idx, count, _len)| *count == 0);
-
-                let mut first = true;
-                for (_idx, count, len) in layers {
-                    if count > 1 {
-                        // Found an in-progress merge that we should continue.
-                        EXERT_POLICY_MERGE_GRANTS.fetch_add(1, Ordering::Relaxed);
-                        return merge_effort;
-                    }
-
-                    if !first && prop > 0 && len > 0 {
-                        // Found a non-empty batch within `arrangement_exert_proportionality` of
-                        // the largest one.
-                        EXERT_POLICY_CONSOLIDATION_GRANTS.fetch_add(1, Ordering::Relaxed);
-                        return merge_effort;
-                    }
-
-                    first = false;
-                    prop /= 2;
-                }
-
-                None
-            });
+            let proportionality = config.arrangement_exert_proportionality;
+            let arc: ExertionLogic = Arc::new(move |layers| exert_effort(proportionality, layers));
             worker_config.set::<ExertionLogic>("differential/default_exert_logic".to_string(), arc);
         }
 
@@ -410,6 +373,53 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
 static EXERT_POLICY_CALLS: AtomicU64 = AtomicU64::new(0);
 static EXERT_POLICY_MERGE_GRANTS: AtomicU64 = AtomicU64::new(0);
 static EXERT_POLICY_CONSOLIDATION_GRANTS: AtomicU64 = AtomicU64::new(0);
+
+/// The exertion policy: the merge effort to apply to an idle spine, or `None` if it is
+/// sufficiently tidied.
+///
+/// `layers` holds the index of a layer, the count of batches in the layer and the length of
+/// batches at the layer, enumerated from the largest to the smallest layer.
+fn exert_effort(proportionality: u32, layers: &[(usize, usize, usize)]) -> Option<usize> {
+    let merge_effort = Some(1000);
+    EXERT_POLICY_CALLS.fetch_add(1, Ordering::Relaxed);
+    let mut prop = proportionality;
+
+    // Layers are ordered from largest to smallest.
+    // Skip to the largest occupied layer.
+    let layers = layers
+        .iter()
+        .copied()
+        .skip_while(|(_idx, count, _len)| *count == 0);
+
+    let mut first = true;
+    for (idx, count, len) in layers {
+        // Layer 0 holds batches of at most one update, and every frontier advance appends an
+        // empty batch there. A one-update batch at layer 0 therefore starts a merge on every
+        // tick, which the next insertion's fuel completes anyway. Exerting on it re-activates
+        // the arrange operator once or twice per tick, forever, so layer 0 never earns effort.
+        if idx == 0 {
+            break;
+        }
+
+        if count > 1 {
+            // Found an in-progress merge that we should continue.
+            EXERT_POLICY_MERGE_GRANTS.fetch_add(1, Ordering::Relaxed);
+            return merge_effort;
+        }
+
+        if !first && prop > 0 && len > 0 {
+            // Found a non-empty batch within `arrangement_exert_proportionality` of
+            // the largest one.
+            EXERT_POLICY_CONSOLIDATION_GRANTS.fetch_add(1, Ordering::Relaxed);
+            return merge_effort;
+        }
+
+        first = false;
+        prop /= 2;
+    }
+
+    None
+}
 
 /// Register gauges for the arrangement exertion policy's decisions.
 ///
@@ -537,5 +547,24 @@ mod exert_policy_metrics_tests {
             .filter(|name| name.starts_with("mz_arrangement_exert_policy"))
             .collect();
         assert!(matches!(names.len(), 0 | 2), "{names:?}");
+    }
+
+    #[mz_ore::test]
+    fn exert_effort_skips_layer_zero() {
+        // A one-update batch merging with the tick's empty batch at layer 0.
+        assert_eq!(exert_effort(16, &[(2, 1, 3), (1, 0, 0), (0, 2, 1)]), None);
+        assert_eq!(exert_effort(16, &[(0, 2, 1)]), None);
+        // A non-empty layer 0 batch near the largest one.
+        assert_eq!(exert_effort(16, &[(2, 1, 3), (1, 0, 0), (0, 1, 1)]), None);
+    }
+
+    #[mz_ore::test]
+    fn exert_effort_grants_above_layer_zero() {
+        // An in-progress merge.
+        assert_eq!(exert_effort(16, &[(3, 1, 8), (1, 2, 3)]), Some(1000));
+        // A non-empty batch within the proportionality of the largest one.
+        assert_eq!(exert_effort(16, &[(3, 1, 8), (1, 1, 2)]), Some(1000));
+        // A tidied spine.
+        assert_eq!(exert_effort(16, &[(3, 1, 8), (0, 1, 0)]), None);
     }
 }
