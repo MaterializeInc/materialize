@@ -856,13 +856,28 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     failed = report.has_regressions or bool(current_failures) or bool(mispredicted)
     if buildkite.is_in_buildkite():
-        buildkite.add_annotation(
-            "error" if failed else "info",
-            f"Cargo bench results ({', '.join(shard_packages)})",
-            markdown,
-            # `bin/ci-annotate-errors` posts under the job's style-named
-            # context (`error` or `info`) and would otherwise replace this table.
-            context="cargo-bench",
+        title = ", ".join(shard_packages)
+        retry_count = int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
+        if retry_count > 0:
+            title += f" (retry #{retry_count})"
+        if failed:
+            title += " [failed]"
+        annotation = (
+            f"\n\n<details><summary>{title}</summary>\n\n"
+            f"{buildkite.truncate_annotation_str(markdown)}\n\n</details>\n\n"
+        )
+        annotate_cmd = [
+            "buildkite-agent",
+            "annotate",
+            "--context=cargo-bench",
+            "--append",
+        ]
+        # Only failures set the shared style so passing shards preserve it.
+        if failed:
+            annotate_cmd.append("--style=error")
+        spawn.runv(
+            annotate_cmd,
+            stdin=annotation.encode(),
         )
         try:
             spawn.runv(

@@ -189,6 +189,30 @@ def annotate(style: str, context: str, markdown: str) -> None:
         print(f"Failed to post annotation: {e}")
 
 
+def initialize_cargo_bench_annotation(pipeline: Any) -> None:
+    """Open the shared results disclosure before Cargo bench shards start."""
+    if not any(
+        step.get("id") == "cargo-bench" and not step.get("skip")
+        for step in steps(pipeline)
+    ):
+        return
+    initialized_key = "cargo-bench-annotation-initialized"
+    if (
+        spawn.capture(
+            ["buildkite-agent", "meta-data", "get", initialized_key, "--default=false"]
+        ).strip()
+        == "true"
+    ):
+        return
+    # NOTE: Keep the outer details open so appends, including retries, stay
+    # nested. The HTML renderer closes it at the end of the annotation.
+    spawn.runv(
+        ["buildkite-agent", "annotate", "--context=cargo-bench", "--style=info"],
+        stdin=b"<details><summary>Cargo bench results</summary>\n\n",
+    )
+    spawn.runv(["buildkite-agent", "meta-data", "set", initialized_key, "true"])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="mkpipeline",
@@ -422,6 +446,8 @@ so it is executed.""",
     cmd = ["buildkite-agent", "pipeline", "upload"]
     if args.dry_run:
         cmd.append("--dry-run")
+    else:
+        initialize_cargo_bench_annotation(pipeline)
     spawn.runv(cmd, stdin=yaml.dump(pipeline).encode())
 
     if fail_build_reason is not None and not args.dry_run:
