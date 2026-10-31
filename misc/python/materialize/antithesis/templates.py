@@ -56,6 +56,16 @@ PROFILES = {
         },
         (),
     ),
+    "contracts": Profile(
+        _COMMON
+        | {
+            "aggregate_retractions",
+            "atomic_commits",
+            "bounded_subscribe",
+            "index_handover",
+        },
+        (),
+    ),
     "cdc": Profile(
         _COMMON
         | {

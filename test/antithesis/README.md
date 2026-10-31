@@ -41,13 +41,14 @@ client-history and external-source oracles.
 
 ## Workload templates
 
-The image generates four templates from the authoritative commands in
+The image generates five templates from the authoritative commands in
 `workload/test/main/`:
 
 | Template | Workloads | Initial bulk setup |
 |---|---|---|
 | `main` | Full mixed workload, including interactions between subsystems | Postgres, Kafka sources, Kafka sinks, IVM |
 | `transactions` | Client histories, contended counters, session mix, read paths, access control | None. Session mix creates its own RTR source when needed. |
+| `contracts` | Finite SUBSCRIBE windows, index handover, aggregate retractions, multi-table commits | None |
 | `cdc` | Postgres and Kafka sources, Kafka sinks, source progress, shard audits | Postgres, Kafka sources, Kafka sinks |
 | `rollouts` | Deployment scenarios, spec-phase changes, histories, counters, read paths, access control, Postgres, IVM, generation isolation | Postgres, IVM |
 
@@ -57,7 +58,9 @@ schedule. For example, the transaction template does not wait for a bulk
 source creation or select a candidate generation that no driver creates.
 
 Finite-stream, index-handover, aggregate-retraction, and multi-table commit
-commands also run in `transactions` and `rollouts`. They create bounded SQL
+commands have a focused `contracts` template and also run in `transactions`
+and `rollouts`. The focused template concentrates schedules on these oracles
+alongside pod faults and recovery checks. They create bounded SQL
 fixtures lazily on the shared cluster, without adding external services or
 initial bulk setup.
 
