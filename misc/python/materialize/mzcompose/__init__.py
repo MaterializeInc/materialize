@@ -358,6 +358,9 @@ def get_variable_system_parameters(
             "enable_compute_correction_v2_spill", "true", ["true", "false"]
         ),
         VariableSystemParameter(
+            "compute_arrangement_exert_skip_layer0", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
             # 1 MiB, an in-between value
             "1048576",
