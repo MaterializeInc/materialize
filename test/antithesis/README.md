@@ -19,6 +19,10 @@ and checks from `misc/python/materialize/antithesis/drivers/`.
 | Generation handoff | Rollouts and spec-phase changes overlap writes, source creation, catalog changes, and targeted pod restarts. Isolation checks observe candidate generations directly. |
 | Temporary and permanent hangs | Coordinator canaries probe independent paths concurrently, record recovery beyond the tight deadline, and fail unanswered probes at the wedge bound. Recovery checks require progress after faults stop. |
 | Wrong results after faults | Read paths compare indexes, persist reads, recomputation, replicas, and SUBSCRIBE at a common timestamp. IVM checks maintained views against Python reference results, including current reads after faults stop for completed and interrupted workloads. |
+| Finite stream boundaries | Generated AS OF / UP TO windows check exact acknowledged input bags while writes to a sibling table advance the shared transaction WAL. |
+| Physical index dependencies | Live subscriptions cross an index drop and same-name recreation. Durable importers provide a separate drop-rejection control. |
+| Aggregate error recovery | Generated interval sums enter modeled overflow states, retract the offending inputs, and check maintained results against exact Python component sums. |
+| Cross-table transaction atomicity | A durable client ledger checks whole transaction markers in common snapshots, including rollback, uncertain outcomes, and replica deletion during staged multi-table writes. |
 | External data | Postgres transaction ledgers, Kafka source histories, and sink progress and envelopes check ingestion, replay, atomicity, and output contents. |
 | Panics and persistent damage | Process instrumentation reports panics and unexpected halts. Pod history detects crash loops. Shard audits inspect persist state and remap frontiers. |
 
@@ -51,6 +55,18 @@ Health checks, resource checks, and pod restarts remain available in each
 template. Restart triggers are restricted to workloads that template can
 schedule. For example, the transaction template does not wait for a bulk
 source creation or select a candidate generation that no driver creates.
+
+Finite-stream, index-handover, aggregate-retraction, and multi-table commit
+commands also run in `transactions` and `rollouts`. They create bounded SQL
+fixtures lazily on the shared cluster, without adding external services or
+initial bulk setup.
+
+Their contracts come from the [txn-WAL frontier design](../../doc/developer/design/20260529_txn_wal_frontiers_deasync.md),
+the [physical index dependency design](../../doc/developer/design/20260923_drop_in_use_index.md),
+the [interval accumulator](../../src/compute/src/render/reduce.rs), and
+the [session transaction operations](../../src/adapter/src/session.rs).
+Expected results come from acknowledged client inputs or exact Python arithmetic.
+Interrupted rounds retain uncertainty and do not earn successful coverage.
 
 `templates.py` discovers executable commands and derives profile membership
 from their driver imports. Adding a command for an existing driver includes

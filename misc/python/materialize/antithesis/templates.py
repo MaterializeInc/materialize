@@ -43,7 +43,17 @@ PROFILES = {
     "main": Profile(None, ("postgres_sources", "kafka_sources", "kafka_sinks", "ivm")),
     "transactions": Profile(
         _COMMON
-        | {"access_control", "counters", "history", "read_paths", "session_mix"},
+        | {
+            "access_control",
+            "aggregate_retractions",
+            "atomic_commits",
+            "bounded_subscribe",
+            "counters",
+            "history",
+            "index_handover",
+            "read_paths",
+            "session_mix",
+        },
         (),
     ),
     "cdc": Profile(
@@ -61,8 +71,12 @@ PROFILES = {
         _COMMON
         | {
             "access_control",
+            "aggregate_retractions",
+            "atomic_commits",
+            "bounded_subscribe",
             "counters",
             "history",
+            "index_handover",
             "ivm",
             "postgres_sources",
             "read_paths",
