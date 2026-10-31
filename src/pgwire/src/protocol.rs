@@ -214,6 +214,7 @@ where
             if is_jwt(&password) {
                 match frontegg.validate_access_token(&password, Some(&user), Some(&group_claim)) {
                     Ok((claims, authenticated)) => {
+                        let expired = frontegg.access_token_expiry(&claims);
                         let session = new_jwt_session(
                             conn,
                             &adapter_client,
@@ -230,7 +231,7 @@ where
                             },
                             authenticated,
                         );
-                        (session, pending().right_future())
+                        (session, expired.boxed().left_future())
                     }
                     Err(err) => {
                         warn!(?err, "pgwire connection failed authentication");
@@ -269,7 +270,7 @@ where
                             authenticated,
                         );
                         let expired = async move { auth_session.expired().await };
-                        (session, expired.left_future())
+                        (session, expired.boxed().left_future())
                     }
                     Err(err) => {
                         warn!(?err, "pgwire connection failed authentication");
@@ -310,6 +311,8 @@ where
                             },
                             authenticated,
                         );
+                        // No invalidation of the auth session once authenticated,
+                        // so auth session lasts indefinitely.
                         (session, pending().right_future())
                     }
                     Err(err) => {
@@ -842,9 +845,7 @@ struct JwtIdentity {
 
 /// Creates the session for a connection authenticated with a validated JWT.
 ///
-/// The token is only checked when the connection is established. The server
-/// cannot renew it, so the session is not invalidated when the token expires
-/// and lasts for the life of the connection.
+/// The caller decides how long the session lasts.
 fn new_jwt_session<A>(
     conn: &FramedConn<A>,
     adapter_client: &mz_adapter::Client,
@@ -859,7 +860,8 @@ where
 {
     // The sender is dropped right away: the claims never change for the life
     // of the token, and the session keeps the initial value of a closed
-    // channel.
+    // channel. Callers that grant authority from these claims must end the
+    // session when the token expires.
     let external_metadata_rx = identity
         .external_metadata
         .map(|metadata| watch::channel(metadata).1);
