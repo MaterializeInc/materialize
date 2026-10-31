@@ -559,3 +559,28 @@ def test_namespace_and_original_writer_are_journaled_before_create(monkeypatch, 
     monkeypatch.setattr(h, "_execute", inspect_journal)
     assert run(db) == 1
     assert len(observed) == 1
+
+
+@pytest.mark.parametrize("corrupt", [None, "value"])
+def test_cleanup_internal_error_is_reported_and_preserves_first_failure(
+    monkeypatch, db, corrupt
+):
+    protocol = Protocol(monkeypatch, corrupt=corrupt)
+    execute = protocol.execute
+
+    def broken_drop(conn, deadline, query, params=None):
+        if query.startswith("DROP SCHEMA"):
+            raise psycopg.errors.InternalError_("unexpected cleanup failure")
+        return execute(conn, deadline, query, params)
+
+    monkeypatch.setattr(h, "_execute", broken_drop)
+    with pytest.raises(
+        AssertionError,
+        match="reads equal" if corrupt else "SQL returns only classified",
+    ):
+        run(db)
+    assert any(
+        not condition and "SQL returns only classified" in message
+        for condition, message, _ in protocol.assertions
+    )
+    assert db.execute("SELECT cleanup_complete FROM runs").fetchone() == (0,)
