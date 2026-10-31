@@ -600,9 +600,10 @@ impl ComputeController {
         for (&log, &id) in &arranged_logs {
             let collection = Collection::new_log();
             let shared = collection.shared.clone();
+            let freshness_tree = collection.freshness_tree.clone();
             collections.insert(id, collection);
             log_ids.insert(id);
-            logs.push((log, id, shared));
+            logs.push((log, id, shared, freshness_tree));
         }
 
         let client = InstanceClient::spawn(
@@ -1014,6 +1015,7 @@ impl ComputeController {
                 import_read_holds,
                 shared_collection_state,
                 target_replica,
+                freshness_tree,
             )
             .expect("validated")
         });
@@ -1394,6 +1396,7 @@ impl InstanceState {
                 collection.freshness_tree = Some(tree.clone());
             }
         }
+        self.call(move |i| i.set_log_freshness_tree(tree));
     }
 
     fn collection(&self, id: GlobalId) -> Result<&Collection, CollectionMissing> {
