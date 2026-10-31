@@ -835,7 +835,11 @@ def submit(ctx: Ctx, action: str, changes: dict[str, Any]) -> str | None:
 
 
 def submit_patch(
-    ctx: Ctx, action: str, changes: dict[str, Any]
+    ctx: Ctx,
+    action: str,
+    changes: dict[str, Any],
+    *,
+    before_patch: Callable[[], None] | None = None,
 ) -> tuple[str | None, Snapshot | None]:
     """`submit`, also returning the CR as the patch stored it, or None unless
     the patch was acknowledged."""
@@ -855,6 +859,10 @@ def submit_patch(
     seq = cursor.lastrowid
     stored: Snapshot | None = None
     try:
+        if ctx.lease is not None:
+            ctx.lease.renew()
+        if before_patch is not None:
+            before_patch()
         stored = Snapshot(ctx.kube.patch_spec(changes))
         outcome = "acked"
     except ApiException as e:

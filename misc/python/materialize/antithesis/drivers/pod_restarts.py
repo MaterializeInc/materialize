@@ -19,7 +19,8 @@ recorded in the `restarts` table of the `pod_restarts` database before it is
 sent, so oracles can tell harness kills from unexplained restarts. Rows carry
 `at` from `time.monotonic()` in the workload container and `outcome`
 `attempted`, then `acked`, `rejected` (a 4xx: the pod was gone or replaced),
-or `unknown`. An `attempted` or `unknown` delete may still have happened.
+`unknown`, or `cancelled` before sending. An `attempted` or `unknown` delete
+may still have happened.
 """
 
 from __future__ import annotations
@@ -121,13 +122,17 @@ def delete_recorded(
     cluster_id: str = "",
     victim_generation: int | None = None,
     deadline: float | None = None,
+    before_delete: Callable[[], None] | None = None,
+    still_pending: Callable[[], bool] | None = None,
 ) -> bool:
     """Delete a pod, recording the attempt first. Returns whether the API acknowledged it.
 
     `uid`, when given, is sent as a delete precondition, so a pod recreated
     under the same name since it was listed is left alone.
     """
-    if deadline is not None and time.monotonic() >= deadline:
+    if (deadline is not None and time.monotonic() >= deadline) or (
+        still_pending is not None and not still_pending()
+    ):
         return False
     if uid:
         recovery.preserve_pod_exit(
@@ -143,7 +148,9 @@ def delete_recorded(
         if bind_role and uid and victim_generation is not None
         else None
     )
-    if deadline is not None and time.monotonic() >= deadline:
+    if (deadline is not None and time.monotonic() >= deadline) or (
+        still_pending is not None and not still_pending()
+    ):
         return False
     db = open_restarts(kube.env.endpoints)
     try:
@@ -155,7 +162,17 @@ def delete_recorded(
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'attempted')",
                 (started, origin, role, namespace, pod, uid, grace, reason),
             ).lastrowid
+        if (deadline is not None and time.monotonic() >= deadline) or (
+            still_pending is not None and not still_pending()
+        ):
+            with db:
+                db.execute(
+                    "UPDATE restarts SET outcome = 'cancelled' WHERE seq = ?", (seq,)
+                )
+            return False
         try:
+            if before_delete is not None:
+                before_delete()
             kube.core.delete_namespaced_pod(
                 pod,
                 namespace,
@@ -397,89 +414,302 @@ def pick_victim(
     return rng.choice(candidates) if candidates else None
 
 
+@dataclass(frozen=True)
+class InterleavingDisruption:
+    """Select a live target before optionally racing COMMIT with the effect."""
+
+    run: Callable[[Callable[[], bool], Callable[[], None]], None]
+
+    def __call__(self) -> None:
+        self.run(lambda: True, lambda: None)
+
+
+class _WriteCompleted(Exception):
+    pass
+
+
+def _owned_interleaving(
+    kube: Kube, deadline: float
+) -> tuple[bool, InterleavingDisruption | None]:
+    from materialize.antithesis import rollout_steps
+    from materialize.antithesis.drivers import rollouts
+
+    db = rollouts.requests_db(kube.env)
+    lease = rollouts.CrLease(kube.env)
+    acquired = False
+    try:
+        acquired = lease.acquire()
+        if not acquired:
+            return False, None
+        scenario = rollout_steps.load(db)
+        if scenario is not None and scenario.owner != "interleavings":
+            return False, None
+        snap = kube.try_snapshot()
+        if snap is None:
+            return scenario is not None, None
+        ctx = rollouts.Ctx(kube.env, kube, db, rollouts.timeline_params(db), lease)
+        if scenario is None:
+            if (
+                snap.reason != "Applied"
+                or snap.request != snap.last_completed
+                or rng.random() >= 0.5
+            ):
+                return False, None
+            changes = {**rollouts.new_request(), "rolloutStrategy": "ManuallyPromote"}
+            scenario = rollout_steps.Scenario(
+                rollouts.new_uuid(),
+                rng.choice(["promote", "environmentd_candidate"]),
+                snap.obj,
+                time.monotonic(),
+                False,
+                owner="interleavings",
+                data={"spec": {**snap.tracked_spec(), **changes}},
+                request=changes["requestRollout"],
+                deadline=time.monotonic() + rollouts.FOLLOW_TIMEOUT_SECONDS,
+                intent=changes,
+                from_request=snap.request,
+            )
+            rollout_steps.save(db, scenario)
+        expected = (
+            scenario.data["spec"]
+            if snap.request == scenario.request
+            else rollouts.Snapshot(scenario.prior).tracked_spec()
+        )
+        if scenario.stage == "cleanup":
+            expected = dict(expected)
+            if snap.spec.get("forcePromote") in (
+                expected.get("forcePromote"),
+                scenario.request,
+            ):
+                expected["forcePromote"] = snap.spec.get("forcePromote")
+            prior_strategy = rollouts.Snapshot(scenario.prior).spec.get(
+                "rolloutStrategy", rollouts.DEFAULT_ROLLOUT_STRATEGY
+            )
+            if snap.spec.get("rolloutStrategy") in ("ManuallyPromote", prior_strategy):
+                expected["rolloutStrategy"] = snap.spec.get("rolloutStrategy")
+        if (
+            snap.request not in (scenario.from_request, scenario.request)
+            or snap.tracked_spec() != expected
+            or snap.resource_id != rollouts.Snapshot(scenario.prior).resource_id
+            or (
+                "generation" in scenario.data
+                and snap.generation != scenario.data["generation"]
+                and scenario.stage != "cleanup"
+            )
+        ):
+            # A superseding request belongs to its writer, including its strategy.
+            with db:
+                db.execute("DELETE FROM rollout_scenario WHERE slot = 0")
+            return True, None
+        expired = time.monotonic() >= scenario.deadline
+        if scenario.stage == "cleanup" or expired:
+            if snap.request == scenario.request:
+                _, stored = rollouts.submit_patch(
+                    ctx,
+                    "interleavings_restore",
+                    {
+                        "rolloutStrategy": rollouts.Snapshot(scenario.prior).spec.get(
+                            "rolloutStrategy", rollouts.DEFAULT_ROLLOUT_STRATEGY
+                        ),
+                        "forcePromote": scenario.request,
+                    },
+                )
+                if stored is None:
+                    return True, None
+            with db:
+                db.execute("DELETE FROM rollout_scenario WHERE slot = 0")
+            return True, None
+        if snap.request != scenario.request:
+            assert scenario.intent is not None
+            rollouts.submit_patch(ctx, "interleavings_prepare", scenario.intent)
+            return True, None
+        if "generation" not in scenario.data:
+            scenario.data["generation"] = snap.generation
+            rollout_steps.save(db, scenario)
+        if (
+            snap.reason != "ReadyToPromote"
+            or snap.generation is None
+            or snap.observed_generation != snap.generation
+        ):
+            return True, None
+        scenario_id, request, generation = (
+            scenario.scenario_id,
+            scenario.request,
+            snap.generation,
+        )
+    except rollouts.LeaseLost:
+        log("interleaving preparation lost its CR lease")
+        return True, None
+    finally:
+        try:
+            if acquired:
+                lease.release()
+        except sqlite3.Error as error:
+            log(f"releasing interleaving lease failed: {error}")
+        finally:
+            lease.db.close()
+            db.close()
+
+    def act(pending: Callable[[], bool], release_commit: Callable[[], None]) -> None:
+        db = rollouts.requests_db(kube.env)
+        lease = rollouts.CrLease(kube.env)
+        acquired = False
+        try:
+            acquired = lease.acquire()
+            if not acquired or not pending() or quiet_period_active(kube.env.endpoints):
+                return
+            current = rollout_steps.load(db)
+            snap = kube.try_snapshot()
+            if (
+                current is None
+                or current.owner != "interleavings"
+                or current.scenario_id != scenario_id
+                or current.stage == "cleanup"
+                or snap is None
+                or snap.request != request
+                or snap.generation != generation
+                or snap.observed_generation != generation
+                or snap.reason != "ReadyToPromote"
+                or time.monotonic() >= deadline
+                or not pending()
+            ):
+                return
+            victim = (
+                pick_victim(kube, "environmentd_candidate")
+                if current.action == "environmentd_candidate"
+                else None
+            )
+            if current.action == "environmentd_candidate" and victim is None:
+                return
+            # An interrupted action can restore this request but cannot repeat a kill.
+            current.stage = "cleanup"
+            rollout_steps.save(db, current)
+            if not pending() or time.monotonic() >= deadline:
+                return
+            if victim is not None:
+                _delete_interleaved(kube, victim, deadline, pending, release_commit)
+                return
+            ctx = rollouts.Ctx(kube.env, kube, db, rollouts.timeline_params(db), lease)
+
+            def before_patch() -> None:
+                if not pending() or time.monotonic() >= deadline:
+                    raise _WriteCompleted
+                release_commit()
+
+            rollouts.submit_patch(
+                ctx,
+                "interleavings_promote",
+                {"forcePromote": request},
+                before_patch=before_patch,
+            )
+            telemetry.interleaving_progress(
+                "disruption", action="promote", outcome="requested", request=request
+            )
+            stop = min(deadline, time.monotonic() + 15.0)
+            while pending() and time.monotonic() < stop:
+                lease.renew()
+                started = time.monotonic()
+                observed = kube.try_snapshot()
+                if observed is None or observed.request != request or not pending():
+                    return
+                if (
+                    observed.reason == "Promoting"
+                    and observed.observed_generation == observed.generation
+                ):
+                    telemetry.phase_observed(
+                        observed.reason,
+                        observed.active,
+                        observed.request,
+                        started=started,
+                        force=True,
+                    )
+                    telemetry.interleaving_progress(
+                        "disruption",
+                        action="promote",
+                        outcome="observed",
+                        phase=observed.reason,
+                        request=observed.request,
+                    )
+                    return
+                if observed.reason == "Applied":
+                    return
+                time.sleep(min(0.25, max(0.0, stop - time.monotonic())))
+        except _WriteCompleted:
+            return
+        except TRANSIENT_ERRORS as error:
+            log(f"interleaving action unavailable: {type(error).__name__}")
+        except rollouts.LeaseLost:
+            log("interleaving action lost its CR lease")
+        finally:
+            try:
+                if acquired:
+                    lease.release()
+            except sqlite3.Error as error:
+                log(f"releasing interleaving lease failed: {error}")
+            finally:
+                lease.db.close()
+                db.close()
+
+    return True, InterleavingDisruption(act)
+
+
+def _delete_interleaved(
+    kube: Kube,
+    victim: Victim,
+    deadline: float,
+    pending: Callable[[], bool],
+    release_commit: Callable[[], None],
+) -> None:
+    if time.monotonic() >= deadline or quiet_period_active(kube.env.endpoints):
+        return
+    delete_recorded(
+        kube,
+        origin="interleavings",
+        role=victim.role,
+        namespace=victim.namespace,
+        pod=victim.pod,
+        uid=victim.uid,
+        grace=rng.choice([0, 1]),
+        reason="staged transaction",
+        cluster_id=victim.cluster_id,
+        victim_generation=victim.generation,
+        deadline=deadline,
+        still_pending=pending,
+        before_delete=release_commit,
+    )
+
+
 def interleaving_disruption(
     kube: Kube, *, cluster_id: str, deadline: float
-) -> Callable[[], None] | None:
-    """Choose a bounded disruption for a staged transaction and its maintained cluster."""
+) -> InterleavingDisruption | None:
+    """Prepare an owned rollout or select a pod only inside unresolved SQL."""
     if quiet_period_active(kube.env.endpoints) or time.monotonic() >= deadline:
         return None
     rolling = templates.enabled_driver("rollouts") or templates.enabled_driver(
         "spec_phase"
     )
-    snap = kube.try_snapshot() if rolling else None
-    if (
-        snap is not None
-        and snap.reason == "ReadyToPromote"
-        and snap.request is not None
-        and snap.generation is not None
-        and snap.observed_generation == snap.generation
-        and rng.random() < 0.5
-    ):
-
-        def promote() -> None:
-            if quiet_period_active(kube.env.endpoints) or time.monotonic() >= deadline:
-                return
-            try:
-                current = kube.snapshot()
-                if (
-                    current.reason != "ReadyToPromote"
-                    or current.request != snap.request
-                    or current.generation != snap.generation
-                    or current.observed_generation != current.generation
-                ):
-                    return
-                kube.patch_spec({"forcePromote": snap.request})
-                telemetry.interleaving_progress(
-                    "disruption",
-                    action="promote",
-                    outcome="requested",
-                    request=snap.request,
-                )
-                stop = min(deadline, time.monotonic() + 15.0)
-                while time.monotonic() < stop:
-                    started = time.monotonic()
-                    observed = kube.snapshot()
-                    if observed.reason == "Promoting":
-                        telemetry.interleaving_progress(
-                            "disruption",
-                            action="promote",
-                            outcome="observed",
-                            phase=observed.reason,
-                            request=observed.request,
-                        )
-                        telemetry.phase_observed(
-                            observed.reason,
-                            observed.active,
-                            observed.request,
-                            started=started,
-                            force=True,
-                        )
-                    if observed.request != snap.request or observed.reason in (
-                        "Promoting",
-                        "Applied",
-                    ):
-                        return
-                    time.sleep(min(0.25, max(0.0, stop - time.monotonic())))
-            except TRANSIENT_ERRORS as error:
-                log(f"interleaving promotion unavailable: {type(error).__name__}")
-
-        return promote
-    roles = ["environmentd_active", "clusterd"]
-    if rolling:
-        roles.append("environmentd_candidate")
     try:
-        for role in rng.sample(roles, len(roles)):
-            victim = pick_victim(kube, role, cluster_id=cluster_id)
-            if victim is None:
-                continue
-            grace = rng.choice([0, 1])
+        if rolling:
+            owned, action = _owned_interleaving(kube, deadline)
+            if owned:
+                return action
+    except TRANSIENT_ERRORS as error:
+        log(f"interleaving preparation unavailable: {type(error).__name__}")
+        return None
 
-            def delete(victim: Victim = victim, grace: int = grace) -> None:
-                if (
-                    quiet_period_active(kube.env.endpoints)
-                    or time.monotonic() >= deadline
-                ):
+    def delete(pending: Callable[[], bool], release_commit: Callable[[], None]) -> None:
+        if quiet_period_active(kube.env.endpoints) or time.monotonic() >= deadline:
+            return
+        roles = ["environmentd_active", "clusterd"]
+        if rolling:
+            roles.append("environmentd_candidate")
+        try:
+            for role in rng.sample(roles, len(roles)):
+                if not pending() or time.monotonic() >= deadline:
                     return
+                victim = pick_victim(kube, role, cluster_id=cluster_id)
+                if victim is None:
+                    continue
                 if rolling:
                     started = time.monotonic()
                     observed = kube.try_snapshot()
@@ -491,26 +721,14 @@ def interleaving_disruption(
                             started=started,
                             force=True,
                         )
-                if time.monotonic() >= deadline:
+                if not pending() or time.monotonic() >= deadline:
                     return
-                delete_recorded(
-                    kube,
-                    origin="interleavings",
-                    role=victim.role,
-                    namespace=victim.namespace,
-                    pod=victim.pod,
-                    uid=victim.uid,
-                    grace=grace,
-                    reason="staged transaction",
-                    cluster_id=victim.cluster_id,
-                    victim_generation=victim.generation,
-                    deadline=deadline,
-                )
+                _delete_interleaved(kube, victim, deadline, pending, release_commit)
+                return
+        except TRANSIENT_ERRORS as error:
+            log(f"interleaving target unavailable: {type(error).__name__}")
 
-            return delete
-    except TRANSIENT_ERRORS as error:
-        log(f"interleaving target unavailable: {type(error).__name__}")
-    return None
+    return InterleavingDisruption(delete)
 
 
 @dataclass(frozen=True)
