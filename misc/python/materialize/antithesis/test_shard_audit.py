@@ -83,3 +83,98 @@ def test_final_audit_reports_environment_setup_failure(
     monkeypatch.setattr(s, "always", lambda ok, *args: assertions.append(ok))
     assert s.finally_main() == 0
     assert assertions == [False]
+
+
+@pytest.mark.parametrize("identity", ["s-txns", "s-other", None])
+def test_negative_counts_require_known_txns_shard_identity(
+    monkeypatch: pytest.MonkeyPatch, identity: str | None
+) -> None:
+    auditor = s.Auditor.__new__(s.Auditor)
+    auditor.host = "sql-host"
+    auditor.txns_shard = None
+    auditor.txns_shard_retried = False
+    auditor.deadline = float("inf")
+    auditor.incomplete = 0
+    lookup = Mock(return_value=identity)
+    monkeypatch.setattr(s, "txns_shard", lookup)
+    assertions: list[bool] = []
+    monkeypatch.setattr(s, "always", lambda ok, *args: assertions.append(ok))
+    mult = {
+        "negative_count": 1,
+        "checked_updates": 1,
+        "schema_ids": ["h0"],
+        "negative": [{"key": "{{s-data,42,},}", "val": "null", "diff": -1}],
+    }
+
+    complete = auditor.check_multiplicities(mult, False, {"shard_id": "s-txns"})
+
+    assert assertions == ([False] if identity == "s-other" else [])
+    assert complete is (identity is not None)
+    assert auditor.incomplete == int(identity is None)
+    lookup.assert_called_once_with("sql-host", timeout_s=5)
+    if identity is None:
+        auditor.check_multiplicities(mult, False, {"shard_id": "s-txns"})
+        lookup.assert_called_once()
+        assert auditor.incomplete == 2
+
+
+def test_negative_counts_do_not_retry_identity_after_audit_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auditor = s.Auditor.__new__(s.Auditor)
+    auditor.host = "sql-host"
+    auditor.txns_shard = None
+    auditor.txns_shard_retried = False
+    auditor.deadline = 0
+    auditor.incomplete = 0
+    lookup = Mock(return_value="s-txns")
+    monkeypatch.setattr(s, "txns_shard", lookup)
+    assertion = Mock()
+    monkeypatch.setattr(s, "always", assertion)
+
+    assert not auditor.check_multiplicities(
+        {"negative_count": 1, "checked_updates": 1, "negative": []},
+        False,
+        {"shard_id": "s-txns"},
+    )
+
+    assert auditor.incomplete == 1
+    lookup.assert_not_called()
+    assertion.assert_not_called()
+
+
+def test_missing_txns_identity_marks_audit_partial_and_keeps_blob_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auditor = s.Auditor.__new__(s.Auditor)
+    auditor.host = "sql-host"
+    auditor.origin = "anytime"
+    auditor.txns_shard = None
+    auditor.txns_shard_retried = False
+    auditor.deadline = float("inf")
+    auditor.incomplete = 0
+    auditor.db = Mock()
+    auditor.db.execute.return_value.fetchone.return_value = None
+    blobs = {"missing": []}
+    mult = {"initialized": True, "negative_count": 1, "checked_updates": 1}
+    auditor.inspect = Mock(side_effect=[blobs, mult])
+    auditor.record = Mock()
+    auditor.terminal_tag = Mock(return_value=False)
+    auditor.report_unfinalized = Mock()
+    monkeypatch.setattr(s, "txns_shard", lambda host, **kwargs: None)
+    monkeypatch.setattr(s, "reachable", lambda *args: None)
+    assertions: list[tuple[bool, str]] = []
+    monkeypatch.setattr(
+        s, "always", lambda ok, name, details: assertions.append((ok, name))
+    )
+
+    auditor.audit_unmapped("s-txns")
+
+    auditor.record.assert_called_once_with("s-txns", "partial", blobs, mult)
+    assert auditor.incomplete == 1
+    assert assertions == [
+        (
+            True,
+            "shard audit: every blob referenced by an unmapped shard's persist state exists",
+        )
+    ]

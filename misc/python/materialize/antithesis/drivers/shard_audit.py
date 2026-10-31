@@ -203,10 +203,15 @@ def remap_pairs(host: str) -> list[remap_frontiers.Pair] | None:
     return [remap_frontiers.Pair(*row) for row in rows]
 
 
-def txns_shard(host: str) -> str | None:
+def txns_shard(host: str, *, timeout_s: int = 10) -> str | None:
     """The txn-wal txns shard named by the catalog, or None if it cannot be read."""
     try:
-        with sql.connection(host, internal=True) as conn:
+        with sql.connection(
+            host,
+            internal=True,
+            connect_timeout=timeout_s,
+            statement_timeout_ms=timeout_s * 1000,
+        ) as conn:
             row = conn.execute(TXNS_SHARD_SQL).fetchone()
     except (psycopg.Error, OSError) as e:
         c = sql.classify(e)
@@ -425,6 +430,7 @@ class Auditor:
         self.host = self.env.sql_host()
         self.db = open_state()
         self.txns_shard = txns_shard(self.host)
+        self.txns_shard_retried = False
 
     def inspect(
         self, subcommand: str, shard_id: str, extra: list[str]
@@ -620,13 +626,18 @@ class Auditor:
             else:
                 self.report_unfinalized(known, seen, details)
 
+        multiplicities_complete = True
         if mult is not None and mult.get("initialized"):
             tagged = self.terminal_tag(
                 known[2] if known else None, known[0] if known else None
             )
-            self.check_multiplicities(mult, tagged, details)
+            multiplicities_complete = self.check_multiplicities(mult, tagged, details)
 
-        outcome = "complete" if blobs is not None and mult is not None else "partial"
+        outcome = (
+            "complete"
+            if blobs is not None and mult is not None and multiplicities_complete
+            else "partial"
+        )
         if blobs is None and mult is None:
             outcome = "skipped"
         self.record(shard_id, outcome, blobs, mult)
@@ -798,9 +809,10 @@ class Auditor:
             if blobs.get("initialized"):
                 self.check_not_tombstoned(shard, blobs, details)
 
+        multiplicities_complete = True
         if mult is not None and mult.get("initialized"):
             tagged = self.terminal_tag(shard.name, shard.object_id)
-            self.check_multiplicities(mult, tagged, details)
+            multiplicities_complete = self.check_multiplicities(mult, tagged, details)
             sometimes(
                 mult["checked_updates"] > 0,
                 "shard audit: audited a shard with at least one update",
@@ -820,7 +832,11 @@ class Auditor:
                 details,
             )
 
-        outcome = "complete" if blobs is not None and mult is not None else "partial"
+        outcome = (
+            "complete"
+            if blobs is not None and mult is not None and multiplicities_complete
+            else "partial"
+        )
         if blobs is None and mult is None:
             outcome = "skipped"
         self.record(shard.shard_id, outcome, blobs, mult)
@@ -852,13 +868,27 @@ class Auditor:
 
     def check_multiplicities(
         self, mult: dict[str, Any], tagged: bool, details: dict[str, Any]
-    ) -> None:
+    ) -> bool:
         clean = mult["negative_count"] == 0
+        if not clean and self.txns_shard is None:
+            # A catalog outage must not turn legitimate txn-WAL retractions
+            # into multiset violations. Retry once within the shared budget.
+            remaining = self.deadline - time.monotonic()
+            retry_timeout_s = int(min(5.0, max(0.0, remaining / 2)))
+            if not self.txns_shard_retried and retry_timeout_s >= 2:
+                self.txns_shard_retried = True
+                self.txns_shard = txns_shard(self.host, timeout_s=retry_timeout_s)
+            if self.txns_shard is None:
+                self.incomplete += 1
+                log(
+                    f"{details['shard_id']}: cannot identify the txn-WAL shard, incomplete"
+                )
+                return False
         # The txn-wal txns shard is not a multiset: `forget` retracts a
         # registration under the forget timestamp, not the registration
         # timestamp, so its accumulations go negative by design.
         if details["shard_id"] == self.txns_shard:
-            return
+            return True
         # Rows written under different schemas compare unequal, so a negative
         # there can be a retraction of a row inserted under the older schema.
         if not clean and len(mult.get("schema_ids", [])) > 1:
@@ -867,7 +897,7 @@ class Auditor:
                 f" across schemas {mult['schema_ids']}, not asserting:"
                 f" {mult['negative'][:3]}"
             )
-            return
+            return True
         report = {
             **details,
             "terminal_before_restart": tagged,
@@ -891,6 +921,7 @@ class Auditor:
                 "shard audit: no (key, val) in a persist shard accumulates to a negative count at any retained time, with no upstream TRUNCATE before the last ingestion restart",
                 report,
             )
+        return True
 
 
 def _main(
