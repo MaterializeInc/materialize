@@ -1156,12 +1156,20 @@ def interleaving_driver() -> int:
     try:
         if quiet.active_quiet_period():
             return 0
-        for (write_id,) in db.execute(
-            "SELECT write_id FROM interleaving_followups WHERE attempts < ?"
-            " ORDER BY write_id LIMIT 4",
+        for write_id, epoch, key in db.execute(
+            "SELECT f.write_id, o.epoch, o.wkey FROM interleaving_followups f"
+            " LEFT JOIN ops o ON o.op_id = f.write_id WHERE f.attempts < ?"
+            " ORDER BY f.write_id LIMIT 4",
             (INTERLEAVING_FOLLOWUP_ATTEMPTS,),
         ).fetchall():
-            if not _follow_up_interleaving(db, host, int(write_id), deadline):
+            with telemetry.interleaving(
+                "resume_history", write_id=int(write_id), epoch=epoch, key=key
+            ):
+                completed = _follow_up_interleaving(db, host, int(write_id), deadline)
+                telemetry.interleaving_progress(
+                    "end", outcome="completed" if completed else "unresolved"
+                )
+            if not completed:
                 return 0
         if db.execute(
             "SELECT 1 FROM interleaving_followups WHERE attempts < ? LIMIT 1",

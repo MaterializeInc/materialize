@@ -497,3 +497,66 @@ def test_pending_identity_has_a_bounded_priority_over_new_disruptions(
     else:
         follow_up.assert_not_called()
         selection.assert_called_once()
+
+
+@pytest.mark.parametrize("observed", [False, True])
+def test_resumed_followup_emits_its_own_operation_identity(monkeypatch, observed):
+    db = sqlite3.connect(":memory:")
+    monkeypatch.setattr(history.state, "open_db", lambda *args: db)
+    history.open_state()
+    with db:
+        db.execute(
+            "INSERT INTO ops (epoch, kind, session, isolation, endpoint, invoke_rt, complete_rt, outcome, wkey) VALUES (7, 'w', 'writer', 'strict serializable', 'service', 1, 2, 'indeterminate', 1)"
+        )
+        db.execute("INSERT INTO interleaving_followups (write_id) VALUES (1)")
+    env = Mock()
+    env.sql_host.return_value = "host"
+    monkeypatch.setattr(history, "Environment", lambda: env)
+    monkeypatch.setattr(history, "start_watchdog", Mock())
+    monkeypatch.setattr(history.quiet, "active_quiet_period", lambda: False)
+    monkeypatch.setattr(history, "_epoch_for_op", Mock(return_value=None))
+    monkeypatch.setattr(history, "_check_epoch", Mock(return_value=[]))
+    monkeypatch.setattr(history, "_assert_timestamp_order", Mock())
+    monkeypatch.setattr(history, "_coverage_cluster_id", lambda *args: "u2")
+    monkeypatch.setattr(
+        history.telemetry,
+        "_recorder",
+        history.telemetry.Recorder(
+            "transactions", "parallel_driver_history_interleavings.py"
+        ),
+    )
+    send = Mock()
+    monkeypatch.setattr(history.telemetry.observations, "send_event", send)
+
+    def read(db_arg, session, epoch, txn_prob, *, paths):
+        session.name = "reader"
+        with db_arg:
+            db_arg.execute(
+                "INSERT INTO ops (epoch, kind, session, isolation, endpoint, invoke_rt, complete_rt, outcome, observed) VALUES (?, 'r', 'reader', 'strict serializable', 'service', 3, 4, 'ok', ?)",
+                (
+                    epoch,
+                    json.dumps([[1, "materialized_view", [1] if observed else [], []]]),
+                ),
+            )
+
+    monkeypatch.setattr(history, "_read", read)
+    assert history.interleaving_driver() == 0
+    events = [
+        call.args[1]
+        for call in send.call_args_list
+        if call.args[0] == "antithesis_interleaving"
+    ]
+    assert [event["stage"] for event in events] == ["start", "checked", "end"]
+    assert len({event["round"] for event in events}) == 1
+    for event in events:
+        assert (event["mode"], event["write_id"], event["epoch"], event["key"]) == (
+            "resume_history",
+            1,
+            7,
+            1,
+        )
+        assert event["profile"] == "transactions"
+        assert event["command"] == "parallel_driver_history_interleavings.py"
+    assert events[1]["observed_write"] is observed
+    assert events[1]["successful_reads"] == 1 and events[1]["read_id"] == 2
+    assert events[2]["outcome"] == "completed"
