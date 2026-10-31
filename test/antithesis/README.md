@@ -254,7 +254,7 @@ dead pod as a Materialize bug:
 - A panic reports `Materialize process panicked` from inside the process. An
   OOM kill or an eviction is a SIGKILL (137) with no panic message. The
   platform's `No unexpected crashes` and `No unexpected container exits` skip
-  137, and `anytime_pod_restarts` counts it as an explained exit and leaves
+  137, and `anytime_pod_exits` counts it as an explained exit and leaves
   the verdict to the resource kill check below.
 - `anytime_resource_kills` and `finally_resource_kills` read every pod, the
   eviction and OOM events, and the node conditions. `No Materialize container
