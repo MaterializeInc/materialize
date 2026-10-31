@@ -867,7 +867,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let arranged_output = outer_scope
             .clone()
             .inline_named("ReduceHierarchical", |inner| {
-                let input = input.enter(inner);
+                let input = input.enter_inline(inner);
 
                 // The first mod to apply to the hash.
                 let first_mod = buckets.get(0).copied().unwrap_or(1);

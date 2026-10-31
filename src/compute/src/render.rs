@@ -253,7 +253,8 @@ pub fn build_compute_dataflow(
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
-        // NOTE: regions here are inline (see `inline_region`), so they add no timely subgraph.
+        // NOTE: regions are inline (see `inline_region`) and add no timely subgraph, except for
+        // `BuildRegion`. Index imports `enter` it from the dataflow scope, which needs a real child.
         let mut imported_sources = Vec::new();
         let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
         let output_probe = MzProbeHandle::default();
@@ -474,7 +475,7 @@ pub fn build_compute_dataflow(
                 }
             });
         } else {
-            scope.clone().inline_named(&build_name, |region| {
+            scope.clone().region_named(&build_name, |region| {
                 let mut context = Context::for_dataflow_in(
                     &dataflow,
                     region.clone(),
@@ -485,8 +486,8 @@ pub fn build_compute_dataflow(
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_edge(
-                        oks.enter_inline(region),
-                        errs.enter_inline(region),
+                        oks.enter_region(region),
+                        errs.enter_region(region),
                     );
                     // Associate collection bundle with the source identifier.
                     context.insert_id(id, bundle);
