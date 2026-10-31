@@ -245,6 +245,7 @@ spec:
         {{- if .Values.balancerd.defaultResources }}
         - '--balancerd-default-resources={{ toJson .Values.balancerd.defaultResources }}'
         {{- end }}
+        - "--balancerd-readiness-probe-path={{ .Values.balancerd.readinessProbePath }}"
         {{- if .Values.console.nodeSelector }}
         {{- range $key, $value := .Values.console.nodeSelector }}
         - "--console-node-selector={{ $key }}={{ $value }}"
