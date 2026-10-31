@@ -44,7 +44,6 @@ Contracts for other drivers, in state database `recovery`:
 from __future__ import annotations
 
 import argparse
-import calendar
 import json
 import os
 import re
@@ -55,7 +54,6 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
@@ -75,6 +73,7 @@ from kubernetes.client.rest import ApiException  # type: ignore
 from materialize.antithesis import (
     crash_loops,
     exit_audit,
+    halt_proof,
     observations,
     sql,
     state,
@@ -83,6 +82,7 @@ from materialize.antithesis.drivers import configure, lifecycle, rollouts
 from materialize.antithesis.drivers.sources_common import source_error_text
 from materialize.antithesis.endpoints import INTERNAL_HTTP_PORT
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.halt_proof import timestamp_interval as _timestamp_interval
 from materialize.antithesis.observations import reachable, sometimes
 from materialize.antithesis.rng import rng
 
@@ -463,6 +463,7 @@ class _LogSelector:
     started_at: str | None
     prior_finished_at: str | None
     next_started_at: str | None
+    termination_message: str | None
 
 
 def _time_text(value: Any) -> str | None:
@@ -499,29 +500,9 @@ def _log_selector(pod: Any, container: str) -> _LogSelector | None:
                 else None
             ),
             _time_text(running.started_at) if current is None and running else None,
+            getattr(term, "message", None),
         )
     return None
-
-
-def _timestamp_interval(value: str | None) -> tuple[int, int] | None:
-    if value is None:
-        return None
-    match = re.fullmatch(
-        r"(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})",
-        value,
-    )
-    if match is None:
-        return None
-    try:
-        seconds = datetime.fromisoformat(match[1] + match[3]).astimezone(UTC)
-    except ValueError:
-        return None
-    fraction = match[2] or ""
-    start = calendar.timegm(seconds.utctimetuple()) * 1_000_000_000
-    start += int(fraction.ljust(9, "0"))
-    # metav1.Time drops fractional seconds. Its precision is an interval, not
-    # evidence that a nanosecond log timestamp is after the process exited.
-    return start, start + 10 ** (9 - len(fraction))
 
 
 def _correlated_log_time(stamp: str, selector: _LogSelector) -> bool:
@@ -583,10 +564,26 @@ def _halt_message(
     return messages[0] if len(messages) == 1 and messages[0][0] else None
 
 
+def _termination_file_key(selector: _LogSelector | None) -> tuple[Any, ...] | None:
+    if selector is None:
+        return None
+    return (
+        selector.pod_uid,
+        selector.pod_name,
+        selector.restart_count + int(selector.current_terminated),
+        selector.exit_code,
+        selector.signal,
+        selector.finished_at,
+        selector.container_id,
+        selector.started_at,
+        selector.termination_message,
+    )
+
+
 def capture_halt_evidence(
     o: ContainerObservation, deadline: float, *, stats: Counter[str] | None = None
 ) -> dict[str, Any] | None:
-    """Read one complete halt message only while its log selector stays unchanged."""
+    """Capture a complete halt reason bound to a stable container termination."""
     counts = stats if stats is not None else Counter()
     if (
         o.exit_code != 166
@@ -638,6 +635,55 @@ def capture_halt_evidence(
         ):
             counts["routing_changed"] += 1
             return None
+        if selector.termination_message:
+            try:
+                if (
+                    not isinstance(selector.termination_message, str)
+                    or not isinstance(selector.container_id, str)
+                    or not selector.container_id
+                ):
+                    raise ValueError("termination file has no container identity")
+                proof = halt_proof.parse(selector.termination_message)
+                halt_proof.validate_lifetime(
+                    proof, selector.started_at, selector.finished_at
+                )
+            except ValueError:
+                counts["invalid_termination_file"] += 1
+                return None
+            request_timeout = timeout()
+            counts["pod_reads"] += 1
+            after = core.read_namespaced_pod(
+                o.pod,
+                o.namespace,
+                _request_timeout=request_timeout,  # pyright: ignore[reportCallIssue]
+            )
+            # Kubernetes binds the message to this terminated container ID.
+            # Current-to-previous routing may change while that identity stays fixed.
+            if _termination_file_key(
+                _log_selector(after, o.container)
+            ) != _termination_file_key(selector):
+                counts["routing_changed"] += 1
+                return None
+            identity = {
+                **_termination_identity(o),
+                "container_id": selector.container_id,
+            }
+            counts["captured"] += 1
+            counts["termination_file_captured"] += 1
+            return {
+                "termination": identity,
+                "halt": {
+                    "termination": dict(identity),
+                    "message": proof.message,
+                    "complete": True,
+                },
+                "termination_file": {
+                    "contents": selector.termination_message,
+                    "container_id": selector.container_id,
+                    "started_at": selector.started_at,
+                    "finished_at": selector.finished_at,
+                },
+            }
         halt = None
         for tail_lines in HALT_EVIDENCE_TAILS:
             request_timeout = timeout()
@@ -966,7 +1012,6 @@ def anytime_main() -> int:
         )
     finally:
         db.close()
-
 
 
 def _audit_fallback(age: float | None) -> int:
