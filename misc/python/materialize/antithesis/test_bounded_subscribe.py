@@ -304,3 +304,23 @@ def test_late_old_insert_does_not_enter_the_new_round_subscription(
     assert sql_tables.execute(
         f"SELECT k FROM {b.SCHEMA}.cold WHERE v=1"
     ).fetchall() == [(99,)]
+
+
+def test_unavailable_service_discovery_does_not_run_the_oracle(
+    monkeypatch, tmp_path, journal
+):
+    from kubernetes.client.exceptions import ApiException
+
+    env = Mock(endpoints=Mock(state_dir=tmp_path))
+    env.sql_host.side_effect = ApiException(status=503, reason="API unavailable")
+    monkeypatch.setattr(b, "Environment", lambda: env)
+    monkeypatch.setattr(b.history, "start_watchdog", Mock())
+    monkeypatch.setattr(b, "open_state", lambda: journal)
+    report, run, comparison = Mock(), Mock(), Mock()
+    monkeypatch.setattr(b, "always", report)
+    monkeypatch.setattr(b, "run_round", run)
+    monkeypatch.setattr(b.telemetry, "comparison", comparison)
+    assert b.main() == 0
+    report.assert_not_called()
+    run.assert_not_called()
+    comparison.assert_called_once_with("bounded_subscribe", "subscribe", None)

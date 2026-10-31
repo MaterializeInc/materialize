@@ -357,8 +357,16 @@ def main() -> int:
             return 0
         db = open_state()
         try:
+            try:
+                host = env.sql_host()
+            except Exception as error:
+                telemetry.comparison("bounded_subscribe", "subscribe", None)
+                print(
+                    f"bounded subscribe: SQL service unavailable: {error}", flush=True
+                )
+                return 0
             run_round(
-                env.sql_host(),
+                host,
                 db,
                 seed_count=rng.choice((0, 1, 8)),
                 tail_count=rng.choice((1, 8, 64)),
