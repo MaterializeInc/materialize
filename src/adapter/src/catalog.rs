@@ -1229,11 +1229,10 @@ impl Catalog {
     }
 
     pub fn get_role_allowed_cluster_sizes(&self, role_id: &Option<RoleId>) -> Vec<String> {
+        // Disabled sizes are included; `ensure_valid_replica_size` decides
+        // whether those are allowed.
         if role_id == &Some(MZ_SYSTEM_ROLE_ID) {
-            self.cluster_replica_sizes()
-                .enabled_allocations()
-                .map(|a| a.0.to_owned())
-                .collect::<Vec<_>>()
+            self.cluster_replica_sizes().0.keys().cloned().collect()
         } else {
             self.system_config().allowed_cluster_replica_sizes()
         }
@@ -2533,7 +2532,11 @@ mod tests {
     use std::{env, iter};
 
     use itertools::Itertools;
-    use mz_catalog::memory::objects::CatalogItem;
+    use mz_catalog::memory::objects::{
+        CatalogItem, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+        ReconfigurationStatus, ReconfigurationTarget,
+    };
+    use mz_controller::clusters::ReplicaLogging;
     use mz_postgres_util::{query, sql};
     use tokio_postgres::NoTls;
     use tokio_postgres::types::Type;
@@ -2561,8 +2564,9 @@ mod tests {
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::{
-        CoercibleScalarExpr, ExprContext, HirScalarExpr, HirToMirConfig, PlanContext, QueryContext,
-        QueryLifetime, Scope, StatementContext,
+        AutoScalingStrategy, CoercibleScalarExpr, ExprContext, HirScalarExpr, HirToMirConfig,
+        OnHydration, OnTimeoutAction, PlanContext, QueryContext, QueryLifetime, Scope,
+        StatementContext,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::{SystemVars, VarInput};
@@ -2694,6 +2698,116 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_cluster_replica_size_sync() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let mut bootstrap_args = test_bootstrap_args();
+        // Builtin cluster replicas use the default size.
+        let in_use = bootstrap_args.default_cluster_replica_size.clone();
+        let unused = "scale=1,workers=2".to_string();
+        let changed = "scale=1,workers=4".to_string();
+        let cluster_only = "scale=1,workers=8".to_string();
+        let hydration = "scale=1,workers=16".to_string();
+        let timed_out_target = "scale=1,workers=32".to_string();
+
+        let mut catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open debug catalog");
+        assert_eq!(
+            catalog.cluster_replica_sizes().0,
+            bootstrap_args.cluster_replica_size_map.0
+        );
+        // A managed cluster with no replicas still depends on its size and
+        // hydration size, but not on a settled reconfiguration's target.
+        let commit_ts = catalog.current_upper().await;
+        let cluster_id = catalog
+            .allocate_user_cluster_id(commit_ts)
+            .await
+            .expect("allocate cluster id");
+        let config = ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: cluster_only.clone(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 0,
+                optimizer_feature_overrides: Default::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: Some(AutoScalingStrategy {
+                    on_hydration: Some(OnHydration {
+                        hydration_size: hydration.clone(),
+                        linger_duration: None,
+                    }),
+                }),
+                reconfiguration: Some(ReconfigurationState {
+                    target: ReconfigurationTarget {
+                        size: timed_out_target.clone(),
+                        replication_factor: 1,
+                        availability_zones: Vec::new(),
+                        logging: ReplicaLogging {
+                            log_logging: false,
+                            interval: None,
+                        },
+                        arrangement_compression: false,
+                    },
+                    deadline: Timestamp::MIN,
+                    on_timeout: OnTimeoutAction::Rollback,
+                    status: ReconfigurationStatus::TimedOut,
+                }),
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let commit_ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                commit_ts,
+                None,
+                vec![Op::CreateCluster {
+                    id: cluster_id,
+                    name: "no_replicas".into(),
+                    introspection_sources: Vec::new(),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                    config,
+                }],
+            )
+            .await
+            .expect("create cluster");
+        catalog.expire().await;
+
+        let config_sizes = &mut bootstrap_args.cluster_replica_size_map.0;
+        config_sizes.remove(&in_use);
+        config_sizes.remove(&unused);
+        config_sizes.remove(&cluster_only);
+        config_sizes.remove(&hydration);
+        config_sizes.remove(&timed_out_target);
+        config_sizes
+            .get_mut(&changed)
+            .expect("test size")
+            .cpu_exclusive = true;
+        let catalog = Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+            .await
+            .expect("unable to open debug catalog");
+        let sizes = &catalog.cluster_replica_sizes().0;
+        assert!(sizes[&in_use].disabled);
+        assert!(sizes[&cluster_only].disabled);
+        assert!(sizes[&hydration].disabled);
+        assert!(!sizes.contains_key(&unused));
+        assert!(!sizes.contains_key(&timed_out_target));
+        assert_eq!(
+            sizes[&changed],
+            bootstrap_args.cluster_replica_size_map.0[&changed]
+        );
+        catalog.expire().await;
     }
 
     #[mz_ore::test(tokio::test)]

@@ -525,13 +525,20 @@ impl Coordinator {
 
         // Validate the target up front, so a bad reshape errors at `ALTER` time
         // rather than silently parking an unconvergeable record.
+        // A size disabled after the cluster started using it stays valid for it.
+        let size_in_use = matches!(
+            &cluster.config.variant,
+            ClusterVariant::Managed(managed) if managed.size == target.size
+        ) || in_flight
+            .as_ref()
+            .is_some_and(|record| record.target.size == target.size);
         let role_id = session.role_metadata().current_role;
         self.catalog.ensure_valid_replica_size(
             &self
                 .catalog()
                 .get_role_allowed_cluster_sizes(&Some(role_id)),
             &target.size,
-            false,
+            size_in_use,
         )?;
         self.ensure_valid_azs(target.availability_zones.iter())?;
 
@@ -1479,10 +1486,11 @@ impl Coordinator {
         } = new_managed;
 
         let role_id = Some(session.role_metadata().current_role);
+        // A size disabled after the cluster started using it stays valid for it.
         self.catalog.ensure_valid_replica_size(
             &self.catalog().get_role_allowed_cluster_sizes(&role_id),
             new_size,
-            false,
+            new_size == size,
         )?;
         // A newly set (or changed) AUTO SCALING STRATEGY gets its HYDRATION
         // SIZE validated like SIZE itself: it must name a real replica size the
@@ -1672,7 +1680,15 @@ impl Coordinator {
                 AlterOptionParameter::Reset | AlterOptionParameter::Unchanged => {
                     coord_bail!("Missing SIZE for empty cluster")
                 }
-                AlterOptionParameter::Set(_) => {} // Was set within the calling function.
+                AlterOptionParameter::Set(_) => {
+                    // Was set within the calling function, but not validated.
+                    let role_id = Some(session.role_metadata().current_role);
+                    self.catalog.ensure_valid_replica_size(
+                        &self.catalog().get_role_allowed_cluster_sizes(&role_id),
+                        new_size,
+                        false,
+                    )?;
+                }
             }
         } else if sizes.len() == 1 {
             let size = sizes.into_iter().next().expect("must exist");

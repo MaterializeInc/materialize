@@ -380,6 +380,8 @@ def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> N
             input=dedent(f"""
                 > CREATE CLUSTER test REPLICAS (r1 (SIZE '{size}'))
 
+                > CREATE CLUSTER managed SIZE '{size}', REPLICATION FACTOR 0
+
                 > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
                 test r1 {size} true ""
                 """),
@@ -389,7 +391,8 @@ def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> N
     # Restart with that size disabled. Startup rebuilds each replica from its
     # durable size in apply_cluster_replica_update, so a disabled size must not
     # stop the environment from booting and the existing replica must survive.
-    # A new replica of the disabled size is still refused.
+    # A new replica of the disabled size is still refused, but a managed cluster
+    # already configured with it can still create replicas.
     disabled = copy.deepcopy(sizes)
     disabled[size]["disabled"] = True
     with c.override(Materialized(cluster_replica_size=disabled)):
@@ -404,6 +407,19 @@ def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> N
                 # Creating a new replica of the disabled size is rejected.
                 ! CREATE CLUSTER REPLICA test.r2 SIZE '{size}'
                 contains:unknown cluster replica size {size}
+
+                # So is converting an empty unmanaged cluster to the disabled size.
+                > CREATE CLUSTER empty REPLICAS ()
+
+                ! ALTER CLUSTER empty SET (MANAGED, SIZE '{size}')
+                contains:unknown cluster replica size {size}
+
+                # A managed cluster configured with the disabled size can still
+                # create replicas of it.
+                > ALTER CLUSTER managed SET (REPLICATION FACTOR 1)
+
+                > SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'managed'
+                {size}
                 """),
         )
 
