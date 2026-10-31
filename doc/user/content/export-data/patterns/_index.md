@@ -1,12 +1,13 @@
 ---
 title: "Patterns"
-description: "Learn about common patterns for consuming data that Materialize sinks to external systems."
+description: "Learn about common Materialize export patterns."
 menu:
   main:
     parent: sink
-    identifier: sink-patterns
+    name: "Patterns"
     weight: 70
+    identifier: sink-patterns
 ---
 
-The following section provides examples of common patterns for consuming the
-data that Materialize writes to external systems:
+The following section provides examples of implementing some common export
+patterns in Materialize:
