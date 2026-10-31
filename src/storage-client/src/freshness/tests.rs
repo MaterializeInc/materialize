@@ -7,18 +7,25 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
-use mz_cluster_client::WallclockLagFn;
+use mz_cluster_client::{ReplicaId, WallclockLagFn};
+use mz_controller_types::dyncfgs::WALLCLOCK_FRESHNESS_RESTART_POLICY;
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::now::NowFn;
-use mz_repr::Timestamp;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::freshness::histogram::BucketScheme;
-use mz_storage_types::freshness::recorder::RecorderConfig;
+use mz_storage_types::freshness::recorder::{PeriodRow, RecorderConfig};
 use mz_storage_types::freshness::{ResolvedTree, Ticker};
 use timely::progress::Antichain;
 
-use super::{AssignmentBoundCache, FreshnessRecording, Measure, SharedVisibilityLog, reported_lag};
+use super::{
+    AssignmentBoundCache, FreshnessRecording, FreshnessSeeds, Measure, RestartPolicy,
+    SeedCollector, SharedVisibilityLog, pack_rows, recording_after_restart, reported_lag,
+};
 use crate::controller::WallclockLag;
 
 #[mz_ore::test]
@@ -272,4 +279,402 @@ fn bound_follows_changed_tickers() {
             WallclockLag::Millis(d)
         );
     }
+}
+
+const T0: u64 = 1_800_000_000_000;
+
+fn recorder_config() -> RecorderConfig {
+    RecorderConfig {
+        scheme: BucketScheme::new(4).expect("power of two"),
+        interval_ms: 1,
+        period_ms: 60_000,
+        retention_ms: RETENTION_MS,
+    }
+}
+
+const RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+
+/// A row of `measure` for each of `buckets` in period `(end - 60 s, end]`.
+fn period_rows(measure: Measure, end: u64, buckets: &[i32]) -> Vec<(Measure, PeriodRow)> {
+    buckets
+        .iter()
+        .map(|bucket| {
+            let row = PeriodRow {
+                period_start_ms: end - 60_000,
+                period_end_ms: end,
+                buckets_per_octave: 4,
+                bucket: *bucket,
+                count: 10,
+            };
+            (measure, row)
+        })
+        .collect()
+}
+
+fn collect_into(collector: &mut SeedCollector, rows: &[(Row, Diff)], diff: StorageDiff) {
+    for (row, _) in rows {
+        collector.add(&row.unpack(), diff);
+    }
+}
+
+#[mz_ore::test]
+fn seeds_are_the_maximum_period_end_per_key() {
+    let (a, b) = (GlobalId::User(1), GlobalId::User(2));
+    let r1 = ReplicaId::User(1);
+    let labels = BTreeMap::new();
+    let pack = |rows: Vec<Vec<(Measure, PeriodRow)>>, id, replica| {
+        pack_rows(rows.into_iter().flatten().collect(), id, replica, &labels)
+    };
+
+    let mut global = SeedCollector::new(false);
+    let rows_a = pack(
+        vec![
+            period_rows(Measure::EndToEnd, T0 + 120_000, &[3, 4]),
+            period_rows(Measure::EndToEnd, T0 + 60_000, &[3]),
+            period_rows(Measure::Local, T0 + 60_000, &[0]),
+        ],
+        a,
+        None,
+    );
+    let rows_b = pack(
+        vec![period_rows(Measure::Local, T0 + 240_000, &[1])],
+        b,
+        None,
+    );
+    collect_into(&mut global, &rows_a, 1);
+    collect_into(&mut global, &rows_b, 1);
+    // Rows that are not in the collection do not seed.
+    let absent = pack(
+        vec![period_rows(Measure::EndToEnd, T0 + 600_000, &[3])],
+        b,
+        None,
+    );
+    collect_into(&mut global, &absent, 0);
+    collect_into(&mut global, &absent, -1);
+    assert_eq!(
+        global.finish(),
+        BTreeMap::from([
+            ((a, None, Measure::EndToEnd), T0 + 120_000),
+            ((a, None, Measure::Local), T0 + 60_000),
+            ((b, None, Measure::Local), T0 + 240_000),
+        ]),
+        "global"
+    );
+
+    let mut replica = SeedCollector::new(true);
+    let rows = pack(
+        vec![
+            period_rows(Measure::EndToEnd, T0 + 180_000, &[3]),
+            period_rows(Measure::Local, T0 + 180_000, &[0]),
+            period_rows(Measure::Local, T0 + 120_000, &[0]),
+        ],
+        a,
+        Some(r1),
+    );
+    collect_into(&mut replica, &rows, 1);
+    assert_eq!(
+        replica.finish(),
+        BTreeMap::from([
+            ((a, Some(r1), Measure::EndToEnd), T0 + 180_000),
+            ((a, Some(r1), Measure::Local), T0 + 180_000),
+        ]),
+        "per replica"
+    );
+}
+
+/// The summed count of the rows of each measure and period end.
+fn period_counts(rows: Vec<(Measure, PeriodRow)>) -> BTreeMap<(Measure, u64), u64> {
+    let mut counts = BTreeMap::new();
+    for (measure, row) in rows {
+        *counts.entry((measure, row.period_end_ms)).or_default() += row.count;
+    }
+    counts
+}
+
+#[mz_ore::test]
+fn charged_recordings_start_at_their_seeds() {
+    let tree = aligned(1000);
+    let config = recorder_config();
+    let (a, b) = (GlobalId::User(1), GlobalId::User(2));
+    let r1 = ReplicaId::User(1);
+    let seeds = FreshnessSeeds::default();
+    let observe = |recording: &mut FreshnessRecording, reflected: u64| {
+        let rows = recording.observe(
+            &tree,
+            &tree,
+            &frontier(reflected + 1),
+            reflected + 5,
+            &[],
+            &config,
+        );
+        period_counts(rows)
+    };
+
+    let mut global_a = FreshnessRecording::seeded(seeds.clone(), a, None, T0);
+    assert_eq!(observe(&mut global_a, T0 + 120_000), BTreeMap::new());
+    assert_eq!(
+        global_a.recorded_through(),
+        None,
+        "waits for the global seeds"
+    );
+
+    seeds.publish(
+        false,
+        BTreeMap::from([
+            ((a, None, Measure::EndToEnd), T0 + 60_000),
+            ((a, None, Measure::Local), T0 + 60_000),
+        ]),
+    );
+    assert_eq!(
+        observe(&mut global_a, T0 + 180_000),
+        BTreeMap::from([
+            ((Measure::EndToEnd, T0 + 120_000), 60_000),
+            ((Measure::EndToEnd, T0 + 180_000), 60_000),
+            ((Measure::Local, T0 + 120_000), 60_000),
+            ((Measure::Local, T0 + 180_000), 60_000),
+        ]),
+        "the arrivals since the seed count at the first observation"
+    );
+
+    // A later recording of `a` would count its arrivals twice if it reused the seed.
+    for id in [a, b] {
+        let mut recording = FreshnessRecording::seeded(seeds.clone(), id, None, T0 + 180_000);
+        assert_eq!(
+            observe(&mut recording, T0 + 180_000),
+            BTreeMap::new(),
+            "{id}"
+        );
+        assert_eq!(
+            recording.recorded_through(),
+            Some(T0 + 180_000),
+            "{id} starts where it was built"
+        );
+    }
+
+    let mut replica_a = FreshnessRecording::seeded(seeds.clone(), a, Some(r1), T0);
+    assert_eq!(observe(&mut replica_a, T0 + 120_000), BTreeMap::new());
+    assert_eq!(
+        replica_a.recorded_through(),
+        None,
+        "waits for the replica seeds"
+    );
+    seeds.publish(
+        true,
+        BTreeMap::from([((a, Some(r1), Measure::EndToEnd), T0 + 60_000)]),
+    );
+    assert_eq!(
+        observe(&mut replica_a, T0 + 120_000),
+        BTreeMap::from([
+            ((Measure::EndToEnd, T0 + 120_000), 60_000),
+            ((Measure::Local, T0 + 60_000), 60_000),
+            ((Measure::Local, T0 + 120_000), 60_000),
+        ]),
+        "a measure without a seed starts where the recording was built"
+    );
+}
+
+#[mz_ore::test]
+fn restart_policy_selects_the_recording() {
+    let a = GlobalId::User(1);
+    let tree = aligned(1000);
+    let config = recorder_config();
+    // Built after the seeds, so `hole` counts the 30 s since the build and `charge` the 60 s since
+    // the seeds, of both measures.
+    for (policy, expected, expected_count) in [
+        ("hole", RestartPolicy::Hole, 60_000),
+        ("charge", RestartPolicy::Charge, 120_000),
+        ("bogus", RestartPolicy::Hole, 60_000),
+    ] {
+        let dyncfg = mz_dyncfgs::all_dyncfgs();
+        let mut updates = ConfigUpdates::default();
+        updates.add(&WALLCLOCK_FRESHNESS_RESTART_POLICY, policy);
+        updates.apply(&dyncfg);
+        assert_eq!(RestartPolicy::get(&dyncfg), expected, "{policy}");
+
+        let seeds = FreshnessSeeds::default();
+        seeds.publish(
+            false,
+            BTreeMap::from([
+                ((a, None, Measure::EndToEnd), T0 + 60_000),
+                ((a, None, Measure::Local), T0 + 60_000),
+            ]),
+        );
+        let mut recording = recording_after_restart(&dyncfg, &seeds, a, None, T0 + 90_000);
+        let rows = recording.observe(
+            &tree,
+            &tree,
+            &frontier(T0 + 120_001),
+            T0 + 120_005,
+            &[],
+            &config,
+        );
+        let counted: u64 = rows.iter().map(|(_, row)| row.count).sum();
+        assert_eq!(counted, expected_count, "{policy}");
+    }
+}
+
+#[mz_ore::test]
+fn seeded_recording_debug_stays_small() {
+    let seeds = FreshnessSeeds::default();
+    let many = (0..10_000).map(|i| ((GlobalId::User(i), None, Measure::EndToEnd), T0));
+    seeds.publish(false, many.collect());
+    let recording = FreshnessRecording::seeded(seeds, GlobalId::User(0), None, T0);
+    let debug = format!("{recording:?}");
+    assert!(debug.contains("seeds: 10000"), "{debug}");
+    assert!(debug.len() < 1024, "{} bytes: {debug}", debug.len());
+}
+
+/// The summed counts per measure.
+fn measure_totals(rows: &[(Measure, PeriodRow)]) -> BTreeMap<Measure, u64> {
+    let mut totals = BTreeMap::new();
+    for (measure, row) in rows {
+        *totals.entry(*measure).or_default() += row.count;
+    }
+    totals
+}
+
+#[mz_ore::test]
+fn hole_starts_no_earlier_than_the_recording() {
+    let tree = aligned(1000);
+    let config = recorder_config();
+    let seeds = FreshnessSeeds::default();
+    let dyncfg = mz_dyncfgs::all_dyncfgs();
+    let mut updates = ConfigUpdates::default();
+    updates.add(&WALLCLOCK_FRESHNESS_RESTART_POLICY, "hole");
+    updates.apply(&dyncfg);
+    let mut recording = recording_after_restart(&dyncfg, &seeds, GlobalId::User(1), None, T0);
+    // A first frontier near the epoch, as of a collection whose as-of is `[0]`, starts nothing
+    // before the recording was built.
+    let rows = recording.observe(&tree, &tree, &frontier(1001), T0, &[], &config);
+    assert_eq!(rows, vec![]);
+    assert_eq!(recording.recorded_through(), Some(T0));
+    let rows = recording.observe(
+        &tree,
+        &tree,
+        &frontier(T0 + 60_001),
+        T0 + 60_005,
+        &[],
+        &config,
+    );
+    assert_eq!(
+        period_counts(rows),
+        BTreeMap::from([
+            ((Measure::EndToEnd, T0 + 60_000), 60_000),
+            ((Measure::Local, T0 + 60_000), 60_000),
+        ])
+    );
+}
+
+#[mz_ore::test]
+fn charge_starts_no_earlier_than_the_retention() {
+    const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+    let tree = aligned(1000);
+    let config = recorder_config();
+    let a = GlobalId::User(1);
+    let seeds = FreshnessSeeds::default();
+    // The end-to-end seed is older than the retention, as when the recording starts long after
+    // the seeds were published. The local one is missing.
+    seeds.publish(
+        false,
+        BTreeMap::from([((a, None, Measure::EndToEnd), T0 - 40 * DAY_MS)]),
+    );
+    let mut recording = FreshnessRecording::seeded(seeds, a, None, T0 - 1000);
+    let rows = recording.observe(&tree, &tree, &frontier(T0 + 1), T0 + 5, &[], &config);
+    // End to end catches up the retention in about a period per day. Local starts like `hole`,
+    // where the recording was built, and closes the period that ends at T0.
+    let periods: BTreeMap<(u64, u64), u64> = rows
+        .iter()
+        .filter(|(measure, _)| *measure == Measure::EndToEnd)
+        .map(|(_, row)| ((row.period_start_ms, row.period_end_ms), row.count))
+        .fold(BTreeMap::new(), |mut periods, (key, count)| {
+            *periods.entry(key).or_default() += count;
+            periods
+        });
+    assert!(periods.len() <= 32, "{} periods", periods.len());
+    let first_end = periods.keys().next().expect("rows").1;
+    assert!(first_end > T0 + 5 - RETENTION_MS, "{first_end}");
+    assert_eq!(
+        measure_totals(&rows),
+        BTreeMap::from([
+            (Measure::EndToEnd, RETENTION_MS - 5),
+            (Measure::Local, 1000)
+        ])
+    );
+    assert_eq!(recording.recorded_through(), Some(T0));
+}
+
+#[mz_ore::test]
+fn end_to_end_only_recording_needs_no_local_seed() {
+    let tree = aligned(1000);
+    let config = recorder_config();
+    let a = GlobalId::User(1);
+    let seeds = FreshnessSeeds::default();
+    seeds.publish(
+        false,
+        BTreeMap::from([((a, None, Measure::EndToEnd), T0 + 60_000)]),
+    );
+    let mut recording = FreshnessRecording::seeded(seeds, a, None, T0).end_to_end_only();
+    let rows = recording.observe(
+        &tree,
+        &tree,
+        &frontier(T0 + 120_001),
+        T0 + 120_005,
+        &[],
+        &config,
+    );
+    assert_eq!(
+        period_counts(rows),
+        BTreeMap::from([((Measure::EndToEnd, T0 + 120_000), 60_000)])
+    );
+}
+
+#[mz_ore::test]
+fn hole_records_arrivals_between_build_and_first_observation() {
+    let tree = aligned(1000);
+    let config = recorder_config();
+    let scheme = config.scheme;
+    let seeds = FreshnessSeeds::default();
+    let dyncfg = mz_dyncfgs::all_dyncfgs();
+    let mut updates = ConfigUpdates::default();
+    updates.add(&WALLCLOCK_FRESHNESS_RESTART_POLICY, "hole");
+    updates.apply(&dyncfg);
+    let mut recording = recording_after_restart(&dyncfg, &seeds, GlobalId::User(1), None, T0);
+    // The first frontier is past the build, as of a replica that reports only once it has
+    // rehydrated.
+    let rows = recording.observe(
+        &tree,
+        &tree,
+        &frontier(T0 + 90_001),
+        T0 + 90_005,
+        &[],
+        &config,
+    );
+    assert_eq!(
+        period_counts(rows.iter().cloned().collect()),
+        BTreeMap::from([
+            ((Measure::EndToEnd, T0 + 60_000), 60_000),
+            ((Measure::Local, T0 + 60_000), 60_000),
+        ])
+    );
+    // The arrivals in the closed period waited at least until the observation.
+    let fastest = scheme.bucket(90_005 - 60_000);
+    for (measure, row) in &rows {
+        assert!(row.bucket >= fastest, "{measure:?} {row:?}");
+    }
+    let rows = recording.observe(
+        &tree,
+        &tree,
+        &frontier(T0 + 120_001),
+        T0 + 120_005,
+        &[],
+        &config,
+    );
+    assert_eq!(
+        period_counts(rows),
+        BTreeMap::from([
+            ((Measure::EndToEnd, T0 + 120_000), 60_000),
+            ((Measure::Local, T0 + 120_000), 60_000),
+        ]),
+        "the arrivals up to the first observation are recorded once"
+    );
 }
