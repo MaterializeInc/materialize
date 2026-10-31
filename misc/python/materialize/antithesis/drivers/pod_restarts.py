@@ -443,102 +443,126 @@ def _owned_interleaving(
         acquired = lease.acquire()
         if not acquired:
             return False, None
-        scenario = rollout_steps.load(db)
-        if scenario is not None and scenario.owner != "interleavings":
-            return False, None
-        snap = kube.try_snapshot()
-        if snap is None:
-            return scenario is not None, None
-        ctx = rollouts.Ctx(kube.env, kube, db, rollouts.timeline_params(db), lease)
-        if scenario is None:
-            if (
-                snap.reason != "Applied"
-                or snap.request != snap.last_completed
-                or rng.random() >= 0.5
-            ):
+        polling = False
+        while True:
+            if polling:
+                time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+            polling = True
+            if time.monotonic() >= deadline or quiet_period_active(kube.env.endpoints):
+                return True, None
+            lease.renew()
+            scenario = rollout_steps.load(db)
+            if scenario is not None and scenario.owner != "interleavings":
                 return False, None
-            changes = {**rollouts.new_request(), "rolloutStrategy": "ManuallyPromote"}
-            scenario = rollout_steps.Scenario(
-                rollouts.new_uuid(),
-                rng.choice(["promote", "environmentd_candidate"]),
-                snap.obj,
-                time.monotonic(),
-                False,
-                owner="interleavings",
-                data={"spec": {**snap.tracked_spec(), **changes}},
-                request=changes["requestRollout"],
-                deadline=time.monotonic() + rollouts.FOLLOW_TIMEOUT_SECONDS,
-                intent=changes,
-                from_request=snap.request,
-            )
-            rollout_steps.save(db, scenario)
-        expected = (
-            scenario.data["spec"]
-            if snap.request == scenario.request
-            else rollouts.Snapshot(scenario.prior).tracked_spec()
-        )
-        if scenario.stage == "cleanup":
-            expected = dict(expected)
-            if snap.spec.get("forcePromote") in (
-                expected.get("forcePromote"),
-                scenario.request,
-            ):
-                expected["forcePromote"] = snap.spec.get("forcePromote")
-            prior_strategy = rollouts.Snapshot(scenario.prior).spec.get(
-                "rolloutStrategy", rollouts.DEFAULT_ROLLOUT_STRATEGY
-            )
-            if snap.spec.get("rolloutStrategy") in ("ManuallyPromote", prior_strategy):
-                expected["rolloutStrategy"] = snap.spec.get("rolloutStrategy")
-        if (
-            snap.request not in (scenario.from_request, scenario.request)
-            or snap.tracked_spec() != expected
-            or snap.resource_id != rollouts.Snapshot(scenario.prior).resource_id
-            or (
-                "generation" in scenario.data
-                and snap.generation != scenario.data["generation"]
-                and scenario.stage != "cleanup"
-            )
-        ):
-            # A superseding request belongs to its writer, including its strategy.
-            with db:
-                db.execute("DELETE FROM rollout_scenario WHERE slot = 0")
-            return True, None
-        expired = time.monotonic() >= scenario.deadline
-        if scenario.stage == "cleanup" or expired:
-            if snap.request == scenario.request:
-                _, stored = rollouts.submit_patch(
-                    ctx,
-                    "interleavings_restore",
-                    {
-                        "rolloutStrategy": rollouts.Snapshot(scenario.prior).spec.get(
-                            "rolloutStrategy", rollouts.DEFAULT_ROLLOUT_STRATEGY
-                        ),
-                        "forcePromote": scenario.request,
-                    },
+            snap = kube.try_snapshot()
+            if snap is None:
+                if scenario is None:
+                    return False, None
+                continue
+            ctx = rollouts.Ctx(kube.env, kube, db, rollouts.timeline_params(db), lease)
+            if scenario is None:
+                if (
+                    snap.reason != "Applied"
+                    or snap.request != snap.last_completed
+                    or rng.random() >= 0.5
+                ):
+                    return False, None
+                changes = {
+                    **rollouts.new_request(),
+                    "rolloutStrategy": "ManuallyPromote",
+                }
+                scenario = rollout_steps.Scenario(
+                    rollouts.new_uuid(),
+                    rng.choice(["promote", "environmentd_candidate"]),
+                    snap.obj,
+                    time.monotonic(),
+                    False,
+                    owner="interleavings",
+                    data={"spec": {**snap.tracked_spec(), **changes}},
+                    request=changes["requestRollout"],
+                    deadline=time.monotonic() + rollouts.FOLLOW_TIMEOUT_SECONDS,
+                    intent=changes,
+                    from_request=snap.request,
                 )
-                if stored is None:
-                    return True, None
-            with db:
-                db.execute("DELETE FROM rollout_scenario WHERE slot = 0")
-            return True, None
-        if snap.request != scenario.request:
-            assert scenario.intent is not None
-            rollouts.submit_patch(ctx, "interleavings_prepare", scenario.intent)
-            return True, None
-        if "generation" not in scenario.data:
-            scenario.data["generation"] = snap.generation
-            rollout_steps.save(db, scenario)
-        if (
-            snap.reason != "ReadyToPromote"
-            or snap.generation is None
-            or snap.observed_generation != snap.generation
-        ):
-            return True, None
-        scenario_id, request, generation = (
-            scenario.scenario_id,
-            scenario.request,
-            snap.generation,
-        )
+                rollout_steps.save(db, scenario)
+            expected = (
+                scenario.data["spec"]
+                if snap.request == scenario.request
+                else rollouts.Snapshot(scenario.prior).tracked_spec()
+            )
+            if scenario.stage == "cleanup":
+                expected = dict(expected)
+                if snap.spec.get("forcePromote") in (
+                    expected.get("forcePromote"),
+                    scenario.request,
+                ):
+                    expected["forcePromote"] = snap.spec.get("forcePromote")
+                prior_strategy = rollouts.Snapshot(scenario.prior).spec.get(
+                    "rolloutStrategy", rollouts.DEFAULT_ROLLOUT_STRATEGY
+                )
+                if snap.spec.get("rolloutStrategy") in (
+                    "ManuallyPromote",
+                    prior_strategy,
+                ):
+                    expected["rolloutStrategy"] = snap.spec.get("rolloutStrategy")
+            if (
+                snap.request not in (scenario.from_request, scenario.request)
+                or snap.tracked_spec() != expected
+                or snap.resource_id != rollouts.Snapshot(scenario.prior).resource_id
+                or (
+                    "generation" in scenario.data
+                    and snap.generation != scenario.data["generation"]
+                    and scenario.stage != "cleanup"
+                )
+            ):
+                # A superseding request belongs to its writer, including its strategy.
+                with db:
+                    db.execute("DELETE FROM rollout_scenario WHERE slot = 0")
+                return True, None
+            expired = time.monotonic() >= scenario.deadline
+            if scenario.stage == "cleanup" or expired:
+                if snap.request == scenario.request:
+                    _, stored = rollouts.submit_patch(
+                        ctx,
+                        "interleavings_restore",
+                        {
+                            "rolloutStrategy": rollouts.Snapshot(
+                                scenario.prior
+                            ).spec.get(
+                                "rolloutStrategy", rollouts.DEFAULT_ROLLOUT_STRATEGY
+                            ),
+                            "forcePromote": scenario.request,
+                        },
+                    )
+                    if stored is None:
+                        return True, None
+                with db:
+                    db.execute("DELETE FROM rollout_scenario WHERE slot = 0")
+                return True, None
+            if snap.request != scenario.request:
+                assert scenario.intent is not None
+                _, stored = rollouts.submit_patch(
+                    ctx, "interleavings_prepare", scenario.intent
+                )
+                if stored is not None and stored.generation is not None:
+                    scenario.data["generation"] = stored.generation
+                    rollout_steps.save(db, scenario)
+                continue
+            if "generation" not in scenario.data:
+                scenario.data["generation"] = snap.generation
+                rollout_steps.save(db, scenario)
+            if (
+                snap.reason != "ReadyToPromote"
+                or snap.generation is None
+                or snap.observed_generation != snap.generation
+            ):
+                continue
+            scenario_id, request, generation = (
+                scenario.scenario_id,
+                scenario.request,
+                snap.generation,
+            )
+            break
     except rollouts.LeaseLost:
         log("interleaving preparation lost its CR lease")
         return True, None
