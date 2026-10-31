@@ -96,7 +96,7 @@ This derivation is a one-shot whose output is pinned for the rest of the run, so
 
 Count the rows before pinning them. This list is the entire production selector for the rest of the run, and a canary region holds one or two environments, so a namespace lost to one missed scrape puts the whole prod sweep on half the fleet with nothing downstream to catch it. Expect one row per canary organization per region.
 
-The canary organizations are `Materialize Production Sandbox` and `Materialize Production Analytics`. Which regions carry which has changed over time, so always derive rather than assume, and note that the bot's links and Prometheus have disagreed on this. Sources and Sinks historically inspected only the sandbox environment.
+The canary organizations are `Materialize Production Sandbox` and `Materialize Production Analytics`. The datasource table under *Areas* lists which regions carry which. Derive the list anyway, and check its row count against that table before pinning it. Sources and Sinks historically inspected only the sandbox environment.
 
 The canonical canary list lives in `MaterializeInc/release`, in `templates/issue.md`, as the `--environment` arguments to `bin/deploy upgrade production`. The `storage-overview` sign-off panel points instead at `MaterializeInc/cloud/.github/ISSUE_TEMPLATE/03-release.md`, which no longer exists.
 
@@ -221,6 +221,7 @@ The bot links one dashboard per area. All are on `grafana.dev.materialize.com`.
 | Persist | `persist` | `m3U1U6ZVk` | `references/persist.md` |
 | Adapter | `environmentd-health` | `mR1Kg1d4z` | `references/adapter.md` |
 | Reference | `release-health` | `zKe0K0N4z` | `references/reference-dashboards.md` |
+| Reference | `networking-top-50` | `axhjnp` | `references/reference-dashboards.md` |
 | Reference | `networking` | `bHQE8bN4k` | `references/reference-dashboards.md` |
 
 Each reference names the metrics, their types and labels, the invariants that hold at any fleet size, and the hazards specific to that area. Read the one for the area you are verifying before running a single query. The `Storage` label the bot still uses refers to work now split between Sources and Sinks and Persist.
@@ -231,16 +232,18 @@ The bot links production only, but staging is a larger and earlier sample of the
 
 Datasource UIDs, which the dashboards take as the `datasource` variable:
 
-| Stack | Region | UID |
-|---|---|---|
-| Production | us-east-1 | `2K85O21Vz` |
-| Production | eu-west-1 | `E0J0O2J4k` |
-| Production | us-west-2 | `ee2e6227-dc2d-4ca5-bb58-ca826fd6d614` |
-| Staging | us-east-1 | `Ks85Oh14z` |
-| Staging | eu-west-1 | `JKT0Oh1Vk` |
-| Staging | us-west-2 | `c979f3ee-16d0-44f1-9f24-9e208e0326d9` |
+| Stack | Region | UID | Canary environments |
+|---|---|---|---|
+| Production | us-east-1 | `2K85O21Vz` | Sandbox, Analytics |
+| Production | eu-west-1 | `E0J0O2J4k` | Sandbox, Analytics |
+| Production | us-west-2 | `ee2e6227-dc2d-4ca5-bb58-ca826fd6d614` | Sandbox |
+| Staging | us-east-1 | `Ks85Oh14z` | none |
+| Staging | eu-west-1 | `JKT0Oh1Vk` | none |
+| Staging | us-west-2 | `c979f3ee-16d0-44f1-9f24-9e208e0326d9` | none |
 
-The bot's links have diverged from this table. On v26.48.0-rc.3 its eu-west-1 links named only the Sandbox namespace while the Analytics canary also ran there, and its networking links pointed at `axhjnp` ("Networking (optimized queries)") rather than `bHQE8bN4k`. The two networking dashboards have the same 48 panels; `axhjnp` wraps 20 of them in `topk(50)`, so either serves the sweep.
+The networking area has two dashboards with the same 48 panels, panel IDs and template variables. `axhjnp` is a copy of `bHQE8bN4k`, made on 2026-10-10, that limits 20 per-pod panels to the top 50 pods with `topk(50)`, and the bot's links have pointed at it since then. Either serves the sweep; use `bHQE8bN4k` when a pod outside the top 50 matters.
+
+The canary environments are the namespaces `environment-88f4bc01-67b2-4ae7-b53e-6c264993152c-0` (Materialize Production Sandbox) and `environment-b65cc970-ba71-43fd-bbea-5b4841bc9742-0` (Materialize Production Analytics). The release tool's rollout records show this split in every canary deploy from v26.13.0 to v26.48.0, with Analytics deleted in us-west-2. The bot's eu-west-1 links name only Sandbox, so add Analytics there by hand. Staging has no canaries; its environment set comes from the rollout records, as described under *Step 2*.
 
 Staging us-west-2 held no compute environments in August 2026, so `v2_mz_compute_cluster_status` returns nothing there. Confirm it is still empty rather than reporting a region as clean.
 
@@ -278,7 +281,23 @@ That turns "is this empty panel a regression or a rename?" into a lookup. A name
 
 The diff survives that blind spot, because both sides share it and a dynamically named metric is missing from both catalogs and so never appears in either list. The diff therefore never reports a rename that did not happen. It can still miss one, so an empty result that the diff does not explain is not yet cleared. Confirm it against Prometheus with `list_prometheus_metric_names` before reporting the metric as zero.
 
-Panels found dead on the v26.48.0-rc.3 sweep, with no series in the canary or staging namespaces: the RocksDB, merge-snapshot and backpressure panels on the storage dashboards, the commit and sync latency averages and the Stash query latencies on `environmentd-health`, `Disk Usage %` on `persist`, and `mz_envd_up` on `release-health`. An empty result on one of these is not evidence either way.
+Some panels return no series for reasons that predate any release under test. Read an empty result on one of these as expected, not as a regression:
+
+| Panels | Dashboard | Metric | Empty since | Change |
+|---|---|---|---|---|
+| `Stash (CRDB) Query Latencies` | `environmentd-health` | `mz_query_latency_bucket` | v0.97.0, 2024-04 | deleted with the stash in #26647 |
+| `Avg Transaction Commit Latency`, `Avg Sync Latency` and their by-env variants | `environmentd-health` | `mz_catalog_transaction_commit_latency_seconds`, `mz_catalog_sync_latency_seconds` | v26.36.0, 2026-08-01 on the canaries | converted to histograms in #37926 |
+| `#workers spilling to disk`, `% source-workers spilling to disk` | `storage-upsert-sources`, `storage-overview` | `mz_storage_upsert_state_rocksdb_autospill_in_use` | v0.147.16, 2025-07 | autospill backend removed in commit `18fb1f796d` |
+| RocksDB multi get and multi put panels, merge-snapshot panels | `storage-upsert-sources` | `mz_storage_rocksdb_multi_get_*`, `mz_storage_rocksdb_multi_put_*`, `mz_storage_upsert_merge_snapshot_*` | intermittent | recorded only by the legacy upsert operator |
+| Backpressure panels | `storage-upsert-sources` | `mz_storage_upsert_backpressure_*` | intermittent | registered only when `storage_dataflow_max_inflight_bytes` is set |
+| `Disk Usage % (requires env)` | `persist` | `kubelet_volume_stats_*` | 2026-06-26 | not traced |
+| 34 `CPU Throttling + Environmentd Down`, arm A | `release-health` | `mz_envd_up` | before 2026-05 | exporter series carry a `v2_` prefix |
+
+- **Catalog latency panels:** #37926 kept the metric names but made them histograms, so Prometheus exposes `_bucket`, `_sum` and `_count` and the bare names the panels divide have no series. Divide the `_sum` rate by the `_count` rate instead.
+- **Legacy upsert panels:** the state backend in `src/storage/src/upsert/types.rs` records these; the v2 operator, chosen per dataflow by the `enable_upsert_v2` dyncfg, does not. On the us-east-1 Sandbox canary the merge-snapshot series existed only on 2026-09-01, 09-02 and 10-12 between late May and 2026-10-30, so empty is their normal state.
+- **Backpressure panels:** `src/storage/src/render/sources.rs` creates these metrics only when `storage_dataflow_max_inflight_bytes` yields a limit. On the same canary they had series from 2026-08-31 to 09-19 and on 10-12.
+- **Disk Usage:** `kubelet_volume_stats_used_bytes` had series for some production us-east-1 environments until 2026-06-26 and has had none since. The cloud change behind it was not found.
+- **`mz_envd_up`:** the cloud Prometheus relabel rule in `infra/prometheus/prometheus.py` renames the promsql exporter's series with a `v2_` prefix, and the unprefixed name has had no series in Prometheus's retained history, which starts in late May 2026. The panel's other arms already read `v2_mz_envd_up`.
 
 When a name resolves in neither the catalog nor Prometheus, the panel that plots it is dead, and the reference should record that rather than the metric. `git log -S<name> --all -- src/` settles which kind of dead it is, and the two kinds read differently in a report. `mz_query_latency` was real, added in #22049 and deleted in #26647 along with the stash, so the `environmentd-health` panel that still plots its `_bucket` family has been empty since that deletion. `mz_persist_columnar_validation_count` and `mz_txn_placeholder_schema_apply` have never appeared in this repository at all, yet both are live arms of the persist dashboard's `should be small` panel, and the working spelling of the first sits beside it on the same panel as `mz_persist_columnar_op_count` with `op="validation"` and `result="invalid"`.
 
