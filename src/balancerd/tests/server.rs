@@ -27,8 +27,8 @@ use mz_balancerd::{
 };
 use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
-    Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
-    DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+    Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimTokenType,
+    Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
 use mz_frontegg_mock::{FronteggMockServer, models::ApiToken, models::UserConfig};
 use mz_ore::cast::CastFrom;
@@ -99,7 +99,7 @@ async fn test_balancer() {
     let frontegg_server = FronteggMockServer::start(
         None,
         issuer,
-        encoding_key,
+        encoding_key.clone(),
         decoding_key,
         users,
         BTreeMap::new(),
@@ -128,6 +128,24 @@ async fn test_balancer() {
     );
     let frontegg_user = "user@_.com";
     let frontegg_password = format!("mzp_{client_id}{secret}");
+    let frontegg_token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &Claims {
+            exp: SYSTEM_TIME.as_secs() + 3600,
+            email: Some(frontegg_user.to_string()),
+            iss: "frontegg-mock".to_string(),
+            sub: Uuid::new_v4(),
+            user_id: None,
+            tenant_id,
+            roles: Vec::new(),
+            permissions: Vec::new(),
+            token_type: ClaimTokenType::UserToken,
+            metadata: None,
+            unknown_claims: Default::default(),
+        },
+        &encoding_key,
+    )
+    .unwrap();
 
     let config = test_util::TestHarness::default()
         // Enable SSL on the main port. There should be a balancerd port with no SSL.
@@ -262,6 +280,33 @@ async fn test_balancer() {
                 &tokio_postgres::error::SqlState::INVALID_PASSWORD
             );
             assert_eq!(db_err.message(), "invalid password");
+
+            // Without SNI, an access token is routed by the tenant in its
+            // validated claims.
+            let token_conn_str = format!(
+                "user={frontegg_user} password={frontegg_token} host={} port={} sslmode=require",
+                balancer_pgwire_listen.ip(),
+                balancer_pgwire_listen.port()
+            );
+            let (token_client, token_conn) = tokio::time::timeout(
+                Duration::from_secs(30),
+                tokio_postgres::connect(&token_conn_str, tls.clone()),
+            )
+            .await
+            .expect("token connection timed out")
+            .unwrap();
+            task::spawn(|| "balancer-token-pg_client", async move {
+                let _ = token_conn.await;
+            });
+            let res: i32 = tokio::time::timeout(
+                Duration::from_secs(30),
+                token_client.query_one("SELECT 4", &[]),
+            )
+            .await
+            .expect("token query timed out")
+            .unwrap()
+            .get(0);
+            assert_eq!(res, 4);
 
             // A query sent in the same write as the password reaches environmentd, although
             // balancerd reads the password itself.
