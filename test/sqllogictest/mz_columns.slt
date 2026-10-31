@@ -95,6 +95,7 @@ ORDER BY columns.position
 5  memory_bytes  uint8  false  NULL  uint8  -1
 6  disk_bytes  uint8  true  NULL  uint8  -1
 7  credits_per_hour  numeric  false  NULL  numeric  -1
+8  disabled  boolean  false  NULL  bool  -1
 
 # A log, a source, a materialized view, a view and the generated views that
 # report the builtins, including the one that reports these columns.
