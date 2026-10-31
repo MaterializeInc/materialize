@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 from textwrap import dedent
+from typing import Any
 
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
@@ -21,6 +22,85 @@ SERVICES = [
     Materialized(),
 ]
 
+# A cluster-coherent parameter and a replica-local one. Both declare a scope in
+# their definitions, so both are resolved per object.
+CLUSTER_PARAM = "enable_eager_delta_joins"
+REPLICA_PARAM = "enable_lgalloc"
+# A second cluster-coherent parameter. Written by the rules that must have no
+# effect, so a leak shows up as a row that should not exist.
+CLUSTER_PARAM_2 = "enable_join_prioritize_arranged"
+# A third cluster-coherent parameter, used to check that an unparseable scoped
+# value is dropped rather than stored or fatal. Its environment-wide value does
+# not matter, since an unparseable value never becomes an override.
+UNPARSEABLE_PARAM = "enable_projection_pushdown_after_relation_cse"
+
+# The environment-wide values every expected scoped row below is derived from.
+#
+# A scoped value is recorded as an override only when it differs from the
+# environment-wide value, so the baseline decides which rows exist. It is pinned
+# here, as environment-wide values in the config file, rather than inherited
+# from the parameters' compiled-in defaults, which are not what an object
+# resolves against under this harness: `Materialized` renders
+# `MZ_SYSTEM_PARAMETER_DEFAULT` from `get_default_system_parameters`, which
+# supplies `CLUSTER_PARAM` and `REPLICA_PARAM`, in both cases as the opposite of
+# their compiled-in default.
+#
+# Environment-wide values are applied to the sync loop's parameter set in the
+# same tick that refreshes the file cache, before the scoped passes read it, and
+# the create-time fold resolves against the catalog's system config, so the
+# reconcile and the create path both see this baseline.
+ENV_WIDE_PARAMS: dict[str, bool] = {
+    CLUSTER_PARAM: False,
+    REPLICA_PARAM: True,
+    CLUSTER_PARAM_2: False,
+}
+
+
+def write_config(config_file: Path, params: dict[str, Any]) -> None:
+    """Atomically-enough rewrite the config sync file in place. The container
+    bind-mounts the file itself, so it must be truncated and rewritten rather
+    than replaced, or the mount would still point at the old inode."""
+    with open(config_file, "w", encoding="utf-8") as f:
+        f.write(json.dumps(params))
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def assert_environment_wide_baseline(c: Composition) -> None:
+    """Check that the environment-wide values pinning `ENV_WIDE_PARAMS` took
+    effect. Every scoped assertion is derived from that baseline, so a stale one
+    would surface as an unexplained missing or extra row rather than as the
+    premise it is.
+    Read as `mz_system`, since the parameters are not user-visible."""
+    for param, value in ENV_WIDE_PARAMS.items():
+        expected = "on" if value else "off"
+        actual = c.sql_query(f"SHOW {param}", port=6877, user="mz_system")[0][0]
+        assert (
+            actual == expected
+        ), f"environment-wide {param} is {actual}, expected {expected}"
+
+
+def running_release(c: Composition) -> str:
+    """The release a version 2 document must name to be applied: the first word
+    of `mz_version()`, which appends the commit sha in parentheses."""
+    return c.sql_query("SELECT mz_version()")[0][0].split()[0]
+
+
+def file_status(c: Composition) -> str:
+    """The status `mz_parameter_frontend_file_status` reports for the latest
+    read of the config sync file, the one label whose gauge is 1."""
+    metrics = c.exec(
+        "materialized", "curl", "localhost:6878/metrics", capture=True
+    ).stdout
+    statuses = [
+        line.split('status="')[1].split('"')[0]
+        for line in metrics.splitlines()
+        if line.startswith("mz_parameter_frontend_file_status{")
+        and line.split()[-1] == "1"
+    ]
+    assert len(statuses) == 1, f"file status is not one-hot: {statuses}"
+    return statuses[0]
+
 
 def workflow_default(c: Composition) -> None:
     # Create config file in MZ_ROOT directory
@@ -28,15 +108,13 @@ def workflow_default(c: Composition) -> None:
     config_file = mz_root / "dyncfg-test-config.json"
 
     try:
-        system_params_1 = {
+        system_params_1: dict[str, Any] = {
+            **ENV_WIDE_PARAMS,
             "max_connections": 1000,
         }
 
         # Create a ConfigMap with the system parameters in JSON format
-        with open(config_file, "w", encoding="utf-8") as f:
-            f.write(json.dumps(system_params_1))
-            f.flush()
-            os.fsync(f.fileno())
+        write_config(config_file, system_params_1)
 
         print(f"config file is {config_file}")
         with c.override(Materialized(config_sync_file_path=str(config_file))):
@@ -55,18 +133,19 @@ def workflow_default(c: Composition) -> None:
                     1000
                 """),
             )
+            assert_environment_wide_baseline(c)
+            assert file_status(c) == "ok"
+            release = running_release(c)
 
-            system_params_2 = {
+            system_params_2: dict[str, Any] = {
+                **ENV_WIDE_PARAMS,
                 "max_connections": 67,
                 # This is a bit awkward, but it works.
                 "allowed_cluster_replica_sizes": "'25cc','50cc'",
             }
 
             # Write updated parameters to the file
-            with open(config_file, "w", encoding="utf-8") as f:
-                f.write(json.dumps(system_params_2))
-                f.flush()
-                os.fsync(f.fileno())
+            write_config(config_file, system_params_2)
             # Wait for dyncfg to sync
             c.sleep(2)
             c.testdrive(
@@ -76,6 +155,278 @@ def workflow_default(c: Composition) -> None:
 
                     > SHOW allowed_cluster_replica_sizes
                     "\\"25cc\\", \\"50cc\\""
+                """),
+            )
+
+            # A cluster with two replicas, `r1` and `r2`, so that a rule targeting
+            # one replica and a rule targeting the whole cluster can contend for the
+            # same parameter. Created while the file is still in the flat legacy
+            # format, which scopes nothing, so the assertion that no scoped rows
+            # exist yet is meaningful.
+            c.testdrive(
+                input=dedent("""
+                    $ postgres-execute connection=mz_system
+                    CREATE CLUSTER dyncfg_scoped SIZE 'scale=1,workers=1', REPLICATION FACTOR 2
+
+                    > SELECT count(*) FROM mz_internal.mz_cluster_system_parameters
+                    0
+
+                    > SELECT count(*) FROM mz_internal.mz_replica_system_parameters
+                    0
+                """),
+            )
+
+            # The same environment-wide values in the versioned format, which
+            # adds rules alongside them. A rule declares the context kind its
+            # clauses match, so a cluster and its replicas need one rule each even
+            # when the clauses are the same. The document names the running
+            # release, without which it would not apply.
+            scoped_clauses = [
+                {
+                    "attribute": "cluster_name",
+                    "op": "in",
+                    "values": ["dyncfg_scoped"],
+                }
+            ]
+            system_params_3: dict[str, Any] = {
+                "version": 2,
+                "release": release,
+                "globalParameters": {
+                    **ENV_WIDE_PARAMS,
+                    "max_connections": 67,
+                    "allowed_cluster_replica_sizes": "'25cc','50cc'",
+                },
+                "rules": [
+                    # The `r1` rule.
+                    {
+                        "contextKind": "replica",
+                        "clauses": [
+                            *scoped_clauses,
+                            {"attribute": "replica_name", "op": "in", "values": ["r1"]},
+                        ],
+                        "parameters": {
+                            # First match wins: this repeats the environment-wide
+                            # value, so the whole-cluster replica rule below cannot
+                            # lower it for `r1` and `r1` records no override, while
+                            # `r2` reaches that rule and does take its value.
+                            REPLICA_PARAM: True,
+                            # A cluster-coherent parameter may not be supplied
+                            # through a `replica` rule, so this is ignored.
+                            CLUSTER_PARAM_2: True,
+                        },
+                    },
+                    # The whole-cluster replica rule: clauses over cluster
+                    # attributes alone, which in a `replica` rule reach every
+                    # replica of that cluster.
+                    {
+                        "contextKind": "replica",
+                        "clauses": scoped_clauses,
+                        "parameters": {REPLICA_PARAM: False},
+                    },
+                    # The cluster rule.
+                    {
+                        "contextKind": "cluster",
+                        "clauses": scoped_clauses,
+                        "parameters": {
+                            # Differs from the environment-wide value, so it is
+                            # recorded as the cluster's override.
+                            CLUSTER_PARAM: True,
+                            # Unparseable for a `bool`, so it is dropped.
+                            UNPARSEABLE_PARAM: "maybe",
+                        },
+                    },
+                    # No live cluster matches this, so it applies to nothing.
+                    {
+                        "contextKind": "cluster",
+                        "clauses": [
+                            {
+                                "attribute": "cluster_name",
+                                "op": "in",
+                                "values": ["dyncfg_absent"],
+                            }
+                        ],
+                        "parameters": {CLUSTER_PARAM: True},
+                    },
+                ],
+            }
+
+            write_config(config_file, system_params_3)
+            c.sleep(2)
+            c.testdrive(
+                input=dedent(f"""
+                    > SHOW max_connections
+                    67
+
+                    > SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY c.name, p.name
+                    dyncfg_scoped {CLUSTER_PARAM} true
+
+                    > SELECT c.name, r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id ORDER BY c.name, r.name, p.name
+                    dyncfg_scoped r2 {REPLICA_PARAM} false
+
+                    # First match wins, stated per replica rather than by the
+                    # absence of a row above: `r1` is decided by the `r1` rule at
+                    # the environment-wide value and so records no override, `r2`
+                    # falls through to the whole-cluster replica rule. Reversing
+                    # the two rules makes the latter decide both, turning `r1`
+                    # into `false` and failing this.
+                    > SELECT r.name, coalesce(p.value, 'env-wide') FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id LEFT JOIN mz_internal.mz_replica_system_parameters p ON p.replica_id = r.id AND p.name = '{REPLICA_PARAM}' WHERE c.name = 'dyncfg_scoped' ORDER BY r.name
+                    r1 env-wide
+                    r2 false
+                """),
+            )
+
+            # A structural defect anywhere rejects the whole document, so neither
+            # its environment-wide values nor its rules apply. The misspelled
+            # attribute would otherwise widen or narrow the rule, and reading
+            # the document as a flat map would prune every override. testdrive
+            # retries until a result matches, so these assertions hold only
+            # because the sleep gave the sync loop time to apply the document.
+            broken_rules = list(system_params_3["rules"])
+            broken_rules[2] = {
+                **broken_rules[2],
+                "clauses": [
+                    {
+                        "attribute": "cluster_nmae",
+                        "op": "in",
+                        "values": ["dyncfg_scoped"],
+                    }
+                ],
+            }
+            system_params_broken: dict[str, Any] = {
+                **system_params_3,
+                "globalParameters": {
+                    **system_params_3["globalParameters"],
+                    "max_connections": 68,
+                },
+                "rules": broken_rules,
+            }
+            # The values `system_params_3` established, which a document that
+            # does not apply leaves in place.
+            unchanged = dedent(f"""
+                > SHOW max_connections
+                67
+
+                > SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY c.name, p.name
+                dyncfg_scoped {CLUSTER_PARAM} true
+
+                > SELECT c.name, r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id ORDER BY c.name, r.name, p.name
+                dyncfg_scoped r2 {REPLICA_PARAM} false
+            """)
+            write_config(config_file, system_params_broken)
+            c.sleep(2)
+            c.testdrive(input=unchanged)
+            assert file_status(c) == "invalid"
+
+            # A well-formed document for another release is not applied either,
+            # so neither its environment-wide value nor the absence of rules,
+            # which would prune every override, takes effect.
+            system_params_other_release: dict[str, Any] = {
+                **system_params_3,
+                "release": "v0.0.0",
+                "globalParameters": {
+                    **system_params_3["globalParameters"],
+                    "max_connections": 68,
+                },
+                "rules": [],
+            }
+            write_config(config_file, system_params_other_release)
+            c.sleep(2)
+            c.testdrive(input=unchanged)
+            assert file_status(c) == "release_mismatch"
+
+            # Create-time resolution: a cluster created while a rule already
+            # matches it folds the overrides into its create transaction. So that
+            # this is the only path that can produce the rows asserted for
+            # `dyncfg_scoped_2`, materialized restarts with the sync loop parked at
+            # an hour (its first tick still runs immediately), and testdrive runs
+            # with `no_reset`: `ALTER SYSTEM RESET ALL` would return both scoped
+            # parameters to `--system-parameter-default` values equal to the rule
+            # values, leaving the fold nothing to record.
+            #
+            # The cluster rule and the whole-cluster replica rule are widened with
+            # `startsWith`, which selects `dyncfg_scoped_2` before it exists. `r1`
+            # of `dyncfg_scoped` must stay decided by the narrower `r1` rule ahead
+            # of the widened one.
+            widened = [
+                {
+                    "attribute": "cluster_name",
+                    "op": "startsWith",
+                    "values": ["dyncfg_scoped"],
+                }
+            ]
+            widened_rules = list(system_params_3["rules"])
+            widened_rules[1] = {**widened_rules[1], "clauses": widened}
+            widened_rules[2] = {**widened_rules[2], "clauses": widened}
+            system_params_4: dict[str, Any] = {
+                **system_params_3,
+                "rules": widened_rules,
+            }
+
+            write_config(config_file, system_params_4)
+            with c.override(
+                Materialized(
+                    config_sync_file_path=str(config_file),
+                    config_sync_loop_interval="1h",
+                ),
+                Testdrive(no_reset=True),
+            ):
+                c.kill("materialized")
+                c.up("materialized")
+                # Long enough for the restarted loop's immediate first tick to
+                # read `system_params_4`, push it, and install the frontend. If it
+                # has not, the fold is skipped and the rows below are simply
+                # absent, which fails loudly rather than flakily.
+                c.sleep(10)
+                # The premise of everything below, and with `no_reset` it now holds
+                # for the whole block rather than only until the next script starts.
+                assert_environment_wide_baseline(c)
+                c.testdrive(
+                    input=dedent(f"""
+                        # The premise again, asserted ahead of the create rather than
+                        # inferred from its result. `max_connections` is one of the
+                        # same environment-wide values and is user-visible, so a
+                        # baseline that was reset after all fails on this line
+                        # instead of surfacing below as an unexplained missing row.
+                        > SHOW max_connections
+                        67
+
+                        $ postgres-execute connection=mz_system
+                        CREATE CLUSTER dyncfg_scoped_2 SIZE 'scale=1,workers=1'
+
+                        > SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY c.name, p.name
+                        dyncfg_scoped {CLUSTER_PARAM} true
+                        dyncfg_scoped_2 {CLUSTER_PARAM} true
+
+                        > SELECT r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'dyncfg_scoped_2'
+                        r1 {REPLICA_PARAM} false
+
+                        # The whole-cluster replica rule now matches every replica
+                        # of both clusters, but the `r1` rule still precedes it, so
+                        # `r1` of `dyncfg_scoped` is still decided at the environment-wide
+                        # value. Widening a later rule must not take a parameter away
+                        # from the narrower rule ahead of it.
+                        > SELECT c.name, r.name, coalesce(p.value, 'env-wide') FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id LEFT JOIN mz_internal.mz_replica_system_parameters p ON p.replica_id = r.id AND p.name = '{REPLICA_PARAM}' WHERE c.name LIKE 'dyncfg_scoped%' ORDER BY c.name, r.name
+                        dyncfg_scoped r1 env-wide
+                        dyncfg_scoped r2 false
+                        dyncfg_scoped_2 r1 false
+                    """),
+                )
+
+            # Returning to the flat legacy format, which scopes nothing, removes
+            # the overrides, returning every object to the environment-wide value. This is the periodic
+            # reconcile's job, so it runs on the short interval and the resetting
+            # testdrive.
+            write_config(config_file, system_params_2)
+            c.kill("materialized")
+            c.up("materialized")
+            c.sleep(5)
+            c.testdrive(
+                input=dedent("""
+                    > SELECT count(*) FROM mz_internal.mz_cluster_system_parameters
+                    0
+
+                    > SELECT count(*) FROM mz_internal.mz_replica_system_parameters
+                    0
                 """),
             )
     finally:
