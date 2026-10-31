@@ -19,9 +19,10 @@ current-commit build does not reuse the developer's own `target/` cache; the
 first run compiles it from scratch into a parked target dir and later runs
 reuse that.
 
-A package whose dependency closure has no committed change between the ancestor
-and the current commit is not built at all: identical source at identical paths
-would only reproduce the identical-binary skip below at the cost of two builds.
+Unless the benchmark harness changed, a package whose dependency closure has no
+committed change between the ancestor and the current commit is not built at
+all: identical source at identical paths would only reproduce the
+identical-binary skip below at the cost of two builds.
 That prediction is unchecked by construction, so scheduled runs build those
 packages anyway and fail when a predicted-unchanged package yields differing
 binaries, which points at a hole in the closure or an unpinned compile-time
@@ -76,6 +77,8 @@ RERUN = "confirm"
 # dependency versions, workspace profiles, and the rustflags cargo applies.
 BUILD_INPUTS = ("Cargo.lock", "Cargo.toml", ".cargo")
 
+HARNESS_INPUTS = ("test/cargo-bench", "misc/python/materialize/cargo_bench")
+
 
 @dataclass(frozen=True)
 class TargetFailure:
@@ -84,8 +87,10 @@ class TargetFailure:
 
 
 def resolve_ancestor() -> str:
-    """Pick the commit to compare against: `default_ancestor()`, moved forward to the bench baseline when HEAD contains the baseline and that ancestor does not."""
+    """Choose the comparison commit, clamping PR merge bases to the bench baseline."""
     ancestor = default_ancestor()
+    if not buildkite.is_in_pull_request():
+        return ancestor
     clamped = clamp_to_baseline(ancestor, "HEAD", MZ_ROOT)
     if clamped != ancestor:
         print(
@@ -95,7 +100,7 @@ def resolve_ancestor() -> str:
 
 
 def default_ancestor() -> str:
-    """The merge base in a pull request, else the latest release tag."""
+    """The PR merge base, or the latest stable release's commit."""
     if buildkite.is_in_pull_request():
         return buildkite.get_merge_base()
     current = MzVersion.parse_cargo()
@@ -108,12 +113,9 @@ def default_ancestor() -> str:
     ]
     if not releases:
         raise RuntimeError(f"no release tag older than {current} found")
-    tag = spawn.capture(
+    return spawn.capture(
         ["git", "rev-parse", f"{max(releases)}^{{commit}}"], cwd=MZ_ROOT
     ).strip()
-    # The tag sits on its release branch and carries backports that main
-    # lacks, so the comparison point is where that branch left main.
-    return spawn.capture(["git", "merge-base", tag, "HEAD"], cwd=MZ_ROOT).strip()
 
 
 def target_dir() -> Path:
@@ -369,6 +371,8 @@ def run_benches(
     env: dict[str, str],
     results_root: Path,
     threshold: float,
+    *,
+    force_run: bool = False,
 ) -> tuple[
     list[TargetFailure], list[TargetFailure], list[TargetFailure], list[BuiltBench]
 ]:
@@ -382,16 +386,13 @@ def run_benches(
     only in the ancestor is never run, since there is no HEAD result to
     compare it against.
 
-    Benchmarks that regress in the first pass are measured once more, both
-    sides again, restricted to exactly those benchmark ids. Between-process
-    variance on large inputs dwarfs criterion's within-run interval, and a
-    swing that does not reproduce on the spot is not a regression. The rerun
-    costs time proportional to the number of flagged rows, nothing when there
-    are none.
+    First-pass regressions get up to four paired reruns, filtered to those IDs.
+    A clean comparison ends confirmation. Earlier attempts remain in artifacts.
+
+    `force_run` runs targets even when their binaries are identical.
 
     Returns the ancestor, current, and rerun failures, then the targets
-    skipped for identical binaries. A rerun failure is not a failure of the
-    commit under test: the flagged rows keep their first-pass verdict.
+    skipped for identical binaries. Current-side failures also fail the step.
     """
     ancestor_by_key = {(b.package, b.name): b for b in ancestor_built}
     ancestor_target_by_key = {(t.package, t.name): t for t in ancestor_targets}
@@ -431,7 +432,8 @@ def run_benches(
         ancestor_digest = loaded_image_digest(ancestor_bin.executable, scratch)
         head_digest = loaded_image_digest(head_bin.executable, scratch)
         if (
-            ancestor_digest is not None
+            not force_run
+            and ancestor_digest is not None
             and head_digest is not None
             and ancestor_digest == head_digest
         ):
@@ -466,18 +468,30 @@ def run_benches(
         # id, so an anchored alternation reruns exactly the flagged ids and
         # nothing else.
         pattern = "^(?:" + "|".join(re.escape(id) for id in regressed) + ")$"
-        ancestor_rc, head_rc = run_pair(
-            ancestor_bin,
-            head_bin,
-            env,
-            results_root / RERUN / head_bin.package / head_bin.name,
-            [pattern],
-            f", confirming {len(regressed)} regression(s)",
-            header_suffix,
-        )
-        for rc in (ancestor_rc, head_rc):
-            if rc is not None:
-                rerun_failures.append(TargetFailure(head_target_by_key[key], rc))
+        home = results_root / RERUN / Path(*key)
+        for attempt in range(4):
+            if home.exists():
+                saved = results_root / "attempts" / str(attempt) / Path(*key)
+                saved.parent.mkdir(parents=True, exist_ok=True)
+                home.rename(saved)
+            ancestor_rc, head_rc = run_pair(
+                ancestor_bin,
+                head_bin,
+                env,
+                home,
+                [pattern],
+                f", confirming {len(regressed)} regression(s)",
+                header_suffix,
+            )
+            for rc in (ancestor_rc, head_rc):
+                if rc is not None:
+                    rerun_failures.append(TargetFailure(head_target_by_key[key], rc))
+            if head_rc is not None:
+                current_failures.append(TargetFailure(head_target_by_key[key], head_rc))
+            if ancestor_rc is not None or head_rc is not None:
+                break
+            if not compare(home, threshold).has_regressions:
+                break
     return ancestor_failures, current_failures, rerun_failures, identical
 
 
@@ -553,7 +567,7 @@ def render_report(
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--ancestor",
-        help="commit to compare against, used as given, defaults to the merge base in a PR and the latest release tag otherwise, never older than the bench baseline",
+        help="commit to compare against, used as given, defaults to the PR merge base (clamped to the bench baseline) or the latest release tag otherwise",
     )
     parser.add_argument(
         "--threshold",
@@ -604,11 +618,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     head = spawn.capture(["git", "rev-parse", "HEAD"], cwd=MZ_ROOT).strip()
     ancestor: str | None = None
     unchanged: list[str] = []
+    force_run = False
     if not args.skip_ancestor:
         ancestor = args.ancestor or resolve_ancestor()
         assert ancestor is not None
         print(f"--- Comparing against ancestor {ancestor}")
-        unchanged = unchanged_packages(ancestor, head, shard_packages)
+        force_run = bool(
+            spawn.capture(
+                [
+                    "git",
+                    "diff",
+                    "--name-only",
+                    "--no-renames",
+                    ancestor,
+                    head,
+                    "--",
+                    *HARNESS_INPUTS,
+                ],
+                cwd=MZ_ROOT,
+            ).strip()
+        )
+        if force_run:
+            print("--- Benchmark harness changed, building and running all targets")
+        else:
+            unchanged = unchanged_packages(ancestor, head, shard_packages)
     # The prefilter is a prediction the identical-binary check can confirm or
     # refute, but only if the predicted-unchanged packages get built. Pull
     # requests and local runs take the saving, scheduled runs pay for the
@@ -777,6 +810,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 env,
                 results_root,
                 args.threshold,
+                force_run=force_run,
             )
             ancestor_failures = ancestor_build_failures + ancestor_run_failures
             current_failures = current_build_failures + current_run_failures

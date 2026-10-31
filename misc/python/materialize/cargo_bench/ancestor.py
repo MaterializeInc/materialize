@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Clamping of the cargo-bench comparison point to the bench baseline."""
+"""Clamping of cargo-bench pull request comparisons to the bench baseline."""
 
 import subprocess
 from pathlib import Path
@@ -20,9 +20,8 @@ from materialize import spawn
 # benches ran on the system allocator.
 #
 # Bump this to the merge commit of any future change of that kind (allocator,
-# bench profile, measurement harness). Without the bump, every comparison
-# against an older ancestor reports the change itself as regressions and
-# improvements until the next release branch point moves past it.
+# bench profile, measurement harness). Without the bump, PR comparisons
+# against an older merge base attribute changes in the bench setup to the PR.
 BENCH_BASELINE = "e95ca7eec04d5817669176949c48a417856cf656"
 
 
