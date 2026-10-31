@@ -73,10 +73,14 @@ def test_mixed_template_keeps_every_authoritative_command(tmp_path: Path) -> Non
         assert all(p.stat().st_mode & 0o111 for p in paths)
 
 
-def test_all_profiles_can_audit_the_passive_exit_observer(tmp_path: Path) -> None:
+def test_all_profiles_audit_exits_without_a_separate_scheduled_command(
+    tmp_path: Path,
+) -> None:
     templates.generate(SOURCE, tmp_path)
     for name in templates.PROFILES:
-        assert (tmp_path / name / "anytime_pod_exits.py").exists()
+        assert not (tmp_path / name / "anytime_pod_exits.py").exists()
+        for command in (tmp_path / name).iterdir():
+            assert "run_command" in command.read_text()
     entrypoint = (MZ_ROOT / "test/antithesis/workload/entrypoint.sh").read_text()
     assert (
         "exec python3 -m materialize.antithesis.drivers.recovery --observe"

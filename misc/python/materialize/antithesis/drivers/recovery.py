@@ -24,9 +24,9 @@ crash-looped (see `materialize.antithesis.crash_loops`) in a window after
 faults stopped. The SUT reports each halt's verdict in process; this check
 catches designed halts and panics that repeat.
 
-`anytime_main` samples every Materialize pod's container statuses and
-classifies each new termination by exit code (sut-anomalies-are-explained,
-workload side). It sees exits that bypass the SUT's panic hook.
+Measured commands audit the passive observer's heartbeat at entry and cleanup.
+`anytime_main` exposes the same audit directly. A stale heartbeat claims a
+bounded fallback that samples pod statuses and classifies new terminations.
 
 Contracts for other drivers, in state database `recovery`:
 
@@ -72,7 +72,13 @@ from antithesis.lifecycle import (  # pyright: ignore[reportMissingModuleSource]
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
-from materialize.antithesis import crash_loops, observations, sql, state
+from materialize.antithesis import (
+    crash_loops,
+    exit_audit,
+    observations,
+    sql,
+    state,
+)
 from materialize.antithesis.drivers import configure, lifecycle, rollouts
 from materialize.antithesis.drivers.sources_common import source_error_text
 from materialize.antithesis.endpoints import INTERNAL_HTTP_PORT
@@ -118,7 +124,7 @@ RESTART_COMPARE_P = 0.5
 
 OBSERVER_POLL_S = 2.0
 OBSERVER_REPORT_S = 30.0
-OBSERVER_FRESH_S = 10.0
+OBSERVER_FRESH_S = exit_audit.OBSERVER_FRESH_S
 HALT_EVIDENCE_BUDGET_S = 10.0
 HALT_EVIDENCE_ATTEMPTS = 3
 HALT_EVIDENCE_WINDOW_S = 30.0
@@ -238,12 +244,6 @@ def open_state() -> sqlite3.Connection:
             termination_count INTEGER, finished_at TEXT,
             payload TEXT NOT NULL, emitted INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (namespace, pod_uid, container, termination_count, finished_at));
-        CREATE TABLE IF NOT EXISTS exit_observer (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            sampled_at REAL NOT NULL, details TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS exit_observer_fallback (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            retry_at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS halt_evidence_missing (
             namespace TEXT, pod_uid TEXT, container TEXT,
             termination_count INTEGER, finished_at TEXT, reasons TEXT,
@@ -251,6 +251,7 @@ def open_state() -> sqlite3.Connection:
             PRIMARY KEY (namespace, pod_uid, container, termination_count, finished_at, reasons));
         """)
     db.commit()
+    exit_audit.initialize(db)
     return db
 
 
@@ -960,31 +961,17 @@ def preserve_pod_exit(
 def anytime_main() -> int:
     db = open_state()
     try:
-        recent = db.execute(
-            "SELECT sampled_at, details FROM exit_observer WHERE singleton = 1"
-        ).fetchone()
-        age = time.monotonic() - recent[0] if recent is not None else None
-        if age is not None and 0 <= age <= OBSERVER_FRESH_S:
-            details = json.loads(recent[1])
-            _emit_observer(
-                {
-                    **details,
-                    "mode": "audit",
-                    "sample_age_s": age,
-                },
-                Counter(details.get("counts", {})),
-            )
-            return 0
-        now = time.monotonic()
-        with db:
-            claimed = db.execute(
-                "INSERT INTO exit_observer_fallback VALUES (1, ?) "
-                "ON CONFLICT (singleton) DO UPDATE SET retry_at = excluded.retry_at "
-                "WHERE exit_observer_fallback.retry_at <= ?",
-                (now + HALT_EVIDENCE_WINDOW_S, now),
-            ).rowcount
-        if not claimed:
-            return 0
+        return exit_audit.audit(
+            db, force=True, emit=_emit_observer, fallback=_audit_fallback
+        )
+    finally:
+        db.close()
+
+
+
+def _audit_fallback(age: float | None) -> int:
+    db = open_state()
+    try:
         budget = HaltEvidenceBudget()
         try:
             record_terminations(
@@ -1023,14 +1010,7 @@ def _observer_api_error(error: BaseException, counts: Counter[str]) -> bool:
 
 
 def _observer_health(counts: Counter[str] | None = None) -> dict[str, Any]:
-    durable = observations.durable_health()
-    invalid = durable is not None or bool(counts and counts["forbidden"])
-    return {
-        "valid": not invalid,
-        "errors": int(invalid),
-        "diagnostics": [] if not invalid else [{"component": "exit observer"}],
-        "first_error": durable,
-    }
+    return exit_audit.health(counts)
 
 
 def _emit_observer(details: dict[str, Any], counts: Counter[str]) -> None:

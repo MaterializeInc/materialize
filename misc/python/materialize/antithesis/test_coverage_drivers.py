@@ -441,6 +441,16 @@ def test_generated_command_records_real_measurements(
     }
     for key, value in settings.items():
         monkeypatch.setenv(f"MZ_ANTITHESIS_{key}", value)
+    db = telemetry.state.open_db(telemetry.exit_audit.STATE_DB)
+    try:
+        telemetry.exit_audit.initialize(db)
+        with db:
+            db.execute(
+                "INSERT INTO exit_observer VALUES (1, ?, '{}')",
+                (telemetry.time.monotonic(),),
+            )
+    finally:
+        db.close()
     source = tmp_path / "sources"
     source.mkdir()
     first = source / "first_configure.py"
