@@ -17,6 +17,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, NoReturn
 
 import psycopg
@@ -40,6 +41,8 @@ STATE_DB = "aggregate_retractions"
 ROUND_SECONDS = 45.0
 STATEMENT_TIMEOUT_MS = 10_000
 SLOTS = 2
+CLEANUP_BATCH = 4
+CLEANUP_SECONDS = 20.0
 
 
 class Interrupted(Exception):
@@ -58,6 +61,114 @@ class Slot:
     @property
     def view(self) -> str:
         return f"{SCHEMA}.v{self.number}_e{self.epoch}"
+
+
+def _init_poison_journal(db: sqlite3.Connection) -> None:
+    with db:
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS poison_intents (epoch INTEGER PRIMARY KEY,"
+            " slot INTEGER NOT NULL, view_id TEXT NOT NULL, owner_pid INTEGER NOT NULL,"
+            " owner_token TEXT NOT NULL, phase TEXT NOT NULL)"
+        )
+
+
+def _process_marker(pid: int) -> str | None:
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    return None if fields[0] == "Z" else fields[19]
+
+
+def _view_id(conn: psycopg.Connection, slot: Slot) -> str | None:
+    row = conn.execute(
+        "SELECT v.id FROM mz_materialized_views v"
+        " JOIN mz_schemas s ON s.id=v.schema_id"
+        " JOIN mz_databases d ON d.id=s.database_id"
+        " WHERE d.name='materialize' AND s.name=%s AND v.name=%s",
+        (SCHEMA, f"v{slot.number}_e{slot.epoch}"),
+    ).fetchone()
+    return str(row[0]) if row is not None else None
+
+
+def _arm_poison(db: sqlite3.Connection, conn: psycopg.Connection, slot: Slot) -> None:
+    _init_poison_journal(db)
+    view_id = _view_id(conn, slot)
+    token = _process_marker(os.getpid())
+    if view_id is None or token is None:
+        raise Interrupted("cannot bind poison intent to its view and owner")
+    # Commit intent before poison SQL. A lost INSERT response can still leave
+    # an errored collection after this invocation has disappeared.
+    with db:
+        db.execute(
+            "INSERT INTO poison_intents VALUES (?,?,?,?,?,'armed')",
+            (slot.epoch, slot.number, view_id, os.getpid(), token),
+        )
+
+
+def _clear_poison(db: sqlite3.Connection, slot: Slot) -> None:
+    with db:
+        db.execute(
+            "DELETE FROM poison_intents WHERE epoch=? AND slot=?",
+            (slot.epoch, slot.number),
+        )
+
+
+def cleanup_abandoned(
+    host: str,
+    db: sqlite3.Connection | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    """Drop exact journaled poisoned views after their owning invocation retires."""
+    own_db = db is None
+    db = state.open_db(STATE_DB) if db is None else db
+    checked = 0
+    replaced = 0
+    deadline = time.monotonic() + CLEANUP_SECONDS
+    try:
+        _init_poison_journal(db)
+        intents = db.execute(
+            "SELECT epoch,slot,view_id,owner_pid,owner_token FROM poison_intents"
+            " WHERE phase='armed' ORDER BY epoch LIMIT ?",
+            (CLEANUP_BATCH,),
+        ).fetchall()
+        if not intents:
+            return True, {"checked": 0}
+        if ddl_hold.active():
+            return False, {"held": True}
+        with _connect(host) as conn:
+            for epoch, number, identity, pid, token in intents:
+                _check_deadline(deadline)
+                if _process_marker(int(pid)) == token:
+                    continue
+                slot = Slot(int(number), int(epoch))
+                current = _view_id(conn, slot)
+                if current == identity:
+                    _check_deadline(deadline)
+                    conn.execute(f"DROP MATERIALIZED VIEW {slot.view}".encode())
+                elif current is not None:
+                    replaced += 1
+                # A new incarnation is not this fixture. Leave it to ordinary
+                # recovery checks, even if it has the same SQL name.
+                _clear_poison(db, slot)
+                checked += 1
+        remaining = db.execute(
+            "SELECT count(*) FROM poison_intents WHERE phase='armed'"
+        ).fetchone()[0]
+        return remaining == 0, {
+            "checked": checked,
+            "remaining": remaining,
+            "replaced": replaced,
+        }
+    except Interrupted:
+        return False, {"checked": checked, "budget_exhausted": True}
+    except (psycopg.Error, OSError) as error:
+        try:
+            _unexpected(error, "abandoned poison cleanup")
+        except Interrupted:
+            return False, {"checked": checked, "error": type(error).__name__}
+    finally:
+        if own_db:
+            db.close()
 
 
 def claim(db: sqlite3.Connection) -> Slot | None:
@@ -341,6 +452,8 @@ def run_round(
     plan: model.Plan,
     deadline: float,
     fault: Callable[[], dict[str, Any] | None] | None = None,
+    *,
+    db: sqlite3.Connection,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "slot": slot.number,
@@ -357,6 +470,7 @@ def run_round(
         with _connect(host) as old:
             as_of = _begin_stream(old, _projection(slot.view))
             _snapshot(old, healthy, deadline, as_of)
+            _arm_poison(db, writer, slot)
             _insert(writer, slot, 1, plan.poison)
             dirty = model.evaluate((*plan.baseline, *plan.poison))
             evidence["overflow_seen"] = _peek(
@@ -381,6 +495,7 @@ def run_round(
             as_of = _begin_stream(fresh, _projection(slot.view))
             _snapshot(fresh, repaired, deadline, as_of)
             fresh.execute("ROLLBACK")
+        _clear_poison(db, slot)
         evidence["repaired_nonempty"] = bool(repaired.rows)
         return evidence
 
@@ -444,6 +559,7 @@ def main() -> int:
             model.generate(rng),
             deadline,
             lambda: _fault(env, host, deadline),
+            db=db,
         )
     except Interrupted:
         pass
