@@ -565,6 +565,14 @@ pub const COMPUTE_FLAT_MAP_FUEL: Config<usize> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether the arrangement exertion policy skips spine layer 0.
+pub const COMPUTE_ARRANGEMENT_EXERT_SKIP_LAYER0: Config<bool> = Config::new(
+    "compute_arrangement_exert_skip_layer0",
+    true,
+    "When enabled, idle arrangements do not exert merge effort on their smallest spine layer.",
+    ParameterScope::Replica,
+);
+
 /// Whether to apply logical backpressure in compute dataflows.
 pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
     "enable_compute_logical_backpressure",
@@ -866,6 +874,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
         .add(&COMPUTE_FLAT_MAP_FUEL)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
+        .add(&COMPUTE_ARRANGEMENT_EXERT_SKIP_LAYER0)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)

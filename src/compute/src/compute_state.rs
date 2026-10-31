@@ -429,6 +429,10 @@ impl ComputeState {
             lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
+        mz_cluster::client::set_exert_skip_layer0(
+            COMPUTE_ARRANGEMENT_EXERT_SKIP_LAYER0.get(config),
+        );
+
         // Pager backend selection follows scratch-directory availability:
         // a scratch dir means the file backend; no scratch dir means swap.
         // `set_scratch_dir` and `set_backend` are both idempotent, so calling
