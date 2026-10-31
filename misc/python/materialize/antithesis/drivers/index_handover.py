@@ -418,3 +418,269 @@ def _reap(host: str, db: sqlite3.Connection, deadline: float) -> None:
         _cleanup(host, db, run, deadline)
 
 
+def run_round(
+    host: str,
+    db: sqlite3.Connection,
+    *,
+    seed: list[Row],
+    mutations: list[Mutation],
+    cuts: tuple[int, int],
+    index_columns: str,
+) -> int:
+    """Run one isolated schedule. SQL interruption aborts its oracle verdict."""
+    deadline = time.monotonic() + BUDGET_S
+    _reap(host, db, deadline)
+    run = _reserve(db)
+    schema = schema_name(run)
+    settled = False
+    details: dict[str, Any] = {
+        "run": run,
+        "schema": schema,
+        "cuts": cuts,
+        "index_columns": index_columns,
+    }
+    try:
+        with (
+            _connect(host, deadline=deadline) as writer,
+            _connect(host, deadline=deadline) as reader,
+            _connect(host, internal=True, deadline=deadline) as meta,
+        ):
+            if ddl_hold.active():
+                raise Incomplete("DDL is held")
+            writer_session = _execute(
+                writer,
+                deadline,
+                "SELECT id::text FROM mz_internal.mz_sessions WHERE connection_id = pg_backend_pid()",
+            ).fetchone()
+            if writer_session is None:
+                raise Incomplete("writer session identity unavailable")
+            with db:
+                db.execute(
+                    "UPDATE runs SET writer_session=?, started=1 WHERE id=?",
+                    (str(writer_session[0]), run),
+                )
+            # Namespace names are never reused. A timed-out DROP can execute
+            # after the next round starts, even after this client has closed.
+            _ddl(writer, deadline, f"CREATE SCHEMA {schema}")
+            _ddl(
+                writer, deadline, f"CREATE TABLE {schema}.t (id bigint,k int,v bigint)"
+            )
+            for row in seed:
+                _write(writer, db, run, Mutation(row[0], row, "insert"), deadline)
+            _ddl(
+                writer,
+                deadline,
+                f"CREATE INDEX i IN CLUSTER {configure.SHARED_CLUSTER} ON {schema}.t (k,id)",
+            )
+            old = _identity(meta, deadline, schema, "i")
+            details["old_index"] = old
+            _ddl(
+                writer,
+                deadline,
+                f"CREATE MATERIALIZED VIEW {schema}.m IN CLUSTER {configure.SHARED_CLUSTER} AS SELECT id,k,v FROM {schema}.t WHERE id>0",
+            )
+            durable = _identity(meta, deadline, schema, "m")
+            _compare(
+                Counter(
+                    tuple(row)
+                    for row in _execute(
+                        writer, deadline, f"SELECT id,k,v FROM {schema}.m"
+                    ).fetchall()
+                ),
+                expected_rows(db, run),
+                "mv",
+                details,
+            )
+            imported = _importer(meta, deadline, old[1], dependent=durable[1])
+            guarded = 0
+            if imported is not None:
+                for mode in ("RESTRICT", "CASCADE"):
+                    if _drop_enabled(meta, deadline) is not False:
+                        break
+                    error_code = None
+                    try:
+                        _ddl(writer, deadline, f"DROP INDEX {schema}.i {mode}")
+                    except psycopg.Error as error:
+                        if error.sqlstate != "2BP01":
+                            raise
+                        error_code = error.sqlstate
+                    if _drop_enabled(meta, deadline) is not False:
+                        raise Incomplete(
+                            "effective drop flag changed during the guard check"
+                        )
+                    blocked = error_code == "2BP01"
+                    telemetry.comparison("index_handover", "index", blocked)
+                    always(
+                        blocked,
+                        "index handover: a verified durable physical importer blocks index DROP",
+                        {
+                            **details,
+                            "importer": durable,
+                            "mode": mode,
+                            "sqlstate": error_code,
+                        },
+                    )
+                    if not blocked:
+                        settled = True
+                        return 0
+                    unchanged = (
+                        _identity(meta, deadline, schema, "i") == old
+                        and _identity(meta, deadline, schema, "m") == durable
+                    )
+                    always(
+                        unchanged,
+                        "index handover: rejected index DROP preserves object incarnations",
+                        {**details, "importer": durable, "mode": mode},
+                    )
+                    guarded += 1
+            sometimes(
+                guarded == 2,
+                "index handover: checked both DROP modes against a verified durable physical importer",
+                details,
+            )
+            _ddl(writer, deadline, f"DROP MATERIALIZED VIEW {schema}.m")
+            session_row = _execute(
+                reader,
+                deadline,
+                "SELECT id::text FROM mz_internal.mz_sessions WHERE connection_id = pg_backend_pid()",
+            ).fetchone()
+            if session_row is None:
+                raise Incomplete("reader session identity unavailable")
+            stream = Stream()
+            with reader.transaction():
+                _execute(
+                    reader,
+                    deadline,
+                    f"DECLARE handover_cursor CURSOR FOR SUBSCRIBE (SELECT id,k,v FROM {schema}.t) WITH(PROGRESS)",
+                )
+                _drain(reader, stream, deadline, None)
+                _compare(
+                    stream.bag,
+                    expected_rows(db, run),
+                    "subscribe",
+                    {**details, "phase": "snapshot"},
+                )
+                subscription = _importer(
+                    meta, deadline, old[1], session=str(session_row[0])
+                )
+                if subscription is None:
+                    raise Incomplete("live SUBSCRIBE physical import was not observed")
+                details["subscription"] = subscription
+                for mutation in mutations[: cuts[0]]:
+                    _write(writer, db, run, mutation, deadline)
+                _ddl(writer, deadline, f"DROP INDEX {schema}.i")
+                details["drop_acknowledged"] = True
+                for mutation in mutations[cuts[0] : cuts[1]]:
+                    _write(writer, db, run, mutation, deadline)
+                _ddl(
+                    writer,
+                    deadline,
+                    f"CREATE INDEX i IN CLUSTER {configure.SHARED_CLUSTER} ON {schema}.t ({index_columns})",
+                )
+                new = _identity(meta, deadline, schema, "i")
+                details["new_index"] = new
+                distinct = old[0] != new[0] and old[1] != new[1]
+                telemetry.comparison("index_handover", "index", distinct)
+                always(
+                    distinct,
+                    "index handover: same-name recreation has a distinct catalog and compute identity",
+                    details,
+                )
+                for mutation in mutations[cuts[1] :]:
+                    _write(writer, db, run, mutation, deadline)
+                snapshot = _execute(
+                    writer, deadline, f"SELECT mz_now()::text,id,k,v FROM {schema}.t"
+                ).fetchall()
+                expected = expected_rows(db, run)
+                peek_ok = _compare(
+                    Counter(tuple(row[1:]) for row in snapshot),
+                    expected,
+                    "index",
+                    details,
+                )
+                if not snapshot:
+                    raise Incomplete("empty response has no closing timestamp")
+                timestamp = int(snapshot[0][0])
+                _drain(reader, stream, deadline, timestamp)
+                stream_ok = _compare(
+                    stream.bag,
+                    expected,
+                    "subscribe",
+                    {
+                        **details,
+                        "closed_frontier": stream.frontier,
+                        "barrier": timestamp,
+                    },
+                )
+                sometimes(
+                    distinct and peek_ok and stream_ok,
+                    "index handover: an old physical subscriber and fresh reads agree after acknowledged same-name index replacement",
+                    {
+                        **details,
+                        "closed_frontier": stream.frontier,
+                        "barrier": timestamp,
+                        "acknowledged_mutations": len(mutations),
+                    },
+                )
+                _execute(reader, deadline, "CLOSE handover_cursor")
+            settled = True
+            return 1
+    finally:
+        if settled:
+            with db:
+                db.execute("UPDATE runs SET settled=1 WHERE id=?", (run,))
+        _cleanup(host, db, run)
+
+
+def main() -> int:
+    history.start_watchdog(BUDGET_S + 30)
+    env = Environment()
+    env.endpoints.state_dir.mkdir(parents=True, exist_ok=True)
+    with exclusive(str(env.endpoints.state_dir / f"{SCHEMA}.lock")) as held:
+        if not held or ddl_hold.active():
+            return 0
+        db = open_state()
+        try:
+            try:
+                host = env.sql_host()
+            except Exception as error:
+                telemetry.comparison("index_handover", "subscribe", None)
+                print(f"index handover: SQL service unavailable: {error}", flush=True)
+                return 0
+            count = rng.choice((3, 4, 7))
+            seed = [
+                (i + 1, rng.randrange(3), rng.randint(-100, 100)) for i in range(count)
+            ]
+            mutations = [
+                Mutation(
+                    count + 1,
+                    (count + 1, rng.randrange(3), rng.randint(-100, 100)),
+                    "insert",
+                ),
+                Mutation(1, (1, rng.randrange(3), rng.randint(-100, 100)), "update"),
+                Mutation(count, None, "delete"),
+            ]
+            rng.shuffle(mutations)
+            first = rng.randrange(len(mutations) + 1)
+            second = rng.randrange(first, len(mutations) + 1)
+            run_round(
+                host,
+                db,
+                seed=seed,
+                mutations=mutations,
+                cuts=(first, second),
+                index_columns=rng.choice(("v,id", "k,id", "id,k")),
+            )
+        except (psycopg.Error, OSError, Incomplete) as error:
+            telemetry.comparison("index_handover", "subscribe", None)
+            if isinstance(error, psycopg.Error):
+                classified = sql.classify(error)
+                always(
+                    classified.outcome is not sql.Outcome.VIOLATION,
+                    "index handover: SQL returns only classified errors",
+                    {"sqlstate": classified.sqlstate, "template": classified.template},
+                )
+            print(f"index handover: incomplete round: {error}", flush=True)
+        finally:
+            db.close()
+    return 0
