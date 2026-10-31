@@ -68,11 +68,6 @@ skip = [
     # be its own PR.
     { name = "itertools", version = "0.10.5" },
 
-    # A few crates -> `num_enum_derive` -> `proc-macro-crate` -> `toml_edit v0.19.14`.
-    { name = "toml_edit", version = "0.19.14" },
-    { name = "toml_datetime", version = "0.6.11" },
-    { name = "winnow", version = "0.5.4" },
-
     { name = "memmap2", version = "0.5.4" },
 
     { name = "getrandom", version = "0.2.10" },
@@ -83,10 +78,6 @@ skip = [
     { name = "thiserror", version = "1.0.61" },
     { name = "thiserror-impl", version = "1.0.61" },
     { name = "unicode-width", version = "0.1.10" },
-    # Used by rdkafka-sys
-    { name = "num_enum", version = "0.5.11" },
-    { name = "num_enum_derive", version = "0.5.11" },
-    { name = "proc-macro-crate", version = "1.3.1" },
     # Used by tempfile
     { name = "linux-raw-sys", version = "0.4.15" },
     { name = "rustix", version = "0.38.44" },
@@ -258,8 +249,6 @@ wrappers = [
     "postgres",
     "pprof",
     "prost-build",
-    # TODO(guswynn): switch to tracing in rdkafka
-    "rdkafka",
     "reqsign-aws-core",
     "reqsign-aws-v4",
     "reqsign-azure-storage",

@@ -37,6 +37,7 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
+mz-kafka-client = { path = "../kafka-client" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["chrono", "async", "panic"] }
@@ -62,7 +63,6 @@ protobuf-native.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true
-rdkafka.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -50,6 +50,7 @@ members = [
     "src/frontegg-mock",
     "src/http-util",
     "src/interchange",
+    "src/kafka-client",
     "src/kafka-util",
     "src/license-keys",
     "src/materialized",
@@ -182,6 +183,7 @@ default-members = [
     "src/frontegg-mock",
     "src/http-util",
     "src/interchange",
+    "src/kafka-client",
     "src/kafka-util",
     "src/license-keys",
     "src/materialized",
@@ -337,6 +339,7 @@ compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"
 console-subscriber = "0.5.0"
 core_affinity = "0.8.3"
+crc32c = "0.6.8"
 crc32fast = "1.5.0"
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 crossbeam = "0.8.4"
@@ -414,6 +417,7 @@ jsonwebtoken = { version = "11.1.0", features = ["aws_lc_rs"] }
 junit-report = "0.9.1"
 k8s-controller = "0.14.1"
 k8s-openapi = { version = "0.28.0", features = ["schemars", "v1_34"] }
+kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker", "client"] }
 kube = { version = "4.2.0", default-features = false, features = ["aws-lc-rs", "client", "derive", "runtime", "rustls-tls"] }
 # Only the `hyper` feature on both LaunchDarkly crates. `hyper-rustls-native-roots`
 # would enable the transport crate's `hyper-rustls` dependency, which it
@@ -487,8 +491,6 @@ quote = "1.0.45"
 rand = "0.10.3"
 rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
 rayon = "1.12.0"
-rdkafka = { version = "0.29.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
-rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = "1.12.3"
 regex-syntax = "0.8.10"
 reqsign-core = "3.3.0"
@@ -584,6 +586,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "jso
 # hashing stack.
 tungstenite = "0.30.0"
 turmoil = "0.7.2"
+twox-hash = { version = "2.1.2", default-features = false, features = ["xxhash32"] }
 uncased = "0.9.10"
 unicode-normalization = "0.1.25"
 unicode-width = "0.2.2"
@@ -598,6 +601,7 @@ x509-cert = { version = "0.3.0", default-features = false }
 yansi = "1.0.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
 zip = { version = "9.1.2", default-features = false, features = ["deflate-flate2"] }
+zstd = "0.13.3"
 
 [profile.dev]
 split-debuginfo = "unpacked"
@@ -684,9 +688,6 @@ chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "14
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git", rev = "a84c6b71825efaffb332c0d19f18c2bdf9ee7b40" }
-
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "20a1646031763eb813cb5184343f3e10c5918d32" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "20a1646031763eb813cb5184343f3e10c5918d32" }
 
 # v0.37.1 plus the upstream rustls verifier fixes for `skip_domain_validation`
 # and `accept_invalid_certs` (blackbeam/mysql_async#408, #409). Drop this patch

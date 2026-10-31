@@ -42,6 +42,7 @@ mz-cluster-client = { path = "../cluster-client" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
+mz-kafka-client = { path = "../kafka-client" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing"] }
 mz-mysql-util = { path = "../mysql-util" }
@@ -60,7 +61,6 @@ mz-tracing = { path = "../tracing" }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 prost.workspace = true
-rdkafka.workspace = true
 regex.workspace = true
 reqsign-core.workspace = true
 reqwest-0-12.workspace = true

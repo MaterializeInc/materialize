@@ -17,6 +17,10 @@ use mz_aws_glue_schema_registry::{
     RegisteredSchemaVersion, SchemaVersionLifecycleStatus,
 };
 use mz_ccsr::GetSubjectConfigError;
+use mz_kafka_client::ClientContext;
+use mz_kafka_client::admin::{
+    AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication,
+};
 use mz_kafka_util::admin::EnsureTopicConfig;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
@@ -26,16 +30,14 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::KafkaTopicOptions;
 use mz_storage_types::errors::ContextCreationErrorExt;
 use mz_storage_types::sinks::KafkaSinkConnection;
-use rdkafka::ClientContext;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use tracing::warn;
 use uuid::Uuid;
 
 pub mod progress_key {
     use std::fmt;
 
+    use mz_kafka_client::message::ToBytes;
     use mz_repr::GlobalId;
-    use rdkafka::message::ToBytes;
 
     /// A key identifying a given sink within a progress topic.
     #[derive(Debug, Clone)]

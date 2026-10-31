@@ -10,10 +10,10 @@
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use mz_kafka_client::consumer::{Consumer, StreamConsumer};
+use mz_kafka_client::topic_partition_list::{Offset, TopicPartitionList};
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
-use rdkafka::consumer::{Consumer, StreamConsumer};
-use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;

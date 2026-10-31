@@ -40,6 +40,7 @@ mz-catalog = { path = "../catalog" }
 mz-ccsr = { path = "../ccsr" }
 mz-adapter = { path = "../adapter" }
 mz-interchange = { path = "../interchange" }
+mz-kafka-client = { path = "../kafka-client" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-license-keys = { path = "../license-keys" }
 mz-ore = { path = "../ore", features = ["async"] }
@@ -59,7 +60,6 @@ postgres_array.workspace = true
 prost.workspace = true
 prost-reflect.workspace = true
 rand.workspace = true
-rdkafka.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

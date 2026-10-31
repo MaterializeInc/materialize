@@ -16,13 +16,13 @@ use std::time::Duration;
 
 use dec::OrderedDecimal;
 use mz_dyncfg::ConfigSet;
+use mz_kafka_client::admin::AdminClient;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::InTask;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use mz_timely_util::order::{Extrema, Partitioned};
-use rdkafka::admin::AdminClient;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
@@ -97,7 +97,7 @@ pub static KAFKA_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
 });
 
 impl KafkaSourceConnection {
-    /// Returns the client ID to register with librdkafka with.
+    /// Returns the client ID to configure the Kafka client with.
     ///
     /// The caller is responsible for providing the source ID as it is not known
     /// to `KafkaSourceConnection`.

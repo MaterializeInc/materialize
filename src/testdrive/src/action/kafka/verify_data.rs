@@ -13,14 +13,14 @@ use std::time::{Duration, Instant};
 use std::{cmp, str};
 
 use anyhow::{Context, anyhow, bail, ensure};
+use mz_kafka_client::consumer::{BaseConsumer, CommitMode, Consumer, StreamConsumer};
+use mz_kafka_client::error::KafkaError;
+use mz_kafka_client::message::{Headers, Message};
+use mz_kafka_client::types::RDKafkaErrorCode;
+use mz_kafka_client::{Offset, TopicPartitionList};
 use mz_kafka_util::client::get_partitions;
 use mz_ore::task;
 use mz_postgres_util::{Sql, query_one, sql};
-use rdkafka::consumer::{BaseConsumer, CommitMode, Consumer, StreamConsumer};
-use rdkafka::error::KafkaError;
-use rdkafka::message::{Headers, Message};
-use rdkafka::types::RDKafkaErrorCode;
-use rdkafka::{Offset, TopicPartitionList};
 use regex::Regex;
 use tokio::pin;
 use tokio_stream::StreamExt;
@@ -397,7 +397,7 @@ pub async fn verify_topics_exhausted(state: &State) -> Result<(), anyhow::Error>
 }
 
 fn verify_topic_exhausted(
-    config: rdkafka::ClientConfig,
+    config: mz_kafka_client::ClientConfig,
     topic: &str,
     timeout: Duration,
 ) -> Result<(), anyhow::Error> {
@@ -439,7 +439,7 @@ fn verify_topic_exhausted(
         .assign(&assignment)
         .context("assigning Kafka topic partitions")?;
 
-    // `enable.partition.eof` makes librdkafka emit a `PartitionEOF` once a
+    // `enable.partition.eof` makes the consumer emit a `PartitionEOF` once a
     // partition is drained to its end. Wait for that marker on every partition
     // rather than comparing consumer positions to high watermarks: a position
     // never advances on a partition that begins already drained (so empty

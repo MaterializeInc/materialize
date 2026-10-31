@@ -22,6 +22,7 @@ mz-cluster-client = { path = "../cluster-client" }
 mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
+mz-kafka-client = { path = "../kafka-client" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "chrono", "process", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
@@ -31,7 +32,6 @@ mz-service = { path = "../service" }
 mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
 prometheus.workspace = true
-rdkafka.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 smallvec = { workspace = true, features = ["serde", "union"] }

@@ -507,7 +507,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "unicode-ident",
- "winnow 1.0.4",
+ "winnow",
 ]
 
 [[package]]
@@ -2336,6 +2336,21 @@ checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "crc"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9710d3b3739c2e349eb44fe848ad0b7c8cb1e42bd87ee49371df2f7acaf3e675"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
 
 [[package]]
 name = "crc-fast"
@@ -5455,6 +5470,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kafka-protocol"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "099d5c2f1b40cd830cbf18ca4d2a0805f2875b811ca18f0372b2433e68fe2dda"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "crc",
+ "crc32c",
+ "indexmap 2.14.2",
+ "uuid",
+]
+
+[[package]]
 name = "keyed_priority_queue"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5833,7 +5862,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f710a23e6dbf193214fd46ca56a9d6864e550abe86202184532ae7275e46de19"
 dependencies = [
  "cc",
- "libc",
  "pkg-config",
  "vcpkg",
 ]
@@ -6253,7 +6281,7 @@ dependencies = [
  "time",
  "tokio",
  "toml",
- "toml_edit 0.25.15+spec-1.1.0",
+ "toml_edit",
  "url",
  "uuid",
 ]
@@ -6725,7 +6753,7 @@ dependencies = [
  "md-5",
  "mz-catalog-protos",
  "mz-ore",
- "num_enum 0.7.6",
+ "num_enum",
  "proptest",
  "proptest-derive",
  "serde",
@@ -7298,6 +7326,7 @@ dependencies = [
  "mz-frontegg-mock",
  "mz-http-util",
  "mz-interchange",
+ "mz-kafka-client",
  "mz-license-keys",
  "mz-metrics",
  "mz-npm",
@@ -7341,8 +7370,6 @@ dependencies = [
  "prometheus",
  "proptest",
  "rand 0.10.3",
- "rdkafka",
- "rdkafka-sys",
  "regex",
  "reqwest 0.13.5",
  "rlimit",
@@ -7422,7 +7449,7 @@ dependencies = [
  "mz-sql-pretty",
  "mz-transform",
  "num",
- "num_enum 0.7.6",
+ "num_enum",
  "ordered-float 5.5.0",
  "paste",
  "proptest",
@@ -7598,6 +7625,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-kafka-client"
+version = "0.0.0"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "crc32c",
+ "crc32fast",
+ "flate2",
+ "futures",
+ "hmac 0.13.0",
+ "itertools 0.15.0",
+ "kafka-protocol",
+ "lz4_flex 0.14.0",
+ "mz-ore",
+ "openssl",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "snap",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-openssl",
+ "tokio-util",
+ "tracing",
+ "twox-hash",
+ "zstd",
+]
+
+[[package]]
 name = "mz-kafka-util"
 version = "0.0.0"
 dependencies = [
@@ -7615,13 +7672,13 @@ dependencies = [
  "mz-avro",
  "mz-build-tools",
  "mz-ccsr",
+ "mz-kafka-client",
  "mz-ore",
  "mz-ssh-util",
  "num_cpus",
  "openssl",
  "prost-build",
  "rand 0.10.3",
- "rdkafka",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -8428,7 +8485,7 @@ dependencies = [
  "mz-repr",
  "mz-timely-util",
  "num-traits",
- "num_enum 0.7.6",
+ "num_enum",
  "ordered-float 5.5.0",
  "postgres-protocol",
  "proptest",
@@ -8651,6 +8708,7 @@ dependencies = [
  "mz-dyncfgs",
  "mz-expr",
  "mz-interchange",
+ "mz-kafka-client",
  "mz-kafka-util",
  "mz-mysql-util",
  "mz-orchestrator",
@@ -8676,7 +8734,6 @@ dependencies = [
  "proptest-derive",
  "prost",
  "protobuf-native",
- "rdkafka",
  "regex",
  "reqwest 0.13.5",
  "serde",
@@ -8900,6 +8957,7 @@ dependencies = [
  "mz-expr",
  "mz-http-util",
  "mz-interchange",
+ "mz-kafka-client",
  "mz-kafka-util",
  "mz-mysql-util",
  "mz-orchestrator-tracing",
@@ -8925,7 +8983,6 @@ dependencies = [
  "postgres-replication",
  "prometheus",
  "rand 0.8.5",
- "rdkafka",
  "regex",
  "rocksdb",
  "seahash",
@@ -8965,6 +9022,7 @@ dependencies = [
  "mz-controller-types",
  "mz-dyncfg",
  "mz-dyncfgs",
+ "mz-kafka-client",
  "mz-kafka-util",
  "mz-ore",
  "mz-persist-client",
@@ -8975,7 +9033,6 @@ dependencies = [
  "mz-storage-types",
  "mz-txn-wal",
  "prometheus",
- "rdkafka",
  "serde",
  "serde_json",
  "smallvec",
@@ -9108,6 +9165,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-expr",
  "mz-interchange",
+ "mz-kafka-client",
  "mz-kafka-util",
  "mz-mysql-util",
  "mz-ore",
@@ -9130,7 +9188,6 @@ dependencies = [
  "prost",
  "prost-build",
  "rand 0.10.3",
- "rdkafka",
  "regex",
  "reqsign-core",
  "reqwest 0.12.28",
@@ -9164,10 +9221,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "mz-kafka-client",
  "mz-kafka-util",
  "mz-ore",
  "rand 0.10.3",
- "rdkafka",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -9207,6 +9264,7 @@ dependencies = [
  "mz-catalog",
  "mz-ccsr",
  "mz-interchange",
+ "mz-kafka-client",
  "mz-kafka-util",
  "mz-license-keys",
  "mz-ore",
@@ -9227,7 +9285,6 @@ dependencies = [
  "prost-build",
  "prost-reflect",
  "rand 0.10.3",
- "rdkafka",
  "regex",
  "reqwest 0.13.5",
  "rustls",
@@ -9606,33 +9663,12 @@ dependencies = [
 
 [[package]]
 name = "num_enum"
-version = "0.5.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f646caf906c20226733ed5b1374287eb97e3c2a5c227ce668c1f2ce20ae57c9"
-dependencies = [
- "num_enum_derive 0.5.11",
-]
-
-[[package]]
-name = "num_enum"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d0bca838442ec211fa11de3a8b0e0e8f3a4522575b5c4c06ed722e005036f26"
 dependencies = [
- "num_enum_derive 0.7.6",
+ "num_enum_derive",
  "rustversion",
-]
-
-[[package]]
-name = "num_enum_derive"
-version = "0.5.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcbff9bc912032c62bf65ef1d5aea88983b420f4f839db1e9b0c281a25c9c799"
-dependencies = [
- "proc-macro-crate 1.3.1",
- "proc-macro2",
- "quote",
- "syn 1.0.109",
 ]
 
 [[package]]
@@ -9641,7 +9677,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 3.5.0",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -10491,7 +10527,7 @@ dependencies = [
  "mz-timestamp-oracle",
  "mz-txn-wal",
  "num_cpus",
- "num_enum 0.7.6",
+ "num_enum",
  "prometheus",
  "serde",
  "serde_json",
@@ -11070,21 +11106,11 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-crate"
-version = "1.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f4c021e1093a56626774e81216a4ce732a735e5bad4868a03f3ed65ca0c3919"
-dependencies = [
- "once_cell",
- "toml_edit 0.19.14",
-]
-
-[[package]]
-name = "proc-macro-crate"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
 dependencies = [
- "toml_edit 0.25.15+spec-1.1.0",
+ "toml_edit",
 ]
 
 [[package]]
@@ -11563,37 +11589,6 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
-]
-
-[[package]]
-name = "rdkafka"
-version = "0.29.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git?rev=20a1646031763eb813cb5184343f3e10c5918d32#20a1646031763eb813cb5184343f3e10c5918d32"
-dependencies = [
- "futures-channel",
- "futures-util",
- "libc",
- "log",
- "rdkafka-sys",
- "serde",
- "serde_derive",
- "serde_json",
- "slab",
- "tokio",
-]
-
-[[package]]
-name = "rdkafka-sys"
-version = "4.3.0+2.15.1"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git?rev=20a1646031763eb813cb5184343f3e10c5918d32#20a1646031763eb813cb5184343f3e10c5918d32"
-dependencies = [
- "cmake",
- "libc",
- "libz-sys",
- "num_enum 0.5.11",
- "openssl-sys",
- "pkg-config",
- "zstd-sys",
 ]
 
 [[package]]
@@ -13817,17 +13812,11 @@ dependencies = [
  "indexmap 2.14.2",
  "serde_core",
  "serde_spanned",
- "toml_datetime 1.1.2+spec-1.1.0",
+ "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.4",
+ "winnow",
 ]
-
-[[package]]
-name = "toml_datetime"
-version = "0.6.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22cddaf88f4fbc13c51aebbf5f8eceb5c7c5a9da2ac40a13519eb5b0a0e8f11c"
 
 [[package]]
 name = "toml_datetime"
@@ -13840,17 +13829,6 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.19.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8123f27e969974a3dfba720fdb560be359f57b44302d280ba72e76a74480e8a"
-dependencies = [
- "indexmap 2.14.2",
- "toml_datetime 0.6.11",
- "winnow 0.5.40",
-]
-
-[[package]]
-name = "toml_edit"
 version = "0.25.15+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1340ea94a5856333492c9064b02c778b191dd2c853778d9609debdcdfea3a614"
@@ -13858,10 +13836,10 @@ dependencies = [
  "indexmap 2.14.2",
  "serde_core",
  "serde_spanned",
- "toml_datetime 1.1.2+spec-1.1.0",
+ "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.4",
+ "winnow",
 ]
 
 [[package]]
@@ -13870,7 +13848,7 @@ version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
- "winnow 1.0.4",
+ "winnow",
 ]
 
 [[package]]
@@ -15223,15 +15201,6 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
-
-[[package]]
-name = "winnow"
-version = "0.5.40"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f593a95398737aeed53e489c785df13f3618e41dbcd6718c6addbf1395aa6876"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "winnow"

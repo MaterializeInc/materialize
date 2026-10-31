@@ -28,6 +28,8 @@ use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_ccsr::SubjectVersion;
+use mz_kafka_client::ClientConfig;
+use mz_kafka_client::producer::Producer;
 use mz_kafka_util::client::{
     MzClientContext, create_new_client_config_simple, create_with_context,
 };
@@ -49,8 +51,6 @@ use mz_postgres_util::{
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
 use openssl::pkcs12::Pkcs12;
-use rdkafka::ClientConfig;
-use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
 use semver::Version;
 use tokio_postgres::CancelToken;
@@ -273,11 +273,11 @@ pub struct State {
     schema_registry_url: Url,
     ccsr_client: mz_ccsr::Client,
     kafka_addr: String,
-    kafka_admin: rdkafka::admin::AdminClient<MzClientContext>,
-    kafka_admin_opts: rdkafka::admin::AdminOptions,
+    kafka_admin: mz_kafka_client::admin::AdminClient<MzClientContext>,
+    kafka_admin_opts: mz_kafka_client::admin::AdminOptions,
     kafka_config: ClientConfig,
     kafka_default_partitions: usize,
-    kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
+    kafka_producer: mz_kafka_client::producer::FutureProducer<MzClientContext>,
     kafka_topics: BTreeMap<String, usize>,
     /// Topics whose final `kafka-verify-data` must consume the complete topic.
     kafka_verify_topics: BTreeSet<String>,
@@ -765,7 +765,7 @@ impl State {
 
     /// Delete Kafka topics + CCSR subjects that were created in this run
     pub async fn reset_kafka(&self) -> Result<(), anyhow::Error> {
-        use rdkafka::types::RDKafkaErrorCode;
+        use mz_kafka_client::types::RDKafkaErrorCode;
         let mut errors: Vec<anyhow::Error> = Vec::new();
 
         let metadata = self.kafka_producer.client().fetch_metadata(
@@ -1198,8 +1198,8 @@ pub async fn create_state(
     };
 
     let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics, kafka_config) = {
-        use rdkafka::admin::{AdminClient, AdminOptions};
-        use rdkafka::producer::FutureProducer;
+        use mz_kafka_client::admin::{AdminClient, AdminOptions};
+        use mz_kafka_client::producer::FutureProducer;
 
         let mut kafka_config = create_new_client_config_simple();
         kafka_config.set("bootstrap.servers", &config.kafka_addr);
@@ -1315,7 +1315,7 @@ pub async fn create_state(
 
 /// Converts a PKCS #12 keystore into a schema registry client identity.
 ///
-/// The same keystore is handed to librdkafka, which reads PKCS #12 natively,
+/// The same keystore is handed to the Kafka client, which reads PKCS #12 natively,
 /// while the schema registry client's rustls backend only accepts PEM.
 fn identity_from_pkcs12_der(der: &[u8], pass: &str) -> anyhow::Result<mz_ccsr::tls::Identity> {
     let parsed = Pkcs12::from_der(der)?.parse2(pass)?;

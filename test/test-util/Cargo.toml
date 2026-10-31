@@ -12,10 +12,10 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+mz-kafka-client = { path = "../../src/kafka-client" }
 mz-kafka-util = { path = "../../src/kafka-util" }
 mz-ore = { path = "../../src/ore", features = ["async"] }
 rand.workspace = true
-rdkafka.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tracing.workspace = true

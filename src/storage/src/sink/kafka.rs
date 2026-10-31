@@ -53,16 +53,17 @@
 //!
 //! ## Retries
 //!
-//! All of the retry logic heavy lifting is offloaded to `librdkafka` since it already implements
-//! the required behavior[1]. In particular we only ever enqueue records to its send queue and
-//! eventually call `commit_transaction` which will ensure that all queued messages are
-//! successfully delivered before the transaction is reported as committed.
+//! All of the retry logic heavy lifting is offloaded to the Kafka client since it already
+//! implements the required behavior, with librdkafka's semantics[1]. In particular we only ever
+//! enqueue records to its send queue and eventually call `commit_transaction` which will ensure
+//! that all queued messages are successfully delivered before the transaction is reported as
+//! committed.
 //!
 //! The only error that is possible during sending is that the queue is full. We are purposefully
-//! NOT handling this error and simply configure `librdkafka` with a very large queue. The reason
-//! for this choice is that the only choice for hanlding such an error ourselves would be to queue
-//! it, and there isn't a good argument about two small queues being better than one big one. If we
-//! reach the queue limit we simply error out the entire sink dataflow and start over.
+//! NOT handling this error and simply configure the Kafka client with a very large queue. The
+//! reason for this choice is that the only choice for hanlding such an error ourselves would be to
+//! queue it, and there isn't a good argument about two small queues being better than one big one.
+//! If we reach the queue limit we simply error out the entire sink dataflow and start over.
 //!
 //! # Error handling
 //!
@@ -95,6 +96,12 @@ use mz_interchange::encode::Encode;
 use mz_interchange::envelopes::{dbz_format, for_each_diff_pair};
 use mz_interchange::json::JsonEncoder;
 use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
+use mz_kafka_client::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use mz_kafka_client::error::KafkaError;
+use mz_kafka_client::message::{Header, OwnedHeaders, ToBytes};
+use mz_kafka_client::producer::{BaseRecord, Producer, ThreadedProducer};
+use mz_kafka_client::types::RDKafkaErrorCode;
+use mz_kafka_client::{Message, Offset, Statistics, TopicPartitionList};
 use mz_kafka_util::admin::EnsureTopicConfig;
 use mz_kafka_util::client::{
     DEFAULT_FETCH_METADATA_TIMEOUT, GetPartitionsError, MzClientContext, TimeoutConfig,
@@ -129,12 +136,6 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::KafkaError;
-use rdkafka::message::{Header, OwnedHeaders, ToBytes};
-use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
-use rdkafka::types::RDKafkaErrorCode;
-use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
@@ -324,8 +325,8 @@ impl TransactionalProducer {
         // We want to be notified regularly with statistics
         options.insert("statistics.interval.ms", "1000".into());
         // Maximum size of a single produced message, controlled by dyncfg so
-        // operators can raise the limit when messages exceed librdkafka's 1MB
-        // default.
+        // operators can raise the limit when messages exceed the Kafka client's
+        // 1MB default.
         options.insert(
             "message.max.bytes",
             format!(
@@ -483,9 +484,9 @@ impl TransactionalProducer {
         self.spawn_blocking(|p| p.begin_transaction()).await
     }
 
-    /// Synchronously puts the provided message to librdkafka's send queue. This method only
+    /// Synchronously puts the provided message to the producer's send queue. This method only
     /// returns an error if the queue is full. Handling this error by buffering the message and
-    /// retrying is equivalent to adjusting the maximum number of queued items in rdkafka so it is
+    /// retrying is equivalent to adjusting the maximum number of queued items in the producer so it is
     /// adviced that callers only handle this error in order to apply backpressure to the rest of
     /// the system.
     fn send(
@@ -602,13 +603,13 @@ impl TransactionalProducer {
     }
 }
 
-/// Listens for statistics updates from librdkafka and updates our Prometheus metrics.
+/// Listens for statistics updates from the Kafka client and updates our Prometheus metrics.
 async fn collect_statistics(
     mut receiver: watch::Receiver<Statistics>,
     metrics: Arc<KafkaSinkMetrics>,
 ) {
     while receiver.changed().await.is_ok() {
-        // The librdkafka per-broker statistics are either running totals (counters)
+        // The per-broker statistics are either running totals (counters)
         // or point-in-time values (gauges). In both cases we aggregate across brokers
         // by re-summing from scratch each interval, so these accumulators are reset
         // every time statistics are fetched.
@@ -951,8 +952,8 @@ async fn determine_sink_progress(
     let progress_key = ProgressKey::new(sink_id);
 
     let common_options = btreemap! {
-        // Consumer group ID, which may have been overridden by the user. librdkafka requires this,
-        // even though we'd prefer to disable the consumer group protocol entirely.
+        // Consumer group ID, which may have been overridden by the user. The consumers only use
+        // `assign` and never join the group.
         "group.id" => group_id,
         // Allow Kafka monitoring tools to identify this consumer.
         "client.id" => client_id,

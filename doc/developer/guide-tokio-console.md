@@ -17,7 +17,7 @@ Then run `environmentd`:
 ```
 
 (Note that this may slow down `environmentd` a lot, as it increases the amount of tracing by a lot,
-and may inadvertently turn on debug logging for `rdkafka`.)
+and may inadvertently turn on debug logging for the Kafka client.)
 
 In the output of the above command, take note of the `tokio-console` listen addresses for the
 different processes, e.g.:

@@ -44,6 +44,9 @@ use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
+use mz_kafka_client::ClientContext;
+use mz_kafka_client::config::FromClientConfigAndContext;
+use mz_kafka_client::consumer::{BaseConsumer, Consumer};
 use mz_kafka_util::client::{
     BrokerAddr, BrokerRewrite, HostMappingRules, MzClientContext, MzKafkaError, TunnelConfig,
     TunnelingClientContext,
@@ -62,9 +65,6 @@ use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use mz_tracing::CloneableEnvFilter;
-use rdkafka::ClientContext;
-use rdkafka::config::FromClientConfigAndContext;
-use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
 use reqsign_core::time::Timestamp;
 use reqwest_0_12::Request;
@@ -342,7 +342,7 @@ pub struct ConnectionContext {
     /// identifier. Higher layers of the stack can make use of that structure,
     /// but the storage layer should be oblivious to it.
     pub environment_id: String,
-    /// The level for librdkafka's logs.
+    /// The level for the Kafka client's logs, which use the tracing target `librdkafka`.
     pub librdkafka_log_level: tracing::Level,
     /// A prefix for an external ID to use for all AWS AssumeRole operations.
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
@@ -1969,7 +1969,7 @@ impl KafkaConnection {
             .kafka_timeout_config
             .fetch_metadata_timeout;
 
-        // librdkafka doesn't expose an API for determining whether a connection to
+        // The Kafka client doesn't expose an API for determining whether a connection to
         // the Kafka cluster has been successfully established. So we make a
         // metadata request, though we don't care about the results, so that we can
         // report any errors making that request. If the request succeeds, we know
@@ -1978,7 +1978,7 @@ impl KafkaConnection {
         //
         // The downside of this approach is it produces a generic error message like
         // "metadata fetch error" with no additional details. The real networking
-        // error is buried in the librdkafka logs, which are not visible to users.
+        // error is buried in the Kafka client logs, which are not visible to users.
         info!("kafka: starting connection validation via fetch_metadata (timeout={timeout:?})");
         let result = mz_ore::task::spawn_blocking(|| "kafka_get_metadata", {
             let consumer = Arc::clone(&consumer);
@@ -1994,7 +1994,7 @@ impl KafkaConnection {
             // The error returned by `fetch_metadata` does not provide any details which makes for
             // a crappy user facing error message. For this reason we attempt to grab a better
             // error message from the client context, which should contain any error logs emitted
-            // by librdkafka, and fallback to the generic error if there is nothing there.
+            // by the Kafka client, and fallback to the generic error if there is nothing there.
             Err(err) => {
                 // Multiple errors might have been logged during this validation but some are more
                 // relevant than others. Specifically, we prefer non-internal errors over internal

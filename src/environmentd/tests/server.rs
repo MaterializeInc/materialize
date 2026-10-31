@@ -41,6 +41,9 @@ use mz_frontegg_auth::{
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
 use mz_frontegg_mock::{FronteggMockServer, models::ApiToken, models::UserConfig};
+use mz_kafka_client::ClientConfig;
+use mz_kafka_client::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use mz_kafka_client::types::RDKafkaErrorCode;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -56,9 +59,6 @@ use openssl::x509::X509;
 use postgres::config::SslMode;
 use postgres_array::Array;
 use rand::Rng;
-use rdkafka::ClientConfig;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use reqwest::blocking::Client;
 use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, SET_COOKIE};
@@ -72,7 +72,7 @@ use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message, Utf8Bytes};
 use uuid::Uuid;
 
-// Allow the use of banned rdkafka methods, because we are just in tests.
+// Allow the use of banned Kafka client methods, because we are just in tests.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_persistence() {
