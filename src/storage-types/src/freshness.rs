@@ -10,6 +10,7 @@
 //! Controller-side description of how an object's output frontier follows arrival time.
 
 pub mod histogram;
+pub mod local;
 mod period;
 pub mod recorder;
 
@@ -170,15 +171,138 @@ impl ResolvedTree {
             // Updates land at the next refresh, so only those at or before the last refresh
             // at or below `bound` are visible.
             ResolvedTree::Refresh { schedule, input } => {
-                let refresh =
-                    schedule.round_down_timestamp_m1(Timestamp::from(bound.checked_add(1)?))?;
-                // NOTE: `round_down_timestamp_m1` saturates at timestamp 0 when the previous
-                // refresh would be negative, so 0 only counts if it is an actual refresh.
-                if schedule.round_up_timestamp(refresh) != Some(refresh) {
-                    return None;
-                }
-                input.last_reflected_at(u64::from(refresh))
+                input.last_reflected_at(last_refresh_at_or_before(schedule, bound)?)
             }
+        }
+    }
+
+    /// The timestamp an arrival at `arrival` is assigned, `None` if it never becomes visible, as
+    /// after the last refresh of a schedule without `EVERY`.
+    ///
+    /// It is the counterpart of `last_reflected`: an arrival is visible below `frontier` exactly
+    /// if its assigned timestamp is below `frontier`.
+    pub fn assigned(&self, arrival: u64) -> Option<u64> {
+        match self {
+            ResolvedTree::Leaf(ticker) => Some(match ticker.grid_ms() {
+                Some(i) => arrival.div_ceil(i).saturating_mul(i),
+                None => arrival,
+            }),
+            ResolvedTree::Min(inputs) => inputs
+                .iter()
+                .map(|i| i.assigned(arrival))
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .max(),
+            ResolvedTree::Refresh { schedule, input } => schedule
+                .round_up_timestamp(Timestamp::from(input.assigned(arrival)?))
+                .map(u64::from),
+        }
+    }
+
+    /// How long after wall clock `timestamp` the frontier first passes `timestamp` when every
+    /// tick and refresh is on time, at the earliest for any phase of the unaligned leaves.
+    ///
+    /// An aligned leaf waits for its next tick at or after `timestamp`, and a continuous one
+    /// waits 0. An unaligned leaf ticks at a phase the controller does not know, so it can
+    /// tick right at `timestamp` and waits 0. A minimum waits for its slowest input.
+    pub fn grid_wait(&self, timestamp: u64) -> u64 {
+        match self {
+            ResolvedTree::Leaf(Ticker::Aligned { interval_ms }) if *interval_ms > 0 => {
+                timestamp
+                    .div_ceil(*interval_ms)
+                    .saturating_mul(*interval_ms)
+                    - timestamp
+            }
+            ResolvedTree::Leaf(_) => 0,
+            ResolvedTree::Min(inputs) => inputs
+                .iter()
+                .map(|i| i.grid_wait(timestamp))
+                .max()
+                .unwrap_or(0),
+            // The output frontier rounds the input frontier up to the next refresh, so it
+            // passes `timestamp` once the input passed the last refresh at or before it. Before
+            // the first refresh the output frontier is past `timestamp` already.
+            ResolvedTree::Refresh { schedule, input } => {
+                let Some(refresh) = last_refresh_at_or_before(schedule, timestamp) else {
+                    return 0;
+                };
+                let passed = refresh.saturating_add(input.grid_wait(refresh));
+                passed.saturating_sub(timestamp)
+            }
+        }
+    }
+
+    /// The latest wall clock at which the frontier reflects `arrival` when every tick and
+    /// refresh is on time, for any phase of the unaligned leaves. `None` if it never does, as
+    /// after the last refresh of a schedule without `EVERY`.
+    ///
+    /// An unaligned leaf ticks at most one interval after any time, so it shows an arrival at
+    /// the latest one interval after it.
+    pub fn latest_show(&self, arrival: u64) -> Option<u64> {
+        match self {
+            ResolvedTree::Leaf(_) => self.latest_assigned(arrival),
+            // Every input has to pass the timestamp the minimum assigns, which is at most
+            // `latest_assigned`.
+            ResolvedTree::Min(inputs) => {
+                let timestamp = self.latest_assigned(arrival)?;
+                inputs.iter().map(|i| i.latest_pass(timestamp)).max()
+            }
+            // The output passes a refresh once the input passed it.
+            ResolvedTree::Refresh { input, .. } => {
+                let refresh = self.latest_assigned(arrival)?;
+                Some(input.latest_pass(refresh).max(refresh))
+            }
+        }
+    }
+
+    /// The latest timestamp any phase of the unaligned leaves assigns `arrival`, `None` if no
+    /// refresh comes after it.
+    fn latest_assigned(&self, arrival: u64) -> Option<u64> {
+        match self {
+            ResolvedTree::Leaf(Ticker::Unaligned { interval_ms }) => {
+                Some(arrival.saturating_add(*interval_ms))
+            }
+            ResolvedTree::Leaf(_) => self.assigned(arrival),
+            ResolvedTree::Min(inputs) => inputs
+                .iter()
+                .map(|i| i.latest_assigned(arrival))
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .max(),
+            ResolvedTree::Refresh { schedule, input } => schedule
+                .round_up_timestamp(Timestamp::from(input.latest_assigned(arrival)?))
+                .map(u64::from),
+        }
+    }
+
+    /// The latest wall clock at which the frontier passes `timestamp` when every tick and
+    /// refresh is on time, for any phase of the unaligned leaves, at least `timestamp`.
+    fn latest_pass(&self, timestamp: u64) -> u64 {
+        match self {
+            ResolvedTree::Leaf(Ticker::Unaligned { interval_ms }) => {
+                timestamp.saturating_add(*interval_ms)
+            }
+            ResolvedTree::Leaf(_) => timestamp.saturating_add(self.grid_wait(timestamp)),
+            ResolvedTree::Min(inputs) => inputs
+                .iter()
+                .map(|i| i.latest_pass(timestamp))
+                .max()
+                .unwrap_or(timestamp),
+            // See `grid_wait`.
+            ResolvedTree::Refresh { schedule, input } => {
+                match last_refresh_at_or_before(schedule, timestamp) {
+                    None => timestamp,
+                    Some(refresh) => input.latest_pass(refresh).max(timestamp),
+                }
+            }
+        }
+    }
+
+    /// The input of a top-level refresh node, or the tree itself if it has none.
+    pub fn below_refresh(&self) -> &ResolvedTree {
+        match self {
+            ResolvedTree::Refresh { input, .. } => input,
+            _ => self,
         }
     }
 
@@ -475,6 +599,14 @@ impl ResolvedTree {
             ResolvedTree::Refresh { input, .. } => input.for_each_ticker(f),
         }
     }
+}
+
+/// The last refresh of `schedule` at or before `timestamp`, if any.
+fn last_refresh_at_or_before(schedule: &RefreshSchedule, timestamp: u64) -> Option<u64> {
+    let refresh = schedule.round_down_timestamp_m1(Timestamp::from(timestamp.checked_add(1)?))?;
+    // NOTE: `round_down_timestamp_m1` saturates at timestamp 0 when the previous refresh would
+    // be negative, so 0 only counts if it is an actual refresh.
+    (schedule.round_up_timestamp(refresh) == Some(refresh)).then(|| u64::from(refresh))
 }
 
 fn duration_ms(d: Duration) -> u64 {

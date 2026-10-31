@@ -987,7 +987,7 @@ impl ComputeController {
             .determine_time_dependence(instance_id, &dataflow, &used_imports)
             .expect("must exist");
 
-        let freshness_tree = self
+        let (freshness_tree, freshness_inputs) = self
             .determine_freshness_tree(instance_id, &dataflow, &used_imports)
             .expect("must exist");
 
@@ -1016,6 +1016,7 @@ impl ComputeController {
                 shared_collection_state,
                 target_replica,
                 freshness_tree,
+                freshness_inputs,
             )
             .expect("validated")
         });
@@ -1230,7 +1231,8 @@ impl ComputeController {
         ))
     }
 
-    /// Determines how the frontiers of a dataflow's exports follow arrival time.
+    /// Determines how the frontiers of a dataflow's exports follow arrival time, and the imports
+    /// that contribute a tree.
     ///
     /// Walks the imports exactly like [`Self::determine_time_dependence`], including the
     /// filtering by `used_imports`, so the two agree on which imports contribute.
@@ -1239,7 +1241,8 @@ impl ComputeController {
         instance_id: ComputeInstanceId,
         dataflow: &mz_compute_types::dataflows::LirDataflowDescription,
         used_imports: &BTreeSet<GlobalId>,
-    ) -> Result<Option<FreshnessTree>, TimeDependenceError> {
+    ) -> Result<(Option<FreshnessTree>, BTreeMap<GlobalId, FreshnessTree>), TimeDependenceError>
+    {
         let instance = self
             .instance(instance_id)
             .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
@@ -1505,7 +1508,8 @@ struct Collection {
 }
 
 /// Collects the freshness trees of the used imports of a dataflow and merges them under its
-/// refresh schedule.
+/// refresh schedule. Also returns the imports that have a tree, the inputs of local delay, with
+/// their trees.
 ///
 /// `index_tree` resolves index imports and fails if the collection is missing. `compute_tree`
 /// resolves a source import that is backed by a compute object, `None` if it is not. Other
@@ -1518,19 +1522,27 @@ fn walk_freshness_trees(
     index_tree: impl Fn(GlobalId) -> Result<Option<FreshnessTree>, CollectionMissing>,
     compute_tree: impl Fn(GlobalId) -> Option<Option<FreshnessTree>>,
     storage_tree: impl Fn(GlobalId) -> Option<FreshnessTree>,
-) -> Result<Option<FreshnessTree>, TimeDependenceError> {
+) -> Result<(Option<FreshnessTree>, BTreeMap<GlobalId, FreshnessTree>), TimeDependenceError> {
     let mut trees = Vec::new();
+    let mut inputs = BTreeMap::new();
 
     for id in index_ids.filter(|id| used_imports.contains(id)) {
         let tree = index_tree(id).map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
+        if let Some(tree) = &tree {
+            inputs.insert(id, tree.clone());
+        }
         trees.push(tree);
     }
 
     for id in source_ids.filter(|id| used_imports.contains(id)) {
-        trees.push(compute_tree(id).unwrap_or_else(|| storage_tree(id)));
+        let tree = compute_tree(id).unwrap_or_else(|| storage_tree(id));
+        if let Some(tree) = &tree {
+            inputs.insert(id, tree.clone());
+        }
+        trees.push(tree);
     }
 
-    Ok(merge_freshness_trees(trees, schedule))
+    Ok((merge_freshness_trees(trees, schedule), inputs))
 }
 
 /// Merges the freshness trees of a dataflow's imports.

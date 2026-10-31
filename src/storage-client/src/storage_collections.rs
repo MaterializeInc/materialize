@@ -65,6 +65,7 @@ use crate::client::TimestamplessUpdateBuilder;
 use crate::controller::{
     CollectionDescription, DataSource, PersistEpoch, StorageMetadata, StorageTxn,
 };
+use crate::freshness::SharedVisibilityLog;
 use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
 
 mod metrics;
@@ -314,6 +315,13 @@ pub trait StorageCollections: Debug + Sync {
     /// Describes how the frontier of the collection follows arrival time, `None` if it has no
     /// time dependence or is unknown.
     fn freshness_tree(&self, id: GlobalId) -> Option<FreshnessTree>;
+
+    /// The log of when the collection made arrivals visible, `None` if the collection is unknown.
+    ///
+    /// The storage controller records it for the collections it writes, and the compute
+    /// controller for materialized views and other storage sinks. Readers use it as an input to
+    /// local delay.
+    fn visibility_log(&self, id: GlobalId) -> Option<SharedVisibilityLog>;
 
     /// Resolves the current tick intervals of ingestions. Reads live values, so the result
     /// reflects later calls to [`StorageCollections::update_ingestion_timestamp_interval`].
@@ -2458,6 +2466,11 @@ impl StorageCollections for StorageCollectionsImpl {
         collections.get(&id)?.freshness_tree.clone()
     }
 
+    fn visibility_log(&self, id: GlobalId) -> Option<SharedVisibilityLog> {
+        let collections = self.collections.lock().expect("lock poisoned");
+        Some(collections.get(&id)?.visibility_log.clone())
+    }
+
     fn ticker_lookup(&self) -> Arc<dyn TickerLookup + Send + Sync> {
         Arc::new(CollectionTickers(Arc::clone(&self.collections)))
     }
@@ -2736,6 +2749,9 @@ struct CollectionState {
     timestamp_interval: Option<Duration>,
     /// The ID of the source remap/progress collection, if this is an ingestion.
     ingestion_remap_collection_id: Option<GlobalId>,
+    /// When this collection made arrivals visible. The controller that writes the collection
+    /// records it.
+    visibility_log: SharedVisibilityLog,
 
     /// Accumulation of read capabilities for the collection.
     ///
@@ -2783,6 +2799,7 @@ impl CollectionState {
             freshness_tree,
             timestamp_interval,
             ingestion_remap_collection_id,
+            visibility_log: SharedVisibilityLog::default(),
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::NoPolicy {
