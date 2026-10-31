@@ -313,8 +313,14 @@ pub trait StorageCollections: Debug + Sync {
     ) -> Result<Option<TimeDependence>, TimeDependenceError>;
 
     /// Describes how the frontier of the collection follows arrival time, `None` if it has no
-    /// time dependence or is unknown.
+    /// time dependence or is unknown. For collections that another controller writes, this is
+    /// the tree of the last [`StorageCollections::set_freshness_tree`] call.
     fn freshness_tree(&self, id: GlobalId) -> Option<FreshnessTree>;
+
+    /// Records the freshness tree of a collection that another controller writes, such as a
+    /// materialized view, for the storage controller's wallclock lag reporting. Does nothing if
+    /// `id` is unknown.
+    fn set_freshness_tree(&self, id: GlobalId, tree: Option<FreshnessTree>);
 
     /// The log of when the collection made arrivals visible, `None` if the collection is unknown.
     ///
@@ -2464,6 +2470,13 @@ impl StorageCollections for StorageCollectionsImpl {
     fn freshness_tree(&self, id: GlobalId) -> Option<FreshnessTree> {
         let collections = self.collections.lock().expect("lock poisoned");
         collections.get(&id)?.freshness_tree.clone()
+    }
+
+    fn set_freshness_tree(&self, id: GlobalId, tree: Option<FreshnessTree>) {
+        let mut collections = self.collections.lock().expect("lock poisoned");
+        if let Some(collection) = collections.get_mut(&id) {
+            collection.freshness_tree = tree;
+        }
     }
 
     fn visibility_log(&self, id: GlobalId) -> Option<SharedVisibilityLog> {

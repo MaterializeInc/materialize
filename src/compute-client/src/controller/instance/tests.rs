@@ -23,7 +23,9 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::ControllerMetrics;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
-use mz_controller_types::dyncfgs::ENABLE_WALLCLOCK_FRESHNESS_RECORDING;
+use mz_controller_types::dyncfgs::{
+    ENABLE_WALLCLOCK_FRESHNESS_RECORDING, ENABLE_WALLCLOCK_FRESHNESS_REPORTING,
+};
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -32,7 +34,7 @@ use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
 use mz_storage_client::client::TimestamplessUpdateBuilder;
 use mz_storage_client::controller::{
-    CollectionDescription, IntrospectionType, StorageMetadata, StorageTxn,
+    CollectionDescription, IntrospectionType, StorageMetadata, StorageTxn, WallclockLag,
 };
 use mz_storage_client::freshness::SharedVisibilityLog;
 use mz_storage_client::storage_collections::{
@@ -401,17 +403,18 @@ impl StorageCollections for TickerStorage {
 
     fn collections_frontiers(
         &self,
-        _ids: Vec<GlobalId>,
+        ids: Vec<GlobalId>,
     ) -> Result<Vec<CollectionFrontiers>, CollectionMissing> {
-        unimplemented!()
+        // The harness's compute collections are not storage collections.
+        Err(CollectionMissing(ids[0]))
     }
 
     fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers> {
         unimplemented!()
     }
 
-    fn check_exists(&self, _id: GlobalId) -> Result<(), StorageError> {
-        unimplemented!()
+    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError> {
+        Err(StorageError::IdentifierMissing(id))
     }
 
     async fn snapshot_stats(
@@ -530,6 +533,8 @@ impl StorageCollections for TickerStorage {
     fn freshness_tree(&self, _id: GlobalId) -> Option<FreshnessTree> {
         unimplemented!()
     }
+
+    fn set_freshness_tree(&self, _id: GlobalId, _tree: Option<FreshnessTree>) {}
 
     fn visibility_log(&self, id: GlobalId) -> Option<SharedVisibilityLog> {
         self.1.get(&id).cloned()
@@ -1387,5 +1392,45 @@ async fn freshness_rehydration_keeps_a_new_recording() {
         recorded.periods(Some(r1)),
         vec![(T0 + 1000, T0 + 60_000, 59_000)],
         "replica"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn reported_lag_skips_transient_collections() {
+    let mut h = FreshnessHarness::new(false, false);
+    let mut updates = ConfigUpdates::default();
+    updates.add(&ENABLE_WALLCLOCK_FRESHNESS_REPORTING, true);
+    updates.apply(&h.instance.dyncfg);
+    h.instance.initialization_complete();
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+    let user = GlobalId::User(10);
+    let transient = GlobalId::Transient(10);
+    for id in [user, transient] {
+        h.add_collection(id, T0);
+        // Lag is only reported for hydrated collections, whose output frontier passed the as-of.
+        let frontier = Antichain::from_elem(Timestamp::from(T0 + 1001));
+        let epoch = h.instance.replicas[&r1].epoch;
+        let frontiers = FrontiersResponse {
+            write_frontier: Some(frontier.clone()),
+            input_frontier: None,
+            output_frontier: Some(frontier),
+        };
+        h.instance
+            .handle_response((r1, epoch, ComputeResponse::Frontiers(id, frontiers)));
+    }
+    h.set_now(T0 + 1005);
+    h.instance.refresh_wallclock_lag();
+
+    let computed = |id| h.instance.collections[&id].assignment_bound.is_computed();
+    assert!(computed(user), "user collection reports max(D, S)");
+    assert!(!computed(transient), "transient collection computes no D");
+    let lag_max = |id| h.instance.replicas[&r1].collections[&id].wallclock_lag_max;
+    assert_eq!(lag_max(transient), None);
+    assert!(
+        matches!(lag_max(user), Some(WallclockLag::Millis(ms)) if ms >= 1000),
+        "{:?}",
+        lag_max(user),
     );
 }
