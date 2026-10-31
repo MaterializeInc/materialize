@@ -112,6 +112,16 @@ def test_focused_templates_omit_unrelated_workloads(tmp_path: Path) -> None:
     assert "parallel_driver_read_paths_load.py" in rollouts
     assert "anytime_read_paths_agree.py" in rollouts
     assert "parallel_driver_kafka_sink_writes.py" not in rollouts
+    for command in (
+        "parallel_driver_aggregate_retractions.py",
+        "parallel_driver_atomic_commits.py",
+        "parallel_driver_bounded_subscribe.py",
+        "parallel_driver_index_handover.py",
+    ):
+        assert command in transactions
+        assert command in rollouts
+        assert command not in cdc
+    assert not templates.PROFILES["transactions"].setup
 
 
 def test_profile_membership_follows_new_commands_for_existing_drivers(
