@@ -562,7 +562,7 @@ def interleaving_main() -> int:
             _note_read_error(error, "interleaved write", None)
             return 0
         # An indeterminate COMMIT still needs its later stream observation.
-        _check_windows(env, host, db)
+        _check_windows(env, host, db, allow_faults=False)
     finally:
         db.close()
     return 0
@@ -1116,8 +1116,10 @@ def _maybe_save_resume(w: Window, db: sqlite3.Connection) -> None:
     _save_resume(db, s.frontier - 1, w.gen, dict(s.state))
 
 
-def _check_windows(env: Environment, host: str, db: sqlite3.Connection) -> None:
-    kill_p = timeline_choice(db, "kill_p", KILL_P_MENU)
+def _check_windows(
+    env: Environment, host: str, db: sqlite3.Connection, *, allow_faults: bool = True
+) -> None:
+    kill_p = timeline_choice(db, "kill_p", KILL_P_MENU) if allow_faults else 0.0
     end = time.monotonic() + CHECK_BUDGET_S
     while end - time.monotonic() > MIN_WINDOW_S:
         budget = min(rng.choice(WINDOW_MENU_S), end - time.monotonic())
