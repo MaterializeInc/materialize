@@ -275,6 +275,7 @@ trufflehog_jq_filter_common() {
       .Raw != "https://materialize:sekurity@schema-registry:8081" and
       .Raw != "postgresql://postgres:postgres@postgres:5432" and
       .Raw != "postgres://postgres:postgres@postgres:5432" and
+      .Raw != "postgres://postgres:postgres@pos:5432" and
       .Raw != "postgres://postgres:postgres@pg-primary:5432" and
       .Raw != "postgres://postgres:postgres@pg-standby:5432" and
       .Raw != "sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe" and

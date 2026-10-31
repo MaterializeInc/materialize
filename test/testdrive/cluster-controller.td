@@ -71,6 +71,11 @@ cc_steady r1 scale=1,workers=1
 > SELECT event_type, details->>'reason' FROM mz_catalog.mz_audit_events WHERE event_type = 'drop' AND object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_steady'
 drop retired
 
+> ALTER CLUSTER cc_steady SET (REPLICATION FACTOR 0)
+
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_steady'
+0
+
 > DROP CLUSTER cc_steady
 
 # ----- Graceful background reconfiguration -----

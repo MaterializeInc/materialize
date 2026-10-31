@@ -148,28 +148,6 @@ WHERE c.name = 'c_managed'
 ----
 r1,r2
 
-# Lowering REPLICATION FACTOR drops the extra replica rows.
-statement ok
-ALTER CLUSTER c_managed SET (REPLICATION FACTOR = 1)
-
-query I
-SELECT count(*) FROM mz_cluster_replicas r
-JOIN mz_clusters c ON r.cluster_id = c.id
-WHERE c.name = 'c_managed'
-----
-1
-
-# REPLICATION FACTOR 0 produces zero rows.
-statement ok
-ALTER CLUSTER c_managed SET (REPLICATION FACTOR = 0)
-
-query I
-SELECT count(*) FROM mz_cluster_replicas r
-JOIN mz_clusters c ON r.cluster_id = c.id
-WHERE c.name = 'c_managed'
-----
-0
-
 statement ok
 DROP CLUSTER c_managed
 
