@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import * as Sentry from "@sentry/react";
 import { sql } from "kysely";
 import { http, HttpResponse } from "msw";
 
+import { buildQueryKeyPart } from "~/api/buildQueryKeySchema";
 import {
   mapColumnToColumnMetadata,
   UNAUTHORIZED_ERROR,
@@ -23,7 +25,12 @@ import {
 import server from "~/api/mocks/server";
 
 import DatabaseError from "./DatabaseError";
-import { executeSqlV2 } from "./executeSqlV2";
+import {
+  executeSqlV2,
+  labelSql,
+  queryKeyLabel,
+  spanErrorStatus,
+} from "./executeSqlV2";
 import { ErrorCode, MzDataType, Notice, OkSqlResult } from "./types";
 
 describe("executeSqlV2", () => {
@@ -188,5 +195,190 @@ describe("executeSqlV2", () => {
         queryKey: ["databaseErrorQuery"],
       }),
     ).rejects.toThrowError(DatabaseError);
+  });
+
+  it("sends each query with its label in a trailing comment", async () => {
+    let sentQueries: string[] = [];
+    server.use(
+      http.post("*/api/sql", async ({ request }) => {
+        const body = (await request.json()) as {
+          queries: { query: string }[];
+        };
+        sentQueries = body.queries.map((q) => q.query);
+        return HttpResponse.json({
+          results: body.queries.map(() => ({ ok: "BEGIN", notices: [] })),
+        });
+      }),
+    );
+
+    await executeSqlV2({
+      queries: [
+        sql`BEGIN`.compile(queryBuilder),
+        sql`COMMIT;`.compile(queryBuilder),
+      ] as const,
+      queryKey: [buildQueryKeyPart("clusters"), buildQueryKeyPart("list")],
+    });
+
+    expect(sentQueries).toEqual([
+      "BEGIN\n/*console_query='clusters.list'*/",
+      "COMMIT\n/*console_query='clusters.list'*/",
+    ]);
+  });
+});
+
+describe("labelSql", () => {
+  it("drops trailing semicolons so the label stays in the logged text", () => {
+    expect(labelSql("SELECT 1; ;\n", "healthCheck")).toBe(
+      "SELECT 1\n/*console_query='healthCheck'*/",
+    );
+  });
+
+  it("puts the label on its own line after a line comment", () => {
+    expect(labelSql("SELECT 1 -- note", "healthCheck")).toBe(
+      "SELECT 1 -- note\n/*console_query='healthCheck'*/",
+    );
+  });
+
+  it("replaces characters that could end the comment", () => {
+    expect(labelSql("SELECT 1", "a*/b c")).toBe(
+      "SELECT 1\n/*console_query='a__b_c'*/",
+    );
+  });
+});
+
+describe("queryKeyLabel", () => {
+  it("joins the scope of each part", () => {
+    expect(
+      queryKeyLabel([
+        {
+          scope: "clusters",
+          regionId: "aws/us-east-1",
+          environmentVersion: "v26.45.0",
+        },
+        { scope: "list", clusterId: "u3" },
+      ]),
+    ).toBe("clusters.list");
+  });
+
+  it("leaves out parts without a scope", () => {
+    expect(
+      queryKeyLabel([
+        { scope: "replicaUtilization" },
+        "u3",
+        "deploymentLineage",
+      ]),
+    ).toBe("replicaUtilization");
+  });
+
+  it("names a key with no scope", () => {
+    expect(queryKeyLabel(["createSecret"])).toBe("unscoped query");
+  });
+});
+
+describe("spanErrorStatus", () => {
+  it("reads a timeout as deadline_exceeded", () => {
+    expect(
+      spanErrorStatus(new DOMException("signal timed out", "TimeoutError")),
+    ).toBe("deadline_exceeded");
+  });
+
+  it("reads any other failure as internal_error", () => {
+    expect(spanErrorStatus(new Error("column does not exist"))).toBe(
+      "internal_error",
+    );
+  });
+});
+
+describe("executeSqlV2 Sentry spans", () => {
+  const transactions: Sentry.Event[] = [];
+  const queryKey = [buildQueryKeyPart("clusters"), buildQueryKeyPart("list")];
+  const queries = sql`SELECT 1`.compile(queryBuilder);
+
+  beforeAll(() => {
+    Sentry.init({
+      dsn: "https://public@sentry.invalid/1",
+      defaultIntegrations: false,
+      tracesSampleRate: 1,
+      beforeSendTransaction: (event) => {
+        transactions.push(event);
+        return null;
+      },
+    });
+  });
+
+  afterAll(() => {
+    Sentry.init({});
+  });
+
+  beforeEach(() => {
+    transactions.length = 0;
+    server.use(
+      buildSqlQueryHandlerV2({
+        queryKey,
+        results: mapKyselyToTabular({ rows: [], columns: [] }),
+      }),
+    );
+  });
+
+  // Observed: a root span started outside `startNewTrace` in this file comes
+  // out unsampled, even with `tracesSampleRate: 1`.
+  function inNewTrace<T>(name: string, callback: () => Promise<T>) {
+    return Sentry.startNewTrace(() => Sentry.startSpan({ name }, callback));
+  }
+
+  async function sentTransaction(name: string) {
+    await vi.waitFor(() =>
+      expect(transactions.map((t) => t.transaction)).toContain(name),
+    );
+    return transactions;
+  }
+
+  it("records a span named after the query key under an active span", async () => {
+    await inNewTrace("page load", () => executeSqlV2({ queries, queryKey }));
+
+    const [pageLoad] = await sentTransaction("page load");
+    expect(pageLoad.spans).toContainEqual(
+      expect.objectContaining({
+        description: "clusters.list",
+        op: "db.sql.query",
+      }),
+    );
+  });
+
+  it("starts no trace when no span is active", async () => {
+    await Sentry.startNewTrace(() => executeSqlV2({ queries, queryKey }));
+    await inNewTrace("marker", async () => undefined);
+
+    const sent = await sentTransaction("marker");
+    expect(sent.map((t) => t.transaction)).toEqual(["marker"]);
+  });
+
+  it("marks a request the caller aborted as cancelled", async () => {
+    server.use(
+      buildSqlQueryHandlerV2(
+        { queryKey, results: mapKyselyToTabular({ rows: [], columns: [] }) },
+        { waitTimeMs: 5_000 },
+      ),
+    );
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 20);
+
+    await inNewTrace("page load", async () => {
+      await expect(
+        executeSqlV2({
+          queries,
+          queryKey,
+          requestOptions: { signal: controller.signal },
+        }),
+      ).rejects.toThrow();
+    });
+
+    const [pageLoad] = await sentTransaction("page load");
+    expect(pageLoad.spans).toContainEqual(
+      expect.objectContaining({
+        description: "clusters.list",
+        status: "cancelled",
+      }),
+    );
   });
 });
