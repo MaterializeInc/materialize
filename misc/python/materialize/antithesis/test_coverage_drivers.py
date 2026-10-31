@@ -87,13 +87,19 @@ def test_only_acknowledged_pod_deletes_emit_exposure_evidence(
 ) -> None:
     db = sqlite3.connect(":memory:")
     monkeypatch.setattr(pod_restarts, "open_db", lambda *args: db)
-    clock = Mock(side_effect=[0.0, 1.0, 2.0])
-    monkeypatch.setattr(pod_restarts.time, "monotonic", clock)
+    now = [1.0]
+    monkeypatch.setattr(pod_restarts.time, "monotonic", lambda: now[0])
     observed = Mock()
     monkeypatch.setattr(telemetry, "fault_observed", observed)
     monkeypatch.setattr(pod_restarts.recovery, "preserve_pod_exit", Mock())
     kube = Mock()
-    kube.core.delete_namespaced_pod.side_effect = error
+
+    def delete(*args, **kwargs):
+        now[0] = 2.0
+        if error is not None:
+            raise error
+
+    kube.core.delete_namespaced_pod.side_effect = delete
     acked = pod_restarts.delete_recorded(
         kube,
         origin="test",
