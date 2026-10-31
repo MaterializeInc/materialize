@@ -1330,6 +1330,8 @@ impl StorageController for Controller {
                             to = ?new_desc,
                             "alter_ingestion_source_desc, updating"
                         );
+                        self.storage_collections
+                            .update_ingestion_timestamp_interval(id, new_desc.timestamp_interval);
                         ingestion.desc = new_desc;
                         ingestions_to_run.insert(id);
                     }

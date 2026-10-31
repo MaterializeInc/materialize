@@ -45,6 +45,7 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dyncfgs::{
     COMPUTE_REPLICA_EXPIRATION_OFFSET, ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
 };
+use mz_controller_types::DEFAULT_REPLICA_LOGGING_INTERVAL;
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
 use mz_expr::row::RowCollection;
@@ -55,9 +56,11 @@ use mz_ore::soft_assert_or_log;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp, frontier_within_lag};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
+use mz_storage_types::freshness::{FreshnessLeaf, FreshnessTree, Ticker};
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
@@ -86,6 +89,9 @@ mod instance;
 mod introspection;
 mod replica;
 mod sequential_hydration;
+
+#[cfg(test)]
+mod tests;
 
 pub mod error;
 pub mod instance_client;
@@ -590,10 +596,12 @@ impl ComputeController {
 
         let mut collections = BTreeMap::new();
         let mut logs = Vec::with_capacity(arranged_logs.len());
+        let mut log_ids = BTreeSet::new();
         for (&log, &id) in &arranged_logs {
             let collection = Collection::new_log();
             let shared = collection.shared.clone();
             collections.insert(id, collection);
+            log_ids.insert(id);
             logs.push((log, id, shared));
         }
 
@@ -612,7 +620,7 @@ impl ComputeController {
             self.read_only,
         );
 
-        let instance = InstanceState::new(client, collections);
+        let instance = InstanceState::new(client, collections, log_ids);
         self.instances.insert(id, instance);
 
         self.instance_workload_classes
@@ -837,6 +845,9 @@ impl ComputeController {
 
         let instance = self.instance_mut(instance_id).expect("validated");
         instance.replicas.insert(replica_id);
+        if enable_logging {
+            instance.set_logging_interval(interval);
+        }
 
         instance.call(move |i| {
             i.add_replica(replica_id, replica_config, None, dyncfg_override)
@@ -975,6 +986,10 @@ impl ComputeController {
             .determine_time_dependence(instance_id, &dataflow, &used_imports)
             .expect("must exist");
 
+        let freshness_tree = self
+            .determine_freshness_tree(instance_id, &dataflow, &used_imports)
+            .expect("must exist");
+
         let instance = self.instance_mut(instance_id).expect("validated");
 
         let mut shared_collection_state = BTreeMap::new();
@@ -985,6 +1000,7 @@ impl ComputeController {
                 compute_dependencies: dataflow.imported_index_ids().collect(),
                 shared: shared.clone(),
                 time_dependence: time_dependence.clone(),
+                freshness_tree: freshness_tree.clone(),
             };
             instance.collections.insert(id, collection);
             shared_collection_state.insert(id, shared);
@@ -1212,6 +1228,35 @@ impl ComputeController {
         ))
     }
 
+    /// Determines how the frontiers of a dataflow's exports follow arrival time.
+    ///
+    /// Walks the imports exactly like [`Self::determine_time_dependence`], including the
+    /// filtering by `used_imports`, so the two agree on which imports contribute.
+    fn determine_freshness_tree(
+        &self,
+        instance_id: ComputeInstanceId,
+        dataflow: &mz_compute_types::dataflows::LirDataflowDescription,
+        used_imports: &BTreeSet<GlobalId>,
+    ) -> Result<Option<FreshnessTree>, TimeDependenceError> {
+        let instance = self
+            .instance(instance_id)
+            .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
+        walk_freshness_trees(
+            dataflow.imported_index_ids(),
+            dataflow.imported_source_ids(),
+            used_imports,
+            dataflow.refresh_schedule.as_ref(),
+            |id| instance.get_freshness_tree(id),
+            |id| {
+                // Compute objects, like storage sinks, carry their own tree.
+                self.instances
+                    .values()
+                    .find_map(|instance| instance.get_freshness_tree(id).ok())
+            },
+            |id| self.storage_collections.freshness_tree(id),
+        )
+    }
+
     /// Processes the work queued by [`ComputeController::ready`].
     #[mz_ore::instrument(level = "debug")]
     pub fn process(&mut self) -> Option<ComputeControllerResponse> {
@@ -1317,14 +1362,37 @@ struct InstanceState {
     client: InstanceClient,
     replicas: BTreeSet<ReplicaId>,
     collections: BTreeMap<GlobalId, Collection>,
+    /// The introspection collections of the instance.
+    log_ids: BTreeSet<GlobalId>,
 }
 
 impl InstanceState {
-    fn new(client: InstanceClient, collections: BTreeMap<GlobalId, Collection>) -> Self {
+    fn new(
+        client: InstanceClient,
+        collections: BTreeMap<GlobalId, Collection>,
+        log_ids: BTreeSet<GlobalId>,
+    ) -> Self {
         Self {
             client,
             replicas: Default::default(),
             collections,
+            log_ids,
+        }
+    }
+
+    /// Sets the tick interval of the introspection collections.
+    ///
+    /// NOTE: The logging interval can differ between the replicas of a cluster. Introspection
+    /// is read through replica-targeted queries, so only the per-replica freshness rows are
+    /// meaningful, not the global aggregate. The tree is kept per instance with the interval
+    /// of the most recently added replica with logging, so a replica with a different interval
+    /// records against the wrong grid.
+    fn set_logging_interval(&mut self, interval: Duration) {
+        let tree = logging_freshness_tree(interval);
+        for id in &self.log_ids {
+            if let Some(collection) = self.collections.get_mut(id) {
+                collection.freshness_tree = Some(tree.clone());
+            }
         }
     }
 
@@ -1390,6 +1458,11 @@ impl InstanceState {
         Ok(self.collection(id)?.time_dependence.clone())
     }
 
+    /// Return the stored freshness tree for a collection.
+    fn get_freshness_tree(&self, id: GlobalId) -> Result<Option<FreshnessTree>, CollectionMissing> {
+        Ok(self.collection(id)?.freshness_tree.clone())
+    }
+
     /// Returns the [`InstanceState`] formatted as JSON.
     pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
@@ -1397,6 +1470,7 @@ impl InstanceState {
             client: _,
             replicas,
             collections,
+            log_ids: _,
         } = self;
 
         let instance = self.call_sync(|i| i.dump()).await?;
@@ -1423,6 +1497,54 @@ struct Collection {
     /// The computed time dependence for this collection. None indicates no specific information,
     /// a value describes how the collection relates to wall-clock time.
     time_dependence: Option<TimeDependence>,
+    /// How the collection's frontier follows arrival time. None indicates no time dependence.
+    freshness_tree: Option<FreshnessTree>,
+}
+
+/// Collects the freshness trees of the used imports of a dataflow and merges them under its
+/// refresh schedule.
+///
+/// `index_tree` resolves index imports and fails if the collection is missing. `compute_tree`
+/// resolves a source import that is backed by a compute object, `None` if it is not. Other
+/// source imports are resolved by `storage_tree`.
+fn walk_freshness_trees(
+    index_ids: impl Iterator<Item = GlobalId>,
+    source_ids: impl Iterator<Item = GlobalId>,
+    used_imports: &BTreeSet<GlobalId>,
+    schedule: Option<&RefreshSchedule>,
+    index_tree: impl Fn(GlobalId) -> Result<Option<FreshnessTree>, CollectionMissing>,
+    compute_tree: impl Fn(GlobalId) -> Option<Option<FreshnessTree>>,
+    storage_tree: impl Fn(GlobalId) -> Option<FreshnessTree>,
+) -> Result<Option<FreshnessTree>, TimeDependenceError> {
+    let mut trees = Vec::new();
+
+    for id in index_ids.filter(|id| used_imports.contains(id)) {
+        let tree = index_tree(id).map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
+        trees.push(tree);
+    }
+
+    for id in source_ids.filter(|id| used_imports.contains(id)) {
+        trees.push(compute_tree(id).unwrap_or_else(|| storage_tree(id)));
+    }
+
+    Ok(merge_freshness_trees(trees, schedule))
+}
+
+/// Merges the freshness trees of a dataflow's imports.
+///
+/// Imports without a tree do not contribute, matching `TimeDependence::merge`.
+fn merge_freshness_trees(
+    trees: Vec<Option<FreshnessTree>>,
+    schedule: Option<&RefreshSchedule>,
+) -> Option<FreshnessTree> {
+    FreshnessTree::merge(trees.into_iter().flatten().collect(), schedule)
+}
+
+/// The tree of an introspection collection, which ticks on the logging interval.
+fn logging_freshness_tree(interval: Duration) -> FreshnessTree {
+    // Saturate intervals beyond `u64` milliseconds, they are not meaningful.
+    let interval_ms = u64::try_from(interval.as_millis()).unwrap_or(u64::MAX);
+    FreshnessTree::Leaf(FreshnessLeaf::Fixed(Ticker::Aligned { interval_ms }))
 }
 
 impl Collection {
@@ -1433,6 +1555,8 @@ impl Collection {
             compute_dependencies: Default::default(),
             shared: SharedCollectionState::new(as_of),
             time_dependence: Some(TimeDependence::default()),
+            // Replaced by the replica's interval once a replica with logging is added.
+            freshness_tree: Some(logging_freshness_tree(DEFAULT_REPLICA_LOGGING_INTERVAL)),
         }
     }
 
