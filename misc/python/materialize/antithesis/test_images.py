@@ -18,6 +18,115 @@ from unittest.mock import Mock
 import pytest
 
 from materialize.antithesis import images
+from materialize.mz_version import MzVersion
+
+
+def test_upgrade_base_does_not_reuse_images_without_termination_proof() -> None:
+    tag = images.upgrade_base_tag(MzVersion.parse_mz("v26.48.2"))
+    assert tag.startswith("v26.48.2--antithesis.upgrade-base.halt1.")
+    assert len(tag.rsplit(".", 1)[1]) == 16
+
+
+def test_upgrade_base_cache_changes_with_recorder_and_overlay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "halt_evidence.rs"
+    source.write_text(images.HALT_EVIDENCE_SOURCE.read_text())
+    monkeypatch.setattr(images, "HALT_EVIDENCE_SOURCE", source)
+    version = MzVersion.parse_mz("v26.48.2")
+    original = images.upgrade_base_tag(version)
+    source.write_text(source.read_text() + "\n")
+    recorder_changed = images.upgrade_base_tag(version)
+    assert recorder_changed != original
+    monkeypatch.setattr(
+        images, "UPGRADE_BASE_RECORDER", images.UPGRADE_BASE_RECORDER + "\n"
+    )
+    assert images.upgrade_base_tag(version) not in (original, recorder_changed)
+
+
+def test_upgrade_base_patch_preserves_unrelated_release_code(tmp_path: Path) -> None:
+    process = tmp_path / "src" / "ore" / "src" / "process.rs"
+    process.parent.mkdir(parents=True)
+    original = (
+        "pub const RELEASE_MARKER: i32 = 168;\n"
+        + images.UPGRADE_BASE_ORIGINAL_HALT
+        + "\npub fn release_exit() { unsafe { libc::_exit(168) } }\n"
+    )
+    process.write_text(original)
+    images.patch_upgrade_base_halt_proof(tmp_path)
+    patched = process.read_text()
+    release, recorder = patched.split('\n#[cfg(target_os = "linux")]', 1)
+    assert (
+        release.replace(
+            images.UPGRADE_BASE_RECORDED_HALT, images.UPGRADE_BASE_ORIGINAL_HALT
+        )
+        == original
+    )
+    assert images.HALT_EVIDENCE_SOURCE.read_text() in recorder
+    assert "antithesis_sdk" not in recorder
+    assert "antithesis::" not in patched
+    macro = patched.split("macro_rules! halt {", 1)[1].split("\n}", 1)[0]
+    assert macro.count("format!") == 1
+    assert "::std::file!()" in macro and "::std::line!()" in macro
+
+
+@pytest.mark.parametrize("kind", ["changed", "duplicate", "already_instrumented"])
+def test_upgrade_base_patch_rejects_unreviewed_source(
+    tmp_path: Path, kind: str
+) -> None:
+    process = tmp_path / "src" / "ore" / "src" / "process.rs"
+    process.parent.mkdir(parents=True)
+    text = images.UPGRADE_BASE_ORIGINAL_HALT
+    if kind == "changed":
+        text = text.replace("HALT_EXIT_CODE", "RESTART_IN_PLACE_EXIT_CODE")
+    elif kind == "duplicate":
+        text += "\n" + text
+    else:
+        text += "\npub fn record_halt() {}"
+    process.write_text(text)
+    with pytest.raises(ValueError, match="unsupported halt macro"):
+        images.patch_upgrade_base_halt_proof(tmp_path)
+    assert process.read_text() == text
+
+
+def test_upgrade_base_build_binds_both_image_fingerprints_to_the_proof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    worktree = tmp_path / "release"
+    commands = []
+
+    def run(command, **kwargs):
+        command = list(map(str, command))
+        commands.append(command)
+        if command[:3] == ["git", "worktree", "add"]:
+            process = worktree / "src" / "ore" / "src" / "process.rs"
+            process.parent.mkdir(parents=True)
+            process.write_text(images.UPGRADE_BASE_ORIGINAL_HALT)
+            for name in images.UPGRADE_BASE_IMAGES:
+                dockerfile = worktree / "src" / name / "ci" / "Dockerfile"
+                dockerfile.parent.mkdir(parents=True)
+                dockerfile.write_text("FROM scratch\n")
+        elif command[:2] == ["bin/mzimage", "acquire"]:
+            assert kwargs["cwd"] == worktree
+            assert kwargs["env"]["AWS_LC_SYS_NO_JITTER_ENTROPY"] == "1"
+            assert kwargs["env"]["CARGO_TARGET_DIR"] == str(
+                worktree / "target-xcompile"
+            )
+            dockerfile = worktree / "src" / command[-1] / "ci" / "Dockerfile"
+            assert images.UPGRADE_BASE_LABEL in dockerfile.read_text()
+            assert images.upgrade_base_patch_digest() in dockerfile.read_text()
+            assert (
+                "MZHALT1"
+                in (worktree / "src" / "ore" / "src" / "process.rs").read_text()
+            )
+
+    monkeypatch.setattr(images.spawn, "runv", run)
+    monkeypatch.setattr(
+        images.spawn, "capture", lambda command, **kwargs: f"local/{command[-1]}:proof"
+    )
+    specs = images.build_upgrade_base(MzVersion.parse_mz("v26.48.2"), worktree)
+    assert specs == {name: f"local/{name}:proof" for name in images.UPGRADE_BASE_IMAGES}
+    assert len([c for c in commands if c[:2] == ["bin/mzimage", "acquire"]]) == 2
 
 
 @pytest.mark.parametrize(
