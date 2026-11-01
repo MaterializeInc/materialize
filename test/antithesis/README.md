@@ -311,8 +311,9 @@ The SDK pin is shared with the workload image. Driver tests skip when this
 optional SDK is absent. Pure model tests remain available without it.
 
 ```
-bin/pyactivate -m materialize.antithesis.local up --build-dir <git checkout>
-bin/pyactivate -m materialize.antithesis.local down
+bin/pyactivate -m materialize.antithesis.local --cluster-name mz-harness-local up \
+    --build-dir <git checkout>
+bin/pyactivate -m materialize.antithesis.local --cluster-name mz-harness-local down
 ```
 
 `up` builds the Antithesis flavor of environmentd, clusterd, orchestratord,
@@ -321,6 +322,43 @@ manifests; and waits for `setup_complete`. mzbuild needs a git work tree, so
 from a jj secondary workspace pass a git worktree checked out at the same
 commit. The license key comes from `MZ_CI_LICENSE_KEY` or
 `~/.config/materialize/antithesis-license-key`.
+
+Run a focused concurrent experiment against the deployed workload pod:
+
+```shell
+bin/pyactivate -m materialize.antithesis.local --cluster-name mz-harness-local run \
+    --profile rollouts --duration 600 --concurrency 8 --seed 425 \
+    --command-timeout 300 --drain-timeout 300 \
+    --include parallel_driver_client_history.py \
+    --include 'parallel_driver_*interleavings.py' \
+    --check eventually_rollout_converges.py \
+    --output /tmp/mz-harness-local-run
+```
+
+The runner initializes the selected profile once, then admits commands for
+`--duration` seconds. Existing commands can finish during the bounded drain
+period. Later experiments on the same workload state must keep that profile
+and use `--skip-first`. A state-directory lock prevents overlapping local
+experiments. The default concurrency is eight. Ordinary writers can overlap,
+while workloads with exclusive fixtures retain their admission limits.
+
+The seed controls scheduling and each invocation's local workload draws.
+Antithesis continues to use SDK entropy. Each run retains child logs, SDK
+events, command intervals, telemetry deltas and positive coverage witnesses.
+False invariant events fail the run even when the command exits zero.
+Unreached required witnesses and truncated requested checks remain incomplete.
+Use `--require-witness 'coverage:*'` to require a checked disruption witness.
+Round diagnostics alone do not establish that a write stayed unresolved
+throughout a disruption. Native SUT output is outside the workload SDK export,
+so retain Kubernetes logs when investigating process failures.
+
+The `transactions` profile supports a smaller history/delete experiment.
+Promotion and IVM SUBSCRIBE interleavings require `rollouts` or `main`.
+Those interleavers run their own correctness follow-up. Keep unrelated
+rollout mutators outside a focused run so they do not supersede its owned
+promotion request. Singleton branches require Antithesis's snapshot scheduler
+and are rejected locally. At most one eventual or final terminal hook can be
+requested per local experiment.
 
 `--upgrade-from v26.45.0` starts the environment on that release's published
 images instead, for the upgrade scenario below. The published images work on
