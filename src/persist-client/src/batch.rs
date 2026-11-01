@@ -78,7 +78,8 @@ pub struct Batch<K, V, T, D> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_metrics: Arc<ShardMetrics>,
 
-    /// The version of Materialize which wrote this batch.
+    /// The authorized format version of this batch, which may precede the writer's
+    /// binary version while older deployments remain admitted.
     pub(crate) version: Version,
 
     /// The encoded schemas of the data in the batch.

@@ -561,6 +561,7 @@ where
         // tombstone, in which case this write is either a noop or will fail gracefully.
         let schema_id = self.try_register_schema().await;
 
+        let format_target = self.cfg.initial_state_version(self.machine.shard_id());
         for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
                 return Err(InvalidUsage::BatchNotFromThisShard {
@@ -569,11 +570,12 @@ where
                 });
             }
             assert_code_can_read_data(&self.cfg.build_version, &batch.version);
-            if self.cfg.build_version > batch.version {
+            if format_target > batch.version {
                 info!(
                     shard_id =? self.machine.shard_id(),
                     batch_version =? batch.version,
                     writer_version =? self.cfg.build_version,
+                    format_target =? format_target,
                     "Appending batch from the past. This is fine but should be rare. \
                     TODO: Error on very old versions once the leaked blob detector exists."
                 )
@@ -931,7 +933,7 @@ where
             schemas,
             blob,
             shard_id,
-            persist_cfg.build_version.clone(),
+            persist_cfg.initial_state_version(shard_id),
         );
         BatchBuilder::new(
             builder,

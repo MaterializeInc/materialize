@@ -99,7 +99,7 @@ impl CompactConfig {
         CompactConfig {
             compaction_memory_bound_bytes: COMPACTION_MEMORY_BOUND_BYTES.get(value),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
-            version: value.build_version.clone(),
+            version: value.initial_state_version(shard_id),
             batch: BatchBuilderConfig::new(value, shard_id),
             fetch_config: FetchConfig::from_persist_config(value),
             now: value.now.clone(),

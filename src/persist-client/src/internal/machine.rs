@@ -2671,6 +2671,7 @@ pub mod tests {
             (("1".to_owned(), ()), 1, 1),
             (("2".to_owned(), ()), 2, 1),
             (("3".to_owned(), ()), 3, 1),
+            (("4".to_owned(), ()), 4, 1),
         ];
         old_write
             .expect_compare_and_append(&updates[..1], 0, 2)
@@ -2678,14 +2679,22 @@ pub mod tests {
         new_write
             .expect_compare_and_append(&updates[1..2], 2, 3)
             .await;
+        // A txn-WAL writer can hand its batch to an older admitted adapter for
+        // application. Exercise that transfer, not just independent appends.
+        let batch = new_write.expect_batch(&updates[2..3], 3, 4).await;
+        let mut transferred =
+            old_write.batch_from_transmittable_batch(batch.into_transmittable_batch());
         old_write
-            .expect_compare_and_append(&updates[2..], 3, 4)
+            .expect_compare_and_append_batch(&mut [&mut transferred], 3, 4)
+            .await;
+        old_write
+            .expect_compare_and_append(&updates[3..], 4, 5)
             .await;
         assert_eq!(
-            old_read.expect_snapshot_and_fetch(3).await,
+            old_read.expect_snapshot_and_fetch(4).await,
             updates
                 .iter()
-                .map(|(kv, _, diff)| (kv.clone(), 3, *diff))
+                .map(|(kv, _, diff)| (kv.clone(), 4, *diff))
                 .collect::<Vec<_>>()
         );
         old_write.expire().await;

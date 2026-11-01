@@ -215,6 +215,9 @@ impl PersistConfig {
         self.state_version_for(None)
     }
 
+    /// Format for new shard state and batch envelopes. Batch transfer (including
+    /// txn-WAL application by a peer) must honor the same admitted reader floor.
+    /// The catalog shard alone may establish that floor before authorization.
     pub(crate) fn initial_state_version(&self, shard: ShardId) -> Version {
         self.state_version_for(Some(shard))
     }
