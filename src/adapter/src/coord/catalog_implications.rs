@@ -332,9 +332,10 @@ impl Coordinator {
         // Logging indexes are installed with their cluster, so stage compute permission
         // before applying any creates. Storage receives its bounds after registration.
         let storage_metadata = self.catalog().state().storage_metadata();
-        let (storage_bounds, compute_bounds): (BTreeMap<_, _>, BTreeMap<_, _>) = compaction_bounds
-            .into_iter()
-            .partition(|(id, _)| storage_metadata.collection_metadata.contains_key(id));
+        let (mut storage_bounds, compute_bounds): (BTreeMap<_, _>, BTreeMap<_, _>) =
+            compaction_bounds
+                .into_iter()
+                .partition(|(id, _)| storage_metadata.collection_metadata.contains_key(id));
         for (id, bound) in compute_bounds {
             if self.controller.replica_owned_compute() {
                 continue;
@@ -1062,6 +1063,16 @@ impl Coordinator {
 
         // New collections already enforce their committed bounds during creation.
         // Deliver advancements after same-batch creates, before drops release protection.
+        // Catalog permissions are global, but this adapter does not register every
+        // collection (notably temporary tables on other adapters). Only deliver to
+        // local registrations. A later registration installs the catalog's then-current
+        // permission, so skipping these notifications cannot lose its bound.
+        storage_bounds.retain(|id, _| {
+            self.controller
+                .storage_collections
+                .check_exists(*id)
+                .is_ok()
+        });
         if !storage_bounds.is_empty() {
             self.controller
                 .storage_collections
