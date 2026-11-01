@@ -14,111 +14,88 @@ not satisfy the required [local walkthrough](../controllerd.md).
 M2 remains closed within its approved scope. Preserve native execution and the
 60s publication default. Kubernetes/operator runtime remains deferred.
 
-## Current implementation and next action
+## Next concrete action
 
-The worktree admits compatible full SQL writers, retains them across promotion,
-and fences them only on explicit retirement. Controller startup does not promote
-or repeat shared initialization. Promotion activates its local configuration
-through the existing controller loop and catalog/WAL protocol. A reproduced stale
-controller overwrite is fixed by checking active authority at the synchronized
-prefix covering the configuration write timestamp.
+The protected-cut regression, full storage library suite and strict all-target
+Clippy across storage-client, compute-client and adapter pass. The readiness and
+batch-format repairs are committed. Build the newer default-development candidate
+with both fixes. Compare against the preserved older `v26.46.0-dev.0-temp-fix`
+artifacts. Existing newer `-temp-fix` artifacts contain neither repair and must not
+be reused for the promotion attempt.
 
-Strict all-target Clippy and the default `bin/controllerd --build-only` passed.
-The linker initially exhausted disk. Removing disposable incremental cache and
-repeating the same build succeeded (`local-controller-build-repeat.log`).
-Generation 0 was verified from fixed v26.46.0-dev.0 artifacts through the launcher.
-It serves DDL, indexed reads and table writes. Controller-only restart preserved
-adapter/replica PIDs and data. Pinning the relay binary replaced that relay while
-preserving its endpoint (`local-artifact-pinning-pass.json`).
+Resume the preserved environment, run `full-writer/promote-live.py`, then verify
+explicit relay handoff and retirement. Both versions must retain SQL, DDL and
+writes across promotion, with warmed replica processes unchanged. No promotion or
+retirement has executed. Generation 0 remains active.
 
-Both fixed development artifact sets now exist under
-`full-writer/artifacts/v26.{46,47}.0-dev.0`. The validation-only manifest/lock
-changes were restored. The live runtime was stopped with `bin/controllerd --stop` after reproduction
-(`local-overlap-stop.log`). Catalog, blobs and binary sets are preserved. The
-catalog still has generation 0 active. Resume generation 0 on HTTP6882 and
-generation 1 on HTTP6883, with one relay provisioner. Adapter
-declarations are shared: creating `candidate` added a2 in both deployments, so
-there are two declared adapters per deployment. Both versions answered SQL, but the
-before-promotion overlap test failed. Do not promote yet.
+## Live blockers and pending decisions
 
-Live blockers and next action:
-- TEMP delivery is fixed in `0912a007`. Strict Clippy and Oracle ownership review
-  passed. The kept SQL harness passed in both ownership directions on two corrected
-  generation-0 adapters, with persistent sessions. Original indexed table contents
-  survived stop/restart. Evidence: `local-temp-harness-same-generation.log` and
-  `local-temp-fix-preservation.json`. Corrected first-version artifacts are in
-  `artifacts/v26.46.0-dev.0-temp-fix`. The runtime was stopped again to free memory
-  (`local-temp-fixed-stop.log`).
-- Next: build corrected v26.47 adapterd/clusterd through `bin/run adapterd
-  --build-only`, with validation-only environmentd/clusterd package-version changes.
-  Preserve the binaries in a fixed directory alongside the unchanged second-version
-  controllerd/pubsubd, then restore manifests and lock entries. Restart both fixed
-  deployments, run the TEMP harness across versions, and continue promotion.
-- Concurrent bootstrap can abort on a changed planning revision. It recovered by
-  process restart, but this is not in-process contention recovery. Agent78/task392
-  identified the required preparation/admission retry owner, retained intermediate
-  holds, and transaction-wise catch-up. Do not retry all bootstrap or merely ignore
-  the revision mismatch. No bootstrap retry change has been implemented.
+- **Version overlap:** transferred txn-WAL batches used the newer binary's version
+  instead of the admitted format. `37ed82b7ef` fixes envelope labels without changing
+  writer-key identity or decode guards. Real cross-version transfer/snapshot tests
+  and strict Persist Clippy pass. Runtime verification is pending. Evidence:
+  `local-batch-version-final-{test,clippy}.log`.
+- **Readiness:** the repair chooses a snapshot cut after acquiring a
+  Persist reader and retains that reader through consumption or cancellation.
+  Unavailable status history means not ready. Do not replace selected-cut semantics
+  with latest-state sampling or dispatch QueryClient acquisition back to the
+  coordinator from its own handler. Evidence: `local-snapshot-lifetime-final.log`
+  and `local-protected-snapshot-final-{full-lib,clippy}.log`. The lifetime regression
+  reproduced early expiry before repair. Its maintenance step reapplies committed
+  permission because reader expiry alone does not recompute Persist since.
+- **Adjacent lifetime bug:** the standalone CollectionReader helper has the same
+  early-drop pattern. Scope approval was requested before changing that path.
+- **Persist suite:** `state_inspect_serde_json` fails unchanged on object-key order.
+  Parsed JSON matches the golden. Do not rewrite the golden or weaken assertions.
+  Evidence: `local-batch-version-full-lib{,-repeat}.log`.
+- **Bootstrap contention:** planning-revision changes can abort startup. Agent78 /
+  task392 identified a preparation/admission retry boundary with retained
+  intermediate holds and transaction-wise catch-up. Do not retry all bootstrap or
+  ignore invalidation. No retry repair is implemented.
+- **Temporary-item cleanup:** reuse `mz_sessions_raw` session-to-execution ownership.
+  First TEMP DDL needs failure-preserving durable session-publication completion.
+  Retirement must remove durable Items before their session mapping, using
+  `remove_ephemeral_items_for_owners`, not local-only `drop_temp_items`. Observe
+  retired rows incrementally rather than repeatedly snapshotting them. Normal
+  disconnect already drops Items first. Agent77 / task378 also found that serving
+  CAS/refresh rejects retired TEMP DDL, but `Catalog::transact` does not itself
+  validate the supplied execution incarnation. Do not infer ownership from absent
+  rows or add new session catalog records.
 
-Evidence: `local-second-version-build.log`, artifact hash manifests,
-`local-candidate-controller.log`, `local-temp-harness-red.log`, and task393's
-independent reproduction. The harness's immediate repeat hit restart readiness,
-not a second assertion of the same error. This is a development-version test, not
-compatibility with an older released binary. Promotion and retirement remain
-unexecuted. After verifying the correction across versions, execute DDL/writes on both
-versions before/after promotion, transfer relay provisioning explicitly, and retire
-only generation 0 while preserving the survivor's sessions and replica PIDs.
+## Preserved runtime and evidence
 
-Catalog library, read-protection/oracle integration, and initialization/race tests
-passed. Runtime all-target compilation passed. Evidence logs:
-`local-catalog-lib-corrected.log`, `local-compute-protection-corrected.log`,
-`local-read-write-corrected.log`, `local-activation-boundary.log`, and
-`local-activation-check.log`. The full library pass precedes the configuration
-repair, which has targeted coverage. Runtime review found no extra authority leak.
-Its objection to restarting the promoted adapter is rejected: the prompt explicitly
-allows that brief restart. Surviving sessions on other adapters remain required.
+The runtime is stopped. Catalog, blobs and artifact hardlinks remain intact.
+Generation 0 uses HTTP6882 and generation 1 HTTP6883. Shared declarations contain
+`a1` (default) and `a2` (candidate), giving two adapters per deployment. Keep one
+relay provisioner: generation 1 uses `--pubsub-url http://127.0.0.1:6879`.
 
-Controller HTTP exposes `POST /api/deployments/{generation}/retire` with required
-JSON `environment_id`. It validates that identity before mutation and returns a
-receipt after durable retirement. Launcher commit `9465b60cd0` plus worktree safety
-changes implement `--retire-generation`, validate the receipt, then stop only that
-generation. Python tests, Black and Ruff pass (`local-prebuilt-launcher.log`). Real HTTP
-rejects wrong-environment and active-generation retirement
-(`local-retirement-rejections.json`). Successful retirement remains unverified. Never use environment-wide `--stop` for this.
-Keep one managed relay provisioner and hand it off explicitly before retiring its
-controller. Agent74/task359 has the process-lifetime evidence.
+Artifacts are under `full-writer/artifacts/v26.{46,47}.0-dev.0-temp-fix`.
+Validation-only version/lock overrides were restored. These are distinct prototype
+development versions, not evidence of released-version compatibility.
 
-Private local PostgreSQL18 is running in `aj-m3-full-writer-postgres` on loopback
-26257. Its credential URL file is `full-writer/local-postgres-url.txt` under the
-local evidence directory. The fresh `materialize_controllerd` runtime database has
-its own `full-writer/local-runtime-postgres-url.txt` file for `MZDEV_POSTGRES`.
-The default controller state directory now holds the live generation-0 environment.
-PostgreSQL uses max_connections=1000 and a 2GiB memory limit. Its default 100 slots
-were saturated by mostly idle pooled connections. Do not print credentials.
-This is separate from the scratch DB.
+The latest overlap attempt completed DDL and writes on both versions, then failed
+before promotion. Evidence: `live-promotion-before.json`, `live-promotion.log`,
+`live-promotion-repeat.log`, and `local-fixed-{old,new}-runtime.log`.
+`local-promotion-failure-stop-repeat.log` records successful shutdown after an
+initial psutil pidfd wait failure. That shutdown error has not been repaired.
 
-Scratch SSO expired, but Aljoscha explicitly authorized local VM verification
-instead. Scratch is an optimization, not a blocker. This VM has 18GiB RAM and limited
-free disk, so keep heavy jobs serial and monitor resources. Prior local `/tmp` logs
-are no longer present. Confirm remote job state before any future worker sync.
+Use `--retire-generation G --controller-url URL`, not environment-wide `--stop`,
+for retirement. The launcher validates the HTTP receipt and exact process identity
+before removing the target generation. Hand off relay supervision before retiring
+its controller. Agent74 / task359 records process-lifetime constraints. Preserve
+sink-specific authorization and Kafka recovery. Global AllowWrites is not sink
+revocation, and promotion does not introduce an atomic Kafka handover protocol.
 
-Temporary-item cleanup remains unimplemented. Aljoscha proposes reusing
-`mz_sessions_raw` session-to-execution ownership. Agent77/task378 confirmed the
-serving path rejects retired TEMP DDL through CAS conflict and refresh, but
-`Catalog::transact` does not itself validate a supplied execution incarnation.
-First TEMP DDL needs failure-preserving durable session-publication completion.
-Retirement must clean durable Items before removing their session mapping. Use
-`remove_ephemeral_items_for_owners`, not local-only `drop_temp_items`. The retired
-row sweep also needs incremental observations rather than repeated full snapshots.
-Normal disconnect already drops Items before retracting its session. Do not guess
-ownership from missing rows or introduce new session catalog records.
+Private PostgreSQL18 runs as `aj-m3-full-writer-postgres` on loopback26257 with
+max_connections=1000 and a 2GiB memory limit. Under the evidence root, test
+credentials are in `full-writer/local-postgres-url.txt`, and runtime credentials
+for `MZDEV_POSTGRES` are in `full-writer/local-runtime-postgres-url.txt`.
+The runtime database is `materialize_controllerd`, with state in the default
+controller directory. Never print credentials or unfiltered process arguments.
 
-Reuse existing sink-specific reconciliation: inactive generations have no desired
-external sinks, and the follower stops their attempts without stopping queries or
-other execution. Global AllowWrites is not the sink revocation boundary. Preserve
-Kafka fencing/recovery and existing late-approved-open limitations. Recheck active
-authority after asynchronous sink input acquisition. Do not add a new handover
-protocol merely to make catalog promotion an atomic Kafka barrier.
+Keep heavy jobs serial and low priority on this 18GiB VM. Stop idle runtime
+processes and preserve database volumes, evidence and candidate binaries. Scratch
+is optional, not a blocker. Confirm remote worker state before syncing anything.
 
 ## Verified outcomes and remaining gaps
 
