@@ -302,3 +302,101 @@ def test_delayed_resolved_cleanup_preserves_unknown_and_future_transactions(
         for shard in (0, 1)
     )
     sut.close()
+
+
+@pytest.fixture
+def rollback_writer(monkeypatch, tmp_path):
+    database = tmp_path / "rollback.sqlite"
+    monkeypatch.setattr(a.state, "open_db", lambda *args: sqlite3.connect(database))
+    journal = a.open_state()
+    with journal:
+        marker = journal.execute(
+            "INSERT INTO plans (shards,value,outcome) VALUES ('[0,1]',7,'indeterminate')"
+        ).lastrowid
+    assert marker is not None
+    connection = Mock()
+    connection.__enter__ = Mock(return_value=connection)
+    connection.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(a, "_connect", lambda host: connection)
+    monkeypatch.setattr(a, "_execute", Mock())
+    monkeypatch.setattr(a, "always", Mock())
+    yield journal, marker, connection
+    journal.close()
+
+
+@pytest.mark.parametrize("acknowledged", [False, True])
+def test_requested_rollback_lost_connection_retains_uncertainty(
+    rollback_writer, monkeypatch, acknowledged
+):
+    journal, marker, connection = rollback_writer
+
+    def execute(conn, deadline, query, params=None):
+        if query == "ROLLBACK" and not acknowledged:
+            raise psycopg.OperationalError("connection lost during ROLLBACK")
+        return Mock()
+
+    monkeypatch.setattr(a, "_execute", execute)
+    a.write("host", marker, 100, True, Mock())
+    assert journal.execute(
+        "SELECT outcome,finalized FROM plans WHERE id=?", (marker,)
+    ).fetchone() == ("rejected" if acknowledged else "indeterminate", 1)
+
+
+@pytest.mark.parametrize("rollback", [False, True])
+def test_escaped_rollback_control_exception_still_propagates(rollback_writer, rollback):
+    journal, marker, connection = rollback_writer
+
+    @contextmanager
+    def transaction():
+        yield
+
+    connection.transaction = transaction
+    unexpected = psycopg.Rollback()
+    with pytest.raises(psycopg.Rollback) as raised:
+        a.write("host", marker, 100, rollback, Mock(side_effect=unexpected))
+    assert raised.value is unexpected
+    assert journal.execute(
+        "SELECT outcome,finalized FROM plans WHERE id=?", (marker,)
+    ).fetchone() == ("indeterminate", 0)
+
+
+@pytest.mark.parametrize(
+    "error,violation",
+    [
+        (psycopg.errors.InternalError_("unexpected ROLLBACK failure"), True),
+        (psycopg.OperationalError("connection lost during ROLLBACK"), False),
+        (psycopg.errors.QueryCanceled("ROLLBACK interrupted"), False),
+    ],
+)
+def test_rollback_sql_errors_reach_the_product_classifier(
+    rollback_writer, monkeypatch, error, violation
+):
+    journal, marker, connection = rollback_writer
+
+    def execute(conn, deadline, query, params=None):
+        if query == "ROLLBACK":
+            raise error
+        return Mock()
+
+    @contextmanager
+    def transaction():
+        try:
+            yield
+        except psycopg.Rollback:
+            # psycopg preserves its original control exception and logs any
+            # SQL failure from its own rollback attempt.
+            try:
+                execute(connection, 100, "ROLLBACK")
+            except psycopg.Error:
+                pass
+            raise
+
+    connection.transaction = transaction
+    monkeypatch.setattr(a, "_execute", execute)
+    assertions = Mock()
+    monkeypatch.setattr(a, "always", assertions)
+    a.write("host", marker, 100, True, Mock())
+    assert any(call.args[0] is False for call in assertions.call_args_list) is violation
+    assert journal.execute(
+        "SELECT outcome,finalized FROM plans WHERE id=?", (marker,)
+    ).fetchone() == ("indeterminate", 1)

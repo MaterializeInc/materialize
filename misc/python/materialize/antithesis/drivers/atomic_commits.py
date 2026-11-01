@@ -20,6 +20,7 @@ import json
 import sqlite3
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
@@ -190,17 +191,22 @@ def write(
     try:
         plan = load_plans(db)[marker]
         try:
-            with _connect(host) as conn, conn.transaction():
-                for shard in plan.shards:
-                    _execute(
-                        conn,
-                        deadline,
-                        f"INSERT INTO {SCHEMA}.t{shard} VALUES (%s, %s)",
-                        (marker, plan.value),
-                    )
-                staged()
+            with _connect(host) as conn:
                 if rollback:
-                    raise psycopg.Rollback()
+                    _execute(conn, deadline, "BEGIN")
+                with nullcontext() if rollback else conn.transaction():
+                    for shard in plan.shards:
+                        _execute(
+                            conn,
+                            deadline,
+                            f"INSERT INTO {SCHEMA}.t{shard} VALUES (%s, %s)",
+                            (marker, plan.value),
+                        )
+                    staged()
+                    if rollback:
+                        # A psycopg Rollback control exception can outlive failed
+                        # rollback I/O and hide its SQL error from our classifier.
+                        _execute(conn, deadline, "ROLLBACK")
             outcome = "rejected" if rollback else "ok"
         except (psycopg.Error, OSError) as error:
             classification = sql.classify(error)
