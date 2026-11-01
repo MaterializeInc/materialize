@@ -26,19 +26,48 @@ prefix covering the configuration write timestamp.
 Strict all-target Clippy and the default `bin/controllerd --build-only` passed.
 The linker initially exhausted disk. Removing disposable incremental cache and
 repeating the same build succeeded (`local-controller-build-repeat.log`).
-Generation 0 is running from fixed v26.46.0-dev.0 artifacts through launcher task385.
+Generation 0 was verified from fixed v26.46.0-dev.0 artifacts through the launcher.
 It serves DDL, indexed reads and table writes. Controller-only restart preserved
 adapter/replica PIDs and data. Pinning the relay binary replaced that relay while
 preserving its endpoint (`local-artifact-pinning-pass.json`).
 
-Next: build a v26.47.0-dev.0 development artifact set from this prototype, changing
-only environmentd/clusterd package versions for validation. Preserve the artifacts
-and restore those temporary manifest/lock changes afterward. Use
-`--controller-binaries-directory` for both deployments, one relay provisioner and
-`--pubsub-url` for the candidate. Execute writes/DDL before and after promotion,
-then explicit retirement while checking survivor sessions and replica PIDs. This
-is a two-development-version test, not compatibility with an older released binary.
-The required distinct-version walkthrough remains unexecuted.
+Both fixed development artifact sets now exist under
+`full-writer/artifacts/v26.{46,47}.0-dev.0`. The validation-only manifest/lock
+changes were restored. The live runtime was stopped with `bin/controllerd --stop` after reproduction
+(`local-overlap-stop.log`). Catalog, blobs and binary sets are preserved. The
+catalog still has generation 0 active. Resume generation 0 on HTTP6882 and
+generation 1 on HTTP6883, with one relay provisioner. Adapter
+declarations are shared: creating `candidate` added a2 in both deployments, so
+there are two declared adapters per deployment. Both versions answered SQL, but the
+before-promotion overlap test failed. Do not promote yet.
+
+Live blockers and next action:
+- TEMP delivery is fixed in `0912a007`. Strict Clippy and Oracle ownership review
+  passed. The kept SQL harness passed in both ownership directions on two corrected
+  generation-0 adapters, with persistent sessions. Original indexed table contents
+  survived stop/restart. Evidence: `local-temp-harness-same-generation.log` and
+  `local-temp-fix-preservation.json`. Corrected first-version artifacts are in
+  `artifacts/v26.46.0-dev.0-temp-fix`. The runtime was stopped again to free memory
+  (`local-temp-fixed-stop.log`).
+- Next: build corrected v26.47 adapterd/clusterd through `bin/run adapterd
+  --build-only`, with validation-only environmentd/clusterd package-version changes.
+  Preserve the binaries in a fixed directory alongside the unchanged second-version
+  controllerd/pubsubd, then restore manifests and lock entries. Restart both fixed
+  deployments, run the TEMP harness across versions, and continue promotion.
+- Concurrent bootstrap can abort on a changed planning revision. It recovered by
+  process restart, but this is not in-process contention recovery. Agent78/task392
+  identified the required preparation/admission retry owner, retained intermediate
+  holds, and transaction-wise catch-up. Do not retry all bootstrap or merely ignore
+  the revision mismatch. No bootstrap retry change has been implemented.
+
+Evidence: `local-second-version-build.log`, artifact hash manifests,
+`local-candidate-controller.log`, `local-temp-harness-red.log`, and task393's
+independent reproduction. The harness's immediate repeat hit restart readiness,
+not a second assertion of the same error. This is a development-version test, not
+compatibility with an older released binary. Promotion and retirement remain
+unexecuted. After verifying the correction across versions, execute DDL/writes on both
+versions before/after promotion, transfer relay provisioning explicitly, and retire
+only generation 0 while preserving the survivor's sessions and replica PIDs.
 
 Catalog library, read-protection/oracle integration, and initialization/race tests
 passed. Runtime all-target compilation passed. Evidence logs:
@@ -113,16 +142,11 @@ remain outside the authorized integration scope. Newer changes need broad CI.
 
 ## Worker and evidence
 
-Worker `i-0f5a60529f57d6ac7`:16vCPU/61GiB/500GiB, expires
-**2026-10-30T18:13:29Z**. Use toolchain1.98.1, CARGO_BUILD_JOBS=2 and
-RUST_MIN_STACK=8388608 for tests. Extend expiry proactively within the approved
-budget. Sync explicit revisions only to an idle, clean worker.
-
-Private PostgreSQL18 listens on loopback26257. Its connection file is
-`/home/ubuntu/m3-evidence/native-postgres-url.txt`. Never print credentials or
-unfiltered process arguments. Private harnesses/evidence live in
-`~/.local/share/aj/m3-evidence/` locally and `/home/ubuntu/m3-evidence/` remotely.
-Run harnesses with `bin/pyactivate`. Keep heavy verification serial.
+The prior scratch worker `i-0f5a60529f57d6ac7` had an expiry of
+2026-10-30T18:13:29Z. Do not assume it still exists. Use the local VM and archived
+evidence. Keep heavy verification serial. Private harnesses/evidence live under
+`~/.local/share/aj/m3-evidence/`. Never print credentials or unfiltered process
+arguments.
 
 Validated off-worker evidence is in the local `startup-spin/` subdirectory:
 - `logical-frontier-runtime-pass.json.gz`: two-adapter restart and placement.

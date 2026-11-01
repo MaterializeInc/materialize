@@ -141,3 +141,16 @@ The current frontier repair already retains differential-writer observations,
 samples physical storage progress cooperatively, moves replica reports to their
 owner, and retains caught-up frontier observations. Do not count those paths as
 untouched findings in subsequent audits.
+
+## Nonlocal compute permission staging
+
+The legacy adapter-owned compute path forwards global permission updates to
+`compute-client::Controller::apply_compaction_bound`. Unknown IDs enter
+`staged_compaction_bounds`; removal occurs when the collection is installed.
+A temporary index belonging to another adapter never installs locally, so its
+staged permission can remain until process restart. Native replica-owned compute
+skips this adapter delivery path and is not affected.
+
+Audit retirement of never-installed permissions before changing this behavior.
+Preserve legitimate staging before collection creation. This is an ownership and
+lifetime follow-up, not permission to weaken catalog or storage validation.
