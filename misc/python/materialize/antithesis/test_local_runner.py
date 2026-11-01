@@ -448,3 +448,173 @@ def test_sticky_invalid_baseline_stops_before_workloads(monkeypatch, experiment)
     )
     assert runner.run(args) == 1
     assert json.loads((args.output / "summary.json").read_text())["stage"] == "baseline"
+
+
+def test_requested_check_timeout_is_incomplete_not_a_passing_experiment(
+    monkeypatch, experiment
+):
+    args, driver, _, setup = experiment
+    checker = command(args.templates, "eventually_check", "check", "eventually")
+    checker.path.write_text("import time; time.sleep(60)")
+    monkeypatch.setattr(runner, "discover", lambda directory: [setup, driver, checker])
+    args.check = [checker.path.name]
+    args.command_timeout = 0.1
+    assert runner.run(args) == 2
+    report = json.loads((args.output / "summary.json").read_text())
+    assert report["has_evaluated_oracle"] and report["status"] == "incomplete"
+    checks = [row for row in report["schedule"] if row["command"] == checker.path.name]
+    assert len(checks) == 1 and checks[0]["incomplete"] in (
+        "command_timeout",
+        "phase_deadline",
+    )
+
+
+def test_final_hook_is_skipped_after_driver_truncation(experiment):
+    args, driver, checker, _ = experiment
+    driver.path.write_text("import time; time.sleep(60)")
+    args.check = [checker.path.name]
+    assert runner.run(args) == 2
+    report = json.loads((args.output / "summary.json").read_text())
+    assert report["skipped_requested_checks"] == [checker.path.name]
+    assert not any(row["command"] == checker.path.name for row in report["schedule"])
+
+
+def test_bounded_drain_allows_natural_driver_completion_and_final_check(experiment):
+    args, driver, checker, _ = experiment
+    args.duration = 0.05
+    args.concurrency = 1
+    args.drain_timeout = 1
+    args.check = [checker.path.name]
+    driver.path.write_text("import time; time.sleep(0.15)")
+    assert runner.run(args) == 0
+    report = json.loads((args.output / "summary.json").read_text())
+    drivers = [row for row in report["schedule"] if row["command"] == driver.path.name]
+    assert len(drivers) == 1 and drivers[0]["incomplete"] is None
+    assert drivers[0]["finished"] > report["admission_end"]
+    assert 0 < report["drain_elapsed_seconds"] < 1
+    assert not report["skipped_requested_checks"]
+    assert any(
+        row["command"] == checker.path.name and row["incomplete"] is None
+        for row in report["schedule"]
+    )
+
+
+def test_drain_still_bounds_a_stubborn_driver(tmp_path):
+    source = command(tmp_path, body="import time; time.sleep(60)")
+    scheduler = scheduling.Scheduler(tmp_path, 1, 1, 5, 0.05, 5, drain_timeout=0.1)
+    started = time.monotonic()
+    scheduler.phase([source], 0.05)
+    assert time.monotonic() - started < 2
+    assert scheduler.admission_end is not None
+    assert 0.08 <= scheduler.drain_elapsed < 1
+    assert scheduler.completed[0]["incomplete"] == "phase_deadline"
+
+
+def test_current_scheduler_state_cannot_be_shared(monkeypatch, experiment):
+    import fcntl
+
+    args, _, _, _ = experiment
+    state = Path(os.environ["MZ_ANTITHESIS_STATE_DIR"])
+    state.mkdir()
+    with (state / "local-scheduler.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(RuntimeError, match="another local scheduler"):
+            runner.run(args)
+
+
+def test_generated_profile_discovery_uses_authoritative_source_family(tmp_path):
+    source = tmp_path / "original.py"
+    source.write_text(
+        "from materialize.antithesis.drivers.history import interleaving_driver\n"
+    )
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    (profile / "first_configure.py").write_text(
+        f"from materialize.antithesis.telemetry import run_command\nrun_command('transactions', {str(source)!r})\n"
+    )
+    (profile / "parallel_driver_interleave.py").write_text(
+        f"from materialize.antithesis.telemetry import run_command\nrun_command('transactions', {str(source)!r})\n"
+    )
+    assert [item.family for item in runner.discover(profile)] == ["history", "history"]
+    (profile / "parallel_driver_raw.py").write_text(source.read_text())
+    with pytest.raises(ValueError, match="measured wrapper"):
+        runner.discover(profile)
+
+
+def test_cli_requires_an_explicit_cluster_and_preserves_context_isolation(monkeypatch):
+    from materialize.antithesis import local
+
+    monkeypatch.setattr(sys, "argv", ["local", "down"])
+    with pytest.raises(SystemExit) as raised:
+        local.main()
+    assert raised.value.code == 2
+    monkeypatch.setattr(local, "CLUSTER", "old")
+    monkeypatch.setattr(local, "CONTEXT", "kind-old")
+    invoked = []
+    monkeypatch.setattr(
+        local, "down", lambda: invoked.append((local.CLUSTER, local.CONTEXT))
+    )
+    monkeypatch.setattr(sys, "argv", ["local", "--cluster-name", "owned-test", "down"])
+    assert local.main() == 0
+    assert invoked == [("owned-test", "kind-owned-test")]
+
+
+def test_local_up_uses_a_cluster_specific_manifests_directory(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
+    from materialize.antithesis import local
+
+    monkeypatch.setattr(local, "CLUSTER", "owned")
+    monkeypatch.setattr(local, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(local, "license_key", lambda: "test-license")
+    for name in ("ensure_cluster", "load_images", "apply", "wait_for_setup"):
+        monkeypatch.setattr(local, name, Mock())
+    render = Mock()
+    monkeypatch.setattr(local.render, "render", render)
+    local.up(tmp_path, skip_build=True)
+    assert render.call_args.args[0] == tmp_path / "owned" / "manifests"
+
+
+@pytest.mark.parametrize("stage", ["first", "check"])
+def test_sigterm_during_setup_or_check_cleans_owned_command_group(tmp_path, stage):
+    pid_file = tmp_path / "owned.pid"
+    sleeping = f"import os,time; open({str(pid_file)!r},'w').write(str(os.getpid())); time.sleep(60)"
+    setup = command(
+        tmp_path, "first_configure", body=sleeping if stage == "first" else "pass"
+    )
+    driver = command(tmp_path, "parallel_driver_test", body="pass")
+    check = command(
+        tmp_path, "eventually_check", body=sleeping if stage == "check" else "pass"
+    )
+    helper = tmp_path / "experiment.py"
+    helper.write_text(f"""
+import argparse
+from pathlib import Path
+from materialize.antithesis import local_runner as r
+from materialize.antithesis.local_scheduler import Command
+r.discover=lambda directory:[Command(Path({str(setup.path)!r}),'configure','first'),Command(Path({str(driver.path)!r}),'test','parallel'),Command(Path({str(check.path)!r}),'check','eventually')]
+r.telemetry_snapshot=lambda *args:{{'telemetry_available':True,'harness_health':{{'valid':True,'errors':0}},'active_commands':0}}
+a=argparse.Namespace(output=Path({str(tmp_path / 'run')!r}),templates=Path({str(tmp_path)!r}),profile='transactions',duration=0.15,concurrency=1,seed=1,command_timeout=10,setup_timeout=10,shutdown_grace=0.05,check_interval=5,include=[],check=[{check.path.name!r}],require_witness=[],skip_first={stage == 'check'!r})
+r.run(a)
+""")
+    with (tmp_path / "scheduler.log").open("w") as log:
+        proc = subprocess.Popen(
+            [sys.executable, str(helper)],
+            env={**os.environ, "MZ_ANTITHESIS_STATE_DIR": str(tmp_path / "state")},
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert pid_file.exists()
+            pid = int(pid_file.read_text())
+            proc.terminate()
+            proc.wait(timeout=5)
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
+    stat = Path(f"/proc/{pid}/stat")
+    assert not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
