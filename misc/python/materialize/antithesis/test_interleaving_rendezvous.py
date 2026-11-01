@@ -130,6 +130,102 @@ def test_owned_preparation_waits_for_ready_without_releasing_its_lease(
     assert rendezvous.obj["spec"]["rolloutStrategy"] == "ManuallyPromote"
 
 
+def test_competing_interleaver_does_not_delete_a_candidate_during_owned_preparation(
+    rendezvous, monkeypatch
+):
+    delete = Mock(return_value=True)
+    monkeypatch.setattr(pod_restarts, "delete_recorded", delete)
+    monkeypatch.setattr(pod_restarts.telemetry, "phase_observed", Mock())
+    monkeypatch.setattr(
+        pod_restarts.rng, "sample", lambda items, n: ["environmentd_candidate"]
+    )
+    monkeypatch.setattr(
+        pod_restarts,
+        "pick_victim",
+        Mock(
+            return_value=pod_restarts.Victim(
+                "environmentd_candidate",
+                "ns",
+                "candidate",
+                "candidate-uid",
+                generation=6,
+            )
+        ),
+    )
+    competing = []
+
+    def advance():
+        other = pod_restarts.interleaving_disruption(
+            rendezvous, cluster_id="u2", deadline=time.monotonic() + 5
+        )
+        competing.append(other)
+        if other is not None:
+            other()
+        rendezvous.phase("ReadyToPromote")
+
+    rendezvous.on_pause = advance
+    action = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=time.monotonic() + 5
+    )
+    assert action is not None
+    delete.assert_not_called()
+    assert competing == [None]
+    assert len(rendezvous.calls) == 1
+
+
+@pytest.mark.parametrize("owner", [None, "rollouts", "expired_interleavings"])
+def test_contended_lease_keeps_fallback_for_unrelated_or_expired_trials(
+    rendezvous, monkeypatch, owner
+):
+    db = rollouts.requests_db(rendezvous.env)
+    rollout_steps.initialize(db)
+    if owner is not None:
+        scenario = rollout_steps.Scenario(
+            "other",
+            "manual_promote",
+            rendezvous.obj,
+            time.monotonic(),
+            False,
+            owner="interleavings" if owner == "expired_interleavings" else owner,
+            deadline=(
+                time.monotonic() - 1
+                if owner == "expired_interleavings"
+                else time.monotonic() + 10
+            ),
+        )
+        rollout_steps.save(db, scenario)
+    lease = rollouts.CrLease(rendezvous.env)
+    assert lease.acquire()
+    try:
+        delete = Mock(return_value=True)
+        monkeypatch.setattr(pod_restarts, "delete_recorded", delete)
+        monkeypatch.setattr(pod_restarts.telemetry, "phase_observed", Mock())
+        monkeypatch.setattr(pod_restarts.rng, "sample", lambda items, n: ["clusterd"])
+        monkeypatch.setattr(
+            pod_restarts,
+            "pick_victim",
+            Mock(
+                return_value=pod_restarts.Victim(
+                    "clusterd", "ns", "replica", "uid", "u2"
+                )
+            ),
+        )
+        action = pod_restarts.interleaving_disruption(
+            rendezvous, cluster_id="u2", deadline=time.monotonic() + 5
+        )
+        assert action is not None
+        action()
+        delete.assert_called_once()
+        retained = rollout_steps.load(db)
+        assert (retained is None) == (owner is None)
+        if retained is not None:
+            assert retained.scenario_id == "other"
+    finally:
+        lease.release()
+        lease.db.close()
+        db.close()
+
+
 def test_owned_preparation_stops_for_quiet_and_resumes_the_same_request(
     rendezvous, monkeypatch
 ):
