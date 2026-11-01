@@ -250,11 +250,9 @@ pub fn build_compute_dataflow(
         let scope = scope.with_label();
 
         // The scope.clone() occurs to allow import in the region.
-        // We build a region here to establish a pattern of a scope inside the dataflow,
-        // so that other similar uses (e.g. with iterative scopes) do not require weird
-        // alternate type signatures.
-        // NOTE: regions are inline (see `inline_region`) and add no timely subgraph, except for
-        // `BuildRegion`. Index imports `enter` it from the dataflow scope, which needs a real child.
+        // NOTE: The regions named here render inline (see `inline_region`) and add no timely
+        // subgraph, except for `BuildRegion`. Index imports `enter` it from the dataflow scope,
+        // which needs a real child scope.
         let mut imported_sources = Vec::new();
         let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
         let output_probe = MzProbeHandle::default();
