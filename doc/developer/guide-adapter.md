@@ -595,6 +595,18 @@ subsequent child WAL writes invalidate the append at B+1. A retry takes new
 snapshots and rechecks authorization. This preserves completed-deployment changes
 without an additional initializer lease or ownership protocol.
 
+### Internal storage observations need snapshot protection
+
+A local storage-controller read hold is not durable protection against another
+participant advancing shared compaction. For an observation whose cut is not yet
+fixed, acquire a Persist reader before selecting the cut, then establish the
+snapshot using that same reader. Retain both the reader and its part leases
+through consumption or cancellation. Part tokens alone do not keep an expired
+reader registered.
+Already-fixed query timestamps require their existing protection, not automatic
+advancement to a newer since. Unavailable readiness observations must remain not
+ready, rather than becoming an empty successful result.
+
 ### Durable sink progress can precede controller observations
 
 A sink commits external output before advancing its Persist progress shard, then

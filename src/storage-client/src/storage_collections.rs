@@ -219,6 +219,17 @@ pub trait StorageCollections: Debug + Sync {
         Result<BoxStream<'static, (SourceData, Timestamp, StorageDiff)>, StorageError>,
     >;
 
+    /// Selects one snapshot cut at or after `minimum_as_of`, after acquiring a
+    /// Persist lease. Unlike an exact snapshot, this can advance the cut to the
+    /// reader's since. The returned stream retains its reader and part leases
+    /// and is not consolidated. An unavailable collection is an error, not an
+    /// empty snapshot. Already-fixed query timestamps must use the exact API.
+    fn snapshot_and_stream_at_since(
+        &self,
+        id: GlobalId,
+        minimum_as_of: Timestamp,
+    ) -> BoxFuture<'static, Result<SourceDataStream, StorageError>>;
+
     /// Create a [`TimestamplessUpdateBuilder`] that can be used to stage
     /// updates for the provided [`GlobalId`].
     fn create_update_builder(
@@ -461,6 +472,14 @@ pub struct StorageCollectionsImpl {
     _finalize_shards_task: Arc<AbortOnDropHandle<()>>,
 }
 
+/// A boxed stream of source data with timestamps and diffs.
+type SourceDataStream = BoxStream<'static, (SourceData, Timestamp, StorageDiff)>;
+
+enum SnapshotCut {
+    Exact(Timestamp),
+    AtLeast(Timestamp),
+}
+
 // Supporting methods for implementing [StorageCollections].
 //
 // Almost all internal methods that are the backing implementation for a trait
@@ -468,9 +487,6 @@ pub struct StorageCollectionsImpl {
 //
 // We follow a pattern where `_inner` methods get a mutable reference to the
 // shared collections state, and it's the public-facing method that locks the
-/// A boxed stream of source data with timestamps and diffs.
-type SourceDataStream = BoxStream<'static, (SourceData, Timestamp, StorageDiff)>;
-
 // state for the duration of its invocation. This allows calling other `_inner`
 // methods from within `_inner` methods.
 impl StorageCollectionsImpl {
@@ -1144,7 +1160,7 @@ impl StorageCollectionsImpl {
     fn snapshot_and_stream(
         &self,
         id: GlobalId,
-        as_of: Timestamp,
+        cut: SnapshotCut,
         txns_read: &TxnsRead<Timestamp>,
     ) -> BoxFuture<'static, Result<SourceDataStream, StorageError>> {
         use futures::stream::StreamExt;
@@ -1161,6 +1177,15 @@ impl StorageCollectionsImpl {
 
         async move {
             let mut read_handle = Self::read_handle_for_snapshot(persist, &metadata, id).await?;
+            let as_of = match cut {
+                SnapshotCut::Exact(as_of) => as_of,
+                SnapshotCut::AtLeast(minimum) => read_handle
+                    .since()
+                    .as_option()
+                    .copied()
+                    .ok_or(StorageError::ReadBeforeSince(id))?
+                    .max(minimum),
+            };
             let stream = match txns_read {
                 None => {
                     // We're not using txn-wal for tables, so we can take a snapshot directly.
@@ -1181,8 +1206,15 @@ impl StorageCollectionsImpl {
                 }
             };
 
-            // Map our stream, unwrapping Persist internal errors.
-            let stream = stream.map(|((data, _v), t, d)| (data, t, d)).boxed();
+            // Part tokens do not keep an expired reader registered. Retain the
+            // handle through consumption or cancellation so GC cannot remove
+            // snapshot blobs before the consumer fetches them.
+            let stream = stream
+                .map(move |((data, _v), t, d)| {
+                    let _read_lease = &read_handle;
+                    (data, t, d)
+                })
+                .boxed();
             Ok(stream)
         }
         .boxed()
@@ -1822,7 +1854,15 @@ impl StorageCollections for StorageCollectionsImpl {
         'static,
         Result<BoxStream<'static, (SourceData, Timestamp, StorageDiff)>, StorageError>,
     > {
-        self.snapshot_and_stream(id, as_of, &self.txns_read)
+        self.snapshot_and_stream(id, SnapshotCut::Exact(as_of), &self.txns_read)
+    }
+
+    fn snapshot_and_stream_at_since(
+        &self,
+        id: GlobalId,
+        minimum_as_of: Timestamp,
+    ) -> BoxFuture<'static, Result<SourceDataStream, StorageError>> {
+        self.snapshot_and_stream(id, SnapshotCut::AtLeast(minimum_as_of), &self.txns_read)
     }
 
     fn create_update_builder(
@@ -4426,6 +4466,145 @@ mod tests {
             critical.opaque().decode::<PersistEpoch>(),
             PersistEpoch::default()
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_snapshot_cut_protected_after_peer_compaction() {
+        use futures::StreamExt;
+
+        async fn wait_for_physical_since(persist: &PersistClient, shard: ShardId, ts: u64) {
+            let mut critical = persist
+                .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
+                    shard,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    Opaque::encode(&PersistEpoch::default()),
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .unwrap();
+            let opaque = critical.opaque().clone();
+            loop {
+                // Expiring a reader does not itself recompute the physical
+                // since. Reapply the already-committed permission to do so.
+                critical
+                    .compare_and_downgrade_since(&opaque, (&opaque, &frontier(ts)))
+                    .await
+                    .unwrap();
+                let state = persist.inspect_shard::<Timestamp>(&shard).await.unwrap();
+                let state = serde_json::to_value(state).unwrap();
+                if state["since"] == serde_json::to_value(vec![Timestamp::new(ts)]).unwrap() {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+
+        let (first, persist) = bound_test_controller().await;
+        let second = peer_test_controller(&first, first.envd_epoch, false).await;
+        let id = GlobalId::User(1);
+        let shard = ShardId::new();
+        write_retained_history(&persist, shard).await;
+        let metadata = StorageMetadata {
+            collection_metadata: [(id, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(5))].into_iter().collect(),
+            ..Default::default()
+        };
+        for controller in [&first, &second] {
+            controller
+                .create_collections_for_bootstrap(
+                    &metadata,
+                    None,
+                    vec![(
+                        id,
+                        CollectionDescription::for_other(RelationDesc::empty(), None),
+                    )],
+                    &BTreeSet::new(),
+                )
+                .await
+                .unwrap();
+        }
+        let local_holds = first.acquire_read_holds(vec![id]).unwrap();
+        second
+            .apply_compaction_bounds(BTreeMap::from([(id, frontier(10))]))
+            .unwrap();
+        await_persist_since(&persist, shard, frontier(10)).await;
+        assert_eq!(local_holds[0].since(), &frontier(5));
+        assert!(matches!(
+            StorageCollections::snapshot_and_stream(&first, id, Timestamp::new(5)).await,
+            Err(StorageError::ReadBeforeSince(_))
+        ));
+
+        let stream = first
+            .snapshot_and_stream_at_since(id, Timestamp::new(5))
+            .await
+            .unwrap();
+        second
+            .apply_compaction_bounds(BTreeMap::from([(id, frontier(20))]))
+            .unwrap();
+        await_persist_since(&persist, shard, frontier(20)).await;
+        // The peer has durably advanced permission. A delayed consumer must
+        // still hold back physical compaction, not merely retain local part tokens.
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                wait_for_physical_since(&persist, shard, 20),
+            )
+            .await
+            .is_err(),
+            "unconsumed snapshot stream lost its read lease"
+        );
+        let rows: Vec<_> = stream.collect().await;
+        // The selected cut includes the event at 5, not the later event at 15,
+        // even though permission advances while the snapshot is being consumed.
+        assert_eq!(rows.iter().map(|(_, _, diff)| diff).sum::<i64>(), 1);
+        assert!(rows.iter().all(|(row, _, _)| row.0 == Ok(Row::default())));
+        await_persist_since(&persist, shard, frontier(20)).await;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_physical_since(&persist, shard, 20),
+        )
+        .await
+        .expect("consumed snapshot did not release its lease");
+
+        let rows: Vec<_> = first
+            .snapshot_and_stream_at_since(id, Timestamp::new(25))
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        assert_eq!(rows.iter().map(|(_, _, diff)| diff).sum::<i64>(), 2);
+        assert!(rows.iter().all(|(_, ts, _)| *ts == Timestamp::new(25)));
+        let abandoned = first
+            .snapshot_and_stream_at_since(id, Timestamp::new(25))
+            .await
+            .unwrap();
+        second
+            .apply_compaction_bounds(BTreeMap::from([(id, frontier(25))]))
+            .unwrap();
+        await_persist_since(&persist, shard, frontier(25)).await;
+        drop(abandoned);
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_physical_since(&persist, shard, 25),
+        )
+        .await
+        .expect("canceled snapshot did not release its lease");
+        assert!(
+            first
+                .snapshot_and_stream_at_since(GlobalId::User(999), Timestamp::MIN)
+                .await
+                .is_err()
+        );
+
+        drop(local_holds);
+        second
+            .apply_compaction_bounds(BTreeMap::from([(id, Antichain::new())]))
+            .unwrap();
+        await_persist_since(&persist, shard, Antichain::new()).await;
+        assert!(matches!(
+            first.snapshot_and_stream_at_since(id, Timestamp::MIN).await,
+            Err(StorageError::ReadBeforeSince(_))
+        ));
     }
 
     #[mz_ore::test(tokio::test)]

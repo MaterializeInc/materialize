@@ -785,6 +785,17 @@ impl StorageCollections for EmptyStorage {
         unimplemented!("storage is not used by these compute tests")
     }
 
+    fn snapshot_and_stream_at_since(
+        &self,
+        _id: GlobalId,
+        _minimum_as_of: Timestamp,
+    ) -> BoxFuture<
+        'static,
+        Result<BoxStream<'static, (SourceData, Timestamp, StorageDiff)>, StorageError>,
+    > {
+        unimplemented!("storage is not used by these compute tests")
+    }
+
     fn create_update_builder(
         &self,
         _id: GlobalId,

@@ -74,7 +74,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
-use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::{Mutex, oneshot};
@@ -687,9 +687,15 @@ impl Coordinator {
 
         // Analyze replica statuses to detect crash-looping or OOM-looping replicas
         let problematic_replicas = if replica_status_check_enabled {
-            self.analyze_replica_looping(now).await
+            match self.analyze_replica_looping(now).await {
+                Ok(replicas) => Some(replicas),
+                Err(error) => {
+                    tracing::warn!(%error, "replica status observation unavailable; not ready to promote");
+                    None
+                }
+            }
         } else {
-            BTreeSet::new()
+            Some(BTreeSet::new())
         };
 
         let stability_check_enabled =
@@ -702,21 +708,25 @@ impl Coordinator {
         // and an operator can still force it via skip-catchup.
         let stability_period_ms = u64::try_from(stability_period.as_millis()).unwrap_or(u64::MAX);
 
-        let classification = self
-            .classify_clusters(
+        let classification = if let Some(problematic_replicas) = &problematic_replicas {
+            self.classify_clusters(
                 allowed_lag.into(),
                 cutoff.into(),
                 now.into(),
                 &live_collection_frontiers,
                 &exclude_collections,
-                &problematic_replicas,
+                problematic_replicas,
                 policy_read_ts,
             )
-            .await;
+            .await
+        } else {
+            BTreeMap::new()
+        };
 
-        let all_caught_up = classification
-            .values()
-            .all(|status| *status != ClusterCaughtUpStatus::NotCaughtUp);
+        let all_caught_up = problematic_replicas.is_some()
+            && classification
+                .values()
+                .all(|status| *status != ClusterCaughtUpStatus::NotCaughtUp);
         let caught_up_clusters = if stability_check_enabled {
             classification
                 .into_iter()
@@ -1161,7 +1171,10 @@ impl Coordinator {
     ///
     /// A replica is considered problematic if it has multiple OOM kills in a
     /// short-ish window.
-    async fn analyze_replica_looping(&self, now: EpochMillis) -> BTreeSet<ReplicaId> {
+    async fn analyze_replica_looping(
+        &self,
+        now: EpochMillis,
+    ) -> Result<BTreeSet<ReplicaId>, StorageError> {
         // Look back 1 day for patterns.
         let lookback_window: u64 = Duration::from_secs(24 * 60 * 60)
             .as_millis()
@@ -1179,33 +1192,27 @@ impl Coordinator {
             .get_entry(&replica_status_item_id)
             .latest_global_id();
 
-        // Acquire a read hold to determine the as_of timestamp for snapshot_and_stream
+        // A local hold supplies the desired lower bound, not protection against
+        // shared compaction. Select the final cut only after acquiring a Persist lease.
         let read_holds = self
             .controller
             .storage_collections
-            .acquire_read_holds(vec![replica_status_gid])
-            .expect("can't acquire read hold for mz_cluster_replica_status_history");
-        let read_hold = if let Some(read_hold) = read_holds.into_iter().next() {
-            read_hold
-        } else {
-            // Collection is not readable anymore, but we return an empty set
-            // instead of panicing.
-            return BTreeSet::new();
-        };
+            .acquire_read_holds(vec![replica_status_gid])?;
+        let unavailable = || StorageError::ReadBeforeSince(replica_status_gid);
+        let read_hold = read_holds.into_iter().next().ok_or_else(unavailable)?;
 
         let as_of = read_hold
             .since()
             .iter()
             .next()
             .cloned()
-            .expect("since should not be empty");
+            .ok_or_else(unavailable)?;
 
         let mut replica_statuses_stream = self
             .controller
             .storage_collections
-            .snapshot_and_stream(replica_status_gid, as_of)
-            .await
-            .expect("can't read mz_cluster_replica_status_history");
+            .snapshot_and_stream_at_since(replica_status_gid, as_of)
+            .await?;
 
         let mut replica_problem_counts: BTreeMap<ReplicaId, u32> = BTreeMap::new();
 
@@ -1295,7 +1302,7 @@ impl Coordinator {
         // Explicitly keep the read hold alive until this point.
         drop(read_hold);
 
-        result
+        Ok(result)
     }
 
     /// Determines if a replica status indicates a problematic state that could
