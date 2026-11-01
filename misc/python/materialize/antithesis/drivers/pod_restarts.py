@@ -442,7 +442,15 @@ def _owned_interleaving(
     try:
         acquired = lease.acquire()
         if not acquired:
-            return False, None
+            # Falling through to a pod delete can destroy a peer's candidate
+            # while that peer is still preparing the owned rendezvous.
+            scenario = rollout_steps.load(db)
+            return (
+                scenario is not None
+                and scenario.owner == "interleavings"
+                and time.monotonic() < scenario.deadline,
+                None,
+            )
         polling = False
         while True:
             if polling:
