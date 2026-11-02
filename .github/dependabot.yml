@@ -174,8 +174,6 @@ updates:
     - /misc/images/tini-static
     - /misc/images/distroless-prod-base
     - /misc/dbt-materialize
-    - /misc/mcp-materialize
-    - /misc/mcp-materialize-agents
     - /ci/builder
     - /test
     - /test/playwright
@@ -290,30 +288,6 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
-# uv projects need the `uv` ecosystem. Under `pip` these directories produced
-# no update PRs at all, and `uv.lock` was never bumped.
-- package-ecosystem: uv
-  directories:
-    - /misc/mcp-materialize
-    - /misc/mcp-materialize-agents
-  schedule:
-    interval: weekly
-    day: sunday
-    time: "22:00"
-  cooldown:
-    default-days: 3
-  open-pull-requests-limit: 50
-  labels: [A-dependencies]
-  ignore:
-    # Both servers are deprecated and use APIs that mcp 2.x removed.
-    - dependency-name: mcp
-      update-types: [version-update:semver-major]
   groups:
     simple:
       applies-to: version-updates
