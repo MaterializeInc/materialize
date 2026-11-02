@@ -500,7 +500,7 @@ reqwest-0-12 = { package = "reqwest", version = "0.12.28", default-features = fa
 reqwest-middleware = { version = "0.5.2", features = ["json"] }
 reqwest-retry = "0.9.1"
 rlimit = "0.11.0"
-rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
+rocksdb = { version = "0.25.0", default-features = false, features = ["bindgen-runtime", "lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = "0.23.46"
 rustls-native-certs = "0.8.3"
