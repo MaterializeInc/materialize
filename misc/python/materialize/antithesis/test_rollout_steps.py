@@ -464,6 +464,7 @@ def test_cr_phase_observation_retains_request_start_across_delayed_response(
     fleet: Fleet,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    fleet.kube.phase("Applied")
     api = object.__new__(r.Kube)
     api.namespace = "mz"
     api.name = "environment"

@@ -252,6 +252,13 @@ class Snapshot:
     def observed_generation(self) -> int | None:
         return self.condition.get("observedGeneration")
 
+    @property
+    def phase_is_current(self) -> bool:
+        """Whether the observed phase belongs to this spec generation."""
+        return (
+            self.generation is not None and self.observed_generation == self.generation
+        )
+
     def expected_force(self) -> str:
         return spec_model.expected_force(self.obj)
 
@@ -332,9 +339,10 @@ class Kube:
                 _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
             )
         )
-        telemetry.phase_observed(
-            snap.reason, snap.active, snap.request, started=started
-        )
+        if snap.phase_is_current:
+            telemetry.phase_observed(
+                snap.reason, snap.active, snap.request, started=started
+            )
         return snap
 
     def try_snapshot(self) -> Snapshot | None:
