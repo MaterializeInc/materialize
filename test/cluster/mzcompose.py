@@ -7435,6 +7435,84 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
         """)
 
 
+def workflow_test_replica_reconnect_keeps_read_holds(c: Composition) -> None:
+    """
+    Test that reconnecting to a cluster's only replica does not advance the
+    read frontier of an index on that cluster past its write frontier.
+
+    While the controller reconnects, its replica map is briefly empty. Treating
+    that as a cluster without replicas forwards the index's read hold, and a
+    replica that still renders the index at its old as-of then halts with
+    "cannot serve requested as_of" once the index's input compacts.
+    """
+
+    query = """
+        SELECT f.read_frontier, f.write_frontier
+        FROM mz_internal.mz_frontiers f
+        JOIN mz_indexes i ON i.id = f.object_id
+        WHERE i.name = 'idx'
+        """
+
+    def reconnects() -> int:
+        logs = c.invoke("logs", "materialized", capture=True).stdout
+        return logs.count("starting replica task")
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1")
+    try:
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql("""
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
+
+            CREATE TABLE t (a int);
+            INSERT INTO t VALUES (1);
+            CREATE INDEX idx ON t (a);
+            SELECT a FROM t;
+            """)
+
+        # A paused replica stops reporting frontiers, so the index's write
+        # frontier stays put. The controller times out the connection after
+        # `grpc_client_http2_keep_alive_timeout` and reconnects, which must
+        # leave the index's read frontier behind its write frontier.
+        connects_before = reconnects()
+        c.pause("clusterd1")
+        try:
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                read, write = (int(f) for f in c.sql_query(query)[0])
+                assert read <= write, (
+                    f"read frontier of idx advanced to {read}, past its write"
+                    f" frontier {write}, while its replica was reconnecting"
+                )
+                time.sleep(1)
+            assert (
+                reconnects() > connects_before
+            ), "the controller did not reconnect to the paused replica"
+        finally:
+            c.unpause("clusterd1")
+
+        c.sql("""
+            SET cluster = cluster1;
+            SELECT a FROM t;
+            """)
+    finally:
+        # Later workflows in the same shard reuse the volumes and create their
+        # own `t`.
+        c.down(destroy_volumes=True)
+
+
 def workflow_test_swap_heap_limiting(c: Composition) -> None:
     """
     Test that heap limits are correctly configured for swap replicas, based
