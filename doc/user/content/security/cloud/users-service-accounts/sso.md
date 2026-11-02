@@ -28,8 +28,6 @@ console. Permissions within the database are handled separately using
 
 ## Before you begin
 
-To make Materialize metadata available to Datadog, you must configure and run the following additional services:
-
 * You must have an existing SAML- or OpenID Connect-based identity provider.
 * Only users assigned the `OrganizationAdmin` role can view and modify SSO settings.
 
