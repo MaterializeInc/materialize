@@ -2960,6 +2960,8 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         # Applies to replicas provisioned after the flip.
         self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
+        # Applies to replicas provisioned after the flip.
+        self.flags_with_values["enable_replica_kafka_listener"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",

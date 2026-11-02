@@ -67,6 +67,23 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// Drops the identified service, if it exists.
     fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
 
+    /// Ensures that the endpoint `id` routes `port` to process `process` of the service `target`,
+    /// replacing the endpoint's previous target.
+    ///
+    /// An endpoint gives clients a stable address for a port while the process serving it
+    /// changes. Endpoints are not services, and [`NamespacedOrchestrator::list_services`] does not
+    /// list them. Orchestrators whose clients connect to each service's own addresses do nothing.
+    fn ensure_endpoint(
+        &self,
+        id: &str,
+        port: &ServicePort,
+        target: &str,
+        process: usize,
+    ) -> Result<(), anyhow::Error>;
+
+    /// Drops the identified endpoint, if it exists.
+    fn drop_endpoint(&self, id: &str) -> Result<(), anyhow::Error>;
+
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
 
@@ -303,6 +320,9 @@ pub struct ServiceAssignments<'a> {
     /// The order of peers is significant. Each peer is uniquely identified by its position in the
     /// list.
     pub peer_addrs: &'a [BTreeMap<String, String>],
+    /// For each [`ServicePort`] name, an address at which clients outside the orchestrator can
+    /// reach this process, if the orchestrator provides one.
+    pub external_addrs: &'a BTreeMap<String, String>,
 }
 
 impl ServiceAssignments<'_> {

@@ -344,6 +344,18 @@ pub struct Args {
         default_value_if("orchestrator", "process", Some("clusterd"))
     )]
     clusterd_image: Option<String>,
+    /// The address at which Kafka clients reach a cluster's Kafka listener sources, with
+    /// `{cluster_id}` standing for the cluster's ID, for example
+    /// `{cluster_id}.kafka.example.com:9093`.
+    ///
+    /// Replicas advertise this address to Kafka clients. If unset, each replica advertises the
+    /// address its orchestrator exposes it at, which only the process orchestrator does.
+    #[clap(
+        long,
+        env = "KAFKA_LISTENER_ADVERTISED_ADDR_TEMPLATE",
+        value_name = "HOST:PORT"
+    )]
+    kafka_listener_advertised_addr_template: Option<String>,
     /// A number representing the environment's generation.
     ///
     /// This is incremented to request that the new process perform a graceful
@@ -1090,6 +1102,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             secrets_reader_name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
         },
         replica_http_locator: Arc::clone(&replica_http_locator),
+        kafka_advertised_addr_template: args.kafka_listener_advertised_addr_template,
     };
 
     let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(

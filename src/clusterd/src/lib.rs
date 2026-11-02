@@ -23,6 +23,7 @@ use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_http_util::DynamicFilterTarget;
+use mz_kafka_server::{KafkaServer, KafkaServerConfig};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
@@ -80,6 +81,20 @@ struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
+    /// The address on which to accept connections from Kafka producers that write to Kafka
+    /// listener sources. If unset, the replica does not accept Kafka connections.
+    #[clap(long, env = "KAFKA_LISTEN_ADDR", value_name = "HOST:PORT")]
+    kafka_listen_addr: Option<SocketAddr>,
+    /// The address that Kafka clients are told to connect to after bootstrapping.
+    ///
+    /// Defaults to `--kafka-listen-addr`. Required if that is a Unix socket, which Kafka clients
+    /// cannot connect to.
+    #[clap(long, env = "KAFKA_ADVERTISED_ADDR", value_name = "HOST:PORT")]
+    kafka_advertised_addr: Option<String>,
+    /// The address on which to serve the schemas of Kafka listener sources' topics with the
+    /// Confluent Schema Registry API. Requires `--kafka-listen-addr`.
+    #[clap(long, env = "KAFKA_REGISTRY_LISTEN_ADDR", value_name = "HOST:PORT")]
+    kafka_registry_listen_addr: Option<SocketAddr>,
     /// The FQDN of this process, for GRPC request validation.
     ///
     /// Not providing this value or setting it to the empty string disables host validation for
@@ -296,7 +311,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.internal_http_listen_addr
         );
         let listener = Listener::bind(args.internal_http_listen_addr).await?;
-        let mut make_service = mz_prof_http::router(&BUILD_INFO)
+        let router = mz_prof_http::router(&BUILD_INFO)
             .route(
                 "/api/livez",
                 routing::get(mz_http_util::handle_liveness_check),
@@ -337,50 +352,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .route(
                 "/api/usage-metrics",
                 routing::get(async move || axum::Json(usage_collector.collect())),
-            )
-            .into_make_service();
-
-        // Once https://github.com/tokio-rs/axum/pull/2479 lands, this can become just a call to
-        // `axum::serve`.
-        async move {
-            loop {
-                let (conn, remote_addr) = match listener.accept().await {
-                    Ok(peer) => peer,
-                    Err(error) => {
-                        // Match hyper's AddrIncoming error handling:
-                        // connection errors are per-connection and can be
-                        // skipped immediately; all other errors (e.g., EMFILE)
-                        // sleep to avoid a tight loop on resource exhaustion.
-                        if is_connection_error(&error) {
-                            debug!("accepted connection already errored: {error:#}");
-                        } else {
-                            error!("internal_http accept error: {error:#}");
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                        }
-                        continue;
-                    }
-                };
-
-                let tower_service = make_service.call(&conn).await.expect("infallible");
-                let hyper_service =
-                    hyper::service::service_fn(move |req| tower_service.clone().call(req));
-
-                mz_ore::task::spawn(
-                    || format!("clusterd_internal_http_server:{remote_addr}"),
-                    async move {
-                        if let Err(error) = hyper::server::conn::http1::Builder::new()
-                            .serve_connection(TokioIo::new(conn), hyper_service)
-                            .await
-                        {
-                            // This can happen when the client performs an unclean shutdown, so a
-                            // high severity isn't warranted. Might even downgrade this to DEBUG if
-                            // it turns out too noisy.
-                            info!("error serving internal_http connection: {error:#}");
-                        }
-                    },
-                );
-            }
-        }
+            );
+        serve_http(listener, router, "clusterd_internal_http_server")
     });
 
     let pubsub_caller_id = std::env::var("HOSTNAME")
@@ -407,6 +380,19 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
     ));
     let txns_ctx = TxnsContext::default();
+
+    let kafka_server = match args.kafka_listen_addr {
+        Some(listen_addr) => {
+            start_kafka_server(
+                listen_addr,
+                args.kafka_advertised_addr,
+                args.kafka_registry_listen_addr,
+                &args.environment_id,
+            )
+            .await?
+        }
+        None => None,
+    };
 
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id,
@@ -448,7 +434,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             },
             SYSTEM_TIME.clone(),
             connection_context,
-            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+            StorageInstanceContext::new(
+                args.scratch_directory,
+                args.announce_memory_limit,
+                kafka_server.clone(),
+            ),
         )
         .await?;
 
@@ -499,7 +489,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
+        StorageInstanceContext::new(
+            args.scratch_directory.clone(),
+            args.announce_memory_limit,
+            kafka_server,
+        ),
     )
     .await?;
     info!(
@@ -555,6 +549,95 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Block forever.
     future::pending().await
+}
+
+/// Starts accepting Kafka connections on `listen_addr`.
+///
+/// Returns `None` if Kafka clients would not be able to reach the server.
+async fn start_kafka_server(
+    listen_addr: SocketAddr,
+    advertised_addr: Option<String>,
+    registry_listen_addr: Option<SocketAddr>,
+    environment_id: &str,
+) -> Result<Option<KafkaServer>, anyhow::Error> {
+    let advertised_addr = match (advertised_addr, &listen_addr) {
+        (Some(addr), _) => addr,
+        (None, SocketAddr::Inet(addr)) if !addr.ip().is_unspecified() => addr.to_string(),
+        (None, _) => {
+            info!(
+                "not accepting Kafka connections: no advertised address is configured, \
+                 and clients cannot connect to {listen_addr}"
+            );
+            return Ok(None);
+        }
+    };
+    let (host, port) = advertised_addr
+        .rsplit_once(':')
+        .with_context(|| format!("invalid Kafka advertised address {advertised_addr}"))?;
+    let port = port
+        .parse()
+        .with_context(|| format!("invalid Kafka advertised address {advertised_addr}"))?;
+    let server = KafkaServer::new(KafkaServerConfig {
+        advertised_host: host.to_string(),
+        advertised_port: port,
+        cluster_id: environment_id.to_string(),
+    });
+    let listener = Listener::bind(&listen_addr)
+        .await
+        .with_context(|| format!("binding Kafka listener to {listen_addr}"))?;
+    info!("accepting Kafka connections on {listen_addr}, advertised as {advertised_addr}");
+    mz_ore::task::spawn(|| "kafka_server", server.clone().serve(listener));
+    if let Some(registry_listen_addr) = registry_listen_addr {
+        let listener = Listener::bind(&registry_listen_addr)
+            .await
+            .with_context(|| format!("binding schema registry to {registry_listen_addr}"))?;
+        info!("serving Kafka topic schemas on {registry_listen_addr}");
+        mz_ore::task::spawn(
+            || "kafka_schema_registry",
+            serve_http(listener, server.schema_registry(), "kafka_schema_registry"),
+        );
+    }
+    Ok(Some(server))
+}
+
+/// Serves `router` over HTTP/1 on `listener` forever.
+async fn serve_http(listener: Listener, router: axum::Router, name: &'static str) {
+    let mut make_service = router.into_make_service();
+    // Once https://github.com/tokio-rs/axum/pull/2479 lands, this can become just a call to
+    // `axum::serve`.
+    loop {
+        let (conn, remote_addr) = match listener.accept().await {
+            Ok(peer) => peer,
+            Err(error) => {
+                // Match hyper's AddrIncoming error handling:
+                // connection errors are per-connection and can be
+                // skipped immediately; all other errors (e.g., EMFILE)
+                // sleep to avoid a tight loop on resource exhaustion.
+                if is_connection_error(&error) {
+                    debug!("accepted connection already errored: {error:#}");
+                } else {
+                    error!("{name} accept error: {error:#}");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                continue;
+            }
+        };
+
+        let tower_service = make_service.call(&conn).await.expect("infallible");
+        let hyper_service = hyper::service::service_fn(move |req| tower_service.clone().call(req));
+
+        mz_ore::task::spawn(|| format!("{name}:{remote_addr}"), async move {
+            if let Err(error) = hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(conn), hyper_service)
+                .await
+            {
+                // This can happen when the client performs an unclean shutdown, so a
+                // high severity isn't warranted. Might even downgrade this to DEBUG if
+                // it turns out too noisy.
+                info!("error serving {name} connection: {error:#}");
+            }
+        });
+    }
 }
 
 /// Per-connection errors from `accept()` that can be skipped immediately.

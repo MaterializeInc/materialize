@@ -112,6 +112,9 @@ def get_minimal_system_parameters(
         "enable_expressions_in_limit_syntax": "true",
         "enable_fixed_correlated_cte_lowering": "true",
         "enable_introspection_subscribes": "true",
+        "enable_kafka_listener_source": (
+            "true" if version >= MzVersion.parse_mz("v26.50.0-dev") else "false"
+        ),
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
@@ -325,6 +328,14 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
+        ),
+        # On by default so CI replicas accept Kafka connections for Kafka listener
+        # sources, which is off in production. Applies to replicas provisioned
+        # after it changes.
+        VariableSystemParameter(
+            "enable_replica_kafka_listener",
+            "true" if version >= MzVersion.parse_mz("v26.50.0-dev") else "false",
+            ["true", "false"],
         ),
         # On by default so CI exercises the jq function, which is off in
         # production while it earns trust.

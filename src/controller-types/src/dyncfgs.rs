@@ -86,6 +86,14 @@ pub const ENABLE_UNIFIED_CLUSTER: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+// Like `ENABLE_UNIFIED_CLUSTER`, this reaches a replica only when it is next provisioned.
+pub const ENABLE_REPLICA_KAFKA_LISTENER: Config<bool> = Config::new(
+    "enable_replica_kafka_listener",
+    false,
+    "Have replicas accept connections from Kafka producers, for Kafka listener sources.",
+    ParameterScope::Replica,
+);
+
 pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     "enable_paused_cluster_readhold_downgrade",
     true,
@@ -105,5 +113,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_UNIFIED_CLUSTER)
+        .add(&ENABLE_REPLICA_KAFKA_LISTENER)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
 }

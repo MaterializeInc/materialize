@@ -402,6 +402,20 @@ struct NamespacedTracingOrchestrator {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
+    fn ensure_endpoint(
+        &self,
+        id: &str,
+        port: &ServicePort,
+        target: &str,
+        process: usize,
+    ) -> Result<(), anyhow::Error> {
+        self.inner.ensure_endpoint(id, port, target, process)
+    }
+
+    fn drop_endpoint(&self, id: &str) -> Result<(), anyhow::Error> {
+        self.inner.drop_endpoint(id)
+    }
+
     async fn fetch_service_metrics(
         &self,
         id: &str,

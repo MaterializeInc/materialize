@@ -1331,6 +1331,7 @@ impl<'a> RunnerInner<'a> {
                 },
                 connection_context,
                 replica_http_locator: Arc::new(ReplicaHttpLocator::default()),
+                kafka_advertised_addr_template: None,
             },
             secrets_controller,
             cloud_resource_controller: None,

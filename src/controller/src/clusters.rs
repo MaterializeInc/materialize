@@ -26,8 +26,8 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_CLUSTER,
-    TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_REPLICA_KAFKA_LISTENER, ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC,
+    ENABLE_UNIFIED_CLUSTER, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -445,6 +445,10 @@ impl Controller {
     pub fn drop_cluster(&mut self, id: ClusterId) {
         self.storage.drop_instance(id);
         self.compute.drop_instance(id);
+        self.kafka_listener_replicas.remove(&id);
+        if let Err(e) = self.update_kafka_endpoint(id) {
+            warn!(cluster_id = %id, "failed to drop Kafka endpoint: {e}");
+        }
     }
 
     /// Creates a replica of the specified cluster with the specified identifier
@@ -462,6 +466,7 @@ impl Controller {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
         let metrics_task: Option<AbortOnDropHandle<()>>;
+        let kafka_service: Option<String>;
 
         match config.location {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
@@ -475,9 +480,10 @@ impl Controller {
                     ctl_addrs: storagectl_addrs,
                 };
                 metrics_task = None;
+                kafka_service = None;
             }
             ReplicaLocation::Managed(m) => {
-                let (service, metrics_task_join_handle) = self.provision_replica(
+                let (service, metrics_task_join_handle, accepts_kafka) = self.provision_replica(
                     cluster_id,
                     replica_id,
                     cluster_name,
@@ -493,6 +499,14 @@ impl Controller {
                     ctl_addrs: service.addresses("computectl"),
                 };
                 metrics_task = Some(metrics_task_join_handle);
+                kafka_service = accepts_kafka.then(|| {
+                    ReplicaServiceName {
+                        cluster_id,
+                        replica_id,
+                        generation: self.deploy_generation,
+                    }
+                    .to_string()
+                });
 
                 // Register the replica for HTTP proxying.
                 let http_addresses = service.addresses("internal-http");
@@ -513,6 +527,12 @@ impl Controller {
         if let Some(task) = metrics_task {
             self.metrics_tasks.insert((cluster_id, replica_id), task);
         }
+
+        self.kafka_listener_replicas
+            .entry(cluster_id)
+            .or_default()
+            .insert(replica_id, kafka_service);
+        self.update_kafka_endpoint(cluster_id)?;
 
         Ok(())
     }
@@ -541,6 +561,56 @@ impl Controller {
 
         self.compute.drop_replica(cluster_id, replica_id)?;
         self.storage.drop_replica(cluster_id, replica_id);
+
+        if let Some(replicas) = self.kafka_listener_replicas.get_mut(&cluster_id) {
+            replicas.remove(&replica_id);
+        }
+        self.update_kafka_endpoint(cluster_id)?;
+        Ok(())
+    }
+
+    /// Points the cluster's Kafka endpoint at the replica that runs its Kafka listener sources,
+    /// or drops it if that replica does not accept Kafka connections.
+    fn update_kafka_endpoint(&mut self, cluster_id: ClusterId) -> Result<(), anyhow::Error> {
+        if self.read_only {
+            return Ok(());
+        }
+        // The storage controller runs single-replica ingestions, which include Kafka listener
+        // sources, on the replica with the lowest ID. See `mz_storage_controller::Instance`.
+        let target = self
+            .kafka_listener_replicas
+            .get(&cluster_id)
+            .and_then(|replicas| replicas.first_key_value())
+            .and_then(|(_, service)| service.clone());
+        if self.kafka_endpoint_targets.get(&cluster_id) == target.as_ref() {
+            return Ok(());
+        }
+        // The schema registry serves the schemas of the topics of the same process.
+        let ports = [
+            (format!("{cluster_id}-kafka"), kafka_port()),
+            (
+                format!("{cluster_id}-kafka-registry"),
+                kafka_registry_port(),
+            ),
+        ];
+        match &target {
+            // Clients reach a replica's process 0 only, and the replica runs its Kafka listener
+            // sources there.
+            Some(service) => {
+                for (endpoint, port) in &ports {
+                    self.orchestrator
+                        .ensure_endpoint(endpoint, port, service, 0)?;
+                }
+                self.kafka_endpoint_targets
+                    .insert(cluster_id, service.clone());
+            }
+            None => {
+                for (endpoint, _) in &ports {
+                    self.orchestrator.drop_endpoint(endpoint)?;
+                }
+                self.kafka_endpoint_targets.remove(&cluster_id);
+            }
+        }
         Ok(())
     }
 
@@ -686,7 +756,7 @@ impl Controller {
         role: ClusterRole,
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
-    ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
+    ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>, bool), anyhow::Error> {
         let service_name = ReplicaServiceName {
             cluster_id,
             replica_id,
@@ -728,6 +798,12 @@ impl Controller {
             ..Default::default()
         };
         let unified_cluster = ENABLE_UNIFIED_CLUSTER.get_with_overrides(&self.dyncfg, overrides);
+        let kafka_listener =
+            ENABLE_REPLICA_KAFKA_LISTENER.get_with_overrides(&self.dyncfg, overrides);
+        let kafka_advertised_addr = self
+            .kafka_advertised_addr_template
+            .as_ref()
+            .map(|template| template.replace("{cluster_id}", &cluster_id.to_string()));
 
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
@@ -816,6 +892,22 @@ impl Controller {
                     if unified_cluster {
                         args.push("--unified-cluster".into());
                     }
+                    if kafka_listener {
+                        args.push(format!(
+                            "--kafka-listen-addr={}",
+                            assigned.listen_addrs["kafka"]
+                        ));
+                        let advertised_addr = kafka_advertised_addr
+                            .as_ref()
+                            .or_else(|| assigned.external_addrs.get("kafka"));
+                        if let Some(addr) = advertised_addr {
+                            args.push(format!("--kafka-advertised-addr={addr}"));
+                        }
+                        args.push(format!(
+                            "--kafka-registry-listen-addr={}",
+                            assigned.listen_addrs["kafka-registry"]
+                        ));
+                    }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
                     }
@@ -837,7 +929,7 @@ impl Controller {
                     args.extend(secrets_args.clone());
                     args
                 }),
-                ports: vec![
+                ports: [
                     ServicePort {
                         name: "storagectl".into(),
                         port_hint: 2100,
@@ -861,7 +953,15 @@ impl Controller {
                         name: "internal-http".into(),
                         port_hint: 6878,
                     },
-                ],
+                ]
+                .into_iter()
+                .chain(
+                    kafka_listener
+                        .then(|| [kafka_port(), kafka_registry_port()])
+                        .into_iter()
+                        .flatten(),
+                )
+                .collect(),
                 cpu_limit: location.allocation.cpu_limit,
                 cpu_request: location.allocation.cpu_request,
                 memory_limit,
@@ -975,7 +1075,7 @@ impl Controller {
             }
         });
 
-        Ok((service, metrics_task.abort_on_drop()))
+        Ok((service, metrics_task.abort_on_drop(), kafka_listener))
     }
 
     /// Deprovisions a replica with the service orchestrator.
@@ -992,6 +1092,22 @@ impl Controller {
         }
         .to_string();
         self.orchestrator.drop_service(&service_name)
+    }
+}
+
+/// The port on which replicas accept Kafka connections.
+fn kafka_port() -> ServicePort {
+    ServicePort {
+        name: "kafka".into(),
+        port_hint: 9092,
+    }
+}
+
+/// The port on which replicas serve the schemas of their Kafka listener sources' topics.
+fn kafka_registry_port() -> ServicePort {
+    ServicePort {
+        name: "kafka-registry".into(),
+        port_hint: 8081,
     }
 }
 
