@@ -17,14 +17,11 @@ multiple-versions = "deny"
 # dependencies.
 
 skip = [
-    # Materialize uses tower-http 0.7.1. kube-client and reqwest still require
+    # Materialize uses tower-http 0.7.1. reqwest still requires
     # 0.6, which currently resolves to 0.6.11. Temporarily exempt that exact
     # version from duplicate checks. Remove this exception once those
     # dependencies no longer bring in tower-http 0.6.11.
     { name = "tower-http", version = "=0.6.11" },
-    # Materialize uses serde-saphyr 2.0.0. kube-client 4.2.0 still requires
-    # 0.0.29. Remove this exception once kube-client moves to serde-saphyr 2.
-    { name = "serde-saphyr", version = "=0.0.29" },
     # Materialize uses lru 0.19. aws-sdk-s3 (through 1.155.0), launchdarkly-server-sdk
     # (through 3.3.2), and mysql_async (through 0.37.1) still require ^0.18.2.
     # Remove this exception once those crates release with lru 0.19.
@@ -37,7 +34,7 @@ skip = [
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
     # transitively depends on, so major versions linger for years. We are on v3;
     # roughly 60 transitive dependencies still pull v2, among them `prost-build`,
-    # `tonic-build`, `kube-derive`, `zerocopy-derive`, and `tracing-attributes`.
+    # `tonic-build`, `zerocopy-derive`, and `tracing-attributes`.
     # A few stragglers still pull v1.
     { name = "syn", version = "1.0.107" },
     { name = "syn", version = "2.0.119" },
@@ -47,10 +44,6 @@ skip = [
     # held back by thrift 0.17.0 depended on by parquet 51.0.0
     { name = "ordered-float", version = "2.10.1" },
     { name = "ordered-float", version = "4.6.0" },
-    # Will require updating many crates
-    { name = "indexmap", version = "1.9.1" },
-    # Required by indexmap 1.9.1, which is depended on by many things
-    { name = "hashbrown", version = "0.12.3" },
     { name = "hashbrown", version = "0.14.5" },
     # Required by hashbrown
     { name = "foldhash", version = "0.1.5" },
@@ -82,7 +75,6 @@ skip = [
     # Used by reqwest
     { name = "thiserror", version = "1.0.61" },
     { name = "thiserror-impl", version = "1.0.61" },
-    { name = "unicode-width", version = "0.1.10" },
     # Used by rdkafka-sys
     { name = "num_enum", version = "0.5.11" },
     { name = "num_enum_derive", version = "0.5.11" },
@@ -105,7 +97,7 @@ skip = [
     { name = "miniz_oxide", version = "0.8.9" },
     # reqsign-core is on 0.7, while opendal still pulls 0.6.
     { name = "asyncband", version = "0.6.7" },
-    # rand 0.9 is still used by apache-avro, governor, iceberg, k8s-controller,
+    # rand 0.9 is still used by apache-avro, governor, iceberg,
     # launchdarkly-server-sdk, mysql_async, opentelemetry_sdk, proptest,
     # rand_distr, retry-policies, tokio-postgres, tower-sessions-core,
     # tungstenite and turmoil. rand_core 0.9 is also used by imbl.
@@ -121,13 +113,6 @@ skip = [
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
     { name = "darling", version = "0.20.11" },
-    { name = "darling_macro", version = "0.21.2" },
-    { name = "darling_core", version = "0.21.2" },
-    { name = "darling", version = "0.21.2" },
-    # `kube-derive` and `serde_with_macros` are still on the `syn` v2 release.
-    { name = "darling_macro", version = "0.23.0" },
-    { name = "darling_core", version = "0.23.0" },
-    { name = "darling", version = "0.23.0" },
     { name = "typed-builder", version = "0.20.1" },
     { name = "typed-builder-macro", version = "0.20.1" },
     # chrono-tz
@@ -141,7 +126,7 @@ skip = [
     { name = "hashbrown", version = "0.16.1" },
     { name = "hashbrown", version = "0.17.1" },
     # base64 0.22 is still used by arrow, axum, eventsource-client, gcp_auth,
-    # headers, iceberg, jsonwebtoken, kube, mysql_common, parquet, pem 3,
+    # headers, iceberg, jsonwebtoken, mysql_common, parquet, pem 3,
     # postgres-protocol, prost-reflect, reqwest 0.12, tonic, tower-http,
     # tower-sessions-core and typespec.
     { name = "base64", version = "0.22.1" },
@@ -320,9 +305,6 @@ ignore = [
     "RUSTSEC-2024-0436",
     # Bincode is unmaintained, the team considers version 1.3.3 a complete version of bincode that is not in need of any updates.
     "RUSTSEC-2025-0141",
-    # rand unsoundness when a custom logger accesses ThreadRng during reseeding.
-    # Affects transitive deps (rand 0.8.5 via fail/quickcheck/etc).
-    "RUSTSEC-2026-0097",
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
