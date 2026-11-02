@@ -1376,6 +1376,10 @@ impl Instance {
             self.finish_peek(uuid, response);
         }
 
+        // We might have a chance to forward implied capabilities and reduce the cost of bringing
+        // up the next replica, if the dropped replica was the only one in the cluster.
+        self.forward_implied_capabilities();
+
         Ok(())
     }
 
@@ -1390,12 +1394,6 @@ impl Instance {
         let epoch = replica.epoch + 1;
         let dyncfg_override = replica.dyncfg_override.clone();
 
-        // NOTE: Between `remove_replica` and `add_replica` the replica map can be empty while the
-        // replica process is still running its dataflows. Nothing on this path may treat that as
-        // a cluster without replicas, in particular `forward_implied_capabilities`. Forwarding
-        // advances the input read holds of a dataflow that has not hydrated past its as-of, and
-        // the replica keeps that dataflow at the old as-of when it reconciles. If its persist
-        // reader has not registered yet, the import halts with "cannot serve requested as_of".
         self.remove_replica(id).expect("replica must exist");
         let result = self.add_replica(id, config, Some(epoch), dyncfg_override);
 
