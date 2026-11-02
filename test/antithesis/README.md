@@ -25,6 +25,8 @@ and checks from `misc/python/materialize/antithesis/drivers/`.
 | Window retractions | Generated partitions, peer groups, nullable offsets, and bounded frames are compared with an independent input model through indexed views, materialized views, recomputation, and a live subscription. |
 | Session bindings | Warm prepared statements and partially fetched server cursors cross view replacement. Independent row and timestamp checks distinguish revalidation, retained snapshots, exhausted portals, and session-local temporary names. |
 | Catalog transactions | Multi-statement renames commit or roll back across acknowledged peer changes. Object identities, dependent results, and stored definitions must preserve those changes. Conflicting inspected definitions must reject without partial renames. |
+| COPY recovery | Flushed partial input receives an exact CopyFail acknowledgment. Generated row bags check aborts, commit and rollback visibility, prepared-plan reuse, escaped text, NULLs, duplicates, and READ ONLY rejection. |
+| Deliberate cancellation | A private future peek is observed before cancelling its pinned session. Rollback must restore prepared execution and preserve the original session identity, and the private peek set must retire. |
 | Upsert error recovery | Acknowledged Kafka offsets fence JSON decode-error, repair, and tombstone checks, including source-replica deletion while erroneous state is live. |
 | Cross-table transaction atomicity | A durable client ledger checks whole transaction markers in common snapshots, including rollback, uncertain outcomes, and replica deletion during staged multi-table writes. |
 | External data | Postgres transaction ledgers, Kafka source histories, and sink progress and envelopes check ingestion, replay, atomicity, and output contents. |
@@ -373,6 +375,9 @@ History and IVM rollout helpers share one local admission slot. Their ordinary
 writers and checkers keep their normal concurrency. An independent active-replica
 fault arm can make progress while a rollout waits for preparation. IVM writes
 exercise both held transactions and COMMIT released at the fault boundary.
+Session recovery normally aborts after flushing 64 KiB. One in 32 size draws
+instead uses 33 MiB, crossing pgwire's raw-input dispatch threshold without
+waiting for background workers to complete before aborting.
 
 The seed controls scheduling and each invocation's local workload draws.
 Antithesis continues to use SDK entropy. Each run retains child logs, SDK
