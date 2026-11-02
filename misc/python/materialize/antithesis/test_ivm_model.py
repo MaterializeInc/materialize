@@ -70,6 +70,17 @@ def test_distinct_collapses_duplicates() -> None:
     assert ref("distinct", b) == Counter({(0, 1): 1})
 
 
+def test_set_operations_count_projected_duplicates_on_both_sides() -> None:
+    b = base(
+        t=[(1, 0, 3, 10)] * 3 + [(2, 1, 7, 11)] * 2 + [(3, 2, 9, 12)],
+        d=[(0, 20)] * 2 + [(1, 21)] * 3 + [(4, 22)] * 2,
+    )
+    assert ref("intersect_all", b) == Counter({(0,): 2, (1,): 2})
+    assert ref("except_all", b) == Counter({(0,): 1, (2,): 1})
+    assert ref("intersect_all", base()) == Counter()
+    assert ref("except_all", base()) == Counter()
+
+
 def test_topk_breaks_ties_on_every_column() -> None:
     b = base(
         t=[
@@ -199,6 +210,95 @@ def run_checker(events: list[tuple], as_of: int) -> tuple[m.Stream, m.ViewChecke
         else:
             s.update(e[0], e[1], m.pad(e[2]), e[3])
     return s, c
+
+
+def _state_events(
+    ts: int, before: dict[str, Counter], after: dict[str, Counter]
+) -> list[tuple]:
+    def state(b: dict[str, Counter]) -> Counter:
+        result: Counter = Counter()
+        for _ts, tag, row, n in snapshot_events(ts, b):
+            result[(tag, tuple(row))] += n
+        return result
+
+    delta = state(after)
+    delta.subtract(state(before))
+    return [(ts, tag, row, n) for (tag, row), n in delta.items() if n]
+
+
+def test_set_operation_stream_checks_changes_from_both_sides_and_zero_crossings() -> (
+    None
+):
+    counts = ((3, 1), (3, 3), (3, 4), (5, 4), (1, 4), (1, 0), (3, 0), (3, 2))
+    previous = base()
+    events: list[tuple] = []
+    for ts, (left, right) in enumerate(counts, 10):
+        current = base(t=[(1, 0, 5, 1)] * left, d=[(0, 2)] * right)
+        events.extend(
+            snapshot_events(ts, current)
+            if ts == 10
+            else _state_events(ts, previous, current)
+        )
+        events.append(("p", ts + 1))
+        previous = current
+    _, checker = run_checker(events, 10)
+    assert checker.first_mismatch_time is None
+    for kind in m.SET_OP_KINDS:
+        stat = checker.set_stats[kind]
+        assert stat.compared == len(counts)
+        assert stat.duplicates > 0
+        assert stat.left_changes > 0 and stat.right_changes > 0
+        assert stat.positive_to_zero > 0 and stat.zero_to_positive > 0
+        for variant in m.VARIANTS:
+            assert checker.stats[m.tag(kind, variant)].changed_steps > 0
+
+
+@pytest.mark.parametrize("kind", m.SET_OP_KINDS)
+@pytest.mark.parametrize("variant", m.VARIANTS)
+def test_set_operation_checker_rejects_distinct_instead_of_all(
+    kind: str, variant: str
+) -> None:
+    b = base(t=[(1, 0, 5, 1)] * 5, d=[(0, 2)] * 2)
+    tag = m.tag(kind, variant)
+    events = snapshot_events(10, b)
+    correct = m.reference(kind, b, 10)
+    events += [(10, tag, row, 1 - n) for row, n in correct.items()]
+    _, checker = run_checker([*events, ("p", 11)], 10)
+    mismatch = checker.stats[tag].mismatch
+    assert mismatch is not None
+    assert mismatch["diff"]["missing_count"] > 0
+    assert checker.set_stats[kind].compared == 0
+
+
+@pytest.mark.parametrize("kind", m.SET_OP_KINDS)
+@pytest.mark.parametrize("variant", m.VARIANTS)
+def test_set_operation_checker_rejects_lost_right_input_retractions(
+    kind: str, variant: str
+) -> None:
+    before = base(t=[(1, 0, 5, 1)] * 3, d=[(0, 2)])
+    after = base(t=[(1, 0, 5, 1)] * 3, d=[(0, 2)] * 3)
+    tag = m.tag(kind, variant)
+    events = [*snapshot_events(10, before), ("p", 11)]
+    events += [e for e in _state_events(12, before, after) if e[1] != tag]
+    events.append(("p", 13))
+    _, checker = run_checker(events, 10)
+    mismatch = checker.stats[tag].mismatch
+    assert mismatch is not None
+    assert mismatch["time"] == 12
+    assert checker.set_stats[kind].right_changes == 0
+
+
+@pytest.mark.parametrize("variant", m.VARIANTS)
+def test_except_all_checker_rejects_negative_output_instead_of_clamping(
+    variant: str,
+) -> None:
+    b = base(t=[(1, 0, 5, 1)], d=[(0, 2)] * 3)
+    tag = m.tag("except_all", variant)
+    events = [*snapshot_events(10, b), (10, tag, (0,), -2), ("p", 11)]
+    _, checker = run_checker(events, 10)
+    assert checker.stats[tag].negative is not None
+    assert checker.stats[tag].mismatch is not None
+    assert checker.set_stats["except_all"].compared == 0
 
 
 def test_checker_accepts_correct_stream() -> None:
