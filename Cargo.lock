@@ -1552,7 +1552,7 @@ dependencies = [
  "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -2336,6 +2336,21 @@ checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "crc"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 
 [[package]]
 name = "crc-fast"
@@ -5455,6 +5470,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kafka-protocol"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "099d5c2f1b40cd830cbf18ca4d2a0805f2875b811ca18f0372b2433e68fe2dda"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "crc",
+ "crc32c",
+ "flate2",
+ "indexmap 2.14.2",
+ "snap",
+ "uuid",
+]
+
+[[package]]
 name = "keyed_priority_queue"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6878,6 +6909,7 @@ dependencies = [
  "mz-compute",
  "mz-dyncfgs",
  "mz-http-util",
+ "mz-kafka-server",
  "mz-metrics",
  "mz-orchestrator-tracing",
  "mz-ore",
@@ -7596,6 +7628,33 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "mz-kafka-server"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.23.1",
+ "bytes",
+ "futures",
+ "headers",
+ "kafka-protocol",
+ "lz4_flex 0.14.0",
+ "mz-avro",
+ "mz-kafka-util",
+ "mz-ore",
+ "rand 0.10.3",
+ "rdkafka",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "subtle",
+ "tokio",
+ "tokio-util",
+ "tower 0.5.3",
+ "tracing",
 ]
 
 [[package]]
@@ -8898,6 +8957,7 @@ dependencies = [
  "mz-expr",
  "mz-http-util",
  "mz-interchange",
+ "mz-kafka-server",
  "mz-kafka-util",
  "mz-mysql-util",
  "mz-orchestrator-tracing",
@@ -8910,6 +8970,7 @@ dependencies = [
  "mz-repr",
  "mz-rocksdb",
  "mz-row-spine",
+ "mz-secrets",
  "mz-service",
  "mz-sql-parser",
  "mz-sql-server-util",
@@ -9136,6 +9197,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "tiberius",
  "timely",
@@ -11154,7 +11216,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -11175,7 +11237,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
