@@ -1370,8 +1370,8 @@ impl Instance {
 
         // The replica's collections go away with it, which ends their freshness recordings.
         for (collection_id, collection) in &mut replica.collections {
-            if let Some(mut recording) = collection.freshness.take() {
-                self.deliver_freshness_rows(*collection_id, Some(id), recording.finish());
+            if let Some(recording) = collection.freshness.take() {
+                self.finish_freshness(*collection_id, Some(id), recording);
             }
         }
 
@@ -1854,8 +1854,8 @@ impl Instance {
                 }
             }
             for (replica_id, recording) in recordings {
-                if let Some(mut recording) = recording {
-                    self.deliver_freshness_rows(*id, replica_id, recording.finish());
+                if let Some(recording) = recording {
+                    self.finish_freshness(*id, replica_id, recording);
                 }
             }
         }
@@ -2100,6 +2100,27 @@ impl Instance {
         let rows = recording
             .get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms))
             .observe(&tree, &frontier, now_ms, &config);
+        self.deliver_freshness_rows(id, replica_id, rows);
+    }
+
+    /// Ends the freshness `recording` of collection `id`, globally or on `replica_id`, and
+    /// delivers the rows of its open periods.
+    fn finish_freshness(
+        &self,
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        mut recording: FreshnessRecording,
+    ) {
+        // Recording state exists only while recording is on, see `refresh_freshness_config`.
+        let Some(config) = self.freshness_config else {
+            return;
+        };
+        let tree = self
+            .collections
+            .get(&id)
+            .and_then(|collection| collection.freshness_tree.as_ref())
+            .and_then(|tree| tree.resolve(&*self.ticker_lookup));
+        let rows = recording.finish(tree.as_ref(), (self.now)(), &config);
         self.deliver_freshness_rows(id, replica_id, rows);
     }
 

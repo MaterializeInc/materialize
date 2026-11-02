@@ -105,12 +105,17 @@ impl FreshnessRecording {
         recorder.observe(tree, frontier, now_ms, config)
     }
 
-    /// Ends the recording of a collection that goes away and returns the rows of its open
-    /// periods, which hold the arrivals up to the last observed frontier.
-    pub fn finish(&mut self) -> Vec<PeriodRow> {
+    /// Ends the recording of a collection that goes away at `now_ms` and returns the rows of its
+    /// open periods, as for [`FreshnessRecorder::finish`].
+    pub fn finish(
+        &mut self,
+        tree: Option<&ResolvedTree>,
+        now_ms: u64,
+        config: &RecorderConfig,
+    ) -> Vec<PeriodRow> {
         self.end_to_end
             .as_mut()
-            .map(FreshnessRecorder::finish)
+            .map(|recorder| recorder.finish(tree, now_ms, config))
             .unwrap_or_default()
     }
 }
