@@ -263,7 +263,7 @@ def run(args: argparse.Namespace) -> int:
         "--fault-interval",
         str(args.fault_interval),
     ]
-    for name in ("include", "check", "require_witness"):
+    for name in ("include", "check", "require_witness", "require_comparison"):
         for value in getattr(args, name):
             command.extend(("--" + name.replace("_", "-"), value))
     if args.skip_first:
@@ -343,8 +343,19 @@ def main() -> int:
         help="seconds after an ordinary pod-fault command finishes before admitting the next (0 disables pacing)",
     )
     run_parser.add_argument("--include", action="append", default=[])
-    run_parser.add_argument("--check", action="append", default=[])
+    run_parser.add_argument(
+        "--check",
+        action="append",
+        default=[],
+        help="run matching checks after the concurrent phase drains",
+    )
     run_parser.add_argument("--require-witness", action="append", default=[])
+    run_parser.add_argument(
+        "--require-comparison",
+        action="append",
+        default=[],
+        help="require each matching selected command to record a passing comparison in this run",
+    )
     run_parser.add_argument("--skip-first", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", args.cluster_name):
