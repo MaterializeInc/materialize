@@ -58,7 +58,7 @@
 //! Oracle: fold the input to its `(row, diff)` multiset, run the optimizer, fold
 //! the result. When both fold to a constant, the multisets must be equal. A
 //! divergence is a miscompile. The comparison is conservative (we only assert
-//! when both sides fold, and skip a plan matching the open bug CLU-137 via
+//! when both sides fold, and skip non-strict operand error folding via
 //! `hits_non_strict_error_fold`), so a surviving assertion failure or a panic
 //! inside the optimizer is a genuine finding. An optimizer *error* is not a skip:
 //! a plan shape the typechecker rejects panics inside `Typecheck` rather than
@@ -78,8 +78,6 @@ fn run(u: &mut Unstructured) -> libfuzzer_sys::arbitrary::Result<()> {
     let mut leaf = gen_constant;
     let (rel, _schema, _nn) = gen_rel(u, 4, &mut leaf)?;
 
-    // Skip the shape of the open bug CLU-137, which the optimizer gets wrong for
-    // reasons unrelated to whatever else the plan exercises.
     if hits_non_strict_error_fold(&rel) {
         return Ok(());
     }

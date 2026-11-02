@@ -31,6 +31,10 @@ the catalog hosting them:
 - [Databricks Unity Catalog](/export-data/iceberg-databricks/)[^4] on
   AWS, which authenticates with the OAuth2 credentials of a Databricks service
   principal.
+- [S3-compatible storage and Iceberg REST
+  catalogs](/export-data/iceberg-rest/), such as Apache Polaris with MinIO,
+  which authenticates with OAuth2 client credentials and writes with
+  catalog-vended storage credentials.
 
 ## Consume an Iceberg sink
 

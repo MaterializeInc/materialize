@@ -173,6 +173,7 @@ const buildCluster = ({
   size: "50cc",
   disk: true,
   managed: true,
+  replicationFactor: 1,
   ownerId: "u1",
   replicas: replicas ?? [buildReplica(), secondReplica()],
   latestStatusUpdate: STATUS_UPDATED_AT,

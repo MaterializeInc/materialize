@@ -158,7 +158,7 @@ def workflow_default(c: Composition) -> None:
                 external_metadata_store=True,
             )
         ):
-            c.up("materialized")
+            start_with_synced_flag(c)
             c.testdrive("\n".join(["> SHOW max_result_size", "2GB"]))
             c.stop("materialized")
 
@@ -273,6 +273,22 @@ def workflow_default(c: Composition) -> None:
             ld_client.delete_flag(LD_FEATURE_FLAG_KEY)
         except:
             pass  # ignore exceptions on cleanup
+
+
+def start_with_synced_flag(c: Composition) -> None:
+    """Start Materialize until boot sync observes the test flag's enabled value."""
+    deadline = monotonic() + 120
+    while True:
+        c.up("materialized")
+        actual = c.sql_query("SHOW max_result_size", reuse_connection=False)[0][0]
+        if actual == "2GB":
+            return
+        if actual != "1GB" or monotonic() >= deadline:
+            raise UIError(f"Boot sync expected max_result_size=2GB, got {actual}")
+        # A fresh SDK stream can see stale targeting after the readiness probe.
+        # With no sync loop, a restart is needed to re-evaluate the flag.
+        print("Boot sync read stale max_result_size=1GB, restarting Materialize")
+        c.stop("materialized")
 
 
 def run_scoped_feature_flag_cases(
@@ -666,20 +682,34 @@ class LaunchDarklyClient:
         # `environments` is optional in the response model, but the patched flag
         # always carries its environment configurations.
         assert flag.environments is not None
+        configuration = flag.environments[self.environment_key]
+        targeting: dict[str, Any] = {}
+        if on is not None:
+            targeting["on"] = on
+        if contextTargets is not None:
+            targeting["contextTargets"] = [
+                target.to_dict() for target in configuration.context_targets or []
+            ]
+        if rules is not None:
+            targeting["rules"] = rules
         self.wait_for_propagation(
-            feature_flag_key, flag.environments[self.environment_key].version
+            feature_flag_key,
+            configuration.version,
+            targeting,
         )
         return flag
 
-    def wait_for_propagation(self, feature_flag_key: str, version: int) -> None:
+    def wait_for_propagation(
+        self, feature_flag_key: str, version: int, targeting: dict[str, Any]
+    ) -> None:
         """Probe fresh SDK stream snapshots until one contains the updated flag."""
         assert LAUNCHDARKLY_SDK_KEY is not None
         # A successful management API write does not imply SDK visibility. In
         # particular, the boot-only assertion has no sync loop to repair a stale
         # initial read. Probe the same initial snapshot endpoint that boot uses,
         # not the polling endpoint or later patches on an already-open stream.
-        # These versions are environment-specific, not the flag's top-level
-        # management API version.
+        # SDK and management API versions can differ, so a version check alone
+        # can accept stale targeting. Compare the requested targeting fields too.
         deadline = monotonic() + 120
         observed: int | str | None = "no snapshot"
         while monotonic() < deadline:
@@ -711,14 +741,22 @@ class LaunchDarklyClient:
                             snapshot_version = (
                                 flag["version"] if flag is not None else None
                             )
-                            observed = snapshot_version
+                            targeting_matches = flag is not None and matches_targeting(
+                                flag, targeting
+                            )
+                            observed = (
+                                f"version {snapshot_version}, "
+                                f"targeting matches: {targeting_matches}"
+                            )
                             if (
                                 snapshot_version is not None
                                 and snapshot_version >= version
+                                and targeting_matches
                             ):
                                 print(
                                     f"SDK snapshot contains {feature_flag_key} version "
-                                    f"{observed} (wanted {version})"
+                                    f"{snapshot_version} with updated targeting "
+                                    f"(wanted version >= {version})"
                                 )
                                 return
                             break
@@ -731,10 +769,31 @@ class LaunchDarklyClient:
             sleep(1)
         raise UIError(
             f"SDK propagation timed out for {feature_flag_key}: "
-            f"expected version >= {version}, last observed {observed}"
+            f"expected version >= {version} with updated targeting, "
+            f"last observed {observed}"
         )
 
     def delete_flag(self, feature_flag_key: str) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)
             return api.delete_feature_flag(self.project_key, feature_flag_key)
+
+
+def matches_targeting(actual: Any, expected: Any) -> bool:
+    """Match requested targeting fields in an SDK flag."""
+    # NOTE: SDK payloads can omit false clause negation and empty targeting lists.
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            matches_targeting(
+                actual.get(key, False if key == "negate" else None), value
+            )
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        actual = [] if actual is None else actual
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(matches_targeting(a, e) for a, e in zip(actual, expected))
+        )
+    return actual == expected

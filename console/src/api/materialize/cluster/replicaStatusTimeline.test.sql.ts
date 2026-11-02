@@ -113,7 +113,7 @@ describe("buildEnvironmentStartedAtQuery", () => {
     } = await executeSqlHttp(
       buildObjectCreationTimesQuery({
         objectIds: [id],
-        startDate: new Date(0).toISOString(),
+        objectTypes: ["index"],
       }).compile(),
     );
     const {
@@ -144,6 +144,7 @@ describe("hydration timeline plans for a large cluster", () => {
   it("reads creation times by key for 400 objects", async () => {
     const query = buildObjectCreationTimesQuery({
       objectIds: OBJECT_IDS,
+      objectTypes: ["index", "materialized-view"],
       startDate: new Date(0).toISOString(),
     });
 

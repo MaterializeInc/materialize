@@ -602,6 +602,21 @@ export function assignReplicaColors(
   );
 }
 
+/**
+ * Each current replica's color in the resource usage charts. Current replicas
+ * lead the display order, so past replicas there don't change these.
+ */
+export function currentReplicaColor(
+  replicas: Array<{ id: string; name: string }>,
+  palette: string[],
+) {
+  const colorById = assignReplicaColors(
+    replicas.map((replica) => ({ ...replica, isCurrent: true })),
+    palette,
+  );
+  return (replicaId: string) => colorById.get(replicaId) ?? palette[0];
+}
+
 /** Whether the point's replica size has swap beyond its RAM. */
 export const canSwap = (
   point: DataPoint,

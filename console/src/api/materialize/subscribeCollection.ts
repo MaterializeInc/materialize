@@ -79,6 +79,9 @@ export interface SubscribeCollection<T extends object> {
    * full current row set is diffed against what's already synced and only the
    * delta is written into the collection. Safe to call before sync starts. */
   applySnapshot: (state: SubscribeState<T>) => void;
+  /** The latest applied rows, including while the collection is paused
+   * between subscribers. */
+  getRows: () => T[];
   /** Seed the collection from the localStorage cache scoped to `scope`
    * (`organizationId|regionId`) and route future writes to that scoped key.
    * Deferred and scoped on purpose: a constant module-level key would seed one
@@ -352,6 +355,7 @@ export function createSubscribeCollection<T extends object>(options: {
     collection,
     statusAtom,
     applySnapshot,
+    getRows: () => Array.from(desired.values()),
     hydrate,
     reset,
     suspendPersistence,

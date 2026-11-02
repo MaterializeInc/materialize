@@ -2181,16 +2181,17 @@ impl Coordinator {
         self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
 
-        // Queue the builtin table update, but do not wait for it to complete. We explicitly do
-        // this to prevent blocking the Coordinator in the case that a lot of connections are
-        // closed at once, which occurs regularly in some workflows.
+        // Queue the retraction for the next group commit without waiting for it, so closing many
+        // connections at once doesn't block the Coordinator. Forcing a commit here (`defer`)
+        // would hand every `mz_catalog_server` dataflow a new timestamp per closed session,
+        // making connection churn cost catalog server CPU per connection.
         let update = self
             .catalog()
             .state()
             .pack_session_update(&conn, Diff::MINUS_ONE);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
-        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
+        let _builtin_update_notify = self.builtin_table_update().background(vec![update]);
     }
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send

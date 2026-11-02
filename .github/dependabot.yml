@@ -310,6 +310,10 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  ignore:
+    # Both servers are deprecated and use APIs that mcp 2.x removed.
+    - dependency-name: mcp
+      update-types: [version-update:semver-major]
   groups:
     simple:
       applies-to: version-updates

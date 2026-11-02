@@ -41,9 +41,9 @@ jobs:
             }
 
             const teamKeys = [
-              'CDX', 'CLO', 'CLU', 'CNS', 'CPU', 'CS', 'DB', 'DEP', 'DEX',
-              'EDU', 'GTM', 'MZC', 'PER', 'PRD', 'QAR', 'SAS', 'SEC', 'SQL',
-              'SS', 'STG',
+              'ANA', 'CDX', 'CLO', 'CLU', 'CNS', 'CPU', 'CS', 'DB', 'DEP',
+              'DEX', 'EDU', 'GTM', 'MZC', 'OPE', 'PER', 'PRD', 'QAR', 'SAS',
+              'SEC', 'SQL', 'SS', 'STG', 'WEB',
             ];
 
             // Don't touch code blocks, inline code, and URLs

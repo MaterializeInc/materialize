@@ -92,6 +92,10 @@ class ItemColumns(Check):
         ]
 
     def validate(self) -> Testdrive:
+        # Before v26.31 (#37276), unrestricted numerics reported numeric(39,39).
+        numeric_type_mod = (
+            2555947 if self.current_version < MzVersion.parse_mz("v26.31.0-dev") else -1
+        )
         return Testdrive(dedent("""
                 > SELECT r.name, c.position, c.name, c.nullable, c.type, c.default, t.name, c.type_mod
                   FROM mz_columns c
@@ -104,7 +108,7 @@ class ItemColumns(Check):
                 item_columns_final_view 3 c true text <null> text -1
                 item_columns_initial_mv 1 a false integer <null> int4 -1
                 item_columns_initial_mv 2 b true text <null> text -1
-                item_columns_initial_mv 3 c1 true numeric <null> numeric -1
+                item_columns_initial_mv 3 c1 true numeric <null> numeric {numeric_type_mod}
                 item_columns_initial_table 1 a false integer NULL int4 -1
                 item_columns_initial_table 2 b true text 'b' text -1
                 item_columns_initial_table 3 c true numeric NULL numeric 2555910
@@ -115,7 +119,7 @@ class ItemColumns(Check):
                 item_columns_initial_table 8 i true integer NULL int4 -1
                 item_columns_initial_view 1 a false integer <null> int4 -1
                 item_columns_initial_view 2 b true text <null> text -1
-                item_columns_initial_view 3 c1 true numeric <null> numeric -1
+                item_columns_initial_view 3 c1 true numeric <null> numeric {numeric_type_mod}
                 item_columns_initial_view 4 d true item_columns_list <null> item_columns_list -1
                 item_columns_initial_view 5 e true item_columns_record <null> item_columns_record -1
                 item_columns_initial_view 6 f true "timestamp without time zone" <null> timestamp 3
@@ -153,4 +157,4 @@ class ItemColumns(Check):
                 2
                 > SELECT count(*) FROM item_columns_middle_mv
                 2
-                """))
+                """).format(numeric_type_mod=numeric_type_mod))

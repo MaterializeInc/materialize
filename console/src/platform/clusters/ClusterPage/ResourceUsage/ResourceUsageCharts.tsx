@@ -83,7 +83,7 @@ const CHANGE_TICK_MIN_HEIGHT_PX = 6;
 const CHANGE_TICK_STEP_PX = 2;
 // The most objects a change tick's tooltip names before summarizing the rest.
 const CHANGE_TOOLTIP_OBJECT_LIMIT = 5;
-const TIME_TICK_COUNT = 8;
+export const TIME_TICK_COUNT = 8;
 // Replicas' bars at one time overlap by this share of a bar, so each group
 // reads as one point in time.
 const BAR_OVERLAP = 0.5;
@@ -379,7 +379,7 @@ export const PercentAxis = ({
   );
 };
 
-const ThresholdLine = ({
+export const ThresholdLine = ({
   layout,
   y,
   color,
@@ -848,6 +848,8 @@ export const MemoryChart = ({
 export interface TimeAxisProps {
   width: number;
   xScale: TimeScale;
+  /** Labels each tick. Defaults to the time before the window's end. */
+  tickFormat?: (ms: number) => string;
 }
 
 /**
@@ -866,14 +868,19 @@ const timeTickValues = (xScale: TimeScale) => {
   ];
 };
 
-/** Each tick's time before now, just right of its gridline. */
-export const TimeAxis = ({ width, xScale }: TimeAxisProps) => {
+/** Each tick's label, just right of its gridline. */
+export const TimeAxis = ({ width, xScale, tickFormat }: TimeAxisProps) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
   const [startDate, endDate] = xScale.domain();
   const endMs = endDate.getTime();
+  // Clock labels take the scale's round times, which stay put as the window
+  // slides.
+  const tickValues = tickFormat
+    ? xScale.ticks(TIME_TICK_COUNT).map((date) => date.getTime())
+    : timeTickValues(xScale);
   return (
     <svg width={width} height={TIME_AXIS_HEIGHT_PX} display="block" aria-hidden>
-      {timeTickValues(xScale).map((value) => (
+      {tickValues.map((value) => (
         <text
           key={value}
           x={xScale(value) + AXIS_LABEL_INSET_PX}
@@ -883,9 +890,11 @@ export const TimeAxis = ({ width, xScale }: TimeAxisProps) => {
           fontFamily={fonts.mono}
           fontSize={AXIS_LABEL_FONT_PX}
         >
-          {value === endMs
-            ? "now"
-            : relativeTimeTickFormat(value, startDate, endDate)}
+          {tickFormat
+            ? tickFormat(value)
+            : value === endMs
+              ? "now"
+              : relativeTimeTickFormat(value, startDate, endDate)}
         </text>
       ))}
     </svg>
