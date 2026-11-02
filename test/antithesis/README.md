@@ -24,6 +24,7 @@ and checks from `misc/python/materialize/antithesis/drivers/`.
 | Aggregate error recovery | Generated interval sums enter modeled overflow states, retract the offending inputs, and check maintained results against exact Python component sums. |
 | Window retractions | Generated partitions, peer groups, nullable offsets, and bounded frames are compared with an independent input model through indexed views, materialized views, recomputation, and a live subscription. |
 | Session bindings | Warm prepared statements and partially fetched server cursors cross view replacement. Independent row and timestamp checks distinguish revalidation, retained snapshots, exhausted portals, and session-local temporary names. |
+| Catalog transactions | Multi-statement renames commit or roll back across acknowledged peer changes. Object identities, dependent results, and stored definitions must preserve those changes. Conflicting inspected definitions must reject without partial renames. |
 | Upsert error recovery | Acknowledged Kafka offsets fence JSON decode-error, repair, and tombstone checks, including source-replica deletion while erroneous state is live. |
 | Cross-table transaction atomicity | A durable client ledger checks whole transaction markers in common snapshots, including rollback, uncertain outcomes, and replica deletion during staged multi-table writes. |
 | External data | Postgres transaction ledgers, Kafka source histories, and sink progress and envelopes check ingestion, replay, atomicity, and output contents. |
@@ -38,7 +39,10 @@ a time budget across persistcli commands. Final checks report incomplete work.
 Timing bounds still need calibration on Antithesis's simulated core. Local
 unit tests validate the oracles and driver control flow, including their
 failure paths. They do not establish fault coverage or throughput under the
-simulator. The IVM reference derives views from the observed base tables.
+simulator. The IVM reference derives views from the observed base tables,
+including duplicate-sensitive `INTERSECT ALL` and `EXCEPT ALL` outputs. Their
+coverage tracks checked changes from each input, duplicate output counts,
+and groups crossing zero multiplicity in both directions.
 Consistent corruption of both base rows and views requires the independent
 client-history and external-source oracles.
 
@@ -357,11 +361,18 @@ period. Later experiments on the same workload state must keep that profile
 and use `--skip-first`. A state-directory lock prevents overlapping local
 experiments. The default concurrency is eight. Ordinary writers can overlap,
 while workloads with exclusive fixtures retain their admission limits.
+Include an `anytime` checker with `--include` to run it alongside writers and
+faults. `--check` runs after the concurrent phase drains, even for `anytime`
+commands. A post-phase checker does not establish overlap with live writes.
 One ordinary pod-restart command runs at a time, with thirty seconds between
 completion and the next admission. `--fault-interval` changes that delay, and
 zero disables pacing. Targeted history, IVM, and upsert disruptions retain
 their own scheduling. Raising SQL concurrency therefore does not multiply
 the ordinary fault-driver count.
+History and IVM rollout helpers share one local admission slot. Their ordinary
+writers and checkers keep their normal concurrency. An independent active-replica
+fault arm can make progress while a rollout waits for preparation. IVM writes
+exercise both held transactions and COMMIT released at the fault boundary.
 
 The seed controls scheduling and each invocation's local workload draws.
 Antithesis continues to use SDK entropy. Each run retains child logs, SDK
@@ -369,6 +380,12 @@ events, command intervals, telemetry deltas and positive coverage witnesses.
 False invariant events fail the run even when the command exits zero.
 Unreached required witnesses and truncated requested checks remain incomplete.
 Use `--require-witness 'coverage:*'` to require a checked disruption witness.
+For a focused correctness experiment, `--require-comparison '*window*'`
+requires every matching selected command to record a passing comparison during
+that run. Skips, retained counters from earlier runs, and comparisons from
+other commands do not satisfy it. Missing comparisons make the run incomplete.
+A comparison can precede the end of a multi-phase round, so use that family's
+completion witness when the experiment requires a full round.
 Round diagnostics alone do not establish that a write stayed unresolved
 throughout a disruption. Native SUT output is outside the workload SDK export,
 so retain Kubernetes logs when investigating process failures.
