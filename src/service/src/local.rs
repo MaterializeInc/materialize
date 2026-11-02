@@ -14,7 +14,6 @@ use std::task::{Context, Poll};
 use std::thread::Thread;
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use itertools::Itertools;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -31,7 +30,6 @@ pub struct LocalClient<C, R> {
     thread: Thread,
 }
 
-#[async_trait]
 impl<C, R> GenericClient<C, R> for LocalClient<C, R>
 where
     C: fmt::Debug + Send,

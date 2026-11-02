@@ -30,7 +30,6 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use async_trait::async_trait;
 use bincode::Options;
 use futures::future;
 use mz_ore::cast::CastInto;
@@ -128,7 +127,6 @@ where
     }
 }
 
-#[async_trait]
 impl<Out: Message, In: Message> GenericClient<Out, In> for Client<Out, In> {
     async fn send(&mut self, cmd: Out) -> anyhow::Result<()> {
         self.conn.send(cmd).await

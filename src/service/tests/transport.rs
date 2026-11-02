@@ -15,7 +15,6 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use futures::future;
 use mz_ore::assert_none;
 use mz_ore::netio::Listener;
@@ -659,7 +658,6 @@ impl<In, Out> ChannelHandler<In, Out> {
     }
 }
 
-#[async_trait]
 impl<In: Message, Out: Message> GenericClient<In, Out> for ChannelHandler<In, Out> {
     async fn send(&mut self, cmd: In) -> anyhow::Result<()> {
         let result = self.tx.send(cmd);
@@ -686,7 +684,6 @@ impl OneOutputHandler {
     }
 }
 
-#[async_trait]
 impl GenericClient<i32, i32> for OneOutputHandler {
     async fn send(&mut self, _cmd: i32) -> anyhow::Result<()> {
         Ok(())

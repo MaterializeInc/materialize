@@ -15,18 +15,16 @@
 use std::fmt;
 use std::task::{Context, Poll};
 
-use async_trait::async_trait;
 use itertools::Itertools;
 use tracing::trace;
 
 /// A generic client to a server that receives commands and asynchronously
 /// produces responses.
-#[async_trait]
 pub trait GenericClient<C, R>: fmt::Debug + Send {
     /// Sends a command to the dataflow server.
     ///
     /// The command can error for various reasons.
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error>;
+    fn send(&mut self, cmd: C) -> impl Future<Output = Result<(), anyhow::Error>> + Send;
 
     /// Receives the next response from the dataflow server.
     ///
@@ -45,8 +43,8 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     /// is dropped.
     ///
     /// [cancellation safe]: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        std::future::poll_fn(|cx| self.poll_recv(cx)).await
+    fn recv(&mut self) -> impl Future<Output = Result<Option<R>, anyhow::Error>> + Send {
+        std::future::poll_fn(|cx| self.poll_recv(cx))
     }
 
     /// Polls for the next response from the dataflow server.
@@ -55,20 +53,6 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     /// is available. Ready values have the same meaning as for
     /// [`GenericClient::recv`].
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<R>, anyhow::Error>>;
-}
-
-#[async_trait]
-impl<C, R> GenericClient<C, R> for Box<dyn GenericClient<C, R>>
-where
-    C: Send,
-{
-    async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-        (**self).send(cmd).await
-    }
-
-    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<R>, anyhow::Error>> {
-        (**self).poll_recv(cx)
-    }
 }
 
 /// A client whose implementation is partitioned across a number of other
@@ -104,7 +88,6 @@ where
     }
 }
 
-#[async_trait]
 impl<P, C, R> GenericClient<C, R> for Partitioned<P, C, R>
 where
     P: GenericClient<C, R>,
@@ -210,7 +193,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl GenericClient<(), i32> for ScriptedPart {
         async fn send(&mut self, _cmd: ()) -> Result<(), anyhow::Error> {
             Ok(())
