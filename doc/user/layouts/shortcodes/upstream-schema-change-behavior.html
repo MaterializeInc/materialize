@@ -87,8 +87,8 @@ Adding a `PRIMARY KEY` or `UNIQUE` constraint does not affect ingestion.
 Dropping one that the capture instance does not use does not affect ingestion
 either, because Materialize never recorded it as a key.
 
-SQL Server rejects dropping the constraint that the capture instance uses, with
-error 22979, as long as that capture instance is the newest one for the table.
+SQL Server rejects dropping the constraint that the capture instance uses, as
+long as that capture instance is the newest one for the table.
 Creating a newer capture instance with a different index lifts that protection.
 If you then drop the constraint, the Materialize table keeps a key that the
 upstream data no longer satisfies, and queries that rely on the key can return
