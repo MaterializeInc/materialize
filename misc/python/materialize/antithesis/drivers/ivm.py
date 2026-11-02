@@ -37,6 +37,7 @@ window; the next one reconnects.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -709,14 +710,28 @@ class Resume:
     state: dict[str, model.Bag]
 
 
+def _resume_signature() -> str:
+    shape = {
+        "query": model.subscribe_query(),
+        "tables": [(t.name, t.columns, t.ddl) for t in model.TABLES],
+        "views": [(v.kind, v.columns, v.sql) for v in model.VIEWS],
+    }
+    return hashlib.sha256(json.dumps(shape, sort_keys=True).encode()).hexdigest()
+
+
 def _load_resume(db: sqlite3.Connection) -> Resume | None:
     row = db.execute("SELECT t, gen, state FROM resume WHERE slot = 0").fetchone()
     if row is None:
         return None
+    encoded = json.loads(row[2])
+    # Added relations change the tagged union. An older checkpoint cannot
+    # prove which outputs were empty, so start a fresh snapshot after an upgrade.
+    if isinstance(encoded, list) or encoded["signature"] != _resume_signature():
+        return None
     return Resume(
         int(row[0]),
         None if row[1] is None else int(row[1]),
-        model.decode_state(json.loads(row[2])),
+        model.decode_state(encoded["state"]),
     )
 
 
@@ -726,7 +741,13 @@ def _save_resume(
     with db:
         db.execute(
             "INSERT OR REPLACE INTO resume (slot, t, gen, state) VALUES (0, ?, ?, ?)",
-            (t, gen, json.dumps(model.encode_state(st))),
+            (
+                t,
+                gen,
+                json.dumps(
+                    {"signature": _resume_signature(), "state": model.encode_state(st)}
+                ),
+            ),
         )
 
 
