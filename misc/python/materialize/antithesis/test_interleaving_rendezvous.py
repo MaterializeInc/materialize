@@ -28,6 +28,213 @@ from materialize.antithesis.drivers import history, pod_restarts, rollouts
 
 
 @pytest.fixture
+def active_replica(monkeypatch, tmp_path):
+    obj = {
+        "metadata": {"uid": "cr-uid", "generation": 13},
+        "spec": {"requestRollout": "owned-request"},
+        "status": {
+            "resourceId": "environment",
+            "activeGeneration": 6,
+            "conditions": [
+                {"type": "UpToDate", "observedGeneration": 13, "reason": "Applying"}
+            ],
+        },
+    }
+
+    def pod(
+        name, generation="6", cluster="u2", resource="environment", uid="active-uid"
+    ):
+        return SimpleNamespace(
+            metadata=SimpleNamespace(
+                name=name,
+                uid=uid,
+                deletion_timestamp=None,
+                labels={
+                    "cluster.environmentd.materialize.cloud/cluster-id": cluster,
+                    "cluster.environmentd.materialize.cloud/generation": generation,
+                    "materialize.cloud/mz-resource-id": resource,
+                },
+            )
+        )
+
+    core = Mock()
+    active = pod("active")
+    core.list_namespaced_pod.return_value.items = [
+        pod("candidate", "7"),
+        pod("foreign", cluster="u9"),
+        pod("other-environment", resource="other"),
+        active,
+    ]
+    core.read_namespaced_pod.return_value = copy.deepcopy(active)
+    kube = SimpleNamespace(
+        env=SimpleNamespace(endpoints=Mock()),
+        namespace="ns",
+        operator_namespace="operator",
+        core=core,
+        try_snapshot=lambda: rollouts.Snapshot(copy.deepcopy(obj)),
+        patch_spec=Mock(),
+    )
+    monkeypatch.setattr(pod_restarts, "quiet_period_active", lambda _: False)
+    monkeypatch.setattr(pod_restarts.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        pod_restarts.rng,
+        "choice",
+        lambda items: (
+            "active_replica"
+            if items == ("rollout_or_pod", "active_replica")
+            else items[0]
+        ),
+    )
+    monkeypatch.setattr(
+        pod_restarts,
+        "_owned_interleaving",
+        Mock(side_effect=AssertionError("independent arm touched rollout ownership")),
+    )
+    monkeypatch.setattr(
+        pod_restarts, "open_db", lambda *args: sqlite3.connect(tmp_path / "faults.db")
+    )
+    monkeypatch.setattr(pod_restarts.recovery, "preserve_pod_exit", Mock())
+    monkeypatch.setattr(pod_restarts.telemetry, "interleaving_progress", Mock())
+    monkeypatch.setattr(pod_restarts.telemetry, "fault_observed", Mock())
+    return SimpleNamespace(kube=kube, obj=obj, active=active, pod=pod)
+
+
+def test_active_replica_arm_ignores_owned_preparation_and_only_deletes_scoped_active_uid(
+    active_replica,
+):
+    f = active_replica
+    action = pod_restarts.interleaving_disruption(f.kube, cluster_id="u2", deadline=30)
+    assert action is not None
+    release = Mock()
+    action.run(lambda: True, release)
+    call = f.kube.core.delete_namespaced_pod.call_args
+    assert call.args == ("active", "ns")
+    assert call.kwargs["body"].preconditions.uid == "active-uid"
+    assert call.kwargs["_request_timeout"] > 0
+    release.assert_called_once()
+    f.kube.patch_spec.assert_not_called()
+    pod_restarts._owned_interleaving.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "missing", ["active", "resource", "uid", "generation", "request", "observed"]
+)
+def test_active_replica_arm_does_not_start_sql_without_current_generation_identity(
+    active_replica, missing
+):
+    f = active_replica
+    if missing == "active":
+        f.obj["status"].pop("activeGeneration")
+    elif missing == "resource":
+        f.obj["status"].pop("resourceId")
+    elif missing in ("uid", "generation"):
+        f.obj["metadata"].pop(missing)
+    elif missing == "request":
+        f.obj["spec"].pop("requestRollout")
+    else:
+        f.obj["status"]["conditions"][0]["observedGeneration"] = 12
+    assert (
+        pod_restarts.interleaving_disruption(f.kube, cluster_id="u2", deadline=30)
+        is None
+    )
+    f.kube.core.list_namespaced_pod.assert_not_called()
+    f.kube.core.delete_namespaced_pod.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "changed", ["active", "resource", "uid", "generation", "request", "observed"]
+)
+def test_active_replica_arm_revalidates_cr_identity_inside_unresolved_sql(
+    active_replica, changed
+):
+    f = active_replica
+    action = pod_restarts.interleaving_disruption(f.kube, cluster_id="u2", deadline=30)
+    assert action is not None
+    if changed == "active":
+        f.obj["status"]["activeGeneration"] = 7
+    elif changed == "resource":
+        f.obj["status"]["resourceId"] = "other"
+    elif changed == "uid":
+        f.obj["metadata"]["uid"] = "replacement-cr"
+    elif changed == "generation":
+        f.obj["metadata"]["generation"] = 14
+        f.obj["status"]["conditions"][0]["observedGeneration"] = 14
+    elif changed == "request":
+        f.obj["spec"]["requestRollout"] = "superseding-request"
+    else:
+        f.obj["status"]["conditions"][0]["observedGeneration"] = 12
+    action()
+    f.kube.core.delete_namespaced_pod.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "kind", ["candidate", "cluster", "resource", "uid", "deleting", "generation"]
+)
+def test_active_replica_arm_never_selects_unproven_pods(active_replica, kind):
+    f = active_replica
+    pod = copy.deepcopy(f.active)
+    if kind == "candidate":
+        pod.metadata.labels["cluster.environmentd.materialize.cloud/generation"] = "7"
+    elif kind == "cluster":
+        pod.metadata.labels["cluster.environmentd.materialize.cloud/cluster-id"] = "u9"
+    elif kind == "resource":
+        pod.metadata.labels["materialize.cloud/mz-resource-id"] = "other"
+    elif kind == "uid":
+        pod.metadata.uid = None
+    elif kind == "deleting":
+        pod.metadata.deletion_timestamp = "now"
+    else:
+        pod.metadata.labels.pop("cluster.environmentd.materialize.cloud/generation")
+    f.kube.core.list_namespaced_pod.return_value.items = [pod]
+    action = pod_restarts.interleaving_disruption(f.kube, cluster_id="u2", deadline=30)
+    assert action is not None
+    action()
+    f.kube.core.read_namespaced_pod.assert_not_called()
+    f.kube.core.delete_namespaced_pod.assert_not_called()
+
+
+def test_active_replica_arm_revalidates_listed_uid_before_delete(active_replica):
+    f = active_replica
+    f.kube.core.read_namespaced_pod.return_value.metadata.uid = "replacement-uid"
+    action = pod_restarts.interleaving_disruption(f.kube, cluster_id="u2", deadline=30)
+    assert action is not None
+    action()
+    f.kube.core.delete_namespaced_pod.assert_not_called()
+
+
+def test_active_replica_arm_keeps_generation_guard_through_delete_preflight(
+    active_replica, monkeypatch
+):
+    f = active_replica
+
+    def promote(*args, **kwargs):
+        f.obj["status"]["activeGeneration"] = 7
+
+    monkeypatch.setattr(pod_restarts.recovery, "preserve_pod_exit", promote)
+    action = pod_restarts.interleaving_disruption(f.kube, cluster_id="u2", deadline=30)
+    assert action is not None
+    action()
+    f.kube.core.delete_namespaced_pod.assert_not_called()
+
+
+@pytest.mark.parametrize("guard", ["pending", "quiet", "deadline"])
+def test_active_replica_arm_preserves_pending_quiet_and_deadline_guards(
+    active_replica, monkeypatch, guard
+):
+    f = active_replica
+    action = pod_restarts.interleaving_disruption(f.kube, cluster_id="u2", deadline=30)
+    assert action is not None
+    if guard == "quiet":
+        monkeypatch.setattr(pod_restarts, "quiet_period_active", lambda _: True)
+    elif guard == "deadline":
+        monkeypatch.setattr(pod_restarts.time, "monotonic", lambda: 31)
+    release = Mock()
+    action.run(lambda: guard != "pending", release)
+    f.kube.core.delete_namespaced_pod.assert_not_called()
+    release.assert_not_called()
+
+
+@pytest.fixture
 def rendezvous(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     class Kube:
         def __init__(self):
@@ -310,6 +517,7 @@ def test_owned_preparation_fences_itself_after_losing_the_lease(
 
 
 def test_victim_is_selected_inside_the_staged_write(monkeypatch):
+    monkeypatch.setattr(pod_restarts.rng, "choice", lambda items: items[0])
     monkeypatch.setattr(pod_restarts.templates, "enabled_driver", lambda *args: False)
     monkeypatch.setattr(pod_restarts, "quiet_period_active", lambda *args: False)
     monkeypatch.setattr(pod_restarts.rng, "sample", lambda items, n: ["clusterd"])

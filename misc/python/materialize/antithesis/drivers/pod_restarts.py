@@ -748,12 +748,127 @@ def _delete_interleaved(
     return sent
 
 
+def _active_replica_identity(snap: Snapshot | None) -> tuple[Any, ...] | None:
+    if (
+        snap is None
+        or not snap.phase_is_current
+        or snap.active is None
+        or snap.generation is None
+        or not snap.resource_id
+        or not snap.request
+        or not snap.obj.get("metadata", {}).get("uid")
+    ):
+        return None
+    return (
+        snap.obj["metadata"]["uid"],
+        snap.resource_id,
+        snap.active,
+        snap.generation,
+        snap.request,
+    )
+
+
+def _active_replica_interleaving(
+    kube: Kube, cluster_id: str, deadline: float
+) -> InterleavingDisruption | None:
+    if (
+        not cluster_id
+        or time.monotonic() >= deadline
+        or quiet_period_active(kube.env.endpoints)
+    ):
+        return None
+    try:
+        identity = _active_replica_identity(kube.try_snapshot())
+    except TRANSIENT_ERRORS as error:
+        log(f"active replica preparation unavailable: {type(error).__name__}")
+        return None
+    if identity is None:
+        log(
+            "active replica preparation deferred: current generation identity unavailable"
+        )
+        return None
+    _, resource_id, generation, _, _ = identity
+
+    def matches(pod: Any) -> bool:
+        metadata = pod.metadata
+        if metadata is None:
+            return False
+        labels = metadata.labels or {}
+        return bool(
+            metadata.name
+            and metadata.uid
+            and metadata.deletion_timestamp is None
+            and recovery.pod_role(kube.namespace, kube.operator_namespace, labels)
+            == "clusterd"
+            and labels.get("cluster.environmentd.materialize.cloud/cluster-id")
+            == cluster_id
+            and labels.get("cluster.environmentd.materialize.cloud/generation")
+            == str(generation)
+            and labels.get("materialize.cloud/mz-resource-id") == resource_id
+        )
+
+    def delete(pending: Callable[[], bool], release_commit: Callable[[], None]) -> None:
+        def guarded() -> bool:
+            return (
+                pending()
+                and time.monotonic() < deadline
+                and not quiet_period_active(kube.env.endpoints)
+                and _active_replica_identity(kube.try_snapshot()) == identity
+            )
+
+        try:
+            if not guarded():
+                return
+            candidates = [
+                pod
+                for pod in kube.core.list_namespaced_pod(
+                    kube.namespace,
+                    _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+                ).items
+                if matches(pod)
+            ]
+            if not candidates or not guarded():
+                return
+            chosen = rng.choice(candidates)
+            metadata = chosen.metadata
+            current = kube.core.read_namespaced_pod(
+                metadata.name,
+                kube.namespace,
+                _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+            )
+            if not matches(current) or current.metadata.uid != metadata.uid:
+                return
+            # The shared cluster ID also exists in the candidate generation.
+            # Recheck the active CR identity after the pod read, then preserve
+            # that guard through delete_recorded's preflight and UID precondition.
+            _delete_interleaved(
+                kube,
+                Victim(
+                    "clusterd",
+                    kube.namespace,
+                    metadata.name,
+                    metadata.uid,
+                    cluster_id,
+                    generation,
+                ),
+                deadline,
+                guarded,
+                release_commit,
+            )
+        except TRANSIENT_ERRORS as error:
+            log(f"active replica target unavailable: {type(error).__name__}")
+
+    return InterleavingDisruption(delete)
+
+
 def interleaving_disruption(
     kube: Kube, *, cluster_id: str, deadline: float
 ) -> InterleavingDisruption | None:
     """Prepare an owned rollout or select a pod only inside unresolved SQL."""
     if quiet_period_active(kube.env.endpoints) or time.monotonic() >= deadline:
         return None
+    if rng.choice(("rollout_or_pod", "active_replica")) == "active_replica":
+        return _active_replica_interleaving(kube, cluster_id, deadline)
     rolling = templates.enabled_driver("rollouts") or templates.enabled_driver(
         "spec_phase"
     )
