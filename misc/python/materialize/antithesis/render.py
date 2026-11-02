@@ -41,10 +41,21 @@ DEFAULT_IMAGES = {
     "REDPANDA_IMAGE": "docker.io/redpandadata/redpanda:v26.1.8",
 }
 
+INTROSPECTION_PARAMETERS = {
+    # History truncation runs when the append-only writer starts. These do
+    # not bound a continuously running generation's history. A local catalog
+    # replica with 2.5 million history arrangement records reached its 1 GiB
+    # limit, so retain less across restarts and record lag less frequently.
+    "replica_metrics_history_retention_interval": "30min",
+    "wallclock_lag_history_retention_interval": "30min",
+    "wallclock_lag_recording_interval": "5min",
+}
+
 # System parameters every timeline starts from. Per-timeline variation is the
 # workload's job (it rewrites the `system-params` ConfigMap); these are only
 # the values the harness itself depends on.
 BASE_SYSTEM_PARAMETERS: dict[str, str] = {
+    **INTROSPECTION_PARAMETERS,
     # One node: replicas of one cluster must be allowed to share it.
     "cluster_soften_replication_anti_affinity": "true",
     "allowed_cluster_replica_sizes": "'antithesis-1', 'antithesis-2', 'antithesis-4'",
