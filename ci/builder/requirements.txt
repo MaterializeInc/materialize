@@ -31,7 +31,7 @@ jupyterlab==4.6.5
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
-launchdarkly-api==25.1.0
+launchdarkly-api==25.1.1
 # NOTE matplotlib 3.10.9 is required for Python 3.10 compatibility
 matplotlib==3.10.9; python_version < "3.11"
 matplotlib==3.11.2; python_version >= "3.11"
