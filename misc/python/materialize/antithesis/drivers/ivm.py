@@ -569,11 +569,47 @@ def interleaving_main() -> int:
                 cid = _cluster_id(meta)
             if cid is None:
                 return 0
-            before_commit = pod_restarts.interleaving_disruption(
+            disruption = pod_restarts.interleaving_disruption(
                 Kube(env), cluster_id=cid, deadline=deadline
             )
-            if before_commit is None:
+            if disruption is None:
                 return 0
+            if not _interleaved_write(
+                host,
+                disruption,
+                race_commit=rng.choice((False, True)),
+                deadline=deadline,
+            ):
+                return 0
+        except (psycopg.Error, OSError) as error:
+            _note_read_error(error, "interleaved write", None)
+            return 0
+        # An indeterminate COMMIT still needs its later stream observation.
+        _check_windows(env, host, db, allow_faults=False)
+    finally:
+        db.close()
+    return 0
+
+
+def _interleaved_write(
+    host: str,
+    disruption: Callable[[], None],
+    *,
+    race_commit: bool,
+    deadline: float,
+) -> bool:
+    """Stage an isolated writer and optionally release COMMIT during disruption.
+
+    Return whether the staged write finished, including an indeterminate COMMIT
+    that still needs the later SUBSCRIBE oracle.
+    """
+    staged = threading.Event()
+
+    def write(before_commit: Callable[[], None]) -> None:
+        # The overlap worker can outlive its deadline. It owns both connections
+        # so a late result cannot touch the controller's closing SQLite handle.
+        db = open_state()
+        try:
             with _connect(host, CLUSTER) as conn:
                 writer = Writer(db, conn, {}, 0)
                 writer.refresh()
@@ -583,16 +619,25 @@ def interleaving_main() -> int:
                     if writer.counts[table] < MAX_ROWS[table]
                 ]
                 if not kinds or time.monotonic() >= deadline:
-                    return 0
-                writer.write(before_commit=before_commit, kind=rng.choice(kinds))
-        except (psycopg.Error, OSError) as error:
-            _note_read_error(error, "interleaved write", None)
-            return 0
-        # An indeterminate COMMIT still needs its later stream observation.
-        _check_windows(env, host, db, allow_faults=False)
-    finally:
-        db.close()
-    return 0
+                    return
+
+                def ready() -> None:
+                    staged.set()
+                    before_commit()
+
+                writer._write(before_commit=ready, kind=rng.choice(kinds))
+        finally:
+            db.close()
+
+    with telemetry.interleaving("race_ivm" if race_commit else "held_ivm"):
+        finished = history._overlap_write(
+            write, disruption, race_commit=race_commit, deadline=deadline
+        )
+        complete = finished and staged.is_set()
+        telemetry.interleaving_progress(
+            "end", outcome="completed" if complete else "indeterminate"
+        )
+        return complete
 
 
 def _active_generation(env: Environment) -> int | None:
@@ -782,6 +827,7 @@ class Window:
         self.fetch_started: float | None = None
         self.snapshot: dict[str, model.Bag] | None = None
         """Accumulated state at `as_of`, once the stream closed it."""
+        self.snapshot_closed_rt: float | None = None
         self.peek: dict[str, model.Bag] | None = None
         self.resume: Resume | None = None
         self.newest: int | None = None
@@ -807,6 +853,7 @@ class Window:
                         )
         if self.snapshot is None and step.time == self.stream.as_of:
             self.snapshot = {t: Counter(b) for t, b in self.stream.state.items() if b}
+            self.snapshot_closed_rt = time.monotonic()
 
     def feed(self, rows: list[tuple[Any, ...]]) -> None:
         assert self.stream is not None
@@ -1103,6 +1150,22 @@ def _check_writes(w: Window, db: sqlite3.Connection, details: dict[str, Any]) ->
         )
         telemetry_coverage.ivm_checked(
             list(ledger.values()), w.closed_ids, passed, cluster_id=w.cluster_id
+        )
+        live = [
+            op.op_id
+            for op in ledger.values()
+            if passed
+            and w.snapshot_closed_rt is not None
+            and op.outcome == "ok"
+            and op.complete_rt is not None
+            and w.snapshot_closed_rt < op.invoke_rt <= op.complete_rt
+            and op.op_id in w.closed_ids
+            and op.complete_rt <= w.closed_ids[op.op_id][1]
+        ]
+        sometimes(
+            bool(live),
+            "ivm: acknowledged writes begin after the subscription snapshot closes and are checked on the same stream",
+            {"writes": len(live), "sample_ids": sorted(live)[:8]},
         )
     with db:
         for op_id, times in w.seen_ids.items():
