@@ -1386,7 +1386,8 @@ impl InstanceState {
     /// is read through replica-targeted queries, so only the per-replica freshness rows are
     /// meaningful, not the global aggregate. The tree is kept per instance with the interval
     /// of the most recently added replica with logging, so a replica with a different interval
-    /// records against the wrong grid.
+    /// records against the wrong grid. Dependents of the introspection collections keep the tree
+    /// derived when they were created, so a later interval change does not reach them.
     fn set_logging_interval(&mut self, interval: Duration) {
         let tree = logging_freshness_tree(interval);
         for id in &self.log_ids {
