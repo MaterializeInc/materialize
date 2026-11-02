@@ -119,6 +119,22 @@ updates:
       update-types:
         - minor
         - patch
+- package-ecosystem: cargo
+  directory: /misc/materialize-sdk
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 # The `test/terraform` roots pin the self-managed modules to a tag rather than
 # floating on `main`, so an upstream release arrives here as a PR that can
 # adapt the roots in the same change, instead of breaking the nightly overnight

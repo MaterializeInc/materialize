@@ -38,6 +38,9 @@ pub struct Frontier {
 impl Frontier {
     /// Returns the frontier `frontier`, or `None` for zero, which no batch can
     /// close because no timestamp is below it.
+    ///
+    /// The frontier one past `u64::MAX` is out of range here.
+    /// `Frontier::after(u64::MAX)` builds it.
     pub fn new(frontier: u64) -> Option<Frontier> {
         let as_of = frontier.checked_sub(1)?;
         Some(Frontier { as_of })
