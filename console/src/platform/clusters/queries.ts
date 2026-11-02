@@ -40,6 +40,10 @@ import {
 } from "~/api/materialize/cluster/arrangementMemory";
 import fetchAvailableClusterSizes from "~/api/materialize/cluster/availableClusterSizes";
 import {
+  AUTO_SCALING_MIN_VERSION,
+  fetchClusterConfiguration,
+} from "~/api/materialize/cluster/clusterConfiguration";
+import {
   expandClusterLineage,
   fetchClusterDeploymentLineage,
 } from "~/api/materialize/cluster/clusterDeploymentLineage";
@@ -178,6 +182,15 @@ export const clusterQueryKeys = {
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("maxReplicasPerCluster"),
+    ] as const,
+  configuration: (params: {
+    clusterId: string;
+    replicaIds: string[];
+    includeAutoScaling: boolean;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("configuration", params),
     ] as const,
   replicas: (params: ClusterReplicasParams) =>
     [...clusterQueryKeys.all(), buildQueryKeyPart("replicas", params)] as const,
@@ -405,7 +418,12 @@ export function useClusters(filters?: ClusterListFilters) {
 // select is a new function every render, which makes react-query re-run it and
 // hand back a fresh Map, which in turn breaks `isOwner`'s referential stability.
 const selectOwnersById = (result: Awaited<ReturnType<typeof fetchOwners>>) =>
-  new Map(result.rows.map((row) => [row.id, row.isOwner]));
+  new Map(
+    result.rows.map((row) => [
+      row.id,
+      { isOwner: row.isOwner, name: row.name },
+    ]),
+  );
 
 /**
  * Returns `isOwner`, a predicate on an object's owner id, for deriving
@@ -416,7 +434,8 @@ const selectOwnersById = (result: Awaited<ReturnType<typeof fetchOwners>>) =>
  * appearing and then disappearing.
  *
  * `isOwner` keeps a stable reference while the underlying data is unchanged, so
- * callers can safely put it in a dependency array.
+ * callers can safely put it in a dependency array. `ownerName` names an owner
+ * id, or is undefined until the roles load.
  */
 export function useOwners() {
   const { data: ownersById, isPending } = useQuery({
@@ -431,11 +450,16 @@ export function useOwners() {
   });
 
   const isOwner = useCallback(
-    (ownerId: string) => !isPending && (ownersById?.get(ownerId) ?? false),
+    (ownerId: string) =>
+      !isPending && (ownersById?.get(ownerId)?.isOwner ?? false),
     [isPending, ownersById],
   );
+  const ownerName = useCallback(
+    (ownerId: string) => ownersById?.get(ownerId)?.name,
+    [ownersById],
+  );
 
-  return { isOwner };
+  return { isOwner, ownerName };
 }
 
 export type AlterClusterParams = AlterClusterSettingsParams &
@@ -630,6 +654,45 @@ export const availableClusterSizesQuery = () => ({
     });
   },
 });
+
+/**
+ * What the configuration drawer shows beyond the cluster list: replication
+ * factor, creation times and the autoscaling strategy, with whether this
+ * environment has autoscaling at all.
+ */
+export function useClusterConfiguration({
+  clusterId,
+  replicaIds,
+}: {
+  clusterId: string;
+  replicaIds: string[];
+}) {
+  const includeAutoScaling =
+    useEnvironmentGate(AUTO_SCALING_MIN_VERSION) === true;
+  const params = {
+    clusterId,
+    replicaIds: [...replicaIds].sort(),
+    includeAutoScaling,
+  };
+  const query = useQuery({
+    queryKey: clusterQueryKeys.configuration(params),
+    queryFn: ({ queryKey, signal }) =>
+      fetchClusterConfiguration({
+        params,
+        queryKey,
+        requestOptions: { signal },
+      }),
+    // A replica added or dropped changes the key. The same cluster's earlier
+    // answer stays up meanwhile, but never another cluster's.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1].clusterId === clusterId ? previous : undefined,
+  });
+  return {
+    data: query.data,
+    isError: query.isError,
+    includeAutoScaling,
+  };
+}
 
 export function useMaxReplicasPerCluster() {
   return useQuery({
@@ -1461,6 +1524,7 @@ export function useObjectCreationTimes(params: {
       return fetchObjectCreationTimes({
         params: {
           objectIds: queryKeyParams.objectIds,
+          objectTypes: ["index", "materialized-view"],
           startDate: subMinutes(
             new Date(),
             queryKeyParams.timePeriodMinutes,

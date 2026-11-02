@@ -60,6 +60,7 @@ describe("useClustersDropdown subscribe", () => {
       disk: true,
       managed: true,
       size: "bootstrap",
+      replicationFactor: 1,
       replicas: [
         {
           disk: true,

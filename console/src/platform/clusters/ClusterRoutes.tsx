@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import React from "react";
-import { Navigate, Route, useParams } from "react-router-dom";
+import { Navigate, Route, useLocation, useParams } from "react-router-dom";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
@@ -48,15 +48,23 @@ export type ClusterParams = {
 const handleRenamedCluster = (
   cluster: Cluster,
   params: Readonly<Partial<ClusterParams>>,
+  // Kept so a rename from the configuration drawer leaves it open.
+  search: string,
 ) => {
   if (cluster.name !== params.clusterName) {
-    return <Navigate to={`../../${relativeClusterPath(cluster)}`} replace />;
+    return (
+      <Navigate
+        to={{ pathname: `../../${relativeClusterPath(cluster)}`, search }}
+        replace
+      />
+    );
   }
   return <ClusterDetailPage />;
 };
 
 const ClusterOrRedirect: React.FC = () => {
   const params = useParams<ClusterParams>();
+  const { search } = useLocation();
   const { snapshotComplete, data: clusters } = useAllClusters();
   // Show loading state until clusters load
   if (!snapshotComplete) {
@@ -64,7 +72,7 @@ const ClusterOrRedirect: React.FC = () => {
   }
   let cluster = clusters?.find((c) => c.id === params.clusterId);
   if (cluster) {
-    return handleRenamedCluster(cluster, params);
+    return handleRenamedCluster(cluster, params, search);
   }
   cluster = clusters?.find((c) => c.name === params.clusterName);
   if (cluster) {
