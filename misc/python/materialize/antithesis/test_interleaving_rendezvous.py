@@ -406,6 +406,76 @@ def test_commit_race_begins_after_target_selection():
     assert sequence == ["staged", "selected", "delete"]
 
 
+@pytest.mark.parametrize(
+    "generation,observed_generation,current",
+    [(1, 1, True), (1, 0, False), (1, None, False), (None, None, False)],
+)
+def test_fallback_delete_records_only_current_forced_phase_samples(
+    rendezvous, monkeypatch, generation, observed_generation, current
+):
+    rendezvous.phase("Promoting")
+    rendezvous.obj["metadata"]["generation"] = generation
+    rendezvous.obj["status"]["conditions"][0][
+        "observedGeneration"
+    ] = observed_generation
+    monkeypatch.setattr(
+        pod_restarts, "_owned_interleaving", lambda *args: (False, None)
+    )
+    monkeypatch.setattr(pod_restarts.rng, "sample", lambda roles, count: ["clusterd"])
+    monkeypatch.setattr(
+        pod_restarts,
+        "pick_victim",
+        Mock(
+            return_value=pod_restarts.Victim(
+                "clusterd", "namespace", "pod", "uid", "u2"
+            )
+        ),
+    )
+    phase = Mock()
+    deleted = Mock(return_value=True)
+    monkeypatch.setattr(pod_restarts.telemetry, "phase_observed", phase)
+    monkeypatch.setattr(pod_restarts, "delete_recorded", deleted)
+    action = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=time.monotonic() + 5
+    )
+    assert action is not None
+    action.run(lambda: True, Mock())
+    deleted.assert_called_once()
+    if current:
+        phase.assert_called_once_with(
+            "Promoting", 5, "initial", started=10.0, force=True
+        )
+    else:
+        phase.assert_not_called()
+
+
+def test_owned_promotion_cannot_credit_a_snapshot_with_no_generation(
+    rendezvous, monkeypatch
+):
+    deadline = prepare_rendezvous(rendezvous)
+    rendezvous.phase("ReadyToPromote")
+    action = pod_restarts.interleaving_disruption(
+        rendezvous, cluster_id="u2", deadline=deadline
+    )
+    assert action is not None
+    patch_spec = rendezvous.patch_spec
+
+    def patch(changes):
+        result = patch_spec(changes)
+        if "forcePromote" in changes:
+            rendezvous.phase("Promoting")
+            rendezvous.obj["metadata"]["generation"] = None
+            rendezvous.obj["status"]["conditions"][0]["observedGeneration"] = None
+        return result
+
+    rendezvous.patch_spec = patch
+    phase = Mock()
+    monkeypatch.setattr(pod_restarts.telemetry, "phase_observed", phase)
+    action()
+    assert len(rendezvous.calls) == 2
+    phase.assert_not_called()
+
+
 @pytest.mark.parametrize("completed_during_capture", [False, True])
 def test_delete_commit_race_waits_for_evidence_and_abandons_finished_sql(
     monkeypatch, completed_during_capture

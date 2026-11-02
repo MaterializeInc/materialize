@@ -139,6 +139,7 @@ closed timestamp from a fetch requested after the observed exposure. The full
 phase-GET or acknowledged pod-delete interval must fit within the write's
 unresolved interval. The matrix records observed phase, kill role, write
 family, read path, and outcome.
+Phase credit requires status to acknowledge the current spec generation.
 A phase and a kill can occur at different points of that same interval.
 Replica exposure requires the deleted pod's cluster id to match the checked
 workload. Missing cluster identity receives no replica credit.

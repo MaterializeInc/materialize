@@ -674,10 +674,7 @@ def _owned_interleaving(
                 observed = kube.try_snapshot()
                 if observed is None or observed.request != request or not pending():
                     return
-                if (
-                    observed.reason == "Promoting"
-                    and observed.observed_generation == observed.generation
-                ):
+                if observed.reason == "Promoting" and observed.phase_is_current:
                     telemetry.phase_observed(
                         observed.reason,
                         observed.active,
@@ -785,7 +782,7 @@ def interleaving_disruption(
                 if rolling:
                     started = time.monotonic()
                     observed = kube.try_snapshot()
-                    if observed is not None:
+                    if observed is not None and observed.phase_is_current:
                         telemetry.phase_observed(
                             observed.reason,
                             observed.active,
