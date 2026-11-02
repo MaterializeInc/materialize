@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Check prepared bindings, begun portals, and session-local temporary shadows."""
+"""Check session bindings and catalog transactions against acknowledged inputs."""
 
 from __future__ import annotations
 
@@ -47,6 +47,10 @@ def open_state() -> sqlite3.Connection:
             " admin_session TEXT, started INTEGER NOT NULL DEFAULT 0,"
             " settled INTEGER NOT NULL DEFAULT 0, cleanup_complete INTEGER NOT NULL DEFAULT 0)"
         )
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS run_sessions"
+            " (run INTEGER, session TEXT, PRIMARY KEY (run,session))"
+        )
     return db
 
 
@@ -67,6 +71,9 @@ def _reserve(db: sqlite3.Connection) -> int:
         assert run is not None
         with db:
             db.execute("DELETE FROM runs WHERE id<? AND cleanup_complete=1", (run - 8,))
+            db.execute(
+                "DELETE FROM run_sessions WHERE run NOT IN (SELECT id FROM runs)"
+            )
         return run
     except BaseException:
         db.rollback()
@@ -79,9 +86,12 @@ def _execute(
     remaining = int(1000 * (deadline - time.monotonic()))
     if remaining <= 0:
         raise Incomplete("round budget elapsed")
-    conn.execute(
-        f"SET statement_timeout='{min(STATEMENT_TIMEOUT_MS, remaining)}ms'".encode()
-    )
+    # A failed explicit transaction rejects SET too. ROLLBACK must reach the
+    # server before this session can configure its next statement.
+    if statement != "ROLLBACK":
+        conn.execute(
+            f"SET statement_timeout='{min(STATEMENT_TIMEOUT_MS, remaining)}ms'".encode()
+        )
     return conn.execute(statement.encode(), params)
 
 
@@ -144,19 +154,28 @@ def _cleanup(host: str, db: sqlite3.Connection, run: int, deadline: float) -> No
             if ddl_hold.active():
                 return
             if not settled:
-                if session is None:
+                sessions = {
+                    row[0]
+                    for row in db.execute(
+                        "SELECT session FROM run_sessions WHERE run=?", (run,)
+                    )
+                }
+                if session is not None:
+                    sessions.add(session)
+                if not sessions:
                     return
                 # The namespace cannot be reclaimed while its original CREATE
                 # can still run after an unacknowledged client response.
                 with _connect(host, deadline, internal=True) as meta:
-                    active = _execute(
-                        meta,
-                        deadline,
-                        "SELECT 1 FROM mz_internal.mz_sessions WHERE id::text=%s",
-                        (session,),
-                    ).fetchone()
-                if active is not None:
-                    return
+                    for original_session in sorted(sessions):
+                        active = _execute(
+                            meta,
+                            deadline,
+                            "SELECT 1 FROM mz_internal.mz_sessions WHERE id::text=%s",
+                            (original_session,),
+                        ).fetchone()
+                        if active is not None:
+                            return
             with _connect(host, deadline) as conn:
                 _ddl(
                     conn, deadline, f"DROP SCHEMA IF EXISTS {schema_name(run)} CASCADE"
@@ -231,6 +250,193 @@ def _fresh(
     return rows
 
 
+def _catalog_check(
+    actual: Any, expected: Any, path: str, details: dict[str, Any]
+) -> None:
+    passed = actual == expected
+    telemetry.comparison(
+        FAMILY, "table" if details.get("ending") == "conflict" else "view", passed
+    )
+    always(
+        passed,
+        "session rebinding: catalog transactions preserve concurrent changes and bindings",
+        {**details, "path": path, "expected": expected, "actual": actual},
+    )
+    if not passed:
+        raise Incomplete("catalog transaction violated its acknowledged contract")
+
+
+def _catalog_ids(
+    conn: psycopg.Connection, deadline: float, schema: str, prefix: str
+) -> dict[str, str]:
+    rows = _execute(
+        conn,
+        deadline,
+        "SELECT o.name,o.id FROM mz_catalog.mz_objects o"
+        " JOIN mz_catalog.mz_schemas s ON o.schema_id=s.id"
+        " JOIN mz_catalog.mz_databases d ON s.database_id=d.id"
+        " WHERE d.name=current_database() AND s.name=%s"
+        " AND left(o.name,length(%s))=%s ORDER BY o.name",
+        (schema, prefix, prefix),
+    ).fetchall()
+    return dict(rows)
+
+
+def _catalog_transactions(
+    txn: psycopg.Connection,
+    other: psycopg.Connection,
+    deadline: float,
+    schema: str,
+    parameters: model.Parameters,
+    details: dict[str, Any],
+) -> None:
+    value = parameters.factor * 997 + parameters.offset
+    peer_value = value + 1
+    for ending in ("COMMIT", "ROLLBACK"):
+        prefix = f"txn_{ending.lower()}_"
+        original, pending, final, dependent, late, unrelated = (
+            prefix + suffix
+            for suffix in (
+                "original",
+                "pending",
+                "final",
+                "dependent",
+                "late",
+                "unrelated",
+            )
+        )
+        case = {**details, "ending": ending, "value": value, "peer_value": peer_value}
+        _ddl(
+            other,
+            deadline,
+            f"CREATE VIEW {schema}.{original} AS SELECT {value}::bigint AS value",
+        )
+        _ddl(
+            other,
+            deadline,
+            f"CREATE VIEW {schema}.{dependent} AS SELECT value FROM {schema}.{original}",
+        )
+        before = _catalog_ids(other, deadline, schema, prefix)
+        _catalog_check(
+            sorted(before), sorted((original, dependent)), "catalog_identity", case
+        )
+        _execute(txn, deadline, "BEGIN")
+        _ddl(txn, deadline, f"ALTER VIEW {schema}.{original} RENAME TO {pending}")
+        if parameters.descending:
+            _ddl(txn, deadline, f"ALTER VIEW {schema}.{pending} RENAME TO {final}")
+        # Both acknowledged peer commits land inside the staged rename's open
+        # transaction. Replaying it must retain the new dependent and object.
+        _ddl(
+            other,
+            deadline,
+            f"CREATE VIEW {schema}.{unrelated} AS SELECT {peer_value}::bigint AS value",
+        )
+        _ddl(
+            other,
+            deadline,
+            f"CREATE VIEW {schema}.{late} AS SELECT value FROM {schema}.{original}",
+        )
+        peer = _catalog_ids(other, deadline, schema, prefix)
+        _catalog_check(
+            sorted(peer),
+            sorted((original, dependent, late, unrelated)),
+            "catalog_identity",
+            case,
+        )
+        _catalog_check(
+            {name: peer[name] for name in before}, before, "catalog_identity", case
+        )
+        if not parameters.descending:
+            _ddl(txn, deadline, f"ALTER VIEW {schema}.{pending} RENAME TO {final}")
+        _execute(txn, deadline, ending)
+        expected = dict(peer)
+        target = original
+        if ending == "COMMIT":
+            target = final
+            expected[final] = expected.pop(original)
+        _catalog_check(
+            _catalog_ids(other, deadline, schema, prefix),
+            expected,
+            "catalog_identity",
+            case,
+        )
+        for name in (target, dependent, late, unrelated):
+            _catalog_check(
+                _execute(
+                    other, deadline, f"SELECT value FROM {schema}.{name}"
+                ).fetchall(),
+                [(peer_value if name == unrelated else value,)],
+                "catalog_rows",
+                {**case, "object": name},
+            )
+        definition = _execute(
+            other, deadline, f"SHOW CREATE VIEW {schema}.{late}"
+        ).fetchone()
+        _catalog_check(
+            definition is not None
+            and f"{schema}.{target}" in definition[1].replace('"', ""),
+            True,
+            "catalog_binding",
+            case,
+        )
+
+    prefix = "txn_conflict_"
+    original, pending, final, unrelated = (
+        prefix + suffix for suffix in ("original", "pending", "final", "unrelated")
+    )
+    case = {**details, "ending": "conflict", "value": value}
+    _ddl(other, deadline, f"CREATE TABLE {schema}.{original}(value bigint)")
+    _execute(other, deadline, f"INSERT INTO {schema}.{original} VALUES ({value})")
+    _execute(txn, deadline, "BEGIN")
+    inspected = _execute(
+        txn, deadline, f"SHOW CREATE TABLE {schema}.{original}"
+    ).fetchone()
+    _catalog_check(
+        inspected is not None
+        and "value" in inspected[1]
+        and "added" not in inspected[1],
+        True,
+        "catalog_inspection",
+        case,
+    )
+    _ddl(txn, deadline, f"ALTER TABLE {schema}.{original} RENAME TO {pending}")
+    _ddl(txn, deadline, f"ALTER TABLE {schema}.{pending} RENAME TO {final}")
+    _ddl(other, deadline, f"ALTER TABLE {schema}.{original} ADD COLUMN added text")
+    _ddl(
+        other,
+        deadline,
+        f"CREATE VIEW {schema}.{unrelated} AS SELECT {peer_value}::bigint AS value",
+    )
+    peer = _catalog_ids(other, deadline, schema, prefix)
+    _catalog_check(
+        sorted(peer), sorted((original, unrelated)), "catalog_identity", case
+    )
+    rejected = False
+    try:
+        _execute(txn, deadline, "COMMIT")
+    except psycopg.Error as error:
+        if error.sqlstate != "40001":
+            raise
+        rejected = True
+    _catalog_check(rejected, True, "catalog_conflict", case)
+    _execute(txn, deadline, "ROLLBACK")
+    _catalog_check(
+        _catalog_ids(other, deadline, schema, prefix), peer, "catalog_identity", case
+    )
+    _catalog_check(
+        _execute(other, deadline, f"SELECT * FROM {schema}.{original}").fetchall(),
+        [(value, None)],
+        "catalog_rows",
+        case,
+    )
+    _catalog_check(
+        _execute(other, deadline, f"SELECT value FROM {schema}.{unrelated}").fetchall(),
+        [(peer_value,)],
+        "catalog_rows",
+        case,
+    )
+
+
 def run_round(
     host: str,
     db: sqlite3.Connection,
@@ -268,17 +474,24 @@ def run_round(
             admin, first, second = (
                 stack.enter_context(_connect(host, deadline)) for _ in range(3)
             )
-            session = _execute(
-                admin,
-                deadline,
-                "SELECT id::text FROM mz_internal.mz_sessions WHERE connection_id=pg_backend_pid()",
-            ).fetchone()
-            if session is None:
-                raise Incomplete("admin session identity unavailable")
+            sessions = []
+            for conn in (admin, first, second):
+                session = _execute(
+                    conn,
+                    deadline,
+                    "SELECT id::text FROM mz_internal.mz_sessions WHERE connection_id=pg_backend_pid()",
+                ).fetchone()
+                if session is None:
+                    raise Incomplete("SQL session identity unavailable")
+                sessions.append(str(session[0]))
             with db:
                 db.execute(
                     "UPDATE runs SET admin_session=?,started=1 WHERE id=?",
-                    (str(session[0]), run),
+                    (sessions[0], run),
+                )
+                db.executemany(
+                    "INSERT OR IGNORE INTO run_sessions VALUES (?,?)",
+                    [(run, session) for session in sessions],
                 )
             _ddl(admin, deadline, f"CREATE SCHEMA {schema}")
             for number, rows in enumerate(inputs):
@@ -439,6 +652,7 @@ def run_round(
                 "temporary",
                 {**details, "stage": "drop_final_shadow"},
             )
+            _catalog_transactions(first, admin, deadline, schema, parameters, details)
         with db:
             db.execute("UPDATE runs SET settled=1 WHERE id=?", (run,))
         sometimes(
@@ -454,6 +668,16 @@ def run_round(
         sometimes(
             True,
             "session rebinding: temporary shadows remain session local across durable replacement",
+            details,
+        )
+        sometimes(
+            True,
+            "session rebinding: catalog commit and rollback retain acknowledged concurrent dependencies",
+            details,
+        )
+        sometimes(
+            True,
+            "session rebinding: inspected catalog conflicts reject without partial renames",
             details,
         )
         return run

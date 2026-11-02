@@ -141,6 +141,7 @@ def protocol(monkeypatch):
     monkeypatch.setattr(h, "_execute", schedule.execute)
     monkeypatch.setattr(h, "_connect", lambda *args, **kwargs: nullcontext(Mock()))
     monkeypatch.setattr(h, "_cleanup", Mock())
+    monkeypatch.setattr(h, "_catalog_transactions", Mock())
     monkeypatch.setattr(h.ddl_hold, "active", lambda: False)
     monkeypatch.setattr(h, "always", Mock())
     monkeypatch.setattr(h, "sometimes", Mock())
@@ -176,7 +177,8 @@ def test_protocol_interleaves_acknowledged_replacement_with_unread_server_portal
         1,
         1,
     )
-    assert h.sometimes.call_count == 3
+    assert h.sometimes.call_count == 5
+    h._catalog_transactions.assert_called_once()
     assert all(call.args[0] for call in h.always.call_args_list)
     assert all(
         call.args[2]["portal_timestamp"] == "100" for call in h.sometimes.call_args_list
@@ -272,3 +274,205 @@ def test_invalid_snapshot_timestamp_cannot_pass(monkeypatch, timestamp):
     monkeypatch.setattr(h.telemetry, "comparison", Mock())
     with pytest.raises(h.Incomplete):
         h._check(stamped(PA, timestamp), PA, "portal", {})
+
+
+class CatalogSchedule:
+    value = PARAMETERS.factor * 997 + PARAMETERS.offset
+
+    def __init__(self):
+        self.statements = []
+        self.snapshots = []
+        for ending in ("commit", "rollback"):
+            prefix = f"txn_{ending}_"
+            before = {prefix + "original": "u1", prefix + "dependent": "u2"}
+            peer = {**before, prefix + "late": "u3", prefix + "unrelated": "u4"}
+            after = dict(peer)
+            if ending == "commit":
+                after[prefix + "final"] = after.pop(prefix + "original")
+            self.snapshots.extend([before, peer, after])
+        conflict = {"txn_conflict_original": "u5", "txn_conflict_unrelated": "u6"}
+        self.snapshots.extend([conflict, conflict])
+        self.commit_count = 0
+        self.conflict = True
+        self.rows = None
+        self.definition = None
+        self.interrupt_at = None
+
+    def execute(self, conn, deadline, statement, params=None):
+        self.statements.append((conn, statement))
+        if self.interrupt_at is not None and self.interrupt_at in statement:
+            raise psycopg.OperationalError("connection lost")
+        if statement.startswith("SELECT o.name,o.id"):
+            snapshot = self.snapshots.pop(0)
+            return Mock(fetchall=lambda: list(snapshot.items()))
+        if statement.startswith("SELECT value FROM"):
+            rows = self.rows
+            if rows is None:
+                rows = [(self.value + int(statement.endswith("unrelated")),)]
+            return Mock(fetchall=lambda: rows)
+        if statement.startswith("SELECT * FROM"):
+            return Mock(fetchall=lambda: [(self.value, None)])
+        if statement.startswith("SHOW CREATE VIEW"):
+            target = "final" if "txn_commit_" in statement else "original"
+            prefix = "txn_commit_" if "txn_commit_" in statement else "txn_rollback_"
+            definition = (
+                self.definition
+                or f"CREATE VIEW s.{prefix}late AS SELECT value FROM s.{prefix}{target}"
+            )
+            return Mock(fetchone=lambda: ("late", definition))
+        if statement.startswith("SHOW CREATE TABLE"):
+            return Mock(
+                fetchone=lambda: ("original", "CREATE TABLE original(value bigint)")
+            )
+        if statement == "COMMIT":
+            self.commit_count += 1
+            if self.commit_count == 2 and self.conflict:
+                raise psycopg.errors.SerializationFailure("catalog changed")
+        return Mock()
+
+
+def test_catalog_identity_ignores_same_schema_and_object_in_another_database(
+    monkeypatch,
+):
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute("ATTACH DATABASE ':memory:' AS mz_catalog")
+        conn.executescript(
+            "CREATE TABLE mz_catalog.mz_databases(id TEXT,name TEXT);"
+            "CREATE TABLE mz_catalog.mz_schemas(id TEXT,database_id TEXT,name TEXT);"
+            "CREATE TABLE mz_catalog.mz_objects(id TEXT,schema_id TEXT,name TEXT);"
+            "INSERT INTO mz_catalog.mz_databases VALUES ('d1','materialize'),('d2','other');"
+            "INSERT INTO mz_catalog.mz_schemas VALUES ('s1','d1','s'),('s2','d2','s');"
+            "INSERT INTO mz_catalog.mz_objects VALUES"
+            " ('u1','s1','txn_original'),('u2','s2','txn_original');"
+        )
+        conn.create_function("current_database", 0, lambda: "materialize")
+        conn.create_function("left", 2, lambda text, count: text[:count])
+
+        def execute(_conn, _deadline, statement, params):
+            statement = statement.replace("%s", "?").replace("left(", '"left"(')
+            return conn.execute(statement, params)
+
+        monkeypatch.setattr(h, "_execute", execute)
+        assert h._catalog_ids(Mock(), float("inf"), "s", "txn_") == {
+            "txn_original": "u1"
+        }
+
+
+@pytest.fixture
+def catalog(monkeypatch):
+    schedule = CatalogSchedule()
+    monkeypatch.setattr(h, "_execute", schedule.execute)
+    monkeypatch.setattr(h.ddl_hold, "active", lambda: False)
+    monkeypatch.setattr(h, "always", Mock())
+    monkeypatch.setattr(h.telemetry, "comparison", Mock())
+    return schedule
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_catalog_protocol_places_acknowledged_peer_commits_inside_staged_transaction(
+    catalog, descending
+):
+    txn, other = Mock(), Mock()
+    parameters = model.Parameters(PARAMETERS.factor, PARAMETERS.offset, descending)
+    h._catalog_transactions(txn, other, float("inf"), "s", parameters, {})
+    assert not catalog.snapshots
+    for ending in ("commit", "rollback"):
+        operations = [
+            (conn, statement)
+            for conn, statement in catalog.statements
+            if f"txn_{ending}_" in statement
+            or statement in ("BEGIN", "COMMIT", "ROLLBACK")
+        ]
+        rename = next(
+            i
+            for i, (conn, text) in enumerate(operations)
+            if conn is txn and "RENAME TO" in text and "original" in text
+        )
+        peer_create = next(
+            i
+            for i, (conn, text) in enumerate(operations)
+            if conn is other and "CREATE VIEW" in text and "late" in text
+        )
+        finish = next(
+            i
+            for i, (conn, text) in enumerate(operations[rename + 1 :], rename + 1)
+            if conn is txn and text == ending.upper()
+        )
+        assert rename < peer_create < finish
+    assert all(call.args[0] for call in h.always.call_args_list)
+    assert {call.args[1] for call in h.telemetry.comparison.call_args_list} == {
+        "view",
+        "table",
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_peer",
+        "changed_id",
+        "partial_rollback",
+        "lost_conflict_peer",
+        "stale_binding",
+        "wrong_rows",
+        "conflict_committed",
+    ],
+)
+def test_catalog_wrong_result_mutants_fail(catalog, mutation):
+    if mutation == "missing_peer":
+        catalog.snapshots[2].pop("txn_commit_late")
+    elif mutation == "changed_id":
+        catalog.snapshots[2]["txn_commit_final"] = "u99"
+    elif mutation == "partial_rollback":
+        catalog.snapshots[5]["txn_rollback_pending"] = catalog.snapshots[5].pop(
+            "txn_rollback_original"
+        )
+    elif mutation == "lost_conflict_peer":
+        catalog.snapshots[7] = {"txn_conflict_original": "u5"}
+    elif mutation == "stale_binding":
+        catalog.definition = (
+            "CREATE VIEW s.txn_commit_late AS SELECT value FROM s.txn_commit_original"
+        )
+    elif mutation == "wrong_rows":
+        catalog.rows = [(catalog.value + 100,)]
+    elif mutation == "conflict_committed":
+        catalog.conflict = False
+    with pytest.raises(h.Incomplete, match="catalog transaction violated"):
+        h._catalog_transactions(Mock(), Mock(), float("inf"), "s", PARAMETERS, {})
+    assert any(not call.args[0] for call in h.always.call_args_list)
+
+
+def test_unknown_catalog_peer_response_cannot_complete_round(db, protocol, monkeypatch):
+    monkeypatch.setattr(
+        h,
+        "_catalog_transactions",
+        Mock(side_effect=psycopg.OperationalError("connection lost")),
+    )
+    with pytest.raises(psycopg.OperationalError):
+        run_protocol(db)
+    h.sometimes.assert_not_called()
+    assert db.execute("SELECT settled FROM runs").fetchone() == (0,)
+
+
+def test_cleanup_waits_for_every_original_mutating_session(monkeypatch, db):
+    run = h._reserve(db)
+    with db:
+        db.execute("UPDATE runs SET started=1,admin_session='a' WHERE id=?", (run,))
+        db.executemany(
+            "INSERT INTO run_sessions VALUES (?,?)", [(run, "a"), (run, "b")]
+        )
+    monkeypatch.setattr(h, "_connect", lambda *args, **kwargs: nullcontext(Mock()))
+    monkeypatch.setattr(h.ddl_hold, "active", lambda: False)
+    execute = Mock(
+        side_effect=[Mock(fetchone=lambda: None), Mock(fetchone=lambda: (1,))]
+    )
+    monkeypatch.setattr(h, "_execute", execute)
+    h._cleanup("host", db, run, float("inf"))
+    assert [call.args[-1] for call in execute.call_args_list] == [("a",), ("b",)]
+    assert db.execute("SELECT cleanup_complete FROM runs").fetchone() == (0,)
+
+
+def test_rollback_reaches_server_without_set_in_failed_transaction():
+    conn = Mock()
+    h._execute(conn, h.time.monotonic() + 10, "ROLLBACK")
+    conn.execute.assert_called_once_with(b"ROLLBACK", None)
