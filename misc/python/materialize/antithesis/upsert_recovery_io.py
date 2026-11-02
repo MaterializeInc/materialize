@@ -103,7 +103,8 @@ def allocate(db: sqlite3.Connection) -> Fixture:
 
 def session_id(conn: psycopg.Connection) -> str:
     row = conn.execute(
-        "SELECT id::text FROM mz_internal.mz_sessions WHERE connection_id=pg_backend_pid()"
+        "SELECT id::text FROM mz_internal.mz_sessions"
+        f" WHERE connection_id={sql.SESSION_CONNECTION_ID}"
     ).fetchone()
     if row is None:
         raise Incomplete("original SQL session identity is unavailable")
