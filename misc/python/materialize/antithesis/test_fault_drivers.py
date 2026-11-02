@@ -13,9 +13,11 @@ import copy
 import json
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
@@ -1133,6 +1135,89 @@ def test_incomplete_resource_attribution_is_retried_without_a_product_verdict(
     assert db.execute("SELECT count(*) FROM seen").fetchone() == (0,)
     resource_kills.check_once(db, Mock(sample=lambda: ([finding], True)))
     assert any(call.args[0] is False for call in product.call_args_list)
+
+
+@pytest.fixture
+def resource_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
+    clock = SimpleNamespace(now=0.0)
+    env = Mock()
+    sample = Mock()
+    monkeypatch.setattr(
+        resource_kills.state,
+        "open_db",
+        lambda _: sqlite3.connect(tmp_path / "resources.sqlite", timeout=5),
+    )
+    monkeypatch.setattr(resource_kills, "Environment", env)
+    monkeypatch.setattr(resource_kills, "Check", Mock())
+    monkeypatch.setattr(resource_kills, "check_once", sample)
+    monkeypatch.setattr(resource_kills.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(
+        resource_kills.time, "sleep", lambda n: setattr(clock, "now", clock.now + n)
+    )
+    monkeypatch.setattr(resource_kills, "ANYTIME_DURATION_S", 1)
+    return SimpleNamespace(clock=clock, env=env, sample=sample)
+
+
+def test_concurrent_resource_checks_share_one_scan(
+    resource_run: SimpleNamespace,
+) -> None:
+    entered, release = threading.Event(), threading.Event()
+
+    def sample(db: sqlite3.Connection, _: object) -> None:
+        assert not db.in_transaction
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+
+    resource_run.sample.side_effect = sample
+    with ThreadPoolExecutor(max_workers=16) as workers:
+        owner = workers.submit(resource_kills.anytime_main)
+        assert entered.wait(5)
+        try:
+            duplicates = [
+                workers.submit(resource_kills.anytime_main) for _ in range(15)
+            ]
+            assert [f.result(timeout=5) for f in duplicates] == [0] * 15
+            assert resource_run.sample.call_count == 1
+            assert resource_run.env.call_count == 1
+        finally:
+            release.set()
+        assert owner.result(timeout=5) == 0
+
+
+def test_resource_check_claim_expires_after_abandoned_scan(
+    resource_run: SimpleNamespace,
+) -> None:
+    resource_run.sample.side_effect = RuntimeError("scanner interrupted")
+    with pytest.raises(RuntimeError, match="scanner interrupted"):
+        resource_kills.anytime_main()
+    resource_run.sample.side_effect = None
+    resource_run.clock.now = resource_kills.ANYTIME_POLL_S - 0.01
+    assert resource_kills.anytime_main() == 0
+    assert resource_run.sample.call_count == 1
+    resource_run.clock.now = resource_kills.ANYTIME_POLL_S
+    assert resource_kills.anytime_main() == 0
+    assert resource_run.sample.call_count == 2
+
+
+def test_final_resource_check_always_takes_a_fresh_sample(
+    resource_run: SimpleNamespace,
+) -> None:
+    assert resource_kills.anytime_main() == 0
+    assert resource_kills.finally_main() == 0
+    assert resource_run.sample.call_count == 2
+
+
+def test_resource_checker_retains_observation_window(
+    monkeypatch: pytest.MonkeyPatch, resource_run: SimpleNamespace
+) -> None:
+    monkeypatch.setattr(resource_kills, "ANYTIME_DURATION_S", 120)
+    sampled_at: list[float] = []
+    resource_run.sample.side_effect = lambda *_: sampled_at.append(
+        resource_run.clock.now
+    )
+    assert resource_kills.anytime_main() == 0
+    assert sampled_at == list(range(0, 120, resource_kills.ANYTIME_POLL_S))
 
 
 def snapshot(reason: str, request: str = "r0") -> rollouts.Snapshot:
