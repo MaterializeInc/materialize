@@ -146,6 +146,10 @@ impl ResolvedTree {
     /// The largest arrival time whose updates are all visible below `frontier`.
     ///
     /// Returns `None` if no arrival time is visible, for example before the first refresh.
+    ///
+    /// For an unaligned leaf the result can be off by up to one interval either way. With
+    /// interval 1000 and phase 500, frontier 1501 gives 1000 instead of 1500, and frontier 1500
+    /// gives 1000 instead of 500.
     pub fn last_reflected(&self, frontier: Timestamp) -> Option<u64> {
         // The largest output timestamp that is complete.
         let bound = u64::from(frontier).checked_sub(1)?;
