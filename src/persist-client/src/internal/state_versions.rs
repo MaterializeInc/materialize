@@ -113,6 +113,7 @@ pub struct EncodedRollup {
     pub(crate) seqno: SeqNo,
     pub(crate) key: PartialRollupKey,
     pub(crate) _desc: Description<SeqNo>,
+    finalized: bool,
     buf: Bytes,
 }
 
@@ -121,6 +122,7 @@ impl EncodedRollup {
         HollowRollup {
             key: self.key.clone(),
             encoded_size_bytes: Some(self.buf.len()),
+            finalized: self.finalized,
         }
     }
 }
@@ -720,6 +722,7 @@ impl StateVersions {
             // rollup until we encode it, but it includes a reference back to
             // itself.
             encoded_size_bytes: None,
+            finalized: false,
         };
         let applied = match initial_state
             .collections
@@ -840,6 +843,7 @@ impl StateVersions {
     {
         let shard_id = state.shard_id;
         let rollup_seqno = state.seqno;
+        let finalized = state.collections.is_finalized();
 
         let rollup = Rollup::from(state.into(), diffs);
         let desc = rollup.diffs.as_ref().expect("inlined diffs").description();
@@ -861,6 +865,7 @@ impl StateVersions {
             key,
             buf,
             _desc: desc,
+            finalized,
         }
     }
 
