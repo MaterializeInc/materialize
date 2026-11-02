@@ -23,8 +23,10 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 from psycopg.abc import Buffer, PQGen
 from psycopg.copy import LibpqWriter
 from psycopg.generators import copy_end, copy_to
+from psycopg.pq import TransactionStatus
 
 from materialize.antithesis import telemetry
+from materialize.antithesis.observations import sometimes
 
 FAMILY = "copy_recovery"
 DEFAULT_ABORT_BYTES = 64 * 1024
@@ -162,3 +164,207 @@ def _rows(
         stage,
         details,
     )
+
+
+def run_round(
+    admin: psycopg.Connection,
+    worker: psycopg.Connection,
+    peer: psycopg.Connection,
+    *,
+    schema: str,
+    rows: Sequence[Row],
+    deadline: float,
+    execute: Execute,
+    ddl: Ddl,
+    abort_bytes: int = DEFAULT_ABORT_BYTES,
+    chunk_bytes: int = 4093,
+    details: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    """Check COPY recovery on distinct, idle autocommit sessions in an owned schema."""
+    connections = (admin, worker, peer)
+    if len({id(conn) for conn in connections}) != 3 or any(
+        not conn.autocommit or conn.info.transaction_status != TransactionStatus.IDLE
+        for conn in connections
+    ):
+        raise ValueError("COPY requires three distinct idle autocommit sessions")
+    if (
+        not 1 <= len(rows) <= MAX_PLAN_ROWS
+        or not 1 <= abort_bytes <= MAX_ABORT_BYTES
+        or not 1 <= chunk_bytes <= MAX_CHUNK_BYTES
+    ):
+        raise ValueError("COPY plan must have bounded rows, bytes, and chunks")
+    details = {} if details is None else details
+    table = f"{schema}.copy_t"
+    ddl(admin, deadline, f"CREATE TABLE {table}(id bigint,v bigint,tag text)")
+    marks = ",".join("(%s,%s,%s)" for _ in rows)
+    execute(
+        admin,
+        deadline,
+        f"INSERT INTO {table} VALUES {marks}",
+        [cell for row in rows for cell in row],
+    )
+    expected = Counter(rows)
+    first = rows[0]
+    batch = (
+        *rows,
+        first,
+        (first[0], None, None),
+        (first[0], None, r"\N"),
+        (first[0], -7, "tab\tline\nslash\\return\r雪"),
+    )
+    payload = encode_rows(batch)
+    execute(
+        worker,
+        deadline,
+        f'PREPARE "Copy Recovery" AS SELECT count(*) FROM {table}',
+        None,
+    )
+
+    def check(stage: str) -> None:
+        _rows(peer, table, expected, deadline, execute, stage, details)
+        _check(
+            execute(worker, deadline, 'EXECUTE "Copy Recovery"', None).fetchall(),
+            [(sum(expected.values()),)],
+            "prepared",
+            stage + " prepared reuse",
+            details,
+        )
+
+    copy_sequence = 0
+
+    def send(cursor: psycopg.Cursor, abort: int = 0) -> _Writer:
+        nonlocal copy_sequence
+        copy_sequence += 1
+        writer = _Writer(cursor, deadline, f"copy-abort-{schema}-{copy_sequence}")
+        try:
+            with cursor.copy(
+                f"COPY {table} FROM STDIN".encode(), writer=writer
+            ) as copy:
+                if abort:
+                    padded = encode_rows(
+                        [
+                            (key, value, (tag or "") + "x" * 1024)
+                            for key, value, tag in batch
+                        ]
+                    )
+                    block = padded * max(1, MAX_CHUNK_BYTES // len(padded))
+                    while writer.sent_bytes < abort:
+                        copy.write(block[: min(len(block), abort - writer.sent_bytes)])
+                else:
+                    offset = 0
+                    for _ in range(32):
+                        if offset >= len(payload):
+                            break
+                        copy.write(payload[offset : offset + chunk_bytes])
+                        offset += chunk_bytes
+                    if offset < len(payload):
+                        copy.write(payload[offset:])
+                _rows(
+                    peer,
+                    table,
+                    expected,
+                    deadline,
+                    execute,
+                    "COPY input before CopyDone",
+                    details,
+                )
+                if abort:
+                    raise _AbortCopy()
+        except _AbortCopy:
+            _check(
+                writer.confirmed_abort, True, "table", "confirmed own CopyFail", details
+            )
+        if not abort:
+            _check(cursor.rowcount, len(batch), "table", "CopyDone row count", details)
+        return writer
+
+    sent = chunks = 0
+    for explicit in (False, True):
+        if explicit:
+            execute(worker, deadline, "BEGIN", None)
+        with worker.cursor() as cursor:
+            writer = send(cursor, DEFAULT_ABORT_BYTES if explicit else abort_bytes)
+            sent += writer.sent_bytes
+            chunks += writer.sent_chunks
+        _check(
+            worker.info.transaction_status,
+            TransactionStatus.INERROR if explicit else TransactionStatus.IDLE,
+            "prepared",
+            "transaction after CopyFail",
+            details,
+        )
+        if explicit:
+            execute(worker, deadline, "ROLLBACK", None)
+        check("after CopyFail")
+
+    with worker.cursor() as cursor:
+        send(cursor)
+    expected.update(batch)
+    check("autocommit CopyDone")
+
+    for ending in ("ROLLBACK", "COMMIT"):
+        execute(worker, deadline, "BEGIN", None)
+        with worker.cursor() as cursor:
+            send(cursor)
+        _rows(
+            peer,
+            table,
+            expected,
+            deadline,
+            execute,
+            "CopyDone before " + ending,
+            details,
+        )
+        execute(worker, deadline, ending, None)
+        if ending == "COMMIT":
+            expected.update(batch)
+        check("after " + ending)
+
+    execute(worker, deadline, "BEGIN READ ONLY", None)
+    execute(worker, deadline, "SELECT 1", None)
+    rejected = False
+    try:
+        with worker.cursor() as cursor:
+            send(cursor)
+    except psycopg.Error as error:
+        if (
+            error.sqlstate != "25006"
+            or error.diag.message_primary != "transaction in read-only mode"
+        ):
+            raise
+        rejected = True
+    _check(rejected, True, "table", "READ ONLY COPY rejection", details)
+    execute(worker, deadline, "ROLLBACK", None)
+    check("after READ ONLY rejection")
+    result = {
+        "abort_bytes": sent,
+        "abort_chunks": chunks,
+        "rows_per_copy": len(batch),
+        "committed_copy_rows": 2 * len(batch),
+    }
+    sometimes(
+        True,
+        "copy recovery: confirmed CopyFail discards flushed input and preserves the original session",
+        {**details, **result},
+    )
+    sometimes(
+        True,
+        "copy recovery: COPY commits and rollbacks match acknowledged input bags",
+        {**details, **result},
+    )
+    sometimes(
+        True,
+        "copy recovery: READ ONLY rejects COPY without row effects",
+        {**details, **result},
+    )
+    sometimes(
+        True,
+        "copy recovery: COPY preserves escaped text NULL tokens and duplicate rows",
+        {**details, **result},
+    )
+    sometimes(
+        abort_bytes > STREAMING_BATCH_BYTES,
+        "copy recovery: confirmed CopyFail follows more than 32 MiB of flushed input",
+        {**details, **result},
+    )
+    return result
