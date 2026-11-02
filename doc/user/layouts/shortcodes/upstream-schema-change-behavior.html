@@ -79,8 +79,9 @@ constraint drop](/ingest-data/{{ $connector
 Materialize ignores foreign key and `CHECK` constraint changes. You can add or
 drop them without affecting ingestion.
 
-Adding a `PRIMARY KEY` or `UNIQUE` constraint, or dropping one that the capture
-instance does not use, does not affect ingestion. See [Unique
+Adding a `PRIMARY KEY` or `UNIQUE` constraint does not affect ingestion. For
+tables created in v26.49 or later, dropping one that the capture instance does
+not use has no impact either. See [Unique
 keys](/ingest-data/sql-server/#unique-keys) for which constraint the capture
 instance uses.
 
