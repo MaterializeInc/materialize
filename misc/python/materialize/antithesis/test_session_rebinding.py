@@ -142,6 +142,9 @@ def protocol(monkeypatch):
     monkeypatch.setattr(h, "_connect", lambda *args, **kwargs: nullcontext(Mock()))
     monkeypatch.setattr(h, "_cleanup", Mock())
     monkeypatch.setattr(h, "_catalog_transactions", Mock())
+    monkeypatch.setattr(h, "_catalog_ids", lambda *args: {"cancel_idx": "u-cancel"})
+    monkeypatch.setattr(h.copy_recovery, "run_round", Mock())
+    monkeypatch.setattr(h.cancel_recovery, "run", Mock())
     monkeypatch.setattr(h.ddl_hold, "active", lambda: False)
     monkeypatch.setattr(h, "always", Mock())
     monkeypatch.setattr(h, "sometimes", Mock())
@@ -149,9 +152,15 @@ def protocol(monkeypatch):
     return schedule
 
 
-def run_protocol(db):
+def run_protocol(db, *, large_copy=False):
     return h.run_round(
-        "host", db, inputs=(A, B), parameters=PARAMETERS, first_page=2, page_size=2
+        "host",
+        db,
+        inputs=(A, B),
+        parameters=PARAMETERS,
+        first_page=2,
+        page_size=2,
+        large_copy=large_copy,
     )
 
 
@@ -177,12 +186,70 @@ def test_protocol_interleaves_acknowledged_replacement_with_unread_server_portal
         1,
         1,
     )
-    assert h.sometimes.call_count == 5
+    assert h.sometimes.call_count == 6
     h._catalog_transactions.assert_called_once()
     assert all(call.args[0] for call in h.always.call_args_list)
     assert all(
         call.args[2]["portal_timestamp"] == "100" for call in h.sometimes.call_args_list
     )
+
+
+@pytest.mark.parametrize("large_copy", [False, True])
+def test_protocol_reuses_fenced_sessions_and_generated_inputs_for_recovery(
+    db, protocol, large_copy
+):
+    run_protocol(db, large_copy=large_copy)
+    copy = h.copy_recovery.run_round.call_args
+    cancel = h.cancel_recovery.run.call_args
+    assert len({id(connection) for connection in copy.args}) == 3
+    assert cancel.args == (copy.args[1], copy.args[2], copy.args[0])
+    assert copy.kwargs["rows"] == cancel.kwargs["expected_rows"] == A
+    assert copy.kwargs["schema"] == "session_rebinding_r1"
+    assert cancel.kwargs["table"] == "session_rebinding_r1.t0"
+    assert cancel.kwargs["index_id"] == "u-cancel"
+    assert copy.kwargs["abort_bytes"] == (
+        h.copy_recovery.LARGE_ABORT_BYTES
+        if large_copy
+        else h.copy_recovery.DEFAULT_ABORT_BYTES
+    )
+
+
+@pytest.mark.parametrize("helper", ["copy", "cancel"])
+def test_incomplete_recovery_cannot_credit_the_combined_round(db, protocol, helper):
+    if helper == "copy":
+        h.copy_recovery.run_round.side_effect = h.copy_recovery.Incomplete(
+            "lost boundary"
+        )
+    else:
+        h.cancel_recovery.run.side_effect = h.cancel_recovery.Incomplete(
+            "lost boundary"
+        )
+    with pytest.raises((h.copy_recovery.Incomplete, h.cancel_recovery.Incomplete)):
+        run_protocol(db)
+    h.sometimes.assert_not_called()
+    assert db.execute("SELECT settled FROM runs").fetchone() == (0,)
+    assert h._cleanup.call_count == 1
+    if helper == "copy":
+        h.cancel_recovery.run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error", [h.copy_recovery.Incomplete, h.cancel_recovery.Incomplete]
+)
+def test_main_treats_missing_recovery_boundaries_as_uncredited_work(
+    monkeypatch, tmp_path, db, protocol, error
+):
+    environment = Mock()
+    environment.endpoints.state_dir = tmp_path
+    environment.sql_host.return_value = "host"
+    monkeypatch.setattr(h, "Environment", lambda: environment)
+    monkeypatch.setattr(h, "exclusive", lambda _: nullcontext(True))
+    monkeypatch.setattr(h, "open_state", lambda: db)
+    monkeypatch.setattr(h.history, "start_watchdog", Mock())
+    monkeypatch.setattr(h, "run_round", Mock(side_effect=error("incomplete recovery")))
+    assert h.main() == 0
+    assert h.telemetry.comparison.call_args.args == (h.FAMILY, "portal", None)
+    h.sometimes.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -476,3 +543,22 @@ def test_rollback_reaches_server_without_set_in_failed_transaction():
     conn = Mock()
     h._execute(conn, h.time.monotonic() + 10, "ROLLBACK")
     conn.execute.assert_called_once_with(b"ROLLBACK", None)
+
+
+def test_normal_statements_use_the_timeout_configured_at_connection_startup(
+    monkeypatch,
+):
+    monkeypatch.setattr(h.time, "monotonic", lambda: 0)
+    conn = Mock()
+    h._execute(conn, 60, "SELECT 1")
+    conn.execute.assert_called_once_with(b"SELECT 1", None)
+
+
+def test_statement_timeout_is_shortened_before_the_round_deadline(monkeypatch):
+    monkeypatch.setattr(h.time, "monotonic", lambda: 0)
+    conn = Mock()
+    h._execute(conn, 5, "SELECT 1")
+    assert [call.args for call in conn.execute.call_args_list] == [
+        (b"SET statement_timeout='5000ms'",),
+        (b"SELECT 1", None),
+    ]

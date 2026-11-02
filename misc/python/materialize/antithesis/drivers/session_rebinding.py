@@ -21,7 +21,14 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     always_or_unreachable as always,
 )
 
-from materialize.antithesis import ddl_hold, sql, state, telemetry
+from materialize.antithesis import (
+    cancel_recovery,
+    copy_recovery,
+    ddl_hold,
+    sql,
+    state,
+    telemetry,
+)
 from materialize.antithesis import session_rebinding_model as model
 from materialize.antithesis.drivers import configure, history
 from materialize.antithesis.drivers.access_control import exclusive
@@ -88,7 +95,9 @@ def _execute(
         raise Incomplete("round budget elapsed")
     # A failed explicit transaction rejects SET too. ROLLBACK must reach the
     # server before this session can configure its next statement.
-    if statement != "ROLLBACK":
+    # _connect sets the normal timeout at startup. Only shorten it near the
+    # deadline, without adding a SET round trip to every statement.
+    if statement != "ROLLBACK" and remaining < STATEMENT_TIMEOUT_MS:
         conn.execute(
             f"SET statement_timeout='{min(STATEMENT_TIMEOUT_MS, remaining)}ms'".encode()
         )
@@ -446,6 +455,7 @@ def run_round(
     first_page: int,
     page_size: int,
     names: tuple[str, str] = ("Read Plan", "Snapshot Cursor"),
+    large_copy: bool = False,
 ) -> int:
     deadline = time.monotonic() + BUDGET_S
     if ddl_hold.active():
@@ -468,6 +478,7 @@ def run_round(
         "descending": parameters.descending,
         "first_page": first_page,
         "page_size": page_size,
+        "large_copy": large_copy,
     }
     try:
         with ExitStack() as stack:
@@ -479,7 +490,8 @@ def run_round(
                 session = _execute(
                     conn,
                     deadline,
-                    "SELECT id::text FROM mz_internal.mz_sessions WHERE connection_id=pg_backend_pid()",
+                    "SELECT id::text FROM mz_internal.mz_sessions"
+                    f" WHERE connection_id={sql.SESSION_CONNECTION_ID}",
                 ).fetchone()
                 if session is None:
                     raise Incomplete("SQL session identity unavailable")
@@ -653,6 +665,41 @@ def run_round(
                 {**details, "stage": "drop_final_shadow"},
             )
             _catalog_transactions(first, admin, deadline, schema, parameters, details)
+            copy_recovery.run_round(
+                admin,
+                first,
+                second,
+                schema=schema,
+                rows=inputs[0],
+                deadline=deadline,
+                execute=_execute,
+                ddl=_ddl,
+                abort_bytes=(
+                    copy_recovery.LARGE_ABORT_BYTES
+                    if large_copy
+                    else copy_recovery.DEFAULT_ABORT_BYTES
+                ),
+                details=details,
+            )
+            _ddl(
+                admin,
+                deadline,
+                f"CREATE INDEX cancel_idx IN CLUSTER {configure.SHARED_CLUSTER}"
+                f" ON {schema}.t0 (id)",
+            )
+            index = _catalog_ids(admin, deadline, schema, "cancel_").get("cancel_idx")
+            if index is None:
+                raise Incomplete("cancellation index identity unavailable")
+            cancel_recovery.run(
+                first,
+                second,
+                admin,
+                deadline=deadline,
+                table=f"{schema}.t0",
+                index_id=index,
+                expected_rows=inputs[0],
+                execute=_execute,
+            )
         with db:
             db.execute("UPDATE runs SET settled=1 WHERE id=?", (run,))
         sometimes(
@@ -678,6 +725,11 @@ def run_round(
         sometimes(
             True,
             "session rebinding: inspected catalog conflicts reject without partial renames",
+            details,
+        )
+        sometimes(
+            True,
+            "session rebinding: COPY and cancellation recovery complete on the original session",
             details,
         )
         return run
@@ -710,7 +762,10 @@ def main() -> int:
                         if key == 0 or rng.randrange(4) == 0
                         else rng.randint(-100, 100)
                     )
-                    row = (key, value, f"generation{generation}")
+                    tag = f"generation{generation}" + rng.choice(
+                        ("", "\tline\n\\N", "\r\\.", "λ")
+                    )
+                    row = (key, value, tag)
                     rows.extend([row] * rng.choice((1, 1, 2)))
                 inputs.append(tuple(rows))
             run_round(
@@ -727,8 +782,15 @@ def main() -> int:
                 names=rng.choice(
                     (("ReadPlan", "SnapshotCursor"), ("Read Plan", "Snapshot Cursor"))
                 ),
+                large_copy=rng.randrange(32) == 0,
             )
-        except (psycopg.Error, OSError, Incomplete) as error:
+        except (
+            psycopg.Error,
+            OSError,
+            Incomplete,
+            copy_recovery.Incomplete,
+            cancel_recovery.Incomplete,
+        ) as error:
             telemetry.comparison(FAMILY, "portal", None)
             if isinstance(error, psycopg.Error):
                 _classify(error, "round")
