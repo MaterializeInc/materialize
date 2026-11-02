@@ -23,11 +23,11 @@ most recent `create_date`.
 
 If two capture instances for a table share the same timestamp (unlikely given the millisecond resolution), Materialize selects the `capture_instance` with the lexicographically larger name.
 
-### Keys
+### Unique keys
 
-Materialize records at most one key for each table it ingests from SQL Server:
-the `PRIMARY KEY` or `UNIQUE` constraint that the capture instance uses to
-identify rows. The capture instance's index is listed in the `index_name`
+Materialize records at most one unique key for each table it ingests from SQL
+Server: the `PRIMARY KEY` or `UNIQUE` constraint that the capture instance uses
+to identify rows. The capture instance's index is listed in the `index_name`
 column of
 [`cdc.change_tables`](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql).
 

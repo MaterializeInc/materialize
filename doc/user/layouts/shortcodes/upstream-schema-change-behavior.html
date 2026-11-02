@@ -80,9 +80,9 @@ Materialize ignores foreign key and `CHECK` constraint changes. You can add or
 drop them without affecting ingestion.
 
 Adding a `PRIMARY KEY` or `UNIQUE` constraint, or dropping one that the capture
-instance does not use, does not affect ingestion. See
-[Keys](/ingest-data/sql-server/#keys) for which constraint the capture instance
-uses.
+instance does not use, does not affect ingestion. See [Unique
+keys](/ingest-data/sql-server/#unique-keys) for which constraint the capture
+instance uses.
 
 SQL Server rejects dropping the constraint that the capture instance uses, as
 long as that capture instance is the newest one for the table.
