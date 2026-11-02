@@ -1,5 +1,7 @@
 # Materialize MCP Server
 
+**Deprecated.** This package is no longer maintained. MCP is built into Materialize: the [built-in MCP server](https://materialize.com/docs/developer-tools/mcp-server/) lets agents find and query your data products at `/api/mcp/agent`, with nothing to install.
+
 **Instantly turn indexed views in Materialize into real-time context tools for LLM-powered applications.**
 
 Materialize MCP Server exposes your Materialize views—when indexed and documented—as live, typed, callable tools. These tools behave like stable APIs for structured data, enabling models to act on fresh, consistent, and trustworthy information.
