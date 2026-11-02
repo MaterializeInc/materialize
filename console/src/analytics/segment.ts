@@ -38,10 +38,13 @@ if (segment && segmentApiKey !== null) {
     },
     {
       integrations: {
-        // Use the Materialize-specific Segment proxy, which is less likely to
-        // be on public ad blocking lists.
+        // NOTE: Pinned to Segment's own host. The Materialize proxy
+        // (api.segment.materialize.com) answers CORS preflights without an
+        // Access-Control-Allow-Origin header, so browsers drop every event
+        // sent through it. Pinning here also keeps a host change in the
+        // Segment source settings from rerouting the console.
         "Segment.io": {
-          apiHost: "api.segment.materialize.com/v1",
+          apiHost: "api.segment.io/v1",
         },
       },
       retryQueue: true,
