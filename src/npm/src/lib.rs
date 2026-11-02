@@ -197,6 +197,12 @@ impl NpmPackage {
 }
 
 pub fn ensure(out_dir: Option<PathBuf>) -> Result<(), anyhow::Error> {
+    // include_dir! embeds the complete static tree but only tracks existing
+    // files on stable Rust. Directory watches also detect added assets.
+    for dir in [STATIC, "src/http/static-dev"] {
+        println!("cargo:rerun-if-changed={dir}");
+    }
+
     println!("ensuring all npm packages are up-to-date...");
     let attempts = 3;
 
