@@ -91,8 +91,10 @@ change it.
 * Install [`curl`](https://curl.se/) and [`jq`](https://jqlang.org/). The
   script runs on macOS and Linux.
 * Have a **Personal** [app password](/developer-tools/console/create-new/#create-new-app-password-cloud-only)
-  for a user with the `OrganizationAdmin` role in the organization you want to
-  change. The script determines the organization from the app password.
+  from the organization you want to change. The script determines the
+  organization from the app password. The `preview` command works with any
+  member's app password; all other commands need an app password for a user
+  with the `OrganizationAdmin` role.
 * Download the script and make it executable:
 
   ```shell
@@ -105,13 +107,17 @@ that organization.
 
 ### Step 1. Preview the Entity ID
 
-Set your app password and run `preview`. This command shows the
-organization-specific Entity ID and doesn't change anything:
+Enter your app password, then run `preview`. The `read` command keeps the app
+password out of your shell history, and the script reads it from the
+`MZ_APP_PASSWORD` environment variable for each command you run:
 
 ```shell
-export MZ_APP_PASSWORD=mzp_...
+read -rs MZ_APP_PASSWORD && export MZ_APP_PASSWORD
 ./set-sso-entity-id.sh preview
 ```
+
+The `preview` command shows the organization-specific Entity ID and doesn't
+change anything:
 
 ```
 Organization: 585dd1a4-9a72-4db9-8915-221cdf530067
@@ -124,10 +130,10 @@ Enter this value in your identity provider:
   Okta:               SAML Settings -> Audience URI (SP Entity ID)
 ```
 
-If you don't set `MZ_APP_PASSWORD`, the script prompts for the app password
-without displaying it.
+### Step 2. Configure SSO, if the organization doesn't use it yet
 
-### Step 2. Configure your identity provider and Materialize
+If the organization already uses SSO, skip to
+[Step 3](#step-3-apply-the-entity-id).
 
 1. In your identity provider, set the Entity ID of the application for this
    organization to the value from Step 1:
@@ -140,22 +146,32 @@ without displaying it.
 
    Leave the reply URL (assertion consumer service URL) unchanged.
 
-1. If you haven't already, [configure SAML SSO](#configure-authentication) in
-   the Materialize console using the SSO endpoint and public certificate from
-   this application.
+1. [Configure SAML SSO](#configure-authentication) in the Materialize console
+   using the SSO endpoint and public certificate from this application.
 
-### Step 3. Apply the Entity ID in Materialize
+### Step 3. Apply the Entity ID
 
-Run `set` to switch the organization's SSO configuration to the
-organization-specific Entity ID:
+SSO login for the organization fails while Materialize and your identity
+provider use different Entity IDs. If you completed Step 2, they already match
+once you run `set`. If the organization already uses SSO, keep the gap to a few
+seconds by changing both sides together:
 
-```shell
-./set-sso-entity-id.sh set
-```
+1. Open the Entity ID setting of the application in your identity provider, as
+   described in Step 2, and enter the value from Step 1 without saving it.
 
-The script shows the current and new Entity ID and asks you to type `yes` to
-confirm. When the change succeeds, the script prints the Entity ID that
-Materialize now uses:
+1. Run `set`:
+
+   ```shell
+   ./set-sso-entity-id.sh set
+   ```
+
+   The script shows the current and new Entity ID and waits for you to type
+   `yes`.
+
+1. Save the change in your identity provider, then type `yes`.
+
+When the change succeeds, the script prints the Entity ID that Materialize now
+uses:
 
 ```
 Done. Materialize now uses this Entity ID for the organization:
@@ -167,11 +183,15 @@ Rerun the command with `--config-id <configuration-id>` to choose one. To list
 the configurations and the Entity ID each one uses, run
 `./set-sso-entity-id.sh list`.
 
-{{< warning >}}
-SSO login for the organization fails whenever Materialize and your identity
-provider use different Entity IDs. If the organization already uses SSO, make
-the change in your identity provider and run `set` at the same time.
-{{< /warning >}}
+{{< note >}}
+SSO affects only logging in to the Materialize console. Users who are already
+logged in stay logged in, and connections that authenticate with app passwords
+aren't affected.
+
+The script signs in with your app password, not through SSO, so it keeps
+working if SSO login fails. To recover, run `./set-sso-entity-id.sh reset` and
+restore the previous Entity ID in your identity provider.
+{{< /note >}}
 
 ### Step 4. Verify SSO login
 
@@ -180,9 +200,10 @@ confirm that the configuration works.
 
 ### Revert to the default Entity ID
 
-To switch the organization back to the shared default Entity ID, run `reset`,
-then set the Entity ID in your identity provider back to
-`https://cloud.materialize.com/auth/saml/metadata`:
+To switch the organization back to the shared default Entity ID, run `reset`
+and set the Entity ID in your identity provider back to
+`https://cloud.materialize.com/auth/saml/metadata`, using the same order as
+Step 3:
 
 ```shell
 ./set-sso-entity-id.sh reset

@@ -16,7 +16,7 @@
 #
 # Background for maintainers: Frontegg applies one SP Entity ID to every
 # account in the environment unless an account's SSO configuration sets
-# `spEntityId`. That field is not exposed in the admin portal, but an
+# `spEntityId`. That field is not exposed in the console, but an
 # Organization Admin's own token may PATCH it through Frontegg's self-service
 # API (`fe.secure.write.samlConfiguration`), so this script needs no Materialize
 # staff credentials. Once set, Frontegg uses the override for the SAML Audience
@@ -54,14 +54,14 @@ WHY YOU MIGHT NEED THIS
 
 BEFORE YOU START
   - Install curl and jq (macOS: brew install jq; Debian/Ubuntu: apt install jq).
-  - Have a personal app password created by an Organization Admin of the
-    organization you want to change. Create one in the Materialize console
-    under your account's App Passwords page. The script works out which
-    organization to change from the app password. ("preview" works with any
-    member's app password.)
+  - Have a personal app password from the organization you want to change.
+    Create one in the Materialize console under your account's App Passwords
+    page. The script works out which organization to use from the app
+    password. "preview" works with any member's app password; "list", "set"
+    and "reset" need an app password belonging to an Organization Admin.
   - To use "set" or "reset", the organization must already have SAML SSO set
-    up (Admin portal -> Single Sign On). The script changes that
-    configuration; it can't create one.
+    up (Materialize console: Account -> Account Settings -> SSO). The script
+    changes that configuration; it can't create one.
 
 USAGE
   $script preview
@@ -85,18 +85,29 @@ OPTIONS
   -h, --help       Show this help.
 
   The app password is read from the MZ_APP_PASSWORD environment variable. If
-  it isn't set, the script asks for it without echoing it to the screen.
+  it isn't set, the script asks for it without echoing it to the screen. To
+  enter it once for several commands without saving it in your shell history:
+      read -rs MZ_APP_PASSWORD && export MZ_APP_PASSWORD
 
 STEP BY STEP
-  1. See the new Entity ID and what's configured today:
+  1. Get the organization-specific Entity ID:
          $script preview
-         $script list
 
-  2. Apply the organization-specific Entity ID:
+  2. If the organization doesn't use SSO yet: enter that value as the Entity
+     ID in your identity provider, then set up SAML SSO in the Materialize
+     console (Account -> Account Settings -> SSO).
+
+  3. Apply the Entity ID in Materialize:
          $script set
-     The script prints the new value and asks you to confirm.
+     The script prints the new value and asks you to type 'yes'.
 
-  3. Straight away, set the same value in your identity provider:
+     If the organization already uses SSO, SSO sign-in fails while Materialize
+     and your identity provider disagree on the Entity ID. Keep that gap to a
+     few seconds: open your identity provider's settings first, run
+     "$script set" and leave it at the 'yes' prompt, save the new
+     value in your identity provider, then type 'yes'.
+
+     Where to set the value in your identity provider:
        Microsoft Entra ID: Enterprise application -> Single sign-on ->
                            Basic SAML Configuration -> Identifier (Entity ID)
        Okta:               Application -> General -> SAML Settings ->
@@ -105,20 +116,15 @@ STEP BY STEP
 
   4. Sign in to Materialize through SSO to confirm it works.
 
-  IMPORTANT: between steps 2 and 3, SSO sign-in for this organization fails,
-  because Materialize and your identity provider disagree on the Entity ID.
-  Do both steps together. If something goes wrong, run "$script reset"
-  and restore the old value in your identity provider.
-
-  For a brand-new SSO setup, run "$script preview" and enter that value
-  in your identity provider first, then create the SSO configuration in the
-  admin portal, then run "$script set".
+  IF SSO SIGN-IN BREAKS: this script signs in with your app password, not
+  through SSO, so it keeps working. Run "$script reset" and restore the
+  old value in your identity provider.
 
 DOCUMENTATION
   https://materialize.com/docs/security/cloud/users-service-accounts/sso/#use-a-unique-entity-id-for-each-organization
 
 EXAMPLES
-  export MZ_APP_PASSWORD=mzp_...
+  read -rs MZ_APP_PASSWORD && export MZ_APP_PASSWORD
   $script preview
   $script list
   $script set
@@ -174,9 +180,12 @@ to_uuid() {
     echo "${1:0:8}-${1:8:4}-${1:12:4}-${1:16:4}-${1:20:12}"
 }
 
+# Secrets go to curl over stdin, never as arguments, so other users on the
+# machine can't see them with `ps`. printf is a shell builtin, so it doesn't
+# expose them either. The values are hex and dashes, so need no JSON escaping.
 token=$(
-    jq -n --arg c "$(to_uuid "${raw:0:32}")" --arg s "$(to_uuid "${raw:32:32}")" \
-        '{clientId: $c, secret: $s}' \
+    printf '{"clientId":"%s","secret":"%s"}' \
+        "$(to_uuid "${raw:0:32}")" "$(to_uuid "${raw:32:32}")" \
     | curl -sS -H 'Content-Type: application/json' --data @- \
         "$api/identity/resources/auth/v1/api-token" \
     | jq -r '.accessToken // empty'
@@ -192,10 +201,10 @@ org_id=$(base64 --decode <<< "$payload" 2>/dev/null | jq -r '.tenantId // empty'
 
 api_call() {
     local method=$1 path=$2 body=${3:-}
-    local args=(-sS -X "$method" -H "Authorization: Bearer $token" -w '\n%{http_code}')
+    local args=(-sS -X "$method" -H @- -w '\n%{http_code}')
     [[ -n "$body" ]] && args+=(-H 'Content-Type: application/json' --data "$body")
     local response status
-    response=$(curl "${args[@]}" "$api$path")
+    response=$(printf 'Authorization: Bearer %s\n' "$token" | curl "${args[@]}" "$api$path")
     status=${response##*$'\n'}
     response=${response%$'\n'*}
     if [[ "$status" != 2* ]]; then
@@ -244,7 +253,8 @@ if [[ "$command" == list ]]; then
     echo "Organization: $org_id"
     echo
     if [[ $(jq length <<< "$configs") -eq 0 ]]; then
-        echo "  No SSO configurations yet. Set up SAML SSO in the admin portal first."
+        echo "  No SSO configurations yet. Set up SAML SSO in the Materialize console"
+        echo "  first (Account -> Account Settings -> SSO)."
     else
         jq -r --arg shared "$shared_entity_id" ".[] | $describe" <<< "$configs"
         echo "Organization-specific Entity ID: $org_entity_id"
@@ -255,7 +265,7 @@ fi
 
 count=$(jq length <<< "$configs")
 if [[ "$count" -eq 0 ]]; then
-    die "organization $org_id has no SSO configuration yet. Set up SAML SSO in the admin portal first, then run this again."
+    die "organization $org_id has no SSO configuration yet. Set up SAML SSO in the Materialize console first (Account -> Account Settings -> SSO), then run this again."
 fi
 if [[ -n "$config_id" ]]; then
     config=$(jq -c --arg id "$config_id" '.[] | select(.id == $id)' <<< "$configs")
@@ -297,11 +307,12 @@ fi
 
 cat <<EOF
 
-After this change, SSO sign-in for this organization fails until your identity
-provider uses the same Entity ID:
+SSO sign-in for this organization fails while your identity provider uses a
+different Entity ID. It must use:
   Microsoft Entra ID: Identifier (Entity ID)      = $idp_value
   Okta:               Audience URI (SP Entity ID) = $idp_value
-Have that change ready to make straight away.
+If the organization already uses SSO, save that value in your identity
+provider now, then type 'yes' here.
 
 EOF
 if [[ "$assume_yes" != true ]]; then
@@ -318,7 +329,7 @@ Done. Materialize now uses this Entity ID for the organization:
   $idp_value
 
 Next steps:
-  1. Set the same value in your identity provider (see above).
+  1. If you haven't already, set the same value in your identity provider.
   2. Sign in to Materialize through SSO to confirm it works.
 To undo, run '$(basename "$0") $( [[ "$command" == set ]] && echo reset || echo set )' and restore the previous value in your identity provider.
 EOF
