@@ -81,7 +81,8 @@ def counter_delta(
                     raise ValueError(
                         f"telemetry counter regressed: {table}/{identity}/{key}"
                     )
-        result.append(delta)
+        if any(value > 0 for key, value in delta.items() if key not in keys):
+            result.append(delta)
     return result
 
 

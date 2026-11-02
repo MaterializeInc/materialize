@@ -90,6 +90,18 @@ def _select_commands(
             "singleton branches are not supported by the bounded local runner; select parallel/serial/anytime commands explicitly"
         )
     checks = [command for command in checkable if matches(command, args.check)]
+    unmatched_comparisons = [
+        pattern
+        for pattern in getattr(args, "require_comparison", [])
+        if not any(
+            fnmatch.fnmatch(command.path.name, pattern)
+            for command in [*selected, *checks]
+        )
+    ]
+    if unmatched_comparisons:
+        raise ValueError(
+            f"profile {args.profile!r}: unmatched --require-comparison patterns among selected commands: {unmatched_comparisons!r}"
+        )
     if sum(command.mode in ("eventually", "finally") for command in checks) > 1:
         raise ValueError(
             "a local experiment can request at most one eventually/finally terminal hook"
@@ -184,6 +196,7 @@ def _run(
         seed_semantics="Per-command invocation seeds replace only the local child SDK random draw source. Antithesis entropy is unchanged.",
         include_patterns=args.include,
         requested_checks=args.check,
+        requested_comparisons=getattr(args, "require_comparison", []),
         maximum_active_commands=scheduler.max_running,
         schedule=scheduler.completed,
         command_interval_overlaps=sorted(scheduler.overlaps),
@@ -233,9 +246,28 @@ def _run(
         result["harness_errors"].append(
             {"error": "commands produced no SDK output", "commands": missing_sdk}
         )
-    result["has_evaluated_oracle"] = any(
-        row.get("outcome") == "passed" and row.get("units", 0) > 0
-        for row in result["comparisons"]
+    admitted = {row["command"] for row in scheduler.completed}
+    result["comparison_commands"] = sorted(
+        {
+            row["command"]
+            for row in result["comparisons"]
+            if row.get("profile") == args.profile
+            and row["command"] in admitted
+            and row.get("outcome") == "passed"
+            and row.get("units", 0) > 0
+        }
+    )
+    result["has_evaluated_oracle"] = bool(result["comparison_commands"])
+    result["required_comparisons_missing"] = sorted(
+        {
+            command.path.name
+            for command in [*selected, *checks]
+            if any(
+                fnmatch.fnmatch(command.path.name, pattern)
+                for pattern in getattr(args, "require_comparison", [])
+            )
+            and command.path.name not in result["comparison_commands"]
+        }
     )
     result["required_witnesses_missing"] = [
         pattern
@@ -259,6 +291,7 @@ def _run(
         else (
             "incomplete"
             if not result["has_evaluated_oracle"]
+            or result["required_comparisons_missing"]
             or result["required_witnesses_missing"]
             or skipped_checks
             or unexpected_timeout
@@ -277,6 +310,7 @@ def _run(
                     "maximum_active_commands",
                     "has_evaluated_oracle",
                     "required_witnesses_missing",
+                    "required_comparisons_missing",
                 )
             }
         )
@@ -348,8 +382,19 @@ def main() -> int:
         help="seconds after an ordinary pod-fault command finishes before admitting the next (0 disables pacing)",
     )
     parser.add_argument("--include", action="append", default=[])
-    parser.add_argument("--check", action="append", default=[])
+    parser.add_argument(
+        "--check",
+        action="append",
+        default=[],
+        help="run matching checks after the concurrent phase drains",
+    )
     parser.add_argument("--require-witness", action="append", default=[])
+    parser.add_argument(
+        "--require-comparison",
+        action="append",
+        default=[],
+        help="require each matching selected command to record a passing comparison in this run",
+    )
     parser.add_argument("--skip-first", action="store_true")
     args = parser.parse_args()
     if args.worker:
