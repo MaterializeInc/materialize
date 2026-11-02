@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::cache::{LockingTypedState, StateCache};
+use crate::cfg::GC_REMOVE_FINALIZED_ROLLUPS;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::gc::GcReq;
 use crate::internal::maintenance::RoutineMaintenance;
@@ -229,7 +230,7 @@ where
     pub fn is_finalized(&self) -> bool {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
-                state.collections.is_tombstone() && state.collections.is_single_empty_batch()
+                state.collections.is_finalized()
             })
     }
 
@@ -521,12 +522,14 @@ where
         let is_write = cmd.name == metrics.cmds.compare_and_append.name;
         let is_rollup = cmd.name == metrics.cmds.add_rollup.name;
         let is_become_tombstone = cmd.name == metrics.cmds.become_tombstone.name;
+        let is_remove_rollups = cmd.name == metrics.cmds.remove_rollups.name;
 
         let gc_config = GcConfig {
             use_active_gc: GC_USE_ACTIVE_GC.get(cfg),
             fallback_threshold_ms: u64::cast_from(GC_FALLBACK_THRESHOLD_MS.get(cfg)),
             min_versions: GC_MIN_VERSIONS.get(cfg),
             max_versions: GC_MAX_VERSIONS.get(cfg),
+            remove_finalized_rollups: GC_REMOVE_FINALIZED_ROLLUPS.get(cfg),
         };
 
         let use_active_rollup = ROLLUP_USE_ACTIVE_ROLLUP.get(cfg);
@@ -547,17 +550,26 @@ where
 
         // Sanity check that all state transitions have special case for
         // being a tombstone. The ones that do will return a Break and
-        // return out of this method above. The one exception is adding
-        // a rollup, because we want to be able to add a rollup for the
-        // tombstone state.
+        // return out of this method above. The exceptions are adding the
+        // tombstone's final rollup and removing old rollups once finalized.
         //
-        // TODO: Even better would be to write the rollup in the
+        // NOTE: Even better would be to write the rollup in the
         // tombstone transition so it's a single terminal state
         // transition, but it'll be tricky to get right.
-        if was_tombstone_before && !(is_rollup || is_become_tombstone) {
+        let is_finalized_removal = is_remove_rollups && new_state.collections.is_finalized();
+        if was_tombstone_before && !(is_rollup || is_become_tombstone || is_finalized_removal) {
             panic!(
                 "cmd {} unexpectedly tried to commit a new state on a tombstone: {:?}",
                 cmd.name, state
+            );
+        }
+
+        // Every extra commit on a finalized shard triggers another rollup,
+        // which GC keeps.
+        if was_tombstone_before && is_remove_rollups {
+            soft_assert_or_log!(
+                new_state.collections.rollups.len() < state.collections.rollups.len(),
+                "remove_rollups committed on a tombstone without removing a rollup"
             );
         }
 
@@ -570,6 +582,9 @@ where
         );
 
         if let Some(write_rollup_seqno) = write_rollup {
+            if new_state.collections.is_finalized() {
+                metrics.state.finalized_rollup_assigned.inc();
+            }
             if use_active_rollup {
                 new_state.collections.active_rollup = Some(ActiveRollup {
                     seqno: write_rollup_seqno,

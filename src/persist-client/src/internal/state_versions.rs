@@ -32,7 +32,7 @@ use prost::Message;
 use timely::progress::Timestamp;
 use tracing::{Instrument, debug, debug_span, trace, warn};
 
-use crate::cfg::STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT;
+use crate::cfg::{GC_REMOVE_FINALIZED_ROLLUPS, STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT};
 use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::machine::{retry_determinate, retry_external};
@@ -843,7 +843,8 @@ impl StateVersions {
     {
         let shard_id = state.shard_id;
         let rollup_seqno = state.seqno;
-        let finalized = state.collections.is_finalized();
+        let finalized =
+            state.collections.is_finalized() && GC_REMOVE_FINALIZED_ROLLUPS.get(&self.cfg);
 
         let rollup = Rollup::from(state.into(), diffs);
         let desc = rollup.diffs.as_ref().expect("inlined diffs").description();

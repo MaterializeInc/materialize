@@ -3163,6 +3163,15 @@
       "dyncfg": true
     },
     {
+      "name": "persist_gc_remove_finalized_rollups",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether GC removes a finalized shard's old rollups from state and blob.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "persist_gc_use_active_gc",
       "typeName": "boolean",
       "default": "off",

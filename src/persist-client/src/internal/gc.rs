@@ -27,7 +27,7 @@ use tracing::{Instrument, Span, debug, debug_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::PartDeletes;
-use crate::cfg::GC_BLOB_DELETE_CONCURRENCY_LIMIT;
+use crate::cfg::{GC_BLOB_DELETE_CONCURRENCY_LIMIT, GC_REMOVE_FINALIZED_ROLLUPS};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
@@ -229,6 +229,7 @@ where
             step_start = now;
         };
         assert_eq!(req.shard_id, machine.shard_id());
+        let remove_finalized = GC_REMOVE_FINALIZED_ROLLUPS.get(&machine.applier.cfg);
 
         // Double check our GC req: seqno_since will never regress
         // so we can verify it's not somehow greater than the last-
@@ -259,7 +260,7 @@ where
         if rollups_to_remove_from_state.is_empty() {
             // Either the work has already been done, or there aren't enough rollups
             // <= seqno_since to have any to delete.
-            return Self::skip_gc(machine, gc_results).await;
+            return Self::skip_gc(machine, gc_results, remove_finalized).await;
         }
 
         debug!(
@@ -280,12 +281,13 @@ where
             // An empty result means Consensus holds no diff at or below `new_seqno_since`.
             // Some other process has already truncated past this request, so the request's
             // goal is met and there are no diffs left from which to derive blob deletions.
+            // Common on tombstones, whose GC skips the `active_gc` check.
             let Some(initial_seqno) = diffs.first().map(|x| x.seqno) else {
                 debug!(
                     ?req,
                     "skipping gc - consensus already truncated past seqno_since. concurrent GC?"
                 );
-                return Self::skip_gc(machine, gc_results).await;
+                return Self::skip_gc(machine, gc_results, remove_finalized).await;
             };
 
             let Some(initial_rollup) = gc_rollups.get(initial_seqno) else {
@@ -301,7 +303,7 @@ where
                     ?gc_rollups,
                     "skipping gc - no rollup at initial seqno. concurrent GC?"
                 );
-                return Self::skip_gc(machine, gc_results).await;
+                return Self::skip_gc(machine, gc_results, remove_finalized).await;
             };
 
             let Some(state) = machine
@@ -315,7 +317,7 @@ where
                     ?gc_rollups,
                     "skipping gc - deleted rollup at initial seqno. concurrent GC?"
                 );
-                return Self::skip_gc(machine, gc_results).await;
+                return Self::skip_gc(machine, gc_results, remove_finalized).await;
             };
 
             UntypedStateVersionsIter::new(
@@ -378,8 +380,9 @@ where
         // In short, while this step is not incremental, it does not need
         // to be for GC to efficiently resume. And in fact, making it
         // incremental could be quite expensive (e.g. more CaS operations).
-        let (removed_rollups, maintenance) =
-            machine.remove_rollups(rollups_to_remove_from_state).await;
+        let (removed_rollups, maintenance) = machine
+            .remove_rollups(rollups_to_remove_from_state, remove_finalized)
+            .await;
         report_step_timing(&machine.applier.metrics.gc.steps.remove_rollups_from_state);
         debug!("CaS removed rollups from state: {:?}", removed_rollups);
         gc_results.rollups_removed_from_state = removed_rollups;
@@ -455,11 +458,16 @@ where
 
     /// Finishes a GC pass that turned out to have no work to do, either because
     /// another process already did it or because there was never any to begin with.
+    ///
+    /// This still calls `remove_rollups` to clear `active_gc` if it was set, so
+    /// the next GC isn't suppressed. A finalized shard leaves it set, which
+    /// `maybe_gc` ignores for tombstones.
     async fn skip_gc(
         machine: &Machine<K, V, T, D>,
         gc_results: GcResults,
+        remove_finalized: bool,
     ) -> (RoutineMaintenance, GcResults) {
-        let (_removed, maintenance) = machine.remove_rollups(&[]).await;
+        let (_removed, maintenance) = machine.remove_rollups(&[], remove_finalized).await;
         machine.applier.metrics.gc.noop.inc();
         (maintenance, gc_results)
     }

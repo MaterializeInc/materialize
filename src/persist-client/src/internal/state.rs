@@ -1303,7 +1303,8 @@ pub struct HollowRollup {
     pub key: PartialRollupKey,
     /// The encoded size of this rollup, if known.
     pub encoded_size_bytes: Option<usize>,
-    /// Whether the state this rolls up is finalized. GC keeps these.
+    /// Whether the state this rolls up is finalized, recorded only while
+    /// `persist_gc_remove_finalized_rollups` is on. GC keeps these.
     pub finalized: bool,
 }
 
@@ -1479,9 +1480,13 @@ where
     pub fn remove_rollups(
         &mut self,
         remove_rollups: &[(SeqNo, PartialRollupKey)],
+        remove_finalized: bool,
     ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
         if self.is_tombstone() {
-            return Break(NoOpStateTransition(vec![]));
+            if !remove_finalized || !self.is_finalized() {
+                return Break(NoOpStateTransition(vec![]));
+            }
+            return self.remove_finalized_rollups(remove_rollups);
         }
 
         // This state transition is called at the end of the GC process, so we
@@ -1512,6 +1517,39 @@ where
             }
         }
 
+        Continue(removed)
+    }
+
+    /// Removes only rollups written before the shard was finalized. Each
+    /// removal asks for a new rollup, so removing those too would loop.
+    ///
+    /// NOTE: A no-op must not commit, even just to clear `active_gc`. See the
+    /// soft assert in `compute_next_state_locked`.
+    fn remove_finalized_rollups(
+        &mut self,
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
+        let latest = self.rollups.keys().next_back().copied();
+        let mut removed = vec![];
+        for (seqno, key) in remove_rollups {
+            if Some(*seqno) == latest {
+                mz_ore::soft_panic_or_log!("GC asked to remove a finalized shard's latest rollup");
+                continue;
+            }
+            // Misses are expected when GC replays a committed removal.
+            if self
+                .rollups
+                .get(seqno)
+                .is_some_and(|x| &x.key == key && !x.finalized)
+            {
+                self.rollups.remove(seqno);
+                removed.push(*seqno);
+            }
+        }
+        if removed.is_empty() {
+            return Break(NoOpStateTransition(vec![]));
+        }
+        self.active_gc = None;
         Continue(removed)
     }
 
@@ -2455,6 +2493,8 @@ pub struct GcConfig {
     pub fallback_threshold_ms: u64,
     pub min_versions: usize,
     pub max_versions: usize,
+    /// Mirrors `persist_gc_remove_finalized_rollups`.
+    pub remove_finalized_rollups: bool,
 }
 
 impl<T> State<T>
@@ -2538,6 +2578,7 @@ where
             fallback_threshold_ms,
             min_versions,
             max_versions,
+            remove_finalized_rollups,
         } = cfg;
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
@@ -2579,10 +2620,10 @@ where
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
         // Always assign GC work to a tombstoned shard to have the chance to
         // clean up any residual blobs. This is safe (won't cause excess gc)
-        // as the only allowed command after becoming a tombstone is to write
-        // the final rollup.
+        // as a tombstone only commits a few rollups and, once finalized, the
+        // `remove_rollups` that drop the older ones.
         let tombstone_needs_gc = self.collections.is_tombstone();
-        let should_gc = should_gc || tombstone_needs_gc;
+        let should_gc = should_gc || (tombstone_needs_gc && !remove_finalized_rollups);
         let should_gc = if use_active_gc {
             // If we have an active gc, we should only gc if the active gc is
             // sufficiently old. This is to avoid doing more gc work than
@@ -2595,6 +2636,10 @@ where
         } else {
             should_gc
         };
+        // A no-op GC on a tombstone leaves `active_gc` set, which would block
+        // GC on the final `add_rollup`. Nothing commits after that, so the old
+        // rollups would leak.
+        let should_gc = should_gc || (tombstone_needs_gc && remove_finalized_rollups);
         if should_gc {
             self.collections.last_gc_req = gc_until_seqno;
             Some(GcReq {
@@ -3928,6 +3973,7 @@ pub(crate) mod tests {
             fallback_threshold_ms: 5000,
             min_versions: 99,
             max_versions: 500,
+            remove_finalized_rollups: true,
         };
         let now_fn = SYSTEM_TIME.clone();
 
@@ -4049,6 +4095,7 @@ pub(crate) mod tests {
             fallback_threshold_ms: 5000,
             min_versions: 16,
             max_versions: 128,
+            remove_finalized_rollups: true,
         };
         const NOW_MS: u64 = 0;
 
@@ -4563,7 +4610,7 @@ pub(crate) mod tests {
         // contains the kept rollup; the older entry is gone.
         let _ = state
             .collections
-            .remove_rollups(&[(older_seqno, older.key.clone())]);
+            .remove_rollups(&[(older_seqno, older.key.clone())], false);
         assert!(!state.collections.rollups.contains_key(&older_seqno));
         assert!(state.collections.rollups.contains_key(&newer_seqno));
 
@@ -4574,5 +4621,74 @@ pub(crate) mod tests {
         assert_eq!(add_older(&mut state.collections), Continue(false));
         assert!(!state.collections.rollups.contains_key(&older_seqno));
         assert_eq!(state.collections.rollups.len(), 1);
+    }
+
+    #[mz_ore::test]
+    fn finalized_rollups() {
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+        state.collections.trace.downgrade_since(&Antichain::new());
+        let _ = state
+            .collections
+            .trace
+            .push_batch(StateCollections::tombstone_batch());
+        assert!(state.collections.is_finalized());
+
+        let rollup = |seqno, finalized| HollowRollup {
+            key: PartialRollupKey::new(SeqNo(seqno), &RollupId::new()),
+            encoded_size_bytes: None,
+            finalized,
+        };
+        let (old, kept, latest) = (rollup(1, false), rollup(3, true), rollup(5, true));
+        for (seqno, rollup) in [(1, &old), (3, &kept), (5, &latest)] {
+            assert_eq!(
+                state.collections.add_rollup((SeqNo(seqno), rollup)),
+                Continue(true)
+            );
+        }
+        let remove_old = [(SeqNo(1), old.key.clone()), (SeqNo(3), kept.key.clone())];
+
+        // The final rollup at v5 is added at v6, and GC's removal of v1 at v7
+        // asks for one more.
+        for (seqno, need) in [(6, None), (7, Some(SeqNo(7)))] {
+            state.seqno = SeqNo(seqno);
+            assert_eq!(state.need_rollup(3, false, 0, 0), need);
+        }
+
+        let noop = Break(NoOpStateTransition(vec![]));
+        assert_eq!(
+            state.collections.remove_rollups(&remove_old, false),
+            noop,
+            "kill switch off"
+        );
+
+        state.collections.active_gc = Some(ActiveGc {
+            seqno: SeqNo(6),
+            start_ms: 0,
+        });
+        assert_eq!(state.collections.remove_rollups(&[], true), noop);
+        assert!(
+            state.collections.active_gc.is_some(),
+            "a no-op must not commit to clear active_gc"
+        );
+
+        assert_eq!(
+            state.collections.remove_rollups(&remove_old, true),
+            Continue(vec![SeqNo(1)])
+        );
+        assert_eq!(state.collections.active_gc, None);
+        assert_eq!(
+            state.collections.rollups.keys().collect::<Vec<_>>(),
+            vec![&SeqNo(3), &SeqNo(5)]
+        );
+        assert_eq!(
+            state.collections.remove_rollups(&remove_old, true),
+            noop,
+            "replayed removal"
+        );
     }
 }
