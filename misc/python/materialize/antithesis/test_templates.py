@@ -117,11 +117,16 @@ def test_focused_templates_omit_unrelated_workloads(tmp_path: Path) -> None:
         "parallel_driver_atomic_commits.py",
         "parallel_driver_bounded_subscribe.py",
         "parallel_driver_index_handover.py",
+        "parallel_driver_session_rebinding.py",
+        "parallel_driver_window_retractions.py",
     ):
         assert command in transactions
         assert command in rollouts
         assert command not in cdc
     assert not templates.PROFILES["transactions"].setup
+    assert "parallel_driver_upsert_recovery.py" in cdc
+    assert "parallel_driver_upsert_recovery.py" in rollouts
+    assert "parallel_driver_upsert_recovery.py" not in transactions
 
 
 def test_contract_template_concentrates_oracles_and_retains_faults(
@@ -135,6 +140,8 @@ def test_contract_template_concentrates_oracles_and_retains_faults(
         "parallel_driver_atomic_commits.py",
         "parallel_driver_bounded_subscribe.py",
         "parallel_driver_index_handover.py",
+        "parallel_driver_session_rebinding.py",
+        "parallel_driver_window_retractions.py",
         "parallel_driver_pod_restarts.py",
         "anytime_coordinator_canaries.py",
         "eventually_coordinator_canaries.py",
