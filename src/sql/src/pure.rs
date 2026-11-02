@@ -43,19 +43,21 @@ use mz_sql_parser::ast::{
     CreateSubsourceOptionName, CreateTableFromSourceStatement, CsrConfigOption,
     CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
     DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption,
-    GlueAvroSeed, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, SqlServerConfigOption,
-    SqlServerConfigOptionName, Statement, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, UnresolvedItemName,
+    GlueAvroSeed, Ident, KafkaListenerSourceOption, KafkaListenerSourceOptionName,
+    KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
+    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
+    RefreshOptionValue, SourceEnvelope, SqlServerConfigOption, SqlServerConfigOptionName,
+    Statement, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
+    UnresolvedItemName,
 };
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::Connection;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::errors::ContextCreationError;
+use mz_storage_types::sources::kafka_listener::KafkaListenerTopics;
 use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
@@ -76,7 +78,10 @@ use crate::ast::{
     ExternalReferences, Format, FormatSpecifier, ProtobufSchema, Value, WithOptionValue,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
-use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
+use crate::kafka_util::{
+    KafkaListenerSourceOptionExtracted, KafkaSinkConfigOptionExtracted,
+    KafkaSourceConfigOptionExtracted,
+};
 use crate::names::{
     Aug, FullItemName, PartialItemName, ResolvedColumnReference, ResolvedDataType, ResolvedIds,
     ResolvedItemName,
@@ -820,7 +825,32 @@ async fn purify_create_source(
         ..
     } = &mut create_source_stmt;
 
-    let uses_old_syntax = !col_names.is_empty()
+    // A Kafka listener source with a single topic writes its data to the source's own relation.
+    // One with a topic prefix writes to tables, one per topic.
+    let listener_topic_prefix = match source_connection {
+        CreateSourceConnection::KafkaListener { options } => {
+            let extracted: KafkaListenerSourceOptionExtracted = options.clone().try_into()?;
+            extracted.topic_prefix
+        }
+        _ => None,
+    };
+    if listener_topic_prefix.is_some()
+        && (!col_names.is_empty()
+            || key_constraint.is_some()
+            || format.is_some()
+            || envelope.is_some()
+            || !include_metadata.is_empty())
+    {
+        sql_bail!(
+            "a Kafka listener source with TOPIC PREFIX has no relation of its own; \
+             specify FORMAT, ENVELOPE and INCLUDE on CREATE TABLE .. FROM SOURCE"
+        );
+    }
+    let uses_old_syntax = (matches!(
+        source_connection,
+        CreateSourceConnection::KafkaListener { .. }
+    ) && listener_topic_prefix.is_none())
+        || !col_names.is_empty()
         || key_constraint.is_some()
         || format.is_some()
         || envelope.is_some()
@@ -849,6 +879,9 @@ async fn purify_create_source(
         }
         CreateSourceConnection::LoadGenerator { .. } => {
             &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
+        }
+        CreateSourceConnection::KafkaListener { .. } => {
+            &mz_storage_types::sources::kafka_listener::KAFKA_LISTENER_PROGRESS_DESC
         }
     };
     let scx = StatementContext::new(None, &catalog);
@@ -985,6 +1018,53 @@ async fn purify_create_source(
             retrieved_source_references = reference_client.get_source_references().await?;
 
             format_options = SourceFormatOptions::Kafka { topic };
+        }
+        CreateSourceConnection::KafkaListener { options } => {
+            if let Some(external_references) = external_references {
+                Err(KafkaSourcePurificationError::ReferencedSubsources(
+                    external_references.clone(),
+                ))?;
+            }
+
+            let extracted_options: KafkaListenerSourceOptionExtracted =
+                options.clone().try_into()?;
+            if let Some(prefix) = extracted_options.topic_prefix {
+                if extracted_options.topic.is_some() {
+                    sql_bail!("TOPIC and TOPIC PREFIX cannot be specified together");
+                }
+                kafka_util::validate_kafka_listener_topic_prefix(&prefix)?;
+                // Tables name their topics. The source itself references none.
+                retrieved_source_references =
+                    SourceReferenceClient::Empty.get_source_references().await?;
+                format_options = SourceFormatOptions::Default;
+            } else {
+                // Default the topic to the source's name and record it, so that renaming the source
+                // does not change the topic producers write to.
+                let topic = match extracted_options.topic {
+                    Some(topic) => topic,
+                    None => {
+                        let topic = source_name
+                            .0
+                            .last()
+                            .ok_or_else(|| {
+                                sql_err!("source name must have at least one component")
+                            })?
+                            .as_str()
+                            .to_string();
+                        options.push(KafkaListenerSourceOption {
+                            name: KafkaListenerSourceOptionName::Topic,
+                            value: Some(WithOptionValue::Value(Value::String(topic.clone()))),
+                        });
+                        topic
+                    }
+                };
+                kafka_util::validate_kafka_listener_topic(&topic)?;
+
+                let reference_client = SourceReferenceClient::Kafka { topic: &topic };
+                retrieved_source_references = reference_client.get_source_references().await?;
+
+                format_options = SourceFormatOptions::Kafka { topic };
+            }
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -1859,6 +1939,16 @@ async fn purify_alter_source_refresh_references(
             };
             reference_client.get_source_references().await?
         }
+        GenericSourceConnection::KafkaListener(listener_conn) => match &listener_conn.topics {
+            KafkaListenerTopics::Topic(topic) => {
+                SourceReferenceClient::Kafka { topic }
+                    .get_source_references()
+                    .await?
+            }
+            KafkaListenerTopics::Prefix(_) => {
+                SourceReferenceClient::Empty.get_source_references().await?
+            }
+        },
     };
     Ok(PurifiedStatement::PurifiedAlterSourceRefreshReferences {
         source_name: resolved_source_name,
@@ -1961,6 +2051,14 @@ async fn purify_create_table_from_source(
     let mut format_options = SourceFormatOptions::Default;
 
     let retrieved_source_references: RetrievedSourceReferences;
+
+    // A listener table's reference names a topic, which may contain dots.
+    if let GenericSourceConnection::KafkaListener(_) = &desc.connection {
+        if let Some(reference) = external_reference.as_mut() {
+            let topic = reference.0.iter().map(|i| i.as_str()).join(".");
+            *reference = UnresolvedItemName::unqualified(Ident::new(topic)?);
+        }
+    }
 
     let requested_references = external_reference.as_ref().map(|ref_name| {
         ExternalReferences::SubsetTables(vec![ExternalReferenceExport {
@@ -2167,6 +2265,41 @@ async fn purify_create_table_from_source(
             format_options = SourceFormatOptions::Kafka {
                 topic: kafka_conn.topic.clone(),
             };
+            PurifiedSourceExport {
+                external_reference: export.external_reference,
+                details: PurifiedExportDetails::Kafka {},
+            }
+        }
+        GenericSourceConnection::KafkaListener(listener_conn) => {
+            let KafkaListenerTopics::Prefix(prefix) = &listener_conn.topics else {
+                sql_bail!(
+                    "CREATE TABLE .. FROM SOURCE requires a Kafka listener source \
+                     created with TOPIC PREFIX"
+                );
+            };
+            // Normalized to a single identifier above.
+            let topic = match external_reference.as_ref() {
+                Some(reference) => reference.0.iter().map(|i| i.as_str()).join("."),
+                None => sql_bail!(
+                    "CREATE TABLE .. FROM SOURCE on a Kafka listener source requires a \
+                     REFERENCE naming the topic"
+                ),
+            };
+            kafka_util::validate_kafka_listener_topic(&topic)?;
+            if !topic.starts_with(prefix.as_str()) {
+                sql_bail!(
+                    "topic {} does not start with the source's TOPIC PREFIX {}",
+                    topic.quoted(),
+                    prefix.quoted()
+                );
+            }
+            let reference_client = SourceReferenceClient::Kafka { topic: &topic };
+            retrieved_source_references = reference_client.get_source_references().await?;
+            let requested_exports = retrieved_source_references
+                .requested_source_exports(requested_references.as_ref(), &unresolved_source_name)?;
+            let export = requested_exports.into_element();
+
+            format_options = SourceFormatOptions::Kafka { topic };
             PurifiedSourceExport {
                 external_reference: export.external_reference,
                 details: PurifiedExportDetails::Kafka {},

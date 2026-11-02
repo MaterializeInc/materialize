@@ -13,11 +13,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mz_kafka_util::client::DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL;
+use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    Expr, KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
-    KafkaSourceConfigOptionName,
+    Expr, KafkaListenerSourceOption, KafkaListenerSourceOptionName, KafkaSinkConfigOption,
+    KafkaSinkConfigOptionName, KafkaSourceConfigOption, KafkaSourceConfigOptionName,
 };
 use mz_storage_types::sinks::KafkaSinkCompressionType;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -29,7 +30,7 @@ use crate::catalog::SessionCatalog;
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
 use crate::plan::PlanError;
-use crate::plan::with_options::{ImpliedValue, TryFromValue};
+use crate::plan::with_options::{self, ImpliedValue, TryFromValue};
 
 generate_extracted_config!(
     KafkaSourceConfigOption,
@@ -43,6 +44,48 @@ generate_extracted_config!(
     (StartTimestamp, i64),
     (StartOffset, Vec<i64>)
 );
+
+generate_extracted_config!(
+    KafkaListenerSourceOption,
+    (Topic, String),
+    (TopicPrefix, String),
+    (SaslUsername, String),
+    (SaslPassword, with_options::Secret),
+    (ValidateOnProduce, bool, Default(false))
+);
+
+/// The longest topic name Kafka accepts.
+const MAX_KAFKA_TOPIC_LEN: usize = 249;
+
+/// Ensures that `topic` is a name Kafka producers accept for a topic.
+pub fn validate_kafka_listener_topic(topic: &str) -> Result<(), PlanError> {
+    if topic.is_empty() || topic == "." || topic == ".." {
+        sql_bail!("invalid Kafka topic {}", topic.quoted());
+    }
+    validate_kafka_listener_topic_prefix(topic)
+}
+
+/// Ensures that topics starting with `prefix` can be valid Kafka topic names.
+pub fn validate_kafka_listener_topic_prefix(prefix: &str) -> Result<(), PlanError> {
+    if prefix.len() > MAX_KAFKA_TOPIC_LEN {
+        sql_bail!(
+            "Kafka topic {} is longer than {MAX_KAFKA_TOPIC_LEN} characters",
+            prefix.quoted()
+        );
+    }
+    if let Some(c) = prefix
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+    {
+        sql_bail!(
+            "Kafka topic {} contains {}; topics may contain only ASCII letters, digits, \
+             '.', '_' and '-'",
+            prefix.quoted(),
+            c.to_string().quoted()
+        );
+    }
+    Ok(())
+}
 
 generate_extracted_config!(
     KafkaSinkConfigOption,

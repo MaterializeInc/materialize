@@ -50,6 +50,9 @@ pub(super) enum SourceReferenceClient<'a> {
     LoadGenerator {
         generator: &'a LoadGenerator,
     },
+    /// A source that references nothing until its tables name what they ingest, such as a
+    /// Kafka listener source with a topic prefix.
+    Empty,
 }
 
 /// Metadata about an available source reference retrieved from the upstream system.
@@ -308,6 +311,7 @@ impl<'a> SourceReferenceClient<'a> {
             SourceReferenceClient::Kafka { topic } => {
                 vec![ReferenceMetadata::Kafka(topic.to_string())]
             }
+            SourceReferenceClient::Empty => Vec::new(),
             SourceReferenceClient::LoadGenerator { generator } => {
                 let mut references = generator
                     .views()
@@ -363,7 +367,9 @@ impl<'a> SourceReferenceClient<'a> {
             SourceReferenceClient::LoadGenerator { .. } => {
                 SourceReferenceResolver::new(LOAD_GENERATOR_DATABASE_NAME, &reference_names)
             }
-            SourceReferenceClient::MySql { .. } | SourceReferenceClient::Kafka { .. } => {
+            SourceReferenceClient::MySql { .. }
+            | SourceReferenceClient::Kafka { .. }
+            | SourceReferenceClient::Empty => {
                 SourceReferenceResolver::new(DATABASE_FAKE_NAME, &reference_names)
             }
         }?;

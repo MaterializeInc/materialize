@@ -220,6 +220,11 @@ fn extract_source(stmt: &mz_sql_parser::ast::CreateSourceStatement<Raw>) -> Infr
             None,
             options_to_properties!(options),
         ),
+        CreateSourceConnection::KafkaListener { options } => (
+            "Kafka Listener".to_string(),
+            None,
+            options_to_properties!(options),
+        ),
     };
     Infrastructure::Source {
         connector_type,

@@ -1344,6 +1344,7 @@ fn humanize_sql_for_show_create(
                     stmt.external_references = Some(ExternalReferences::All);
                 }
                 CreateSourceConnection::Kafka { .. }
+                | CreateSourceConnection::KafkaListener { .. }
                 | CreateSourceConnection::LoadGenerator { .. } => {}
             }
 

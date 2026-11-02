@@ -65,6 +65,7 @@ pub mod casts;
 pub mod encoding;
 pub mod envelope;
 pub mod kafka;
+pub mod kafka_listener;
 pub mod load_generator;
 pub mod mysql;
 pub mod postgres;
@@ -72,6 +73,7 @@ pub mod sql_server;
 
 pub use crate::sources::envelope::SourceEnvelope;
 pub use crate::sources::kafka::KafkaSourceConnection;
+pub use crate::sources::kafka_listener::KafkaListenerSourceConnection;
 pub use crate::sources::load_generator::LoadGeneratorSourceConnection;
 pub use crate::sources::mysql::{MySqlSourceConnection, MySqlSourceExportDetails};
 pub use crate::sources::postgres::{PostgresSourceConnection, PostgresSourceExportDetails};
@@ -625,7 +627,8 @@ impl<C: ConnectionAccess> SourceExportDataConfig<C> {
                     // Whether or not a Loadgen source can produce retractions varies.
                     GenericSourceConnection::LoadGenerator(g) => g.load_generator.is_monotonic(),
                     // Kafka exports with `None` envelope are append-only.
-                    GenericSourceConnection::Kafka(_) => true,
+                    GenericSourceConnection::Kafka(_)
+                    | GenericSourceConnection::KafkaListener(_) => true,
                 }
             }
         }
@@ -697,6 +700,7 @@ pub enum GenericSourceConnection<C: ConnectionAccess = InlinedConnection> {
     MySql(MySqlSourceConnection<C>),
     SqlServer(SqlServerSourceConnection<C>),
     LoadGenerator(LoadGeneratorSourceConnection),
+    KafkaListener(KafkaListenerSourceConnection),
 }
 
 impl<C: ConnectionAccess> From<KafkaSourceConnection<C>> for GenericSourceConnection<C> {
@@ -729,6 +733,12 @@ impl<C: ConnectionAccess> From<LoadGeneratorSourceConnection> for GenericSourceC
     }
 }
 
+impl<C: ConnectionAccess> From<KafkaListenerSourceConnection> for GenericSourceConnection<C> {
+    fn from(conn: KafkaListenerSourceConnection) -> Self {
+        Self::KafkaListener(conn)
+    }
+}
+
 impl<R: ConnectionResolver> IntoInlineConnection<GenericSourceConnection, R>
     for GenericSourceConnection<ReferencedConnection>
 {
@@ -749,6 +759,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<GenericSourceConnection, R>
             GenericSourceConnection::LoadGenerator(lg) => {
                 GenericSourceConnection::LoadGenerator(lg)
             }
+            GenericSourceConnection::KafkaListener(kl) => {
+                GenericSourceConnection::KafkaListener(kl)
+            }
         }
     }
 }
@@ -761,6 +774,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.name(),
             Self::SqlServer(conn) => conn.name(),
             Self::LoadGenerator(conn) => conn.name(),
+            Self::KafkaListener(conn) => conn.name(),
         }
     }
 
@@ -771,6 +785,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.external_reference(),
             Self::SqlServer(conn) => conn.external_reference(),
             Self::LoadGenerator(conn) => conn.external_reference(),
+            Self::KafkaListener(conn) => conn.external_reference(),
         }
     }
 
@@ -781,6 +796,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.default_key_desc(),
             Self::SqlServer(conn) => conn.default_key_desc(),
             Self::LoadGenerator(conn) => conn.default_key_desc(),
+            Self::KafkaListener(conn) => conn.default_key_desc(),
         }
     }
 
@@ -791,6 +807,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.default_value_desc(),
             Self::SqlServer(conn) => conn.default_value_desc(),
             Self::LoadGenerator(conn) => conn.default_value_desc(),
+            Self::KafkaListener(conn) => conn.default_value_desc(),
         }
     }
 
@@ -801,6 +818,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.timestamp_desc(),
             Self::SqlServer(conn) => conn.timestamp_desc(),
             Self::LoadGenerator(conn) => conn.timestamp_desc(),
+            Self::KafkaListener(conn) => conn.timestamp_desc(),
         }
     }
 
@@ -811,6 +829,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.connection_id(),
             Self::SqlServer(conn) => conn.connection_id(),
             Self::LoadGenerator(conn) => conn.connection_id(),
+            Self::KafkaListener(conn) => conn.connection_id(),
         }
     }
 
@@ -821,6 +840,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             GenericSourceConnection::MySql(conn) => conn.supports_read_only(),
             GenericSourceConnection::SqlServer(conn) => conn.supports_read_only(),
             GenericSourceConnection::LoadGenerator(conn) => conn.supports_read_only(),
+            GenericSourceConnection::KafkaListener(conn) => conn.supports_read_only(),
         }
     }
 
@@ -831,6 +851,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             GenericSourceConnection::MySql(conn) => conn.prefers_single_replica(),
             GenericSourceConnection::SqlServer(conn) => conn.prefers_single_replica(),
             GenericSourceConnection::LoadGenerator(conn) => conn.prefers_single_replica(),
+            GenericSourceConnection::KafkaListener(conn) => conn.prefers_single_replica(),
         }
     }
 }
@@ -845,6 +866,9 @@ impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> 
             (Self::MySql(conn), Self::MySql(other)) => conn.alter_compatible(id, other),
             (Self::SqlServer(conn), Self::SqlServer(other)) => conn.alter_compatible(id, other),
             (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
+                conn.alter_compatible(id, other)
+            }
+            (Self::KafkaListener(conn), Self::KafkaListener(other)) => {
                 conn.alter_compatible(id, other)
             }
             _ => Err(AlterError { id }),
@@ -870,6 +894,7 @@ pub enum SourceExportDetails {
     /// output to.
     None,
     Kafka(KafkaSourceExportDetails),
+    KafkaListener(kafka_listener::KafkaListenerSourceExportDetails),
     Postgres(PostgresSourceExportDetails),
     MySql(MySqlSourceExportDetails),
     SqlServer(SqlServerSourceExportDetails),
@@ -884,6 +909,7 @@ impl crate::AlterCompatible for SourceExportDetails {
         let r = match (self, other) {
             (Self::None, Self::None) => Ok(()),
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
+            (Self::KafkaListener(s), Self::KafkaListener(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
             (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),

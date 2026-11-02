@@ -1263,7 +1263,8 @@ impl Source {
                         | LoadGenerator::Marketing
                         | LoadGenerator::Tpch { .. } => 0,
                     },
-                    GenericSourceConnection::Kafka(_) => 1,
+                    GenericSourceConnection::Kafka(_)
+                    | GenericSourceConnection::KafkaListener(_) => 1,
                 }
             }
             //  DataSourceDesc::IngestionExport represents a subsource, which

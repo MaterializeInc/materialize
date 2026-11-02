@@ -317,6 +317,7 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                 MySql { connection, .. } => ("mysql", Some(connection)),
                 SqlServer { connection, .. } => ("sql-server", Some(connection)),
                 LoadGenerator { .. } => ("load-generator", None),
+                KafkaListener { .. } => ("kafka-listener", None),
             };
             info.insert("source_type", json!(source_type));
             if let Some(conn) = connection {
@@ -349,7 +350,11 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                         CdcV2 => "materialize",
                     })
                 }
-                None if source_type == "kafka" && stmt.progress_subsource.is_some() => Some("none"),
+                None if matches!(source_type, "kafka" | "kafka-listener")
+                    && stmt.progress_subsource.is_some() =>
+                {
+                    Some("none")
+                }
                 None => None,
             };
             if let Some(envelope_type) = envelope_type {

@@ -2908,6 +2908,34 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_kafka_listener_source_option(
+        &mut self,
+    ) -> Result<KafkaListenerSourceOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[SASL, TOPIC, VALIDATE])? {
+            SASL => match self.expect_one_of_keywords(&[PASSWORD, USERNAME])? {
+                PASSWORD => KafkaListenerSourceOptionName::SaslPassword,
+                USERNAME => KafkaListenerSourceOptionName::SaslUsername,
+                _ => unreachable!(),
+            },
+            TOPIC => {
+                if self.parse_keyword(PREFIX) {
+                    KafkaListenerSourceOptionName::TopicPrefix
+                } else {
+                    KafkaListenerSourceOptionName::Topic
+                }
+            }
+            VALIDATE => {
+                self.expect_keywords(&[ON, PRODUCE])?;
+                KafkaListenerSourceOptionName::ValidateOnProduce
+            }
+            _ => unreachable!(),
+        };
+        Ok(KafkaListenerSourceOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
     fn parse_iceberg_sink_config_option(
         &mut self,
     ) -> Result<IcebergSinkConfigOption<Raw>, ParserError> {
@@ -3807,6 +3835,17 @@ impl<'a> Parser<'a> {
                     connection,
                     options,
                 })
+            }
+            KAFKA if self.parse_keyword(LISTENER) => {
+                let options = if self.consume_token(&Token::LParen) {
+                    let options =
+                        self.parse_comma_separated(Parser::parse_kafka_listener_source_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
+                } else {
+                    vec![]
+                };
+                Ok(CreateSourceConnection::KafkaListener { options })
             }
             KAFKA => {
                 self.expect_keyword(CONNECTION)?;

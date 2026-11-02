@@ -103,6 +103,10 @@ use mz_storage_types::sources::envelope::{
 use mz_storage_types::sources::kafka::{
     KafkaMetadataKind, KafkaSourceConnection, KafkaSourceExportDetails, kafka_metadata_columns_desc,
 };
+use mz_storage_types::sources::kafka_listener::{
+    KafkaListenerSaslCredentials, KafkaListenerSourceConnection, KafkaListenerSourceExportDetails,
+    KafkaListenerTopics,
+};
 use mz_storage_types::sources::load_generator::{
     KeyValueLoadGenerator, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT, LoadGenerator,
     LoadGeneratorOutput, LoadGeneratorSourceConnection, LoadGeneratorSourceExportDetails,
@@ -132,7 +136,10 @@ use crate::catalog::{
     CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
 };
 use crate::iceberg::IcebergSinkConfigOptionExtracted;
-use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
+use crate::kafka_util::{
+    KafkaListenerSourceOptionExtracted, KafkaSinkConfigOptionExtracted,
+    KafkaSourceConfigOptionExtracted,
+};
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, DependencyIds, ObjectId, PartialItemName, QualifiedItemName,
     ResolvedClusterName, ResolvedColumnReference, ResolvedDataType, ResolvedDatabaseSpecifier,
@@ -170,9 +177,9 @@ use crate::plan::{
 };
 use crate::session::vars::{
     self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
-    ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
-    ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
-    VarInput,
+    ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_LISTENER_SOURCE,
+    ENABLE_KAFKA_SINK_HEADERS, ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -792,17 +799,21 @@ pub fn plan_create_source(
 
     let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
 
-    if !matches!(source_connection, CreateSourceConnection::Kafka { .. })
-        && include_metadata
-            .iter()
-            .any(|sic| matches!(sic, SourceIncludeMetadata::Headers { .. }))
+    if !matches!(
+        source_connection,
+        CreateSourceConnection::Kafka { .. } | CreateSourceConnection::KafkaListener { .. }
+    ) && include_metadata
+        .iter()
+        .any(|sic| matches!(sic, SourceIncludeMetadata::Headers { .. }))
     {
         // TODO(guswynn): should this be `bail_unsupported!`?
         sql_bail!("INCLUDE HEADERS with non-Kafka sources not supported");
     }
     if !matches!(
         source_connection,
-        CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. }
+        CreateSourceConnection::Kafka { .. }
+            | CreateSourceConnection::KafkaListener { .. }
+            | CreateSourceConnection::LoadGenerator { .. }
     ) && !include_metadata.is_empty()
     {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
@@ -830,6 +841,10 @@ pub fn plan_create_source(
 
     let metadata_columns_desc = match external_connection {
         GenericSourceConnection::Kafka(KafkaSourceConnection {
+            ref metadata_columns,
+            ..
+        })
+        | GenericSourceConnection::KafkaListener(KafkaListenerSourceConnection {
             ref metadata_columns,
             ..
         }) => kafka_metadata_columns_desc(metadata_columns),
@@ -926,6 +941,15 @@ pub fn plan_create_source(
             let details = match external_connection {
                 GenericSourceConnection::Kafka(ref c) => {
                     SourceExportDetails::Kafka(KafkaSourceExportDetails {
+                        metadata_columns: c.metadata_columns.clone(),
+                    })
+                }
+                GenericSourceConnection::KafkaListener(ref c) => {
+                    let KafkaListenerTopics::Topic(topic) = &c.topics else {
+                        bail_internal!("a Kafka listener source with TOPIC PREFIX has no data")
+                    };
+                    SourceExportDetails::KafkaListener(KafkaListenerSourceExportDetails {
+                        topic: topic.clone(),
                         metadata_columns: c.metadata_columns.clone(),
                     })
                 }
@@ -1063,6 +1087,104 @@ pub fn plan_generic_source_connection(
                 include_metadata,
             )?)
         }
+        CreateSourceConnection::KafkaListener { options } => {
+            GenericSourceConnection::KafkaListener(plan_kafka_listener_source_connection(
+                scx,
+                options,
+                include_metadata,
+            )?)
+        }
+    })
+}
+
+/// Returns the metadata columns that `INCLUDE` options request from a source of Kafka records.
+fn kafka_metadata_columns(
+    include_metadata: &[SourceIncludeMetadata],
+) -> Vec<(String, KafkaMetadataKind)> {
+    include_metadata
+        .into_iter()
+        .flat_map(|item| match item {
+            SourceIncludeMetadata::Timestamp { alias } => {
+                let name = match alias {
+                    Some(name) => name.to_string(),
+                    None => "timestamp".to_owned(),
+                };
+                Some((name, KafkaMetadataKind::Timestamp))
+            }
+            SourceIncludeMetadata::Partition { alias } => {
+                let name = match alias {
+                    Some(name) => name.to_string(),
+                    None => "partition".to_owned(),
+                };
+                Some((name, KafkaMetadataKind::Partition))
+            }
+            SourceIncludeMetadata::Offset { alias } => {
+                let name = match alias {
+                    Some(name) => name.to_string(),
+                    None => "offset".to_owned(),
+                };
+                Some((name, KafkaMetadataKind::Offset))
+            }
+            SourceIncludeMetadata::Headers { alias } => {
+                let name = match alias {
+                    Some(name) => name.to_string(),
+                    None => "headers".to_owned(),
+                };
+                Some((name, KafkaMetadataKind::Headers))
+            }
+            SourceIncludeMetadata::Header {
+                alias,
+                key,
+                use_bytes,
+            } => Some((
+                alias.to_string(),
+                KafkaMetadataKind::Header {
+                    key: key.clone(),
+                    use_bytes: *use_bytes,
+                },
+            )),
+            SourceIncludeMetadata::Key { .. } => {
+                // handled below
+                None
+            }
+        })
+        .collect()
+}
+
+fn plan_kafka_listener_source_connection(
+    scx: &StatementContext<'_>,
+    options: &Vec<ast::KafkaListenerSourceOption<Aug>>,
+    include_metadata: &Vec<SourceIncludeMetadata>,
+) -> Result<KafkaListenerSourceConnection, PlanError> {
+    scx.require_feature_flag(&ENABLE_KAFKA_LISTENER_SOURCE)?;
+    let KafkaListenerSourceOptionExtracted {
+        topic,
+        topic_prefix,
+        sasl_username,
+        sasl_password,
+        validate_on_produce,
+        seen: _,
+    } = options.clone().try_into()?;
+    // Purification defaults TOPIC unless TOPIC PREFIX is given, and validates both.
+    let topics = match (topic, topic_prefix) {
+        (Some(topic), None) => KafkaListenerTopics::Topic(topic),
+        (None, Some(prefix)) => KafkaListenerTopics::Prefix(prefix),
+        (Some(_), Some(_)) => sql_bail!("TOPIC and TOPIC PREFIX cannot be specified together"),
+        (None, None) => Err(internal_err!("TOPIC option is required"))?,
+    };
+    let sasl = match (sasl_username, sasl_password) {
+        (Some(username), Some(password)) => Some(KafkaListenerSaslCredentials {
+            username,
+            password: password.into(),
+        }),
+        (None, None) => None,
+        _ => sql_bail!("SASL USERNAME and SASL PASSWORD must be specified together"),
+    };
+    Ok(KafkaListenerSourceConnection {
+        topics,
+        sasl,
+        metadata_columns: kafka_metadata_columns(include_metadata),
+        validate_on_produce,
     })
 }
 
@@ -1236,54 +1358,7 @@ fn plan_kafka_source_connection(
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
-    let metadata_columns = include_metadata
-        .into_iter()
-        .flat_map(|item| match item {
-            SourceIncludeMetadata::Timestamp { alias } => {
-                let name = match alias {
-                    Some(name) => name.to_string(),
-                    None => "timestamp".to_owned(),
-                };
-                Some((name, KafkaMetadataKind::Timestamp))
-            }
-            SourceIncludeMetadata::Partition { alias } => {
-                let name = match alias {
-                    Some(name) => name.to_string(),
-                    None => "partition".to_owned(),
-                };
-                Some((name, KafkaMetadataKind::Partition))
-            }
-            SourceIncludeMetadata::Offset { alias } => {
-                let name = match alias {
-                    Some(name) => name.to_string(),
-                    None => "offset".to_owned(),
-                };
-                Some((name, KafkaMetadataKind::Offset))
-            }
-            SourceIncludeMetadata::Headers { alias } => {
-                let name = match alias {
-                    Some(name) => name.to_string(),
-                    None => "headers".to_owned(),
-                };
-                Some((name, KafkaMetadataKind::Headers))
-            }
-            SourceIncludeMetadata::Header {
-                alias,
-                key,
-                use_bytes,
-            } => Some((
-                alias.to_string(),
-                KafkaMetadataKind::Header {
-                    key: key.clone(),
-                    use_bytes: *use_bytes,
-                },
-            )),
-            SourceIncludeMetadata::Key { .. } => {
-                // handled below
-                None
-            }
-        })
-        .collect();
+    let metadata_columns = kafka_metadata_columns(include_metadata);
     Ok(KafkaSourceConnection {
         connection: connection_item.id(),
         connection_id: connection_item.id(),
@@ -1795,6 +1870,10 @@ pub fn plan_create_table_from_source(
 
     let source_item = scx.get_item_by_resolved_name(source)?;
     let ingestion_id = source_item.id();
+    let source_connection = &source_item
+        .source_desc()?
+        .ok_or_else(|| sql_err!("item is not a source"))?
+        .connection;
 
     // Decode the details option stored on the statement, which contains information
     // created during the purification process.
@@ -1932,14 +2011,22 @@ pub fn plan_create_table_from_source(
                 })
                 .collect();
 
-            SourceExportDetails::Kafka(KafkaSourceExportDetails { metadata_columns })
+            match &source_connection {
+                GenericSourceConnection::KafkaListener(_) => {
+                    // Purification normalizes the reference to the topic name.
+                    let topic = external_reference
+                        .as_ref()
+                        .and_then(|r| r.0.iter().exactly_one().ok())
+                        .ok_or_else(|| internal_err!("Kafka listener table without a topic"))?;
+                    SourceExportDetails::KafkaListener(KafkaListenerSourceExportDetails {
+                        topic: topic.as_str().to_string(),
+                        metadata_columns,
+                    })
+                }
+                _ => SourceExportDetails::Kafka(KafkaSourceExportDetails { metadata_columns }),
+            }
         }
     };
-
-    let source_connection = &source_item
-        .source_desc()?
-        .ok_or_else(|| sql_err!("item is not a source"))?
-        .connection;
 
     // Some source-types (e.g. postgres, mysql, multi-output load-gen sources) define a value_schema
     // during purification and define the `columns` and `constraints` fields for the statement,
@@ -1962,6 +2049,10 @@ pub fn plan_create_table_from_source(
     let metadata_columns_desc = match &details {
         SourceExportDetails::Kafka(KafkaSourceExportDetails {
             metadata_columns, ..
+        })
+        | SourceExportDetails::KafkaListener(KafkaListenerSourceExportDetails {
+            metadata_columns,
+            ..
         }) => kafka_metadata_columns_desc(metadata_columns),
         _ => vec![],
     };

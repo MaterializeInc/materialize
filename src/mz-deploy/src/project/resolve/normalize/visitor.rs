@@ -169,6 +169,11 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
                 self.normalize_raw_item_name(connection);
             }
             CreateSourceConnection::LoadGenerator { .. } => {}
+            CreateSourceConnection::KafkaListener { options } => {
+                for value in options.iter_mut().filter_map(|o| o.value.as_mut()) {
+                    self.normalize_with_option_value(value);
+                }
+            }
         }
     }
 
