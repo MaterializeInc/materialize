@@ -85,8 +85,9 @@ const perObjectLagCteAtProbePeak = (
   ),
   per_object_lag(object_id text, lag interval) AS (
     SELECT DISTINCT ON (h.object_id) h.object_id, h.lag
-    FROM mz_wallclock_global_lag_recent_history h, probe_peak_bucket b
-    WHERE h.occurred_at >= b.bucket_start
+    FROM mz_wallclock_global_lag_recent_history h, probe_peak_bucket b, upstream u
+    WHERE h.object_id = u.id
+      AND h.occurred_at >= b.bucket_start
       AND h.occurred_at < b.bucket_start + INTERVAL '${bucketMs} MILLISECONDS'
     ORDER BY h.object_id, h.lag DESC
   )`;
@@ -106,6 +107,7 @@ const perObjectLagCteAtTime = (timestamp: Date, bucketSizeMs: number) => {
   return sql`per_object_lag(object_id text, lag interval) AS (
     SELECT DISTINCT ON (object_id) object_id, lag
     FROM mz_wallclock_global_lag_recent_history
+    JOIN upstream u ON u.id = object_id
     WHERE occurred_at >= date_bin(
         INTERVAL '${bucketMs} MILLISECONDS',
         ${tsLit}::timestamptz,
@@ -173,6 +175,14 @@ WITH MUTUALLY RECURSIVE
     FROM mz_object_dependencies od
     JOIN mz_sources p ON p.id = od.referenced_object_id AND p.type = 'progress'
   ),
+  -- Every object the chain can reach. The lag CTEs join to this, so each
+  -- reads only these ids through the (object_id) index. Unscoped, each read
+  -- scans the whole 24h history of every object in the environment.
+  upstream(id text) AS (
+    SELECT ${lit(objectId)}
+    UNION
+    SELECT i.source FROM input_of i JOIN upstream u ON u.id = i.target
+  ),
   ${perObjectLag},
   -- Per-node max lag in the lookback window and when it occurred.
   -- Joined onto the SELECT below as per-node badge metadata.
@@ -180,6 +190,7 @@ WITH MUTUALLY RECURSIVE
     SELECT DISTINCT ON (object_id)
       object_id, lag, occurred_at::timestamptz
     FROM mz_wallclock_global_lag_recent_history
+    JOIN upstream u ON u.id = object_id
     WHERE occurred_at + INTERVAL '${lookback} MINUTES' >= mz_now()
     ORDER BY object_id, lag DESC NULLS LAST, occurred_at DESC
   ),

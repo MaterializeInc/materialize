@@ -10,6 +10,7 @@
 import { queryBuilder } from "~/api/materialize/db";
 import {
   executeSqlHttp,
+  explainOnCatalogServer,
   getMaterializeClient,
 } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
@@ -83,19 +84,34 @@ describe("createPostgresSourceStatement", () => {
     const {
       rows: [sink],
     } = await client.query("select id from mz_sinks where name = 't_sink'");
-    const query = buildWorkflowGraphQuery({
-      objectId: source.id,
-    }).compile(queryBuilder);
-    // Compute dependencies are not updated transactionally, so sometimes we have to wait
-    // a bit for all the deps to show up.
-    await waitFor(async () => {
-      const result = await executeSqlHttp(query);
-      expect(result.rows).toEqual([
-        { parentId: source.id, childId: subsource.id },
-        { parentId: subsource.id, childId: matView.id },
-        { parentId: subsource.id, childId: index.id },
-        { parentId: matView.id, childId: sink.id },
-      ]);
-    });
+    // 26.39.0 reads mz_object_graph_edges; 26.38.0 predates it.
+    for (const environmentVersion of ["26.39.0", "26.38.0"]) {
+      const query = buildWorkflowGraphQuery({
+        objectId: source.id,
+        environmentVersion,
+      }).compile(queryBuilder);
+      // Compute dependencies are not updated transactionally, so sometimes we have to wait
+      // a bit for all the deps to show up.
+      await waitFor(async () => {
+        const result = await executeSqlHttp(query);
+        expect(result.rows).toEqual([
+          { parentId: source.id, childId: subsource.id },
+          { parentId: subsource.id, childId: matView.id },
+          { parentId: subsource.id, childId: index.id },
+          { parentId: matView.id, childId: sink.id },
+        ]);
+      });
+    }
+  });
+
+  it("walks the indexed edge view instead of rebuilding it", async () => {
+    const plan = await explainOnCatalogServer(
+      buildWorkflowGraphQuery({
+        objectId: "u1",
+        environmentVersion: "26.39.0",
+      }).compile(queryBuilder),
+    );
+    expect(plan).toContain("mz_internal.mz_object_graph_edges_ind");
+    expect(plan).not.toContain("mz_catalog.mz_objects_ind");
   });
 });

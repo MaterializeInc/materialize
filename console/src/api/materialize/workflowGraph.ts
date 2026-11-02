@@ -10,10 +10,12 @@
 import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
+import { extractEnvironmentVersion } from "~/api/buildQueryKeySchema";
 import { escapedLiteral as lit, executeSqlV2 } from "~/api/materialize";
 
 import { queryBuilder } from "./db";
 import { buildSourceExportsQuery } from "./expressionBuilders";
+import { semverParseGte } from "./versioning";
 
 export interface WorkflowGraphEdge {
   parentId: string | null;
@@ -30,19 +32,14 @@ export const ALLOWED_OBJECT_TYPES = [
 
 export type AllowedObjects = (typeof ALLOWED_OBJECT_TYPES)[0];
 
+/** The first version with `mz_internal.mz_object_graph_edges`. */
+const OBJECT_GRAPH_EDGES_MIN_VERSION = "26.39.0";
+
 /**
- * Given an object ID, looks for all compute dependencies up and downstream. Returns
- * pairs of IDs that represent edges in the graph.
- *
- * 1) Filters materialization dependencies for allowed types
- * 2) Unions sources that have subsources and sinks
- * 3) Walk upstream from the given object
- * 4) Walk downstream from the given object
- * 5) Union those two sets
+ * Rebuilds the `mz_object_graph_edges` edge set per request, for environments
+ * that predate it.
  */
-export function buildWorkflowGraphQuery({ objectId }: { objectId: string }) {
-  return sql`
-WITH MUTUALLY RECURSIVE
+const buildLegacyAllowedDependencies = () => sql`
   allowed_compute_dependencies(child_id text, parent_id text) AS (
     SELECT object_id, dependency_id FROM mz_materialization_dependencies
     JOIN mz_objects AS parent_o ON parent_o.id = dependency_id
@@ -65,7 +62,28 @@ WITH MUTUALLY RECURSIVE
     -- but their subsources do since dataflows exist in subsources. Thus we union sources_with_subsources_object_dependencies
     -- to create edges and nodes for these type of sources.
     SELECT * from sources_with_subsources_object_dependencies
-  ),
+  )`;
+
+/**
+ * Given an object ID, looks for all compute dependencies up and downstream. Returns
+ * pairs of IDs that represent edges in the graph.
+ */
+export function buildWorkflowGraphQuery({
+  objectId,
+  environmentVersion,
+}: WorkflowGraphQueryParams) {
+  // An unknown version takes the legacy query, which is correct on every
+  // version.
+  const allowedDependencies =
+    environmentVersion !== undefined &&
+    semverParseGte(environmentVersion, OBJECT_GRAPH_EDGES_MIN_VERSION)
+      ? sql`
+  allowed_dependencies(child_id text, parent_id text) AS (
+    SELECT object_id, dependency_id FROM mz_object_graph_edges
+  )`
+      : buildLegacyAllowedDependencies();
+  return sql`
+WITH MUTUALLY RECURSIVE${allowedDependencies},
   upstream(child_id text, parent_id text) AS (
     SELECT *
     FROM allowed_dependencies
@@ -94,6 +112,10 @@ export type WorkflowGraphParams = {
   objectId: string;
 };
 
+export type WorkflowGraphQueryParams = WorkflowGraphParams & {
+  environmentVersion?: string;
+};
+
 /**
  * Fetches all upstream and downstream compute dependencies of an object.
  */
@@ -106,7 +128,10 @@ export async function fetchWorkflowGraph({
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
-  const compiledQuery = buildWorkflowGraphQuery(params).compile(queryBuilder);
+  const compiledQuery = buildWorkflowGraphQuery({
+    ...params,
+    environmentVersion: extractEnvironmentVersion(queryKey),
+  }).compile(queryBuilder);
 
   return executeSqlV2({
     queries: compiledQuery,
