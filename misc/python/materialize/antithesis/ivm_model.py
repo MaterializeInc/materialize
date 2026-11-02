@@ -151,6 +151,29 @@ def _distinct(base: Base, _t: int) -> Bag:
     return Counter({(g, abs(v) % 4): 1 for (_k, g, v, _w) in base["t"]})
 
 
+def _set_inputs(base: Base) -> tuple[Bag, Bag]:
+    left: Bag = Counter()
+    right: Bag = Counter()
+    for (_k, g, _v, _w), n in base["t"].items():
+        left[(g,)] += n
+    for (g, _label), n in base["d"].items():
+        right[(g,)] += n
+    return left, right
+
+
+def _intersect_all(base: Base, _t: int) -> Bag:
+    left, right = _set_inputs(base)
+    return left & right
+
+
+def _except_all(base: Base, _t: int) -> Bag:
+    left, right = _set_inputs(base)
+    return left - right
+
+
+SET_OP_KINDS = ("intersect_all", "except_all")
+
+
 TOPK_LIMIT = 2
 
 
@@ -258,6 +281,20 @@ VIEWS = (
         f"SELECT DISTINCT g, abs(v) % 4 AS b FROM {S}.t",
         frozenset({"t"}),
         _distinct,
+    ),
+    ViewKind(
+        "intersect_all",
+        ("g",),
+        f"SELECT g FROM {S}.t INTERSECT ALL SELECT g FROM {S}.d",
+        frozenset({"t", "d"}),
+        _intersect_all,
+    ),
+    ViewKind(
+        "except_all",
+        ("g",),
+        f"SELECT g FROM {S}.t EXCEPT ALL SELECT g FROM {S}.d",
+        frozenset({"t", "d"}),
+        _except_all,
     ),
     ViewKind(
         "topk",
@@ -442,6 +479,16 @@ class TagStats:
 
 
 @dataclass
+class SetOpStats:
+    compared: int = 0
+    duplicates: int = 0
+    left_changes: int = 0
+    right_changes: int = 0
+    positive_to_zero: int = 0
+    zero_to_positive: int = 0
+
+
+@dataclass
 class ViewChecker:
     """Compares every maintained view with its reference at each `Step`.
 
@@ -459,6 +506,10 @@ class ViewChecker:
     skipped_negative_base: int = 0
     first_mismatch_time: int | None = None
     _seen: set[str] = field(default_factory=set)
+    set_stats: dict[str, SetOpStats] = field(
+        default_factory=lambda: {kind: SetOpStats() for kind in SET_OP_KINDS}
+    )
+    _previous_sets: dict[str, Bag] = field(default_factory=dict)
 
     def check(self, state: Mapping[str, Bag], step: Step) -> None:
         self.steps += 1
@@ -511,6 +562,24 @@ class ViewChecker:
                         "expected_rows": sum(expected.values()),
                         "observed_rows": sum(observed.values()),
                     }
+            if view.kind in self.set_stats and expected is not None:
+                previous = self._previous_sets.get(view.kind)
+                self._previous_sets[view.kind] = expected
+                if not all(
+                    state.get(tag(view.kind, variant), Counter()) == expected
+                    for variant in VARIANTS
+                ):
+                    continue
+                stat = self.set_stats[view.kind]
+                stat.compared += 1
+                stat.duplicates += any(n > 1 for n in expected.values())
+                if previous is None:
+                    continue
+                stat.positive_to_zero += len(previous.keys() - expected.keys())
+                stat.zero_to_positive += len(expected.keys() - previous.keys())
+                if previous != expected:
+                    stat.left_changes += changed_inputs == {"t"}
+                    stat.right_changes += changed_inputs == {"d"}
 
     def _note_negative(
         self, tag_name: str, time: int, neg: list[tuple[Row, int]]

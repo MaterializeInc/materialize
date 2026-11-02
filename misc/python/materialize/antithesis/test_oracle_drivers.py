@@ -216,6 +216,26 @@ def _write_ledger(outcome: str | None = "ok") -> sqlite3.Connection:
     return db
 
 
+@pytest.mark.parametrize("kind", model.SET_OP_KINDS)
+@pytest.mark.parametrize("variant", model.VARIANTS)
+def test_ivm_set_coverage_requires_both_maintained_paths_to_match(
+    monkeypatch: pytest.MonkeyPatch, kind: str, variant: str
+) -> None:
+    checker = model.ViewChecker()
+    checker.set_stats[kind] = model.SetOpStats(5, 1, 1, 1, 1, 1)
+    checker.stats[model.tag(kind, variant)].mismatch = {"time": 10}
+    guidance = {}
+    monkeypatch.setattr(ivm, "always", lambda *args: None)
+    monkeypatch.setattr(
+        ivm,
+        "sometimes",
+        lambda condition, message, details: guidance.update({message: condition}),
+    )
+    ivm._report_views(checker, {})
+    assert all(not guidance[message] for message in ivm.SET_COVERAGE[kind])
+
+
+
 @pytest.mark.parametrize("corrupt", [False, True])
 @pytest.mark.parametrize("outcome", ["ok", "pending", "indeterminate"])
 def test_final_ivm_checks_current_view_contents(

@@ -13,7 +13,8 @@ Property: `ivm-subscribe-matches-reference`.
 
 Objects, all in schema `ivm` and maintained on `ivm_c` (replication factor 1):
 the base tables and view kinds in `ivm_model` (filter and map, inner, left and
-full outer join, grouped and global reduce, distinct, TopK, a temporal filter,
+full outer join, grouped and global reduce, distinct, multiset intersection
+and difference, TopK, a temporal filter,
 and a `WITH MUTUALLY RECURSIVE` closure), each kind both as an indexed view and
 as a materialized view. Tables, indexes and MVs retain history, so a subscribe
 can start in the past.
@@ -130,6 +131,8 @@ KIND_EQUAL = {
     "reduce": "ivm: the reduce view equals the reference at every closed timestamp",
     "global_reduce": "ivm: the global_reduce view equals the reference at every closed timestamp",
     "distinct": "ivm: the distinct view equals the reference at every closed timestamp",
+    "intersect_all": "ivm: the intersect_all view equals the reference at every closed timestamp",
+    "except_all": "ivm: the except_all view equals the reference at every closed timestamp",
     "topk": "ivm: the topk view equals the reference at every closed timestamp",
     "temporal": "ivm: the temporal view equals the reference at every closed timestamp",
     "recursive": "ivm: the recursive view equals the reference at every closed timestamp",
@@ -142,11 +145,25 @@ KIND_NONEMPTY = {
     "reduce": "ivm: compared a non-empty reduce view at a closed timestamp",
     "global_reduce": "ivm: compared a non-empty global_reduce view at a closed timestamp",
     "distinct": "ivm: compared a non-empty distinct view at a closed timestamp",
+    "intersect_all": "ivm: compared a non-empty intersect_all view at a closed timestamp",
+    "except_all": "ivm: compared a non-empty except_all view at a closed timestamp",
     "topk": "ivm: compared a non-empty topk view at a closed timestamp",
     "temporal": "ivm: compared a non-empty temporal view at a closed timestamp",
     "recursive": "ivm: compared a non-empty recursive view at a closed timestamp",
 }
 assert set(KIND_EQUAL) == set(KIND_NONEMPTY) == set(model.VIEWS_BY_KIND)
+SET_COVERAGE = {
+    "intersect_all": (
+        "ivm: INTERSECT ALL checked duplicate output multiplicities",
+        "ivm: INTERSECT ALL checked output changes driven separately by both inputs",
+        "ivm: INTERSECT ALL checked both directions of a group crossing zero multiplicity",
+    ),
+    "except_all": (
+        "ivm: EXCEPT ALL checked duplicate output multiplicities",
+        "ivm: EXCEPT ALL checked output changes driven separately by both inputs",
+        "ivm: EXCEPT ALL checked both directions of a group crossing zero multiplicity",
+    ),
+}
 
 
 def log(message: str) -> None:
@@ -301,7 +318,9 @@ class Writer:
                 "t_move",
                 "t_delete",
                 "t_delete_range",
+                "t_delete_group",
                 "d_insert",
+                "d_insert_many",
                 "d_update",
                 "d_delete",
                 "ev_insert",
@@ -349,8 +368,15 @@ class Writer:
                 lo,
                 lo + rng.choice((2, 8, 16)),
             )
+        if kind == "t_delete_group":
+            return f"DELETE FROM {s}.t WHERE g = %s", (rng.randrange(GROUPS),)
         if kind == "d_insert":
             return f"INSERT INTO {s}.d VALUES (%s, %s)", (rng.randrange(DIM_GROUPS), op)
+        if kind == "d_insert_many":
+            n = rng.randint(2, 4)
+            group = rng.randrange(DIM_GROUPS)
+            values = ", ".join(["(%s, %s)"] * n)
+            return f"INSERT INTO {s}.d VALUES {values}", (group, op) * n
         if kind == "d_update":
             return f"UPDATE {s}.d SET label = %s WHERE g = %s", (
                 op,
@@ -1024,6 +1050,23 @@ def _report_views(checker: model.ViewChecker, details: dict[str, Any]) -> None:
         "ivm: an outer join view held a NULL-extended row at a compared timestamp",
         details,
     )
+    for kind, stat in checker.set_stats.items():
+        passed = all(
+            checker.stats[model.tag(kind, variant)].mismatch is None
+            and checker.stats[model.tag(kind, variant)].negative is None
+            for variant in model.VARIANTS
+        )
+        conditions = (
+            stat.duplicates > 0,
+            stat.left_changes > 0 and stat.right_changes > 0,
+            stat.positive_to_zero > 0 and stat.zero_to_positive > 0,
+        )
+        for condition, message in zip(conditions, SET_COVERAGE[kind]):
+            sometimes(
+                passed and condition,
+                message,
+                {"kind": kind, **vars(stat)},
+            )
 
 
 def _check_writes(w: Window, db: sqlite3.Connection, details: dict[str, Any]) -> None:
