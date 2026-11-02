@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -434,6 +435,71 @@ def test_initial_false_sdk_assertion_stops_before_workloads(monkeypatch, experim
     report = json.loads((args.output / "summary.json").read_text())
     assert report["stage"] == "initialization" and report["false_hits"]
     assert not any(row["command"] == driver.path.name for row in report["schedule"])
+
+
+@pytest.mark.parametrize(
+    "option,patterns",
+    [
+        ("include", ["parallel_driver_test.py", "parallel_driver_ivm_checks.py"]),
+        ("include", ["first_configure.py"]),
+        ("include", ["finally_check.py"]),
+        ("check", ["finally_check.py", "eventually_misspelled.py"]),
+        ("check", ["parallel_driver_test.py"]),
+        ("check", ["first_configure.py"]),
+    ],
+)
+def test_every_pattern_must_match_its_phase_before_any_mutation(
+    monkeypatch, experiment, option, patterns
+):
+    args, _, _, _ = experiment
+    args.skip_first = False
+    setattr(args, option, patterns)
+    scheduler = Mock(
+        side_effect=AssertionError("scheduler constructed before preflight")
+    )
+    monkeypatch.setattr(runner, "Scheduler", scheduler)
+    snapshot = Mock(side_effect=AssertionError("health checked before preflight"))
+    monkeypatch.setattr(runner, "telemetry_snapshot", snapshot)
+    with pytest.raises(ValueError, match="unmatched --" + option):
+        runner.run(args)
+    assert not args.output.exists()
+    assert not Path(os.environ["MZ_ANTITHESIS_STATE_DIR"]).exists()
+    scheduler.assert_not_called()
+    snapshot.assert_not_called()
+
+
+def test_pattern_preflight_keeps_legal_globs_and_distinct_check_phases(
+    monkeypatch, experiment
+):
+    args, driver, final, setup = experiment
+    anytime = command(args.templates, "anytime_health", "check", "anytime", "pass")
+    eventual = command(
+        args.templates, "eventually_health", "check", "eventually", "pass"
+    )
+    commands = [setup, driver, anytime, eventual, final]
+    discovered = []
+
+    def discover(directory):
+        discovered.append(directory)
+        return commands
+
+    monkeypatch.setattr(runner, "discover", discover)
+    args.include = ["parallel_driver_*.py", "anytime_*.py"]
+    args.check = ["anytime_*.py", "eventually_*.py", "anytime_health.py"]
+    all_commands, selected, checks = runner._select_commands(args)
+    assert discovered == [args.templates / args.profile]
+    assert all_commands == commands
+    assert selected == [driver, anytime]
+    assert checks == [anytime, eventual]
+    args.include = []
+    args.check = ["finally_*.py"]
+    assert runner._select_commands(args) == (
+        commands,
+        [driver, anytime],
+        [final],
+    )
+    assert not args.output.exists()
+    assert not Path(os.environ["MZ_ANTITHESIS_STATE_DIR"]).exists()
 
 
 def test_sticky_invalid_baseline_stops_before_workloads(monkeypatch, experiment):

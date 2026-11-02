@@ -29,7 +29,7 @@ from materialize.antithesis.local_evidence import (
     snapshot_valid,
     telemetry_snapshot,
 )
-from materialize.antithesis.local_scheduler import Scheduler, discover
+from materialize.antithesis.local_scheduler import Command, Scheduler, discover
 
 
 def seed_local_random(seed: int) -> None:
@@ -39,16 +39,42 @@ def seed_local_random(seed: int) -> None:
     rng.get_random = lambda: draw.getrandbits(64)
 
 
-def _run(args: argparse.Namespace, scheduler: Scheduler) -> int:
+def _select_commands(
+    args: argparse.Namespace,
+) -> tuple[list[Command], list[Command], list[Command]]:
     commands = discover(args.templates / args.profile)
     matches = lambda command, patterns: any(
         fnmatch.fnmatch(command.path.name, pattern) for pattern in patterns
     )
-    selected = [
+    runnable = [
         command
         for command in commands
         if command.mode in ("parallel", "serial", "singleton", "anytime")
-        and (not args.include or matches(command, args.include))
+    ]
+    checkable = [
+        command
+        for command in commands
+        if command.mode in ("anytime", "eventually", "finally")
+    ]
+    for option, patterns, eligible in (
+        ("include", args.include, runnable),
+        ("check", args.check, checkable),
+    ):
+        unmatched = [
+            pattern
+            for pattern in patterns
+            if not any(
+                fnmatch.fnmatch(command.path.name, pattern) for command in eligible
+            )
+        ]
+        if unmatched:
+            raise ValueError(
+                f"profile {args.profile!r}: unmatched --{option} patterns: {unmatched!r}"
+            )
+    selected = [
+        command
+        for command in runnable
+        if not args.include or matches(command, args.include)
     ]
     if not selected:
         raise ValueError(
@@ -58,16 +84,21 @@ def _run(args: argparse.Namespace, scheduler: Scheduler) -> int:
         raise ValueError(
             "singleton branches are not supported by the bounded local runner; select parallel/serial/anytime commands explicitly"
         )
-    checks = [
-        command
-        for command in commands
-        if command.mode in ("anytime", "eventually", "finally")
-        and matches(command, args.check)
-    ]
+    checks = [command for command in checkable if matches(command, args.check)]
     if sum(command.mode in ("eventually", "finally") for command in checks) > 1:
         raise ValueError(
             "a local experiment can request at most one eventually/finally terminal hook"
         )
+    return commands, selected, checks
+
+
+def _run(
+    args: argparse.Namespace,
+    scheduler: Scheduler,
+    commands: list[Command],
+    selected: list[Command],
+    checks: list[Command],
+) -> int:
     if not args.skip_first:
         scheduler.timeout = args.setup_timeout
         scheduler.start(
@@ -252,6 +283,7 @@ def _run(args: argparse.Namespace, scheduler: Scheduler) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    commands, selected, checks = _select_commands(args)
     os.umask(0o077)
     args.output.mkdir(parents=True, exist_ok=False)
     state_dir = Path(
@@ -280,7 +312,7 @@ def run(args: argparse.Namespace) -> int:
 
         previous = signal.signal(signal.SIGTERM, interrupted)
         try:
-            return _run(args, scheduler)
+            return _run(args, scheduler, commands, selected, checks)
         finally:
             scheduler.reap(phase_end=True)
             signal.signal(signal.SIGTERM, previous)
