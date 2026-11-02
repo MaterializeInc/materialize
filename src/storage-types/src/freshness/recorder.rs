@@ -52,6 +52,69 @@ pub(super) struct PeriodHistogram {
 #[derive(Debug)]
 pub struct FreshnessRecorder {
     book: PeriodBook<PeriodHistogram>,
+    shown: Shown,
+}
+
+/// The most entries [`Shown`] keeps.
+pub(super) const MAX_SHOWN: usize = 16;
+
+/// The first observations that reflected the arrivals above a period book's high-water mark.
+///
+/// The book defers the arrivals of a frontier ahead of the wall clock past the next period
+/// boundary to a later observation. They were visible at the first observation that reflected
+/// them, and are charged at that one.
+#[derive(Debug, Default)]
+pub(super) struct Shown {
+    /// `(reflected, observed_ms)`, ascending in both: the arrivals above the high-water mark up
+    /// to `reflected` were reflected at or before `observed_ms`. At most [`MAX_SHOWN`] entries.
+    entries: Vec<(u64, u64)>,
+}
+
+impl Shown {
+    /// Notes that an observation at `observed_ms` reflected the arrivals up to `reflected`, given
+    /// the high-water mark `high_water_ms` of the book.
+    pub fn note(&mut self, reflected: u64, observed_ms: u64, high_water_ms: u64) {
+        if reflected <= high_water_ms || self.entries.last().is_some_and(|(r, _)| reflected <= *r) {
+            return;
+        }
+        self.entries.push((reflected, observed_ms));
+        if self.entries.len() > MAX_SHOWN {
+            // A frontier that leads the wall clock by many observations would grow the list
+            // without bound. Merging the neighbours `(r1, o1), (r2, o2)` into `(r2, o1)` charges
+            // `(r1, r2]` at the earlier `o1`, which understates their latencies by at most
+            // `o2 - o1`, so the pair with the closest observations is merged.
+            let i = (1..self.entries.len())
+                .min_by_key(|i| self.entries[*i].1.saturating_sub(self.entries[*i - 1].1))
+                .expect("more than one entry");
+            let (reflected, _) = self.entries.remove(i);
+            self.entries[i - 1].0 = reflected;
+        }
+    }
+
+    /// Calls `add` with each part `(lo, hi]` of `(from, to]` and the observation time that
+    /// first reflected it. `(from, to]` must lie above the high-water mark of the last
+    /// [`Self::forget_through`] and at or below the last noted arrival.
+    pub fn split(&self, from: u64, to: u64, mut add: impl FnMut(u64, u64, u64)) {
+        let mut lo = from;
+        for (reflected, observed_ms) in &self.entries {
+            let hi = to.min(*reflected);
+            if lo < hi {
+                add(lo, hi, *observed_ms);
+                lo = hi;
+            }
+        }
+        debug_assert!(lo >= to, "({lo}, {to}] not noted");
+    }
+
+    /// Forgets the arrivals at or below `high_water_ms`, which the book recorded.
+    pub fn forget_through(&mut self, high_water_ms: u64) {
+        self.entries.retain(|(r, _)| *r > high_water_ms);
+    }
+
+    /// The last noted arrival that is not forgotten.
+    pub fn last(&self) -> Option<u64> {
+        self.entries.last().map(|(r, _)| *r)
+    }
 }
 
 impl FreshnessRecorder {
@@ -60,14 +123,18 @@ impl FreshnessRecorder {
     pub fn new(start_ms: u64) -> Self {
         FreshnessRecorder {
             book: PeriodBook::new(start_ms),
+            shown: Shown::default(),
         }
     }
 
     /// Records a write frontier observed at `now_ms` and returns the rows of periods that closed.
     ///
-    /// Rows of one period are adjacent and sorted by bucket. An empty frontier closes all open
-    /// periods and ends the recording. A frontier that reflects nothing new, or nothing at all as
-    /// for a refresh view before its first refresh, records nothing.
+    /// Rows of one period are adjacent and sorted by bucket. An empty frontier ends the recording
+    /// like [`Self::finish`]. A frontier that reflects nothing new, or nothing at all as for a
+    /// refresh view before its first refresh, records nothing.
+    ///
+    /// Every arrival is charged at the first observation that reflected it, also when the period
+    /// book defers it to a later call.
     pub fn observe(
         &mut self,
         tree: &ResolvedTree,
@@ -75,44 +142,71 @@ impl FreshnessRecorder {
         now_ms: u64,
         config: &RecorderConfig,
     ) -> Vec<PeriodRow> {
-        let closed = match frontier.as_option() {
-            None => self.book.finish(),
-            Some(frontier) => {
-                let Some(last_reflected) = tree.last_reflected(*frontier) else {
-                    return Vec::new();
-                };
-                // All parts of the span share this advance time, so a window cut at a period
-                // boundary keeps a single latency.
-                let advance_ms = now_ms.max(last_reflected);
-                self.book.advance(
-                    last_reflected,
-                    now_ms,
-                    config,
-                    || PeriodHistogram {
-                        scheme: config.scheme,
-                        counts: BTreeMap::new(),
-                    },
-                    |period, from, to| {
-                        add_part(
-                            tree,
-                            &period.scheme,
-                            config.interval_ms,
-                            from,
-                            to,
-                            advance_ms,
-                            &mut period.counts,
-                        )
-                    },
-                )
-            }
+        let Some(frontier) = frontier.as_option() else {
+            return self.finish(Some(tree), now_ms, config);
         };
-        rows(closed)
+        let Some(last_reflected) = tree.last_reflected(*frontier) else {
+            return Vec::new();
+        };
+        self.shown
+            .note(last_reflected, now_ms, self.book.high_water_ms());
+        rows(self.advance(tree, last_reflected, now_ms, config))
     }
 
-    /// Ends the recording like an empty frontier, for an object that goes away without one, and
-    /// returns the rows of the open periods.
-    pub fn finish(&mut self) -> Vec<PeriodRow> {
-        rows(self.book.finish())
+    /// Advances the book to `to_ms` at `now_ms`, charging each arrival at the observation that
+    /// first reflected it.
+    fn advance(
+        &mut self,
+        tree: &ResolvedTree,
+        to_ms: u64,
+        now_ms: u64,
+        config: &RecorderConfig,
+    ) -> Vec<ClosedPeriod<PeriodHistogram>> {
+        let shown = &self.shown;
+        let closed = self.book.advance(
+            to_ms,
+            now_ms,
+            config,
+            || PeriodHistogram {
+                scheme: config.scheme,
+                counts: BTreeMap::new(),
+            },
+            |period, from, to| {
+                shown.split(from, to, |lo, hi, observed_ms| {
+                    add_part(
+                        tree,
+                        &period.scheme,
+                        config.interval_ms,
+                        lo,
+                        hi,
+                        observed_ms,
+                        &mut period.counts,
+                    )
+                })
+            },
+        );
+        self.shown.forget_through(self.book.high_water_ms());
+        closed
+    }
+
+    /// Ends the recording, for an object that goes away, and returns the rows of the open
+    /// periods.
+    ///
+    /// The arrivals that the period book deferred are recorded first, up to `now_ms`, at the
+    /// observations that reflected them. Without `tree`, for an object whose tree no longer
+    /// resolves, they are not recorded.
+    pub fn finish(
+        &mut self,
+        tree: Option<&ResolvedTree>,
+        now_ms: u64,
+        config: &RecorderConfig,
+    ) -> Vec<PeriodRow> {
+        let mut closed = match (tree, self.shown.last()) {
+            (Some(tree), Some(last)) => self.advance(tree, last.min(now_ms), now_ms, config),
+            _ => Vec::new(),
+        };
+        closed.extend(self.book.finish());
+        rows(closed)
     }
 }
 
@@ -138,8 +232,9 @@ pub(super) fn rows(closed: Vec<ClosedPeriod<PeriodHistogram>>) -> Vec<PeriodRow>
 
 /// Adds the arrivals in `(from, to]` to `counts`, where the ends may fall inside a window.
 ///
-/// The arrivals of a window carry the latency of the window start, wherever the window is cut.
-/// `advance_ms` must be at least `to`.
+/// The arrivals of a window carry the latency `advance_ms - s` from the window start `s`,
+/// wherever the window is cut. A latency of at most 1 ms, also a negative one, takes the bucket
+/// of 1 ms.
 pub(super) fn add_part(
     tree: &ResolvedTree,
     scheme: &BucketScheme,
@@ -155,9 +250,8 @@ pub(super) fn add_part(
     let mut add_window_part = |window_start: u64, lo: u64, hi: u64| {
         let n = hi / interval_ms - lo / interval_ms;
         if n > 0 {
-            *counts
-                .entry(scheme.bucket(advance_ms - window_start))
-                .or_default() += n;
+            let latency_ms = advance_ms.saturating_sub(window_start);
+            *counts.entry(scheme.bucket(latency_ms)).or_default() += n;
         }
     };
     // The leading part of the window that contains `from`, if `from` is not a boundary.

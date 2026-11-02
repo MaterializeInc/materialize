@@ -80,6 +80,9 @@ impl BucketScheme {
 /// Adds the virtual arrivals in `(from, to]` that became visible at `advance_ms` to `counts`,
 /// keyed by bucket. Arrivals sit at multiples of `interval_ms`.
 ///
+/// An arrival has the latency `advance_ms - s` from the start `s` of its window. A latency of
+/// at most 1 ms, also a negative one, takes the bucket of 1 ms.
+///
 /// `from` and `to` must be window boundaries of `tree`, as returned by `last_reflected`. The
 /// work is bounded by the number of touched buckets and independent of the span length.
 pub fn add_span(
@@ -116,18 +119,21 @@ pub(super) fn add_span_with(
         return;
     }
     // NOTE: A frontier can be reported before the wall clock reaches the span end, for example
-    // under clock skew between the writer and the controller. Latency is then measured from
-    // the span end, which keeps every latency at least the length of its window.
-    let a = advance_ms.max(to);
-    // A window starting at boundary `s` in `[from, to)` has latency `a - s`.
-    let (shortest, longest) = (a - to + 1, a - from);
+    // under clock skew between the writer and the controller. A window that starts at or after
+    // `advance_ms` was visible as soon as it started.
+    let shortest = advance_ms.saturating_sub(to - 1).max(1);
+    let longest = advance_ms.saturating_sub(from).max(1);
     for k in scheme.bucket(shortest)..=scheme.bucket(longest) {
-        // The windows with latency in this bucket start in `[a - hi, a - lo)`, so their
-        // arrivals are `(beta(a - hi), beta(a - lo)]`.
+        // The windows with latency in this bucket start in `[advance_ms - hi, advance_ms - lo)`,
+        // so their arrivals are `(beta(advance_ms - hi), beta(advance_ms - lo)]`. The lowest
+        // bucket also takes the windows that start at or after `advance_ms`.
         let lo = scheme.max_latency_ms(k - 1);
         let hi = scheme.max_latency_ms(k);
-        let start = beta(a.saturating_sub(hi)).max(from);
-        let end = beta(a.saturating_sub(lo)).min(to);
+        let start = beta(advance_ms.saturating_sub(hi)).max(from);
+        let end = match k {
+            0 => to,
+            _ => beta(advance_ms.saturating_sub(lo)).min(to),
+        };
         if start < end {
             let n = end / interval_ms - start / interval_ms;
             if n > 0 {

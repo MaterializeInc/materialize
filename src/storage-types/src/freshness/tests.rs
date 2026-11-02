@@ -566,7 +566,7 @@ fn is_boundary(tree: &ResolvedTree, s: u64) -> bool {
 }
 
 /// Reference for `add_span` that charges every arrival one by one: its window start is the
-/// largest boundary below it, and its latency is `max(advance, to)` minus that start.
+/// largest boundary below it, and its latency is `advance` minus that start, at least 1 ms.
 fn reference_span(
     tree: &ResolvedTree,
     scheme: &BucketScheme,
@@ -576,7 +576,6 @@ fn reference_span(
     advance: u64,
     counts: &mut BTreeMap<i32, u64>,
 ) {
-    let a = advance.max(to);
     for t in (from + 1)..=to {
         if t % interval != 0 {
             continue;
@@ -586,7 +585,8 @@ fn reference_span(
             start -= 1;
         }
         assert!(start >= from);
-        *counts.entry(scheme.bucket(a - start)).or_default() += 1;
+        let latency = advance.saturating_sub(start).max(1);
+        *counts.entry(scheme.bucket(latency)).or_default() += 1;
     }
 }
 
@@ -633,17 +633,15 @@ fn span_matches_window_walk() {
 
 #[mz_ore::test]
 fn span_clock_skew() {
-    proptest!(|((tree, from, to) in arb_span(), interval in 1u64..=5)| {
+    proptest!(|((tree, from, to) in arb_span(), interval in 1u64..=5, behind in 0u64..400)| {
         let s = scheme(4);
-        // The advance time precedes the span end, so the span end stands in for it, and every
-        // arrival's latency is at least the length of its window.
+        // The advance time precedes the span end, so windows that start at or after it are
+        // visible right away, and the others carry their latency up to the advance time.
+        let advance = to.saturating_sub(behind);
         let mut skewed = BTreeMap::new();
-        add_span(&tree, &s, interval, from, to, 0, &mut skewed);
-        let mut clamped = BTreeMap::new();
-        add_span(&tree, &s, interval, from, to, to, &mut clamped);
-        prop_assert_eq!(&skewed, &clamped);
+        add_span(&tree, &s, interval, from, to, advance, &mut skewed);
         let mut expected = BTreeMap::new();
-        reference_span(&tree, &s, interval, from, to, 0, &mut expected);
+        reference_span(&tree, &s, interval, from, to, advance, &mut expected);
         prop_assert_eq!(skewed, expected);
     });
 }
@@ -1203,14 +1201,62 @@ fn finish_emits_open_periods() {
             .observe(&tree, &at(30_001), 30_001, &cfg)
             .is_empty()
     );
-    let rows = recorder.finish();
+    let rows = recorder.finish(Some(&tree), 31_000, &cfg);
     assert_eq!(period_totals(&rows), BTreeMap::from([(0, 30_000)]));
     assert!(
         recorder
             .observe(&tree, &at(90_001), 90_001, &cfg)
             .is_empty()
     );
-    assert!(recorder.finish().is_empty());
+    assert!(recorder.finish(Some(&tree), 91_000, &cfg).is_empty());
+}
+
+const HOUR_MS: u64 = 60 * 60 * 1000;
+
+#[mz_ore::test]
+fn frontier_ahead_of_wall_clock_records_small_latencies() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(0);
+    let mut rows = recorder.observe(&tree, &at(60_001), 60_001, &cfg);
+    assert_eq!(period_totals(&rows), BTreeMap::from([(0, 60_000)]));
+    // The frontier runs an hour ahead. The book records up to the next period boundary, whose
+    // windows were visible at most a window length after they started.
+    rows = recorder.observe(&tree, &at(60_001 + HOUR_MS), 60_500, &cfg);
+    assert_eq!(period_totals(&rows), BTreeMap::from([(60_000, 60_000)]));
+    let s = cfg.scheme;
+    assert!(rows.iter().all(|r| r.bucket <= s.bucket(1000)), "{rows:?}");
+}
+
+#[mz_ore::test]
+fn deferred_arrivals_are_charged_at_their_first_observation() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(60_000);
+    let frontier = at(HOUR_MS + 1);
+    let rows = recorder.observe(&tree, &frontier, 60_000, &cfg);
+    assert_eq!(period_totals(&rows), BTreeMap::from([(60_000, 60_000)]));
+    // Ten minutes later the frontier is unchanged. The arrivals the cap deferred were visible
+    // since the first observation, so none waited.
+    let rows = recorder.observe(&tree, &frontier, 660_000, &cfg);
+    assert_eq!(period_totals(&rows).values().sum::<u64>(), 600_000);
+    assert!(rows.iter().all(|r| r.bucket == 0), "{rows:?}");
+}
+
+#[mz_ore::test]
+fn finish_records_deferred_arrivals_up_to_now() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(60_000);
+    let frontier = at(HOUR_MS + 1);
+    let rows = recorder.observe(&tree, &frontier, 60_000, &cfg);
+    assert_eq!(period_totals(&rows), BTreeMap::from([(60_000, 60_000)]));
+    // The object goes away ten minutes later with the frontier unchanged. The arrivals up to
+    // then were visible since the first observation, and later ones never arrived.
+    let rows = recorder.finish(Some(&tree), 660_500, &cfg);
+    assert_eq!(period_totals(&rows).values().sum::<u64>(), 540_500);
+    assert!(rows.iter().all(|r| r.bucket == 0), "{rows:?}");
+    assert!(recorder.finish(Some(&tree), 700_000, &cfg).is_empty());
 }
 
 #[mz_ore::test]
