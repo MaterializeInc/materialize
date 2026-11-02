@@ -16,6 +16,7 @@ asserting the exact Arrow type per column is what catches a regression here.
 """
 
 import unittest
+from uuid import UUID
 
 # Pinned in `test/adbc/requirements.txt` and installed only inside this
 # composition's test container, so they are absent from the repo-wide virtualenv
@@ -121,6 +122,7 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(row["c_int4"], 2)
         self.assertEqual(row["c_text"], "abc")
         self.assertEqual(row["c_bytea"], b"\x01\x02")
+        self.assertEqual(row["c_uuid"], UUID("00000000-0000-0000-0000-000000000001"))
 
     def test_array_type(self) -> None:
         """An array must arrive as an Arrow list, not as an opaque blob."""
