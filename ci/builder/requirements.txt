@@ -14,8 +14,8 @@
 aiohttp==3.14.5
 black==26.10.1
 # Pulls in dependencies that make launchdarkly/cloud tests fail, keep for now
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.43.122
-boto3==1.43.122
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.43.123
+boto3==1.43.123
 click==8.5.0
 cryptography==50.0.2
 colored==2.3.2
@@ -31,7 +31,7 @@ jupyterlab==4.6.5
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
-launchdarkly-api==25.1.0
+launchdarkly-api==25.1.1
 # NOTE matplotlib 3.10.9 is required for Python 3.10 compatibility
 matplotlib==3.10.9; python_version < "3.11"
 matplotlib==3.11.2; python_version >= "3.11"
