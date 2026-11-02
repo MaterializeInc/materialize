@@ -36,6 +36,7 @@ from pathlib import Path
 from materialize import MZ_ROOT, spawn
 from materialize.antithesis import images as antithesis_images
 from materialize.antithesis import render
+from materialize.antithesis.local_scheduler import nonnegative_seconds
 from materialize.mz_version import MzVersion
 from materialize.xcompile import Arch
 
@@ -259,6 +260,8 @@ def run(args: argparse.Namespace) -> int:
         str(args.drain_timeout),
         "--check-interval",
         str(args.check_interval),
+        "--fault-interval",
+        str(args.fault_interval),
     ]
     for name in ("include", "check", "require_witness"):
         for value in getattr(args, name):
@@ -290,6 +293,7 @@ def run(args: argparse.Namespace) -> int:
         "profile": args.profile,
         "concurrency": args.concurrency,
         "seed": args.seed,
+        "fault_interval": args.fault_interval,
         "returncode": result.returncode,
     }
     (args.output / "local-run.json").write_text(json.dumps(receipt, indent=2) + "\n")
@@ -332,6 +336,12 @@ def main() -> int:
     run_parser.add_argument("--shutdown-grace", type=float, default=2)
     run_parser.add_argument("--drain-timeout", type=float, default=60)
     run_parser.add_argument("--check-interval", type=float, default=5)
+    run_parser.add_argument(
+        "--fault-interval",
+        type=nonnegative_seconds,
+        default=30,
+        help="seconds after an ordinary pod-fault command finishes before admitting the next (0 disables pacing)",
+    )
     run_parser.add_argument("--include", action="append", default=[])
     run_parser.add_argument("--check", action="append", default=[])
     run_parser.add_argument("--require-witness", action="append", default=[])

@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import math
 import os
 import random
 import signal
@@ -28,11 +29,19 @@ EXCLUSIVE = {
     "atomic_commits": 1,
     "bounded_subscribe": 1,
     "index_handover": 1,
+    "pod_restarts": 1,
     "aggregate_retractions": 2,
     "session_rebinding": 1,
     "upsert_recovery": 1,
     "window_retractions": 1,
 }
+
+
+def nonnegative_seconds(value: str | float) -> float:
+    seconds = float(value)
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError("seconds must be finite and nonnegative")
+    return seconds
 
 
 @dataclass(frozen=True)
@@ -144,16 +153,19 @@ class Scheduler:
         grace: float,
         check_interval: float,
         drain_timeout: float = 0,
+        fault_interval: float = 30,
     ):
         self.output, self.concurrency, self.seed = output, concurrency, seed
         self.timeout, self.grace, self.check_interval = timeout, grace, check_interval
         self.drain_timeout = drain_timeout
+        self.fault_interval = nonnegative_seconds(fault_interval)
         self.admission_end: float | None = None
         self.drain_elapsed = 0.0
         self.running: list[dict] = []
         self.completed: list[dict] = []
         self.dispatched: Counter[str] = Counter()
         self.ready: dict[str, float] = {}
+        self.family_ready: dict[str, float] = {}
         self.random = random.Random(seed)
         self.max_running = 0
         self.overlaps = set()
@@ -257,6 +269,10 @@ class Scheduler:
             self.ready[command.path.name] = time.monotonic() + (
                 self.check_interval if command.mode == "anytime" else 0
             )
+            if command.family == "pod_restarts":
+                self.family_ready[command.family] = (
+                    self.completed[-1]["finished"] + self.fault_interval
+                )
             self.running.remove(item)
 
     def phase(self, commands: list[Command], duration: float) -> None:
@@ -272,7 +288,11 @@ class Scheduler:
                         (
                             command
                             for command in commands
-                            if self.ready.get(command.path.name, 0) <= time.monotonic()
+                            if max(
+                                self.ready.get(command.path.name, 0),
+                                self.family_ready.get(command.family, 0),
+                            )
+                            <= time.monotonic()
                         ),
                         key=lambda command: (
                             self.dispatched[command.path.name],

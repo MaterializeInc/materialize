@@ -356,6 +356,11 @@ period. Later experiments on the same workload state must keep that profile
 and use `--skip-first`. A state-directory lock prevents overlapping local
 experiments. The default concurrency is eight. Ordinary writers can overlap,
 while workloads with exclusive fixtures retain their admission limits.
+One ordinary pod-restart command runs at a time, with thirty seconds between
+completion and the next admission. `--fault-interval` changes that delay, and
+zero disables pacing. Targeted history, IVM, and upsert disruptions retain
+their own scheduling. Raising SQL concurrency therefore does not multiply
+the ordinary fault-driver count.
 
 The seed controls scheduling and each invocation's local workload draws.
 Antithesis continues to use SDK entropy. Each run retains child logs, SDK
