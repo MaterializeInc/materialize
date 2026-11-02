@@ -3910,8 +3910,9 @@ where
             }
 
             // Ingestions and exports report their write frontiers to `update_write_frontier`,
-            // which records their freshness. The other collections, among them tables and
-            // webhooks, advance their frontiers without a report to this controller.
+            // which records their freshness. The other collections, among them tables,
+            // webhooks, and the catalog collection, advance their frontiers without a report to
+            // this controller.
             if matches!(collection.extra_state, CollectionStateExtra::None) {
                 unreported_frontiers.push((id, frontiers.write_frontier));
             }

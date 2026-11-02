@@ -736,6 +736,18 @@ impl FreshnessHarness {
         as_of: u64,
         inputs: &[(GlobalId, FreshnessTree)],
     ) {
+        let tree = FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT));
+        self.add_collection_with_trees(id, as_of, tree, inputs);
+    }
+
+    /// Adds a collection with the tree `tree` that reads `inputs` with the given trees.
+    fn add_collection_with_trees(
+        &mut self,
+        id: GlobalId,
+        as_of: u64,
+        tree: FreshnessTree,
+        inputs: &[(GlobalId, FreshnessTree)],
+    ) {
         let as_of = Antichain::from_elem(Timestamp::from(as_of));
         self.instance.add_collection(
             id,
@@ -749,7 +761,7 @@ impl FreshnessHarness {
             None,
             None,
             None,
-            Some(FreshnessTree::Leaf(FreshnessLeaf::Ingestion(STORAGE_INPUT))),
+            Some(tree),
             inputs.iter().cloned().collect(),
         );
     }
@@ -1005,6 +1017,72 @@ async fn skew_needs_two_inputs() {
                 recorded.measure_periods("skew", Some(id), replica),
                 vec![],
                 "{id} {replica:?}"
+            );
+        }
+    }
+}
+
+/// A builtin materialized view over the catalog collection, and an index on it. The catalog
+/// collection has the tables' tree and its log is recorded like a table's. The catalog stalls
+/// for 30 s, which both compute collections charge as upstream delay, not as local delay.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+async fn catalog_stall_is_upstream_delay() {
+    let mut h = FreshnessHarness::new(true, false);
+    h.instance.initialization_complete();
+    let catalog = STORAGE_INPUT;
+    let catalog_tree = FreshnessTree::Leaf(FreshnessLeaf::Fixed(Ticker::Unaligned {
+        interval_ms: 1000,
+    }));
+    let (mv, index) = (GlobalId::System(10), GlobalId::System(11));
+    h.add_collection_with_trees(
+        mv,
+        T0,
+        catalog_tree.clone(),
+        &[(catalog, catalog_tree.clone())],
+    );
+    h.add_collection_with_trees(
+        index,
+        T0,
+        catalog_tree.clone(),
+        &[(mv, catalog_tree.clone())],
+    );
+    let r1 = ReplicaId::User(1);
+    h.add_replica(r1);
+
+    let config =
+        mz_storage_client::freshness::recorder_config(&h.instance.dyncfg).expect("recording on");
+    let resolved = catalog_tree.resolve(&FixedTickers(1000)).expect("resolves");
+    // The catalog upper does not advance past the tick at 30 s until the tick at 60 s.
+    let catalog_upper = |s: u64| T0 + if (31..60).contains(&s) { 30 } else { s } * 1000 + 1;
+    for s in 1..=120 {
+        let tick = T0 + s * 1000;
+        let upper = catalog_upper(s);
+        h.set_now(tick + 2);
+        let frontier = Antichain::from_elem(Timestamp::from(upper));
+        h.storage_log
+            .record(&resolved, &frontier, tick + 2, &config);
+        h.set_now(tick + 5);
+        h.report(r1, mv, upper);
+        h.set_now(tick + 9);
+        h.report(r1, index, upper);
+    }
+
+    let recorded = h.recorded();
+    let scheme = BucketScheme::new(4).expect("power of two");
+    for replica in [None, Some(r1)] {
+        for (id, delay) in [(mv, 3), (index, 4)] {
+            assert!(
+                recorded
+                    .buckets("end_to_end", id, replica)
+                    .contains(&scheme.bucket(29_000)),
+                "{id} {replica:?} charges the stall end to end: {:?}",
+                recorded.buckets("end_to_end", id, replica),
+            );
+            assert_eq!(
+                recorded.buckets("local", id, replica),
+                BTreeSet::from([scheme.bucket(delay)]),
+                "{id} waits {delay} ms for its input on {replica:?}"
             );
         }
     }
