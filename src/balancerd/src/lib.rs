@@ -106,6 +106,7 @@ pub struct BalancerConfig {
     /// DNS resolver.
     resolver: BalancerResolver,
     https_sni_addr_template: String,
+    kafka: Option<KafkaConfig>,
     tls: Option<TlsCertConfig>,
     internal_tls: bool,
     metrics_registry: MetricsRegistry,
@@ -129,6 +130,7 @@ impl BalancerConfig {
         cancellation_resolver: CancellationResolver,
         resolver: BalancerResolver,
         https_sni_addr_template: String,
+        kafka: Option<KafkaConfig>,
         tls: Option<TlsCertConfig>,
         internal_tls: bool,
         metrics_registry: MetricsRegistry,
@@ -150,6 +152,7 @@ impl BalancerConfig {
             cancellation_resolver,
             resolver,
             https_sni_addr_template,
+            kafka,
             tls,
             internal_tls,
             metrics_registry,
@@ -164,6 +167,29 @@ impl BalancerConfig {
             default_configs,
         }
     }
+}
+
+/// Configures balancerd to proxy Kafka connections to clusters' Kafka listeners.
+#[derive(Debug, Clone)]
+pub struct KafkaConfig {
+    /// Listen address for Kafka connections.
+    pub listen_addr: SocketAddr,
+    /// The backend address for a connection, with `{}` standing for the environment and
+    /// `{cluster}` for the cluster ID that the client's SNI hostname names.
+    pub resolver_template: String,
+    /// If `Some`, proxies connections to clusters' schema registries in the same way, so that
+    /// clients reach a cluster's registry at the hostname of its Kafka listener.
+    pub registry: Option<KafkaRegistryConfig>,
+}
+
+/// Configures balancerd to proxy connections to the schema registries of clusters' Kafka
+/// listeners. See [`KafkaConfig`].
+#[derive(Debug, Clone)]
+pub struct KafkaRegistryConfig {
+    /// Listen address for schema registry connections.
+    pub listen_addr: SocketAddr,
+    /// The backend address, like [`KafkaConfig::resolver_template`].
+    pub resolver_template: String,
 }
 
 /// Prometheus monitoring metrics.
@@ -195,6 +221,8 @@ pub struct BalancerService {
     cfg: BalancerConfig,
     pub pgwire: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     pub https: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    pub kafka: Option<(ListenerHandle, Pin<Box<dyn ConnectionStream>>)>,
+    pub kafka_registry: Option<(ListenerHandle, Pin<Box<dyn ConnectionStream>>)>,
     pub internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     _metrics: BalancerMetrics,
     configs: ConfigSet,
@@ -204,6 +232,17 @@ impl BalancerService {
     pub async fn new(cfg: BalancerConfig) -> Result<Self, anyhow::Error> {
         let pgwire = listen(&cfg.pgwire_listen_addr)?;
         let https = listen(&cfg.https_listen_addr)?;
+        let kafka = cfg
+            .kafka
+            .as_ref()
+            .map(|kafka| listen(&kafka.listen_addr))
+            .transpose()?;
+        let kafka_registry = cfg
+            .kafka
+            .as_ref()
+            .and_then(|kafka| kafka.registry.as_ref())
+            .map(|registry| listen(&registry.listen_addr))
+            .transpose()?;
         let internal_http = listen(&cfg.internal_http_listen_addr)?;
         let metrics = BalancerMetrics::new(&cfg);
         let mut configs = ConfigSet::default();
@@ -301,6 +340,8 @@ impl BalancerService {
             cfg,
             pgwire,
             https,
+            kafka,
+            kafka_registry,
             internal_http,
             _metrics: metrics,
             configs,
@@ -321,6 +362,7 @@ impl BalancerService {
             }
             None => (None, None),
         };
+        let kafka_tls = https_tls.clone();
 
         // Built once and shared by every upstream connection, since building a connector loads
         // and parses the system CA bundle.
@@ -385,11 +427,11 @@ impl BalancerService {
             let port: u16 = port.parse().expect("unexpected port");
 
             let https = HttpsBalancer {
-                resolver: shared_dns,
+                resolver: Arc::clone(&shared_dns),
                 tls: https_tls,
                 resolve_template: Arc::from(addr),
                 port,
-                metrics: Arc::from(ServerMetrics::new(metrics, "https")),
+                metrics: Arc::from(ServerMetrics::new(metrics.clone(), "https")),
                 limiter: Arc::clone(&limiter),
                 configs: self.configs.clone(),
                 internal_tls,
@@ -409,6 +451,52 @@ impl BalancerService {
                     })
                     .await;
                     warn!("https server exited");
+                }
+            });
+        }
+        let kafka = self.cfg.kafka.as_ref();
+        let kafka_listeners = [
+            ("kafka", kafka.map(|k| &k.resolver_template), self.kafka),
+            (
+                "kafka_registry",
+                kafka
+                    .and_then(|k| k.registry.as_ref())
+                    .map(|r| &r.resolver_template),
+                self.kafka_registry,
+            ),
+        ];
+        for (name, resolver_template, listener) in kafka_listeners {
+            let (Some(resolver_template), Some((handle, stream))) = (resolver_template, listener)
+            else {
+                continue;
+            };
+            let Some((addr, port)) = resolver_template.rsplit_once(':') else {
+                panic!("expected port in {name} resolver template");
+            };
+            let port: u16 = port.parse().expect("unexpected port");
+            let kafka = KafkaBalancer {
+                resolver: Arc::clone(&shared_dns),
+                tls: kafka_tls.clone(),
+                resolve_template: Arc::from(addr),
+                port,
+                metrics: Arc::from(ServerMetrics::new(metrics.clone(), name)),
+                limiter: Arc::clone(&limiter),
+                configs: self.configs.clone(),
+            };
+            server_handles.push(handle);
+            set.spawn_named(|| format!("{name}_stream"), {
+                let config_set = self.configs.clone();
+                async move {
+                    mz_server_core::serve(ServeConfig {
+                        server: kafka,
+                        conns: stream,
+                        dyncfg: Some(ServeDyncfg {
+                            config_set,
+                            sigterm_wait_config: &SIGTERM_CONNECTION_WAIT,
+                        }),
+                    })
+                    .await;
+                    warn!("{name} server exited");
                 }
             });
         }
@@ -1801,30 +1889,8 @@ impl HttpsBalancer {
             .peer_addr()
             .context("fetching peer addr")
             .inspect_err(|_| fault.server())?;
-        let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) = match tls_context
-        {
-            Some(tls_context) => {
-                let mut ssl_stream = Ssl::new(&tls_context.get())
-                    .and_then(|ssl| SslStream::new(ssl, conn))
-                    .inspect_err(|_| fault.server())?;
-                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                    metrics.tls_handshake_failures().inc();
-                    let _ = ssl_stream.get_mut().shutdown().await;
-                    return Err(e.into());
-                }
-                let servername: Option<String> =
-                    ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                        match sn.split_once('.') {
-                            Some((left, _right)) => left,
-                            None => sn,
-                        }
-                        .into()
-                    });
-                debug!("Found sni servername: {servername:?} (https)");
-                (Box::new(ssl_stream), servername)
-            }
-            _ => (Box::new(conn), None),
-        };
+        let (client_stream, servername) = accept_tls(conn, tls_context, metrics, fault).await?;
+        debug!("Found sni servername: {servername:?} (https)");
         let resolved = fault
             .server_work(Self::resolve(
                 resolver,
@@ -1864,6 +1930,170 @@ impl HttpsBalancer {
             tenant,
         })
     }
+}
+
+/// Proxies Kafka connections to the Kafka listener of the cluster that the client's SNI hostname
+/// names.
+///
+/// The first label of the hostname is `<environment>-<cluster ID>`, which Kafka clients learn from
+/// the address a replica advertises. balancerd terminates TLS and proxies the Kafka protocol
+/// unencrypted. Clients authenticate to the replica, with SASL inside the TLS session.
+struct KafkaBalancer {
+    resolver: Arc<TenantDnsResolver>,
+    tls: Option<ReloadingSslContext>,
+    /// The backend address, with `{}` standing for the environment and `{cluster}` for the
+    /// cluster ID.
+    resolve_template: Arc<str>,
+    port: u16,
+    metrics: Arc<ServerMetrics>,
+    limiter: Arc<ConnectionLimiter>,
+    configs: ConfigSet,
+}
+
+impl KafkaBalancer {
+    async fn pre_resolve(
+        conn: Connection,
+        tls_context: Option<ReloadingSslContext>,
+        resolver: &TenantDnsResolver,
+        resolve_template: &str,
+        port: u16,
+        metrics: &ServerMetrics,
+        fault: &ConnectionFault,
+    ) -> Result<(Box<dyn ClientStream>, SocketAddr), anyhow::Error> {
+        let (client_stream, servername) = accept_tls(conn, tls_context, metrics, fault).await?;
+        debug!("Found sni servername: {servername:?} (kafka)");
+        let host = match servername {
+            Some(servername) => kafka_backend_host(resolve_template, &servername)
+                .filter(|host| Name::from_utf8(host).is_ok())
+                .ok_or(UnknownHost::Named(servername))?,
+            None if resolve_template.contains('{') => return Err(UnknownHost::NoSni.into()),
+            None => resolve_template.to_string(),
+        };
+        let (addr, _tenant) = fault
+            .server_work(resolver.resolve(&host, port, true))
+            .await
+            .inspect_err(|e| {
+                if !names_unknown_host(e) {
+                    fault.server();
+                }
+            })?;
+        Ok((client_stream, addr))
+    }
+}
+
+/// Returns the backend host for the first label of a Kafka client's SNI hostname, or `None` if
+/// the label names no cluster.
+///
+/// The label is `<environment>-<cluster ID>`, or just the cluster ID when `template` has no
+/// environment placeholder.
+fn kafka_backend_host(template: &str, servername: &str) -> Option<String> {
+    let (environment, cluster) = servername.rsplit_once('-').unwrap_or(("", servername));
+    // Only cluster IDs reach the hostname, so a client cannot steer the lookup elsewhere.
+    let is_cluster_id = matches!(cluster.as_bytes(), [b'u' | b's', digits @ ..]
+        if !digits.is_empty() && digits.iter().all(u8::is_ascii_digit));
+    if !is_cluster_id || (template.contains("{}") && environment.is_empty()) {
+        return None;
+    }
+    Some(
+        template
+            .replace("{cluster}", cluster)
+            .replace("{}", environment),
+    )
+}
+
+impl mz_server_core::Server for KafkaBalancer {
+    const NAME: &'static str = "kafka_balancer";
+
+    fn handle_connection(
+        &self,
+        conn: Connection,
+        _tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+    ) -> mz_server_core::ConnectionHandler {
+        let tls_context = self.tls.clone();
+        let resolver = Arc::clone(&self.resolver);
+        let resolve_template = Arc::clone(&self.resolve_template);
+        let port = self.port;
+        let metrics = Arc::clone(&self.metrics);
+        let limiter = Arc::clone(&self.limiter);
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
+        Box::pin(async move {
+            let accepted = Instant::now();
+            let fault = ConnectionFault::default();
+            let active_guard = metrics.active_connections();
+            let result: Result<(), anyhow::Error> = async {
+                let Some(_conn_guard) = limiter.acquire() else {
+                    fault.server();
+                    return Ok(());
+                };
+                let pre_resolved = metrics.pre_resolved_connections();
+                let (client_stream, addr) = under_pre_resolved_timeout(
+                    pre_resolved_timeout,
+                    &metrics,
+                    &fault,
+                    Self::pre_resolve(
+                        conn,
+                        tls_context,
+                        &resolver,
+                        &resolve_template,
+                        port,
+                        &metrics,
+                        &fault,
+                    ),
+                )
+                .await?;
+                drop(pre_resolved);
+                // A cluster without a replica that accepts Kafka connections has no backend.
+                // Kafka clients retry.
+                let mut mz_stream = connect_upstream(addr, &metrics)
+                    .await
+                    .inspect_err(|_| fault.server())?;
+                metrics
+                    .connection_setup_duration()
+                    .observe(accepted.elapsed().as_secs_f64());
+                let mut client_stream = client_stream;
+                // See the corresponding comment in the pgwire implementation about ignoring the
+                // error.
+                let _ = tokio::io::copy_bidirectional(&mut client_stream, &mut mz_stream).await;
+                metrics
+                    .connection_duration()
+                    .observe(accepted.elapsed().as_secs_f64());
+                Ok(())
+            }
+            .await;
+            drop(active_guard);
+            metrics.connection_status(fault.is_ok()).inc();
+            if let Err(e) = result {
+                debug!("kafka connection error: {e}");
+            }
+            Ok(())
+        })
+    }
+}
+
+/// Accepts TLS on `conn` if `tls_context` is set, and returns the stream and the first label of
+/// the client's SNI hostname.
+async fn accept_tls(
+    conn: Connection,
+    tls_context: Option<ReloadingSslContext>,
+    metrics: &ServerMetrics,
+    fault: &ConnectionFault,
+) -> Result<(Box<dyn ClientStream>, Option<String>), anyhow::Error> {
+    let Some(tls_context) = tls_context else {
+        return Ok((Box::new(conn), None));
+    };
+    let mut ssl_stream = Ssl::new(&tls_context.get())
+        .and_then(|ssl| SslStream::new(ssl, conn))
+        .inspect_err(|_| fault.server())?;
+    if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+        metrics.tls_handshake_failures().inc();
+        let _ = ssl_stream.get_mut().shutdown().await;
+        return Err(e.into());
+    }
+    let servername = ssl_stream
+        .ssl()
+        .servername(NameType::HOST_NAME)
+        .map(|sn| sn.split_once('.').map_or(sn, |(left, _right)| left).into());
+    Ok((Box::new(ssl_stream), servername))
 }
 
 /// Extracts the tenant ID from an environmentd CNAME target.
@@ -2440,6 +2670,27 @@ mod tests {
     use mz_dyncfg::ConfigUpdates;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn kafka_backend_host_names_clusters_only() {
+        let template = "cluster-{cluster}-kafka.environment-{}.svc.cluster.local";
+        assert_eq!(
+            kafka_backend_host(template, "7vifiksqeftxc6ld3r6zvc8n2-u7").as_deref(),
+            Some("cluster-u7-kafka.environment-7vifiksqeftxc6ld3r6zvc8n2.svc.cluster.local"),
+        );
+        assert_eq!(
+            kafka_backend_host(template, "abc-def-s12").as_deref(),
+            Some("cluster-s12-kafka.environment-abc-def.svc.cluster.local"),
+        );
+        for label in ["abc-x7", "abc-u", "abc-u7x", "abc-", "u7", "abc-U7"] {
+            assert_eq!(kafka_backend_host(template, label), None, "{label}");
+        }
+        // Without an environment placeholder, the label may be just the cluster ID.
+        assert_eq!(
+            kafka_backend_host("cluster-{cluster}-kafka", "u7").as_deref(),
+            Some("cluster-u7-kafka"),
+        );
+    }
 
     #[mz_ore::test]
     fn test_tenant() {

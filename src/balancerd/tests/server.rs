@@ -23,7 +23,7 @@ use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
-    FronteggResolver, SniTemplate, TenantDnsResolver,
+    FronteggResolver, KafkaConfig, KafkaRegistryConfig, SniTemplate, TenantDnsResolver,
 };
 use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
@@ -199,6 +199,7 @@ async fn test_balancer() {
             cancellation_resolver,
             resolver,
             envd_server.http_local_addr().to_string(),
+            None,
             cert_config.clone(),
             true,
             MetricsRegistry::new(),
@@ -545,6 +546,7 @@ async fn start_balancer_to(
         CancellationResolver::Static(unreachable.clone()),
         BalancerResolver::Static(unreachable.clone()),
         unreachable.clone(),
+        None,
         tls,
         false,
         MetricsRegistry::new(),
@@ -1064,4 +1066,93 @@ async fn test_startup_rejection_reaches_the_client() {
         "expected an ErrorResponse, got {read} bytes; a rejection that is not flushed reaches \
          the client as a bare close",
     );
+}
+
+/// A Kafka connection, and a schema registry connection, is proxied, after TLS, to the backend
+/// that its SNI names.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_kafka_connection_is_proxied() {
+    let upstream = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    task::spawn(|| "echo", async move {
+        loop {
+            let (mut conn, _) = upstream.accept().await.unwrap();
+            task::spawn(|| "echo_conn", async move {
+                let (mut read, mut write) = conn.split();
+                let _ = tokio::io::copy(&mut read, &mut write).await;
+            });
+        }
+    });
+
+    let ca = Ca::new_root("test ca").unwrap();
+    let (cert, key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let (_reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
+    let localhost = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    let unreachable = "127.0.0.1:1".to_string();
+    let balancer_cfg = BalancerConfig::new(
+        &BUILD_INFO,
+        localhost,
+        localhost,
+        localhost,
+        CancellationResolver::Static(unreachable.clone()),
+        BalancerResolver::Static(unreachable.clone()),
+        unreachable,
+        Some(KafkaConfig {
+            listen_addr: localhost,
+            resolver_template: upstream_addr.to_string(),
+            registry: Some(KafkaRegistryConfig {
+                listen_addr: localhost,
+                resolver_template: upstream_addr.to_string(),
+            }),
+        }),
+        Some(TlsCertConfig { cert, key }),
+        false,
+        MetricsRegistry::new(),
+        Box::pin(reload_rx),
+        None,
+        None,
+        Duration::ZERO,
+        None,
+        None,
+        None,
+        TracingHandle::disabled(),
+        vec![],
+    );
+    let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
+    let kafka_addr = balancer_server.kafka.as_ref().unwrap().0.local_addr();
+    let registry_addr = balancer_server
+        .kafka_registry
+        .as_ref()
+        .unwrap()
+        .0
+        .local_addr();
+    task::spawn(|| "balancer", async {
+        balancer_server.serve().await.unwrap();
+    });
+
+    for addr in [kafka_addr, registry_addr] {
+        let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+        connector.set_verify(SslVerifyMode::NONE);
+        let ssl = connector
+            .build()
+            .configure()
+            .unwrap()
+            .into_ssl("env-u7.kafka.test")
+            .unwrap();
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut stream = SslStream::new(ssl, tcp).unwrap();
+        Pin::new(&mut stream).connect().await.unwrap();
+        stream.write_all(b"ping").await.unwrap();
+        let mut reply = [0u8; 4];
+        tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut reply))
+            .await
+            .expect("the backend should echo through balancerd")
+            .unwrap();
+        assert_eq!(&reply, b"ping", "{addr}");
+    }
 }
