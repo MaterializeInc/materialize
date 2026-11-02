@@ -20,6 +20,13 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.49.0
+*Released to Materialize Cloud: 2026-11-05* <br>
+*Released to Materialize Self-Managed: 2026-11-06* <br>
+
+### Improvements {#v26.49-improvements}
+- **SQL Server tables key only on the capture instance's index**: A table created from a SQL Server source now records as its key only the `PRIMARY KEY` or `UNIQUE` constraint backing the index its CDC capture instance uses, which SQL Server does not allow dropping while that capture instance is the table's newest one. Other `UNIQUE` constraints are no longer recorded, so dropping one upstream can no longer cause queries in Materialize to return incorrect results. Tables created before this release keep the keys recorded when they were created. See [Table keys](/ingest-data/sql-server/#table-keys).
+
 ## v26.48.2
 *Released to Materialize Cloud: 2026-10-29 (v26.48.0)* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>

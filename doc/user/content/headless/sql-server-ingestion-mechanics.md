@@ -23,6 +23,23 @@ most recent `create_date`.
 
 If two capture instances for a table share the same timestamp (unlikely given the millisecond resolution), Materialize selects the `capture_instance` with the lexicographically larger name.
 
+### Table keys
+
+Materialize records at most one key for each table: the `PRIMARY KEY` or
+`UNIQUE` constraint backing the index that the table's capture instance uses,
+listed as `index_name` in
+[`sys.cdc_change_tables`](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql).
+This is the table's primary key, unless the capture instance was created with
+`@index_name` pointing at a `UNIQUE` constraint. Materialize does not record
+any other `PRIMARY KEY` or `UNIQUE` constraint on the table. A table whose
+capture instance has no index, because the table had no primary key when CDC
+was enabled and no `@index_name` was given, has no key in Materialize.
+
+SQL Server does not allow dropping the index that a table's newest capture
+instance uses. As long as Materialize ingests from that capture instance, the
+recorded key cannot be dropped upstream, so the key stays valid for the queries
+Materialize plans against it.
+
 ### Adding a table to an existing source
 
 {{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}

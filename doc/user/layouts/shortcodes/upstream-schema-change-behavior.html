@@ -79,12 +79,12 @@ constraint drop](/ingest-data/{{ $connector
 Materialize ignores foreign key and `CHECK` constraint changes. You can add or
 drop them without affecting ingestion.
 
-Adding a `UNIQUE` constraint does not affect ingestion. Dropping a `UNIQUE`
-constraint puts the affected table into an error state.
-
-SQL Server does not allow dropping a `PRIMARY KEY` from a table while change data
-capture is enabled on it. A primary key that existed when Materialize began
-ingesting the table therefore cannot be dropped upstream.
+Materialize records only the `PRIMARY KEY` or `UNIQUE` constraint backing the
+index that the table's capture instance uses. See [Table keys](#table-keys).
+Adding or dropping any other `PRIMARY KEY` or `UNIQUE` constraint does not
+affect ingestion. SQL Server does not allow dropping the capture instance's
+index while that capture instance is the table's newest one, so the recorded
+key cannot be dropped upstream.
 
 Adding or removing a `NOT NULL` constraint on an ingested column requires an
 upstream `ALTER COLUMN`, which puts the affected table into an error state. See
