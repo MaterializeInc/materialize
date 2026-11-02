@@ -463,7 +463,8 @@ def run_round(
             writer_session = _execute(
                 writer,
                 deadline,
-                "SELECT id::text FROM mz_internal.mz_sessions WHERE connection_id = pg_backend_pid()",
+                "SELECT id::text FROM mz_internal.mz_sessions"
+                f" WHERE connection_id = {sql.SESSION_CONNECTION_ID}",
             ).fetchone()
             if writer_session is None:
                 raise Incomplete("writer session identity unavailable")
@@ -555,7 +556,8 @@ def run_round(
             session_row = _execute(
                 reader,
                 deadline,
-                "SELECT id::text FROM mz_internal.mz_sessions WHERE connection_id = pg_backend_pid()",
+                "SELECT id::text FROM mz_internal.mz_sessions"
+                f" WHERE connection_id = {sql.SESSION_CONNECTION_ID}",
             ).fetchone()
             if session_row is None:
                 raise Incomplete("reader session identity unavailable")

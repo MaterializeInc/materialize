@@ -1,0 +1,34 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+import sqlite3
+
+import pytest
+
+pytest.importorskip("psycopg")
+
+from materialize.antithesis import sql
+
+
+@pytest.mark.parametrize("connection_id", [0, 2**31 - 1, 2**31, 2**32 - 1])
+def test_session_lookup_preserves_unsigned_connection_identity(connection_id):
+    pid = connection_id if connection_id < 2**31 else connection_id - 2**32
+    expression = sql.SESSION_CONNECTION_ID.replace("::bigint", "").replace(
+        "::uint4", ""
+    )
+    with sqlite3.connect(":memory:") as db:
+        db.create_function("pg_backend_pid", 0, lambda: pid)
+        db.execute("CREATE TABLE sessions(connection_id INTEGER, id TEXT)")
+        db.executemany(
+            "INSERT INTO sessions VALUES (?,?)",
+            [(connection_id, "original"), (connection_id ^ 2**31, "peer")],
+        )
+        assert db.execute(
+            f"SELECT id FROM sessions WHERE connection_id={expression}"
+        ).fetchall() == [("original",)]
