@@ -37,10 +37,9 @@ use crate::Timestamp;
 /// system which `self` connects to.
 ///
 /// # Panics
-/// - If `self` is a [`GenericSourceConnection::LoadGenerator`]. Load
-///   generator sources do not yet (or might never) support real-time
-///   recency. You can avoid this panic by choosing to not call this
-///   function on load generator sources.
+/// - If `self` is a [`GenericSourceConnection::LoadGenerator`] or a
+///   [`GenericSourceConnection::KafkaListener`]. Neither has an external
+///   system to determine recency against.
 pub(super) async fn real_time_recency_ts(
     connection: GenericSourceConnection,
     id: GlobalId,
@@ -107,7 +106,8 @@ pub(super) async fn real_time_recency_ts(
         }
         // Load generator sources have no "external system" to reach out to,
         // so it's unclear what RTR would mean for them.
-        s @ GenericSourceConnection::LoadGenerator(_) => unreachable!(
+        s @ (GenericSourceConnection::LoadGenerator(_)
+        | GenericSourceConnection::KafkaListener(_)) => unreachable!(
             "do not try to determine RTR timestamp on {} source",
             s.name()
         ),

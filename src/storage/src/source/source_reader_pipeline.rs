@@ -122,6 +122,11 @@ pub struct RawSourceCreationConfig {
     // A semaphore that should be acquired by async operators in order to signal that upstream
     // operators should slow down.
     pub busy_signal: Arc<Semaphore>,
+    /// The server through which Kafka producers write to Kafka listener sources, if this replica
+    /// accepts Kafka connections.
+    pub kafka_server: Option<mz_kafka_server::KafkaServer>,
+    /// The memory limit of the replica, if known.
+    pub cluster_memory_limit: Option<usize>,
 }
 
 /// Reduced version of [`RawSourceCreationConfig`] that is used when rendering
@@ -460,6 +465,8 @@ where
         config: _,
         remap_collection_id,
         busy_signal: _,
+        kafka_server: _,
+        cluster_memory_limit: _,
     } = config;
 
     let read_only_rx = storage_state.read_only_rx.clone();

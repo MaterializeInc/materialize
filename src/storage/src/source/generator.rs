@@ -237,6 +237,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             progress,
             config.timestamp_interval,
             config.now_fn.clone(),
+            false,
         );
 
         (updates, health, probe_stream, button)
@@ -497,11 +498,16 @@ fn render_simple_generator<'scope>(
 ///
 /// This is used as a fallback for sources that don't support probing the frontier of the upstream
 /// system.
-fn synthesize_probes<'scope, T: timely::progress::Timestamp>(
+///
+/// Unless `probe_minimum` is set, no probes are produced while the progress frontier is the minimum
+/// frontier, so that the first remap binding corresponds to the source's snapshot. Sources whose
+/// snapshot is legitimately empty must set it, or they stay unreadable until their first record.
+pub(crate) fn synthesize_probes<'scope, T: timely::progress::Timestamp>(
     source_id: GlobalId,
     progress: StreamVec<'scope, T, Infallible>,
     interval: Duration,
     now_fn: NowFn,
+    probe_minimum: bool,
 ) -> StreamVec<'scope, T, Probe<T>> {
     let scope = progress.scope();
 
@@ -534,7 +540,7 @@ fn synthesize_probes<'scope, T: timely::progress::Timestamp>(
                 // This makes it so the first remap binding corresponds to the snapshot of the
                 // source, and because the first binding always maps to the minimum *target*
                 // frontier we guarantee that the source will never appear empty.
-                probe_ts = ticker.tick(), if frontier != minimum_frontier => {
+                probe_ts = ticker.tick(), if probe_minimum || frontier != minimum_frontier => {
                     let probe = Probe {
                         probe_ts,
                         upstream_frontier: frontier.clone(),

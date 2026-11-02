@@ -34,6 +34,7 @@ pub mod types;
 
 pub mod generator;
 mod kafka;
+mod kafka_listener;
 mod mysql;
 mod postgres;
 mod sql_server;

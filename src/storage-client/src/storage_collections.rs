@@ -48,6 +48,7 @@ use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::sources::kafka_listener::kafka_listener_log_shard;
 use mz_storage_types::sources::{GenericSourceConnection, SourceData, SourceEnvelope, Timeline};
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -1309,6 +1310,21 @@ impl StorageCollectionsImpl {
     }
 }
 
+/// Returns the log shard of `id`, if it is a Kafka listener source.
+fn kafka_listener_log_of(
+    collections: &BTreeMap<GlobalId, CollectionState>,
+    id: GlobalId,
+) -> Option<ShardId> {
+    let collection = collections.get(&id)?;
+    if !collection.owns_kafka_listener_log {
+        return None;
+    }
+    let remap = collections.get(&collection.ingestion_remap_collection_id?)?;
+    Some(kafka_listener_log_shard(
+        remap.collection_metadata.data_shard,
+    ))
+}
+
 /// Partitions the finalization WAL by whether an active collection references
 /// each shard.
 fn partition_finalizable_shards(
@@ -1718,7 +1734,7 @@ impl StorageCollections for StorageCollectionsImpl {
         txn.insert_collection_metadata(ids_to_register)?;
 
         // Delete the metadata for any dropped collections.
-        let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
+        let dropped_mappings = txn.delete_collection_metadata(ids_to_drop.clone());
 
         // Only finalize the shards of dropped collections that don't have a primary.
         // Otherwise the shard might still be in use by the primary.
@@ -1731,6 +1747,13 @@ impl StorageCollections for StorageCollectionsImpl {
                     dropped_shards.insert(shard);
                 }
             }
+            // Recorded so that the log is finalized even if this process restarts before
+            // `drop_collections_unvalidated` enqueues it.
+            dropped_shards.extend(
+                ids_to_drop
+                    .iter()
+                    .filter_map(|id| kafka_listener_log_of(&collections, *id)),
+            );
         }
         let remaining_metadata = txn.get_collection_metadata();
         let (referenced_shards, dropped_shards) = partition_finalizable_shards(
@@ -2011,11 +2034,10 @@ impl StorageCollections for StorageCollectionsImpl {
                         Ingestion(ingestion) => {
                             use GenericSourceConnection::*;
                             match ingestion.desc.connection {
-                                // Kafka, Postgres, MySql, and SQL Server sources all
-                                // follow wall clock.
-                                Kafka(_) | Postgres(_) | MySql(_) | SqlServer(_) => {
-                                    Some(TimeDependence::default())
-                                }
+                                // Kafka, Kafka listener, Postgres, MySql, and SQL Server
+                                // sources all follow wall clock.
+                                Kafka(_) | KafkaListener(_) | Postgres(_) | MySql(_)
+                                | SqlServer(_) => Some(TimeDependence::default()),
                                 // Load generators not further specified.
                                 LoadGenerator(_) => None,
                             }
@@ -2048,6 +2070,11 @@ impl StorageCollections for StorageCollectionsImpl {
                 write_frontier.clone(),
                 storage_dependencies,
                 metadata.clone(),
+            );
+            collection_state.owns_kafka_listener_log = matches!(
+                &description.data_source,
+                DataSource::Ingestion(desc)
+                    if matches!(desc.desc.connection, GenericSourceConnection::KafkaListener(_))
             );
 
             // Install the collection state in the appropriate spot.
@@ -2321,6 +2348,21 @@ impl StorageCollections for StorageCollectionsImpl {
                          which an active collection still uses"
                     );
                     continue;
+                }
+            }
+
+            // A Kafka listener source's log is not a collection, so no since handle reaching
+            // `[]` enqueues it. Only the dropped source uses it, so it can go now.
+            if let Some(log_shard) = kafka_listener_log_of(&self_collections, id) {
+                let finalize_shards = self
+                    .config
+                    .lock()
+                    .expect("lock poisoned")
+                    .parameters
+                    .finalize_shards;
+                if finalize_shards {
+                    info!(%id, %log_shard, "enqueuing finalization of Kafka listener log");
+                    self.finalizable_shards.lock().insert(log_shard);
                 }
             }
 
@@ -2614,6 +2656,8 @@ struct CollectionState {
     time_dependence: Option<TimeDependence>,
     /// The ID of the source remap/progress collection, if this is an ingestion.
     ingestion_remap_collection_id: Option<GlobalId>,
+    /// Whether this is a Kafka listener source, whose log shard must be finalized with it.
+    owns_kafka_listener_log: bool,
 
     /// Accumulation of read capabilities for the collection.
     ///
@@ -2657,6 +2701,7 @@ impl CollectionState {
             primary,
             time_dependence,
             ingestion_remap_collection_id,
+            owns_kafka_listener_log: false,
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::NoPolicy {

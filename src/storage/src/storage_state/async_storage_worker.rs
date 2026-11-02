@@ -29,9 +29,10 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
-    LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
-    SourceConnection, SourceData, SourceEnvelope, SourceTimestamp, SqlServerSourceConnection,
+    GenericSourceConnection, IngestionDescription, KafkaListenerSourceConnection,
+    KafkaSourceConnection, LoadGeneratorSourceConnection, MySqlSourceConnection,
+    PostgresSourceConnection, SourceConnection, SourceData, SourceEnvelope, SourceTimestamp,
+    SqlServerSourceConnection,
 };
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
@@ -383,6 +384,18 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             GenericSourceConnection::LoadGenerator(_) => {
                                 let uppers =
                                     reclock_resume_uppers::<LoadGeneratorSourceConnection, _>(
+                                        &id,
+                                        &persist_clients,
+                                        &ingestion_description,
+                                        as_of.clone(),
+                                        &resume_uppers,
+                                    )
+                                    .await;
+                                to_vec_row(uppers)
+                            }
+                            GenericSourceConnection::KafkaListener(_) => {
+                                let uppers =
+                                    reclock_resume_uppers::<KafkaListenerSourceConnection, _>(
                                         &id,
                                         &persist_clients,
                                         &ingestion_description,
