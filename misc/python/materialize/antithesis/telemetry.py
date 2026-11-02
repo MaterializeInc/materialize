@@ -55,6 +55,8 @@ _FAMILIES = frozenset(
         "bounded_subscribe",
         "index_handover",
         "session_rebinding",
+        "copy_recovery",
+        "cancel_recovery",
         "upsert_recovery",
         "window_retractions",
         "counters",
