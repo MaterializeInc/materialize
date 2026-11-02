@@ -21,9 +21,11 @@ import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
     always_or_unreachable as always,
 )
+from psycopg.sql import Literal
 
 from materialize.antithesis import sql, telemetry
 from materialize.antithesis.observations import sometimes
+from materialize.antithesis.rng import rng
 
 FAMILY = "cancel_recovery"
 FUTURE = 2**64 - 2
@@ -128,6 +130,7 @@ def run(
     must be idle on entry, with `controller` and `observer` distinct from
     `worker`. An incomplete invocation must discard the worker connection.
     Input rows must be committed below `FUTURE` and remain unchanged throughout.
+    Successful invocations restore the worker and observer's replica targets.
     """
     if worker is controller or worker is observer:
         raise ValueError("cancellation requires a separate controller connection")
@@ -149,7 +152,34 @@ def run(
         raise Incomplete("original session identity unavailable")
     session, pid = identity
     pid = int(pid)
-    details = {"session": str(session), "pid": pid, "index_id": index_id}
+    replicas = execute(
+        observer,
+        deadline,
+        "SELECT r.name FROM mz_catalog.mz_cluster_replicas r"
+        " JOIN mz_catalog.mz_indexes i ON i.cluster_id=r.cluster_id"
+        " WHERE i.id=%s ORDER BY r.id",
+        (index_id,),
+    ).fetchall()
+    if not replicas:
+        raise Incomplete("cancellation index has no available replica")
+    replica = str(rng.choice(replicas)[0])
+    original_targets = []
+    for conn in (worker, observer):
+        target = execute(conn, deadline, "SHOW cluster_replica", None).fetchone()
+        if target is None:
+            raise Incomplete("original replica target unavailable")
+        original_targets.append((conn, target[0]))
+    # Replica-local introspection requires an explicit target when RF > 1.
+    # Pin the read too, so its observed lifetime belongs to that same replica.
+    for conn, _ in original_targets:
+        value = Literal(replica).as_string()
+        execute(conn, deadline, f"SET cluster_replica = {value}", None)
+    details = {
+        "session": str(session),
+        "pid": pid,
+        "index_id": index_id,
+        "replica": replica,
+    }
     execute(
         worker,
         deadline,
@@ -257,6 +287,9 @@ def run(
     else:
         raise Incomplete("cancelled peek retirement was not observed")
     execute(worker, deadline, "DEALLOCATE cancel_read", None)
+    for conn, target in original_targets:
+        value = "DEFAULT" if target is None else Literal(str(target)).as_string()
+        execute(conn, deadline, f"SET cluster_replica = {value}", None)
     details["peek_ids"] = sorted(peeks)
     sometimes(
         True,

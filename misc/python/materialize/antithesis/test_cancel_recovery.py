@@ -67,6 +67,11 @@ class Protocol:
         self.retirement_lag = 1
         self.retirement_id = "peek-uuid"
         self.controller_error = None
+        self.replicas = [("first_replica",), ("second_replica",)]
+        self.replica_targets = {}
+        self.require_replica = False
+        self.replica_error = None
+        self.missing_replica_target = False
         self.allow_read_exit = None
         self.worker.cancel_safe.side_effect = lambda **kwargs: self.cancel.set()
         self.worker.close.side_effect = self.close
@@ -81,6 +86,21 @@ class Protocol:
         if conn is self.worker and " AS OF " not in statement:
             assert not self.entered.is_set() or self.retired.is_set()
         self.statements.append((conn, statement, params, threading.get_ident()))
+        if statement.startswith("SELECT r.name FROM mz_catalog.mz_cluster_replicas"):
+            assert params == ("u100",)
+            return Mock(fetchall=lambda: self.replicas)
+        if statement == "SHOW cluster_replica":
+            if self.missing_replica_target and conn is self.observer:
+                return Mock(fetchone=lambda: None)
+            return Mock(fetchone=lambda: (self.replica_targets.get(conn),))
+        if statement.startswith("SET cluster_replica = "):
+            if self.replica_error is not None:
+                raise self.replica_error
+            value = statement.removeprefix("SET cluster_replica = ")
+            self.replica_targets[conn] = (
+                None if value == "DEFAULT" else value[1:-1].replace("''", "'")
+            )
+            return Mock()
         if " AS OF " in statement:
             self.entered.set()
             try:
@@ -102,6 +122,13 @@ class Protocol:
                 )
             )
         if statement.startswith("SELECT id::text FROM mz_introspection"):
+            if self.require_replica:
+                target = self.replica_targets.get(conn)
+                if target is None:
+                    raise psycopg.errors.FeatureNotSupported(
+                        "log source reads must target a replica"
+                    )
+                assert target == self.replica_targets.get(self.worker)
             rows = []
             if self.entered.is_set() and self.peek_visible:
                 if not self.retired.is_set() or self.retirement_lag:
@@ -135,6 +162,7 @@ def protocol(monkeypatch):
     monkeypatch.setattr(c, "sometimes", Mock())
     monkeypatch.setattr(c.telemetry, "comparison", Mock())
     monkeypatch.setattr(c, "POLL_SECONDS", 0.001)
+    monkeypatch.setattr(c.rng, "choice", lambda rows: rows[0])
     yield p
     p.cancel.set()
     if p.allow_read_exit is not None:
@@ -163,6 +191,7 @@ def test_cancelled_registered_peek_recovers_same_session_and_prepared_plan(proto
         "session": "original",
         "pid": 42,
         "index_id": "u100",
+        "replica": "first_replica",
         "peek_ids": ["peek-uuid"],
     }
     assert all(call.args[0] for call in c.always.call_args_list)
@@ -180,7 +209,7 @@ def test_cancelled_registered_peek_recovers_same_session_and_prepared_plan(proto
     assert all(
         row[3] == original_thread for row in protocol.statements if row is not future[0]
     )
-    assert [row[1] for row in protocol.statements][-1] == "DEALLOCATE cancel_read"
+    assert [row[1] for row in protocol.statements][-3] == "DEALLOCATE cancel_read"
 
 
 def test_negative_backend_pid_uses_unsigned_identity_and_signed_cancellation(protocol):
@@ -199,6 +228,52 @@ def test_negative_backend_pid_uses_unsigned_identity_and_signed_cancellation(pro
         if row[1].startswith("SELECT pg_cancel_backend")
     )
     assert cancellation[2] == (-7,)
+
+
+@pytest.mark.parametrize("original_observer", [None, "", "prior' replica"])
+def test_multireplica_cancellation_targets_one_replica_and_restores_both_sessions(
+    protocol,
+    original_observer,
+):
+    protocol.require_replica = True
+    protocol.replica_targets[protocol.worker] = "old_worker"
+    protocol.replica_targets[protocol.observer] = original_observer
+    details = run(protocol)
+    assert details["replica"] in {row[0] for row in protocol.replicas}
+    assert protocol.replica_targets[protocol.worker] == "old_worker"
+    assert protocol.replica_targets[protocol.observer] == original_observer
+    c.sometimes.assert_called()
+
+
+def test_no_replica_leaves_cancellation_uncredited_before_starting_a_read(protocol):
+    protocol.replicas = []
+    with pytest.raises(c.Incomplete, match="replica"):
+        run(protocol)
+    assert not protocol.entered.is_set()
+    c.sometimes.assert_not_called()
+
+
+def test_missing_replica_target_leaves_sessions_unmodified_and_uncredited(protocol):
+    protocol.missing_replica_target = True
+    with pytest.raises(c.Incomplete, match="replica target"):
+        run(protocol)
+    assert not protocol.entered.is_set()
+    assert not protocol.replica_targets
+    c.sometimes.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error", [psycopg.errors.UndefinedObject, psycopg.errors.InternalError_]
+)
+def test_replica_selection_errors_propagate_without_cancellation_credit(
+    protocol, error
+):
+    protocol.replica_error = error("replica selection failed")
+    with pytest.raises(error, match="replica selection failed"):
+        run(protocol)
+    assert not protocol.entered.is_set()
+    c.always.assert_not_called()
+    c.sometimes.assert_not_called()
 
 
 @pytest.mark.parametrize("early", [False, True])
