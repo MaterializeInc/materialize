@@ -28,21 +28,21 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 <red>*Materialize Cloud only*</red>
 
-Upsert sources that spill to disk now hydrate faster, with significantly lower lower heap (memory + disk) usage.
+Upsert sources that spill to disk now hydrate faster, with significantly lower heap (memory + disk) usage.
 
 ![Hydration time and peak memory plus disk usage for an upsert source, old versus new: hydration time drops from 206.1 minutes to 107.9–113.3 minutes, and peak memory plus disk usage drops from 542 GiB to 183–208 GiB](/images/releases/v2648_upsert_hydration.png)
 
 Materialize now uses its own buffer pool to keep hot data in memory and serve sequential work from disk. Previously, this was left to the operating system's swap. In addition, we now apply LZ4 compression to in-progress data while building an upsert source. See our [blog post](https://materialize.com/blog/materialize-out-of-core/) for details on how it works.
 
-We ran our performance tests on Materialize Cloud. We setup a Kafka topic, with a single partition, of about 1.5B messages (roughly 100 GB), holding 956M distinct keys, with records around 100 bytes. We ingested this data into Materialize, using a Kafka Upsert source, on an M.1-1.5xlarge cluster. This cluster size has 98 GB of memory, and 586 GB of Disk. We measured hydration times as how long it took from `CREATE SOURCE` until every key is indexed, and the source is keeping up with the topic. We ran the test four times, and observed that hydration times dropped from 206 minutes to between 108 and 113 minutes. Peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
+We ran our performance tests on Materialize Cloud. We set up a Kafka topic, with a single partition, of about 1.5B messages (roughly 100 GB), holding 956M distinct keys, with records around 100 bytes. We ingested this data into Materialize, using a Kafka Upsert source, on an M.1-1.5xlarge cluster. This cluster size has 98 GB of memory and 586 GB of disk. We measured hydration times as how long it took from `CREATE SOURCE` until every key was indexed and the source was keeping up with the topic. We ran the test four times and observed that hydration times dropped from 206 minutes to between 108 and 113 minutes. Peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
 
-In real world usage, we observed that hydration times improved by 49%-88%. Real world memory usage improved by 13-64%.
+In real-world usage, we observed that hydration times improved by 49-88%. Real-world memory usage improved by 13-64%.
 
 Note that the improved hydration times are most impactful for workloads that spill heavily to disk. Workloads that are fully resident in memory won't see a speedup.
 
 This change has been rolled out to all Materialize Cloud environments and applies to all existing and new clusters. It will be enabled by default in Materialize Self-Managed in the coming weeks.
 
-### Track environment wide Freshness, using the new Freshness page in the Console {#v26.48-freshness-page}
+### Track environment-wide freshness using the new Freshness page in the Console {#v26.48-freshness-page}
 
 <red>*Materialize Cloud only*</red>
 
@@ -101,7 +101,7 @@ For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/mysql/)
 
 ### Turn cast errors into `NULL`s with `TRY_CAST` {#v26.47-try-cast}
 
-`TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type. It produces `NULL` instead of an error when the value cannot be converted. This means that bad values in an ingest pipeline don't cause errors which block reads.
+`TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type. It produces `NULL` instead of an error when the value cannot be converted. This means that bad values in an ingest pipeline don't cause errors that block reads.
 
 ```mzsql
 CREATE TABLE raw_orders (id int, amount text);
