@@ -295,7 +295,13 @@ const AlterClusterForm = ({
             </InlineLabeledInput>
           </FormControl>
           <FormControl isInvalid={!!formState.errors.size}>
-            <InlineLabeledInput label="Size">
+            <InlineLabeledInput
+              label="Size"
+              message={
+                opened.autoScaling?.resizeTargetSize &&
+                `Resizing to ${opened.autoScaling.resizeTargetSize}.`
+              }
+            >
               <SimpleSelect
                 {...register("size", { deps: ["hydrationSize"] })}
                 width="100%"
@@ -458,7 +464,7 @@ const AlterClusterForm = ({
           )}
           <VStack alignItems="stretch" spacing="2" width="100%">
             <Divider />
-            <Text textStyle="heading-xs">Equivalent code</Text>
+            <Text textStyle="heading-xs">Equivalent Code</Text>
             {equivalentSql === "" ? (
               <Text textStyle="text-small" color={colors.foreground.secondary}>
                 No changes to apply.

@@ -189,4 +189,32 @@ describe("alter cluster statements", () => {
     await expectResize(`in-progress ${SMALL}`);
     await expectResize(`finalized ${LARGE}`, 40);
   });
+
+  it("retargets an in-flight resize and takes its old target as the burst size in one statement", async () => {
+    await testdrive(`
+      $ postgres-execute connection=postgres://mz_system@\${testdrive.materialize-internal-sql-addr}/materialize
+      ALTER SYSTEM SET enable_auto_scaling_strategy = true
+      ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+
+      > CREATE CLUSTER retargeting (SIZE '${SMALL}');
+      > CREATE TABLE retargeting_t (id int);
+      > INSERT INTO retargeting_t VALUES (1);
+      > CREATE MATERIALIZED VIEW retargeting_slow IN CLUSTER retargeting AS
+        SELECT mz_unsafe.mz_sleep(id * 15) AS s FROM retargeting_t;
+      > ALTER CLUSTER retargeting SET (SIZE '${LARGE}');
+    `);
+    expect(await resizeTargetOf("retargeting")).toBe(LARGE);
+
+    // Why the form accepts the old target as the burst once Size changes.
+    await alter({
+      clusterName: "retargeting",
+      size: BURST,
+      autoScalingPolicy: { hydrationSize: LARGE, lingerMs: undefined },
+    });
+    expect(await resizeTargetOf("retargeting")).toBe(BURST);
+    expect(await policyOf("retargeting")).toEqual({
+      hydrationSize: LARGE,
+      lingerMs: undefined,
+    });
+  });
 });

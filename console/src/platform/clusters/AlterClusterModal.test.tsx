@@ -341,6 +341,7 @@ describe("ClusterOverview", () => {
     ).toBeChecked();
     expect(screen.getByLabelText("Burst size")).toHaveDisplayValue("800cc");
     expect(screen.getByLabelText("Linger duration")).toHaveDisplayValue("2m");
+    expect(screen.queryByText(/Resizing to/)).not.toBeInTheDocument();
     expect(autoScalingReads()).toBe(1);
   });
 
@@ -633,6 +634,11 @@ describe("ClusterOverview", () => {
     expect(sent).toEqual([]);
   });
 
+  it("notes the size an in-progress resize is heading to", async () => {
+    await renderWithAutoScaling({ resizeTargetSize: "800cc" });
+    expect(await screen.findByText("Resizing to 800cc.")).toBeVisible();
+  });
+
   it("starts the burst past an in-progress resize's target, and rejects the target", async () => {
     const user = userEvent.setup();
     const { sent } = await renderWithAutoScaling({ resizeTargetSize: "800cc" });
@@ -691,7 +697,7 @@ describe("ClusterOverview", () => {
     });
 
     expect(await screen.findByLabelText("Replicas")).toBeInTheDocument();
-    expect(screen.getByText("Equivalent code")).toBeInTheDocument();
+    expect(screen.getByText("Equivalent Code")).toBeInTheDocument();
     expect(
       screen.queryByRole("checkbox", { name: "Enable auto-scaling" }),
     ).not.toBeInTheDocument();
