@@ -296,6 +296,88 @@ def exempt_names(db: sqlite3.Connection) -> set[str]:
     return {r[0] for r in db.execute("SELECT object_name FROM expected_unhealthy")}
 
 
+@dataclass(frozen=True)
+class _HydrationContributor:
+    object_id: str | None
+    name: str | None
+    is_export: bool
+    statistic_id: str | None
+    statistic_replica: str | None
+    hydrated: bool
+
+
+def _terminal_children_explain_hydration(
+    parent_id: str,
+    replica_id: str,
+    contributors: list[_HydrationContributor],
+    exempt: set[str],
+) -> bool:
+    explained = False
+    parent_seen = False
+    exports = 0
+    seen = set()
+    for c in contributors:
+        if c.object_id is None or c.object_id in seen or not c.name:
+            return False
+        seen.add(c.object_id)
+        if c.statistic_id is not None and (
+            c.statistic_id != c.object_id or c.statistic_replica != replica_id
+        ):
+            return False
+        if c.statistic_id is None and c.statistic_replica is not None:
+            return False
+        if not c.is_export:
+            if c.object_id != parent_id or (
+                c.statistic_id is not None and not c.hydrated
+            ):
+                return False
+            parent_seen = True
+            continue
+        if c.object_id == parent_id:
+            return False
+        exports += 1
+        if c.name in exempt:
+            explained |= c.statistic_id is not None and not c.hydrated
+        elif c.statistic_id is None or not c.hydrated:
+            return False
+    return parent_seen and exports > 0 and explained
+
+
+# Keep the contribution paths aligned with mz_source_statistics_with_history.
+_HYDRATION_SAMPLE_SQL = """
+WITH pending AS (
+    SELECT o.id, o.name, o.type, h.replica_id, r.name AS replica_name
+    FROM mz_internal.mz_hydration_statuses h
+    JOIN mz_objects o ON o.id = h.object_id
+    JOIN mz_cluster_replicas r ON r.id = h.replica_id
+    WHERE NOT h.hydrated AND h.object_id LIKE 'u%'
+), exports AS (
+    SELECT source_id AS parent_id, id, name
+    FROM mz_tables WHERE source_id IS NOT NULL
+    UNION
+    SELECT parent.id, sub.id, sub.name
+    FROM mz_sources sub
+    JOIN mz_internal.mz_object_dependencies d ON d.object_id = sub.id
+    JOIN mz_sources parent ON parent.id = d.referenced_object_id
+    WHERE sub.type = 'subsource'
+), contributors AS (
+    SELECT p.id AS parent_id, p.id, p.name, false AS is_export
+    FROM pending p WHERE p.type = 'source'
+    UNION
+    SELECT e.parent_id, e.id, e.name, true
+    FROM exports e JOIN pending p ON p.id = e.parent_id
+    WHERE p.type = 'source'
+)
+SELECT p.id, p.name, p.replica_id, p.replica_name, p.type,
+       c.id, c.name, c.is_export,
+       s.id, s.replica_id, s.rehydration_latency IS NOT NULL
+FROM pending p
+LEFT JOIN contributors c ON c.parent_id = p.id
+LEFT JOIN mz_internal.mz_source_statistics_raw s
+    ON s.id = c.id AND s.replica_id = p.replica_id
+"""
+
+
 def mark_expected_unhealthy(names: list[str], reason: str) -> None:
     """Record objects a driver broke on purpose, see `expected_unhealthy`."""
     if not names:
@@ -1299,17 +1381,25 @@ class Recovery:
         return not offline, {"offline": [list(map(str, r)) for r in offline]}
 
     def hydrated(self) -> tuple[bool, Any]:
-        pending = rows(
-            self.host,
-            "SELECT o.id, o.name, r.name FROM mz_internal.mz_hydration_statuses h"
-            " JOIN mz_objects o ON o.id = h.object_id"
-            " JOIN mz_cluster_replicas r ON r.id = h.replica_id"
-            " WHERE NOT h.hydrated AND h.object_id LIKE 'u%'",
-        )
-        blocked = self.blocked_ids() if pending else set()
-        pending = [
-            p for p in pending if p[1] not in self.exempt and p[0] not in blocked
-        ]
+        # Parent statistics aggregate every export to NULL if any contributor
+        # is not hydrated. Read the live mapping and raw contributors with the
+        # pending status in one snapshot, so a new export cannot escape proof.
+        sample = rows(self.host, _HYDRATION_SAMPLE_SQL)
+        blocked = self.blocked_ids() if sample else set()
+        groups: dict[tuple[str, str, str, str, str], list[_HydrationContributor]] = {}
+        for id_, name, replica, replica_name, typ, *contributor in sample:
+            groups.setdefault((id_, name, replica, replica_name, typ), []).append(
+                _HydrationContributor(*contributor)
+            )
+        pending = []
+        for (id_, name, replica, replica_name, typ), contributors in groups.items():
+            if name in self.exempt or id_ in blocked:
+                continue
+            if typ == "source" and _terminal_children_explain_hydration(
+                id_, replica, contributors, self.exempt
+            ):
+                continue
+            pending.append((id_, name, replica_name))
         return not pending, {"not_hydrated": [list(map(str, p)) for p in pending]}
 
     def reconfigurations_settled(self) -> tuple[bool, Any]:
