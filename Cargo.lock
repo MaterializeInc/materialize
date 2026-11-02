@@ -8589,7 +8589,6 @@ name = "mz-service"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-stream",
  "async-trait",
  "bincode",
  "futures",
@@ -8604,7 +8603,6 @@ dependencies = [
  "serde",
  "sysinfo",
  "tokio",
- "tokio-stream",
  "tracing",
  "tracing-subscriber",
  "turmoil",

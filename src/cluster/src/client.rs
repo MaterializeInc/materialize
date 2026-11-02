@@ -12,12 +12,12 @@
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::task::{Context, Poll};
 use std::thread::Thread;
 
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
-use futures::future;
 use mz_cluster_client::client::{TimelyConfig, TryIntoProtocolNonce};
 use mz_ore::metric;
 use mz_ore::metrics::{ComputedUIntGauge, MetricsRegistry};
@@ -172,14 +172,10 @@ where
         }
     }
 
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe, see [`ClusterClient::recv`].
-    async fn recv(&mut self) -> Result<Option<Resp>, Error> {
-        if let Some(client) = self.inner.as_mut() {
-            client.recv().await
-        } else {
-            future::pending().await
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<Resp>, Error>> {
+        match self.inner.as_mut() {
+            Some(client) => client.poll_recv(cx),
+            None => Poll::Pending,
         }
     }
 }
@@ -252,17 +248,10 @@ where
         }
     }
 
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> Result<Option<C::Response>, Error> {
-        if let Some(client) = self.inner.as_mut() {
-            // `Partitioned::recv` is documented as cancel safe.
-            client.recv().await
-        } else {
-            future::pending().await
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<C::Response>, Error>> {
+        match self.inner.as_mut() {
+            Some(client) => client.poll_recv(cx),
+            None => Poll::Pending,
         }
     }
 }

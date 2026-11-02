@@ -13,12 +13,10 @@
 //! among several worker threads or processes.
 
 use std::fmt;
-use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use futures::stream::{Stream, StreamExt};
 use itertools::Itertools;
-use tokio_stream::StreamMap;
 use tracing::trace;
 
 /// A generic client to a server that receives commands and asynchronously
@@ -47,37 +45,16 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     /// is dropped.
     ///
     /// [cancellation safe]: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error>;
-
-    /// Returns an adapter that treats the client as a stream.
-    ///
-    /// The stream produces the responses that would be produced by repeated
-    /// calls to `recv`.
-    ///
-    /// # Cancel safety
-    ///
-    /// The returned stream is cancel safe. If `stream.next()` is used as the event in a
-    /// [`tokio::select!`] statement and some other branch completes first, it is guaranteed that
-    /// no messages were received by this client.
-    fn as_stream<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Stream<Item = Result<R, anyhow::Error>> + Send + 'a>>
-    where
-        R: Send + 'a,
-    {
-        Box::pin(async_stream::stream!({
-            loop {
-                // `GenericClient::recv` is required to be cancel safe.
-                match self.recv().await {
-                    Ok(Some(response)) => yield Ok(response),
-                    Err(error) => yield Err(error),
-                    Ok(None) => {
-                        return;
-                    }
-                }
-            }
-        }))
+    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
+        std::future::poll_fn(|cx| self.poll_recv(cx)).await
     }
+
+    /// Polls for the next response from the dataflow server.
+    ///
+    /// Returns `Poll::Pending` and schedules `cx` for a wakeup if no response
+    /// is available. Ready values have the same meaning as for
+    /// [`GenericClient::recv`].
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<R>, anyhow::Error>>;
 }
 
 #[async_trait]
@@ -89,14 +66,8 @@ where
         (**self).send(cmd).await
     }
 
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        // `GenericClient::recv` is required to be cancel safe.
-        (**self).recv().await
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<R>, anyhow::Error>> {
+        (**self).poll_recv(cx)
     }
 }
 
@@ -115,6 +86,8 @@ where
     pub parts: Vec<P>,
     /// The partitioned state.
     state: <(C, R) as Partitionable<C, R>>::PartitionedState,
+    /// The part that `poll_recv` polls first.
+    next_part: usize,
 }
 
 impl<P, C, R> Partitioned<P, C, R>
@@ -126,6 +99,7 @@ where
         Self {
             state: <(C, R) as Partitionable<C, R>>::new(parts.len()),
             parts,
+            next_part: 0,
         }
     }
 }
@@ -150,38 +124,40 @@ where
         Ok(())
     }
 
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        let mut stream: StreamMap<_, _> = self
-            .parts
-            .iter_mut()
-            .map(|shard| shard.as_stream())
-            .enumerate()
-            .collect();
-
-        // `stream` is a cancel safe stream: It only awaits streams created with
-        // `GenericClient::as_stream`, which is documented to produce cancel safe streams.
-        // Thus no messages are lost if `stream` is dropped while awaiting its next element.
-        while let Some((index, response)) = stream.next().await {
-            match response {
-                Err(e) => {
-                    return Err(e);
-                }
-                Ok(response) => {
-                    trace!(shard = ?index, response = ?response, "received response");
-                    if let Some(response) = self.state.absorb_response(index, response) {
-                        trace!(response = ?response, "returning response");
-                        return response.map(Some);
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<R>, anyhow::Error>> {
+        let parts = self.parts.len();
+        loop {
+            let mut received = false;
+            let mut all_done = true;
+            // Start each pass after the part polled last, so that a part with a steady supply of
+            // responses cannot starve the others.
+            for _ in 0..parts {
+                let index = self.next_part;
+                self.next_part = (index + 1) % parts;
+                match self.parts[index].poll_recv(cx) {
+                    Poll::Pending => all_done = false,
+                    Poll::Ready(Ok(None)) => {}
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                    Poll::Ready(Ok(Some(response))) => {
+                        received = true;
+                        all_done = false;
+                        trace!(shard = ?index, response = ?response, "received response");
+                        if let Some(response) = self.state.absorb_response(index, response) {
+                            trace!(response = ?response, "returning response");
+                            return Poll::Ready(response.map(Some));
+                        }
                     }
                 }
             }
+            if all_done {
+                // Indicate completion of the communication.
+                return Poll::Ready(Ok(None));
+            }
+            if !received {
+                // Every part that is not done returned `Pending` and registered `cx`.
+                return Poll::Pending;
+            }
         }
-        // Indicate completion of the communication.
-        Ok(None)
     }
 }
 
@@ -207,4 +183,134 @@ pub trait PartitionedState<C, R>: fmt::Debug + Send {
     /// amalgamated response.
     fn absorb_response(&mut self, shard_id: usize, response: R)
     -> Option<Result<R, anyhow::Error>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use anyhow::anyhow;
+    use futures::task::noop_waker;
+
+    use super::*;
+
+    /// A part that yields scripted responses, then `Ok(None)` if `done`, else `Pending`.
+    #[derive(Debug)]
+    struct ScriptedPart {
+        responses: VecDeque<Result<i32, String>>,
+        done: bool,
+    }
+
+    impl ScriptedPart {
+        fn new(responses: impl IntoIterator<Item = Result<i32, String>>, done: bool) -> Self {
+            Self {
+                responses: responses.into_iter().collect(),
+                done,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl GenericClient<(), i32> for ScriptedPart {
+        async fn send(&mut self, _cmd: ()) -> Result<(), anyhow::Error> {
+            Ok(())
+        }
+
+        fn poll_recv(&mut self, _cx: &mut Context<'_>) -> Poll<Result<Option<i32>, anyhow::Error>> {
+            match self.responses.pop_front() {
+                Some(Ok(response)) => Poll::Ready(Ok(Some(response))),
+                Some(Err(error)) => Poll::Ready(Err(anyhow!(error))),
+                None if self.done => Poll::Ready(Ok(None)),
+                None => Poll::Pending,
+            }
+        }
+    }
+
+    /// Passes through responses, except that it swallows negative ones.
+    #[derive(Debug)]
+    pub struct PassthroughState;
+
+    impl PartitionedState<(), i32> for PassthroughState {
+        fn split_command(&mut self, _command: ()) -> Vec<Option<()>> {
+            unimplemented!()
+        }
+
+        fn absorb_response(
+            &mut self,
+            _shard_id: usize,
+            response: i32,
+        ) -> Option<Result<i32, anyhow::Error>> {
+            (response >= 0).then_some(Ok(response))
+        }
+    }
+
+    impl Partitionable<(), i32> for ((), i32) {
+        type PartitionedState = PassthroughState;
+
+        fn new(_parts: usize) -> PassthroughState {
+            PassthroughState
+        }
+    }
+
+    fn poll(client: &mut Partitioned<ScriptedPart, (), i32>) -> Poll<Result<Option<i32>, String>> {
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        client.poll_recv(&mut cx).map_err(|error| error.to_string())
+    }
+
+    #[mz_ore::test]
+    fn partitioned_poll_recv_round_robins_parts() {
+        let mut client = Partitioned::new(vec![
+            ScriptedPart::new([Ok(0), Ok(2), Ok(4)], false),
+            ScriptedPart::new([Ok(1), Ok(3)], false),
+        ]);
+        let received: Vec<_> = std::iter::from_fn(|| match poll(&mut client) {
+            Poll::Ready(response) => Some(response),
+            Poll::Pending => None,
+        })
+        .collect();
+        assert_eq!(
+            received,
+            vec![
+                Ok(Some(0)),
+                Ok(Some(1)),
+                Ok(Some(2)),
+                Ok(Some(3)),
+                Ok(Some(4))
+            ]
+        );
+    }
+
+    #[mz_ore::test]
+    fn partitioned_poll_recv_keeps_polling_after_absorbed_responses() {
+        let mut client = Partitioned::new(vec![
+            ScriptedPart::new([Ok(-1), Ok(-2)], false),
+            ScriptedPart::new([Ok(-3), Ok(7)], false),
+        ]);
+        assert_eq!(poll(&mut client), Poll::Ready(Ok(Some(7))));
+        assert_eq!(poll(&mut client), Poll::Pending);
+    }
+
+    #[mz_ore::test]
+    fn partitioned_poll_recv_completes_when_all_parts_complete() {
+        let mut client = Partitioned::new(vec![
+            ScriptedPart::new([], true),
+            ScriptedPart::new([Ok(5)], false),
+        ]);
+        assert_eq!(poll(&mut client), Poll::Ready(Ok(Some(5))));
+        assert_eq!(poll(&mut client), Poll::Pending, "one part still open");
+        client.parts[1].done = true;
+        assert_eq!(poll(&mut client), Poll::Ready(Ok(None)));
+        let mut empty = Partitioned::<ScriptedPart, (), i32>::new(vec![]);
+        assert_eq!(poll(&mut empty), Poll::Ready(Ok(None)));
+    }
+
+    #[mz_ore::test]
+    fn partitioned_poll_recv_returns_part_errors() {
+        let mut client = Partitioned::new(vec![
+            ScriptedPart::new([], false),
+            ScriptedPart::new([Err("boom".into())], false),
+        ]);
+        assert_eq!(poll(&mut client), Poll::Ready(Err("boom".into())));
+    }
 }

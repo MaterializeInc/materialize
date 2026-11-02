@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::iter;
+use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use differential_dataflow::difference::Monoid;
@@ -50,14 +51,11 @@ impl GenericClient<StorageCommand, StorageResponse> for Box<dyn StorageClient> {
         (**self).send(cmd).await
     }
 
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> Result<Option<StorageResponse>, anyhow::Error> {
-        // `GenericClient::recv` is required to be cancel safe.
-        (**self).recv().await
+    fn poll_recv(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Option<StorageResponse>, anyhow::Error>> {
+        (**self).poll_recv(cx)
     }
 }
 
