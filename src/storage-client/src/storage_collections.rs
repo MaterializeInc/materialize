@@ -891,6 +891,7 @@ impl StorageCollectionsImpl {
             | DataSource::Webhook
             | DataSource::Table
             | DataSource::Progress
+            | DataSource::Catalog
             | DataSource::Other => (),
             DataSource::IngestionExport {
                 ingestion_id,
@@ -1875,6 +1876,7 @@ impl StorageCollections for StorageCollectionsImpl {
                         | DataSource::Webhook
                         | DataSource::Ingestion(_)
                         | DataSource::Progress
+                        | DataSource::Catalog
                         | DataSource::Other => {}
                         DataSource::Sink { .. } => {}
                         DataSource::Table => {
@@ -2042,7 +2044,7 @@ impl StorageCollections for StorageCollectionsImpl {
                             Some(TimeDependence::default())
                         }
                         // Materialized views, etc, aren't managed by storage.
-                        Other => None,
+                        Catalog | Other => None,
                         Sink { .. } => None,
                     }
                 }
@@ -2102,7 +2104,7 @@ impl StorageCollections for StorageCollectionsImpl {
                     }
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Progress | DataSource::Other => {
+                DataSource::Progress | DataSource::Catalog | DataSource::Other => {
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Ingestion(_) => {
@@ -2678,9 +2680,9 @@ fn freshness_tree_for(id: GlobalId, description: &CollectionDescription) -> Opti
     let leaf = match &description.data_source {
         Ingestion(_) => FreshnessLeaf::Ingestion(id),
         IngestionExport { ingestion_id, .. } => FreshnessLeaf::Ingestion(*ingestion_id),
-        // Tables, webhooks, and storage-managed collections tick once per second at an
-        // unknown phase.
-        Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
+        // Tables, webhooks, storage-managed collections, and the catalog collection, which
+        // group commit advances with the tables, tick once per second at an unknown phase.
+        Introspection(_) | Progress | Table { .. } | Webhook { .. } | Catalog => {
             FreshnessLeaf::Fixed(Ticker::Unaligned { interval_ms: 1000 })
         }
         // Materialized views, etc, aren't managed by storage.
@@ -3420,6 +3422,21 @@ mod tests {
 
         assert_eq!(referenced_shards, BTreeSet::from([active_shard]));
         assert_eq!(finalizable_shards, BTreeSet::from([dropped_shard]));
+    }
+
+    #[mz_ore::test]
+    fn freshness_tree_of_catalog_collection_ticks_like_tables() {
+        let catalog = CollectionDescription {
+            data_source: DataSource::Catalog,
+            timeline: Some(Timeline::EpochMilliseconds),
+            ..CollectionDescription::for_other(RelationDesc::empty(), None)
+        };
+        assert_eq!(
+            freshness_tree_for(GlobalId::System(1), &catalog),
+            Some(FreshnessTree::Leaf(FreshnessLeaf::Fixed(
+                Ticker::Unaligned { interval_ms: 1000 }
+            ))),
+        );
     }
 
     #[mz_ore::test]
