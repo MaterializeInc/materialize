@@ -34,13 +34,12 @@ import {
   VisuallyHiddenInput,
   VStack,
 } from "@chakra-ui/react";
-import { useMutation } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 import React from "react";
 import { useForm, UseFormRegisterReturn } from "react-hook-form";
 
+import { SupportTicket } from "~/api/cloudGlobalApi";
 import { Alert } from "~/components/Alert";
-import SimpleSelect from "~/components/SimpleSelect";
 import { HELP_CENTER_TICKETS_URL, SUPPORT_EMAIL } from "~/externalUrls";
 import { useHideIntercomLauncher } from "~/hooks/useIntercom";
 import { CheckmarkIcon, ChevronLeftIcon } from "~/icons";
@@ -50,14 +49,12 @@ import {
 } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
-import { submitTicket, SubmitTicketResult } from "./submitTicket";
+import { useCreateSupportTicket } from "./queries";
 import {
-  buildTicketPayload,
+  buildCreateTicketRequest,
   ENVIRONMENT_OPTIONS,
-  PLATFORM_OPTIONS,
   SEVERITY_OPTIONS,
   TicketFormValues,
-  TicketPlatform,
   TicketSeverity,
 } from "./ticketForm";
 
@@ -66,7 +63,15 @@ const EXTERNAL_LINK_PROPS = {
   rel: "noopener noreferrer",
 } as const;
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/**
+ * Where urgent tickets go: the Messenger's outage workflow when Intercom is
+ * running, otherwise an email to support.
+ */
+export type OutageLink = {
+  href: string;
+  onClick: (event: React.MouseEvent<HTMLElement>) => void;
+  isChat: boolean;
+};
 
 /** Context the console knows, attached so the customer doesn't retype it. */
 const useTicketContext = () => {
@@ -177,23 +182,21 @@ type TicketDetails = { label: string; value: React.ReactNode }[];
 const NewTicketForm = ({
   organizationId,
   organizationName,
-  isAnonymous,
   defaultSeverity,
-  defaultPlatform,
+  outageLink,
   onSubmitted,
   onClose,
 }: {
   organizationId?: string;
   organizationName?: string;
-  isAnonymous: boolean;
   defaultSeverity: TicketSeverity;
-  defaultPlatform: TicketPlatform;
-  onSubmitted: (result: SubmitTicketResult, values: TicketFormValues) => void;
+  outageLink: OutageLink;
+  onSubmitted: (ticket: SupportTicket, values: TicketFormValues) => void;
   onClose: () => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const context = useTicketContext();
-  const submit = useMutation({ mutationFn: submitTicket });
+  const submit = useCreateSupportTicket();
   const { register, handleSubmit, formState, watch } =
     useForm<TicketFormValues>({
       mode: "onTouched",
@@ -202,10 +205,6 @@ const NewTicketForm = ({
         severity: defaultSeverity,
         environmentType: "production",
         description: "",
-        email: "",
-        name: "",
-        companyName: "",
-        platform: defaultPlatform,
         includeDetails: true,
       },
     });
@@ -251,15 +250,18 @@ const NewTicketForm = ({
     });
   }
 
+  const isUrgent = severity === "urgent";
+
   const onSubmit = (values: TicketFormValues) => {
-    const payload = buildTicketPayload(values, {
-      ...(values.includeDetails ? context : {}),
-      organizationId: values.includeDetails ? organizationId : undefined,
-      isAnonymous,
-    });
-    submit.mutate(payload, {
-      onSuccess: (result) => onSubmitted(result, values),
-    });
+    // Urgent tickets go through the outage workflow instead (see the footer).
+    if (values.severity === "urgent") return;
+    submit.mutate(
+      buildCreateTicketRequest(
+        { ...values, severity: values.severity },
+        context,
+      ),
+      { onSuccess: (ticket) => onSubmitted(ticket, values) },
+    );
   };
 
   return (
@@ -308,166 +310,126 @@ const NewTicketForm = ({
               >
                 Production down?{" "}
                 <Text as="span" fontWeight="600" color={colors.accent.red}>
-                  Urgent tickets page on-call
+                  Outage reports page on-call
                 </Text>{" "}
-                right away. Use it only when there&apos;s no workaround.
+                right away.{" "}
+                {outageLink.isChat
+                  ? "Continue in chat and choose \u201cReport Production Outage\u201d."
+                  : `Email ${SUPPORT_EMAIL} with \u201curgent\u201d in the subject.`}
               </Box>
             )}
           </Box>
 
-          <Box as="fieldset">
-            <FieldLabel>Environment</FieldLabel>
-            <Flex
-              width="fit-content"
-              borderWidth="1px"
-              borderColor={colors.border.secondary}
-              borderRadius="lg"
-              overflow="hidden"
-            >
-              {ENVIRONMENT_OPTIONS.map((option, index) => (
-                <SegmentOption
-                  key={option.value}
-                  registration={environmentField}
-                  value={option.value}
-                  label={option.label}
-                  isSelected={environmentType === option.value}
-                  isLast={index === ENVIRONMENT_OPTIONS.length - 1}
-                />
-              ))}
-            </Flex>
-          </Box>
+          {!isUrgent && (
+            <>
+              <Box as="fieldset">
+                <FieldLabel>Environment</FieldLabel>
+                <Flex
+                  width="fit-content"
+                  borderWidth="1px"
+                  borderColor={colors.border.secondary}
+                  borderRadius="lg"
+                  overflow="hidden"
+                >
+                  {ENVIRONMENT_OPTIONS.map((option, index) => (
+                    <SegmentOption
+                      key={option.value}
+                      registration={environmentField}
+                      value={option.value}
+                      label={option.label}
+                      isSelected={environmentType === option.value}
+                      isLast={index === ENVIRONMENT_OPTIONS.length - 1}
+                    />
+                  ))}
+                </Flex>
+              </Box>
 
-          {isAnonymous && (
-            <Grid templateColumns="repeat(2, minmax(0, 1fr))" gap="4">
-              <FormControl isRequired isInvalid={!!errors.email}>
-                <FormLabel fontWeight="600">Email</FormLabel>
+              <FormControl isRequired isInvalid={!!errors.title}>
+                <FormLabel fontWeight="600">Subject</FormLabel>
                 <Input
-                  {...register("email", {
+                  {...register("title", {
                     validate: (value) =>
-                      value.trim().length === 0
-                        ? "An email is required, so we can reply."
-                        : EMAIL_PATTERN.test(value.trim()) ||
-                          "Enter a valid email address.",
+                      value.trim().length > 0 || "A subject is required.",
+                    maxLength: {
+                      value: 200,
+                      message: "Keep the subject under 200 characters.",
+                    },
                   })}
-                  type="email"
-                  autoComplete="email"
-                  variant={errors.email ? "error" : "default"}
+                  placeholder="e.g. prod_ingest replica keeps restarting"
+                  variant={errors.title ? "error" : "default"}
                 />
-                <FormErrorMessage>{errors.email?.message}</FormErrorMessage>
+                <FormErrorMessage>{errors.title?.message}</FormErrorMessage>
               </FormControl>
-              <FormControl>
-                <FormLabel fontWeight="600">Name</FormLabel>
-                <Input {...register("name")} autoComplete="name" />
-              </FormControl>
-              <FormControl isRequired isInvalid={!!errors.companyName}>
-                <FormLabel fontWeight="600">Company</FormLabel>
-                <Input
-                  {...register("companyName", {
+
+              <FormControl isRequired isInvalid={!!errors.description}>
+                <FormLabel fontWeight="600">What happened?</FormLabel>
+                <Textarea
+                  {...register("description", {
                     validate: (value) =>
-                      value.trim().length > 0 || "A company is required.",
+                      value.trim().length > 0 || "Describe what happened.",
+                    maxLength: {
+                      value: 10000,
+                      message: "Keep the description under 10,000 characters.",
+                    },
                   })}
-                  autoComplete="organization"
-                  variant={errors.companyName ? "error" : "default"}
+                  rows={4}
+                  resize="vertical"
+                  placeholder="What you expected, what happened instead, and the cluster or object involved."
                 />
                 <FormErrorMessage>
-                  {errors.companyName?.message}
+                  {errors.description?.message}
                 </FormErrorMessage>
               </FormControl>
-              <FormControl isRequired>
-                <FormLabel fontWeight="600">Platform</FormLabel>
-                <SimpleSelect {...register("platform")}>
-                  {PLATFORM_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </SimpleSelect>
-              </FormControl>
-            </Grid>
-          )}
 
-          <FormControl isRequired isInvalid={!!errors.title}>
-            <FormLabel fontWeight="600">Subject</FormLabel>
-            <Input
-              {...register("title", {
-                validate: (value) =>
-                  value.trim().length > 0 || "A subject is required.",
-                maxLength: {
-                  value: 200,
-                  message: "Keep the subject under 200 characters.",
-                },
-              })}
-              placeholder="e.g. prod_ingest replica keeps restarting"
-              variant={errors.title ? "error" : "default"}
-            />
-            <FormErrorMessage>{errors.title?.message}</FormErrorMessage>
-          </FormControl>
-
-          <FormControl isRequired isInvalid={!!errors.description}>
-            <FormLabel fontWeight="600">What happened?</FormLabel>
-            <Textarea
-              {...register("description", {
-                validate: (value) =>
-                  value.trim().length > 0 || "Describe what happened.",
-                maxLength: {
-                  value: 10000,
-                  message: "Keep the description under 10,000 characters.",
-                },
-              })}
-              rows={4}
-              resize="vertical"
-              placeholder="What you expected, what happened instead, and the cluster or object involved."
-            />
-            <FormErrorMessage>{errors.description?.message}</FormErrorMessage>
-          </FormControl>
-
-          {details.length > 0 && (
-            <Box
-              as="section"
-              aria-label="Sent with your ticket"
-              borderWidth="1px"
-              borderColor={colors.border.primary}
-              borderRadius="lg"
-              bg={colors.background.secondary}
-            >
-              <HStack spacing="2.5" px="3" py="2.5">
-                <Checkbox {...register("includeDetails")} flex="1">
-                  <Text textStyle="text-ui-med" fontWeight="600">
-                    Include environment details
-                  </Text>
-                </Checkbox>
-                <Text
-                  textStyle="text-small"
-                  color={colors.foreground.secondary}
+              {details.length > 0 && (
+                <Box
+                  as="section"
+                  aria-label="Sent with your ticket"
+                  borderWidth="1px"
+                  borderColor={colors.border.primary}
+                  borderRadius="lg"
+                  bg={colors.background.secondary}
                 >
-                  Saves a round trip
-                </Text>
-              </HStack>
-              {includeDetails && (
-                <Grid
-                  as="dl"
-                  templateColumns="132px minmax(0, 1fr)"
-                  columnGap="3"
-                  rowGap="1.5"
-                  pl="9.5"
-                  pr="3"
-                  pb="3"
-                  textStyle="text-small"
-                  data-testid="support-ticket-context"
-                >
-                  {details.map((detail) => (
-                    <React.Fragment key={detail.label}>
-                      <Text as="dt" color={colors.foreground.secondary}>
-                        {detail.label}
+                  <HStack spacing="2.5" px="3" py="2.5">
+                    <Checkbox {...register("includeDetails")} flex="1">
+                      <Text textStyle="text-ui-med" fontWeight="600">
+                        Include environment details
                       </Text>
-                      <Text as="dd" minWidth="0" overflowWrap="anywhere">
-                        {detail.value}
-                      </Text>
-                    </React.Fragment>
-                  ))}
-                </Grid>
+                    </Checkbox>
+                    <Text
+                      textStyle="text-small"
+                      color={colors.foreground.secondary}
+                    >
+                      Saves a round trip
+                    </Text>
+                  </HStack>
+                  {includeDetails && (
+                    <Grid
+                      as="dl"
+                      templateColumns="132px minmax(0, 1fr)"
+                      columnGap="3"
+                      rowGap="1.5"
+                      pl="9.5"
+                      pr="3"
+                      pb="3"
+                      textStyle="text-small"
+                      data-testid="support-ticket-context"
+                    >
+                      {details.map((detail) => (
+                        <React.Fragment key={detail.label}>
+                          <Text as="dt" color={colors.foreground.secondary}>
+                            {detail.label}
+                          </Text>
+                          <Text as="dd" minWidth="0" overflowWrap="anywhere">
+                            {detail.value}
+                          </Text>
+                        </React.Fragment>
+                      ))}
+                    </Grid>
+                  )}
+                </Box>
               )}
-            </Box>
+            </>
           )}
         </VStack>
       </DrawerBody>
@@ -481,9 +443,23 @@ const NewTicketForm = ({
         <Button variant="secondary" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" variant="primary" isLoading={submit.isPending}>
-          Open ticket
-        </Button>
+        {isUrgent ? (
+          <Button
+            as="a"
+            href={outageLink.href}
+            onClick={(event: React.MouseEvent<HTMLElement>) => {
+              outageLink.onClick(event);
+              onClose();
+            }}
+            variant="primary"
+          >
+            {outageLink.isChat ? "Report in chat" : "Email support"}
+          </Button>
+        ) : (
+          <Button type="submit" variant="primary" isLoading={submit.isPending}>
+            Open ticket
+          </Button>
+        )}
       </DrawerFooter>
     </Flex>
   );
@@ -498,18 +474,18 @@ const ENVIRONMENT_LABELS = Object.fromEntries(
 );
 
 const TicketSent = ({
-  result,
+  ticket,
   values,
   organizationName,
   region,
-  onReportOutage,
+  outageLink,
   onClose,
 }: {
-  result: SubmitTicketResult;
+  ticket: SupportTicket;
   values: TicketFormValues;
   organizationName?: string;
   region?: string;
-  onReportOutage: () => void;
+  outageLink: OutageLink;
   onClose: () => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -523,13 +499,6 @@ const TicketSent = ({
   return (
     <DrawerBody px="6" py="7" data-testid="support-ticket-sent">
       <VStack spacing="5" align="stretch">
-        {!result.sent && (
-          <Alert
-            variant="info"
-            minWidth="0"
-            message="Preview only: ticket submission isn't connected yet, so nothing was sent."
-          />
-        )}
         <VStack spacing="3" align="start">
           <Flex
             boxSize="10"
@@ -542,8 +511,8 @@ const TicketSent = ({
             <CheckmarkIcon aria-hidden />
           </Flex>
           <Text as="h3" textStyle="heading-md">
-            {result.ticketNumber
-              ? `Ticket #${result.ticketNumber} is open`
+            {ticket.number
+              ? `Ticket #${ticket.number} is open`
               : "Your ticket is open"}
           </Text>
           <Text color={colors.foreground.secondary}>{values.title.trim()}</Text>
@@ -624,8 +593,10 @@ const TicketSent = ({
           >
             Production went down?{" "}
             <Button
+              as="a"
               variant="link"
-              onClick={onReportOutage}
+              href={outageLink.href}
+              onClick={outageLink.onClick}
               fontWeight="500"
               fontSize="inherit"
               color={colors.accent.red}
@@ -643,32 +614,27 @@ const TicketSent = ({
 export interface NewSupportTicketDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Reopens the form with Urgent selected. */
-  onReportOutage: () => void;
+  /** Where urgent tickets go instead of the ticket endpoint. */
+  outageLink: OutageLink;
   organizationId?: string;
   organizationName?: string;
-  /** True when the Messenger doesn't know who the user is. */
-  isAnonymous: boolean;
   defaultSeverity?: TicketSeverity;
-  defaultPlatform?: TicketPlatform;
 }
 
 export const NewSupportTicketDrawer = ({
   isOpen,
   onClose,
-  onReportOutage,
+  outageLink,
   organizationId,
   organizationName,
-  isAnonymous,
   defaultSeverity = "normal",
-  defaultPlatform = "Materialize Cloud",
 }: NewSupportTicketDrawerProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const region = useAtomValue(currentRegionIdAtom) ?? undefined;
   // The Messenger launcher floats over the drawer's footer buttons.
   useHideIntercomLauncher(isOpen);
   const [sent, setSent] = React.useState<{
-    result: SubmitTicketResult;
+    ticket: SupportTicket;
     values: TicketFormValues;
   } | null>(null);
 
@@ -715,11 +681,11 @@ export const NewSupportTicketDrawer = ({
         {isOpen &&
           (sent ? (
             <TicketSent
-              result={sent.result}
+              ticket={sent.ticket}
               values={sent.values}
               organizationName={organizationName}
               region={region}
-              onReportOutage={onReportOutage}
+              outageLink={outageLink}
               onClose={onClose}
             />
           ) : (
@@ -727,10 +693,9 @@ export const NewSupportTicketDrawer = ({
               key={defaultSeverity}
               organizationId={organizationId}
               organizationName={organizationName}
-              isAnonymous={isAnonymous}
               defaultSeverity={defaultSeverity}
-              defaultPlatform={defaultPlatform}
-              onSubmitted={(result, values) => setSent({ result, values })}
+              outageLink={outageLink}
+              onSubmitted={(ticket, values) => setSent({ ticket, values })}
               onClose={onClose}
             />
           ))}

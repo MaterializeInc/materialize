@@ -7,105 +7,42 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import {
-  buildTicketPayload,
-  TICKET_TYPES,
-  TicketFormValues,
-} from "./ticketForm";
+import { buildCreateTicketRequest } from "./ticketForm";
 
-const values = (
-  overrides: Partial<TicketFormValues> = {},
-): TicketFormValues => ({
+const values = {
   title: "  Sink is lagging ",
-  severity: "normal",
-  environmentType: "production",
+  severity: "normal" as const,
+  environmentType: "production" as const,
   description: " Kafka sink is 10 minutes behind. ",
-  email: "",
-  name: "",
-  companyName: "",
-  platform: "Materialize Cloud",
   includeDetails: true,
-  ...overrides,
-});
-
-const context = {
-  organizationId: "org-1",
-  region: "aws/us-east-1",
-  environmentVersion: "v0.150.0",
 };
 
-describe("buildTicketPayload", () => {
-  it.each([
-    ["high", "High"],
-    ["normal", "Medium"],
-    ["low", "Low"],
-  ] as const)(
-    "maps %s severity to the support request's %s priority",
-    (severity, priority) => {
-      const payload = buildTicketPayload(values({ severity }), {
-        ...context,
-        isAnonymous: false,
-      });
-      expect(payload).toEqual({
-        ticketTypeId: TICKET_TYPES.supportRequest,
-        title: "Sink is lagging",
-        severity,
-        attributes: { Priority: priority },
-        description: [
-          "Kafka sink is 10 minutes behind.",
-          "---",
-          "Environment: production",
-          "Organization ID: org-1",
-          "Region: aws/us-east-1",
-          "Version: v0.150.0",
-          "Submitted from the Materialize Console",
-        ].join("\n"),
-      });
-    },
-  );
+const context = { region: "aws/us-east-1", environmentVersion: "v26.48.0" };
 
-  it("sends urgent tickets as production outages", () => {
-    for (const isAnonymous of [false, true]) {
-      const payload = buildTicketPayload(
-        values({ severity: "urgent", email: "ada@example.com" }),
-        { isAnonymous },
-      );
-      expect(payload.ticketTypeId).toBe(TICKET_TYPES.productionOutage);
-      expect(payload.attributes).toEqual({});
-    }
+describe("buildCreateTicketRequest", () => {
+  it("trims the fields and attaches the region and version", () => {
+    expect(buildCreateTicketRequest(values, context)).toEqual({
+      title: "Sink is lagging",
+      description: "Kafka sink is 10 minutes behind.",
+      severity: "normal",
+      environmentType: "production",
+      region: "aws/us-east-1",
+      environmentVersion: "v26.48.0",
+    });
   });
 
-  it("uses the visitor type with a contact for anonymous users", () => {
-    const payload = buildTicketPayload(
-      values({
-        email: " ada@example.com ",
-        name: "Ada",
-        companyName: " Example Corp ",
-        platform: "Self-Managed Materialize",
-        severity: "low",
-      }),
-      { isAnonymous: true },
+  it("leaves out the region and version when details are off", () => {
+    const request = buildCreateTicketRequest(
+      { ...values, includeDetails: false },
+      context,
     );
-    expect(payload).toMatchObject({
-      ticketTypeId: TICKET_TYPES.supportRequestVisitor,
-      contact: { email: "ada@example.com", name: "Ada" },
-      attributes: {
-        Priority: "Low",
-        "Company Name": "Example Corp",
-        "Materialize Platform": "Self-Managed Materialize",
-      },
-    });
-  });
-
-  it("leaves out the contact for signed-in users", () => {
-    const payload = buildTicketPayload(values({ email: "ada@example.com" }), {
-      isAnonymous: false,
-    });
-    expect(payload).not.toHaveProperty("contact");
+    expect(request).not.toHaveProperty("region");
+    expect(request).not.toHaveProperty("environmentVersion");
   });
 
   it("leaves out context the console doesn't have", () => {
-    const payload = buildTicketPayload(values(), { isAnonymous: false });
-    expect(payload.description).not.toMatch(/Organization ID|Region|Version/);
+    const request = buildCreateTicketRequest(values, {});
+    expect(request).not.toHaveProperty("region");
+    expect(request).not.toHaveProperty("environmentVersion");
   });
 });

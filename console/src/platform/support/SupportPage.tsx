@@ -62,7 +62,7 @@ import { useSummary } from "~/queries/incident-io";
 import { currentRegionIdAtom } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
-import { NewSupportTicketDrawer } from "./NewSupportTicketDrawer";
+import { NewSupportTicketDrawer, OutageLink } from "./NewSupportTicketDrawer";
 import { useSupportTickets } from "./queries";
 import { SupportTicketModal, SupportTicketsTable } from "./SupportTickets";
 import { TicketSeverity } from "./ticketForm";
@@ -260,19 +260,23 @@ const SupportPage = () => {
   // links to Help Center.
   const areTicketsAvailable = ticketsQuery.isSuccess;
   const flags = useFlags();
-  // The form's submission isn't connected yet (see submitTicket), so it's
-  // behind its own flag until it is.
-  const isTicketFormEnabled = Boolean(flags["support-ticket-form-cns-201"]);
+  // The form needs the ticket endpoints, so it only replaces the Messenger
+  // once they answer, and is behind its own flag until launch.
+  const isTicketFormEnabled =
+    Boolean(flags["support-ticket-form-cns-201"]) && areTicketsAvailable;
+  const outageLink: OutageLink = {
+    href: OUTAGE_MAILTO,
+    onClick: preferIntercom(hasIntercomJwt, openIntercomNewConversation),
+    isChat: hasIntercomJwt,
+  };
   const [ticketFormSeverity, setTicketFormSeverity] =
     React.useState<TicketSeverity | null>(null);
   const [selectedTicketId, setSelectedTicketId] = React.useState<string | null>(
     null,
   );
-  const outageHint = isTicketFormEnabled
-    ? "Opens an Urgent ticket, which pages our on-call engineers."
-    : isIntercomIdentified
-      ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
-      : "Chat is unavailable, so these open an email to support.";
+  const outageHint = isIntercomIdentified
+    ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
+    : "Chat is unavailable, so these open an email to support.";
 
   return (
     <MainContentContainer>
@@ -304,32 +308,17 @@ const SupportPage = () => {
               Open a ticket
             </Button>
           )}
-          {isTicketFormEnabled ? (
-            <Button
-              onClick={() => setTicketFormSeverity("urgent")}
-              variant="outline"
-              size="sm"
-              color={colors.accent.red}
-              borderColor={colors.border.error}
-            >
-              Report a production outage
-            </Button>
-          ) : (
-            <Button
-              as="a"
-              href={OUTAGE_MAILTO}
-              onClick={preferIntercom(
-                hasIntercomJwt,
-                openIntercomNewConversation,
-              )}
-              variant="outline"
-              size="sm"
-              color={colors.accent.red}
-              borderColor={colors.border.error}
-            >
-              Report a production outage
-            </Button>
-          )}
+          <Button
+            as="a"
+            href={outageLink.href}
+            onClick={outageLink.onClick}
+            variant="outline"
+            size="sm"
+            color={colors.accent.red}
+            borderColor={colors.border.error}
+          >
+            Report a production outage
+          </Button>
           <Tooltip label={outageHint} lineHeight={1.2} hasArrow>
             <Box
               as="span"
@@ -543,10 +532,9 @@ const SupportPage = () => {
       <NewSupportTicketDrawer
         isOpen={ticketFormSeverity !== null}
         onClose={() => setTicketFormSeverity(null)}
-        onReportOutage={() => setTicketFormSeverity("urgent")}
+        outageLink={outageLink}
         organizationId={organizationId}
         organizationName={organization?.name}
-        isAnonymous={!hasIntercomJwt}
         defaultSeverity={ticketFormSeverity ?? "normal"}
       />
       <SupportTicketModal
