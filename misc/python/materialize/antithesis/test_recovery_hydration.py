@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import sqlite3
 from dataclasses import replace
 
 import pytest
@@ -151,3 +152,122 @@ def test_legacy_subsource_contributors_use_the_same_complete_proof(monkeypatch):
         monkeypatch, [sample(PARENT), sample(TERMINAL), sample(subsource)]
     )
     assert result == (True, {"not_hydrated": []})
+
+
+@pytest.fixture
+def catalog(monkeypatch):
+    db = sqlite3.connect(":memory:")
+    db.executescript("""
+        ATTACH ':memory:' AS mz_internal;
+        CREATE TABLE mz_objects(id TEXT, name TEXT, type TEXT, cluster_id TEXT);
+        CREATE TABLE mz_cluster_replicas(id TEXT, name TEXT, cluster_id TEXT);
+        CREATE TABLE mz_tables(id TEXT, name TEXT, source_id TEXT);
+        CREATE TABLE mz_sources(id TEXT, name TEXT, type TEXT);
+        CREATE TABLE mz_internal.mz_hydration_statuses(
+            object_id TEXT, replica_id TEXT, hydrated BOOLEAN);
+        CREATE TABLE mz_internal.mz_object_dependencies(
+            object_id TEXT, referenced_object_id TEXT);
+        CREATE TABLE mz_internal.mz_source_statistics_raw(
+            id TEXT, replica_id TEXT, rehydration_latency TEXT);
+        INSERT INTO mz_cluster_replicas VALUES
+            ('r1', 'one', 'cluster'), ('r2', 'two', 'cluster'),
+            ('foreign', 'other', 'another_cluster');
+    """)
+    monkeypatch.setattr(
+        recovery, "rows", lambda host, query: db.execute(query).fetchall()
+    )
+    check = recovery.Recovery.__new__(recovery.Recovery)
+    check.host = "host"
+    check.exempt = set()
+    yield db, check
+    db.close()
+
+
+@pytest.mark.parametrize(
+    "statuses,expected_replicas",
+    [
+        ([(None, False)], ["one", "two"]),
+        ([("r1", True)], ["two"]),
+        ([("r1", None), ("r2", True)], ["one"]),
+        ([("r1", False), ("r2", True)], ["one"]),
+        ([("foreign", True)], ["one", "two"]),
+        ([("r1", True), ("r2", True)], []),
+    ],
+)
+@pytest.mark.parametrize("typ", ("index", "materialized-view"))
+def test_compute_expected_replica_matrix_catches_missing_and_null_reports(
+    catalog, statuses, expected_replicas, typ
+):
+    db, check = catalog
+    db.execute("INSERT INTO mz_objects VALUES ('u1','maintained',?,'cluster')", (typ,))
+    db.executemany(
+        "INSERT INTO mz_internal.mz_hydration_statuses VALUES ('u1',?,?)", statuses
+    )
+    ok, details = check.hydrated()
+    assert ok is (not expected_replicas)
+    assert sorted(row[2] for row in details["not_hydrated"]) == expected_replicas
+
+
+def test_single_replica_ingestion_does_not_require_the_idle_replica(catalog):
+    db, check = catalog
+    db.execute("INSERT INTO mz_objects VALUES ('u1','ingestion','source','cluster')")
+    db.execute("INSERT INTO mz_internal.mz_hydration_statuses VALUES ('u1','r1',true)")
+    assert check.hydrated() == (True, {"not_hydrated": []})
+
+
+@pytest.mark.parametrize("typ", ("source", "sink"))
+@pytest.mark.parametrize(
+    "replica,hydrated",
+    [(None, False), ("r1", None), ("foreign", True), ("gone", False)],
+)
+def test_storage_null_or_unmapped_assignment_never_passes(
+    catalog, typ, replica, hydrated
+):
+    db, check = catalog
+    db.execute("INSERT INTO mz_objects VALUES ('u1','storage',?,'cluster')", (typ,))
+    db.execute(
+        "INSERT INTO mz_internal.mz_hydration_statuses VALUES ('u1',?,?)",
+        (replica, hydrated),
+    )
+    ok, details = check.hydrated()
+    assert not ok
+    assert len(details["not_hydrated"]) == 1
+
+
+@pytest.mark.parametrize("typ", ("source", "index"))
+def test_zero_replica_cluster_remains_intentionally_blocked(catalog, typ):
+    db, check = catalog
+    db.execute(
+        "INSERT INTO mz_objects VALUES ('u1','blocked',?,'empty_cluster')", (typ,)
+    )
+    db.execute("INSERT INTO mz_internal.mz_hydration_statuses VALUES ('u1',NULL,false)")
+    assert check.hydrated() == (True, {"not_hydrated": []})
+
+
+def test_plain_tables_and_webhooks_omitted_by_builtin_remain_outside_check(catalog):
+    db, check = catalog
+    db.executemany(
+        "INSERT INTO mz_objects VALUES (?,?,?,'cluster')",
+        [("u1", "plain_table", "table"), ("u2", "webhook", "source")],
+    )
+    assert check.hydrated() == (True, {"not_hydrated": []})
+
+
+def test_unmapped_source_cannot_borrow_old_replica_terminal_explanation(catalog):
+    db, check = catalog
+    check.exempt = {"terminal"}
+    db.execute("INSERT INTO mz_objects VALUES ('u1','ingestion','source','cluster')")
+    db.execute(
+        "INSERT INTO mz_internal.mz_hydration_statuses VALUES ('u1','foreign',false)"
+    )
+    db.executemany(
+        "INSERT INTO mz_tables VALUES (?,?, 'u1')",
+        [("u2", "terminal"), ("u3", "healthy")],
+    )
+    db.executemany(
+        "INSERT INTO mz_internal.mz_source_statistics_raw VALUES (?,'foreign',?)",
+        [("u2", None), ("u3", "1ms")],
+    )
+    ok, details = check.hydrated()
+    assert not ok
+    assert len(details["not_hydrated"]) == 1
