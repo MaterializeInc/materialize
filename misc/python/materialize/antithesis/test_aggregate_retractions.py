@@ -415,7 +415,10 @@ def test_unexpected_product_error_in_cleanup_is_reported_not_allowlisted(
     assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (1,)
 
 
-def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(monkeypatch):
+@pytest.mark.parametrize("blocked_fixture", ("aggregate", "upsert"))
+def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(
+    monkeypatch, blocked_fixture
+):
     check = recovery.Recovery.__new__(recovery.Recovery)
     check.host = "host"
     check.env = Mock()
@@ -443,7 +446,13 @@ def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(monkey
         "no_crash_loop",
     ):
         setattr(check, name, good(name))
-    check.cleanup_aggregate_fixtures = lambda: (False, {"owner_still_active": True})
+    for fixture in ("aggregate", "upsert"):
+
+        def cleanup(fixture=fixture):
+            observed.append(f"cleanup_{fixture}")
+            return fixture != blocked_fixture, {"owner_still_active": True}
+
+        setattr(check, f"cleanup_{fixture}_fixtures", cleanup)
     check.hydrated = Mock(side_effect=AssertionError("poison hydration checked"))
     check.frontiers_advance = Mock(
         side_effect=AssertionError("poison frontier checked")
@@ -479,6 +488,8 @@ def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(monkey
     assert "/api/catalog/check" in observed
     assert "/api/coordinator/check" in observed
     assert "no_crash_loop" in observed
+    assert "cleanup_aggregate" in observed
+    assert "cleanup_upsert" in observed
     check.retry_ledger.assert_called_once()
     check.drain_replacements.assert_called_once()
     check.hydrated.assert_not_called()
