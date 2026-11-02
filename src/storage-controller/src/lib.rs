@@ -3121,8 +3121,17 @@ where
         let Some(mut recording) = collection.freshness.take() else {
             return Vec::new();
         };
+        // Recording state exists only while recording is on, see `refresh_freshness_config`.
+        let Some(config) = self.freshness_config else {
+            return Vec::new();
+        };
+        let tree = self
+            .storage_collections
+            .freshness_tree(id)
+            .and_then(|tree| tree.resolve(&*self.ticker_lookup));
+        let rows = recording.finish(tree.as_ref(), (self.now)(), &config);
         let labels = histogram_labels(&self.instances, &collection.extra_state);
-        freshness::pack_rows(recording.finish(), id, None, &labels)
+        freshness::pack_rows(rows, id, None, &labels)
     }
 
     /// Records the freshness of a collection's write frontier `frontier` and returns the
