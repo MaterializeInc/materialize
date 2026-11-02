@@ -50,9 +50,6 @@ copyright_files=$(grep -vE \
     -e '^ci/www/public/_redirects$' \
     -e '^ci/test/lint-deps/' \
     -e '^misc/completions/.*' \
-    -e '^misc/mcp-materialize/uv.lock' \
-    -e '^misc/mcp-materialize-agents/uv.lock' \
-    -e '^misc/mcp-materialize-agents/mcp_materialize_agents/system_prompt.md' \
     -e '^misc/python/MANIFEST\.in' \
     -e '^test/chbench/chbench' \
     -e '^src/pgtz/tznames/.*' \
