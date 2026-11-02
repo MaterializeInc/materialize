@@ -5876,25 +5876,51 @@ fn plan_is_expr<'a>(
             // The operands are planned after `ne_hir`, which types any parameters among them.
             // (Planned before it, a parameter would get both the text type and the type
             // `ne_hir` needs, and planning would fail.)
-            let expr1_hir = plan_expr(ecx, expr)?.type_as_any(ecx)?;
-            let expr2_hir = plan_expr(ecx, expr2)?.type_as_any(ecx)?;
-
-            let term1 = HirScalarExpr::variadic_or(vec![
-                ne_hir,
-                expr1_hir.clone().call_is_null(),
-                expr2_hir.clone().call_is_null(),
-            ]);
-            let term2 = HirScalarExpr::variadic_or(vec![
-                expr1_hir.call_is_null().not(),
-                expr2_hir.call_is_null().not(),
-            ]);
-            term1.and(term2)
+            //
+            // A literal other than NULL is never NULL, so its IS NULL term is false and `term2` is
+            // true. Leaving them out keeps two copies of the other operand instead of three, a
+            // factor that nested comparisons multiply.
+            let literal1 = is_non_null_literal(expr);
+            let literal2 = is_non_null_literal(expr2);
+            if literal1 || literal2 {
+                let mut terms = vec![ne_hir];
+                if !literal1 {
+                    terms.push(plan_expr(ecx, expr)?.type_as_any(ecx)?.call_is_null());
+                }
+                if !literal2 {
+                    terms.push(plan_expr(ecx, expr2)?.type_as_any(ecx)?.call_is_null());
+                }
+                HirScalarExpr::variadic_or(terms)
+            } else {
+                let expr1_hir = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+                let expr2_hir = plan_expr(ecx, expr2)?.type_as_any(ecx)?;
+                let term1 = HirScalarExpr::variadic_or(vec![
+                    ne_hir,
+                    expr1_hir.clone().call_is_null(),
+                    expr2_hir.clone().call_is_null(),
+                ]);
+                let term2 = HirScalarExpr::variadic_or(vec![
+                    expr1_hir.call_is_null().not(),
+                    expr2_hir.call_is_null().not(),
+                ]);
+                term1.and(term2)
+            }
         }
     };
     if not {
         result = result.not();
     }
     Ok(result)
+}
+
+/// Reports whether `expr` is a literal other than `NULL`, possibly parenthesized.
+fn is_non_null_literal(expr: &Expr<Aug>) -> bool {
+    match expr {
+        Expr::Value(Value::Null) => false,
+        Expr::Value(_) => true,
+        Expr::Nested(expr) => is_non_null_literal(expr),
+        _ => false,
+    }
 }
 
 fn plan_case<'a>(
