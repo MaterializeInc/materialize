@@ -377,6 +377,7 @@ where
 
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
+    let operator_info = builder.operator_info();
     let (descs_output, descs_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     #[allow(clippy::await_holding_refcell_ref)]
@@ -403,7 +404,14 @@ where
         // we whack the moles as we see them.
         let mut read = mz_ore::task::spawn(|| format!("shard_source_reader({})", name_owned), {
             let diagnostics = Diagnostics {
-                handle_purpose: format!("shard_source({})", name_owned),
+                // Operator addresses are process-local. Keep the process and
+                // worker alongside the address to identify the actual reader,
+                // rather than guessing from the shard's most recent writer.
+                handle_purpose: format!(
+                    "shard_source({name_owned}) pid={} worker={worker_index} operator={:?}",
+                    std::process::id(),
+                    operator_info.address,
+                ),
                 shard_name: name_owned.clone(),
             };
             async move {

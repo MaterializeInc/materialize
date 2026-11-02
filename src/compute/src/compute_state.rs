@@ -1288,8 +1288,19 @@ impl<'a> ActiveComputeState<'a> {
 
             // Collect the input frontier and check for progress.
             new_frontier.clear();
-            for probe in collection.input_probes.values() {
-                probe.with_frontier(|frontier| new_frontier.extend(frontier.iter().copied()));
+            for (input_id, probe) in &collection.input_probes {
+                probe.with_frontier(|frontier| {
+                    tracing::debug!(
+                        target: "mz_compute::read_protection",
+                        worker = self.timely_worker.index(),
+                        dataflow = *collection.dataflow_index,
+                        export = %id,
+                        input = %input_id,
+                        ?frontier,
+                        "compute input probe"
+                    );
+                    new_frontier.extend(frontier.iter().copied());
+                });
             }
             let new_input_frontier = reported
                 .input_frontier

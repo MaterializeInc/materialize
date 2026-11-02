@@ -250,6 +250,7 @@ impl LocalReadProtection {
     }
 }
 
+#[derive(Debug)]
 struct Installed {
     as_of: Antichain<Timestamp>,
     /// Last ordered compaction ceiling, not a best-effort worker observation.
@@ -1217,6 +1218,42 @@ impl ReplicaEnactment {
             self.recovery_holds.take();
         }
         let publish_requirements = self.publication_clock.as_ref().expect("configured").due();
+        // Capture token owners before preparing the aggregate. A committed
+        // minimum alone cannot distinguish a reader from unpublished progress.
+        if publish_requirements
+            && tracing::enabled!(target: "mz_clusterd::read_protection", tracing::Level::DEBUG)
+        {
+            let window_targets: BTreeMap<_, _> = self
+                .installed
+                .iter()
+                .filter_map(|(id, collection)| {
+                    collection.window.as_ref()?;
+                    let upper = collection.progress.write_frontier.as_ref()?;
+                    let policy = catalog.state().index_read_policy(*id)?;
+                    Some((*id, policy.frontier(upper.borrow())))
+                })
+                .collect();
+            tracing::debug!(
+                target: "mz_clusterd::read_protection",
+                incarnation = self.protection.incarnation(),
+                cluster = %self.cluster,
+                replica = %self.replica,
+                position = ?catalog.observed_position(),
+                pending,
+                refreshed,
+                pending_plans = ?effects.pending,
+                pending_metadata = ?metadata.map(|metadata| &metadata.pending),
+                protection = ?self.protection,
+                recovery = ?self.recovery_holds,
+                installed = ?self.installed,
+                pending_grants = ?self.pending_grants,
+                pending_imports = ?self.pending_imports,
+                ?window_targets,
+                "replica read protection before publication"
+            );
+            self.storage_state
+                .trace_read_protection(self.protection.incarnation());
+        }
         self.publication_bounds_pending |= publish_requirements && metadata.is_some();
         // Installation can defer bounds without preventing safe client advances.
         // Keep deferred bounds eligible on the first ungated iteration rather
@@ -1346,7 +1383,20 @@ impl ReplicaEnactment {
             }
         }
         if !ops.is_empty() {
+            tracing::debug!(
+                target: "mz_clusterd::read_protection",
+                incarnation = self.protection.incarnation(),
+                protection = ?self.protection,
+                "replica read protection publication prepared"
+            );
             let result = self.transact(catalog, effects, cluster, build, ops).await;
+            tracing::debug!(
+                target: "mz_clusterd::read_protection",
+                incarnation = self.protection.incarnation(),
+                committed = result.is_ok(),
+                error = ?result.as_ref().err(),
+                "replica read protection publication completed"
+            );
             if prepared {
                 self.protection.finish_publication(result.is_ok());
             }

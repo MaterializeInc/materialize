@@ -157,6 +157,16 @@ pub(super) struct StorageState {
 }
 
 impl StorageState {
+    pub(super) fn trace_read_protection(&self, incarnation: u64) {
+        tracing::debug!(
+            target: "mz_clusterd::read_protection",
+            incarnation,
+            reads = ?self.reads,
+            starting = ?self.starting,
+            "replica storage read protection"
+        );
+    }
+
     fn apply_progress(&mut self, io: &mut StorageIo) {
         for execution in std::mem::take(&mut io.started) {
             self.starting.remove(&execution);

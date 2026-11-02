@@ -422,6 +422,14 @@ where
         // and also after we construct metadata.
         self.frontier = new_frontier;
 
+        tracing::debug!(
+            target: "mz_persist_client::read_protection",
+            shard = %self.handle.machine.shard_id(),
+            reader = ?self.handle.reader_id,
+            frontier = ?self.frontier,
+            requested_since = ?self.handle.since(),
+            "listen selected batch"
+        );
         let elapsed = started.elapsed();
         if elapsed >= Duration::from_millis(20) {
             tracing::debug!(
