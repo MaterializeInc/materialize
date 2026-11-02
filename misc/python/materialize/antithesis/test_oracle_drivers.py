@@ -235,6 +235,51 @@ def test_ivm_set_coverage_requires_both_maintained_paths_to_match(
     assert all(not guidance[message] for message in ivm.SET_COVERAGE[kind])
 
 
+@pytest.mark.parametrize(
+    "snapshot_closed,invoked,completed,outcome,mismatch,expected",
+    [
+        (10.0, 11.0, 12.0, "ok", False, True),
+        (None, 11.0, 12.0, "ok", False, False),
+        (10.0, 9.0, 12.0, "ok", False, False),
+        (10.0, 10.0, 12.0, "ok", False, False),
+        (10.0, 11.0, 14.0, "ok", False, False),
+        (10.0, 11.0, 12.0, "indeterminate", False, False),
+        (10.0, 11.0, 12.0, "ok", True, False),
+    ],
+)
+def test_ivm_live_write_witness_requires_acknowledged_input_after_initial_snapshot(
+    monkeypatch, snapshot_closed, invoked, completed, outcome, mismatch, expected
+):
+    db = _write_ledger(outcome)
+    with db:
+        db.execute("UPDATE writes SET invoke_rt=?,complete_rt=?", (invoked, completed))
+    window = ivm.Window(Mock(), "host", db, 20, 0, 1)
+    window.snapshot_closed_rt = snapshot_closed
+    window.stream = model.Stream(10)
+    window.seen_ids = {1: {12}}
+    window.closed_ids = {1: (12.5, 13.0)}
+    if mismatch:
+        window.checker.first_mismatch_time = 12
+    guidance = {}
+    monkeypatch.setattr(ivm, "always", Mock())
+    monkeypatch.setattr(
+        ivm,
+        "sometimes",
+        lambda condition, message, details: guidance.update({message: condition}),
+    )
+    monkeypatch.setattr(ivm.telemetry_coverage, "ivm_checked", Mock())
+    try:
+        ivm._check_writes(window, db, {})
+        assert (
+            guidance.get(
+                "ivm: acknowledged writes begin after the subscription snapshot closes and are checked on the same stream",
+                False,
+            )
+            is expected
+        )
+    finally:
+        db.close()
+
 
 @pytest.mark.parametrize("corrupt", [False, True])
 @pytest.mark.parametrize("outcome", ["ok", "pending", "indeterminate"])

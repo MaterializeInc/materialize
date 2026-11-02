@@ -649,6 +649,13 @@ def test_ivm_interleaving_checks_the_same_write_after_disruption(
     )
     selection = Mock(return_value=ivm_write.disrupt)
     monkeypatch.setattr(pod_restarts, "interleaving_disruption", selection)
+    overlap = Mock(
+        side_effect=lambda host, disruption, **kwargs: ivm_write.writer.write(
+            before_commit=disruption, kind="t_insert"
+        )
+        or True
+    )
+    monkeypatch.setattr(ivm, "_interleaved_write", overlap)
     observed = []
 
     def check(env_arg, host, db, *, allow_faults=True):
@@ -663,6 +670,8 @@ def test_ivm_interleaving_checks_the_same_write_after_disruption(
 
     assert observed == [(1, "indeterminate" if lost_commit else "ok")]
     assert selection.call_args.kwargs["cluster_id"] == "u-ivm"
+    assert overlap.call_args.args == ("host", ivm_write.disrupt)
+    assert type(overlap.call_args.kwargs["race_commit"]) is bool
 
 
 def test_ivm_interleaving_skips_writes_when_no_disruption_is_available(
