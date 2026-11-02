@@ -1591,6 +1591,10 @@ impl MirRelationExpr {
     /// [`MirRelationExpr::let_bind`] builds. If `self` is already a `Get`, returns a copy of
     /// `self` and `None`, and no `Let` is needed.
     ///
+    /// The type of a new `Get` has no unique keys. (Keys carried in the `Get` would compound in
+    /// the types of nested filters with equality predicates over such `Get`s, exponentially in the
+    /// nesting depth, and `NormalizeLets` derives them from the `Let`'s value anyway.)
+    ///
     /// Usually used together with `let_bind` through [`MirRelationExpr::let_in`].
     pub fn let_get(&self, id_gen: &mut IdGen) -> (MirRelationExpr, Option<LocalId>) {
         if let MirRelationExpr::Get { .. } = self {
@@ -1599,7 +1603,9 @@ impl MirRelationExpr {
             let id = LocalId::new(id_gen.allocate_id());
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
-                typ: self.typ(),
+                // TODO(SQL-427): Once key inference no longer enumerates key variants, this can
+                // carry `self.typ()` with its keys.
+                typ: ReprRelationType::new(self.typ().column_types),
                 access_strategy: AccessStrategy::UnknownOrLocal,
             };
             (get, Some(id))
