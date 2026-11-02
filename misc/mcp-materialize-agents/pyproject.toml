@@ -15,7 +15,7 @@
 
 [project]
 name = "mcp_materialize_agents"
-version = "0.3.2"
+version = "0.3.3"
 description = "Live data layer for agents. Expose canonical business objects as database-consistent, instantly-queryable SQL views via Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,8 +24,9 @@ authors = [
 ]
 
 keywords = ["materialize", "mcp", "database", "api"]
+classifiers = ["Development Status :: 7 - Inactive"]
 dependencies = [
-    "mcp>=1.10.1",
+    "mcp>=1.30.0,<2",
     "psycopg-pool>=3.2.6",
     "psycopg[binary]>=3.2.6",
     "pydantic>=2.0.0",

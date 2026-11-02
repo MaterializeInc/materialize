@@ -1,5 +1,7 @@
 # Materialize MCP Server
 
+**Deprecated.** This package is no longer maintained. MCP is built into Materialize: the [built-in MCP server](https://materialize.com/docs/developer-tools/mcp-server/) lets agents find and query your data products at `/api/mcp/agent`, with nothing to install.
+
 **The live data layer for apps and agents**
 
 Agents succeed when they can act in a loop with confidence.
@@ -147,13 +149,13 @@ pip install mcp-materialize-agents
 Run with defaults:
 
 ```bash
-mcp-materialize-agents
+mcp_materialize_agents
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv run mcp-materialize-agents
+uv run mcp_materialize_agents
 ```
 
 ---
