@@ -20,6 +20,16 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.49.0
+*Released to Materialize Cloud: 2026-11-05* <br>
+*Released to Materialize Self-Managed: 2026-11-06* <br>
+
+### Advisory {#v26.49-advisory}
+
+- **Query plans may change when a SQL Server source table is re-created**: Starting with this release, a table created from a SQL Server source records at most one key, the `PRIMARY KEY` or `UNIQUE` constraint behind its CDC capture instance's index (see [Unique keys](/ingest-data/sql-server/#unique-keys)). Existing tables are not affected, but any workflow that re-creates the table in Materialize, such as a blue/green deployment that re-creates the source's tables or the [source versioning](/ingest-data/sql-server/source-versioning/) procedure, creates it with the new key set. If the table had other `PRIMARY KEY` or `UNIQUE` constraints, views, indexes, and materialized views that depend on it can get a different plan, for example a `DISTINCT` over the columns of a no longer recorded constraint is kept instead of removed, and may use more memory or CPU as a result. Query results do not change.
+
+  **Upgrade impact**: Before promoting a deployment that re-creates SQL Server source tables, compare the plans of the objects that depend on them with [`EXPLAIN PLAN`](/sql/explain-plan/). To keep a `UNIQUE` constraint other than the primary key as the table's key, create the capture instance with [`@index_name`](/ingest-data/sql-server/#unique-keys) set to that constraint.
+
 ## v26.48.2
 *Released to Materialize Cloud: 2026-10-29 (v26.48.0)* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
