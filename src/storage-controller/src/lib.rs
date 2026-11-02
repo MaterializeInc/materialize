@@ -2626,6 +2626,9 @@ impl StorageController for Controller {
                     // poses an annoying user experience, so instead just skip
                     // over them.
                     GenericSourceConnection::LoadGenerator(_) => continue,
+                    // Producers receive acknowledgements only for records that are already
+                    // durable, so every acknowledged record is visible at the current upper.
+                    GenericSourceConnection::KafkaListener(_) => continue,
                 },
                 // Skip over all other objects
                 _ => {

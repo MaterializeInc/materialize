@@ -25,6 +25,7 @@ mz-cluster-client = { path = "../cluster-client" }
 mz-compute = { path = "../compute", default-features = false }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-http-util = { path = "../http-util" }
+mz-kafka-server = { path = "../kafka-server" }
 mz-metrics = { path = "../metrics" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["async", "panic", "tracing"] }

@@ -386,6 +386,13 @@ fn rewrite_sources_to_tables(
             progress_subsource,
         } = source_stmt;
 
+        // A Kafka listener source with a single TOPIC has no `CREATE TABLE .. FROM SOURCE`
+        // form, which needs TOPIC PREFIX, so it keeps writing to its own relation.
+        if matches!(connection, CreateSourceConnection::KafkaListener { .. }) {
+            info!("migrate: skipping Kafka listener source: {name}");
+            continue;
+        }
+
         let (progress_name, progress_item) = match progress_subsource {
             Some(DeferredItemName::Named(RawItemName::Name(name))) => {
                 let partial_name = normalize::unresolved_item_name(name.clone())?;
@@ -435,13 +442,17 @@ fn rewrite_sources_to_tables(
                     }
                 });
             }
-            CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. } => {
-            }
+            CreateSourceConnection::Kafka { .. }
+            | CreateSourceConnection::LoadGenerator { .. }
+            | CreateSourceConnection::KafkaListener { .. } => {}
         }
 
         // Then, figure out the new statements for the progress and source.
         let (new_progress_name, new_progress_stmt, new_source_name, new_source_stmt) =
             match connection {
+                CreateSourceConnection::KafkaListener { .. } => {
+                    unreachable!("Kafka listener sources are skipped above")
+                }
                 connection @ (CreateSourceConnection::Postgres { .. }
                 | CreateSourceConnection::MySql { .. }
                 | CreateSourceConnection::SqlServer { .. }

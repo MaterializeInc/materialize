@@ -22,7 +22,7 @@ use anyhow::Context;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
-    FronteggResolver, SniTemplate, TenantDnsResolver,
+    FronteggResolver, KafkaConfig, KafkaRegistryConfig, SniTemplate, TenantDnsResolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -94,6 +94,38 @@ pub struct ServiceArgs {
     /// destinations.
     #[clap(long, value_name = "HOST.{}.NAME:PORT")]
     pgwire_sni_resolver_template: Option<String>,
+    /// Listen address for Kafka connections to clusters' Kafka listener sources.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        requires = "kafka_sni_resolver_template"
+    )]
+    kafka_listen_addr: Option<SocketAddr>,
+    /// Kafka resolver address template. The first subdomain of the Kafka SNI host is
+    /// `<environment>-<cluster ID>`. `{}` is replaced with the environment and `{cluster}` with the
+    /// cluster ID to get a DNS address. The first IP that address resolves to is the proxy
+    /// destination.
+    #[clap(
+        long,
+        value_name = "HOST-{cluster}.{}.NAME:PORT",
+        requires = "kafka_listen_addr"
+    )]
+    kafka_sni_resolver_template: Option<String>,
+    /// Listen address for connections to the schema registries of clusters' Kafka listeners,
+    /// which clients reach at the same SNI host as the cluster's Kafka listener.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        requires_all = ["kafka_listen_addr", "kafka_registry_sni_resolver_template"]
+    )]
+    kafka_registry_listen_addr: Option<SocketAddr>,
+    /// Schema registry resolver address template, like `--kafka-sni-resolver-template`.
+    #[clap(
+        long,
+        value_name = "HOST-{cluster}.{}.NAME:PORT",
+        requires = "kafka_registry_listen_addr"
+    )]
+    kafka_registry_sni_resolver_template: Option<String>,
     /// Cancellation resolver configmap directory. The org id part of the incoming connection id
     /// (the 12 bits after (and excluding) the first bit) converted to a 3-char UUID string is
     /// appended to this to make a file path. That file is read, and every newline-delimited line
@@ -358,6 +390,18 @@ pub async fn run(
         cancellation_resolver,
         resolver,
         args.https_sni_resolver_template,
+        args.kafka_listen_addr.map(|listen_addr| KafkaConfig {
+            listen_addr,
+            resolver_template: args.kafka_sni_resolver_template.expect("clap enforced"),
+            registry: args
+                .kafka_registry_listen_addr
+                .map(|listen_addr| KafkaRegistryConfig {
+                    listen_addr,
+                    resolver_template: args
+                        .kafka_registry_sni_resolver_template
+                        .expect("clap enforced"),
+                }),
+        }),
         args.tls.into_config()?,
         args.internal_tls,
         metrics_registry,

@@ -13,7 +13,7 @@ use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fs::Permissions;
 use std::future::Future;
-use std::net::{IpAddr, SocketAddr, TcpListener as StdTcpListener};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
 use std::num::NonZero;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
@@ -325,6 +325,22 @@ impl NamespacedProcessOrchestrator {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
+    // Clients connect to each process's own TCP proxy, which `ServiceAssignments::external_addrs`
+    // reports.
+    fn ensure_endpoint(
+        &self,
+        _id: &str,
+        _port: &ServicePort,
+        _target: &str,
+        _process: usize,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    fn drop_endpoint(&self, _id: &str) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     fn ensure_service(
         &self,
         id: &str,
@@ -679,9 +695,21 @@ impl OrchestratorWorker {
                     });
                 }
 
+                // Clients reach a proxy bound to an unspecified IP through the loopback address.
+                let external_addrs = tcp_proxy_addrs
+                    .iter()
+                    .map(|(name, addr)| {
+                        let mut addr = *addr;
+                        if addr.ip().is_unspecified() {
+                            addr.set_ip(Ipv4Addr::LOCALHOST.into());
+                        }
+                        (name.clone(), addr.to_string())
+                    })
+                    .collect();
                 let mut args = args(ServiceAssignments {
                     listen_addrs,
                     peer_addrs: &peer_addrs,
+                    external_addrs: &external_addrs,
                 });
                 args.push(format!("--process={i}"));
                 if disk {

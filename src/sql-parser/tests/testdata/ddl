@@ -3141,6 +3141,41 @@ CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST 'ssh-bastion', PORT 1234, US
 CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST = 'ssh-bastion', PORT = 1234, USER = 'blah')
 
 parse-statement
+CREATE SOURCE events FROM KAFKA LISTENER
+----
+CREATE SOURCE events FROM KAFKA LISTENER
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("events")]), in_cluster: None, col_names: [], connection: KafkaListener { options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE events IN CLUSTER ingest FROM KAFKA LISTENER (TOPIC 'events', SASL USERNAME 'producer', SASL PASSWORD SECRET pw) KEY FORMAT TEXT VALUE FORMAT JSON INCLUDE KEY, OFFSET, TIMESTAMP, HEADERS ENVELOPE UPSERT
+----
+CREATE SOURCE events IN CLUSTER ingest FROM KAFKA LISTENER (TOPIC = 'events', SASL USERNAME = 'producer', SASL PASSWORD = SECRET pw) KEY FORMAT TEXT VALUE FORMAT JSON INCLUDE KEY, OFFSET, TIMESTAMP, HEADERS ENVELOPE UPSERT
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("events")]), in_cluster: Some(Unresolved(Ident("ingest"))), col_names: [], connection: KafkaListener { options: [KafkaListenerSourceOption { name: Topic, value: Some(Value(String("events"))) }, KafkaListenerSourceOption { name: SaslUsername, value: Some(Value(String("producer"))) }, KafkaListenerSourceOption { name: SaslPassword, value: Some(Secret(Name(UnresolvedItemName([Ident("pw")])))) }] }, include_metadata: [Key { alias: None }, Offset { alias: None }, Timestamp { alias: None }, Headers { alias: None }], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert { value_decode_err_policy: [] }), if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE cdc FROM KAFKA LISTENER (TOPIC PREFIX 'cdc.public.')
+----
+CREATE SOURCE cdc FROM KAFKA LISTENER (TOPIC PREFIX = 'cdc.public.')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("cdc")]), in_cluster: None, col_names: [], connection: KafkaListener { options: [KafkaListenerSourceOption { name: TopicPrefix, value: Some(Value(String("cdc.public."))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE cdc FROM KAFKA LISTENER (TOPIC PREFIX 'cdc.', VALIDATE ON PRODUCE)
+----
+CREATE SOURCE cdc FROM KAFKA LISTENER (TOPIC PREFIX = 'cdc.', VALIDATE ON PRODUCE)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("cdc")]), in_cluster: None, col_names: [], connection: KafkaListener { options: [KafkaListenerSourceOption { name: TopicPrefix, value: Some(Value(String("cdc."))) }, KafkaListenerSourceOption { name: ValidateOnProduce, value: None }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE events FROM KAFKA LISTENER (GROUP ID PREFIX 'x')
+----
+error: Expected one of SASL or TOPIC or VALIDATE, found GROUP
+CREATE SOURCE events FROM KAFKA LISTENER (GROUP ID PREFIX 'x')
+                                          ^
+
+parse-statement
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 ----
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER

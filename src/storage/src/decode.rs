@@ -270,7 +270,7 @@ pub(crate) enum DataDecoderInner {
 }
 
 #[derive(Debug)]
-struct DataDecoder {
+pub(crate) struct DataDecoder {
     inner: DataDecoderInner,
     metrics: DecodeMetricDefs,
 }
@@ -340,7 +340,7 @@ impl DataDecoder {
     }
 }
 
-async fn get_decoder(
+pub(crate) async fn get_decoder(
     encoding: DataEncoding,
     debug_name: &str,
     // Information about optional transformations that can be eagerly done.
@@ -449,7 +449,7 @@ async fn get_decoder(
     Ok(decoder)
 }
 
-async fn decode_delimited(
+pub(crate) async fn decode_delimited(
     decoder: &mut DataDecoder,
     buf: &[u8],
 ) -> Result<Result<Option<Row>, DecodeError>, CsrConnectError> {

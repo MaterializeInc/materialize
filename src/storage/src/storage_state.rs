@@ -427,14 +427,22 @@ pub struct StorageInstanceContext {
     /// The memory limit of the materialize cluster replica. This will
     /// be used to calculate and configure the maximum inflight bytes for backpressure
     pub cluster_memory_limit: Option<usize>,
+    /// The server through which Kafka producers write to Kafka listener sources, if this replica
+    /// accepts Kafka connections.
+    pub kafka_server: Option<mz_kafka_server::KafkaServer>,
 }
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub fn new(scratch_directory: Option<PathBuf>, cluster_memory_limit: Option<usize>) -> Self {
+    pub fn new(
+        scratch_directory: Option<PathBuf>,
+        cluster_memory_limit: Option<usize>,
+        kafka_server: Option<mz_kafka_server::KafkaServer>,
+    ) -> Self {
         Self {
             scratch_directory,
             cluster_memory_limit,
+            kafka_server,
         }
     }
 

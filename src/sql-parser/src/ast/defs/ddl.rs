@@ -1222,6 +1222,53 @@ impl_display_for_with_option!(KafkaSourceConfigOption);
 impl_display_t!(KafkaSourceConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum KafkaListenerSourceOptionName {
+    Topic,
+    TopicPrefix,
+    SaslUsername,
+    SaslPassword,
+    ValidateOnProduce,
+}
+
+impl AstDisplay for KafkaListenerSourceOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            KafkaListenerSourceOptionName::Topic => "TOPIC",
+            KafkaListenerSourceOptionName::TopicPrefix => "TOPIC PREFIX",
+            KafkaListenerSourceOptionName::SaslUsername => "SASL USERNAME",
+            KafkaListenerSourceOptionName::SaslPassword => "SASL PASSWORD",
+            KafkaListenerSourceOptionName::ValidateOnProduce => "VALIDATE ON PRODUCE",
+        })
+    }
+}
+impl_display!(KafkaListenerSourceOptionName);
+
+impl WithOptionName for KafkaListenerSourceOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            KafkaListenerSourceOptionName::Topic
+            | KafkaListenerSourceOptionName::TopicPrefix
+            | KafkaListenerSourceOptionName::ValidateOnProduce => false,
+            KafkaListenerSourceOptionName::SaslUsername
+            | KafkaListenerSourceOptionName::SaslPassword => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KafkaListenerSourceOption<T: AstInfo> {
+    pub name: KafkaListenerSourceOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(KafkaListenerSourceOption);
+impl_display_t!(KafkaListenerSourceOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KafkaSinkConfigOptionName {
     CompressionType,
     PartitionBy,
@@ -1518,6 +1565,9 @@ pub enum CreateSourceConnection<T: AstInfo> {
         generator: LoadGenerator,
         options: Vec<LoadGeneratorOption<T>>,
     },
+    KafkaListener {
+        options: Vec<KafkaListenerSourceOption<T>>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
@@ -1574,6 +1624,14 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
             CreateSourceConnection::LoadGenerator { generator, options } => {
                 f.write_str("LOAD GENERATOR ");
                 f.write_node(generator);
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
+                }
+            }
+            CreateSourceConnection::KafkaListener { options } => {
+                f.write_str("KAFKA LISTENER");
                 if !options.is_empty() {
                     f.write_str(" (");
                     f.write_node(&display::comma_separated(options));

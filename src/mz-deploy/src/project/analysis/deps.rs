@@ -485,6 +485,11 @@ fn extract_source_connection_dep(
             ));
         }
         CreateSourceConnection::LoadGenerator { .. } => {}
+        CreateSourceConnection::KafkaListener { options } => {
+            for value in options.iter().filter_map(|o| o.value.as_ref()) {
+                extract_with_option_value_deps(value, default_database, default_schema, deps);
+            }
+        }
     }
 }
 

@@ -312,6 +312,8 @@ pub fn build_ingestion_dataflow(
                 config: storage_state.storage_configuration.clone(),
                 remap_collection_id: description.remap_collection_id,
                 busy_signal: Arc::clone(&busy_signal),
+                kafka_server: storage_state.instance_context.kafka_server.clone(),
+                cluster_memory_limit: storage_state.instance_context.cluster_memory_limit,
             };
 
             let (outputs, source_health, remap_upper, source_tokens) = match connection {
@@ -356,6 +358,16 @@ pub fn build_ingestion_dataflow(
                     base_source_config,
                 ),
                 GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
+                    mz_scope,
+                    root_scope,
+                    &debug_name,
+                    c,
+                    description.clone(),
+                    export_upper_streams,
+                    storage_state,
+                    base_source_config,
+                ),
+                GenericSourceConnection::KafkaListener(c) => crate::render::sources::render_source(
                     mz_scope,
                     root_scope,
                     &debug_name,

@@ -63,10 +63,11 @@ impl Client {
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
+        // The URL's path is the API's base, for registries that serve it under a prefix.
         let mut url = (self.url)();
         url.path_segments_mut()
             .expect("constructor validated URL can be a base")
-            .clear()
+            .pop_if_empty()
             .extend(path);
 
         let mut request = self.inner.request(method, url);
@@ -926,6 +927,41 @@ mod tests {
     #![allow(clippy::disallowed_types)]
     use super::*;
     use std::collections::HashMap;
+
+    #[mz_ore::test]
+    fn test_request_url_keeps_base_path() {
+        let url_for = |base: &str| {
+            let base = Url::parse(base).unwrap();
+            let client = Client::new(
+                reqwest::Client::new(),
+                Arc::new(move || base.clone()),
+                None,
+                Duration::from_secs(1),
+            )
+            .unwrap();
+            let request = client
+                .make_request(Method::GET, &["subjects", "a/b", "versions"])
+                .build()
+                .unwrap();
+            request.url().to_string()
+        };
+        assert_eq!(
+            url_for("http://registry:8081"),
+            "http://registry:8081/subjects/a%2Fb/versions"
+        );
+        assert_eq!(
+            url_for("http://registry:8081/"),
+            "http://registry:8081/subjects/a%2Fb/versions"
+        );
+        assert_eq!(
+            url_for("http://registry/apis/ccompat/v7"),
+            "http://registry/apis/ccompat/v7/subjects/a%2Fb/versions"
+        );
+        assert_eq!(
+            url_for("http://registry/apis/ccompat/v7/"),
+            "http://registry/apis/ccompat/v7/subjects/a%2Fb/versions"
+        );
+    }
 
     /// Helper to create a SubjectVersion
     fn sv(subject: &str, version: i32) -> SubjectVersion {

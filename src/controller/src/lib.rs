@@ -106,6 +106,10 @@ pub struct ControllerConfig {
     /// Locator for HTTP addresses of cluster replicas, used to proxy HTTP
     /// requests from environmentd to clusterd.
     pub replica_http_locator: Arc<ReplicaHttpLocator>,
+    /// The address at which Kafka clients reach a cluster's Kafka listener, with `{cluster_id}`
+    /// standing for the cluster's ID. If unset, each replica advertises the address its
+    /// orchestrator exposes it at, if any.
+    pub kafka_advertised_addr_template: Option<String>,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -167,6 +171,13 @@ pub struct Controller {
     readiness: Readiness,
     /// Tasks for collecting replica metrics.
     metrics_tasks: BTreeMap<(ClusterId, ReplicaId), AbortOnDropHandle<()>>,
+    /// See [`ControllerConfig::kafka_advertised_addr_template`].
+    kafka_advertised_addr_template: Option<String>,
+    /// The replicas of each cluster, with the service name of those that accept Kafka
+    /// connections.
+    kafka_listener_replicas: BTreeMap<ClusterId, BTreeMap<ReplicaId, Option<String>>>,
+    /// The replica service that each cluster's Kafka endpoint routes to.
+    kafka_endpoint_targets: BTreeMap<ClusterId, String>,
     /// Sender for the channel over which replica metrics are sent.
     metrics_tx: mpsc::UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
@@ -292,6 +303,9 @@ impl Controller {
             orchestrator: _,
             readiness,
             metrics_tasks: _,
+            kafka_advertised_addr_template: _,
+            kafka_listener_replicas: _,
+            kafka_endpoint_targets: _,
             metrics_tx: _,
             metrics_rx: _,
             now: _,
@@ -745,6 +759,9 @@ impl Controller {
             orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),
+            kafka_advertised_addr_template: config.kafka_advertised_addr_template,
+            kafka_listener_replicas: BTreeMap::new(),
+            kafka_endpoint_targets: BTreeMap::new(),
             metrics_tx,
             metrics_rx,
             now: config.now,

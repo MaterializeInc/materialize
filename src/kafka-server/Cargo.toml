@@ -1,0 +1,36 @@
+[package]
+name = "mz-kafka-server"
+description = "A server for the Kafka wire protocol that accepts records from Kafka producers."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+bytes = { workspace = true, features = ["serde"] }
+futures.workspace = true
+headers.workspace = true
+kafka-protocol.workspace = true
+lz4_flex.workspace = true
+mz-avro = { path = "../avro" }
+mz-ore = { path = "../ore", features = ["async", "network"] }
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
+tracing.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+mz-kafka-util = { path = "../kafka-util" }
+mz-ore = { path = "../ore", features = ["async", "network", "test"] }
+rdkafka.workspace = true
+tower.workspace = true

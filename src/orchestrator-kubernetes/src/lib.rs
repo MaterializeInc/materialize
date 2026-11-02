@@ -49,7 +49,8 @@ use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
     DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
     OfflineReason, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
-    ServiceProcessMetrics, ServiceStatus, recommended_k8s_labels, scheduling_config::*,
+    ServicePort as MzServicePort, ServiceProcessMetrics, ServiceStatus, recommended_k8s_labels,
+    scheduling_config::*,
 };
 use mz_ore::cast::CastInto;
 use mz_ore::error::ErrorExt;
@@ -269,6 +270,12 @@ enum WorkerCommand {
         desc: ServiceDescription,
     },
     DropService {
+        name: String,
+    },
+    EnsureEndpoint {
+        service: K8sService,
+    },
+    DropEndpoint {
         name: String,
     },
     ListServices {
@@ -713,9 +720,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 peer_addrs[i].insert(name.clone(), format!("{host}:{port}"));
             }
         }
+        // Clients outside the Kubernetes cluster reach processes through endpoints, whose
+        // external addresses the caller knows.
+        let external_addrs = BTreeMap::new();
         let mut args = args(ServiceAssignments {
             listen_addrs: &listen_addrs,
             peer_addrs: &peer_addrs,
+            external_addrs: &external_addrs,
         });
 
         // This constrains the orchestrator (for those orchestrators that support
@@ -1316,6 +1327,51 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         Ok(())
     }
 
+    fn ensure_endpoint(
+        &self,
+        id: &str,
+        port: &MzServicePort,
+        target: &str,
+        process: usize,
+    ) -> Result<(), anyhow::Error> {
+        let name = self.service_name(id);
+        let pod = format!("{}-{process}", self.service_name(target));
+        let service = K8sService {
+            metadata: ObjectMeta {
+                name: Some(name),
+                labels: Some(btreemap! {
+                    "environmentd.materialize.cloud/namespace".into() => self.namespace.clone(),
+                    "environmentd.materialize.cloud/endpoint-id".into() => id.into(),
+                }),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                ports: Some(vec![ServicePort {
+                    port: port.port_hint.into(),
+                    name: Some(port.name.clone()),
+                    ..Default::default()
+                }]),
+                // A cluster IP, unlike the headless services of `ensure_service`, keeps the
+                // address stable when the target changes, so clients holding a resolved address
+                // follow the change.
+                selector: Some(btreemap! {
+                    "statefulset.kubernetes.io/pod-name".into() => pod,
+                }),
+                ..Default::default()
+            }),
+            status: None,
+        };
+        self.send_command(WorkerCommand::EnsureEndpoint { service });
+        Ok(())
+    }
+
+    fn drop_endpoint(&self, id: &str) -> Result<(), anyhow::Error> {
+        self.send_command(WorkerCommand::DropEndpoint {
+            name: self.service_name(id),
+        });
+        Ok(())
+    }
+
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
         let (result_tx, result_rx) = oneshot::channel();
@@ -1520,6 +1576,10 @@ impl OrchestratorWorker {
                 retry(|| self.ensure_service(desc.clone()), "EnsureService").await
             }
             DropService { name } => retry(|| self.drop_service(&name), "DropService").await,
+            EnsureEndpoint { service } => {
+                retry(|| self.ensure_endpoint(service.clone()), "EnsureEndpoint").await
+            }
+            DropEndpoint { name } => retry(|| self.drop_endpoint(&name), "DropEndpoint").await,
             ListServices {
                 namespace,
                 result_tx,
@@ -1814,6 +1874,35 @@ impl OrchestratorWorker {
             .delete(name, &DeleteParams::default())
             .await;
         match res {
+            Ok(_) => Ok(()),
+            Err(K8sError::Api(e)) if e.code == 404 => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn ensure_endpoint(&self, mut service: K8sService) -> Result<(), K8sError> {
+        service
+            .metadata
+            .owner_references
+            .get_or_insert(vec![])
+            .extend(self.owner_references.iter().cloned());
+        let name = service.metadata.name.clone().expect("endpoints are named");
+        self.service_api
+            .patch(
+                &name,
+                &PatchParams::apply(FIELD_MANAGER).force(),
+                &Patch::Apply(service),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn drop_endpoint(&self, name: &str) -> Result<(), K8sError> {
+        match self
+            .service_api
+            .delete(name, &DeleteParams::default())
+            .await
+        {
             Ok(_) => Ok(()),
             Err(K8sError::Api(e)) if e.code == 404 => Ok(()),
             Err(e) => Err(e),

@@ -58,6 +58,7 @@ pub enum StatusNamespace {
     /// `Running`.
     Generator,
     Kafka,
+    KafkaListener,
     Postgres,
     MySql,
     SqlServer,
@@ -80,6 +81,7 @@ impl fmt::Display for StatusNamespace {
         match self {
             Generator => write!(f, "generator"),
             Kafka => write!(f, "kafka"),
+            KafkaListener => write!(f, "kafka-listener"),
             Postgres => write!(f, "postgres"),
             MySql => write!(f, "mysql"),
             SqlServer => write!(f, "sql-server"),

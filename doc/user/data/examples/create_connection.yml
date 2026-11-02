@@ -315,7 +315,9 @@
       description: |
         *Value:* `text`. Required.
 
-        The schema registry URL.
+        The schema registry URL. A path, for example
+        `https://registry.example.com/apis/ccompat/v7`, is the base path of the
+        registry's API.
     - name: "`USERNAME` / `PASSWORD`"
       description: |
         *Value:* secret or `text` / secret

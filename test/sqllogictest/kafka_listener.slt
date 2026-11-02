@@ -1,0 +1,169 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Planning of Kafka listener sources. Producing to them is tested in
+# src/kafka-server/tests and misc/kafka-listener.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_kafka_listener_source = false
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER ingest SIZE 'scale=1,workers=1'
+
+statement error CREATE SOURCE \.\.\. FROM KAFKA LISTENER is not available
+CREATE SOURCE events IN CLUSTER ingest FROM KAFKA LISTENER
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_kafka_listener_source = true
+----
+COMPLETE 0
+
+# The topic defaults to the source name and is recorded.
+statement ok
+CREATE SOURCE events IN CLUSTER ingest FROM KAFKA LISTENER
+
+query TT
+SHOW CREATE SOURCE events
+----
+materialize.public.events  CREATE␠SOURCE␠materialize.public.events⏎IN␠CLUSTER␠ingest⏎FROM␠KAFKA␠LISTENER␠(TOPIC␠=␠'events')⏎EXPOSE␠PROGRESS␠AS␠materialize.public.events_progress;
+
+query TTTT
+SHOW COLUMNS FROM events
+----
+value true bytea (empty)
+
+query TTTT
+SHOW COLUMNS FROM events_progress
+----
+offset true uint8 (empty)
+
+query TT
+SELECT name, type FROM mz_sources WHERE name LIKE 'events%' ORDER BY name
+----
+events kafka-listener
+events_progress progress
+
+statement ok
+CREATE SECRET pw AS 'hunter2'
+
+statement ok
+CREATE SOURCE users
+  IN CLUSTER ingest
+  FROM KAFKA LISTENER (TOPIC 'users-v1', SASL USERNAME 'ingest', SASL PASSWORD SECRET pw)
+  KEY FORMAT TEXT VALUE FORMAT JSON
+  INCLUDE PARTITION, OFFSET, TIMESTAMP AS ts, HEADERS, HEADER 'trace' AS trace
+  ENVELOPE UPSERT
+
+query TTTT
+SHOW COLUMNS FROM users
+----
+key  false  text  (empty)
+data  false  jsonb  (empty)
+partition  false  integer  (empty)
+offset  false  uint8  (empty)
+ts  false  timestamp␠without␠time␠zone  (empty)
+headers  false  list  (empty)
+trace  true  text  (empty)
+
+query TTT
+SELECT name, envelope_type, key_format FROM mz_sources WHERE name = 'users'
+----
+users upsert text
+
+# The secret cannot be dropped while the source uses it.
+statement error cannot drop secret "pw": still depended upon by source "users"
+DROP SECRET pw
+
+statement error SASL USERNAME and SASL PASSWORD must be specified together
+CREATE SOURCE s IN CLUSTER ingest FROM KAFKA LISTENER (SASL USERNAME 'ingest')
+
+statement error must provide a secret value
+CREATE SOURCE s IN CLUSTER ingest FROM KAFKA LISTENER (SASL USERNAME 'ingest', SASL PASSWORD 'hunter2')
+
+statement error invalid Kafka topic ""
+CREATE SOURCE s IN CLUSTER ingest FROM KAFKA LISTENER (TOPIC '')
+
+statement error topics may contain only ASCII letters, digits, '\.', '_' and '-'
+CREATE SOURCE s IN CLUSTER ingest FROM KAFKA LISTENER (TOPIC 'a b')
+
+statement error Expected one of SASL or TOPIC
+CREATE SOURCE s IN CLUSTER ingest FROM KAFKA LISTENER (START OFFSET (1))
+
+statement error CREATE TABLE \.\. FROM SOURCE requires a Kafka listener source created with TOPIC PREFIX
+CREATE TABLE t FROM SOURCE events (REFERENCE "events")
+
+# A source with a topic prefix has no relation of its own. Its tables name their topics.
+statement ok
+CREATE SOURCE cdc IN CLUSTER ingest FROM KAFKA LISTENER (TOPIC PREFIX 'cdc.public.')
+
+query TT
+SHOW CREATE SOURCE cdc
+----
+materialize.public.cdc  CREATE␠SOURCE␠materialize.public.cdc⏎IN␠CLUSTER␠ingest⏎FROM␠KAFKA␠LISTENER␠(TOPIC␠PREFIX␠=␠'cdc.public.');
+
+statement ok
+CREATE SOURCE validated IN CLUSTER ingest FROM KAFKA LISTENER (TOPIC PREFIX 'validated.', VALIDATE ON PRODUCE)
+
+query TT
+SHOW CREATE SOURCE validated
+----
+materialize.public.validated  CREATE␠SOURCE␠materialize.public.validated⏎IN␠CLUSTER␠ingest⏎FROM␠KAFKA␠LISTENER␠(TOPIC␠PREFIX␠=␠'validated.',␠VALIDATE␠ON␠PRODUCE);
+
+statement ok
+DROP SOURCE validated
+
+statement error a Kafka listener source with TOPIC PREFIX has no relation of its own
+CREATE SOURCE s IN CLUSTER ingest FROM KAFKA LISTENER (TOPIC PREFIX 'x.') FORMAT JSON
+
+statement error TOPIC and TOPIC PREFIX cannot be specified together
+CREATE SOURCE s IN CLUSTER ingest FROM KAFKA LISTENER (TOPIC 'x.a', TOPIC PREFIX 'x.')
+
+# An unquoted reference joins its parts with dots.
+statement ok
+CREATE TABLE orders FROM SOURCE cdc (REFERENCE cdc.public.orders)
+  KEY FORMAT JSON VALUE FORMAT JSON INCLUDE OFFSET ENVELOPE UPSERT
+
+statement ok
+CREATE TABLE customers FROM SOURCE cdc (REFERENCE "cdc.public.customers") FORMAT JSON
+
+query TTTT
+SHOW COLUMNS FROM orders
+----
+key  false  jsonb  (empty)
+data  false  jsonb  (empty)
+offset  false  uint8  (empty)
+
+# Tables on the same topic decode its records each with their own format.
+statement ok
+CREATE TABLE orders_text FROM SOURCE cdc (REFERENCE "cdc.public.orders") FORMAT TEXT
+
+statement ok
+DROP TABLE orders_text
+
+statement error topic "other\.orders" does not start with the source's TOPIC PREFIX "cdc\.public\."
+CREATE TABLE o FROM SOURCE cdc (REFERENCE "other.orders") FORMAT JSON
+
+statement error requires a REFERENCE naming the topic
+CREATE TABLE o FROM SOURCE cdc FORMAT JSON
+
+# Dropping a table frees its topic.
+statement ok
+DROP TABLE orders
+
+statement ok
+CREATE TABLE orders FROM SOURCE cdc (REFERENCE "cdc.public.orders") FORMAT JSON
+
+statement ok
+DROP CLUSTER ingest CASCADE
