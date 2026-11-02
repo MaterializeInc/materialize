@@ -1778,7 +1778,7 @@ fn finish_emits_open_periods() {
     let rows = recorder.finish(Some(&tree), 31_000, &cfg);
     assert_eq!(period_totals(&rows), BTreeMap::from([(0, 30_000)]));
     assert_eq!(
-        local.finish(),
+        local.finish(Some(&tree), 31_000, &cfg),
         LocalRows {
             local: rows,
             skew: vec![]
@@ -1841,6 +1841,58 @@ fn finish_records_deferred_arrivals_up_to_now() {
 }
 
 #[mz_ore::test]
+fn local_without_inputs_ahead_of_wall_clock_matches_end_to_end() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut recorder = FreshnessRecorder::new(60_000);
+    let mut local = LocalDelayRecorder::new(60_000);
+    let (mut e2e, mut rows) = (Vec::new(), Vec::new());
+    // The frontier runs an hour ahead and stays there.
+    let frontier = at(60_001 + HOUR_MS);
+    for now in [60_500, 600_500] {
+        e2e.extend(recorder.observe(&tree, &frontier, now, &cfg));
+        rows.extend(local.observe(&tree, &tree, &frontier, now, &[], &cfg).local);
+    }
+    e2e.extend(recorder.finish(Some(&tree), 700_000, &cfg));
+    rows.extend(local.finish(Some(&tree), 700_000, &cfg).local);
+    assert_eq!(rows, e2e);
+    assert_eq!(period_totals(&rows).values().sum::<u64>(), 640_000);
+    let s = cfg.scheme;
+    assert!(rows.iter().all(|r| r.bucket <= s.bucket(500)), "{rows:?}");
+}
+
+#[mz_ore::test]
+fn local_finish_records_deferred_arrivals_up_to_now() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let frontier = at(HOUR_MS + 1);
+    let mut log = VisibilityLog::default();
+    log.record(HOUR_MS + 1, Some(HOUR_MS), 60_000);
+    for logs in [vec![&log], vec![&log, &log]] {
+        let inputs = inputs_of(&tree, &logs);
+        let mut recorder = FreshnessRecorder::new(60_000);
+        let mut local = LocalDelayRecorder::new(60_000);
+        let mut e2e = recorder.observe(&tree, &frontier, 60_000, &cfg);
+        let mut rows = local.observe(&tree, &tree, &frontier, 60_000, &inputs, &cfg);
+        // The object goes away ten minutes later with the frontier unchanged.
+        e2e.extend(recorder.finish(Some(&tree), 660_500, &cfg));
+        let finished = local.finish(Some(&tree), 660_500, &cfg);
+        rows.local.extend(finished.local);
+        rows.skew.extend(finished.skew);
+        assert_eq!(period_totals(&rows.local), period_totals(&e2e));
+        assert_eq!(period_totals(&e2e).values().sum::<u64>(), 600_500);
+        assert!(rows.local.iter().all(|r| r.bucket == 0), "{rows:?}");
+        match inputs.len() {
+            1 => assert_eq!(rows.skew, vec![]),
+            _ => {
+                assert_eq!(period_totals(&rows.skew), period_totals(&e2e));
+                assert!(rows.skew.iter().all(|r| r.bucket == 0), "{rows:?}");
+            }
+        }
+    }
+}
+
+#[mz_ore::test]
 fn local_long_input_outage_uses_last_pruned_observation() {
     let tree = aligned(1000);
     let cfg = config(4);
@@ -1866,7 +1918,7 @@ fn local_long_input_outage_uses_last_pruned_observation() {
             &cfg,
         )
         .local;
-    rows.extend(recorder.finish().local);
+    rows.extend(recorder.finish(Some(&tree), now, &cfg).local);
     let counts = bucket_counts(&rows);
     let total: u64 = counts.values().sum();
     assert_eq!(total, end - start);
@@ -2170,8 +2222,12 @@ fn record_history(
         recorded.skew.extend(rows.skew);
     }
     recorded.high_water_ms = local.high_water_ms();
-    recorded.end_to_end.extend(end_to_end.finish());
-    let rows = local.finish();
+    // Deferred arrivals lie after the last observation, so finishing then records none of them.
+    let last_ms = history.last().map_or(start_ms, |(o, _)| *o);
+    recorded
+        .end_to_end
+        .extend(end_to_end.finish(Some(tree), last_ms, &cfg));
+    let rows = local.finish(Some(tree), last_ms, &cfg);
     recorded.local.extend(rows.local);
     recorded.skew.extend(rows.skew);
     recorded
@@ -2857,8 +2913,11 @@ fn split_never_exceeds_per_arrival_oracle() {
             recorded.skew.extend(rows.skew);
         }
         let high_water_ms = local.high_water_ms();
-        recorded.end_to_end.extend(end_to_end.finish());
-        let rows = local.finish();
+        let last_ms = history.last().map_or(0, |(o, _)| *o);
+        recorded
+            .end_to_end
+            .extend(end_to_end.finish(Some(&tree), last_ms, &cfg));
+        let rows = local.finish(Some(&tree), last_ms, &cfg);
         recorded.local.extend(rows.local);
         recorded.skew.extend(rows.skew);
 
@@ -2934,12 +2993,13 @@ fn split_merges_held_back_observations() {
         longest = longest.max(local.shown_len());
     }
     let high_water_ms = local.high_water_ms();
-    let new = local.finish();
+    let last_ms = history.last().map_or(start_ms, |(o, _)| *o);
+    let new = local.finish(Some(&join), last_ms, &cfg);
     rows.local.extend(new.local);
     rows.skew.extend(new.skew);
     // The join advances every 5 ms, so about 1000 observations wait at a time, and the list
     // stays at its bound only by merging.
-    assert_eq!(longest, super::local::MAX_SHOWN);
+    assert_eq!(longest, super::recorder::MAX_SHOWN);
     // The oracle charges every arrival at its first observation, as an unmerged list would.
     let truths = Truth::all(&join, &join, &history, &inputs, (start_ms, high_water_ms));
     never_exceeds(&rows.local, &truths, cfg.period_ms, Truth::local_ms).unwrap();
@@ -3106,11 +3166,11 @@ fn split_skew_past_the_step_budget_understates() {
     let mut rows = local.observe(&join, &join, &at(span_end + 1), now, &inputs, &cfg);
     // The last arrival the join reflects, on both grids.
     let reflected = local.high_water_ms();
-    let finished = local.finish();
+    let finished = local.finish(Some(&join), now, &cfg);
     rows.local.extend(finished.local);
     rows.skew.extend(finished.skew);
     let mut e2e = end_to_end.observe(&join, &at(span_end + 1), now, &cfg);
-    e2e.extend(end_to_end.finish());
+    e2e.extend(end_to_end.finish(Some(&join), now, &cfg));
     let s = scheme(4);
     // Local delay and end-to-end latency do not depend on the budget.
     assert_eq!(

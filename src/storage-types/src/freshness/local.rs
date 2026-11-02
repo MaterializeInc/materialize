@@ -24,7 +24,7 @@ use timely::progress::Antichain;
 
 use super::ResolvedTree;
 use super::period::{ClosedPeriod, PeriodBook};
-use super::recorder::{PeriodHistogram, PeriodRow, RecorderConfig, add_part, rows};
+use super::recorder::{PeriodHistogram, PeriodRow, RecorderConfig, Shown, add_part, rows};
 
 /// One observed advance of a collection.
 #[derive(Debug, Clone, Copy)]
@@ -209,14 +209,10 @@ struct LocalPeriod {
 #[derive(Debug)]
 pub struct LocalDelayRecorder {
     book: PeriodBook<LocalPeriod>,
-    /// `(reflected, observed_ms)`, ascending in both: the arrivals above the high-water mark up
-    /// to `reflected` were reflected at or before `observed_ms`. At most [`MAX_SHOWN`] entries.
-    shown: Vec<(u64, u64)>,
+    shown: Shown,
+    /// The number of direct inputs at the last observation.
+    inputs: usize,
 }
-
-/// The most entries [`LocalDelayRecorder`] keeps of observations whose arrivals the period book
-/// deferred.
-pub(super) const MAX_SHOWN: usize = 16;
 
 /// The most steps of equal needed timestamps that the skew of one group of windows is split
 /// into.
@@ -227,7 +223,8 @@ impl LocalDelayRecorder {
     pub fn new(start_ms: u64) -> Self {
         LocalDelayRecorder {
             book: PeriodBook::new(start_ms),
-            shown: Vec::new(),
+            shown: Shown::default(),
+            inputs: 0,
         }
     }
 
@@ -251,9 +248,9 @@ impl LocalDelayRecorder {
     /// With no inputs the local delay is the end-to-end latency.
     ///
     /// Both measures may understate and never overstate. An input whose log cannot answer an
-    /// arrival counts as ready at `now_ms`, and one whose answering entry was pruned as ready at
-    /// the observation of its last pruned entry. Rows have the order and finality of
-    /// `FreshnessRecorder::observe`.
+    /// arrival counts as ready at the observation that first reflected the arrival, and one
+    /// whose answering entry was pruned as ready at the observation of its last pruned entry.
+    /// Rows have the order and finality of `FreshnessRecorder::observe`.
     pub fn observe(
         &mut self,
         tree: &ResolvedTree,
@@ -263,94 +260,107 @@ impl LocalDelayRecorder {
         inputs: &[LocalInput<'_>],
         config: &RecorderConfig,
     ) -> LocalRows {
-        let closed = match frontier.as_option() {
-            None => return self.finish(),
-            Some(frontier) => {
-                let Some(last_reflected) = tree.last_reflected(*frontier) else {
-                    return LocalRows::default();
-                };
-                let advance_ms = now_ms.max(last_reflected);
-                // The book defers the arrivals of a frontier ahead of the wall clock past the
-                // next period boundary to a later observation. Charging them at that one would
-                // add the time until then to their local delay, so the first observation that
-                // reflected them is kept.
-                if last_reflected > self.book.high_water_ms()
-                    && self.shown.last().is_none_or(|(r, _)| last_reflected > *r)
-                {
-                    self.shown.push((last_reflected, now_ms));
-                    if self.shown.len() > MAX_SHOWN {
-                        // A frontier that leads the wall clock by many observations would grow
-                        // the list without bound. Merging the neighbours `(r1, o1), (r2, o2)`
-                        // into `(r2, o1)` charges `(r1, r2]` at the earlier `o1`, which
-                        // understates their delays by at most `o2 - o1`, so the pair with the
-                        // closest observations is merged.
-                        let i = (1..self.shown.len())
-                            .min_by_key(|i| self.shown[*i].1.saturating_sub(self.shown[*i - 1].1))
-                            .expect("more than one entry");
-                        let (reflected, _) = self.shown.remove(i);
-                        self.shown[i - 1].0 = reflected;
-                    }
-                }
-                let shown = &self.shown;
-                let histogram = || PeriodHistogram {
-                    scheme: config.scheme,
-                    counts: BTreeMap::new(),
-                };
-                let closed = self.book.advance(
-                    last_reflected,
-                    now_ms,
-                    config,
-                    || LocalPeriod {
-                        local: histogram(),
-                        skew: histogram(),
-                    },
-                    |period, from, to| {
-                        if inputs.is_empty() {
-                            add_part(
-                                tree,
-                                &period.local.scheme,
-                                config.interval_ms,
-                                from,
-                                to,
-                                advance_ms,
-                                &mut period.local.counts,
-                            );
-                        } else {
-                            // NOTE: Raw observation times, because `advance_ms` exceeds them
-                            // by as much as a frontier runs ahead of the wall clock, which
-                            // would overstate the delay by that much. The last entry of
-                            // `shown` reflects `to`, so the parts cover `(from, to]`.
-                            let mut lo = from;
-                            for (reflected, observed_ms) in shown {
-                                let hi = to.min(*reflected);
-                                if lo < hi {
-                                    add_local_part(
-                                        tree,
-                                        needed,
-                                        config.interval_ms,
-                                        (lo, hi),
-                                        *observed_ms,
-                                        inputs,
-                                        period,
-                                    );
-                                    lo = hi;
-                                }
-                            }
-                        }
-                    },
-                );
-                let high_water_ms = self.book.high_water_ms();
-                self.shown.retain(|(r, _)| *r > high_water_ms);
-                closed
-            }
+        self.inputs = inputs.len();
+        let Some(frontier) = frontier.as_option() else {
+            return self.finish_with(tree, needed, now_ms, inputs, config);
         };
-        local_rows(closed)
+        let Some(last_reflected) = tree.last_reflected(*frontier) else {
+            return LocalRows::default();
+        };
+        self.shown
+            .note(last_reflected, now_ms, self.book.high_water_ms());
+        local_rows(self.advance(tree, needed, last_reflected, now_ms, inputs, config))
     }
 
-    /// Like [`FreshnessRecorder::finish`](super::recorder::FreshnessRecorder::finish).
-    pub fn finish(&mut self) -> LocalRows {
-        self.shown.clear();
-        local_rows(self.book.finish())
+    /// Advances the book to `to_ms` at `now_ms`, charging each arrival at the observation that
+    /// first reflected it.
+    fn advance(
+        &mut self,
+        tree: &ResolvedTree,
+        needed: &ResolvedTree,
+        to_ms: u64,
+        now_ms: u64,
+        inputs: &[LocalInput<'_>],
+        config: &RecorderConfig,
+    ) -> Vec<ClosedPeriod<LocalPeriod>> {
+        let shown = &self.shown;
+        let histogram = || PeriodHistogram {
+            scheme: config.scheme,
+            counts: BTreeMap::new(),
+        };
+        let closed = self.book.advance(
+            to_ms,
+            now_ms,
+            config,
+            || LocalPeriod {
+                local: histogram(),
+                skew: histogram(),
+            },
+            |period, from, to| {
+                shown.split(from, to, |lo, hi, observed_ms| {
+                    if inputs.is_empty() {
+                        add_part(
+                            tree,
+                            &period.local.scheme,
+                            config.interval_ms,
+                            lo,
+                            hi,
+                            observed_ms,
+                            &mut period.local.counts,
+                        );
+                    } else {
+                        add_local_part(
+                            tree,
+                            needed,
+                            config.interval_ms,
+                            (lo, hi),
+                            observed_ms,
+                            inputs,
+                            period,
+                        );
+                    }
+                })
+            },
+        );
+        self.shown.forget_through(self.book.high_water_ms());
+        closed
+    }
+
+    /// Ends the recording like [`FreshnessRecorder::finish`](super::recorder::FreshnessRecorder::finish).
+    ///
+    /// The inputs' logs are not consulted, so every input counts as unanswered for the deferred
+    /// arrivals, which records them with a local delay and skew of 0, unless the object has no
+    /// inputs.
+    pub fn finish(
+        &mut self,
+        tree: Option<&ResolvedTree>,
+        now_ms: u64,
+        config: &RecorderConfig,
+    ) -> LocalRows {
+        let Some(tree) = tree else {
+            return local_rows(self.book.finish());
+        };
+        // Stand-ins with empty logs, as many as needed to keep recording skew or not.
+        let empty = VisibilityLog::default();
+        let inputs = vec![LocalInput { tree, log: &empty }; self.inputs.min(2)];
+        self.finish_with(tree, tree, now_ms, &inputs, config)
+    }
+
+    /// Records the deferred arrivals up to `now_ms` with `inputs` and ends the recording.
+    fn finish_with(
+        &mut self,
+        tree: &ResolvedTree,
+        needed: &ResolvedTree,
+        now_ms: u64,
+        inputs: &[LocalInput<'_>],
+        config: &RecorderConfig,
+    ) -> LocalRows {
+        let mut closed = match self.shown.last() {
+            Some(last) => self.advance(tree, needed, last.min(now_ms), now_ms, inputs, config),
+            None => Vec::new(),
+        };
+        closed.extend(self.book.finish());
+        local_rows(closed)
     }
 }
 

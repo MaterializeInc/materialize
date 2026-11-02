@@ -115,6 +115,11 @@ impl Shown {
     pub fn last(&self) -> Option<u64> {
         self.entries.last().map(|(r, _)| *r)
     }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 impl FreshnessRecorder {

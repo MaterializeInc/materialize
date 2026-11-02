@@ -174,7 +174,8 @@ impl FreshnessRecording {
     }
 
     /// Ends the recording of a collection that goes away at `now_ms` and returns the rows of the
-    /// open periods of all measures, as for [`FreshnessRecorder::finish`].
+    /// open periods of all measures, as for [`FreshnessRecorder::finish`] and
+    /// [`LocalDelayRecorder::finish`].
     pub fn finish(
         &mut self,
         tree: Option<&ResolvedTree>,
@@ -186,7 +187,7 @@ impl FreshnessRecording {
         };
         let local = local
             .as_mut()
-            .map(LocalDelayRecorder::finish)
+            .map(|local| local.finish(tree, now_ms, config))
             .unwrap_or_default();
         tag(end_to_end.finish(tree, now_ms, config), local)
     }
@@ -400,7 +401,7 @@ mod tests {
         let mut recording = FreshnessRecording::created(frontier(0), 0).end_to_end_only();
         let mut rows = recording.observe(&tree, &tree, &frontier(90_001), 90_005, &[], &config);
         assert_eq!(recording.recorded_through(), Some(90_000));
-        rows.extend(recording.finish());
+        rows.extend(recording.finish(Some(&tree), 90_005, &config));
         assert!(
             rows.iter()
                 .all(|(measure, _)| *measure == Measure::EndToEnd),
