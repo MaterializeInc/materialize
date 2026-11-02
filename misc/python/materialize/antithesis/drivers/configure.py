@@ -597,6 +597,14 @@ def main() -> int:
     )
 
     ensure_shared_cluster(host, rng.choice([1, 2]))
+    # NOTE: A first-recovery CREATE restarts a read-only candidate's catch-up.
+    # Seed before rollout workloads can create that candidate.
+    from materialize.antithesis.drivers.recovery import ensure_canary
+
+    with sql.connect_with_retry(
+        host, SQL_TIMEOUT_S, options={"cluster": SHARED_CLUSTER}
+    ) as conn:
+        ensure_canary(conn)
     reachable(
         "configure finished with the shared cluster in place", {"profile": profile}
     )

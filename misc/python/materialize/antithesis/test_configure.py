@@ -21,7 +21,7 @@ import pytest
 
 pytest.importorskip("antithesis")
 
-from materialize.antithesis.drivers import configure
+from materialize.antithesis.drivers import configure, recovery
 
 FRONTEND = "enable_frontend_peek_sequencing"
 
@@ -67,6 +67,7 @@ def test_startup_requests_and_credits_only_supported_flags(
     written = []
     checked = []
     credits = []
+    startup = []
 
     original_update = configure.update_system_params
     config_map = SimpleNamespace(
@@ -87,7 +88,15 @@ def test_startup_requests_and_credits_only_supported_flags(
 
     monkeypatch.setattr(configure, "update_system_params", update)
     monkeypatch.setattr(configure, "wait_until_reflected", reflected)
-    monkeypatch.setattr(configure, "ensure_shared_cluster", lambda *args: None)
+    monkeypatch.setattr(
+        configure, "ensure_shared_cluster", lambda *args: startup.append("cluster")
+    )
+    monkeypatch.setattr(
+        recovery, "ensure_canary", lambda conn: startup.append("canary")
+    )
+    monkeypatch.setattr(
+        configure, "reachable", lambda *args: startup.append("finished")
+    )
     monkeypatch.setattr(
         configure,
         "sometimes",
@@ -95,6 +104,7 @@ def test_startup_requests_and_credits_only_supported_flags(
     )
 
     assert configure.main() == 0
+    assert startup == ["cluster", "canary", "finished"]
     assert (FRONTEND in written[0]) is frontend_supported
     assert (FRONTEND in checked[0]) is frontend_supported
     assert any("frontend peek sequencing" in name for name, _ in credits) is (
