@@ -90,6 +90,79 @@ def test_serial_can_share_with_anytime_but_not_other_drivers(tmp_path):
     assert not scheduling.compatible(ordinary, [serial], 8)
 
 
+def test_ordinary_fault_aliases_share_one_local_slot(tmp_path):
+    first = command(tmp_path, "parallel_driver_fault_a", "pod_restarts")
+    alias = command(tmp_path, "parallel_driver_fault_b", "pod_restarts")
+    assert not scheduling.compatible(alias, [first], 12)
+    for family in ("history", "ivm", "upsert_recovery"):
+        scoped = command(tmp_path, f"parallel_driver_{family}_interleaving", family)
+        assert scheduling.compatible(scoped, [first], 12)
+
+
+@pytest.mark.parametrize("interval", [0.0, 3.0])
+def test_local_fault_cooldown_follows_completion_without_stalling_sql(
+    monkeypatch, tmp_path, interval
+):
+    now = [100.0]
+    monkeypatch.setattr(scheduling.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        scheduling.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+    monkeypatch.setattr(scheduling.os, "killpg", lambda *args: None)
+    created = []
+
+    class Process:
+        def __init__(self, args, **kwargs):
+            self.pid = 200000 + len(created)
+            self.returncode = None
+            self.finished = now[0] + (2 if "fault" in args[5] else 0.2)
+            created.append(self)
+
+        def poll(self):
+            if now[0] >= self.finished:
+                self.returncode = 0
+            return self.returncode
+
+    monkeypatch.setattr(scheduling.subprocess, "Popen", Process)
+    sources = [
+        command(tmp_path, "parallel_driver_fault_a", "pod_restarts"),
+        command(tmp_path, "parallel_driver_fault_b", "pod_restarts"),
+        command(tmp_path, "parallel_driver_history", "history"),
+        command(tmp_path, "parallel_driver_history_interleaving", "history"),
+        command(tmp_path, "parallel_driver_ivm_interleaving", "ivm"),
+        command(tmp_path, "parallel_driver_upsert_interleaving", "upsert_recovery"),
+    ]
+    scheduler = scheduling.Scheduler(
+        tmp_path, 12, 7, 100, 0.1, 5, drain_timeout=3, fault_interval=interval
+    )
+    scheduler.phase(sources, 8)
+    faults = sorted(
+        (row for row in scheduler.completed if row["family"] == "pod_restarts"),
+        key=lambda row: row["started"],
+    )
+    assert len(faults) >= 2
+    assert faults[0]["started"] == 100.0
+    assert {row["command"] for row in faults} == {
+        source.path.name for source in sources[:2]
+    }
+    assert scheduler.max_running == 12
+    assert all(
+        row["returncode"] == 0 and row["incomplete"] is None
+        for row in scheduler.completed
+    )
+    for first, following in zip(faults, faults[1:]):
+        assert following["started"] >= first["finished"] + interval
+    if interval:
+        for source in sources[2:]:
+            assert any(
+                row["command"] == source.path.name
+                and faults[0]["finished"]
+                < row["started"]
+                < faults[0]["finished"] + interval
+                for row in scheduler.completed
+            )
+
+
 def test_higher_concurrency_runs_overlapping_ordinary_writers(tmp_path):
     source = command(tmp_path)
     scheduler = scheduling.Scheduler(tmp_path, 8, 17, 5, 0.1, 5)
@@ -639,6 +712,88 @@ def test_local_up_uses_a_cluster_specific_manifests_directory(monkeypatch, tmp_p
     monkeypatch.setattr(local.render, "render", render)
     local.up(tmp_path, skip_build=True)
     assert render.call_args.args[0] == tmp_path / "owned" / "manifests"
+
+
+@pytest.mark.parametrize("interval", [None, 0.0, 7.5])
+def test_fault_interval_is_forwarded_through_host_and_remote_cli(
+    monkeypatch, tmp_path, interval
+):
+    from materialize.antithesis import local
+
+    monkeypatch.setattr(local, "CLUSTER", "owned")
+    monkeypatch.setattr(local, "CONTEXT", "kind-owned")
+    pod = {"metadata": {"name": "workload"}, "status": {"phase": "Running"}}
+    monkeypatch.setattr(
+        local,
+        "kubectl",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 0, json.dumps({"items": [pod]}), ""
+        ),
+    )
+    sent = []
+    monkeypatch.setattr(
+        local.subprocess,
+        "run",
+        lambda args, **kwargs: sent.append(args)
+        or subprocess.CompletedProcess(args, 0),
+    )
+    argv = [
+        "local",
+        "--cluster-name",
+        "owned",
+        "run",
+        "--output",
+        str(tmp_path / "result"),
+        "--concurrency",
+        "12",
+    ]
+    if interval is not None:
+        argv.extend(("--fault-interval", str(interval)))
+    monkeypatch.setattr(sys, "argv", argv)
+    assert local.main() == 0
+    expected = 30.0 if interval is None else interval
+    remote = sent[0]
+    assert float(remote[remote.index("--fault-interval") + 1]) == expected
+    parsed = []
+    monkeypatch.setattr(runner, "run", lambda args: parsed.append(args) or 0)
+    monkeypatch.setattr(sys, "argv", ["runner", *remote[remote.index("--output") :]])
+    assert runner.main() == 0
+    assert parsed[0].fault_interval == expected and parsed[0].concurrency == 12
+
+
+def test_remote_runner_passes_fault_interval_to_scheduler(monkeypatch, experiment):
+    args, _, _, _ = experiment
+    args.fault_interval = 7.5
+    observed = []
+    monkeypatch.setattr(
+        runner,
+        "_run",
+        lambda args, scheduler, *rest: observed.append(scheduler.fault_interval) or 0,
+    )
+    assert runner.run(args) == 0
+    assert observed == [7.5]
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+@pytest.mark.parametrize("host", [False, True])
+def test_fault_interval_rejects_invalid_values_before_running(
+    monkeypatch, tmp_path, value, host
+):
+    from materialize.antithesis import local
+
+    target = local if host else runner
+    invoke = Mock(side_effect=AssertionError("invalid interval reached execution"))
+    monkeypatch.setattr(target, "run", invoke)
+    prefix = ["local", "--cluster-name", "owned", "run"] if host else ["runner"]
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [*prefix, "--output", str(tmp_path / "result"), "--fault-interval", value],
+    )
+    with pytest.raises(SystemExit) as raised:
+        target.main()
+    assert raised.value.code == 2
+    invoke.assert_not_called()
 
 
 @pytest.mark.parametrize("stage", ["first", "check"])

@@ -29,7 +29,12 @@ from materialize.antithesis.local_evidence import (
     snapshot_valid,
     telemetry_snapshot,
 )
-from materialize.antithesis.local_scheduler import Command, Scheduler, discover
+from materialize.antithesis.local_scheduler import (
+    Command,
+    Scheduler,
+    discover,
+    nonnegative_seconds,
+)
 
 
 def seed_local_random(seed: int) -> None:
@@ -187,6 +192,7 @@ def _run(
         admission_end=scheduler.admission_end,
         drain_elapsed_seconds=scheduler.drain_elapsed,
         requested_drain_seconds=scheduler.drain_timeout,
+        ordinary_fault_interval_seconds=scheduler.fault_interval,
         first_skipped=args.skip_first,
         skipped_requested_checks=skipped_checks,
         unrun_checks=[
@@ -298,6 +304,7 @@ def run(args: argparse.Namespace) -> int:
         args.shutdown_grace,
         args.check_interval,
         getattr(args, "drain_timeout", 0),
+        fault_interval=getattr(args, "fault_interval", 30),
     )
     with (state_dir / "local-scheduler.lock").open("a") as lock:
         try:
@@ -334,6 +341,12 @@ def main() -> int:
     parser.add_argument("--setup-timeout", type=float, default=600)
     parser.add_argument("--shutdown-grace", type=float, default=2)
     parser.add_argument("--check-interval", type=float, default=5)
+    parser.add_argument(
+        "--fault-interval",
+        type=nonnegative_seconds,
+        default=30,
+        help="seconds after an ordinary pod-fault command finishes before admitting the next (0 disables pacing)",
+    )
     parser.add_argument("--include", action="append", default=[])
     parser.add_argument("--check", action="append", default=[])
     parser.add_argument("--require-witness", action="append", default=[])
