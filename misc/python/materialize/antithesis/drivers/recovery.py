@@ -292,6 +292,12 @@ def rows(
         return cur.fetchall() if cur.description else []
 
 
+def ensure_canary(conn: psycopg.Connection) -> None:
+    """Create missing canary objects without inserting data."""
+    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {SCHEMA}.canary (x int)")
+
+
 def exempt_names(db: sqlite3.Connection) -> set[str]:
     return {r[0] for r in db.execute("SELECT object_name FROM expected_unhealthy")}
 
@@ -1342,8 +1348,7 @@ class Recovery:
         with sql.connection(
             self.host, options={"cluster": configure.SHARED_CLUSTER}
         ) as conn:
-            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
-            conn.execute(f"CREATE TABLE IF NOT EXISTS {SCHEMA}.canary (x int)")
+            ensure_canary(conn)
             before_row = conn.execute(
                 f"SELECT count(*) FROM {SCHEMA}.canary"
             ).fetchone()
