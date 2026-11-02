@@ -25,6 +25,7 @@ import pytest
 pytest.importorskip("antithesis")
 
 from materialize.antithesis import observations, quiet, state, telemetry
+from materialize.antithesis.drivers import rollouts
 
 
 @pytest.fixture(autouse=True)
@@ -104,6 +105,45 @@ def test_short_transaction_can_request_a_fresh_sample_of_an_observed_phase(
         100.9,
         101.0,
         "Promoting",
+    )
+
+
+@pytest.mark.parametrize(
+    "generation,observed_generation,current",
+    [(12, 12, True), (12, 11, False), (12, None, False), (None, None, False)],
+)
+def test_cr_snapshot_records_only_current_phases_and_preserves_get_interval(
+    monkeypatch, generation, observed_generation, current
+):
+    monkeypatch.setattr(telemetry, "_recorder", telemetry.Recorder("main", "driver"))
+    now = [100.0]
+    monkeypatch.setattr(telemetry.time, "monotonic", lambda: now[0])
+    obj = {
+        "metadata": {"generation": generation},
+        "spec": {"requestRollout": "request"},
+        "status": {
+            "activeGeneration": 5,
+            "conditions": [
+                {
+                    "type": "UpToDate",
+                    "reason": "Promoting",
+                    "observedGeneration": observed_generation,
+                }
+            ],
+        },
+    }
+    kube = rollouts.Kube.__new__(rollouts.Kube)
+    kube.namespace, kube.name, kube.custom = "namespace", "name", Mock()
+
+    def get(*args, **kwargs):
+        now[0] = 101.0
+        return obj
+
+    kube.custom.get_namespaced_custom_object.side_effect = get
+    assert kube.snapshot().obj is obj
+    events = telemetry.events_between(99, 102)
+    assert events == (
+        [telemetry.Event("phase", 100.0, 101.0, "Promoting")] if current else []
     )
 
 
