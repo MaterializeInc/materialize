@@ -332,14 +332,12 @@ class Action:
             "division by zero",
             "out of range",
             "is only defined for finite arguments",
-            "Window function performance issue",  # TODO: Remove when SQL-640 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
             # A persistent object (sink, non-temp view) referencing a temporary
             # one is correctly rejected. We still let the workload attempt it,
             # a path that wrongly accepts it instead panics the coordinator on
             # catalog apply, which surfaces as an unexpected failure.
             "non-temporary items cannot depend on temporary item",
-            "is not of expected type SqlColumnType",  # TODO: Remove when SQL-566 is fixed
             # generate_select_query occasionally emits a WITH MUTUALLY
             # RECURSIVE body with ERROR AT RECURSION LIMIT, which errors on
             # purpose when the iteration outruns the limit. Only our generated
@@ -6544,7 +6542,7 @@ dml_nontrans_action_list = ActionList(
         (FlipFlagsAction, 2),
         (SetSessionVariableAction, 2),
         (DiscardAction, 2),
-        # TODO: Reenable when SS-193 and SS-325 are fixed
+        # TODO: Reenable when SS-325 is fixed
         # (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
     ],

@@ -275,9 +275,8 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                             _ => None,
                         })
                         .filter(|expr| !is_null_literal(expr))
-                        // A column without a default reads as the string NULL. Clients compare
-                        // against that string, and the Terraform provider replaces a table whose
-                        // column default reads as SQL NULL (SQL-839).
+                        // The Terraform provider expects the string NULL for a missing default
+                        // and replaces the table if it reads SQL NULL.
                         // TODO(DEX-197): Switch to SQL NULL once released providers read it as
                         // no default.
                         .map_or_else(|| json!("NULL"), |expr| json!(expr.to_ast_string_stable()))
