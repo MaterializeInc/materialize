@@ -35,6 +35,9 @@ EXCLUSIVE = {
     "upsert_recovery": 1,
     "window_retractions": 1,
 }
+CR_INTERLEAVERS = frozenset(
+    {("history", "interleaving_driver"), ("ivm", "interleaving_main")}
+)
 
 
 def nonnegative_seconds(value: str | float) -> float:
@@ -49,6 +52,7 @@ class Command:
     path: Path
     family: str
     mode: str
+    admission_group: str = ""
 
 
 def discover(directory: Path) -> list[Command]:
@@ -81,11 +85,17 @@ def discover(directory: Path) -> list[Command]:
             raise ValueError(f"expected a generated measured wrapper: {path}")
         source = Path(sources[0])
         families = set()
+        admission_group = ""
         for node in ast.walk(ast.parse(source.read_text())):
             if isinstance(node, ast.ImportFrom) and node.module:
                 prefix = "materialize.antithesis.drivers."
                 if node.module.startswith(prefix):
-                    families.add(node.module.removeprefix(prefix).split(".")[0])
+                    family = node.module.removeprefix(prefix).split(".")[0]
+                    families.add(family)
+                    if any(
+                        (family, alias.name) in CR_INTERLEAVERS for alias in node.names
+                    ):
+                        admission_group = "cr_interleaving"
                 elif node.module == "materialize.antithesis.drivers":
                     families.update(alias.name for alias in node.names)
         if len(families) > 1:
@@ -99,7 +109,9 @@ def discover(directory: Path) -> list[Command]:
                 else name.split("_", 1)[0]
             )
         )
-        commands.append(Command(path, next(iter(families), "telemetry"), mode))
+        commands.append(
+            Command(path, next(iter(families), "telemetry"), mode, admission_group)
+        )
     if sum(command.mode == "first" for command in commands) != 1:
         raise ValueError("profile must contain exactly one first command")
     return commands
@@ -119,6 +131,12 @@ def compatible(command: Command, running: list[Command], concurrency: int) -> bo
     if command.mode == "serial":
         return not any(item.mode != "anytime" for item in running)
     if command.mode in ("singleton", "anytime") and command in running:
+        return False
+    # These entry points can wait on one CR lease. Limit duplicate preparation
+    # while keeping other SQL slots available.
+    if command.admission_group and any(
+        item.admission_group == command.admission_group for item in running
+    ):
         return False
     limit = EXCLUSIVE.get(command.family)
     return (
