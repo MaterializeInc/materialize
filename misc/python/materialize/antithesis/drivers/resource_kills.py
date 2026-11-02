@@ -102,6 +102,9 @@ def open_state() -> sqlite3.Connection:
     db.executescript("""
         CREATE TABLE IF NOT EXISTS seen (
             key TEXT PRIMARY KEY, kind TEXT, details TEXT, observed_at REAL);
+        CREATE TABLE IF NOT EXISTS scan_cadence (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            retry_at REAL NOT NULL);
         """)
     db.commit()
     return db
@@ -355,20 +358,42 @@ def check_once(db: sqlite3.Connection, check: Check) -> None:
         always(True, MSG_LIMIT, summary)
 
 
+def _claim_scan(db: sqlite3.Connection) -> bool:
+    # Share the sampling cadence across profiles. An interrupted scan holds
+    # the claim for at most one interval, without holding a database transaction.
+    now = time.monotonic()
+    with db:
+        return bool(
+            db.execute(
+                "INSERT INTO scan_cadence VALUES (1, ?) "
+                "ON CONFLICT (singleton) DO UPDATE SET retry_at = excluded.retry_at "
+                "WHERE scan_cadence.retry_at <= ?",
+                (now + ANYTIME_POLL_S, now),
+            ).rowcount
+        )
+
+
 def _run(duration_s: float) -> int:
-    try:
-        env = Environment()
-    except TRANSIENT_ERRORS as e:
-        log(f"cannot reach the Kubernetes API: {e}")
-        return 0
-    check = Check(env)
     db = open_state()
-    deadline = time.monotonic() + duration_s
-    while True:
-        check_once(db, check)
-        if time.monotonic() + ANYTIME_POLL_S >= deadline:
+    try:
+        if duration_s > 0 and not _claim_scan(db):
             return 0
-        time.sleep(ANYTIME_POLL_S)
+        try:
+            env = Environment()
+        except TRANSIENT_ERRORS as e:
+            log(f"cannot reach the Kubernetes API: {e}")
+            return 0
+        check = Check(env)
+        deadline = time.monotonic() + duration_s
+        while True:
+            check_once(db, check)
+            if time.monotonic() + ANYTIME_POLL_S >= deadline:
+                return 0
+            time.sleep(ANYTIME_POLL_S)
+            if not _claim_scan(db):
+                return 0
+    finally:
+        db.close()
 
 
 def anytime_main() -> int:
