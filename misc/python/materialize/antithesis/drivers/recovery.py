@@ -1229,6 +1229,15 @@ class Recovery:
 
         return aggregate_retractions.cleanup_abandoned(self.host)
 
+    def cleanup_upsert_fixtures(self) -> tuple[bool, Any]:
+        from materialize.antithesis.drivers import upsert_recovery
+
+        complete, info = upsert_recovery.cleanup_abandoned(self.host)
+        return complete or info.get("sql_fixtures_absent") is True, {
+            **info,
+            "broker_cleanup_complete": complete,
+        }
+
     def canary(self) -> tuple[bool, Any]:
         rows(self.host, "SELECT 1")
         rows(self.host, "SELECT 1", internal=True)
@@ -1766,20 +1775,23 @@ class Recovery:
             self.details(),
         )
 
-        ok, info, took = poll(
-            CHECK_BUDGET_S,
-            self.cleanup_aggregate_fixtures,
-            "abandoned aggregate fixtures",
-        )
-        self.timings["aggregate_fixtures"] = took
-        if not ok:
-            from materialize.antithesis import telemetry
-
-            telemetry.comparison("recovery", "full", None)
-            log(
-                f"collection recovery is incomplete until modeled poison fixtures are removed: {info}"
+        collections_ready = True
+        for fixture, cleanup in (
+            ("aggregate", self.cleanup_aggregate_fixtures),
+            ("upsert", self.cleanup_upsert_fixtures),
+        ):
+            ok, info, took = poll(
+                CHECK_BUDGET_S, cleanup, f"abandoned {fixture} fixtures"
             )
-        collections_ready = ok
+            self.timings[f"{fixture}_fixtures"] = took
+            if not ok:
+                from materialize.antithesis import telemetry
+
+                telemetry.comparison("recovery", "full", None)
+                log(
+                    f"collection recovery is incomplete until modeled {fixture} poison fixtures are removed: {info}"
+                )
+                collections_ready = False
 
         if collections_ready:
             ok, info, took = poll(wedge, self.hydrated, "hydration")
