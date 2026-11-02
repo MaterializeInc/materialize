@@ -74,7 +74,8 @@ COMMANDS
           so you can enter it in your identity provider ahead of time.
           Changes nothing and doesn't need SSO to be set up yet.
   list    Show the organization's SSO configurations and the Entity ID each
-          one uses. Changes nothing.
+          one uses. Changes nothing. Use this rather than the console's SSO
+          page, which always shows the shared default Entity ID.
   set     Switch the SSO configuration to the organization-specific Entity ID.
   reset   Switch back to the shared default Entity ID.
 
@@ -327,6 +328,9 @@ cat <<EOF
 
 Done. Materialize now uses this Entity ID for the organization:
   $idp_value
+
+The console's SSO page keeps showing the shared default Entity ID; that's
+expected. Run '$(basename "$0") list' to see the value in use.
 
 Next steps:
   1. If you haven't already, set the same value in your identity provider.

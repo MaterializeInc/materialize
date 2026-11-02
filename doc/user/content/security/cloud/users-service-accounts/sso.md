@@ -82,9 +82,15 @@ https://cloud.materialize.com/auth/saml/metadata/<organization-id>
 If you connect only one Materialize organization to your identity provider, you
 don't need to change the Entity ID.
 
-The Materialize console doesn't display this setting. Use the
+You can't change this setting in the Materialize console. Use the
 [`set-sso-entity-id.sh`](/scripts/set-sso-entity-id.sh) script to view and
 change it.
+
+{{< note >}}
+The SSO page in the Materialize console always shows the shared default Entity
+ID, even after you change it. To see the Entity ID that an organization uses,
+run `./set-sso-entity-id.sh list`.
+{{< /note >}}
 
 ### Before you begin
 
@@ -151,8 +157,8 @@ If the organization already uses SSO, skip to
 
 ### Step 3. Apply the Entity ID
 
-SSO login for the organization fails while Materialize and your identity
-provider use different Entity IDs. If you completed Step 2, they already match
+SSO login for the organization fails until Materialize and your identity
+provider use the same Entity ID. If you completed Step 2, they already match
 once you run `set`. If the organization already uses SSO, keep the gap to a few
 seconds by changing both sides together:
 
@@ -184,9 +190,8 @@ the configurations and the Entity ID each one uses, run
 `./set-sso-entity-id.sh list`.
 
 {{< note >}}
-SSO affects only logging in to the Materialize console. Users who are already
-logged in stay logged in, and connections that authenticate with app passwords
-aren't affected.
+SSO affects only logging in to the Materialize console. Connections that
+authenticate with app passwords aren't affected.
 
 The script signs in with your app password, not through SSO, so it keeps
 working if SSO login fails. To recover, run `./set-sso-entity-id.sh reset` and
