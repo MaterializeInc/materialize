@@ -22,6 +22,9 @@ and checks from `misc/python/materialize/antithesis/drivers/`.
 | Finite stream boundaries | Generated AS OF / UP TO windows check exact acknowledged input bags while writes to a sibling table advance the shared transaction WAL. |
 | Physical index dependencies | Live subscriptions cross an index drop and same-name recreation. Durable importers provide a separate drop-rejection control. |
 | Aggregate error recovery | Generated interval sums enter modeled overflow states, retract the offending inputs, and check maintained results against exact Python component sums. |
+| Window retractions | Generated partitions, peer groups, nullable offsets, and bounded frames are compared with an independent input model through indexed views, materialized views, recomputation, and a live subscription. |
+| Session bindings | Warm prepared statements and partially fetched server cursors cross view replacement. Independent row and timestamp checks distinguish revalidation, retained snapshots, exhausted portals, and session-local temporary names. |
+| Upsert error recovery | Acknowledged Kafka offsets fence JSON decode-error, repair, and tombstone checks, including source-replica deletion while erroneous state is live. |
 | Cross-table transaction atomicity | A durable client ledger checks whole transaction markers in common snapshots, including rollback, uncertain outcomes, and replica deletion during staged multi-table writes. |
 | External data | Postgres transaction ledgers, Kafka source histories, and sink progress and envelopes check ingestion, replay, atomicity, and output contents. |
 | Panics and persistent damage | Process instrumentation reports panics and unexpected halts. Pod history detects crash loops. Shard audits inspect persist state and remap frontiers. |
@@ -48,8 +51,8 @@ The image generates five templates from the authoritative commands in
 |---|---|---|
 | `main` | Full mixed workload, including interactions between subsystems | Postgres, Kafka sources, Kafka sinks, IVM |
 | `transactions` | Client histories, contended counters, session mix, read paths, access control | None. Session mix creates its own RTR source when needed. |
-| `contracts` | Finite SUBSCRIBE windows, index handover, aggregate retractions, multi-table commits | None |
-| `cdc` | Postgres and Kafka sources, Kafka sinks, source progress, shard audits | Postgres, Kafka sources, Kafka sinks |
+| `contracts` | Finite SUBSCRIBE windows, index handover, aggregate and window retractions, multi-table commits, session bindings | None |
+| `cdc` | Postgres and Kafka sources, Kafka sinks, upsert error recovery, source progress, shard audits | Postgres, Kafka sources, Kafka sinks |
 | `rollouts` | Deployment scenarios, spec-phase changes, histories, counters, read paths, access control, Postgres, IVM, generation isolation | Postgres, IVM |
 
 Health checks, resource checks, and pod restarts remain available in each
@@ -57,8 +60,8 @@ template. Restart triggers are restricted to workloads that template can
 schedule. For example, the transaction template does not wait for a bulk
 source creation or select a candidate generation that no driver creates.
 
-Finite-stream, index-handover, aggregate-retraction, and multi-table commit
-commands have a focused `contracts` template and also run in `transactions`
+Finite-stream, index-handover, aggregate and window retraction, session binding,
+and multi-table commit commands have a focused `contracts` template and also run in `transactions`
 and `rollouts`. The focused template concentrates schedules on these oracles
 alongside pod faults and recovery checks. They create bounded SQL
 fixtures lazily on the shared cluster, without adding external services or
@@ -70,6 +73,12 @@ the [interval accumulator](../../src/compute/src/render/reduce.rs), and
 the [session transaction operations](../../src/adapter/src/session.rs).
 Expected results come from acknowledged client inputs or exact Python arithmetic.
 Interrupted rounds retain uncertainty and do not earn successful coverage.
+
+The upsert error-recovery command runs in `cdc` and `rollouts`. It creates a
+bounded source fixture lazily on the existing source cluster. Recovery removes
+only its journaled fixture after the original SQL writer is gone, before
+checking collection health. Unknown Kafka outcomes remain retained even when
+their SQL namespace is proved absent.
 
 `templates.py` discovers executable commands and derives profile membership
 from their driver imports. Adding a command for an existing driver includes
@@ -117,6 +126,12 @@ fraction, and a verified exposure matrix. The quiet fraction measures the
 union of requested intervals, so overlapping requests are counted once.
 Comparison units differ by oracle. Compare costs within the same workload
 and read path, and inspect coverage combinations alongside throughput.
+
+Introspection records use a five-minute lag sampling interval. Existing
+history-retention parameters trim replica metrics and per-collection lag history to thirty
+minutes when their append-only writers start. Truncation is startup-only, so
+these parameters do not impose a live thirty-minute history bound. They leave
+user-data retention and source-status histories unchanged.
 
 A history exposure is credited only when a later checked read contains the
 write's id and the history checks pass. SUBSCRIBE witnesses require a correct
