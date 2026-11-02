@@ -29,6 +29,9 @@ EXCLUSIVE = {
     "bounded_subscribe": 1,
     "index_handover": 1,
     "aggregate_retractions": 2,
+    "session_rebinding": 1,
+    "upsert_recovery": 1,
+    "window_retractions": 1,
 }
 
 
