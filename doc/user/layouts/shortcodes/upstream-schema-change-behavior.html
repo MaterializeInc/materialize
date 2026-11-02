@@ -80,7 +80,7 @@ Materialize ignores foreign key and `CHECK` constraint changes. You can add or
 drop them without affecting ingestion.
 
 Materialize records only the `PRIMARY KEY` or `UNIQUE` constraint backing the
-index that the table's capture instance uses. See [Table keys](#table-keys).
+index that the table's capture instance uses. See [Unique keys](#unique-keys).
 Adding or dropping any other `PRIMARY KEY` or `UNIQUE` constraint does not
 affect ingestion. SQL Server does not allow dropping the capture instance's
 index while that capture instance is the table's newest one, so the recorded
