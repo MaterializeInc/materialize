@@ -345,12 +345,28 @@ def _terminal_children_explain_hydration(
 
 # Keep the contribution paths aligned with mz_source_statistics_with_history.
 _HYDRATION_SAMPLE_SQL = """
-WITH pending AS (
-    SELECT o.id, o.name, o.type, h.replica_id, r.name AS replica_name
+WITH maintained AS (
+    SELECT DISTINCT o.id, o.name, o.type, o.cluster_id
     FROM mz_internal.mz_hydration_statuses h
     JOIN mz_objects o ON o.id = h.object_id
-    JOIN mz_cluster_replicas r ON r.id = h.replica_id
-    WHERE NOT h.hydrated AND h.object_id LIKE 'u%'
+    WHERE h.object_id LIKE 'u%'
+), pending AS (
+    SELECT o.id, o.name, o.type, r.id AS replica_id, r.name AS replica_name
+    FROM maintained o
+    JOIN mz_cluster_replicas r ON r.cluster_id = o.cluster_id
+    LEFT JOIN mz_internal.mz_hydration_statuses h
+        ON h.object_id = o.id AND h.replica_id = r.id
+    WHERE o.type IN ('index', 'materialized-view')
+        AND h.hydrated IS DISTINCT FROM TRUE
+    UNION ALL
+    -- OLTP sources and sinks run only on their assigned storage replica.
+    SELECT o.id, o.name, o.type, h.replica_id, r.name AS replica_name
+    FROM maintained o
+    JOIN mz_internal.mz_hydration_statuses h ON h.object_id = o.id
+    LEFT JOIN mz_cluster_replicas r
+        ON r.id = h.replica_id AND r.cluster_id = o.cluster_id
+    WHERE o.type NOT IN ('index', 'materialized-view')
+        AND (h.hydrated IS DISTINCT FROM TRUE OR r.id IS NULL)
 ), exports AS (
     SELECT source_id AS parent_id, id, name
     FROM mz_tables WHERE source_id IS NOT NULL
@@ -1395,8 +1411,13 @@ class Recovery:
         for (id_, name, replica, replica_name, typ), contributors in groups.items():
             if name in self.exempt or id_ in blocked:
                 continue
-            if typ == "source" and _terminal_children_explain_hydration(
-                id_, replica, contributors, self.exempt
+            if (
+                typ == "source"
+                and replica is not None
+                and replica_name is not None
+                and _terminal_children_explain_hydration(
+                    id_, replica, contributors, self.exempt
+                )
             ):
                 continue
             pending.append((id_, name, replica_name))
