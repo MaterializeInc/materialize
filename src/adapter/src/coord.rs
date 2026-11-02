@@ -6056,9 +6056,19 @@ impl Coordinator {
             .iter()
             .map(|(id, read_txn)| (id.unhandled().to_string(), format!("{read_txn:?}")))
             .collect();
+        // Timeline and transaction maps omit tokens owned by asynchronous query
+        // tasks. The shared registry distinguishes retained tokens from local
+        // advancement that has not yet been durably published.
+        let query_read_protection = self
+            .query_client
+            .as_ref()
+            .map(|client| format!("{:?}", client.protection));
 
         Ok(serde_json::json!({
             "global_timelines": global_timelines,
+            "query_read_protection": query_read_protection,
+            "recovery_read_holds": format!("{:?}", self.recovery_read_holds),
+            "read_protection_catalog_position": format!("{:?}", self.client_read_catalog().observed_position()),
             "active_conns": active_conns,
             "txn_read_holds": txn_read_holds,
             "pending_peeks": pending_peeks,

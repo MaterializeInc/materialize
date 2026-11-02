@@ -434,7 +434,7 @@ impl Coordinator {
         }
     }
 
-    fn client_read_catalog(&self) -> &crate::catalog::Catalog {
+    pub(super) fn client_read_catalog(&self) -> &crate::catalog::Catalog {
         self.client_protection_catalog
             .as_ref()
             .unwrap_or_else(|| self.catalog())
