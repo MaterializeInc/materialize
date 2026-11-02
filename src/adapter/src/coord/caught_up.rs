@@ -17,10 +17,9 @@
 //! [`WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL`]). We call one such run a
 //! "tick", and the term is used throughout this module.
 //!
-//! Each tick the task asks the coordinator to classify the clusters, which
-//! needs controller state only the coordinator loop can reach. The task then
-//! applies the stability gate itself, because the replica queries it needs
-//! call back into the coordinator and would deadlock on its loop.
+//! The task reads reference progress before asking the coordinator to capture
+//! local execution state. Classification, hydration waits and stability queries
+//! run on the task, leaving the coordinator free to serve SQL and maintenance.
 //!
 //! A point-in-time caught-up check is not enough on its own: a crash- or
 //! OOM-looping replica can momentarily look hydrated and caught-up, and cutting
@@ -51,6 +50,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::catalog::Catalog;
 use differential_dataflow::lattice::Lattice as _;
 use futures::{StreamExt, future};
 use itertools::Itertools;
@@ -60,8 +60,9 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS_RAW, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
+use mz_catalog::durable::objects::{ClientIncarnationValue, ClientRealization};
 use mz_catalog::memory::objects::{CatalogItem, Cluster};
-use mz_compute_client::controller::CollectionReadiness;
+use mz_compute_client::controller::{CollectionReadiness, error::CollectionMissing};
 use mz_compute_client::logging::{ComputeLog, LogVariant};
 use mz_controller::clusters::ClusterStatus;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -73,12 +74,12 @@ use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp as _};
-use tokio::sync::{Mutex, oneshot};
-use tokio::time::MissedTickBehavior;
+use tokio::sync::oneshot;
 
 use crate::PeekClient;
 use crate::coord::{ClusterReplicaStatuses, Coordinator, Message};
@@ -227,14 +228,60 @@ impl ReplicaFrontierReference {
     }
 }
 
-/// A request from the caught-up check task for the coordinator's view of the
-/// clusters, answered by [`Coordinator::handle_caught_up_check_request`].
+/// Requests local controller state without waiting for external reads.
 #[derive(Debug)]
 pub struct CaughtUpCheckRequest {
     exclude_collections: Arc<BTreeSet<GlobalId>>,
     policy_read_ts: Option<Timestamp>,
-    reference: Arc<Mutex<Option<ReplicaFrontierReference>>>,
-    tx: oneshot::Sender<CaughtUpSnapshot>,
+    tx: oneshot::Sender<CaughtUpCheck>,
+}
+
+/// Only replica executions in the candidate and active reference deployments
+/// supply readiness evidence. Other registrations must not postpone readiness.
+fn readiness_executions_match<'a>(
+    before: impl Iterator<Item = (&'a u64, &'a ClientIncarnationValue)>,
+    after: impl Iterator<Item = (&'a u64, &'a ClientIncarnationValue)>,
+    active: Option<u64>,
+    candidate: u64,
+) -> bool {
+    let relevant = |(_, value): &(&u64, &ClientIncarnationValue)| {
+        matches!(value.realization, ClientRealization::Replica(_))
+            && (Some(value.deployment_generation) == active
+                || value.deployment_generation == candidate)
+    };
+    before.filter(relevant).eq(after.filter(relevant))
+}
+
+/// Inputs owned by one background check.
+#[derive(Debug)]
+struct CaughtUpCheck {
+    catalog: Arc<Catalog>,
+    now: EpochMillis,
+    clusters: BTreeMap<ClusterId, Result<ClusterSnapshot, anyhow::Error>>,
+}
+
+struct LeaderSnapshot {
+    native: bool,
+    rows: Vec<Row>,
+    problematic_replicas: BTreeSet<ReplicaId>,
+}
+
+#[derive(Debug)]
+struct ClusterSnapshot {
+    replicas: BTreeMap<ReplicaId, ReplicaTarget>,
+    ignored_compute_collections: BTreeSet<GlobalId>,
+    collections: Vec<(GlobalId, Antichain<Timestamp>, CollectionType)>,
+    compute_hydration:
+        Option<oneshot::Receiver<BTreeMap<GlobalId, Result<bool, CollectionMissing>>>>,
+    native: bool,
+    required_realizations: bool,
+}
+
+#[derive(Debug)]
+enum CollectionType {
+    Storage { hydrated: bool },
+    Compute,
+    NativeCompute { hydrated: bool },
 }
 
 /// The coordinator's view of the clusters at one check.
@@ -506,14 +553,39 @@ impl Coordinator {
             .replica_owned_compute()
             .then(|| self.get_local_timestamp_oracle());
 
+        let mut catalog = self.owned_catalog();
+        let native = self.controller.replica_owned_compute();
+        let generation = self.query_deploy_generation;
+        let storage_collections = Arc::clone(&self.controller.storage_collections);
+        let persist = self.persist_client.clone();
         task::spawn(|| "caught_up_check", async move {
-            let reference = Arc::new(Mutex::new(None));
-            let mut interval = tokio::time::interval(period);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut reference = None;
+            let mut delay = None;
             loop {
-                interval.tick().await;
-                // Scheduling requires a fresh observation for each check. Await
-                // it off the coordinator loop so provisioning can keep moving.
+                // A slow check must not cause back-to-back retries.
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
+                delay = Some(period);
+                let leader_revision = catalog.transient_revision();
+                let leader = match LeaderSnapshot::read(
+                    &catalog,
+                    &*storage_collections,
+                    &persist,
+                    native,
+                    generation,
+                    &mut reference,
+                )
+                .await
+                {
+                    Ok(leader) => leader,
+                    Err(error) => {
+                        tracing::warn!(%error, "cannot read leader caught-up state");
+                        continue;
+                    }
+                };
+                // Read reference progress first. Neither the policy timestamp nor
+                // local execution evidence should age behind a slow Persist read.
                 let policy_read_ts = match &policy_oracle {
                     Some(oracle) => Some(oracle.read_ts().await),
                     None => None,
@@ -522,384 +594,91 @@ impl Coordinator {
                 let request = CaughtUpCheckRequest {
                     exclude_collections: Arc::clone(&exclude_collections),
                     policy_read_ts,
-                    reference: Arc::clone(&reference),
                     tx,
                 };
-                // A failed send or a dropped reply means the coordinator is
-                // gone.
-                //
-                // NOTE: Returning drops `trigger`, which fires it, so a
-                // coordinator shutdown reads as caught up.
+                // Dropping the trigger on coordinator shutdown preserves the
+                // existing shutdown behavior of the readiness task.
                 if internal_cmd_tx
                     .send(Message::CaughtUpCheck(request))
                     .is_err()
                 {
                     return;
                 }
-                let Ok(snapshot) = rx.await else {
+                let Ok(check) = rx.await else {
                     return;
                 };
-                if gate.ready(snapshot).await {
-                    trigger.fire();
-                    return;
+                catalog = Arc::clone(&check.catalog);
+                if catalog.transient_revision() != leader_revision {
+                    continue;
+                }
+                let snapshot = check.run(leader).await;
+                if gate.ready(snapshot).await && catalog.transient_revision_is_current() {
+                    // Planning revisions omit execution registrations. Fetch an
+                    // uncached projection so retired execution evidence cannot
+                    // authorize readiness after the asynchronous stability check.
+                    let Ok(current) = gate
+                        .client
+                        .call_coordinator(|tx| crate::coord::Command::CatalogSnapshot {
+                            tx,
+                            include_durable_upper: false,
+                            through: None,
+                        })
+                        .await
+                    else {
+                        return;
+                    };
+                    let valid = current.catalog.transient_revision()
+                        == catalog.transient_revision()
+                        && current.catalog.state().active_deployment_generation()
+                            == catalog.state().active_deployment_generation()
+                        && readiness_executions_match(
+                            catalog.state().client_incarnations().iter(),
+                            current.catalog.state().client_incarnations().iter(),
+                            catalog.state().active_deployment_generation(),
+                            generation,
+                        );
+                    catalog = current.catalog;
+                    if valid {
+                        trigger.fire();
+                        return;
+                    }
                 }
             }
         });
     }
 
-    /// Answers a [`CaughtUpCheckRequest`] with the classification of every
-    /// cluster and the replicas the stability gate has to hear from.
-    pub(crate) async fn handle_caught_up_check_request(&self, request: CaughtUpCheckRequest) {
+    /// Captures local state and issues hydration requests without awaiting them.
+    pub(crate) fn handle_caught_up_check_request(&self, request: CaughtUpCheckRequest) {
         let CaughtUpCheckRequest {
             exclude_collections,
             policy_read_ts,
-            reference,
             tx,
         } = request;
-
-        let native = self.controller.replica_owned_compute();
-        let source = if native {
-            &mz_catalog::builtin::MZ_REPLICA_FRONTIER_OBSERVATIONS
-        } else {
-            &MZ_CLUSTER_REPLICA_FRONTIERS_RAW
-        };
-        let replica_frontier_item_id = self.catalog().resolve_builtin_storage_collection(source);
-        let replica_frontier_gid = self
+        let clusters = self
             .catalog()
-            .get_entry(&replica_frontier_item_id)
-            .latest_global_id();
-
-        // Both sources consolidate to sets. Their migration guards preserve the
-        // active deployment's reference shard rather than comparing a candidate
-        // with itself. Native prewarm requires matching builtin fingerprints, so
-        // there is no admitted native peer requiring a legacy-row fallback.
-        let live_frontiers = if native {
-            let metadata = self
-                .controller
-                .storage_collections
-                .collection_metadata(replica_frontier_gid)
-                .expect("reference collection metadata");
-            let mut reference = reference.lock().await;
-            if reference.is_none() {
-                *reference =
-                    Some(ReplicaFrontierReference::open(&self.persist_client, &metadata).await);
-            }
-            let reference = reference.as_mut().expect("reference initialized");
-            assert_eq!(
-                reference.shard, metadata.data_shard,
-                "reference must not migrate during prewarm"
-            );
-            reference.refresh(&self.persist_client).await
-        } else {
-            self.controller
-                .storage_collections
-                .snapshot_latest(replica_frontier_gid)
-                .await
-                .expect("can't read replica frontier reference")
-        };
-
-        let state = self.catalog().state();
-        let live_frontiers = live_frontiers
-            .into_iter()
-            .filter_map(|row| {
-                let mut iter = row.into_iter();
-                let id: GlobalId = iter
-                    .next()
-                    .expect("object id")
-                    .unwrap_str()
-                    .parse()
-                    .expect("id");
-                let replica: ReplicaId = iter
-                    .next()
-                    .expect("replica id")
-                    .unwrap_str()
-                    .parse()
-                    .expect("id");
-                let upper = if native {
-                    let generation = iter.next().expect("deployment generation").unwrap_uint64();
-                    let incarnation = iter.next().expect("client incarnation").unwrap_uint64();
-                    let current = state.client_incarnations().get(&incarnation)?;
-                    if Some(generation) != state.active_deployment_generation()
-                        || current.deployment_generation != generation
-                        || current.realization
-                            != mz_catalog::durable::objects::ClientRealization::Replica(replica)
-                    {
-                        return None;
-                    }
-                    let _read_known = iter.next().expect("read known");
-                    let _read_frontier = iter.next().expect("read frontier");
-                    if !iter.next().expect("write known").unwrap_bool() {
-                        return None;
-                    }
-                    iter.next().expect("write frontier")
-                } else {
-                    let upper = iter.next().expect("write frontier");
-                    if !iter.next().expect("deployment generation").is_null() {
-                        return None;
-                    }
-                    upper
-                };
-                // Unknown was excluded above. NULL now means completed, not missing.
-                let upper = if upper.is_null() {
-                    Antichain::new()
-                } else {
-                    Antichain::from_elem(upper.unwrap_mz_timestamp())
-                };
-                Some((id, replica, upper))
+            .clusters()
+            .map(|cluster| {
+                (
+                    cluster.id,
+                    self.caught_up_cluster_snapshot(cluster, &exclude_collections, policy_read_ts),
+                )
             })
-            .collect_vec();
-
-        // The classification only requires each collection to be hydrated on
-        // _some_ replica. The stability gate separately requires every replica
-        // to have hydrated everything it hosts.
-        let live_collection_frontiers: BTreeMap<_, _> = live_frontiers
-            .into_iter()
-            .map(|(oid, _replica_id, upper_ts)| (oid, upper_ts))
-            .into_grouping_map()
-            .fold(
-                Antichain::from_elem(Timestamp::minimum()),
-                |mut acc, _key, upper| {
-                    acc.join_assign(&upper);
-                    acc
-                },
-            )
-            .into_iter()
             .collect();
-
-        tracing::debug!(?live_collection_frontiers, "checking re-hydration status");
-
-        let allowed_lag =
-            WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG.get(self.catalog().system_config().dyncfgs());
-        let allowed_lag: u64 = allowed_lag
-            .as_millis()
-            .try_into()
-            .expect("must fit into u64");
-
-        let cutoff = WITH_0DT_CAUGHT_UP_CHECK_CUTOFF.get(self.catalog().system_config().dyncfgs());
-        let cutoff: u64 = cutoff.as_millis().try_into().expect("must fit into u64");
-
-        let now = self.now();
-
-        // Something might go wrong with querying the status collection, so we
-        // have an emergency flag for disabling it.
-        let replica_status_check_enabled =
-            ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK.get(self.catalog().system_config().dyncfgs());
-
-        // Analyze replica statuses to detect crash-looping or OOM-looping replicas
-        let problematic_replicas = if replica_status_check_enabled {
-            match self.analyze_replica_looping(now).await {
-                Ok(replicas) => Some(replicas),
-                Err(error) => {
-                    tracing::warn!(%error, "replica status observation unavailable; not ready to promote");
-                    None
-                }
-            }
-        } else {
-            Some(BTreeSet::new())
-        };
-
-        let stability_check_enabled =
-            ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK.get(self.catalog().system_config().dyncfgs());
-        let stability_period =
-            WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD.get(self.catalog().system_config().dyncfgs());
-        // Cap rather than panic on an absurdly large configured duration. A
-        // period of u64::MAX milliseconds means "effectively never auto-ready",
-        // which is the safe, conservative outcome: we won't cut over on our own,
-        // and an operator can still force it via skip-catchup.
-        let stability_period_ms = u64::try_from(stability_period.as_millis()).unwrap_or(u64::MAX);
-
-        let classification = if let Some(problematic_replicas) = &problematic_replicas {
-            self.classify_clusters(
-                allowed_lag.into(),
-                cutoff.into(),
-                now.into(),
-                &live_collection_frontiers,
-                &exclude_collections,
-                problematic_replicas,
-                policy_read_ts,
-            )
-            .await
-        } else {
-            BTreeMap::new()
-        };
-
-        let all_caught_up = problematic_replicas.is_some()
-            && classification
-                .values()
-                .all(|status| *status != ClusterCaughtUpStatus::NotCaughtUp);
-        let caught_up_clusters = if stability_check_enabled {
-            classification
-                .into_iter()
-                .filter_map(|(cluster_id, status)| match status {
-                    ClusterCaughtUpStatus::CaughtUp {
-                        ignored_compute_collections,
-                    } => Some((
-                        cluster_id,
-                        CaughtUpCluster {
-                            ignored_compute_collections,
-                            replicas: self.replica_targets(cluster_id),
-                        },
-                    )),
-                    _ => None,
-                })
-                .collect()
-        } else {
-            BTreeMap::new()
-        };
-
-        // A dropped receiver means the task is gone, which leaves nothing to
-        // answer.
-        let _ = tx.send(CaughtUpSnapshot {
-            now,
-            all_caught_up,
-            stability_check_enabled,
-            stability_period_ms,
-            caught_up_clusters,
+        let _ = tx.send(CaughtUpCheck {
+            catalog: self.owned_catalog(),
+            now: self.now(),
+            clusters,
         });
     }
 
-    /// Classifies the replicas of a cluster for the stability gate.
-    fn replica_targets(&self, cluster_id: ClusterId) -> BTreeMap<ReplicaId, ReplicaTarget> {
-        let cluster = self.catalog().get_cluster(cluster_id);
-        let has_hydration_log = cluster
-            .log_indexes
-            .contains_key(&LogVariant::Compute(ComputeLog::HydrationTime));
-        cluster
-            .replicas()
-            .map(|replica| {
-                // Native adapters observe their own QueryReady connections,
-                // not the separate provisioner's backend process events.
-                let online = if self.controller.replica_owned_compute() {
-                    self.query_client.as_ref().is_some_and(|client| {
-                        !client
-                            .replica_clients(cluster_id, Some(replica.replica_id))
-                            .is_empty()
-                    })
-                } else {
-                    self.cluster_replica_statuses
-                        .try_get_cluster_replica_statuses(cluster_id, replica.replica_id)
-                        .is_some_and(|processes| {
-                            !processes.is_empty()
-                                && ClusterReplicaStatuses::cluster_replica_status(processes)
-                                    == ClusterStatus::Online
-                        })
-                };
-                let logging = has_hydration_log && replica.config.compute.logging.enabled();
-                let target = if !online {
-                    ReplicaTarget::NotOnline
-                } else if !logging {
-                    ReplicaTarget::Exempt
-                } else {
-                    ReplicaTarget::Ask
-                };
-                (replica.replica_id, target)
-            })
-            .collect()
-    }
-
-    /// Classifies every cluster for the caught-up check.
-    ///
-    /// Informally, a cluster is considered caught-up if it is at least as healthy as its
-    /// counterpart in the leader environment. To determine that, we use the following rules:
-    ///
-    ///  (1) A cluster is caught-up if all non-transient, non-excluded collections expected on it
-    ///      are either caught-up or ignored.
-    ///  (2) A collection is caught-up when it is (a) hydrated and (b) its progress frontier is within
-    ///      `allowed_lag` of the "live" frontier, the collection's frontier reported by the leader
-    ///      environment.
-    ///      Native compute uses local output progress, not shared Persist write progress.
-    ///      Storage retains status-based hydration plus shared output lag, not replay lag.
-    ///  (3) A collection is ignored if its "live" frontier is behind `now` by more than `cutoff`.
-    ///      Such a collection is unhealthy in the leader environment, so we don't care about its
-    ///      health in the read-only environment either.
-    ///  (4) On a cluster that is crash-looping, all collections are ignored.
-    ///
-    /// A cluster that is caught-up only because it has no replicas, or because it is hopelessly
-    /// behind with only crash/OOM-looping replicas (rule 4), is reported as
-    /// [`ClusterCaughtUpStatus::Ignored`] rather than [`ClusterCaughtUpStatus::CaughtUp`]. The
-    /// caller does not health-gate ignored clusters, so we keep ignoring clusters that are already
-    /// unhealthy in the leader environment.
-    async fn classify_clusters(
-        &self,
-        allowed_lag: Timestamp,
-        cutoff: Timestamp,
-        now: Timestamp,
-        live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-        exclude_collections: &BTreeSet<GlobalId>,
-        problematic_replicas: &BTreeSet<ReplicaId>,
-        policy_read_ts: Option<Timestamp>,
-    ) -> BTreeMap<ClusterId, ClusterCaughtUpStatus> {
-        let mut result = BTreeMap::new();
-        for cluster in self.catalog().clusters() {
-            let status = self
-                .collections_caught_up(
-                    cluster,
-                    allowed_lag.clone(),
-                    cutoff.clone(),
-                    now.clone(),
-                    live_frontiers,
-                    exclude_collections,
-                    problematic_replicas,
-                    policy_read_ts,
-                )
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::error!(
-                        "unexpected error while checking if cluster {} caught up: {e:#}",
-                        cluster.id
-                    );
-                    ClusterCaughtUpStatus::NotCaughtUp
-                });
-
-            if status == ClusterCaughtUpStatus::NotCaughtUp {
-                // We log all non-caught-up clusters instead of breaking out early.
-                tracing::info!("cluster {} is not caught up", cluster.id);
-            }
-
-            result.insert(cluster.id, status);
-        }
-
-        result
-    }
-
-    /// Classifies the given cluster for the caught-up check.
-    ///
-    /// See [`Coordinator::classify_clusters`] for details.
-    async fn collections_caught_up(
+    fn caught_up_cluster_snapshot(
         &self,
         cluster: &Cluster,
-        allowed_lag: Timestamp,
-        cutoff: Timestamp,
-        now: Timestamp,
-        live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
         exclude_collections: &BTreeSet<GlobalId>,
-        problematic_replicas: &BTreeSet<ReplicaId>,
         policy_read_ts: Option<Timestamp>,
-    ) -> Result<ClusterCaughtUpStatus, anyhow::Error> {
-        if self.controller.replica_owned_compute()
-            && !self.cluster_has_required_realizations(cluster.id, policy_read_ts, now)
-        {
-            return Ok(ClusterCaughtUpStatus::NotCaughtUp);
-        }
-        if cluster.replicas().next().is_none() {
-            return Ok(ClusterCaughtUpStatus::Ignored);
-        }
-
-        // Check if all replicas in this cluster are crash/OOM-looping. As long
-        // as there is at least one healthy replica, the cluster is okay-ish.
-        let cluster_has_only_problematic_replicas = cluster
-            .replicas()
-            .all(|replica| problematic_replicas.contains(&replica.replica_id));
-
-        enum CollectionType {
-            Storage,
-            Compute,
-            NativeCompute { hydrated: bool },
-        }
-
-        let mut all_caught_up = true;
+    ) -> Result<ClusterSnapshot, anyhow::Error> {
+        let native = self.controller.replica_owned_compute();
         let mut ignored_compute_collections = exclude_collections.clone();
-
         let storage_frontiers = self
             .controller
             .storage
@@ -909,10 +688,16 @@ impl Coordinator {
             .map(|id| {
                 let (_read_frontier, write_frontier) =
                     self.controller.storage.collection_frontiers(id)?;
-                Ok::<_, anyhow::Error>((id, write_frontier, CollectionType::Storage))
+                Ok::<_, anyhow::Error>((
+                    id,
+                    write_frontier,
+                    CollectionType::Storage {
+                        hydrated: self.controller.storage.collection_hydrated(id)?,
+                    },
+                ))
             });
 
-        let compute_frontiers = if self.controller.replica_owned_compute() {
+        let compute_frontiers = if native {
             // Match start_readiness_checks: catalog definitions include exports
             // not yet installed and builtin objects absent from bound_objects.
             // Catalog introspection indexes participate through their reported
@@ -985,184 +770,138 @@ impl Coordinator {
             )
         };
 
-        for res in itertools::chain(storage_frontiers, compute_frontiers) {
-            let (id, write_frontier, collection_type) = res?;
-            // Native storage progress is the shared physical upper, already
-            // tracked locally in read-only mode. It is not an adapter observation
-            // and does not depend on the cooperative sampler's publication cadence.
-            let reference = if self.controller.replica_owned_compute()
-                && matches!(collection_type, CollectionType::Storage)
-            {
-                Some(&write_frontier)
-            } else {
-                live_frontiers.get(&id)
-            };
-            let live_write_frontier = match reference {
-                Some(frontier) => frontier,
-                None => {
-                    // No live frontier to compare against, either because the collection didn't
-                    // exist on the leader or because the leader hosts it as something
-                    // `mz_cluster_replica_frontiers_raw` doesn't track. A table→MV conversion is the
-                    // latter: it keeps the table's `GlobalId`, still a table on the leader, so the
-                    // new MV lands here instead of the strong path below.
-                    //
-                    // Require hydration, not just a write frontier past the minimum. A fresh MV's
-                    // sink reaches frontier 1 after one batch, which would otherwise look caught
-                    // up mid-hydration and bring back the cut-over spike this gate prevents.
-                    let collection_hydrated = match collection_type {
-                        CollectionType::NativeCompute { hydrated } => hydrated,
-                        CollectionType::Compute => {
-                            self.controller
-                                .compute
-                                .collection_hydrated(cluster.id, id)
-                                .await?
-                        }
-                        CollectionType::Storage => {
-                            self.controller.storage.collection_hydrated(id)?
-                        }
-                    };
-
-                    // Also require the frontier to be within the allowed lag, the bound the
-                    // live-frontier path applies, with `now` standing in for the missing live
-                    // frontier. Hydration is one-shot: a collection that hydrated and then stalled
-                    // would otherwise satisfy this branch forever.
-                    //
-                    // NOTE: there is deliberately no `cutoff` escape hatch here. A frontier frozen
-                    // at the minimum is exactly what this gate must catch, so a collection stuck
-                    // here blocks promotion until `with_0dt_deployment_max_wait` elapses.
-                    let readiness = CollectionReadiness::classify(
-                        collection_hydrated,
-                        &write_frontier,
-                        Some((&Antichain::from_elem(now), allowed_lag)),
-                    );
-
-                    tracing::info!(
-                        ?write_frontier,
-                        ?readiness,
-                        ?allowed_lag,
-                        ?now,
-                        "collection {id} not in live frontiers"
-                    );
-                    if write_frontier.less_equal(&Timestamp::minimum())
-                        || readiness != CollectionReadiness::Ready
-                    {
-                        all_caught_up = false;
-                    }
-                    continue;
-                }
-            };
-
-            // We can't do comparisons and subtractions, so we bump up the live
-            // write frontier by the cutoff, and then compare that against
-            // `now`.
-            let live_write_frontier_plus_cutoff = live_write_frontier
-                .iter()
-                .map(|t| t.step_forward_by(&cutoff));
-            let live_write_frontier_plus_cutoff =
-                Antichain::from_iter(live_write_frontier_plus_cutoff);
-
-            let beyond_all_hope = live_write_frontier_plus_cutoff.less_equal(&now);
-
-            if beyond_all_hope && cluster_has_only_problematic_replicas {
-                tracing::info!(
-                    ?live_write_frontier,
-                    ?cutoff,
-                    ?now,
-                    "live write frontier of collection {id} is too far behind 'now'"
-                );
-                tracing::info!(
-                    "ALL replicas of cluster {} are crash/OOM-looping and it has at least one \
-                     collection that is too far behind 'now'; ignoring cluster for caught-up \
-                     checks",
-                    cluster.id
-                );
-                return Ok(ClusterCaughtUpStatus::Ignored);
-            } else if beyond_all_hope {
-                tracing::info!(
-                    ?live_write_frontier,
-                    ?cutoff,
-                    ?now,
-                    "live write frontier of collection {id} is too far behind 'now'; \
-                     ignoring for caught-up checks"
-                );
-                if matches!(
-                    collection_type,
-                    CollectionType::Compute | CollectionType::NativeCompute { .. }
-                ) {
-                    ignored_compute_collections.insert(id);
-                }
-                continue;
-            }
-
-            // This call is on the expensive side, because we have to do a call
-            // across a task/channel boundary, and our work competes with other
-            // things the compute/instance controller might be doing. But it's
-            // okay because we only do these hydration checks when in read-only
-            // mode, and only rarely.
-            let collection_hydrated = match collection_type {
-                CollectionType::NativeCompute { hydrated } => hydrated,
-                CollectionType::Compute => {
-                    self.controller
-                        .compute
-                        .collection_hydrated(cluster.id, id)
-                        .await?
-                }
-                CollectionType::Storage => self.controller.storage.collection_hydrated(id)?,
-            };
-
-            let readiness = CollectionReadiness::classify(
-                collection_hydrated,
-                &write_frontier,
-                Some((live_write_frontier, allowed_lag)),
-            );
-
-            // We don't expect collections to get hydrated, ingestions to be
-            // started, etc. when they are already at the empty write frontier.
-            if live_write_frontier.is_empty() || readiness == CollectionReadiness::Ready {
-                if readiness != CollectionReadiness::Ready
-                    && matches!(
-                        collection_type,
-                        CollectionType::Compute | CollectionType::NativeCompute { .. }
-                    )
-                {
-                    ignored_compute_collections.insert(id);
-                }
-                // This is a bit spammy, but log caught-up collections while we
-                // investigate why environments are cutting over but then a lot
-                // of compute collections are _not_ in fact hydrated on
-                // clusters.
-                tracing::info!(
-                    %id,
-                    ?readiness,
-                    ?write_frontier,
-                    ?live_write_frontier,
-                    ?allowed_lag,
-                    %cluster.id,
-                    "collection is caught up");
-            } else {
-                // We are not within the allowed lag, or not hydrated!
-                //
-                // We continue with our loop instead of breaking out early, so
-                // that we log all non-caught-up replicas.
-                tracing::info!(
-                    %id,
-                    ?readiness,
-                    ?write_frontier,
-                    ?live_write_frontier,
-                    ?allowed_lag,
-                    %cluster.id,
-                    "collection is not caught up"
-                );
-                all_caught_up = false;
-            }
-        }
-
-        Ok(if all_caught_up {
-            ClusterCaughtUpStatus::CaughtUp {
-                ignored_compute_collections,
-            }
+        let collections = itertools::chain(storage_frontiers, compute_frontiers)
+            .collect::<Result<Vec<_>, anyhow::Error>>()?;
+        let compute_hydration = if native {
+            None
         } else {
-            ClusterCaughtUpStatus::NotCaughtUp
+            Some(
+                self.controller.compute.collections_hydrated(
+                    cluster.id,
+                    collections
+                        .iter()
+                        .filter_map(|(id, _, ty)| {
+                            matches!(ty, CollectionType::Compute).then_some(*id)
+                        })
+                        .collect(),
+                )?,
+            )
+        };
+        Ok(ClusterSnapshot {
+            replicas: self.replica_targets(cluster.id),
+            ignored_compute_collections,
+            collections,
+            compute_hydration,
+            native,
+            required_realizations: !native
+                || self.cluster_has_required_realizations(
+                    cluster.id,
+                    policy_read_ts,
+                    self.now().into(),
+                ),
+        })
+    }
+
+    /// Classifies the replicas of a cluster for the stability gate.
+    fn replica_targets(&self, cluster_id: ClusterId) -> BTreeMap<ReplicaId, ReplicaTarget> {
+        let cluster = self.catalog().get_cluster(cluster_id);
+        let has_hydration_log = cluster
+            .log_indexes
+            .contains_key(&LogVariant::Compute(ComputeLog::HydrationTime));
+        cluster
+            .replicas()
+            .map(|replica| {
+                // Native adapters observe their own QueryReady connections,
+                // not the separate provisioner's backend process events.
+                let online = if self.controller.replica_owned_compute() {
+                    self.query_client.as_ref().is_some_and(|client| {
+                        !client
+                            .replica_clients(cluster_id, Some(replica.replica_id))
+                            .is_empty()
+                    })
+                } else {
+                    self.cluster_replica_statuses
+                        .try_get_cluster_replica_statuses(cluster_id, replica.replica_id)
+                        .is_some_and(|processes| {
+                            !processes.is_empty()
+                                && ClusterReplicaStatuses::cluster_replica_status(processes)
+                                    == ClusterStatus::Online
+                        })
+                };
+                let logging = has_hydration_log && replica.config.compute.logging.enabled();
+                let target = if !online {
+                    ReplicaTarget::NotOnline
+                } else if !logging {
+                    ReplicaTarget::Exempt
+                } else {
+                    ReplicaTarget::Ask
+                };
+                (replica.replica_id, target)
+            })
+            .collect()
+    }
+}
+
+impl LeaderSnapshot {
+    async fn read(
+        catalog: &Catalog,
+        storage_collections: &(dyn StorageCollections + Send + Sync),
+        persist: &PersistClient,
+        native: bool,
+        generation: u64,
+        reference: &mut Option<ReplicaFrontierReference>,
+    ) -> Result<Self, anyhow::Error> {
+        fail::fail_point!("0dt_caught_up_read");
+        let source = if native {
+            &mz_catalog::builtin::MZ_REPLICA_FRONTIER_OBSERVATIONS
+        } else {
+            &MZ_CLUSTER_REPLICA_FRONTIERS_RAW
+        };
+        let replica_frontier_item_id = catalog.resolve_builtin_storage_collection(source);
+        let replica_frontier_gid = catalog
+            .get_entry(&replica_frontier_item_id)
+            .latest_global_id();
+
+        // Both sources consolidate to sets. Their migration guards preserve the
+        // active deployment's reference shard rather than comparing a candidate
+        // with itself. Native prewarm requires matching builtin fingerprints, so
+        // there is no admitted native peer requiring a legacy-row fallback.
+        let live_frontiers = if native {
+            let metadata = storage_collections
+                .collection_metadata(replica_frontier_gid)
+                .expect("reference collection metadata");
+            if reference.is_none() {
+                *reference = Some(ReplicaFrontierReference::open(persist, &metadata).await);
+            }
+            let reference = reference.as_mut().expect("reference initialized");
+            assert_eq!(
+                reference.shard, metadata.data_shard,
+                "reference must not migrate during prewarm"
+            );
+            reference.refresh(persist).await
+        } else {
+            storage_collections
+                .snapshot_latest(replica_frontier_gid)
+                .await?
+        };
+
+        let problematic_replicas =
+            if ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK.get(catalog.system_config().dyncfgs()) {
+                Self::analyze_replica_looping(
+                    catalog,
+                    storage_collections,
+                    native,
+                    generation,
+                    (catalog.config().now)(),
+                )
+                .await?
+            } else {
+                BTreeSet::new()
+            };
+        Ok(Self {
+            native,
+            rows: live_frontiers,
+            problematic_replicas,
         })
     }
 
@@ -1172,7 +911,10 @@ impl Coordinator {
     /// A replica is considered problematic if it has multiple OOM kills in a
     /// short-ish window.
     async fn analyze_replica_looping(
-        &self,
+        catalog: &Catalog,
+        storage_collections: &(dyn StorageCollections + Send + Sync),
+        native: bool,
+        generation: u64,
         now: EpochMillis,
     ) -> Result<BTreeSet<ReplicaId>, StorageError> {
         // Look back 1 day for patterns.
@@ -1184,20 +926,15 @@ impl Coordinator {
         let min_timestamp_dt = mz_ore::now::to_datetime(min_timestamp);
 
         // Get the replica status collection GlobalId
-        let replica_status_item_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_STATUS_HISTORY);
-        let replica_status_gid = self
-            .catalog()
+        let replica_status_item_id =
+            catalog.resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_STATUS_HISTORY);
+        let replica_status_gid = catalog
             .get_entry(&replica_status_item_id)
             .latest_global_id();
 
         // A local hold supplies the desired lower bound, not protection against
         // shared compaction. Select the final cut only after acquiring a Persist lease.
-        let read_holds = self
-            .controller
-            .storage_collections
-            .acquire_read_holds(vec![replica_status_gid])?;
+        let read_holds = storage_collections.acquire_read_holds(vec![replica_status_gid])?;
         let unavailable = || StorageError::ReadBeforeSince(replica_status_gid);
         let read_hold = read_holds.into_iter().next().ok_or_else(unavailable)?;
 
@@ -1208,9 +945,7 @@ impl Coordinator {
             .cloned()
             .ok_or_else(unavailable)?;
 
-        let mut replica_statuses_stream = self
-            .controller
-            .storage_collections
+        let mut replica_statuses_stream = storage_collections
             .snapshot_and_stream_at_since(replica_status_gid, as_of)
             .await?;
 
@@ -1263,13 +998,13 @@ impl Coordinator {
                 .unwrap_timestamptz();
 
             // Local readiness must not count a peer deployment's events for a stable ID.
-            let generation = iter.next().expect("missing deployment_generation");
-            let own_generation = if self.controller.replica_owned_compute() {
-                Datum::UInt64(self.query_deploy_generation)
+            let row_generation = iter.next().expect("missing deployment_generation");
+            let own_generation = if native {
+                Datum::UInt64(generation)
             } else {
                 Datum::Null
             };
-            if generation != own_generation {
+            if row_generation != own_generation {
                 continue;
             }
 
@@ -1318,8 +1053,599 @@ impl Coordinator {
     }
 }
 
+impl CaughtUpCheck {
+    async fn run(mut self, leader: LeaderSnapshot) -> CaughtUpSnapshot {
+        let native = leader.native;
+        let state = self.catalog.state();
+        let live_frontiers = leader
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                let mut iter = row.into_iter();
+                let id: GlobalId = iter
+                    .next()
+                    .expect("object id")
+                    .unwrap_str()
+                    .parse()
+                    .expect("id");
+                let replica: ReplicaId = iter
+                    .next()
+                    .expect("replica id")
+                    .unwrap_str()
+                    .parse()
+                    .expect("id");
+                let upper = if native {
+                    let generation = iter.next().expect("deployment generation").unwrap_uint64();
+                    let incarnation = iter.next().expect("client incarnation").unwrap_uint64();
+                    let current = state.client_incarnations().get(&incarnation)?;
+                    if Some(generation) != state.active_deployment_generation()
+                        || current.deployment_generation != generation
+                        || current.realization
+                            != mz_catalog::durable::objects::ClientRealization::Replica(replica)
+                    {
+                        return None;
+                    }
+                    let _read_known = iter.next().expect("read known");
+                    let _read_frontier = iter.next().expect("read frontier");
+                    if !iter.next().expect("write known").unwrap_bool() {
+                        return None;
+                    }
+                    iter.next().expect("write frontier")
+                } else {
+                    let upper = iter.next().expect("write frontier");
+                    if !iter.next().expect("deployment generation").is_null() {
+                        return None;
+                    }
+                    upper
+                };
+                // Unknown was excluded above. NULL now means completed, not missing.
+                let upper = if upper.is_null() {
+                    Antichain::new()
+                } else {
+                    Antichain::from_elem(upper.unwrap_mz_timestamp())
+                };
+                Some((id, replica, upper))
+            })
+            .collect_vec();
+
+        // The classification only requires each collection to be hydrated on
+        // _some_ replica. The stability gate separately requires every replica
+        // to have hydrated everything it hosts.
+        let live_collection_frontiers: BTreeMap<_, _> = live_frontiers
+            .into_iter()
+            .map(|(oid, _replica_id, upper_ts)| (oid, upper_ts))
+            .into_grouping_map()
+            .fold(
+                Antichain::from_elem(Timestamp::minimum()),
+                |mut acc, _key, upper| {
+                    acc.join_assign(&upper);
+                    acc
+                },
+            )
+            .into_iter()
+            .collect();
+
+        tracing::debug!(?live_collection_frontiers, "checking re-hydration status");
+
+        let allowed_lag =
+            WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG.get(self.catalog.system_config().dyncfgs());
+        let allowed_lag: u64 = allowed_lag
+            .as_millis()
+            .try_into()
+            .expect("must fit into u64");
+
+        let cutoff = WITH_0DT_CAUGHT_UP_CHECK_CUTOFF.get(self.catalog.system_config().dyncfgs());
+        let cutoff: u64 = cutoff.as_millis().try_into().expect("must fit into u64");
+
+        let now = self.now;
+
+        let stability_check_enabled =
+            ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK.get(self.catalog.system_config().dyncfgs());
+        let stability_period =
+            WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD.get(self.catalog.system_config().dyncfgs());
+        // Cap rather than panic on an absurdly large configured duration. A
+        // period of u64::MAX milliseconds means "effectively never auto-ready",
+        // which is the safe, conservative outcome: we won't cut over on our own,
+        // and an operator can still force it via skip-catchup.
+        let stability_period_ms = u64::try_from(stability_period.as_millis()).unwrap_or(u64::MAX);
+
+        let classification = self
+            .classify_clusters(
+                allowed_lag.into(),
+                cutoff.into(),
+                now.into(),
+                &live_collection_frontiers,
+                &leader.problematic_replicas,
+            )
+            .await;
+        let all_caught_up = classification
+            .values()
+            .all(|status| *status != ClusterCaughtUpStatus::NotCaughtUp);
+        let caught_up_clusters = if stability_check_enabled {
+            classification
+                .into_iter()
+                .filter_map(|(cluster_id, status)| match status {
+                    ClusterCaughtUpStatus::CaughtUp {
+                        ignored_compute_collections,
+                    } => Some((
+                        cluster_id,
+                        CaughtUpCluster {
+                            ignored_compute_collections,
+                            replicas: self.clusters[&cluster_id]
+                                .as_ref()
+                                .expect("classified cluster")
+                                .replicas
+                                .clone(),
+                        },
+                    )),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
+
+        CaughtUpSnapshot {
+            now,
+            all_caught_up,
+            stability_check_enabled,
+            stability_period_ms,
+            caught_up_clusters,
+        }
+    }
+
+    async fn classify_clusters(
+        &mut self,
+        allowed_lag: Timestamp,
+        cutoff: Timestamp,
+        now: Timestamp,
+        live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        problematic_replicas: &BTreeSet<ReplicaId>,
+    ) -> BTreeMap<ClusterId, ClusterCaughtUpStatus> {
+        let mut result = BTreeMap::new();
+        for (&cluster_id, cluster) in &mut self.clusters {
+            let status = match cluster {
+                Ok(cluster) => {
+                    Self::collections_caught_up(
+                        cluster_id,
+                        cluster,
+                        allowed_lag.clone(),
+                        cutoff.clone(),
+                        now.clone(),
+                        live_frontiers,
+                        problematic_replicas,
+                    )
+                    .await
+                }
+                Err(error) => Err(anyhow::anyhow!("{error:#}")),
+            }
+            .unwrap_or_else(|e| {
+                tracing::error!(
+                    "unexpected error while checking if cluster {} caught up: {e:#}",
+                    cluster_id
+                );
+                ClusterCaughtUpStatus::NotCaughtUp
+            });
+
+            if status == ClusterCaughtUpStatus::NotCaughtUp {
+                // We log all non-caught-up clusters instead of breaking out early.
+                tracing::info!("cluster {} is not caught up", cluster_id);
+            }
+
+            result.insert(cluster_id, status);
+        }
+
+        result
+    }
+
+    /// Classifies the given cluster for the caught-up check.
+    ///
+    /// See [`Self::classify_clusters`] for details.
+    async fn collections_caught_up(
+        cluster_id: ClusterId,
+        cluster: &mut ClusterSnapshot,
+        allowed_lag: Timestamp,
+        cutoff: Timestamp,
+        now: Timestamp,
+        live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        problematic_replicas: &BTreeSet<ReplicaId>,
+    ) -> Result<ClusterCaughtUpStatus, anyhow::Error> {
+        if !cluster.required_realizations {
+            return Ok(ClusterCaughtUpStatus::NotCaughtUp);
+        }
+        if cluster.replicas.is_empty() {
+            return Ok(ClusterCaughtUpStatus::Ignored);
+        }
+
+        // Check if all replicas in this cluster are crash/OOM-looping. As long
+        // as there is at least one healthy replica, the cluster is okay-ish.
+        let cluster_has_only_problematic_replicas = cluster
+            .replicas
+            .keys()
+            .all(|id| problematic_replicas.contains(id));
+        // A cluster whose collections all exceed the cutoff must not wait on
+        // its compute controller.
+        let mut hydration = None;
+        let mut all_caught_up = true;
+        let mut ignored_compute_collections = cluster.ignored_compute_collections.clone();
+
+        for (id, write_frontier, collection_type) in &cluster.collections {
+            let id = *id;
+            let reference =
+                if cluster.native && matches!(collection_type, CollectionType::Storage { .. }) {
+                    Some(write_frontier)
+                } else {
+                    live_frontiers.get(&id)
+                };
+            if let Some(live_write_frontier) = reference {
+                // We can't do comparisons and subtractions, so we bump up the live
+                // write frontier by the cutoff, and then compare that against
+                // `now`.
+                let live_write_frontier_plus_cutoff = live_write_frontier
+                    .iter()
+                    .map(|t| t.step_forward_by(&cutoff));
+                let live_write_frontier_plus_cutoff =
+                    Antichain::from_iter(live_write_frontier_plus_cutoff);
+
+                let beyond_all_hope = live_write_frontier_plus_cutoff.less_equal(&now);
+
+                if beyond_all_hope && cluster_has_only_problematic_replicas {
+                    tracing::info!(
+                        ?live_write_frontier,
+                        ?cutoff,
+                        ?now,
+                        "live write frontier of collection {id} is too far behind 'now'"
+                    );
+                    tracing::info!(
+                        "ALL replicas of cluster {} are crash/OOM-looping and it has at least one \
+                     collection that is too far behind 'now'; ignoring cluster for caught-up \
+                     checks",
+                        cluster_id
+                    );
+                    return Ok(ClusterCaughtUpStatus::Ignored);
+                } else if beyond_all_hope {
+                    tracing::info!(
+                        ?live_write_frontier,
+                        ?cutoff,
+                        ?now,
+                        "live write frontier of collection {id} is too far behind 'now'; \
+                     ignoring for caught-up checks"
+                    );
+                    if matches!(
+                        collection_type,
+                        CollectionType::Compute | CollectionType::NativeCompute { .. }
+                    ) {
+                        ignored_compute_collections.insert(id);
+                    }
+                    continue;
+                }
+            }
+            let collection_hydrated = match collection_type {
+                CollectionType::Compute => {
+                    if hydration.is_none() {
+                        hydration = Some(
+                            cluster
+                                .compute_hydration
+                                .as_mut()
+                                .expect("legacy hydration request")
+                                .await?,
+                        );
+                    }
+                    *hydration.as_ref().expect("hydration received")[&id]
+                        .as_ref()
+                        .map_err(|_| CollectionMissing(id))?
+                }
+                CollectionType::Storage { hydrated }
+                | CollectionType::NativeCompute { hydrated } => *hydrated,
+            };
+            let live_write_frontier = match reference {
+                Some(frontier) => frontier,
+                None => {
+                    // No live frontier to compare against, either because the collection didn't
+                    // exist on the leader or because the leader hosts it as something
+                    // `mz_cluster_replica_frontiers` doesn't track. A table→MV conversion is the
+                    // latter: it keeps the table's `GlobalId`, still a table on the leader, so the
+                    // new MV lands here instead of the strong path below.
+                    //
+                    // Require hydration, not just a write frontier past the minimum. A fresh MV's
+                    // sink reaches frontier 1 after one batch, which would otherwise look caught
+                    // up mid-hydration and bring back the cut-over spike this gate prevents.
+                    // Also require the frontier to be within the allowed lag, the bound the
+                    // live-frontier path applies, with `now` standing in for the missing live
+                    // frontier. Hydration is one-shot: a collection that hydrated and then stalled
+                    // would otherwise satisfy this branch forever.
+                    //
+                    // NOTE: there is deliberately no `cutoff` escape hatch here. A frontier frozen
+                    // at the minimum is exactly what this gate must catch, so a collection stuck
+                    // here blocks promotion until `with_0dt_deployment_max_wait` elapses.
+                    let readiness = CollectionReadiness::classify(
+                        collection_hydrated,
+                        write_frontier,
+                        Some((&Antichain::from_elem(now), allowed_lag)),
+                    );
+
+                    tracing::info!(
+                        ?write_frontier,
+                        ?readiness,
+                        ?allowed_lag,
+                        ?now,
+                        "collection {id} not in live frontiers"
+                    );
+                    if write_frontier.less_equal(&Timestamp::minimum())
+                        || readiness != CollectionReadiness::Ready
+                    {
+                        all_caught_up = false;
+                    }
+                    continue;
+                }
+            };
+
+            let readiness = CollectionReadiness::classify(
+                collection_hydrated,
+                write_frontier,
+                Some((live_write_frontier, allowed_lag)),
+            );
+
+            // We don't expect collections to get hydrated, ingestions to be
+            // started, etc. when they are already at the empty write frontier.
+            if live_write_frontier.is_empty() || readiness == CollectionReadiness::Ready {
+                // Carry hydration waivers into the per-replica stability check.
+                if readiness != CollectionReadiness::Ready
+                    && matches!(
+                        collection_type,
+                        CollectionType::Compute | CollectionType::NativeCompute { .. }
+                    )
+                {
+                    ignored_compute_collections.insert(id);
+                }
+                // This is a bit spammy, but log caught-up collections while we
+                // investigate why environments are cutting over but then a lot
+                // of compute collections are _not_ in fact hydrated on
+                // clusters.
+                tracing::info!(
+                    %id,
+                    ?readiness,
+                    ?write_frontier,
+                    ?live_write_frontier,
+                    ?allowed_lag,
+                    %cluster_id,
+                    "collection is caught up");
+            } else {
+                // We are not within the allowed lag, or not hydrated!
+                //
+                // We continue with our loop instead of breaking out early, so
+                // that we log all non-caught-up replicas.
+                tracing::info!(
+                    %id,
+                    ?readiness,
+                    ?write_frontier,
+                    ?live_write_frontier,
+                    ?allowed_lag,
+                    %cluster_id,
+                    "collection is not caught up"
+                );
+                all_caught_up = false;
+            }
+        }
+
+        Ok(if all_caught_up {
+            ClusterCaughtUpStatus::CaughtUp {
+                ignored_compute_collections,
+            }
+        } else {
+            ClusterCaughtUpStatus::NotCaughtUp
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[mz_ore::test]
+    fn readiness_identity_validation_ignores_unrelated_registrations() {
+        let replica = |generation| ClientIncarnationValue {
+            deployment_generation: generation,
+            realization: ClientRealization::Replica(ReplicaId::User(1)),
+        };
+        let before = BTreeMap::from([(1, replica(0)), (2, replica(1))]);
+        let mut after = before.clone();
+        after.insert(3, replica(2));
+        assert!(readiness_executions_match(
+            before.iter(),
+            after.iter(),
+            Some(0),
+            1
+        ));
+        after.insert(
+            4,
+            ClientIncarnationValue {
+                deployment_generation: 1,
+                realization: ClientRealization::Adapter(mz_repr::AdapterId(1)),
+            },
+        );
+        assert!(readiness_executions_match(
+            before.iter(),
+            after.iter(),
+            Some(0),
+            1
+        ));
+        for incarnation in [1, 2] {
+            let mut replaced = after.clone();
+            let old = replaced.remove(&incarnation).unwrap();
+            replaced.insert(5, old);
+            assert!(!readiness_executions_match(
+                before.iter(),
+                replaced.iter(),
+                Some(0),
+                1
+            ));
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn classification_waits_for_hydration_and_rejects_lost_responses() {
+        use futures::poll;
+        use std::task::Poll;
+
+        for response in [
+            Some(Ok(true)),
+            Some(Err(CollectionMissing(GlobalId::User(1)))),
+            None,
+        ] {
+            let id = GlobalId::User(1);
+            let (tx, rx) = oneshot::channel();
+            let mut cluster = ClusterSnapshot {
+                replicas: BTreeMap::from([(ReplicaId::User(1), ReplicaTarget::Ask)]),
+                ignored_compute_collections: BTreeSet::new(),
+                collections: vec![(
+                    id,
+                    Antichain::from_elem(100.into()),
+                    CollectionType::Compute,
+                )],
+                compute_hydration: Some(rx),
+                native: false,
+                required_realizations: true,
+            };
+            let frontiers = BTreeMap::from([(id, Antichain::from_elem(100.into()))]);
+            let problematic = BTreeSet::new();
+            let check = CaughtUpCheck::collections_caught_up(
+                ClusterId::User(1),
+                &mut cluster,
+                0.into(),
+                1000.into(),
+                100.into(),
+                &frontiers,
+                &problematic,
+            );
+            tokio::pin!(check);
+            assert!(matches!(poll!(&mut check), Poll::Pending));
+            let success = matches!(response, Some(Ok(true)));
+            match response {
+                Some(response) => tx
+                    .send(BTreeMap::from([(id, response)]))
+                    .expect("classification still holds the receiver"),
+                None => drop(tx),
+            }
+            let result = check.await;
+            if success {
+                assert_eq!(
+                    result.expect("hydration reply succeeds"),
+                    ClusterCaughtUpStatus::CaughtUp {
+                        ignored_compute_collections: BTreeSet::new(),
+                    }
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "missing hydration evidence must not authorize promotion"
+                );
+            }
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn cutoff_exemptions_do_not_wait_for_hydration() {
+        use futures::FutureExt;
+
+        let id = GlobalId::User(1);
+        let replica = ReplicaId::User(1);
+        for problematic in [BTreeSet::new(), BTreeSet::from([replica])] {
+            let (_tx, rx) = oneshot::channel();
+            let mut cluster = ClusterSnapshot {
+                replicas: BTreeMap::from([(replica, ReplicaTarget::Ask)]),
+                ignored_compute_collections: BTreeSet::new(),
+                collections: vec![(id, Antichain::from_elem(0.into()), CollectionType::Compute)],
+                compute_hydration: Some(rx),
+                native: false,
+                required_realizations: true,
+            };
+            let status = CaughtUpCheck::collections_caught_up(
+                ClusterId::User(1),
+                &mut cluster,
+                0.into(),
+                100.into(),
+                100.into(),
+                &BTreeMap::from([(id, Antichain::from_elem(0.into()))]),
+                &problematic,
+            )
+            .now_or_never()
+            .expect("ignored collections must not wait for hydration")
+            .expect("ignored collections need no hydration evidence");
+            let expected = if problematic.is_empty() {
+                ClusterCaughtUpStatus::CaughtUp {
+                    ignored_compute_collections: BTreeSet::from([id]),
+                }
+            } else {
+                ClusterCaughtUpStatus::Ignored
+            };
+            assert_eq!(status, expected);
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn native_readiness_distinguishes_unknown_completed_and_missing_realizations() {
+        let id = GlobalId::User(1);
+        for (hydrated, reference, required_realizations, expected) in [
+            (false, None, true, ClusterCaughtUpStatus::NotCaughtUp),
+            (
+                false,
+                Some(Antichain::from_elem(100.into())),
+                true,
+                ClusterCaughtUpStatus::NotCaughtUp,
+            ),
+            (
+                true,
+                Some(Antichain::from_elem(100.into())),
+                true,
+                ClusterCaughtUpStatus::CaughtUp {
+                    ignored_compute_collections: BTreeSet::new(),
+                },
+            ),
+            (
+                false,
+                Some(Antichain::new()),
+                true,
+                ClusterCaughtUpStatus::CaughtUp {
+                    ignored_compute_collections: BTreeSet::from([id]),
+                },
+            ),
+            (
+                true,
+                Some(Antichain::new()),
+                false,
+                ClusterCaughtUpStatus::NotCaughtUp,
+            ),
+        ] {
+            let mut cluster = ClusterSnapshot {
+                replicas: BTreeMap::from([(ReplicaId::User(1), ReplicaTarget::Ask)]),
+                ignored_compute_collections: BTreeSet::new(),
+                collections: vec![(
+                    id,
+                    Antichain::from_elem(100.into()),
+                    CollectionType::NativeCompute { hydrated },
+                )],
+                compute_hydration: None,
+                native: true,
+                required_realizations,
+            };
+            let reference = reference
+                .into_iter()
+                .map(|frontier| (id, frontier))
+                .collect();
+            let result = CaughtUpCheck::collections_caught_up(
+                ClusterId::User(1),
+                &mut cluster,
+                0.into(),
+                1000.into(),
+                100.into(),
+                &reference,
+                &BTreeSet::new(),
+            )
+            .await
+            .expect("native observations need no legacy hydration response");
+            assert_eq!(result, expected);
+        }
+    }
+
     #[mz_ore::test(tokio::test)]
     async fn reference_incorporates_peer_updates_and_empty_progress() {
         use mz_catalog::builtin::MZ_REPLICA_FRONTIER_OBSERVATIONS;
