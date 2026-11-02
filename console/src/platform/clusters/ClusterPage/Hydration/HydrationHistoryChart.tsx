@@ -12,6 +12,7 @@ import { useParentSize } from "@visx/responsive";
 import { scaleLinear, scaleTime } from "@visx/scale";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { max } from "d3";
+import { millisecondsInDay } from "date-fns/constants";
 import React from "react";
 
 import { OOM_REASON } from "~/api/materialize/cluster/replicaStatusTimeline";
@@ -21,6 +22,7 @@ import { pluralize } from "~/util";
 import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
+  TIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
 import { formatDurationExact } from "~/utils/format";
 
@@ -46,12 +48,20 @@ const DURATION_STEPS_MS = [
   300_000, 600_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 21_600_000,
   43_200_000, 86_400_000,
 ];
-// Replicas often hydrate at the same moment, so each is drawn this far from
-// the next to keep both visible.
-const REPLICA_OFFSET_PX = 4;
+// Replicas often hydrate at the same moment, so each is drawn a dot's width
+// and a gap from the next. Within 12px, the hit area of the dot drawn on top
+// covers the other's center and takes its clicks.
+const REPLICA_OFFSET_PX = 16;
 // A replica restarting in a loop restarts too often to draw each restart, so
-// restarts closer than this are one mark with a count.
+// restarts closer than this are one mark, counted in its tooltip.
 const RESTART_GROUP_PX = 12;
+
+// A week or a month reads in dates, and a day in times of day.
+const dateTick = (startMs: number, endMs: number) => {
+  const format =
+    endMs - startMs > millisecondsInDay ? "MMM d" : TIME_FORMAT_NO_SECONDS;
+  return (ms: number) => formatDate(new Date(ms), format);
+};
 
 /** Ticks from zero at a round duration, at most `DURATION_TICK_COUNT` steps. */
 function durationTicks(maxMs: number) {
@@ -311,18 +321,6 @@ const HistoryPlot = ({
                   strokeWidth={2.2}
                   strokeLinecap="round"
                 />
-                {groupRows.length > 1 && (
-                  <text
-                    x={x - 9}
-                    y={laneY + 4}
-                    textAnchor="end"
-                    fontSize={11}
-                    fontWeight={600}
-                    fill={colors.accent.red}
-                  >
-                    {groupRows.length}
-                  </text>
-                )}
               </g>
             );
           })}
@@ -396,7 +394,11 @@ const HistoryPlot = ({
             );
           })}
         </svg>
-        <TimeAxis width={width} xScale={xScale} />
+        <TimeAxis
+          width={width}
+          xScale={xScale}
+          tickFormat={dateTick(startMs, endMs)}
+        />
       </Box>
       {tooltipData && tooltipLeft !== undefined && tooltipTop !== undefined && (
         <GraphTooltip
@@ -482,15 +484,21 @@ export const HydrationHistoryLegend = ({
     label: string;
     help?: string;
   }> = [
-    ...replicas.map(({ id, name }) => ({
-      key: id,
-      swatch: (
-        <TooltipColorSwatch
-          color={colorById.get(id) ?? colors.foreground.tertiary}
-        />
-      ),
-      label: name,
-    })),
+    // Replicas of one name share a color, as when a resize replaced them.
+    ...replicas
+      .filter(
+        ({ name }, index) =>
+          replicas.findIndex((other) => other.name === name) === index,
+      )
+      .map(({ id, name }) => ({
+        key: id,
+        swatch: (
+          <TooltipColorSwatch
+            color={colorById.get(id) ?? colors.foreground.tertiary}
+          />
+        ),
+        label: name,
+      })),
     {
       key: "full",
       swatch: glyph(

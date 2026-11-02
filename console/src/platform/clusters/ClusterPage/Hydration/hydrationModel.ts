@@ -277,8 +277,9 @@ const restartId = ({ replicaId, occurredAt }: ReplicaTransition) =>
  * `startMs` aren't read, so an attempt that began before it is skipped unless
  * such an object was created after it.
  *
- * NOTE: the history can miss an episode that finished, so a restart after
- * one can read as unfinished.
+ * NOTE: the collector visits one replica per interval, so a hydration that
+ * finished before a restart and before the replica's next visit is never
+ * recorded, and that restart reads as unfinished.
  */
 export function findUnfinishedHydrations({
   restarts,

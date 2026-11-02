@@ -11,8 +11,10 @@ import { HStack, Text, useTheme, VStack } from "@chakra-ui/react";
 import { createColumnHelper } from "@tanstack/react-table";
 import React from "react";
 
+import { SizeAllocation } from "~/api/materialize/cluster/replicaProcessMetrics";
 import { OOM_REASON } from "~/api/materialize/cluster/replicaStatusTimeline";
 import { TooltipColorSwatch } from "~/components/graphComponents";
+import PercentBar from "~/components/PercentBar";
 import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
 import { TablePagination } from "~/components/Table/TablePagination";
 import { UniversalTable } from "~/components/Table/UniversalTable";
@@ -30,7 +32,6 @@ import {
   formatPeakBytes,
   HYDRATION_HELP,
   HydrationRow,
-  HydrationRowKind,
   ROW_KIND_NAMES,
   rowKind,
   rowTime,
@@ -40,6 +41,8 @@ interface HydrationTableMeta {
   colorById: Map<string, string>;
   nameById: Map<string, string>;
   heapLimitById: Map<string, number>;
+  /** Each replica's per-process CPU, memory and disk. */
+  allocationById: Map<string, SizeAllocation>;
   selectedId: string | undefined;
   onSelect: (rowId: string) => void;
 }
@@ -135,6 +138,36 @@ const COLUMNS = [
     },
   ),
   columnHelper.display({
+    id: "peakMemory",
+    header: "Peak memory",
+    meta: { tooltip: HYDRATION_HELP.peakMemory },
+    cell: (info) => {
+      const row = info.row.original;
+      if (row.type === "unfinished") return "-";
+      const meta = info.table.options.meta as HydrationTableMeta;
+      const percent = percentOf(
+        row.peakMemoryBytes,
+        meta.allocationById.get(row.replicaId)?.memoryBytes ?? null,
+      );
+      return percent === null ? (
+        (formatPeakBytes(row.peakMemoryBytes) ?? "-")
+      ) : (
+        <PercentBar fraction={percent / 100} />
+      );
+    },
+  }),
+  columnHelper.display({
+    id: "peakDisk",
+    header: "Peak disk",
+    meta: { isNumeric: true, tooltip: HYDRATION_HELP.peakDisk },
+    cell: (info) => {
+      const row = info.row.original;
+      return row.type === "hydration"
+        ? (formatPeakBytes(row.peakDiskBytes) ?? "-")
+        : "-";
+    },
+  }),
+  columnHelper.display({
     id: "peakHeap",
     header: "Peak heap",
     meta: { isNumeric: true, tooltip: HYDRATION_HELP.peakHeap },
@@ -154,80 +187,29 @@ const COLUMNS = [
         : `${formatPercentage(percent / 100, 0)} · ${peakBytes}`;
     },
   }),
-  columnHelper.display({
-    id: "peakDisk",
-    header: "Peak disk",
-    meta: { isNumeric: true, tooltip: HYDRATION_HELP.peakDisk },
-    cell: (info) => {
-      const row = info.row.original;
-      return row.type === "hydration"
-        ? (formatPeakBytes(row.peakDiskBytes) ?? "-")
-        : "-";
-    },
-  }),
 ];
 
 export interface HydrationTableProps extends HydrationTableMeta {
   rows: HydrationRow[];
 }
 
-/** Every hydration in the window, with filters by kind. */
+/** Every hydration in the window. */
 export const HydrationTable = ({ rows, ...meta }: HydrationTableProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const [shownKinds, setShownKinds] = React.useState<Set<HydrationRowKind>>(
-    () => new Set(["full", "additive", "unfinished"]),
-  );
-  const shownRows = React.useMemo(
-    () => rows.filter((row) => shownKinds.has(rowKind(row))),
-    [rows, shownKinds],
-  );
   const table = useUniversalTable({
-    data: shownRows,
+    data: rows,
     columns: COLUMNS,
     meta,
     getRowId: ({ id }) => id,
   });
-  const toggleKind = (kind: HydrationRowKind) =>
-    setShownKinds((previous) => {
-      const next = new Set(previous);
-      if (next.has(kind)) next.delete(kind);
-      else next.add(kind);
-      return next;
-    });
-  return (
+  return rows.length === 0 ? (
+    <Text textStyle="text-small" color={colors.foreground.secondary}>
+      No hydrations in this period.
+    </Text>
+  ) : (
     <VStack spacing={3} alignItems="stretch">
-      <HStack
-        as="ul"
-        aria-label="Show hydrations"
-        spacing={4}
-        flexWrap="wrap"
-        listStyleType="none"
-      >
-        {(Object.keys(ROW_KIND_NAMES) as HydrationRowKind[]).map((kind) => (
-          <li key={kind}>
-            <Text
-              as="button"
-              type="button"
-              textStyle="text-small"
-              aria-pressed={shownKinds.has(kind)}
-              opacity={shownKinds.has(kind) ? 1 : 0.5}
-              onClick={() => toggleKind(kind)}
-            >
-              {ROW_KIND_NAMES[kind].short}
-            </Text>
-          </li>
-        ))}
-      </HStack>
-      {shownRows.length === 0 ? (
-        <Text textStyle="text-small" color={colors.foreground.secondary}>
-          No matching hydrations in this period.
-        </Text>
-      ) : (
-        <>
-          <UniversalTable table={table} variant="rounded" />
-          <TablePagination table={table} itemLabel="hydrations" />
-        </>
-      )}
+      <UniversalTable table={table} variant="rounded" />
+      <TablePagination table={table} itemLabel="hydrations" />
     </VStack>
   );
 };

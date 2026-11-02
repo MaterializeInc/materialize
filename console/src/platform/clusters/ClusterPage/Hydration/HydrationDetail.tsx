@@ -19,7 +19,7 @@ import {
 } from "@chakra-ui/react";
 import { useParentSize } from "@visx/responsive";
 import { scaleLinear } from "@visx/scale";
-import { sort } from "d3";
+import { max, sort } from "d3";
 import React from "react";
 
 import { SizeAllocation } from "~/api/materialize/cluster/replicaProcessMetrics";
@@ -79,8 +79,8 @@ const UnfinishedDetail = ({
     <VStack spacing={2} alignItems="start">
       <Text textStyle="text-base">
         {row.reason === OOM_REASON
-          ? `${replicaName} ran out of memory and restarted before it finished hydrating.`
-          : `${replicaName} went offline before it finished hydrating.`}
+          ? `${replicaName} ran out of memory and restarted with no finished hydration recorded.`
+          : `${replicaName} went offline with no finished hydration recorded.`}
       </Text>
       <Text textStyle="text-small" color={colors.foreground.secondary}>
         Materialize records object timings only for hydrations that finish.
@@ -282,13 +282,20 @@ const ObjectWaterfall = ({
   const { parentRef, width } = useParentSize({ debounceTime: 10 });
   const [order, setOrder] = React.useState<WaterfallOrder>("started");
   const [pageIndex, setPageIndex] = React.useState(0);
+  // Slowest first compares working times, so each bar starts at zero and the
+  // time spent waiting is left out.
+  const isSlowest = order === "slowest";
   const ordered = React.useMemo(
     () =>
-      order === "slowest"
+      isSlowest
         ? sort(spans, (a, b) => (b.workingMs ?? 0) - (a.workingMs ?? 0))
         : spans,
-    [spans, order],
+    [spans, isSlowest],
   );
+  const workingEndOf = (span: NamedSpan) => span.hydratedMs ?? durationMs;
+  const domainMs = isSlowest
+    ? (max(spans, (span) => workingEndOf(span) - span.startedMs) ?? 0)
+    : durationMs;
   const pageCount = Math.ceil(ordered.length / WATERFALL_PAGE_SIZE);
   const shown = ordered.slice(
     pageIndex * WATERFALL_PAGE_SIZE,
@@ -298,14 +305,14 @@ const ObjectWaterfall = ({
   const xScale = React.useMemo(
     () =>
       scaleLinear<number>({
-        domain: [0, Math.max(durationMs, 1)],
+        domain: [0, Math.max(domainMs, 1)],
         range: [
           LABEL_WIDTH_PX,
           Math.max(LABEL_WIDTH_PX + 1, width - DURATION_LABEL_WIDTH_PX),
         ],
         clamp: true,
       }),
-    [durationMs, width],
+    [domainMs, width],
   );
   return (
     <VStack spacing={2} alignItems="stretch">
@@ -322,20 +329,22 @@ const ObjectWaterfall = ({
               Working
             </Text>
           </HStack>
-          <HStack as="li" spacing={1.5}>
-            <Box
-              width="4"
-              height="2"
-              borderRadius="sm"
-              background={colors.background.accent}
-              borderWidth="1px"
-              borderColor={colors.accent.brightPurple}
-            />
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              Waiting
-            </Text>
-            <InfoTip subject="waiting" label={HYDRATION_HELP.hydrationSlot} />
-          </HStack>
+          {!isSlowest && (
+            <HStack as="li" spacing={1.5}>
+              <Box
+                width="4"
+                height="2"
+                borderRadius="sm"
+                background={colors.background.accent}
+                borderWidth="1px"
+                borderColor={colors.accent.brightPurple}
+              />
+              <Text textStyle="text-small" color={colors.foreground.secondary}>
+                Waiting
+              </Text>
+              <InfoTip subject="waiting" label={HYDRATION_HELP.hydrationSlot} />
+            </HStack>
+          )}
         </HStack>
         <HStack
           as="ul"
@@ -373,7 +382,10 @@ const ObjectWaterfall = ({
             {shown.map((span, rowIndex) => {
               const y = rowIndex * ROW_HEIGHT_PX;
               const barY = y + 6;
-              const workingEnd = span.hydratedMs ?? durationMs;
+              const barStart = isSlowest ? 0 : span.startedMs;
+              const barEnd = isSlowest
+                ? workingEndOf(span) - span.startedMs
+                : workingEndOf(span);
               return (
                 <g key={span.globalId}>
                   <text
@@ -388,7 +400,7 @@ const ObjectWaterfall = ({
                       : span.name}
                     <title>{span.name}</title>
                   </text>
-                  {span.queuedMs > 0 && (
+                  {!isSlowest && span.queuedMs > 0 && (
                     <rect
                       x={xScale(span.installedMs)}
                       y={barY}
@@ -404,18 +416,15 @@ const ObjectWaterfall = ({
                     />
                   )}
                   <rect
-                    x={xScale(span.startedMs)}
+                    x={xScale(barStart)}
                     y={barY}
-                    width={Math.max(
-                      2,
-                      xScale(workingEnd) - xScale(span.startedMs),
-                    )}
+                    width={Math.max(2, xScale(barEnd) - xScale(barStart))}
                     height={14}
                     rx={3}
                     fill={colors.accent.brightPurple}
                   />
                   <text
-                    x={xScale(workingEnd) + 6}
+                    x={xScale(barEnd) + 6}
                     y={y + 17}
                     fontSize={12}
                     fill={colors.foreground.secondary}

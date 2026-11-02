@@ -11,7 +11,6 @@ import {
   Box,
   Card,
   Flex,
-  Grid,
   HStack,
   Text,
   useInterval,
@@ -43,11 +42,10 @@ import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
-import { formatDurationExact, formatPercentage } from "~/utils/format";
+import { formatDurationExact } from "~/utils/format";
 
 import { replicaStatus } from "../Configuration/clusterConfigurationModel";
 import { ReplicaSelect } from "../ReplicaSelect";
-import { percentOf } from "../ResourceUsage/processReadingsModel";
 import {
   assignReplicaColors,
   groupReplicasByName,
@@ -60,11 +58,7 @@ import {
   HydrationHistoryChart,
   HydrationHistoryLegend,
 } from "./HydrationHistoryChart";
-import {
-  Hydration,
-  HydrationReplica,
-  latestFullHydration,
-} from "./hydrationModel";
+import { HydrationReplica } from "./hydrationModel";
 import { HydrationTable } from "./HydrationTable";
 import {
   HYDRATION_HELP,
@@ -77,10 +71,7 @@ import {
   summarizeReplicasNow,
   toHydrationRows,
 } from "./hydrationView";
-import {
-  CreatedObject,
-  useClusterHydrationData,
-} from "./useClusterHydrationData";
+import { useClusterHydrationData } from "./useClusterHydrationData";
 import { useLiveObjectHydrations } from "./useLiveHydration";
 
 // Status history, which unfinished hydrations come from, is kept 30 days.
@@ -254,8 +245,9 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
     explicitRow ?? rows.find(({ id }) => id === lastFinished?.id) ?? rows[0];
   const isLastFinishedShown =
     !explicitRow && lastFinished !== undefined && selectedRow !== undefined;
-  const inProgress = replicasNow.flatMap(({ replica, state, startedAt }) =>
-    (state === "hydrating" || state === "restarting") && startedAt
+  // A replica's boot comes from its status, so its start waits for it too.
+  const inProgress = replicasNow.flatMap(({ replica, isWorking, startedAt }) =>
+    isWorking && startedAt && !data.isProgressLoading
       ? [
           {
             replicaId: replica.id,
@@ -333,54 +325,33 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
           <LoadingContainer />
         ) : (
           <>
-            <Grid
-              templateColumns={{ base: "minmax(0, 1fr)", xl: "2fr 1fr" }}
-              gap={6}
-            >
-              <SectionCard
-                title="Hydration History"
-                subtitle="From Materialize's hydration history"
-              >
-                <HydrationHistoryLegend
-                  replicas={replicas}
+            <SectionCard title="Hydration History">
+              <HydrationHistoryLegend
+                replicas={replicas}
+                colorById={colorById}
+                hasInProgress={inProgress.length > 0}
+              />
+              {rows.length === 0 && inProgress.length === 0 ? (
+                <Text
+                  textStyle="text-small"
+                  color={colors.foreground.secondary}
+                >
+                  No hydrations in this period.
+                </Text>
+              ) : (
+                <HydrationHistoryChart
+                  rows={rows}
+                  inProgress={inProgress}
+                  replicaIds={replicaIds}
                   colorById={colorById}
-                  hasInProgress={inProgress.length > 0}
+                  nameById={nameById}
+                  startMs={data.startMs}
+                  endMs={nowMs}
+                  selectedId={selectedRow?.id}
+                  onSelect={setSelectedRowId}
                 />
-                {rows.length === 0 && inProgress.length === 0 ? (
-                  <Text
-                    textStyle="text-small"
-                    color={colors.foreground.secondary}
-                  >
-                    No hydrations in this period.
-                  </Text>
-                ) : (
-                  <HydrationHistoryChart
-                    rows={rows}
-                    inProgress={inProgress}
-                    replicaIds={replicaIds}
-                    colorById={colorById}
-                    nameById={nameById}
-                    startMs={data.startMs}
-                    endMs={nowMs}
-                    selectedId={selectedRow?.id}
-                    onSelect={setSelectedRowId}
-                  />
-                )}
-              </SectionCard>
-              <SectionCard
-                title="Before the Next Full Hydration"
-                subtitle="From the last full hydration, not a forecast"
-              >
-                <NextHydration
-                  lastFull={latestFullHydration(hydrations)}
-                  nameOf={nameOf}
-                  clusterObjectCount={data.objectCount}
-                  createdObjects={data.createdObjects}
-                  isCreatedObjectsError={data.isCreatedObjectsError}
-                  heapLimitBytesById={data.heapLimitBytesById}
-                />
-              </SectionCard>
-            </Grid>
+              )}
+            </SectionCard>
             {selectedRow && (
               <SectionCard
                 title={
@@ -408,12 +379,13 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
                 />
               </SectionCard>
             )}
-            <SectionCard title="Hydrations">
+            <SectionCard title="Past Hydrations">
               <HydrationTable
                 rows={rows}
                 colorById={colorById}
                 nameById={nameById}
                 heapLimitById={data.heapLimitBytesById}
+                allocationById={data.allocationById}
                 selectedId={selectedRow?.id}
                 onSelect={setSelectedRowId}
               />
@@ -484,10 +456,10 @@ const ReplicasNow = ({
   return (
     <VStack as="ul" spacing={4} alignItems="stretch" listStyleType="none">
       {replicasNow.map((replicaNow) => {
-        const { replica, state, progress, startedAt, lastFull } = replicaNow;
+        const { replica, state, progress, isWorking, startedAt, lastFull } =
+          replicaNow;
         const { label, color } = stateStyles[state];
         const help = stateHelp[state];
-        const isWorking = state === "hydrating" || state === "restarting";
         const share =
           progress.objectCount === 0
             ? 1
@@ -527,16 +499,19 @@ const ReplicasNow = ({
                     {replica.size}
                   </Text>
                 )}
-                <HStack spacing={1.5}>
-                  <Box
-                    width="2"
-                    height="2"
-                    borderRadius="full"
-                    background={color}
-                  />
-                  <Text textStyle="text-small">{label}</Text>
-                  {help && <InfoTip subject={label} label={help} />}
-                </HStack>
+                {/* The progress bar already says a replica is hydrating. */}
+                {state !== "hydrating" && (
+                  <HStack spacing={1.5}>
+                    <Box
+                      width="2"
+                      height="2"
+                      borderRadius="full"
+                      background={color}
+                    />
+                    <Text textStyle="text-small">{label}</Text>
+                    {help && <InfoTip subject={label} label={help} />}
+                  </HStack>
+                )}
                 {isWorking && (
                   <Text
                     textStyle="text-small"
@@ -612,32 +587,23 @@ const LiveObjects = ({
   // The progress above already says how far the replica has got.
   if (isError || !snapshotComplete) return null;
   const working = objects.filter(({ state }) => state === "working");
-  const queuedCount = objects.filter(({ state }) => state === "queued").length;
-  if (working.length === 0 && queuedCount === 0) return null;
+  if (working.length === 0) return null;
   return (
-    <Flex
+    <VStack
       as="ul"
       aria-label={`Objects ${replicaName} is hydrating`}
       listStyleType="none"
-      flexWrap="wrap"
-      gap={2}
+      spacing={1}
+      alignItems="start"
     >
       {working.slice(0, MAX_LIVE_OBJECTS).map((object) => (
-        <Text
-          as="li"
-          key={object.globalId}
-          textStyle="text-small"
-          fontFamily="mono"
-          px={2}
-          py={0.5}
-          borderRadius="md"
-          borderWidth="1px"
-          borderColor={colors.border.primary}
-        >
-          {object.name} · working{" "}
-          {object.startedAt
-            ? formatDurationExact(nowMs - object.startedAt.getTime())
-            : ""}
+        <Text as="li" key={object.globalId} textStyle="text-small">
+          Working on{" "}
+          <Text as="span" fontFamily="mono">
+            {object.name}
+          </Text>
+          {object.startedAt &&
+            ` for ${formatDurationExact(nowMs - object.startedAt.getTime())}`}
         </Text>
       ))}
       {working.length > MAX_LIVE_OBJECTS && (
@@ -648,127 +614,6 @@ const LiveObjects = ({
         >
           and {working.length - MAX_LIVE_OBJECTS} more working
         </Text>
-      )}
-      {queuedCount > 0 && (
-        <HStack as="li" spacing={1}>
-          <Text textStyle="text-small" color={colors.foreground.secondary}>
-            {queuedCount} waiting
-          </Text>
-          <InfoTip subject="waiting" label={HYDRATION_HELP.hydrationSlot} />
-        </HStack>
-      )}
-    </Flex>
-  );
-};
-
-const Fact = ({
-  label,
-  value,
-  note,
-  help,
-}: {
-  label: string;
-  value: string;
-  note?: string;
-  help: string;
-}) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  const labelId = React.useId();
-  return (
-    <VStack
-      spacing={0}
-      alignItems="start"
-      role="group"
-      aria-labelledby={labelId}
-    >
-      <HStack spacing={1}>
-        <Text
-          id={labelId}
-          textStyle="text-small"
-          color={colors.foreground.secondary}
-        >
-          {label}
-        </Text>
-        <InfoTip subject={label} label={help} />
-      </HStack>
-      <Text textStyle="text-ui-med">{value}</Text>
-      {note && (
-        <Text textStyle="text-small" color={colors.foreground.secondary}>
-          {note}
-        </Text>
-      )}
-    </VStack>
-  );
-};
-
-/**
- * What the last full hydration says about the next one: how long it took, how
- * many objects it covered against how many there are now, and its memory.
- */
-const NextHydration = ({
-  lastFull,
-  nameOf,
-  clusterObjectCount,
-  heapLimitBytesById,
-  createdObjects,
-  isCreatedObjectsError,
-}: {
-  lastFull: Hydration | undefined;
-  nameOf: (replicaId: string) => string;
-  clusterObjectCount: number | undefined;
-  heapLimitBytesById: Map<string, number>;
-  createdObjects: CreatedObject[] | undefined;
-  isCreatedObjectsError: boolean;
-}) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  if (!lastFull) {
-    return (
-      <Text textStyle="text-small" color={colors.foreground.secondary}>
-        No full hydration finished in this period.
-      </Text>
-    );
-  }
-  const createdSince = createdObjects?.filter(
-    ({ occurredAt }) => occurredAt.getTime() > lastFull.finishedAt.getTime(),
-  );
-  const peakPercent = percentOf(
-    lastFull.peakHeapBytes,
-    heapLimitBytesById.get(lastFull.replicaId) ?? null,
-  );
-  const createdNames = (createdSince ?? []).flatMap(({ name }) =>
-    name ? [name] : [],
-  );
-  return (
-    <VStack spacing={4} alignItems="start">
-      <Fact
-        label="Last full hydration"
-        help={HYDRATION_HELP.lastFullDuration}
-        value={formatDurationExact(lastFull.durationMs)}
-        note={`On ${nameOf(lastFull.replicaId)}, ${formatDate(lastFull.finishedAt, FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}`}
-      />
-      <Fact
-        label="Objects"
-        help={HYDRATION_HELP.lastFullObjects}
-        value={
-          clusterObjectCount === undefined
-            ? `${lastFull.objectCount} then`
-            : `${lastFull.objectCount} then, ${clusterObjectCount} now`
-        }
-        note={
-          isCreatedObjectsError
-            ? "Creation times couldn't be loaded"
-            : createdNames.length > 0
-              ? `Created since: ${createdNames.slice(0, 3).join(", ")}${createdNames.length > 3 ? ` and ${createdNames.length - 3} more` : ""}`
-              : undefined
-        }
-      />
-      {peakPercent !== null && (
-        <Fact
-          label="Memory used"
-          help={HYDRATION_HELP.lastFullMemory}
-          value={`${formatPercentage(peakPercent / 100, 0)} of the heap limit`}
-          note={`${formatPercentage(Math.max(0, 100 - peakPercent) / 100, 0)} headroom at its peak`}
-        />
       )}
     </VStack>
   );

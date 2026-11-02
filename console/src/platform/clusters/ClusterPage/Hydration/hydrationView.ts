@@ -12,12 +12,11 @@ import { millisecondsInMinute } from "date-fns/constants";
 
 import { OOM_REASON } from "~/api/materialize/cluster/replicaStatusTimeline";
 import { AlertVariant } from "~/components/Alert";
-import { pluralize } from "~/util";
 import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
-import { formatBytesShort, formatDurationExact } from "~/utils/format";
+import { formatBytesShort } from "~/utils/format";
 
 import { ReplicaStatus } from "../Configuration/clusterConfigurationModel";
 import {
@@ -86,7 +85,12 @@ export interface ReplicaNow {
   replica: HydrationReplica;
   state: ReplicaHydrationState;
   progress: ReplicaHydrationProgress;
-  /** When its current hydration began, if that's known. */
+  /**
+   * Hydrating now: online and short of its objects. A replica restarting in a
+   * loop can be offline between attempts.
+   */
+  isWorking: boolean;
+  /** When its current hydration began, if it's working and that's known. */
   startedAt: Date | undefined;
   lastFull: Hydration | undefined;
   /** Times it restarted without finishing, since it last finished. */
@@ -146,7 +150,10 @@ export function summarizeReplicasNow({
   bootTimes: Map<string, number[]>;
   hydrations: Hydration[];
   unfinished: UnfinishedHydration[];
-  /** Objects created on the cluster in the window, undefined until known. */
+  /**
+   * When the cluster's objects were created, undefined until known. An object
+   * missing from it is taken to be older than the replica's boot.
+   */
   createdObjects: Array<{ id: string | null; occurredAt: Date }> | undefined;
   nowMs: number;
 }): ReplicaNow[] {
@@ -176,6 +183,7 @@ export function summarizeReplicasNow({
       );
       const isHydrating = progress.hydratedCount < progress.objectCount;
       const isOffline = statusById.get(replica.id)?.kind === "offline";
+      const isWorking = isHydrating && !isOffline;
       // A replica reports nothing until its first process is up, which reads as
       // nothing to hydrate on a cluster that has objects.
       const bootedAt = latestBoot(bootTimes, replica.id);
@@ -198,7 +206,8 @@ export function summarizeReplicasNow({
         replica,
         state,
         progress,
-        startedAt: isHydrating
+        isWorking,
+        startedAt: isWorking
           ? currentHydrationStart(
               bootedAt,
               progress.unhydratedObjectIds,
@@ -232,7 +241,8 @@ const restartsSentence = (restarts: UnfinishedHydration[], subject: string) => {
 
 /**
  * One sentence on what needs attention in the cluster's hydration, with the
- * numbers behind it. Undefined when every replica is hydrated.
+ * numbers behind it. Undefined when every replica is hydrated or hydrating,
+ * which the progress card already shows.
  */
 export function hydrationVerdict(
   replicasNow: ReplicaNow[],
@@ -260,36 +270,12 @@ export function hydrationVerdict(
     );
     return {
       variant: "error",
-      label: `${names} ${restarting.length === 1 ? "hasn't" : "haven't"} finished hydrating since ${formatDate(sinceMs, FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}.`,
+      label: `${names} ${restarting.length === 1 ? "has" : "have"} no finished hydration recorded since ${formatDate(sinceMs, FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}.`,
       message: restartsSentence(
         restarts,
         restarting.length === 1 ? "It" : "Between them, they",
       ),
       isFailing: true,
-    };
-  }
-
-  const hydrating = replicasNow.filter(({ state }) => state === "hydrating");
-  if (hydrating.length === 1) {
-    const [{ replica, progress, startedAt, lastFull }] = hydrating;
-    const elapsed = startedAt
-      ? `, ${formatDurationExact(nowMs - startedAt.getTime())} so far`
-      : "";
-    return {
-      variant: "warning",
-      label: `${replica.name} is hydrating: ${progress.hydratedCount} of ${progress.objectCount} ${pluralize(progress.objectCount, "object", "objects")}${elapsed}.`,
-      message: lastFull
-        ? `Its last full hydration took ${formatDurationExact(lastFull.durationMs)}.`
-        : undefined,
-      isFailing: false,
-    };
-  }
-  if (hydrating.length > 1) {
-    return {
-      variant: "warning",
-      label: `${LIST_FORMAT.format(hydrating.map(({ replica }) => replica.name))} are hydrating.`,
-      message: undefined,
-      isFailing: false,
     };
   }
 
@@ -324,7 +310,7 @@ export const HYDRATION_HELP = {
     "Hydrating new objects, such as a new index, on a replica that already has the others. Inferred: Materialize doesn't record why a hydration began.",
   kind: "Full or additive. Inferred: Materialize doesn't record why a hydration began.",
   unfinished:
-    "Inferred from replica status: it went offline or ran out of memory before finishing.",
+    "Inferred from replica status: it went offline or ran out of memory with no finished hydration recorded. Materialize records hydrations by visiting replicas in turn, so one that finished shortly before the restart can show here.",
   inProgress: "Still hydrating, placed at how long it has taken so far.",
   hydrationSlot: "A replica hydrates a few objects at a time, 4 by default.",
   duration: "From the first dataflow installed to the last object hydrated.",
@@ -336,12 +322,8 @@ export const HYDRATION_HELP = {
   peakHeap:
     "Memory plus disk, as a share of the process's heap limit. A process that reaches the limit runs out of memory. Recorded since the process started.",
   cpu: "The highest CPU sample during the hydration. Materialize samples CPU once a minute.",
-  lastFullDuration: "How long the replica's last full hydration took.",
-  lastFullObjects:
-    "Objects the last full hydration covered, and objects on the cluster now. Objects created since hydrate during the next one.",
-  lastFullMemory:
-    "Memory plus disk one process used at the last full hydration, as a share of its heap limit.",
-  restarting: "Inferred from replica status: it restarted before finishing.",
+  restarting:
+    "Inferred from replica status: it restarted with no finished hydration recorded.",
   offline: "The replica is offline, so it isn't hydrating.",
   starting: "The replica hasn't reported its objects yet.",
 };

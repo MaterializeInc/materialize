@@ -154,6 +154,67 @@ describe("summarizeReplicasNow", () => {
       ["u2", "hydrated", []],
     ]);
   });
+
+  it("dates a hydration from the replica's boot", () => {
+    const [, r2] = summarize({
+      progress: { u1: [9, 9], u2: [5, 9] },
+      bootTimes: new Map([["u2", [at("11:19:50").getTime()]]]),
+    });
+
+    expect(r2).toMatchObject({
+      state: "hydrating",
+      isWorking: true,
+      startedAt: at("11:19:50"),
+    });
+  });
+
+  it("dates a hydration of new objects from the first one's creation, not the replica's boot", () => {
+    const [r1] = summarize({
+      progress: { u1: [8, 9, ["u10"]], u2: [9, 9] },
+      hydrations: [hydration("u1", "08:00:00", 280_000)],
+      // A boot after the last hydration finished, as a zero-downtime
+      // upgrade records.
+      bootTimes: new Map([["u1", [at("08:20:00").getTime()]]]),
+      createdObjects: [{ id: "u10", occurredAt: at("11:20:30") }],
+    });
+
+    expect(r1.startedAt).toEqual(at("11:20:30"));
+  });
+
+  it("dates a hydration from the boot when an object from before it isn't hydrated", () => {
+    const [r1] = summarize({
+      progress: { u1: [7, 9, ["u10", "u11"]] },
+      bootTimes: new Map([["u1", [at("11:19:50").getTime()]]]),
+      createdObjects: [{ id: "u10", occurredAt: at("11:21:00") }],
+    });
+
+    expect(r1.startedAt).toEqual(at("11:19:50"));
+  });
+
+  it("leaves out when a replica began hydrating until creation times load", () => {
+    const [, r2] = summarize({
+      progress: { u1: [9, 9], u2: [5, 9] },
+      bootTimes: new Map([["u2", [at("11:19:50").getTime()]]]),
+      isCreationTimesUnknown: true,
+    });
+
+    expect(r2).toMatchObject({ isWorking: true, startedAt: undefined });
+  });
+
+  it("keeps an offline replica restarting in a loop off the clock", () => {
+    const [r1] = summarize({
+      progress: { u1: [7, 10], u2: [10, 10] },
+      unfinished: [restart("u1", "11:00:00")],
+      bootTimes: new Map([["u1", [at("10:59:00").getTime()]]]),
+      statuses: { u1: { kind: "offline", reason: "oom-killed" } },
+    });
+
+    expect(r1).toMatchObject({
+      state: "restarting",
+      isWorking: false,
+      startedAt: undefined,
+    });
+  });
 });
 
 describe("hydrationVerdict", () => {
@@ -174,69 +235,35 @@ describe("hydrationVerdict", () => {
 
     expect(verdict).toEqual({
       variant: "error",
-      label: `r1 and r2 haven't finished hydrating since ${formatDate(at("10:31:00"), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}.`,
+      label: `r1 and r2 have no finished hydration recorded since ${formatDate(at("10:31:00"), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}.`,
       message:
         "Between them, they restarted 3 times, each after running out of memory.",
       isFailing: true,
     });
   });
 
-  it("says how far a hydrating replica has got and how long it last took", () => {
-    const verdict = hydrationVerdict(
-      summarize({
-        progress: { u1: [9, 9], u2: [5, 9] },
-        hydrations: [hydration("u2", "09:00:00", 280_000)],
-        bootTimes: new Map([["u2", [at("11:19:50").getTime()]]]),
-      }),
-      NOW_MS,
-    );
-
-    expect(verdict).toMatchObject({
-      variant: "warning",
-      label: "r2 is hydrating: 5 of 9 objects, 2m 10s so far.",
-      message: "Its last full hydration took 4m 40s.",
-    });
+  it("leaves a hydrating replica to the progress card", () => {
+    expect(
+      hydrationVerdict(
+        summarize({
+          progress: { u1: [9, 9], u2: [5, 9] },
+          bootTimes: new Map([["u2", [at("11:19:50").getTime()]]]),
+        }),
+        NOW_MS,
+      ),
+    ).toBeUndefined();
   });
 
-  it("dates a hydration of new objects from the first one's creation, not the replica's boot", () => {
-    const verdict = hydrationVerdict(
-      summarize({
-        progress: { u1: [8, 9, ["u10"]], u2: [9, 9] },
-        hydrations: [hydration("u1", "08:00:00", 280_000)],
-        // A boot after the last hydration finished, as a zero-downtime
-        // upgrade records.
-        bootTimes: new Map([["u1", [at("08:20:00").getTime()]]]),
-        createdObjects: [{ id: "u10", occurredAt: at("11:20:30") }],
-      }),
-      NOW_MS,
-    );
-
-    expect(verdict?.label).toBe(
-      "r1 is hydrating: 8 of 9 objects, 1m 30s so far.",
-    );
-  });
-
-  it("dates a hydration from the boot when an object from before it isn't hydrated", () => {
-    const [r1] = summarize({
-      progress: { u1: [7, 9, ["u10", "u11"]] },
-      bootTimes: new Map([["u1", [at("11:19:50").getTime()]]]),
-      createdObjects: [{ id: "u10", occurredAt: at("11:21:00") }],
-    });
-
-    expect(r1.startedAt).toEqual(at("11:19:50"));
-  });
-
-  it("leaves out how long a replica has been hydrating until creation times load", () => {
-    const verdict = hydrationVerdict(
-      summarize({
-        progress: { u1: [9, 9], u2: [5, 9] },
-        bootTimes: new Map([["u2", [at("11:19:50").getTime()]]]),
-        isCreationTimesUnknown: true,
-      }),
-      NOW_MS,
-    );
-
-    expect(verdict?.label).toBe("r2 is hydrating: 5 of 9 objects.");
+  it("calls out an offline replica while another hydrates", () => {
+    expect(
+      hydrationVerdict(
+        summarize({
+          progress: { u1: [3, 9], u2: [9, 9] },
+          statuses: { u2: { kind: "offline", reason: null } },
+        }),
+        NOW_MS,
+      ),
+    ).toMatchObject({ variant: "warning", label: "r2 is offline." });
   });
 
   it("has nothing to say once every replica is hydrated", () => {
