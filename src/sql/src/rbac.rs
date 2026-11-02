@@ -16,9 +16,9 @@ use maplit::btreeset;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::str::StrExt;
-use mz_repr::CatalogItemId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
 use tracing::debug;
 
@@ -82,6 +82,19 @@ fn filter_requirements(
     session_meta: &dyn SessionMetadata,
     rbac_requirements: RbacRequirements,
 ) -> RbacRequirements {
+    if skips_non_mandatory_checks(catalog, session_meta) {
+        return rbac_requirements.filter_to_mandatory_requirements();
+    }
+
+    rbac_requirements
+}
+
+/// Whether only mandatory RBAC requirements apply to the session, which never
+/// include `SELECT` (see [`RbacRequirements::filter_to_mandatory_requirements`]).
+fn skips_non_mandatory_checks(
+    catalog: &impl SessionCatalog,
+    session_meta: &dyn SessionMetadata,
+) -> bool {
     // Skip RBAC non-mandatory checks if RBAC is disabled. However, we never skip RBAC checks for
     // system roles. This allows us to limit access of system users even when RBAC is off.
     let is_rbac_disabled = !is_rbac_enabled_for_session(catalog.system_vars(), session_meta)
@@ -89,11 +102,7 @@ fn filter_requirements(
         && !session_meta.role_metadata().session_role.is_system();
     // Skip RBAC checks on user items if the session is a superuser.
     let is_superuser = session_meta.is_superuser();
-    if is_rbac_disabled || is_superuser {
-        return rbac_requirements.filter_to_mandatory_requirements();
-    }
-
-    rbac_requirements
+    is_rbac_disabled || is_superuser
 }
 
 // The default item types that most statements require USAGE privileges for.
@@ -160,6 +169,15 @@ pub enum UnauthorizedError {
     /// Access to system objects is restricted by the restrict_to_user_objects session variable.
     #[error("access to system object {object_name} is restricted")]
     RestrictedSystemObject { object_name: String },
+    /// The role may read the object only through one of `indexes`, and the
+    /// optimized query reads it some other way.
+    #[error("permission denied for {object_description}")]
+    IndexRoute {
+        object_description: ErrorMessageObjectDescription,
+        role_name: String,
+        /// `(index name, name of the cluster that maintains it)` pairs.
+        indexes: Vec<(String, String)>,
+    },
 }
 
 impl UnauthorizedError {
@@ -190,6 +208,22 @@ impl UnauthorizedError {
                 Contact your administrator if you need access."
                     .into(),
             ),
+            UnauthorizedError::IndexRoute {
+                object_description,
+                role_name,
+                indexes,
+            } => Some(format!(
+                "The '{role_name}' role may read {object_description} only through {}. \
+                Run the query on the cluster that maintains one of them.",
+                indexes
+                    .iter()
+                    .map(|(index, cluster)| format!(
+                        "index {} in cluster {}",
+                        index.quoted(),
+                        cluster.quoted()
+                    ))
+                    .join(", ")
+            )),
             UnauthorizedError::Ownership { .. } | UnauthorizedError::RoleMembership { .. } => None,
         }
     }
@@ -952,7 +986,7 @@ fn generate_rbac_requirements(
                 .depends_on()
                 .into_iter()
                 .map(|gid| catalog.resolve_item_id(&gid));
-            let mut privileges = generate_read_privileges(catalog, items, role_id);
+            let mut privileges = generate_query_read_privileges(catalog, items, role_id);
             if let Some(privilege) = generate_cluster_usage_privileges(
                 source.as_const().is_some(),
                 target_cluster_id,
@@ -978,7 +1012,7 @@ fn generate_rbac_requirements(
                 .depends_on()
                 .into_iter()
                 .map(|gid| catalog.resolve_item_id(&gid));
-            let mut privileges = generate_read_privileges(catalog, items, role_id);
+            let mut privileges = generate_query_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -1031,7 +1065,7 @@ fn generate_rbac_requirements(
                 .depends_on()
                 .into_iter()
                 .map(|gid| catalog.resolve_item_id(&gid));
-            let mut privileges = generate_read_privileges(catalog, items, role_id);
+            let mut privileges = generate_query_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -1141,7 +1175,11 @@ fn generate_rbac_requirements(
                 .into_iter()
                 .map(|gid| catalog.resolve_item_id(&gid));
             privileges.extend_from_slice(&generate_read_privileges_inner(
-                catalog, items, role_id, &mut seen,
+                catalog,
+                items,
+                role_id,
+                &BTreeSet::new(),
+                &mut seen,
             ));
 
             if let Some(privilege) = generate_cluster_usage_privileges(
@@ -1501,7 +1539,11 @@ fn generate_rbac_requirements(
                 .into_iter()
                 .map(|gid| catalog.resolve_item_id(&gid));
             privileges.extend_from_slice(&generate_read_privileges_inner(
-                catalog, items, role_id, &mut seen,
+                catalog,
+                items,
+                role_id,
+                &BTreeSet::new(),
+                &mut seen,
             ));
 
             if let Some(privilege) = generate_cluster_usage_privileges(
@@ -1827,20 +1869,74 @@ fn generate_read_privileges(
     ids: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
-    generate_read_privileges_inner(catalog, ids, role_id, &mut BTreeSet::new())
+    generate_read_privileges_inner(
+        catalog,
+        ids,
+        role_id,
+        &BTreeSet::new(),
+        &mut BTreeSet::new(),
+    )
+}
+
+/// Like [`generate_read_privileges`], for a query that `role_id` runs and
+/// whose results go only to the session: `SELECT`, `SUBSCRIBE`, and `COPY TO`.
+///
+/// A relation the role may read only through an index (see [`index_routes`])
+/// needs no `SELECT` on the relation itself. The caller must then run
+/// [`check_index_routed_reads`] on the optimized plan, because RBAC alone
+/// cannot tell whether the optimizer reads the relation through that index.
+fn generate_query_read_privileges(
+    catalog: &impl SessionCatalog,
+    ids: impl Iterator<Item = CatalogItemId>,
+    role_id: RoleId,
+) -> Vec<(SystemObjectId, AclMode, RoleId)> {
+    let ids: Vec<_> = ids.collect();
+    let routed: BTreeSet<_> = index_routes(catalog, role_id, ids.iter().copied())
+        .into_keys()
+        .collect();
+    generate_read_privileges_inner(
+        catalog,
+        ids.into_iter(),
+        role_id,
+        &routed,
+        &mut BTreeSet::new(),
+    )
 }
 
 fn generate_read_privileges_inner(
     catalog: &impl SessionCatalog,
     ids: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
+    index_routed: &BTreeSet<CatalogItemId>,
     seen: &mut BTreeSet<(ObjectId, RoleId)>,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     let mut privileges = Vec::new();
 
     // Iterative worklist traversal rather than recursion. View dependency
     // chains are user controlled and can be arbitrarily deep.
-    let mut queue: VecDeque<(CatalogItemId, RoleId)> = ids.map(|id| (id, role_id)).collect();
+    let mut queue: VecDeque<(CatalogItemId, RoleId)> = VecDeque::new();
+    for id in ids {
+        if !index_routed.contains(&id) {
+            queue.push_back((id, role_id));
+            continue;
+        }
+        // The relation itself needs no `SELECT` from `role_id`, but its
+        // schema's `USAGE` and the view owner's privileges still apply.
+        // NOTE: `(id, role_id)` stays out of `seen`, so a second, transitive
+        // path to `id` through another view still requires `SELECT` on it.
+        let item = catalog.get_item(&id);
+        let schema_id: ObjectId = item.name().qualifiers.clone().into();
+        if seen.insert((schema_id.clone(), role_id)) {
+            privileges.push((SystemObjectId::Object(schema_id), AclMode::USAGE, role_id))
+        }
+        if matches!(
+            item.item_type(),
+            CatalogItemType::View | CatalogItemType::MaterializedView
+        ) {
+            let view_owner = item.owner_id();
+            queue.extend(item.references().items().map(|id| (*id, view_owner)));
+        }
+    }
     while let Some((id, role_id)) = queue.pop_front() {
         if seen.insert((id.into(), role_id)) {
             let item = catalog.get_item(&id);
@@ -1937,15 +2033,7 @@ fn check_object_privileges(
         let role_membership = role_memberships
             .entry(role_id)
             .or_insert_with_key(|role_id| catalog.collect_role_membership(role_id));
-        let object_privileges = catalog
-            .get_privileges(&object_id)
-            .expect("only object types with privileges will generate required privileges");
-        let role_privileges = role_membership
-            .iter()
-            .flat_map(|role_id| object_privileges.get_acl_items_for_grantee(role_id))
-            .map(|mz_acl_item| mz_acl_item.acl_mode)
-            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));
-        if !role_privileges.contains(acl_mode) {
+        if !holds_privileges(catalog, role_membership, &object_id, acl_mode) {
             let role_name = catalog.get_role(&role_id).name().to_string();
             let privileges = acl_mode.to_error_string();
             return Err(UnauthorizedError::Privilege {
@@ -1956,6 +2044,147 @@ fn check_object_privileges(
         }
     }
 
+    Ok(())
+}
+
+/// Whether any role in `role_membership` holds `acl_mode` on `object_id`.
+fn holds_privileges(
+    catalog: &impl SessionCatalog,
+    role_membership: &BTreeSet<RoleId>,
+    object_id: &SystemObjectId,
+    acl_mode: AclMode,
+) -> bool {
+    let object_privileges = catalog
+        .get_privileges(object_id)
+        .expect("only object types with privileges will generate required privileges");
+    role_membership
+        .iter()
+        .flat_map(|role_id| object_privileges.get_acl_items_for_grantee(role_id))
+        .map(|mz_acl_item| mz_acl_item.acl_mode)
+        .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode))
+        .contains(acl_mode)
+}
+
+/// The indexes built on relation `id`.
+fn indexes_on(catalog: &impl SessionCatalog, id: CatalogItemId) -> Vec<CatalogItemId> {
+    catalog
+        .get_item(&id)
+        .used_by()
+        .iter()
+        .copied()
+        .filter(|user| {
+            catalog
+                .get_item(user)
+                .index_details()
+                .is_some_and(|(_, on)| catalog.resolve_item_id(&on) == id)
+        })
+        .collect()
+}
+
+/// The relations among `ids` that `role_id` may read only through an index,
+/// each mapped to the indexes on it that the role holds `SELECT` on.
+///
+/// `SELECT` on an index lets a role read the index's relation without `SELECT`
+/// on the relation, provided the query reads it through that index. A role
+/// that holds `SELECT` on the relation itself reads it without restriction,
+/// so such a relation is absent from the result.
+fn index_routes(
+    catalog: &impl SessionCatalog,
+    role_id: RoleId,
+    ids: impl Iterator<Item = CatalogItemId>,
+) -> BTreeMap<CatalogItemId, BTreeSet<CatalogItemId>> {
+    let role_membership = catalog.collect_role_membership(&role_id);
+    let holds_select = |id: CatalogItemId| {
+        holds_privileges(
+            catalog,
+            &role_membership,
+            &SystemObjectId::Object(id.into()),
+            AclMode::SELECT,
+        )
+    };
+    let mut routes = BTreeMap::new();
+    for id in ids {
+        if routes.contains_key(&id)
+            || !ObjectType::from(catalog.get_item(&id).item_type()).is_relation()
+            || holds_select(id)
+        {
+            continue;
+        }
+        let granted: BTreeSet<_> = indexes_on(catalog, id)
+            .into_iter()
+            .filter(|index_id| holds_select(*index_id))
+            .collect();
+        if !granted.is_empty() {
+            routes.insert(id, granted);
+        }
+    }
+    routes
+}
+
+/// Checks that an optimized query reads each relation that the session's role
+/// may read only through an index (see [`index_routes`]) through indexes the
+/// role holds `SELECT` on, and never through another index or the relation's
+/// storage collection.
+///
+/// `depends_on` holds the relations the query names, which are the ones RBAC
+/// checked. `source_imports` and `index_imports` are the optimized plan's
+/// reads. Every path that executes a plan authorized by
+/// [`generate_query_read_privileges`] must call this before executing it.
+pub fn check_index_routed_reads(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    depends_on: &BTreeSet<GlobalId>,
+    source_imports: &BTreeSet<GlobalId>,
+    index_imports: &BTreeSet<GlobalId>,
+) -> Result<(), UnauthorizedError> {
+    if skips_non_mandatory_checks(catalog, session) {
+        return Ok(());
+    }
+    let role_id = session.role_metadata().current_role;
+    let ids = depends_on.iter().map(|gid| catalog.resolve_item_id(gid));
+    for (id, granted) in index_routes(catalog, role_id, ids) {
+        let reads_collection = catalog
+            .get_item(&id)
+            .global_ids()
+            .any(|gid| source_imports.contains(&gid));
+        // A view without an imported index is inlined, and a stored
+        // collection without one is read from storage. Either way the plan
+        // reads none of the relation's indexes.
+        let used: Vec<_> = indexes_on(catalog, id)
+            .into_iter()
+            .filter(|index_id| {
+                catalog
+                    .get_item(index_id)
+                    .global_ids()
+                    .any(|gid| index_imports.contains(&gid))
+            })
+            .collect();
+        let routed = !reads_collection
+            && !used.is_empty()
+            && used.iter().all(|index_id| granted.contains(index_id));
+        if !routed {
+            let indexes = granted
+                .iter()
+                .map(|index_id| {
+                    let index = catalog.get_item(index_id);
+                    let name = catalog.resolve_full_name(index.name()).to_string();
+                    let cluster = index
+                        .cluster_id()
+                        .map(|cluster_id| catalog.get_cluster(cluster_id).name().to_string())
+                        .unwrap_or_default();
+                    (name, cluster)
+                })
+                .collect();
+            return Err(UnauthorizedError::IndexRoute {
+                object_description: ErrorMessageObjectDescription::from_sys_id(
+                    &SystemObjectId::Object(id.into()),
+                    catalog,
+                ),
+                role_name: catalog.get_role(&role_id).name().to_string(),
+                indexes,
+            });
+        }
+    }
     Ok(())
 }
 
@@ -1978,7 +2207,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Index) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,

@@ -570,6 +570,14 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_index_columns",
         ),
+        // mz_indexes gained a `privileges` column, which changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.50.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
     ]
 });
 

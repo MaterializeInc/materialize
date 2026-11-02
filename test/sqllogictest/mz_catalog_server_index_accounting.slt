@@ -543,6 +543,7 @@ mz_indexes  name
 mz_indexes  oid
 mz_indexes  on_id
 mz_indexes  owner_id
+mz_indexes  privileges
 mz_indexes  redacted_create_sql
 mz_kafka_sources  group_id_prefix
 mz_kafka_sources  id

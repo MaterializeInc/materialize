@@ -1,0 +1,352 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# `SELECT` on an index lets a role read the index's relation, but only through
+# that index.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER idx_cluster SIZE 'scale=1,workers=1'
+
+statement ok
+CREATE CLUSTER other SIZE 'scale=1,workers=1'
+
+statement ok
+CREATE TABLE t (owner_name text, x text)
+
+statement ok
+INSERT INTO t VALUES ('alice', '1'), ('bob', 'not a number')
+
+statement ok
+CREATE VIEW v AS SELECT x::int AS x FROM t WHERE owner_name = 'alice'
+
+statement ok
+CREATE INDEX v_idx IN CLUSTER idx_cluster ON v (x)
+
+statement ok
+CREATE MATERIALIZED VIEW mv IN CLUSTER idx_cluster AS SELECT x FROM t WHERE owner_name = 'alice'
+
+statement ok
+CREATE INDEX mv_idx IN CLUSTER idx_cluster ON mv (x)
+
+statement ok
+CREATE ROLE alice
+
+statement ok
+CREATE ROLE readers
+
+statement ok
+CREATE ROLE bob
+
+statement ok
+GRANT readers TO bob
+
+statement ok
+GRANT USAGE ON CLUSTER idx_cluster, other TO alice, readers
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA public TO alice;
+----
+COMPLETE 0
+
+# Planning only accepts SELECT on an index, and only on an actual index.
+
+statement error invalid privilege types INSERT for INDEX "materialize.public.v_idx"
+GRANT INSERT ON INDEX v_idx TO alice
+
+statement error VIEW materialize.public.v is not a INDEX
+GRANT SELECT ON INDEX v TO alice
+
+simple conn=alice,user=alice
+GRANT SELECT ON INDEX v_idx TO alice;
+----
+db error: ERROR: must be owner of INDEX materialize.public.v_idx
+
+# Without any grant, the view is not readable.
+
+simple conn=alice,user=alice
+SET cluster = idx_cluster;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+SELECT * FROM v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role needs SELECT privileges on VIEW "materialize.public.v"
+
+statement ok
+GRANT SELECT ON INDEX v_idx, mv_idx TO alice
+
+query TTTT
+SELECT grantor, grantee, name, privilege_type FROM mz_internal.mz_show_object_privileges WHERE grantee = 'alice' AND object_type = 'index' ORDER BY name
+----
+materialize  alice  mv_idx  SELECT
+materialize  alice  v_idx  SELECT
+
+# On the cluster that maintains the index, the read goes through it, so the
+# fallible cast never sees the other row.
+
+simple conn=alice,user=alice
+SELECT * FROM v;
+----
+1
+COMPLETE 1
+
+simple conn=alice,user=alice
+SELECT x + 1 FROM v WHERE x > 0;
+----
+2
+COMPLETE 1
+
+simple conn=alice,user=alice
+SELECT * FROM mv;
+----
+1
+COMPLETE 1
+
+# Elsewhere, the view is inlined and the materialized view is read from
+# storage, and both are refused.
+
+simple conn=alice,user=alice
+SET cluster = other;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+SELECT * FROM v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role may read VIEW "materialize.public.v" only through index "materialize.public.v_idx" in cluster "idx_cluster". Run the query on the cluster that maintains one of them.
+
+simple conn=alice,user=alice
+SELECT * FROM mv;
+----
+db error: ERROR: permission denied for MATERIALIZED VIEW "materialize.public.mv"
+DETAIL: The 'alice' role may read MATERIALIZED VIEW "materialize.public.mv" only through index "materialize.public.mv_idx" in cluster "idx_cluster". Run the query on the cluster that maintains one of them.
+
+# SUBSCRIBE is checked the same way.
+
+simple conn=alice,user=alice
+BEGIN;
+DECLARE c CURSOR FOR SUBSCRIBE v;
+FETCH 0 c;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role may read VIEW "materialize.public.v" only through index "materialize.public.v_idx" in cluster "idx_cluster". Run the query on the cluster that maintains one of them.
+
+simple conn=alice,user=alice
+ROLLBACK;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+SET cluster = idx_cluster;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+BEGIN;
+DECLARE c CURSOR FOR SUBSCRIBE v;
+FETCH 0 c;
+ROLLBACK;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+# The Coordinator's SUBSCRIBE path, used when frontend subscribes are off,
+# applies the same check.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_frontend_subscribes = false;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+BEGIN;
+DECLARE c CURSOR FOR SUBSCRIBE v;
+FETCH 0 c;
+ROLLBACK;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+simple conn=alice,user=alice
+SET cluster = other;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+BEGIN;
+DECLARE c CURSOR FOR SUBSCRIBE v;
+FETCH 0 c;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role may read VIEW "materialize.public.v" only through index "materialize.public.v_idx" in cluster "idx_cluster". Run the query on the cluster that maintains one of them.
+
+simple conn=alice,user=alice
+ROLLBACK;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_frontend_subscribes;
+----
+COMPLETE 0
+
+# The grant covers only a query that names the relation. A view that alice
+# builds over it is read with alice's privileges as the view's owner, which do
+# not include SELECT on `v`, even when the query also names `v` directly.
+
+simple conn=alice,user=alice
+CREATE VIEW alice_v AS SELECT * FROM v;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+SELECT * FROM alice_v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role needs SELECT privileges on VIEW "materialize.public.v"
+
+simple conn=alice,user=alice
+SELECT * FROM v UNION ALL SELECT * FROM alice_v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role needs SELECT privileges on VIEW "materialize.public.v"
+
+simple conn=alice,user=alice
+DROP VIEW alice_v;
+----
+COMPLETE 0
+
+# Writing the relation's rows elsewhere is not a read through the index.
+
+simple conn=alice,user=alice
+CREATE TABLE alice_t (x int);
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+INSERT INTO alice_t SELECT x FROM v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role needs SELECT privileges on VIEW "materialize.public.v"
+
+simple conn=alice,user=alice
+DROP TABLE alice_t;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+SELECT * FROM t;
+----
+db error: ERROR: permission denied for TABLE "materialize.public.t"
+DETAIL: The 'alice' role needs SELECT privileges on TABLE "materialize.public.t"
+
+# Grants on an index apply through role membership like any other grant.
+
+statement ok
+GRANT SELECT ON INDEX v_idx TO readers
+
+simple conn=bob,user=bob
+SET cluster = idx_cluster;
+----
+COMPLETE 0
+
+simple conn=bob,user=bob
+SELECT * FROM v;
+----
+1
+COMPLETE 1
+
+simple conn=bob,user=bob
+SET cluster = other;
+----
+COMPLETE 0
+
+simple conn=bob,user=bob
+SELECT * FROM v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'bob' role may read VIEW "materialize.public.v" only through index "materialize.public.v_idx" in cluster "idx_cluster". Run the query on the cluster that maintains one of them.
+
+# SELECT on the view itself lifts the restriction.
+
+statement ok
+GRANT SELECT ON v TO readers
+
+simple conn=bob,user=bob
+SELECT * FROM v;
+----
+1
+COMPLETE 1
+
+statement ok
+REVOKE SELECT ON v FROM readers
+
+# Revoking the index grant, or dropping the index, removes access.
+
+statement ok
+REVOKE SELECT ON INDEX v_idx FROM readers
+
+simple conn=bob,user=bob
+SET cluster = idx_cluster;
+----
+COMPLETE 0
+
+simple conn=bob,user=bob
+SELECT * FROM v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'bob' role needs SELECT privileges on VIEW "materialize.public.v"
+
+statement ok
+DROP INDEX v_idx
+
+simple conn=alice,user=alice
+SELECT * FROM v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role needs SELECT privileges on VIEW "materialize.public.v"
+
+# A new index does not inherit the dropped index's grants.
+
+statement ok
+CREATE INDEX v_idx IN CLUSTER idx_cluster ON v (x)
+
+simple conn=alice,user=alice
+SELECT * FROM v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role needs SELECT privileges on VIEW "materialize.public.v"
+
+# Indexes are not swept into grants on all tables.
+
+statement ok
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO bob
+
+query T
+SELECT name FROM mz_internal.mz_show_object_privileges WHERE grantee = 'bob' ORDER BY name
+----
+mv
+t
+v

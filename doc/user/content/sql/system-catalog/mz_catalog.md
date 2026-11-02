@@ -255,6 +255,7 @@ Field        | Type        | Meaning
 `owner_id`   | [`text`]    | The role ID of the owner of the index. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `create_sql` | [`text`]    | The `CREATE` SQL statement for the index.
 `redacted_create_sql` | [`text`] | The redacted `CREATE` SQL statement for the index.
+`privileges` | [`mz_aclitem array`] | The privileges belonging to the index. `NULL` for system indexes.
 
 ### `mz_index_columns`
 

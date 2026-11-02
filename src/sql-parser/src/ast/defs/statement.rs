@@ -5809,6 +5809,7 @@ fn write_grant_object_type_plural<W: fmt::Write>(
 ) {
     match object_type {
         ObjectType::NetworkPolicy => f.write_str("POLICIES"),
+        ObjectType::Index => f.write_str("INDEXES"),
         other => {
             f.write_node(other);
             f.write_str("S");

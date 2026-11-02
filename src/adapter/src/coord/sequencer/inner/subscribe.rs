@@ -513,6 +513,13 @@ impl Coordinator {
             .txn_read_holds
             .remove(&conn_id)
             .expect("must have previously installed read holds");
+        mz_sql::rbac::check_index_routed_reads(
+            &self.catalog().for_session(ctx.session()),
+            ctx.session(),
+            &dependency_ids,
+            &df_desc.source_imports.keys().copied().collect(),
+            &df_desc.index_imports.keys().copied().collect(),
+        )?;
         let (resp, write_notify) = self
             .implement_subscribe(
                 ctx.extra_mut(),

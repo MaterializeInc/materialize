@@ -369,11 +369,25 @@ GRANT USAGE ON SOURCE foo TO joe
                ^
 
 parse-statement
-GRANT USAGE ON INDEX foo TO joe
+GRANT SELECT ON INDEX foo TO joe
+----
+GRANT SELECT ON INDEX foo TO joe
+=>
+GrantPrivileges(GrantPrivilegesStatement { privileges: Privileges([SELECT]), target: Object { object_type: Index, object_spec_inner: Objects { names: [Item(UnresolvedItemName([Ident("foo")]))] } }, roles: [Ident("joe")] })
+
+parse-statement
+GRANT SELECT ON ALL INDEXES IN SCHEMA s TO joe
+----
+GRANT SELECT ON ALL INDEXES IN SCHEMA s TO joe
+=>
+GrantPrivileges(GrantPrivilegesStatement { privileges: Privileges([SELECT]), target: Object { object_type: Index, object_spec_inner: All(AllSchemas { schemas: [UnresolvedSchemaName([Ident("s")])] }) }, roles: [Ident("joe")] })
+
+parse-statement
+ALTER DEFAULT PRIVILEGES FOR ROLE r GRANT SELECT ON INDEXES TO joe
 ----
 error: Unsupported GRANT on INDEX
-GRANT USAGE ON INDEX foo TO joe
-               ^
+ALTER DEFAULT PRIVILEGES FOR ROLE r GRANT SELECT ON INDEXES TO joe
+                                                    ^
 
 parse-statement
 GRANT USAGE ON SECRET foo TO joe
@@ -712,11 +726,25 @@ REVOKE USAGE ON SOURCE foo FROM joe
                 ^
 
 parse-statement
-REVOKE USAGE ON INDEX foo FROM joe
+REVOKE SELECT ON INDEX foo FROM joe
+----
+REVOKE SELECT ON INDEX foo FROM joe
+=>
+RevokePrivileges(RevokePrivilegesStatement { privileges: Privileges([SELECT]), target: Object { object_type: Index, object_spec_inner: Objects { names: [Item(UnresolvedItemName([Ident("foo")]))] } }, roles: [Ident("joe")] })
+
+parse-statement
+REVOKE SELECT ON ALL INDEXES IN SCHEMA s FROM joe
+----
+REVOKE SELECT ON ALL INDEXES IN SCHEMA s FROM joe
+=>
+RevokePrivileges(RevokePrivilegesStatement { privileges: Privileges([SELECT]), target: Object { object_type: Index, object_spec_inner: All(AllSchemas { schemas: [UnresolvedSchemaName([Ident("s")])] }) }, roles: [Ident("joe")] })
+
+parse-statement
+ALTER DEFAULT PRIVILEGES FOR ROLE r REVOKE SELECT ON INDEXES FROM joe
 ----
 error: Unsupported REVOKE on INDEX
-REVOKE USAGE ON INDEX foo FROM joe
-                ^
+ALTER DEFAULT PRIVILEGES FOR ROLE r REVOKE SELECT ON INDEXES FROM joe
+                                                     ^
 
 parse-statement
 REVOKE USAGE ON SECRET foo FROM joe

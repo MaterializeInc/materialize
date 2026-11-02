@@ -181,6 +181,7 @@ cluster_id  text  The␠ID␠of␠the␠cluster␠in␠which␠the␠index␠is�
 owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠index.␠Corresponds␠to␠`mz_roles.id`.
 create_sql  text  The␠`CREATE`␠SQL␠statement␠for␠the␠index.
 redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠the␠index.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠index.␠`NULL`␠for␠system␠indexes.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_index_columns' ORDER BY position

@@ -816,7 +816,8 @@ const USER_INDEXES_CTE: &str = "\
             parsed->>'cluster_id' AS cluster_id,
             mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
             data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
-            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
         FROM
             mz_internal.mz_catalog_raw
             CROSS JOIN LATERAL (
@@ -875,7 +876,7 @@ pub static MZ_INDEXES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     // `mz_catalog_server` cluster id.
     let builtin_indexes_cte = format!("\
     builtin_indexes AS (
-        SELECT *, mz_internal.redact_sql(create_sql) AS redacted_create_sql
+        SELECT *, mz_internal.redact_sql(create_sql) AS redacted_create_sql, NULL::mz_catalog.mz_aclitem[] AS privileges
         FROM (
             SELECT
                 bigm.id AS id,
@@ -894,7 +895,7 @@ pub static MZ_INDEXES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
 
     let introspection_source_indexes_cte = format!("\
     introspection_source_indexes AS (
-        SELECT *, mz_internal.redact_sql(create_sql) AS redacted_create_sql
+        SELECT *, mz_internal.redact_sql(create_sql) AS redacted_create_sql, NULL::mz_catalog.mz_aclitem[] AS privileges
         FROM (
             SELECT
                 'si' || (isi.data->'value'->>'catalog_id') AS id,
@@ -959,6 +960,10 @@ SELECT * FROM introspection_source_indexes
             .with_column("owner_id", SqlScalarType::String.nullable(false))
             .with_column("create_sql", SqlScalarType::String.nullable(false))
             .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(true),
+            )
             .with_key(vec![0])
             .with_key(vec![1])
             .finish(),
@@ -982,6 +987,10 @@ SELECT * FROM introspection_source_indexes
             (
                 "redacted_create_sql",
                 "The redacted `CREATE` SQL statement for the index.",
+            ),
+            (
+                "privileges",
+                "The privileges belonging to the index. `NULL` for system indexes.",
             ),
         ]),
         sql: Box::leak(sql.into_boxed_str()),
@@ -3806,7 +3815,7 @@ UNION ALL
 UNION ALL
     SELECT id, oid, schema_id, name, 'metric-sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_internal.mz_metric_sinks
 UNION ALL
-    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, mz_indexes.cluster_id, NULL::mz_catalog.mz_aclitem[]
+    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, mz_indexes.cluster_id, mz_indexes.privileges
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 UNION ALL

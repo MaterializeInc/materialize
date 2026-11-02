@@ -6734,8 +6734,15 @@ impl<'a> Parser<'a> {
             .expect_err("only returns errors")
         })?;
         self.expect_keyword(ON)?;
-        let object_type =
-            self.expect_grant_revoke_plural_object_type(if is_grant { "GRANT" } else { "REVOKE" })?;
+        let statement_type = if is_grant { "GRANT" } else { "REVOKE" };
+        let object_type = self.expect_grant_revoke_plural_object_type(statement_type)?;
+        if object_type == ObjectType::Index {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("Unsupported {statement_type} on {object_type}")
+            );
+        }
         if is_grant {
             self.expect_keyword(TO)?;
         } else {
@@ -10040,7 +10047,6 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Sink
             | ObjectType::MetricSink
-            | ObjectType::Index
             | ObjectType::ClusterReplica
             | ObjectType::Role
             | ObjectType::Func
@@ -10052,6 +10058,7 @@ impl<'a> Parser<'a> {
                 )
             }
             ObjectType::Table
+            | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Cluster
             | ObjectType::Secret
