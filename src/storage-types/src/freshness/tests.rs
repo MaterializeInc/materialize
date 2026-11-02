@@ -3308,7 +3308,8 @@ fn thinned_frontier_answer_does_not_lengthen_skew() {
         ];
         let mut recorder = LocalDelayRecorder::new(0);
         let mut rows = recorder.observe(&join, &join, &at(11_001), now, &inputs, &cfg);
-        rows.skew.extend(recorder.finish().skew);
+        rows.skew
+            .extend(recorder.finish(Some(&join), now, &cfg).skew);
         bucket_counts(&rows.skew)
     };
     let s = scheme(4);
