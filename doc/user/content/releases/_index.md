@@ -30,6 +30,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
   **Upgrade impact**: Before promoting a deployment that re-creates SQL Server source tables, compare the plans of the objects that depend on them with [`EXPLAIN PLAN`](/sql/explain-plan/). To keep a `UNIQUE` constraint other than the primary key as the table's key, create the capture instance with [`@index_name`](/ingest-data/sql-server/#unique-keys) set to that constraint.
 
+### Improvements {#v26.49-improvements}
+- **SQL Server tables key only on the capture instance's index**: A table created from a SQL Server source now records as its key only the `PRIMARY KEY` or `UNIQUE` constraint backing the index its CDC capture instance uses, which SQL Server does not allow dropping while that capture instance is the table's newest one. Other `UNIQUE` constraints are no longer recorded, so dropping one upstream can no longer cause queries in Materialize to return incorrect results. Tables created before this release keep the keys recorded when they were created. See [Unique keys](/ingest-data/sql-server/#unique-keys).
+
 ## v26.48.2
 *Released to Materialize Cloud: 2026-10-29 (v26.48.0)* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
