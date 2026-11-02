@@ -31,6 +31,9 @@ import psycopg
 
 from materialize.antithesis.endpoints import INTERNAL_SQL_PORT, SQL_PORT
 
+# pg_backend_pid exposes the unsigned connection ID through a signed int4.
+SESSION_CONNECTION_ID = "(pg_backend_pid()::bigint & 4294967295)::uint4"
+
 
 class Outcome(enum.Enum):
     INDETERMINATE = "indeterminate"

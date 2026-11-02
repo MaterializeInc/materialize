@@ -273,7 +273,8 @@ def _session(conn: psycopg.Connection, deadline: float) -> str:
     row = _execute(
         conn,
         deadline,
-        "SELECT id::text FROM mz_internal.mz_sessions WHERE connection_id=pg_backend_pid()",
+        "SELECT id::text FROM mz_internal.mz_sessions"
+        f" WHERE connection_id={sql.SESSION_CONNECTION_ID}",
     ).fetchone()
     if row is None:
         raise Incomplete("SQL session identity unavailable")
