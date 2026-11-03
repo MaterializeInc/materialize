@@ -80,6 +80,19 @@ export interface BasePalette {
   };
   lineGraph: string[];
   dataflow: {
+    // Fill per operator family in the dataflow visualizer. The six hues share
+    // one CIE-LCH lightness per theme (about 66 in light mode, 54 in dark
+    // mode), so no family reads as more important than another, and they sit
+    // away from the purple and green hues that region and LIR group chrome
+    // reserve.
+    operator: {
+      join: string;
+      reduce: string;
+      arrange: string;
+      map: string;
+      io: string;
+      other: string;
+    };
     // Edge stroke for an edge that touches the selected node. The selected
     // node or edge itself uses `accent.brightPurple`, so this is its weaker
     // sibling: lighter than the selection in light mode, darker in dark

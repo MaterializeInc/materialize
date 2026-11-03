@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { hcl, rgb } from "d3";
 import { describe, expect, it } from "vitest";
+
+import { darkColors } from "~/theme/dark";
+import { lightColors } from "~/theme/light";
 
 import {
   formatCount,
@@ -18,12 +22,15 @@ import {
   lirGroupColor,
   nodeFillColor,
   operatorColor,
+  operatorFamily,
   prettyPrintChannelType,
+  relativeLuminance,
   statLines,
   textColorFor,
 } from "./nodeStyle";
 
 const PALETTE = ["#111111", "#222222", "#333333", "#444444"];
+const OPERATOR_PALETTE = lightColors.dataflow.operator;
 const ACCENT = { arranged: "#aaaaaa", notArranged: "#bbbbbb" };
 
 const baseNode = {
@@ -71,24 +78,83 @@ describe("lirGroupColor", () => {
   });
 });
 
-describe("operatorColor", () => {
-  it("is deterministic for the same operator name", () => {
-    expect(operatorColor("Reduce", PALETTE)).toEqual(
-      operatorColor("Reduce", PALETTE),
-    );
+describe("operatorFamily", () => {
+  it.each([
+    ["Join", "join"],
+    ["Join(Linear)", "join"],
+    ["LinearJoinKeyPreparation", "join"],
+    ["Reduce", "reduce"],
+    ["ReduceAccumulable", "reduce"],
+    ["Reduced TopK input", "reduce"],
+    ["Distinct errors", "reduce"],
+    ["Arrange bundle err", "arrange"],
+    ['ArrangeBy[[Column(0, "id")]]', "arrange"],
+    ["ArrangementSize", "arrange"],
+    ["Arranged TopK input", "arrange"],
+    ["Arrange ReduceMinsMaxes", "arrange"],
+    ["FlatMap", "map"],
+    ["CollectionFlatMap", "map"],
+    ["ExplodeOne", "map"],
+    ["Source(User(1))", "io"],
+    ["shard_source_descs(u3)", "io"],
+    ["persist_source::decode_and_mfp(u3)", "io"],
+    ["Index(s2, [Column(0)])", "io"],
+    ["mv_sink(u4)::write", "io"],
+    ["SubscribeSink(Transient(1))", "io"],
+    ["Concatenate", "other"],
+    ["Probe", "other"],
+  ])("%s is %s", (name, family) => {
+    expect(operatorFamily(name)).toEqual(family);
+  });
+});
+
+describe("operator palette tokens", () => {
+  const themes = [
+    ["light", lightColors],
+    ["dark", darkColors],
+  ] as const;
+
+  it.each(themes)("%s: fills keep text at contrast >= 4.5", (_, theme) => {
+    for (const fill of Object.values(theme.dataflow.operator)) {
+      // textColorFor returns 3-digit hex, which relativeLuminance can't parse.
+      const text = rgb(textColorFor(fill)).formatHex();
+      const [lighter, darker] = [fill, text]
+        .map(relativeLuminance)
+        .sort((a, b) => b - a);
+      expect((lighter + 0.05) / (darker + 0.05)).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
-  it("differs for different operator names often enough to be useful", () => {
-    const picked = new Set(
-      ["Map", "Filter", "Reduce", "Join", "FlatMap", "Arrange"].map((name) =>
-        operatorColor(name, PALETTE),
-      ),
-    );
-    expect(picked.size).toBeGreaterThan(1);
-  });
+  it.each(themes)(
+    "%s: fills share one lightness and avoid the region hues",
+    (_, theme) => {
+      const lightness = Object.values(theme.dataflow.operator).map(
+        (fill) => hcl(fill).l,
+      );
+      expect(Math.max(...lightness) - Math.min(...lightness)).toBeLessThan(2);
+      // Regions use the purple and green accents, LIR groups reserve one of
+      // them too, so operator hues must stay clear of both. Gray has no hue.
+      const reserved = [theme.accent.purple, theme.accent.green].map(
+        (c) => hcl(c).h,
+      );
+      for (const fill of Object.values(theme.dataflow.operator)) {
+        const { c, h } = hcl(fill);
+        if (c < 15) continue;
+        for (const r of reserved) {
+          const distance = Math.abs(((h - r + 540) % 360) - 180);
+          expect(distance).toBeGreaterThan(40);
+        }
+      }
+    },
+  );
 
-  it("only ever picks from the given palette", () => {
-    expect(PALETTE).toContain(operatorColor("Reduce", PALETTE));
+  it("colors by family, identically for every name in it", () => {
+    expect(operatorColor("Join", lightColors.dataflow.operator)).toEqual(
+      operatorColor("Join(Linear)", lightColors.dataflow.operator),
+    );
+    expect(operatorColor("Join", lightColors.dataflow.operator)).not.toEqual(
+      operatorColor("Reduce", lightColors.dataflow.operator),
+    );
   });
 });
 
@@ -96,7 +162,7 @@ describe("nodeFillColor", () => {
   it("colors an operator by its name, not by whether it's arranged", () => {
     const unarranged = nodeFillColor(
       { ...baseNode, kind: "operator" },
-      PALETTE,
+      OPERATOR_PALETTE,
       ACCENT,
     );
     const arranged = nodeFillColor(
@@ -110,17 +176,17 @@ describe("nodeFillColor", () => {
           scheduleCount: 0n,
         },
       },
-      PALETTE,
+      OPERATOR_PALETTE,
       ACCENT,
     );
-    expect(unarranged).toEqual(operatorColor("Reduce", PALETTE));
-    expect(arranged).toEqual(operatorColor("Reduce", PALETTE));
+    expect(unarranged).toEqual(OPERATOR_PALETTE.reduce);
+    expect(arranged).toEqual(OPERATOR_PALETTE.reduce);
   });
 
   it("still colors a region by whether it's arranged, unaffected by name", () => {
     const noArrangement = nodeFillColor(
       { ...baseNode, kind: "region" },
-      PALETTE,
+      OPERATOR_PALETTE,
       ACCENT,
     );
     const arranged = nodeFillColor(
@@ -134,7 +200,7 @@ describe("nodeFillColor", () => {
           scheduleCount: 0n,
         },
       },
-      PALETTE,
+      OPERATOR_PALETTE,
       ACCENT,
     );
     expect(noArrangement).toEqual(ACCENT.notArranged);

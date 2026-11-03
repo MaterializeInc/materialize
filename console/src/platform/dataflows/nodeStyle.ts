@@ -10,6 +10,7 @@
 import { rgb } from "d3";
 import { interpolateInferno, interpolateViridis } from "d3-scale-chromatic";
 
+import type { MaterializeTheme } from "~/theme";
 import colors from "~/theme/colors";
 import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
@@ -56,15 +57,33 @@ export function lirGroupColor(
   return palette[Math.abs(hashString(lirId)) % palette.length];
 }
 
+export type OperatorFamily =
+  keyof MaterializeTheme["colors"]["dataflow"]["operator"];
+
+// The first matching family wins, so the order resolves names that touch two:
+// "Arrange ReduceMinsMaxes" is an arrangement, "ArrangementFlatMap(scan)" too.
+// Concatenate, Union and anything unrecognized fall through to "other".
+const OPERATOR_FAMILIES: [OperatorFamily, RegExp][] = [
+  ["io", /sink|source|subscribe|import|export|backpressure|^index\(/i],
+  ["join", /join/i],
+  ["arrange", /arrang/i],
+  ["reduce", /reduce|topk|distinct|accumulable|minsmaxes|hierarchical/i],
+  ["map", /map|filter|project|explode|mfp/i],
+];
+
+export function operatorFamily(name: string): OperatorFamily {
+  return OPERATOR_FAMILIES.find(([, re]) => re.test(name))?.[0] ?? "other";
+}
+
 export function operatorColor(
   name: string,
-  palette: readonly string[],
+  palette: MaterializeTheme["colors"]["dataflow"]["operator"],
 ): string {
-  return palette[Math.abs(hashString(name)) % palette.length];
+  return palette[operatorFamily(name)];
 }
 
 // WCAG relative luminance of a "#RRGGBB" color, for picking readable text.
-function relativeLuminance(hex: string): number {
+export function relativeLuminance(hex: string): number {
   const channels = [
     parseInt(hex.slice(1, 3), 16),
     parseInt(hex.slice(3, 5), 16),
@@ -76,13 +95,11 @@ function relativeLuminance(hex: string): number {
   return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
 }
 
-// colors.lineGraph mixes dark and light swatches in both themes (it's
-// indexed by hash, not by theme), so a node's fill color carries no
-// relationship to the current color mode. Text on top of it needs a
-// contrast decision from the fill's actual luminance, not a theme token.
-// Pins to raw black/white (not theme foreground tokens) since those exist
-// specifically for text on the app's own background, not on an arbitrary
-// hashed fill.
+// A node's fill (an operator family color or a heatmap step) can be light or
+// dark in either theme, so text on top of it needs a contrast decision from
+// the fill's actual luminance, not a theme token. Pins to raw black/white
+// (not theme foreground tokens) since those exist specifically for text on
+// the app's own background, not on an arbitrary fill.
 export function textColorFor(background: string): string {
   const luminance = relativeLuminance(background);
   // WCAG contrast ratio, (lighter + 0.05) / (darker + 0.05), against each
@@ -105,7 +122,7 @@ export function hexToRgba(hex: string, alpha: number): string {
 
 export function nodeFillColor(
   node: VisibleNode,
-  palette: readonly string[],
+  palette: MaterializeTheme["colors"]["dataflow"]["operator"],
   accent: { arranged: string; notArranged: string },
 ): string {
   const region = node.kind !== "operator" && node.kind !== "port";

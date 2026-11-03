@@ -68,6 +68,14 @@ const base: BasePalette = {
     colors.green[500],
   ],
   dataflow: {
+    operator: {
+      join: "#bb6c20",
+      reduce: "#0f8bc7",
+      arrange: "#079094",
+      map: "#948012",
+      io: "#ce5a6e",
+      other: "#77838e",
+    },
     connectedEdge: colors.purple[400],
   },
 };

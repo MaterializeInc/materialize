@@ -337,7 +337,7 @@ export const DataflowGraphView = ({
           dimmed: decorations?.dimmedNodeIds?.has(n.id) ?? false,
           color:
             decorations?.nodeColors?.get(n.id) ??
-            nodeFillColor(n, colors.lineGraph, {
+            nodeFillColor(n, colors.dataflow.operator, {
               arranged: colors.accent.purple,
               notArranged: colors.accent.green,
             }),
