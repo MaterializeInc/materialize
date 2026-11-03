@@ -129,7 +129,7 @@ const CommandResult = ({
   };
 
   let table = null;
-  if (hasRows && cols && rows) {
+  if (hasRows && cols && cols.length > 0 && rows) {
     const colNames = cols.map(({ name }) => name);
 
     const paginatedRows = paginationState
@@ -222,7 +222,7 @@ const CommandResult = ({
           commandResultIndex={commandResultIndex}
         />
       ))}
-      {!hasRows && !error && <Code>{commandCompletePayload ?? ""}</Code>}
+      {!table && !error && <Code>{commandCompletePayload ?? ""}</Code>}
       {table}
 
       {error && (
