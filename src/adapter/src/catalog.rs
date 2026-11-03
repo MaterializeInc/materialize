@@ -2768,9 +2768,10 @@ mod tests {
             .get_mut(&changed)
             .expect("test size")
             .cpu_exclusive = true;
-        let catalog = Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
-            .await
-            .expect("unable to open debug catalog");
+        let catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open debug catalog");
         let sizes = &catalog.cluster_replica_sizes().0;
         assert!(sizes[&in_use].disabled);
         assert!(sizes[&cluster_only].disabled);
@@ -2781,6 +2782,19 @@ mod tests {
             sizes[&changed],
             bootstrap_args.cluster_replica_size_map.0[&changed]
         );
+        let durable_sizes = catalog.cluster_replica_sizes().clone();
+        catalog.expire().await;
+
+        // A read-only open with a different size config uses the durable sizes.
+        bootstrap_args
+            .cluster_replica_size_map
+            .0
+            .insert(unused.clone(), durable_sizes.0[&changed].clone());
+        let catalog =
+            Catalog::open_debug_read_only_catalog(persist_client, organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open read-only debug catalog");
+        assert_eq!(catalog.cluster_replica_sizes().0, durable_sizes.0);
         catalog.expire().await;
     }
 
