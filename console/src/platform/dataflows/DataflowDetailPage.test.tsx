@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
@@ -705,6 +705,48 @@ describe("DataflowDetailPage", () => {
     // Present only in the detail panel's own rendering, confirming the
     // panel (not just the node) is open.
     expect(screen.getByText("Kind")).toBeInTheDocument();
+    // The fit runs once layout positions land, after the panel renders.
+    await waitFor(() => expect(fitViewSpy).toHaveBeenCalledTimes(1));
+  });
+
+  // Refresh rebuilds the structure, and with it the selection object, but
+  // the URL's selection is unchanged: the user may have panned elsewhere
+  // since, so the viewport must stay put.
+  it("does not refit to a restored selection when the data is refreshed", async () => {
+    let graphRequests = 0;
+    server.use(
+      http.post("*/api/sql", async ({ request }) => {
+        // useDataflowList's query also mentions the id, so count only the
+        // graph data's own request.
+        const body = await request.clone().text();
+        if (body.includes("'8'") && !body.includes("mz_dataflows")) {
+          graphRequests++;
+        }
+      }),
+    );
+    await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={<DataflowDetailPage />}
+        />
+      </Routes>,
+      {
+        initialRouterEntries: [
+          `/clusters/u5/test_cluster/dataflows/8?scope=8.1&select=${encodeURIComponent(`node:${nodeIdOf([8, 1, 1])}`)}`,
+        ],
+      },
+    );
+    expect(await screen.findAllByText("LeafA")).toHaveLength(2);
+    await waitFor(() => expect(fitViewSpy).toHaveBeenCalledTimes(1));
+
+    const before = graphRequests;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(graphRequests).toBeGreaterThan(before));
+    // Let the refreshed data land and the effects run.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled(),
+    );
     expect(fitViewSpy).toHaveBeenCalledTimes(1);
   });
 

@@ -561,14 +561,26 @@ const DataflowDetailPage = () => {
   // already onscreen, so it doesn't need this. Re-fits only then, and only
   // for node/edge (a lirGroup's members can be scattered outside a single
   // fit's worth of space, so it's left to whatever the panel alone shows).
+  //
+  // `selection` gets a new identity on every refetch, so the effect keys on
+  // the `select` param it was fitted for instead: a Refresh must not yank the
+  // viewport back to a selection the user has since panned away from. The
+  // marker resets whenever the last navigation was not a POP or nothing is
+  // selected, so returning to an earlier selection by back/forward fits again.
   const navigationType = useNavigationType();
+  const fittedSelectParam = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (navigationType !== "POP" || !selection) return;
+    if (navigationType !== "POP" || !selection) {
+      fittedSelectParam.current = null;
+      return;
+    }
+    if (fittedSelectParam.current === selectParam) return;
+    fittedSelectParam.current = selectParam;
     if (selection.kind === "node") setPendingFitIds([selection.node.id]);
     else if (selection.kind === "edge") {
       setPendingFitIds([selection.edge.source, selection.edge.target]);
     }
-  }, [navigationType, selection]);
+  }, [navigationType, selection, selectParam]);
 
   const decorations = React.useMemo(() => {
     if (!data || !focusedScope || !visibleGraph) return undefined;
