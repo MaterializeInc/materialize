@@ -161,6 +161,50 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.test_parts(sharded_files, run)
 
 
+def workflow_offset_committed_seed(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Adding a table to a source must not report any other table's
+    `offset_committed` below the value it reported before. The statistics
+    views keep the higher value, so a regression is only visible as an
+    `offset_committed erroneously regressed` error in the clusterd log.
+    """
+    c.kill("sql-server")
+    c.rm("sql-server")
+    c.kill("materialized")
+    c.rm("materialized")
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                # Ship per-worker statistics often, so the value worker 0 holds
+                # when a seed arrives is fresh rather than up to 10s old.
+                "storage_statistics_collection_interval": "100",
+                "storage_statistics_interval": "200",
+                "min_timestamp_interval": "50ms",
+            },
+        ),
+    ):
+        c.up("materialized", "sql-server", Service("testdrive", idle=True))
+        td_vars = [
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        ]
+        c.run_testdrive_files(
+            *td_vars, "setup/setup.td", "override/offset-committed-seed-part-1.td"
+        )
+        c.run_testdrive_files(
+            "--no-reset", *td_vars, "override/offset-committed-seed-part-2.td"
+        )
+
+        regression = "offset_committed erroneously regressed"
+        regressions = c.invoke("logs", "materialized", capture=True).stdout.count(
+            regression
+        )
+        assert regressions == 0, f"{regressions} offset_committed regressions logged"
+
+
 def workflow_azure(c: Composition, parser: WorkflowArgumentParser) -> None:
     """
     Exercise the SQL Server source happy path against a real Azure SQL Database.
