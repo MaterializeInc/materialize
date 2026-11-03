@@ -29,21 +29,30 @@ interface LirRowProps {
 
 const LirRow = ({ node, onHighlight, onSelect }: LirRowProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+  // An empty member set would dim the whole canvas, which reads as "no
+  // match" rather than "this span has no operators".
+  const highlight = () =>
+    onHighlight(node.memberIds.length > 0 ? new Set(node.memberIds) : null);
+  const clearHighlight = () => onHighlight(null);
   return (
     <>
+      {/* A button so keyboard users can reach the row. Focus mirrors hover,
+          and the reset styles keep the look of the plain text row. */}
       <Text
+        as="button"
+        type="button"
+        display="block"
+        width="100%"
+        textAlign="left"
         fontSize="xs"
         pl={node.info.nesting * 3}
         cursor="pointer"
         _hover={{ background: colors.background.secondary }}
-        // An empty member set would dim the whole canvas, which reads as "no
-        // match" rather than "this span has no operators".
-        onMouseEnter={() =>
-          onHighlight(
-            node.memberIds.length > 0 ? new Set(node.memberIds) : null,
-          )
-        }
-        onMouseLeave={() => onHighlight(null)}
+        _focusVisible={{ background: colors.background.secondary }}
+        onMouseEnter={highlight}
+        onMouseLeave={clearHighlight}
+        onFocus={highlight}
+        onBlur={clearHighlight}
         onClick={() => onSelect(node.memberIds)}
       >
         LIR {node.info.lirId}: {node.info.operator}

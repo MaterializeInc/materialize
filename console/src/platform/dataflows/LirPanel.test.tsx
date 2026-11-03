@@ -181,4 +181,32 @@ describe("LirPanel", () => {
     await userEvent.hover(row);
     expect(onHighlight).not.toHaveBeenCalledWith(new Set());
   });
+
+  it("rows are buttons reachable by keyboard, and focus highlights like hover", async () => {
+    const onHighlight = vi.fn();
+    const onSelect = vi.fn();
+    await renderComponent(
+      <LirPanel
+        structure={structureWithLir}
+        collapsed={false}
+        onToggleCollapsed={noop}
+        onHighlight={onHighlight}
+        onSelect={onSelect}
+      />,
+    );
+    const row = screen.getByRole("button", { name: "LIR 1: Join" });
+    expect(row).toHaveAttribute("type", "button");
+
+    // Tab past the collapse button to the row.
+    await userEvent.tab();
+    await userEvent.tab();
+    expect(row).toHaveFocus();
+    expect(onHighlight).toHaveBeenLastCalledWith(new Set(["root"]));
+
+    await userEvent.keyboard("{Enter}");
+    expect(onSelect).toHaveBeenCalledWith(["root"]);
+
+    await userEvent.tab();
+    expect(onHighlight).toHaveBeenLastCalledWith(null);
+  });
 });
