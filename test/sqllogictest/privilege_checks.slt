@@ -3673,6 +3673,19 @@ REVOKE USAGE ON SCHEMA mz_temp FROM PUBLIC
 ----
 db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
 
+simple conn=no_temp_objects,user=materialize
+GRANT SELECT ON ALL TABLES IN SCHEMA mz_temp TO PUBLIC
+----
+db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+
+simple conn=no_temp_objects,user=materialize
+REVOKE SELECT ON ALL TABLES IN SCHEMA mz_temp FROM PUBLIC
+----
+db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+
+statement error cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+GRANT SELECT ON ALL TABLES IN SCHEMA mz_temp TO PUBLIC
+
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;

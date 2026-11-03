@@ -503,13 +503,26 @@ fn plan_update_privilege(
                 }
                 GrantTargetSpecificationInner::All(GrantTargetAllSpecification::AllSchemas {
                     schemas,
-                }) => schemas
-                    .into_iter()
-                    .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
-                    .flat_map(|schema| schema.item_ids())
-                    .map(|item_id| item_id.into())
-                    .filter(|object_id| object_type_filter(object_id, &object_type, scx))
-                    .collect(),
+                }) => {
+                    // The temporary schema is created lazily, so `get_schema` on it panics
+                    // for a connection that has not created a temporary object yet.
+                    if schemas
+                        .iter()
+                        .any(|schema| schema.schema_spec().is_temporary())
+                    {
+                        sql_bail!(
+                            "cannot grant or revoke privileges on schema {} because it is a temporary schema",
+                            mz_repr::namespaces::MZ_TEMP_SCHEMA
+                        );
+                    }
+                    schemas
+                        .into_iter()
+                        .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
+                        .flat_map(|schema| schema.item_ids())
+                        .map(|item_id| item_id.into())
+                        .filter(|object_id| object_type_filter(object_id, &object_type, scx))
+                        .collect()
+                }
                 GrantTargetSpecificationInner::Objects { names } => {
                     let mut ids = Vec::with_capacity(names.len());
                     for name in names {
