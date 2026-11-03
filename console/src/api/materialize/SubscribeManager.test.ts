@@ -129,6 +129,26 @@ describe("SubscribeManager", () => {
     expect(manager.getSnapshot().snapshotComplete).toBe(true);
   });
 
+  it("waits longer before each resend of a statement that fails every time", async () => {
+    const queries: MockSubscribeConnection[] = [];
+    server.use(
+      mockSubscribeSocket((_sql, _params, connection) => {
+        queries.push(connection);
+        connection.endWithError('permission denied for CLUSTER "analytics"');
+        return undefined;
+      }),
+    );
+    connect();
+
+    // Resent at once, then after a second.
+    await vi.waitFor(() => expect(queries).toHaveLength(3), {
+      timeout: 3_000,
+    });
+    // Then after two more.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(queries).toHaveLength(3);
+  });
+
   it("keeps reporting the error of a subscribe that fails every time it runs", async () => {
     const queries: MockSubscribeConnection[] = [];
     server.use(

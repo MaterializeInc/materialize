@@ -186,10 +186,11 @@ export function transformHydrations(
  *
  * An attempt runs from the replica's previous restart, or its creation, to the
  * restart. Online rows don't bound it: the one a zero-downtime upgrade writes
- * comes after the replica already hydrated. An attempt that began before
- * `startMs` is skipped, since the hydrations before it aren't read. An object
- * created during the attempt starts a hydration of its own, so the attempt
- * finished only if a hydration finished after the last such object.
+ * comes after the replica already hydrated. An object created during the
+ * attempt starts a hydration of its own, so the attempt finished only if a
+ * hydration finished after the last such object. The hydrations before
+ * `startMs` aren't read, so an attempt that began before it is skipped unless
+ * such an object was created after it.
  *
  * NOTE: the history can miss an episode that finished, so a restart after
  * one can read as unfinished.
@@ -239,16 +240,26 @@ export function findUnfinishedHydrations({
 
   // One restart can be recorded as process 0 going offline and as OOM kills
   // on several processes. Keep the first, with an OOM reason if any has one.
+  // An end after the replica came back online is a restart of its own.
+  const isSameRestart = (
+    previous: ReplicaTransition,
+    end: ReplicaTransition,
+  ) => {
+    const previousMs = previous.occurredAt.getTime();
+    const endMs = end.occurredAt.getTime();
+    return (
+      endMs - previousMs <= RESTART_MERGE_MS &&
+      !(bootTimes.get(end.replicaId) ?? []).some(
+        (bootMs) => bootMs > previousMs && bootMs < endMs,
+      )
+    );
+  };
   const restarts: ReplicaTransition[] = [];
   for (const end of ends) {
     const previous = restarts.findLast(
       ({ replicaId }) => replicaId === end.replicaId,
     );
-    if (
-      previous &&
-      end.occurredAt.getTime() - previous.occurredAt.getTime() <=
-        RESTART_MERGE_MS
-    ) {
+    if (previous && isSameRestart(previous, end)) {
       if (end.reason === OOM_REASON) previous.reason = OOM_REASON;
       continue;
     }
@@ -271,12 +282,13 @@ export function findUnfinishedHydrations({
       .slice(0, index)
       .findLast((restart) => restart.replicaId === replicaId)
       ?.occurredAt.getTime();
-    const attemptStartMs = previousRestartMs ?? replica?.createdAt?.getTime();
-    if (attemptStartMs === undefined || attemptStartMs < startMs) return [];
+    const attemptStartMs =
+      previousRestartMs ?? replica?.createdAt?.getTime() ?? -Infinity;
     const lastCreatedMs =
       max(objectCreatedAtMs, (ms) =>
         ms > attemptStartMs && ms < endMs ? ms : undefined,
       ) ?? attemptStartMs;
+    if (lastCreatedMs < startMs) return [];
     const finishedBetween = (fromMs: number, toMs: number) =>
       hydrations.some(
         (hydration) =>
@@ -286,13 +298,15 @@ export function findUnfinishedHydrations({
       );
     if (finishedBetween(lastCreatedMs, endMs)) return [];
     // A replica that had finished before the object was created was hydrating
-    // only that object. Otherwise it was hydrating since it came online for
+    // only that object, which is all that's known of an attempt that began
+    // before the window. Otherwise it was hydrating since it came online for
     // this attempt, if that was recorded.
-    const hydratingSinceMs = finishedBetween(attemptStartMs, lastCreatedMs)
-      ? lastCreatedMs
-      : ((bootTimes.get(replicaId) ?? []).findLast(
-          (ms) => ms >= attemptStartMs && ms < endMs,
-        ) ?? attemptStartMs);
+    const hydratingSinceMs =
+      attemptStartMs < startMs || finishedBetween(attemptStartMs, lastCreatedMs)
+        ? lastCreatedMs
+        : ((bootTimes.get(replicaId) ?? []).findLast(
+            (ms) => ms >= attemptStartMs && ms < endMs,
+          ) ?? attemptStartMs);
     return [
       {
         id: `${replicaId}|${endMs}`,

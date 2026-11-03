@@ -281,6 +281,23 @@ describe("findUnfinishedHydrations", () => {
     ]);
   });
 
+  it("keeps an end after the replica came back online apart from the restart before it", () => {
+    const transitions = [
+      transition("u1", "09:59:30", "online"),
+      transition("u1", "10:05:00", "offline", "oom-killed"),
+      transition("u1", "10:05:10", "online"),
+      transition("u1", "10:05:40", "offline", "oom-killed"),
+    ];
+    const hydrations = transformHydrations(
+      [episode("u1", "09:59:31", "10:04:00")],
+      replicaBootTimes(transitions, replicas),
+    );
+
+    expect(find({ transitions, hydrations })).toEqual([
+      ["2026-10-20T10:05:10.000Z", "2026-10-20T10:05:40.000Z", "oom-killed"],
+    ]);
+  });
+
   it("skips a restart after the replica finished hydrating", () => {
     const transitions = [
       transition("u1", "10:00:00", "online"),
@@ -312,6 +329,39 @@ describe("findUnfinishedHydrations", () => {
         startMs: at("11:00:00").getTime(),
       }),
     ).toEqual([]);
+  });
+
+  it("reports a crash loop a new object started on a replica up since before the window", () => {
+    const replicaList = [
+      replica({ id: "u1", createdAt: new Date("2026-10-18T10:00:00Z") }),
+    ];
+    const transitions = [
+      {
+        replicaId: "u1",
+        occurredAt: new Date("2026-10-18T10:00:30Z"),
+        status: "online",
+        reason: null,
+      },
+      transition("u1", "11:15:00", "offline", "oom-killed"),
+      transition("u1", "11:16:00", "online"),
+      transition("u1", "11:22:00", "offline", "oom-killed"),
+      transition("u1", "11:23:00", "online"),
+      transition("u1", "11:29:00", "offline", "oom-killed"),
+      transition("u1", "11:30:00", "online"),
+    ];
+
+    expect(
+      find({
+        transitions,
+        replicaList,
+        objectCreatedAtMs: [at("11:10:00").getTime()],
+        startMs: at("11:00:00").getTime(),
+      }),
+    ).toEqual([
+      ["2026-10-20T11:10:00.000Z", "2026-10-20T11:15:00.000Z", "oom-killed"],
+      ["2026-10-20T11:16:00.000Z", "2026-10-20T11:22:00.000Z", "oom-killed"],
+      ["2026-10-20T11:23:00.000Z", "2026-10-20T11:29:00.000Z", "oom-killed"],
+    ]);
   });
 
   it("doesn't take the online row of a zero-downtime upgrade for a boot", () => {

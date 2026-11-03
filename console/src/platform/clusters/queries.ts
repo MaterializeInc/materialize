@@ -1372,6 +1372,9 @@ export function useClusterReplicaHistory(params: {
       currentReplicaIdsKey: [...params.currentReplicaIds].sort().join(","),
     }),
     staleTime: Infinity,
+    // A set of current replicas can come back, as when a burst replica is
+    // dropped, and its cached answer would lack the replicas made since.
+    gcTime: 0,
     queryFn: ({ queryKey, signal }) => {
       const [, queryKeyParams] = queryKey;
       return fetchClusterReplicaHistory({
@@ -1396,14 +1399,26 @@ export function useClusterReplicaHistory(params: {
 }
 
 /**
- * The object hydrations of one finished episode, which never change, so this
- * is fetched once. Idle without an episode or before the history exists.
+ * The object hydrations of one finished episode, fetched until there are as
+ * many as the episode's objects. Idle without an episode or before the history
+ * exists.
  */
 export function useEpisodeObjectHydrations(
-  episode: { replicaId: string; startedAt: Date; finishedAt: Date } | undefined,
+  episode:
+    | {
+        replicaId: string;
+        startedAt: Date;
+        finishedAt: Date;
+        objectCount: number;
+      }
+    | undefined,
 ) {
   const hasHydrationHistory =
     useEnvironmentGate(REPLICA_HYDRATION_HISTORY_MIN_VERSION) === true;
+  // The collector can record an episode a visit before some of its objects,
+  // which then show up at the replica's next visit.
+  const isComplete = (rows: unknown[] | undefined) =>
+    rows !== undefined && rows.length >= (episode?.objectCount ?? 0);
   return useQuery({
     queryKey: clusterQueryKeys.episodeObjectHydrations({
       replicaId: episode?.replicaId ?? "",
@@ -1411,7 +1426,6 @@ export function useEpisodeObjectHydrations(
       endDate: episode?.finishedAt.toISOString() ?? "",
     }),
     enabled: hasHydrationHistory && episode !== undefined,
-    staleTime: Infinity,
     queryFn: ({ queryKey, signal }) => {
       const [, queryKeyParams] = queryKey;
       return fetchEpisodeObjectHydrations({
@@ -1420,6 +1434,9 @@ export function useEpisodeObjectHydrations(
         requestOptions: { signal },
       });
     },
+    // After `queryFn`, so the data type is inferred from it.
+    staleTime: (query) => (isComplete(query.state.data) ? Infinity : 0),
+    refetchInterval: (query) => (isComplete(query.state.data) ? false : 60_000),
   });
 }
 
@@ -1748,12 +1765,14 @@ export function useObjectCreationTimes(params: {
     },
     // The earlier answer stays up while the objects overlap, as after one is
     // created, which another cluster's objects never do.
-    placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey[1].objectIds.some((id) =>
-        params.objectIds.includes(id),
+    placeholderData: (previous, previousQuery) => {
+      const objectIds = new Set(params.objectIds);
+      return previousQuery?.queryKey[1].objectIds.some((id) =>
+        objectIds.has(id),
       )
         ? previous
-        : undefined,
+        : undefined;
+    },
   });
 }
 
