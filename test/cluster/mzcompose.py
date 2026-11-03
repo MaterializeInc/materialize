@@ -1610,6 +1610,42 @@ def workflow_pg_seal_on_replay(c: Composition) -> None:
         c.run_testdrive_files("pg-seal-on-replay/02-verify.td")
 
 
+def workflow_pg_late_add_restart(c: Composition) -> None:
+    """Test that environmentd restarts while a table added to an established
+    PostgreSQL source is still snapshotting at an as_of past the minimum. A
+    held snapshot keeps the table snapshotting across the restart."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+
+        # Each ingestion render opens a leased reader on the remap shard and
+        # holds it at the since it read for 300s (`deferred_expire` in
+        # async_storage_worker.rs). The setup's renders read a since of 0, so a
+        # table added before they expire renders with an as_of of 0.
+        time.sleep(330)
+
+        # The restart has to come after the replica renders the ingestion with
+        # t_paused, which its running status implies.
+        c.testdrive(dedent("""
+                > CREATE TABLE t_paused FROM SOURCE mz_source (REFERENCE t_paused);
+
+                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 't_paused'
+                running
+                """))
+
+        c.kill("materialized")
+        c.up("materialized")
+
+
 def workflow_sink_failure(c: Composition) -> None:
     """Test specific sink failure scenarios"""
 
