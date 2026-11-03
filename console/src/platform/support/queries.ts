@@ -44,21 +44,38 @@ const retryUnlessUnavailable = (failureCount: number, error: unknown) =>
   ) && failureCount < 2;
 
 /**
+ * How many empty pages in a row to skip before returning one anyway, so a
+ * long run of hidden tickets can't keep a request going indefinitely.
+ */
+const MAX_EMPTY_PAGES = 5;
+
+/**
  * The signed-in user's tickets, a page at a time. While this errors, the page
  * falls back to the Messenger and Help Center links, so it works before the
  * endpoints are deployed.
  *
  * The global API hides internal and unshared tickets after searching, so a
- * page can be short or even empty while there are more pages.
+ * page can come back empty while there are more pages. Empty pages are
+ * skipped here, so each page has tickets to show, unless it's the last one.
  */
 export function useSupportTickets() {
   return useInfiniteQuery({
     queryKey: supportTicketQueryKeys.list(),
     queryFn: async ({ pageParam, signal }) => {
-      const { data } = await listSupportTickets(
+      let { data } = await listSupportTickets(
         { cursor: pageParam },
         { signal },
       );
+      for (
+        let skipped = 0;
+        data.data.length === 0 && data.nextCursor && skipped < MAX_EMPTY_PAGES;
+        skipped++
+      ) {
+        ({ data } = await listSupportTickets(
+          { cursor: data.nextCursor },
+          { signal },
+        ));
+      }
       return data;
     },
     initialPageParam: undefined as string | undefined,

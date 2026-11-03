@@ -19,15 +19,16 @@ import { STATUSPAGE_URL } from "~/api/incident-io";
 import { Incident, StatusSummary } from "~/api/incident-io/types";
 import server from "~/api/mocks/server";
 import {
-  COMMUNITY_SLACK_URL,
   HELP_CENTER_TICKETS_URL,
   HELP_CENTER_URL,
   STATUS_PAGE_URL,
+  SUPPORT_CHAT_URL,
   SUPPORT_PLANS_URL,
 } from "~/externalUrls";
 import { incidentIOQueryKeys } from "~/queries/incident-io";
 import { renderComponent } from "~/test/utils";
 
+import { supportTicketQueryKeys } from "./queries";
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
 
 const mockFlags: Record<string, boolean> = vi.hoisted(() => ({}));
@@ -148,7 +149,7 @@ describe("SupportPage", () => {
     ).toHaveAttribute("href", HELP_CENTER_URL);
     expect(
       screen.getByRole("link", { name: "Community Slack ↗" }),
-    ).toHaveAttribute("href", COMMUNITY_SLACK_URL);
+    ).toHaveAttribute("href", SUPPORT_CHAT_URL);
     expect(
       screen.getByRole("link", { name: "Support plans and response times ↗" }),
     ).toHaveAttribute("href", SUPPORT_PLANS_URL);
@@ -390,6 +391,39 @@ describe("SupportPage", () => {
       ).not.toBeInTheDocument();
     });
 
+    it("keeps the tickets when a refetch fails", async () => {
+      server.use(ticketsHandler([buildTicket()]));
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      await renderComponent(<SupportPage />, { queryClient });
+      expect(
+        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+      ).toBeVisible();
+
+      server.use(
+        http.get(TICKETS_URL, () => HttpResponse.json({}, { status: 500 })),
+      );
+      await queryClient.refetchQueries({
+        queryKey: supportTicketQueryKeys.all(),
+      });
+
+      expect(
+        screen.getByRole("button", { name: "Replica keeps restarting" }),
+      ).toBeVisible();
+      expect(screen.queryByRole("link", { name: "View tickets" })).toBeNull();
+    });
+
+    it("opens a ticket from anywhere in its row", async () => {
+      server.use(ticketsHandler([buildTicket()]));
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      await user.click(await screen.findByText("#4821 · opened by you"));
+
+      expect(await screen.findByRole("dialog")).toBeVisible();
+    });
+
     it("shows an empty state", async () => {
       server.use(ticketsHandler([]));
       await renderComponent(<SupportPage />);
@@ -605,6 +639,27 @@ describe("SupportPage", () => {
       expect(
         await screen.findByText(/support account needs to be linked/),
       ).toBeVisible();
+    });
+
+    it("offers email for urgent tickets when chat is unavailable", async () => {
+      setIntercom("stub");
+      server.use(ticketsHandler([]));
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.click(await screen.findByRole("radio", { name: /^Urgent/ }));
+
+      expect(
+        screen.getByTestId("support-ticket-urgent-notice"),
+      ).toHaveTextContent(/with “urgent” in the subject/);
+      expect(
+        screen.getByRole("link", { name: "Email support" }),
+      ).toHaveAttribute("href", OUTAGE_MAILTO);
+      expect(
+        screen.queryByRole("link", { name: "Report in chat" }),
+      ).not.toBeInTheDocument();
     });
 
     it("sends urgent tickets to the Messenger's outage workflow", async () => {

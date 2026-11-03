@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { htmlToText } from "./supportTicketUtils";
+import { htmlToParts, htmlToText } from "./supportTicketUtils";
 
 describe("htmlToText", () => {
   it("keeps paragraphs and line breaks", () => {
@@ -22,5 +22,36 @@ describe("htmlToText", () => {
         '<p onclick="x()">Click <b>me</b></p><img src=x onerror=alert(1)>',
       ),
     ).toBe("Click me");
+  });
+});
+
+describe("htmlToParts", () => {
+  it("keeps links", () => {
+    expect(
+      htmlToParts(
+        '<p>See <a href="https://materialize.com/docs/">the docs</a>.</p>',
+      ),
+    ).toEqual([
+      { text: "See " },
+      { text: "the docs", href: "https://materialize.com/docs/" },
+      { text: "." },
+    ]);
+  });
+
+  it("drops unsafe links but keeps their text", () => {
+    expect(htmlToParts('<a href="javascript:alert(1)">Click</a> here')).toEqual(
+      [{ text: "Click here" }],
+    );
+  });
+
+  it("shows the URL of a link without text", () => {
+    expect(
+      htmlToParts('<a href="mailto:support@materialize.com"></a>'),
+    ).toEqual([
+      {
+        text: "mailto:support@materialize.com",
+        href: "mailto:support@materialize.com",
+      },
+    ]);
   });
 });

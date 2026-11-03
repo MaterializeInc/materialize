@@ -34,7 +34,3 @@ export const HELP_CENTER_TICKETS_URL =
 
 /** Urgent-issue process and response times for SLA-supported customers. */
 export const SUPPORT_PLANS_URL = `${SUPPORT_URL}#urgent-issues-for-sla-supported-customers-only`;
-
-/** Invite link to the Materialize Community Slack. */
-export const COMMUNITY_SLACK_URL =
-  "https://materializecommunity.slack.com/join/shared_invite/zt-4cxl88spz-HrApVNaPVGuhP2Vhm44PWA";

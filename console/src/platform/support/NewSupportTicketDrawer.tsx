@@ -50,6 +50,7 @@ import {
 } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
+import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { useCreateSupportTicket } from "./queries";
 import {
   buildCreateTicketRequest,
@@ -58,11 +59,6 @@ import {
   TicketFormValues,
   TicketSeverity,
 } from "./ticketForm";
-
-const EXTERNAL_LINK_PROPS = {
-  target: "_blank",
-  rel: "noopener noreferrer",
-} as const;
 
 /**
  * Where urgent tickets go: the Messenger's outage workflow when Intercom is
@@ -114,7 +110,7 @@ const SeverityCard = ({
       display="flex"
       flexDirection="column"
       gap="0.5"
-      minHeight="11"
+      minHeight="44px"
       px="3"
       py="2.5"
       borderRadius="lg"
@@ -125,7 +121,7 @@ const SeverityCard = ({
         isSelected
           ? isUrgent
             ? colors.background.error
-            : colors.purple[50]
+            : colors.background.accent
           : colors.background.primary
       }
       _focusWithin={{ boxShadow: "input.focus" }}
@@ -183,14 +179,12 @@ type TicketDetails = { label: string; value: React.ReactNode }[];
 const NewTicketForm = ({
   organizationId,
   organizationName,
-  defaultSeverity,
   outageLink,
   onSubmitted,
   onClose,
 }: {
   organizationId?: string;
   organizationName?: string;
-  defaultSeverity: TicketSeverity;
   outageLink: OutageLink;
   onSubmitted: (ticket: SupportTicket, values: TicketFormValues) => void;
   onClose: () => void;
@@ -203,7 +197,7 @@ const NewTicketForm = ({
       mode: "onTouched",
       defaultValues: {
         title: "",
-        severity: defaultSeverity,
+        severity: "normal",
         environmentType: "production",
         description: "",
         includeDetails: true,
@@ -417,7 +411,7 @@ const NewTicketForm = ({
                       templateColumns="132px minmax(0, 1fr)"
                       columnGap="3"
                       rowGap="1.5"
-                      pl="9.5"
+                      pl="38px"
                       pr="3"
                       pb="3"
                       textStyle="text-small"
@@ -497,7 +491,6 @@ const TicketSent = ({
   onClose: () => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const isUrgent = values.severity === "urgent";
   const tags = [
     severityLabel(values.severity),
     ENVIRONMENT_LABELS[values.environmentType],
@@ -511,10 +504,10 @@ const TicketSent = ({
           <Flex
             boxSize="10"
             borderRadius="full"
-            bg={colors.green[50]}
+            bg={colors.background.secondary}
             align="center"
             justify="center"
-            color={colors.green[600]}
+            color={colors.accent.green}
           >
             <CheckmarkIcon aria-hidden />
           </Flex>
@@ -533,17 +526,11 @@ const TicketSent = ({
                 fontWeight="500"
                 bg={
                   index === 0
-                    ? isUrgent
-                      ? colors.background.error
-                      : colors.purple[50]
+                    ? colors.background.accent
                     : colors.background.tertiary
                 }
                 color={
-                  index === 0
-                    ? isUrgent
-                      ? colors.accent.red
-                      : colors.purple[600]
-                    : colors.foreground.primary
+                  index === 0 ? colors.accent.purple : colors.foreground.primary
                 }
               >
                 {tag}
@@ -563,9 +550,9 @@ const TicketSent = ({
           </Text>
           <OrderedList spacing="2" pl="1">
             <ListItem>
-              {isUrgent
-                ? "On-call is paged right away."
-                : `A support engineer picks it up within the ${severityLabel(values.severity)} response target in your support plan.`}
+              A support engineer picks it up within the{" "}
+              {severityLabel(values.severity)} response target in your support
+              plan.
             </ListItem>
             <ListItem>Replies arrive by email and in Help Center.</ListItem>
             {organizationName && (
@@ -591,29 +578,27 @@ const TicketSent = ({
           </Button>
         </HStack>
 
-        {!isUrgent && (
-          <Text
-            textStyle="text-small"
-            color={colors.foreground.secondary}
-            pt="4"
-            borderTopWidth="1px"
-            borderColor={colors.border.primary}
+        <Text
+          textStyle="text-small"
+          color={colors.foreground.secondary}
+          pt="4"
+          borderTopWidth="1px"
+          borderColor={colors.border.primary}
+        >
+          Production went down?{" "}
+          <Button
+            as="a"
+            variant="link"
+            href={outageLink.href}
+            onClick={outageLink.onClick}
+            fontWeight="500"
+            fontSize="inherit"
+            color={colors.accent.red}
           >
-            Production went down?{" "}
-            <Button
-              as="a"
-              variant="link"
-              href={outageLink.href}
-              onClick={outageLink.onClick}
-              fontWeight="500"
-              fontSize="inherit"
-              color={colors.accent.red}
-            >
-              Report a production outage
-            </Button>{" "}
-            to page on-call.
-          </Text>
-        )}
+            Report a production outage
+          </Button>{" "}
+          to page on-call.
+        </Text>
       </VStack>
     </DrawerBody>
   );
@@ -626,7 +611,6 @@ export interface NewSupportTicketDrawerProps {
   outageLink: OutageLink;
   organizationId?: string;
   organizationName?: string;
-  defaultSeverity?: TicketSeverity;
 }
 
 export const NewSupportTicketDrawer = ({
@@ -635,7 +619,6 @@ export const NewSupportTicketDrawer = ({
   outageLink,
   organizationId,
   organizationName,
-  defaultSeverity = "normal",
 }: NewSupportTicketDrawerProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const region = useAtomValue(currentRegionIdAtom) ?? undefined;
@@ -646,15 +629,17 @@ export const NewSupportTicketDrawer = ({
     values: TicketFormValues;
   } | null>(null);
 
-  // Start over each time the drawer opens.
-  React.useEffect(() => {
-    if (isOpen) setSent(null);
-  }, [isOpen, defaultSeverity]);
-
   const scope = [organizationName, region].filter(Boolean).join(" · ");
 
   return (
-    <Drawer isOpen={isOpen} onClose={onClose} placement="right" size="md">
+    <Drawer
+      isOpen={isOpen}
+      onClose={onClose}
+      // Start over the next time it opens.
+      onCloseComplete={() => setSent(null)}
+      placement="right"
+      size="md"
+    >
       <DrawerOverlay />
       <DrawerContent maxWidth="560px">
         <DrawerHeader
@@ -698,10 +683,8 @@ export const NewSupportTicketDrawer = ({
             />
           ) : (
             <NewTicketForm
-              key={defaultSeverity}
               organizationId={organizationId}
               organizationName={organizationName}
-              defaultSeverity={defaultSeverity}
               outageLink={outageLink}
               onSubmitted={(ticket, values) => setSent({ ticket, values })}
               onClose={onClose}

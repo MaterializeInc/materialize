@@ -34,23 +34,24 @@ import { SupportTicket } from "~/api/cloudGlobalApi";
 import { Alert } from "~/components/Alert";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import { Modal } from "~/components/Modal";
+import TextLink from "~/components/TextLink";
 import { HELP_CENTER_TICKETS_URL } from "~/externalUrls";
 import { MaterializeTheme } from "~/theme";
 
+import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { useSupportTicket } from "./queries";
-import { formatRelativeTime, htmlToText } from "./supportTicketUtils";
-
-const EXTERNAL_LINK_PROPS = {
-  target: "_blank",
-  rel: "noopener noreferrer",
-} as const;
+import {
+  formatRelativeTime,
+  htmlToParts,
+  MessagePart,
+} from "./supportTicketUtils";
 
 /** Colors a ticket's state the way the Help Center groups them. */
 const useStateColors = (ticket: SupportTicket) => {
   const { colors } = useTheme<MaterializeTheme>();
   const state = (ticket.state ?? "").toLowerCase();
   if (!ticket.open || /resolved|closed/.test(state)) {
-    return { bg: colors.green[50], color: colors.green[600] };
+    return { bg: colors.background.tertiary, color: colors.accent.green };
   }
   if (/waiting on you|waiting on customer/.test(state)) {
     return { bg: colors.background.warn, color: colors.foreground.primary };
@@ -113,7 +114,13 @@ export const SupportTicketsTable = ({
         </Thead>
         <Tbody>
           {tickets.map((ticket) => (
-            <Tr key={ticket.id}>
+            // The whole row opens the ticket. The title stays a button so it
+            // can be reached with the keyboard; its click bubbles up here.
+            <Tr
+              key={ticket.id}
+              onClick={() => onSelect(ticket.id)}
+              cursor="pointer"
+            >
               <Td py="2.5">
                 <VStack spacing="0" align="start">
                   <Button
@@ -122,7 +129,6 @@ export const SupportTicketsTable = ({
                     fontWeight="500"
                     textAlign="left"
                     whiteSpace="normal"
-                    onClick={() => onSelect(ticket.id)}
                   >
                     {ticket.title}
                   </Button>
@@ -161,7 +167,7 @@ const MessageBubble = ({
   fromYou,
 }: {
   author: string;
-  body: string;
+  body: MessagePart[];
   createdAt: string;
   fromYou: boolean;
 }) => {
@@ -184,7 +190,15 @@ const MessageBubble = ({
         </Text>
       </HStack>
       <Text textStyle="text-ui-reg" whiteSpace="pre-wrap">
-        {body}
+        {body.map((part, index) =>
+          part.href ? (
+            <TextLink key={index} href={part.href} isExternal>
+              {part.text}
+            </TextLink>
+          ) : (
+            <React.Fragment key={index}>{part.text}</React.Fragment>
+          ),
+        )}
       </Text>
     </Box>
   );
@@ -244,7 +258,7 @@ export const SupportTicketModal = ({
               {data.description && (
                 <MessageBubble
                   author="You"
-                  body={htmlToText(data.description)}
+                  body={htmlToParts(data.description)}
                   createdAt={data.ticket.createdAt}
                   fromYou
                 />
@@ -257,7 +271,7 @@ export const SupportTicketModal = ({
                       ? "You"
                       : (message.authorName ?? "Materialize support")
                   }
-                  body={htmlToText(message.bodyHtml)}
+                  body={htmlToParts(message.bodyHtml)}
                   createdAt={message.createdAt}
                   fromYou={message.fromYou}
                 />

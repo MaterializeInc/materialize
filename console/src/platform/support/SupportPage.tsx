@@ -36,10 +36,10 @@ import { isInRegion } from "~/components/IncidentStatusWidget/utils";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import TextLink from "~/components/TextLink";
 import {
-  COMMUNITY_SLACK_URL,
   HELP_CENTER_TICKETS_URL,
   HELP_CENTER_URL,
   STATUS_PAGE_URL,
+  SUPPORT_CHAT_URL,
   SUPPORT_EMAIL,
   SUPPORT_PLANS_URL,
 } from "~/externalUrls";
@@ -51,6 +51,7 @@ import {
   useIntercomUnreadCount,
   useIsIntercomIdentified,
 } from "~/hooks/useIntercom";
+import { useToast } from "~/hooks/useToast";
 import { InfoIcon } from "~/icons";
 import {
   MainContentContainer,
@@ -62,55 +63,57 @@ import { useSummary } from "~/queries/incident-io";
 import { currentRegionIdAtom } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
+import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { NewSupportTicketDrawer, OutageLink } from "./NewSupportTicketDrawer";
 import { useSupportTickets } from "./queries";
 import { SupportTicketModal, SupportTicketsTable } from "./SupportTickets";
-import { TicketSeverity } from "./ticketForm";
+import { SEVERITY_OPTIONS } from "./ticketForm";
 
 export const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}`;
 export const OUTAGE_MAILTO = `${SUPPORT_MAILTO}?subject=${encodeURIComponent(
   "Urgent: production outage",
 )}`;
 
-const EXTERNAL_LINK_PROPS = {
-  target: "_blank",
-  rel: "noopener noreferrer",
-} as const;
+type OpenMessenger = (onUnavailable: () => void) => boolean;
 
 /**
- * Opens the Intercom Messenger instead of following the link when the
- * Messenger is booted for the signed-in user. Otherwise the link's href (email
- * or the Help Center) is the fallback, including when the Messenger reports
- * booted but never appears. `open` checks that the Messenger has booted at
- * click time, so a late boot is picked up without waiting for the next
- * readiness check.
+ * Returns click handlers that open the Intercom Messenger instead of
+ * following the link when the Messenger is booted for the signed-in user.
+ * Otherwise the link's href (email or the Help Center) is the fallback,
+ * including when the Messenger reports booted but never appears. `open`
+ * checks that the Messenger has booted at click time, so a late boot is
+ * picked up without waiting for the next readiness check.
+ *
+ * A Messenger that never appears is only noticed seconds after the click, too
+ * late to open a new tab without the popup blocker stepping in, so a new-tab
+ * fallback is offered as a link in a toast instead.
  */
-const preferIntercom =
-  (hasJwt: boolean, open: (onUnavailable: () => void) => boolean) =>
-  (event: React.MouseEvent<HTMLElement>) => {
+const usePreferIntercom = (hasJwt: boolean) => {
+  const toast = useToast({ status: "error", duration: 10_000 });
+  return (open: OpenMessenger) => (event: React.MouseEvent<HTMLElement>) => {
     const link = event.currentTarget;
     const followLink = () => {
       const href = link.getAttribute("href");
       if (!href) return;
-      if (link.getAttribute("target") === "_blank") {
-        window.open(href, "_blank", "noopener,noreferrer");
-      } else {
+      if (link.getAttribute("target") !== "_blank") {
         window.location.assign(href);
+        return;
       }
+      toast({
+        isClosable: true,
+        description: (
+          <>
+            Chat didn&apos;t open.{" "}
+            <TextLink href={href} isExternal>
+              Continue in a new tab ↗
+            </TextLink>
+          </>
+        ),
+      });
     };
     if (hasJwt && open(followLink)) event.preventDefault();
   };
-
-const SEVERITIES = [
-  {
-    level: "Urgent",
-    description: "Production down, no workaround. Use the outage button.",
-    isUrgent: true,
-  },
-  { level: "High", description: "Key features seriously impaired" },
-  { level: "Normal", description: "Some impact, a workaround exists" },
-  { level: "Low", description: "Little or no impact, or a question" },
-];
+};
 
 const statusPageButtonProps = (href: string) => ({
   as: "a" as const,
@@ -124,7 +127,7 @@ const StatusLink = () => (
     data-testid="support-status-link"
     href={STATUS_PAGE_URL}
     fontWeight="500"
-    {...EXTERNAL_LINK_PROPS}
+    isExternal
   >
     Check system status ↗
   </TextLink>
@@ -246,7 +249,7 @@ const AnswerItem = ({
       <TextLink
         href={href}
         onClick={onClick}
-        {...EXTERNAL_LINK_PROPS}
+        isExternal
         textStyle="text-ui-med"
       >
         {title}
@@ -265,28 +268,17 @@ const SupportPage = () => {
   const isIntercomIdentified = useIsIntercomIdentified();
   const hasIntercomJwt = useHasIntercomJwt();
   const unreadCount = useIntercomUnreadCount();
+  const preferIntercom = usePreferIntercom(hasIntercomJwt);
   const ticketsQuery = useSupportTickets();
   // The ticket endpoints aren't deployed or configured everywhere yet. Until
   // they answer, "Open a ticket" uses the Messenger and the tickets card
-  // links to Help Center.
-  const areTicketsAvailable = ticketsQuery.isSuccess;
+  // links to Help Center. A failed refetch keeps the tickets already loaded.
+  const areTicketsAvailable = ticketsQuery.data !== undefined;
   const tickets = React.useMemo(
     () => ticketsQuery.data?.pages.flatMap((page) => page.data) ?? [],
     [ticketsQuery.data],
   );
-  const {
-    hasNextPage,
-    isFetchingNextPage,
-    isFetchNextPageError,
-    fetchNextPage,
-  } = ticketsQuery;
-  // A page can come back empty when all its tickets are hidden, so keep
-  // going until there's something to show or no more pages.
-  const isLookingForTickets =
-    tickets.length === 0 && hasNextPage && !isFetchNextPageError;
-  React.useEffect(() => {
-    if (isLookingForTickets && !isFetchingNextPage) fetchNextPage();
-  }, [isLookingForTickets, isFetchingNextPage, fetchNextPage]);
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = ticketsQuery;
   const flags = useFlags();
   // The form needs the ticket endpoints, so it only replaces the Messenger
   // once they answer, and is behind its own flag until launch.
@@ -294,11 +286,12 @@ const SupportPage = () => {
     Boolean(flags["support-ticket-form-cns-201"]) && areTicketsAvailable;
   const outageLink: OutageLink = {
     href: OUTAGE_MAILTO,
-    onClick: preferIntercom(hasIntercomJwt, openIntercomNewConversation),
-    isChat: hasIntercomJwt,
+    onClick: preferIntercom(openIntercomNewConversation),
+    // Matches the outage hint. The click handler still checks at click time,
+    // so a Messenger that boots late keeps working.
+    isChat: isIntercomIdentified,
   };
-  const [ticketFormSeverity, setTicketFormSeverity] =
-    React.useState<TicketSeverity | null>(null);
+  const [isTicketFormOpen, setIsTicketFormOpen] = React.useState(false);
   const [selectedTicketId, setSelectedTicketId] = React.useState<string | null>(
     null,
   );
@@ -318,7 +311,7 @@ const SupportPage = () => {
             <Button
               variant="primary"
               size="sm"
-              onClick={() => setTicketFormSeverity("normal")}
+              onClick={() => setIsTicketFormOpen(true)}
             >
               Open a ticket
             </Button>
@@ -326,10 +319,7 @@ const SupportPage = () => {
             <Button
               as="a"
               href={SUPPORT_MAILTO}
-              onClick={preferIntercom(
-                hasIntercomJwt,
-                openIntercomNewConversation,
-              )}
+              onClick={preferIntercom(openIntercomNewConversation)}
               variant="primary"
               size="sm"
             >
@@ -397,7 +387,7 @@ const SupportPage = () => {
                 {areTicketsAvailable && (
                   <TextLink
                     href={HELP_CENTER_TICKETS_URL}
-                    {...EXTERNAL_LINK_PROPS}
+                    isExternal
                     textStyle="text-small"
                     fontWeight="500"
                   >
@@ -406,7 +396,7 @@ const SupportPage = () => {
                 )}
               </CardTitle>
               <CardContent>
-                {ticketsQuery.isPending || isLookingForTickets ? (
+                {ticketsQuery.isPending ? (
                   <LoadingContainer minHeight="24" />
                 ) : areTicketsAvailable ? (
                   <VStack spacing="3" align="stretch">
@@ -473,10 +463,7 @@ const SupportPage = () => {
                   title="Ask Matty"
                   description="AI answers from the docs, any time"
                   href={HELP_CENTER_URL}
-                  onClick={preferIntercom(
-                    hasIntercomJwt,
-                    openIntercomMessenger,
-                  )}
+                  onClick={preferIntercom(openIntercomMessenger)}
                 />
                 <AnswerItem
                   title="Documentation ↗"
@@ -486,7 +473,7 @@ const SupportPage = () => {
                 <AnswerItem
                   title="Community Slack ↗"
                   description="Ask other Materialize users"
-                  href={COMMUNITY_SLACK_URL}
+                  href={SUPPORT_CHAT_URL}
                 />
               </VStack>
             </Card>
@@ -520,22 +507,28 @@ const SupportPage = () => {
                     rowGap="1.5"
                     textStyle="text-small"
                   >
-                    {SEVERITIES.map(({ level, description, isUrgent }) => (
-                      <React.Fragment key={level}>
+                    {SEVERITY_OPTIONS.map(({ value, label, description }) => (
+                      <React.Fragment key={value}>
                         <Text
                           as="dt"
                           fontWeight="600"
-                          color={isUrgent ? colors.accent.red : undefined}
+                          color={
+                            value === "urgent" ? colors.accent.red : undefined
+                          }
                         >
-                          {level}
+                          {label}
                         </Text>
-                        <Text as="dd">{description}</Text>
+                        <Text as="dd">
+                          {value === "urgent"
+                            ? `${description}. Use the outage button.`
+                            : description}
+                        </Text>
                       </React.Fragment>
                     ))}
                   </Grid>
                   <TextLink
                     href={SUPPORT_PLANS_URL}
-                    {...EXTERNAL_LINK_PROPS}
+                    isExternal
                     textStyle="text-small"
                     fontWeight="500"
                   >
@@ -571,12 +564,11 @@ const SupportPage = () => {
         </Flex>
       </VStack>
       <NewSupportTicketDrawer
-        isOpen={ticketFormSeverity !== null}
-        onClose={() => setTicketFormSeverity(null)}
+        isOpen={isTicketFormOpen}
+        onClose={() => setIsTicketFormOpen(false)}
         outageLink={outageLink}
         organizationId={organizationId}
         organizationName={organization?.name}
-        defaultSeverity={ticketFormSeverity ?? "normal"}
       />
       <SupportTicketModal
         ticketId={selectedTicketId}

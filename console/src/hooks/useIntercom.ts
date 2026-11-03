@@ -27,6 +27,7 @@ export function useIntercomAnonymous() {
       app_id: APP_ID,
     };
     Intercom(anonymousConfig);
+    watchMessengerVisibility();
   }, []);
 }
 
@@ -37,6 +38,7 @@ export function useIntercom() {
   useEffect(() => {
     if (jwt) {
       Intercom({ app_id: APP_ID, intercom_user_jwt: jwt });
+      watchMessengerVisibility();
     }
   }, [jwt]);
 }
@@ -121,6 +123,11 @@ export const INTERCOM_OPEN_TIMEOUT_MS = 3_000;
 
 const messengerState = { isWatching: false, isShown: false, shownAt: 0 };
 
+/**
+ * Tracks whether the Messenger is open. Registered when Intercom boots, so a
+ * Messenger the user opened from the launcher counts as open: asking an open
+ * Messenger to open again doesn't fire `onShow`.
+ */
 function watchMessengerVisibility() {
   if (messengerState.isWatching) return;
   messengerState.isWatching = true;

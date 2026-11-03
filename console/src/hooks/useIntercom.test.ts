@@ -17,6 +17,7 @@ import {
   INTERCOM_OPEN_TIMEOUT_MS,
   openIntercomNewConversation,
   resetMessengerVisibilityForTests,
+  useIntercom,
   useIsIntercomIdentified,
 } from "./useIntercom";
 
@@ -120,6 +121,22 @@ describe("openIntercomNewConversation", () => {
     const [shown] = vi.mocked(onShow).mock.calls[0] as [() => void];
     shown();
 
+    vi.advanceTimersByTime(INTERCOM_OPEN_TIMEOUT_MS);
+    expect(onUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("doesn't fall back when the user already opened the Messenger", () => {
+    installStub().booted = true;
+    // Booting registers the visibility watchers, before any of our buttons
+    // are clicked.
+    renderHook(() => useIntercom());
+    const [shown] = vi.mocked(onShow).mock.calls[0] as [() => void];
+    // The user opens the Messenger from the launcher.
+    shown();
+
+    // Asking an open Messenger to open doesn't fire onShow again.
+    const onUnavailable = vi.fn();
+    openIntercomNewConversation(onUnavailable);
     vi.advanceTimersByTime(INTERCOM_OPEN_TIMEOUT_MS);
     expect(onUnavailable).not.toHaveBeenCalled();
   });
