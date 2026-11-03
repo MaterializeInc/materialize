@@ -7,7 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from kubernetes.client import V1ObjectMeta, V1RoleBinding, V1RoleRef, V1Subject
+from kubernetes.client import V1ObjectMeta, V1RoleBinding, V1RoleRef
+
+try:
+    from kubernetes.client import V1Subject
+except ImportError:
+    from kubernetes.client import RbacV1Subject as V1Subject  # type: ignore
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_role_binding import K8sRoleBinding
