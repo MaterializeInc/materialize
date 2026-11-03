@@ -21,7 +21,14 @@ import { Client } from "pg";
 
 import { Region } from "~/api/cloudGlobalApi";
 
-import { CONSOLE_ADDR, EMAIL, REGIONS, STATE_NAME, TestContext } from "./util";
+import {
+  CONSOLE_ADDR,
+  EMAIL,
+  FRONTEGG_LOADING_TIMEOUT,
+  REGIONS,
+  STATE_NAME,
+  TestContext,
+} from "./util";
 
 const test = base.extend<{
   testContext: TestContext;
@@ -109,7 +116,9 @@ for (const region of REGIONS) {
     );
     await page.getByRole("textbox", { name: "Name" }).fill(apiKeyName);
     await page.getByRole("button", { name: "Create password" }).click();
-    await page.getByText(`New password "${apiKeyName}"`).waitFor();
+    await page.getByText(`New password "${apiKeyName}"`).waitFor({
+      timeout: FRONTEGG_LOADING_TIMEOUT,
+    });
     await page.getByRole("button", { name: "visibility" }).first().click();
     const passwordField = page.getByLabel("clientId");
     const password = await passwordField.evaluate((e) => e.textContent);
