@@ -12,8 +12,6 @@ aliases:
   - /integrations/mcp-server/mcp-developer/
 ---
 
-{{< public-preview />}}
-
 Materialize provides a built-in `materialize-developer` Model Context Protocol
 (MCP) server (`/api/mcp/developer`, port 6876) for troubleshooting and
 observability. The server is provided directly by Materialize; no sidecar
