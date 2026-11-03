@@ -726,3 +726,48 @@ SELECT string_agg(rtrim(t), chr(10) ORDER BY cy) FROM a;
                                     ....#
                                     +.
 EOF
+
+# Persistent recursive dataflows must hydrate and keep advancing. The hydration
+# logging operator sits on the loop's feedback cycle, and a capability it holds
+# must not keep the loop from reaching the hydration frontier.
+
+statement ok
+CREATE TABLE hydration_t (x int)
+
+statement ok
+INSERT INTO hydration_t VALUES (1)
+
+statement ok
+CREATE MATERIALIZED VIEW hydration_wmr_mv AS
+WITH MUTUALLY RECURSIVE cnt (i int) AS (
+  SELECT x FROM hydration_t UNION SELECT i + 1 FROM cnt WHERE i < 5
+)
+SELECT * FROM cnt
+
+statement ok
+CREATE INDEX hydration_wmr_idx ON hydration_wmr_mv (i)
+
+query I rowsort
+SELECT * FROM hydration_wmr_mv
+----
+1
+2
+3
+4
+5
+
+statement ok
+INSERT INTO hydration_t VALUES (10)
+
+query I rowsort
+SELECT * FROM hydration_wmr_mv
+----
+1
+10
+2
+3
+4
+5
+
+statement ok
+DROP TABLE hydration_t CASCADE
