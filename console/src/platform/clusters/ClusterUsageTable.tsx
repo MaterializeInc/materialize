@@ -366,7 +366,7 @@ const columns = [
       cell: (info) => <ReplicaHydrationCell bucket={info.getValue()} />,
       meta: {
         tooltip:
-          "Whether the objects on this replica have finished reading their history.",
+          "Whether the output of the objects on this replica is up to date with their inputs.",
         renderFilter: (column) => (
           <MultiSelectFilterPanel<HydrationBucket, ClusterReplicaRow>
             column={column}
