@@ -605,6 +605,7 @@ name                                     comment
 mz_aggregates                            ""
 mz_cluster_replica_size_internal         ""
 mz_license_keys                          ""
+mz_materialized_view_unconfirmed_keys    ""
 mz_object_arrangement_size_history       ""
 mz_object_hydration_history              ""
 mz_optimizer_notices                     ""

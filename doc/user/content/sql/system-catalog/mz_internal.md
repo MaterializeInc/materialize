@@ -595,6 +595,21 @@ each materialized view with a refresh strategy other than `on-commit`.
 | `last_completed_refresh` | [`mz_timestamp`]             | The time of the last successfully completed refresh. `NULL` if the materialized view hasn't completed any refreshes yet.  |
 | `next_refresh`           | [`mz_timestamp`]             | The time of the next scheduled refresh. `NULL` if the materialized view has no future scheduled refreshes.                 |
 
+## `mz_materialized_view_unconfirmed_keys`
+
+The `mz_materialized_view_unconfirmed_keys` table lists the keys declared for
+materialized views that the running version of Materialize cannot confirm for
+the materialized view's query. Materialize does not use an unconfirmed key, for
+example to optimize queries that read from the materialized view. The table has
+a row for each unconfirmed key.
+
+<!-- RELATION_SPEC mz_internal.mz_materialized_view_unconfirmed_keys -->
+| Field                  | Type       | Meaning                                                                                       |
+|------------------------|------------|-----------------------------------------------------------------------------------------------|
+| `materialized_view_id` | [`text`]   | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views)  |
+| `key`                  | [`text array`] | The names of the columns of the declared key.                                             |
+| `mz_version`           | [`text`]   | The version of Materialize that could not confirm the key.                                    |
+
 ## `mz_mcp_data_products`
 
 The `mz_mcp_data_products` view lists data products available for discovery
