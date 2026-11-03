@@ -1077,9 +1077,10 @@ impl HirScalarExpr {
                     //
                     // We lower each branch once, against its filtered relation from the
                     // strategy above, and only then check whether it introduced columns.
-                    // (Lowering the branches in place to find out, and again for the strategy
-                    // above when they do, would take time exponential in the nesting depth of
-                    // `If`s whose branches introduce columns.)
+                    // Lowering a branch also lowers the `If`s nested in it, so lowering each
+                    // branch twice (in place to find out, then again for the strategy above)
+                    // would double the work at every nesting level whose branches introduce
+                    // columns, for example in a long CASE with a subquery in its last arm.
 
                     let inner_arity = inner.arity();
                     let cond_expr =
