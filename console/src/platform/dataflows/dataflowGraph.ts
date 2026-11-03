@@ -30,6 +30,10 @@ export function mustGet<K, V>(map: ReadonlyMap<K, V>, key: K): V {
 export interface NodeStats {
   arrangementRecords: bigint;
   arrangementSize: bigint;
+  // Inclusive: scheduling a region runs its children, and the region's
+  // elapsed time covers them. A region's own elapsed time is therefore
+  // already its subtree's, and summing it with its descendants' counts
+  // nested time once per nesting level.
   elapsedNs: bigint;
   // Total times this operator was scheduled (summed over the scheduling
   // duration histogram's buckets). A high count relative to elapsed time
@@ -93,18 +97,10 @@ export interface DataflowNode {
   // which a merge would hide and a max surfaces.
   transitiveSkew: SkewStats;
   lir: LirInfo[]; // one entry per export span covering this operator id
-  // Timely's own-elapsed accounting is exclusive self time: an operator's
-  // own.elapsedNs already excludes time spent inside any nested/child
-  // operator's own activation, even though scheduling a region
-  // synchronously runs its children first (verified against live
-  // introspection data: a region's own.elapsedNs can come in well below
-  // its direct children's own.elapsedNs summed, which an inclusive
-  // wall-clock reading never could). Comparing self time to self time (own
-  // minus direct children's own, not their transitive) isolates the
-  // region's own dispatch overhead: pointstamp/progress tracking,
-  // activation logic, everything beyond simply handing off to each direct
-  // child once. Equals own.elapsedNs for a leaf (no children to subtract),
-  // which isn't a meaningful "overhead" reading on its own.
+  // Own elapsed time minus the direct children's own elapsed time. Since
+  // elapsed time is inclusive (see NodeStats), this is the time the region
+  // spends outside its children: progress tracking and activation logic.
+  // Equals own.elapsedNs for a leaf, which has no children to subtract.
   overheadNs: bigint;
 }
 
@@ -519,7 +515,6 @@ export function buildDataflowStructure(
       const child = mustGet(nodes, c);
       t.arrangementRecords += child.transitive.arrangementRecords;
       t.arrangementSize += child.transitive.arrangementSize;
-      t.elapsedNs += child.transitive.elapsedNs;
       t.scheduleCount += child.transitive.scheduleCount;
       childrenOwnElapsedNs += child.own.elapsedNs;
       cpuSkew = Math.max(cpuSkew, child.transitiveSkew.cpuSkew);

@@ -40,7 +40,8 @@ export const OPS: OperatorRow[] = [
     name: "Dataflow",
     arrangementRecords: null,
     arrangementSize: null,
-    elapsedNs: "0",
+    // Elapsed time is inclusive: each scope covers its children.
+    elapsedNs: "15",
   },
   {
     id: "11",
@@ -48,7 +49,7 @@ export const OPS: OperatorRow[] = [
     name: "Region",
     arrangementRecords: "0",
     arrangementSize: "0",
-    elapsedNs: "5",
+    elapsedNs: "13",
   },
   {
     id: "12",
@@ -135,7 +136,9 @@ describe("buildDataflowStructure", () => {
   it("precomputes transitive stats", () => {
     const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
     const region = s.nodes.get(nodeIdOf([5, 1]))!;
-    expect(region.own.elapsedNs).toEqual(5n);
+    // Elapsed time is inclusive, so the region's own already covers its
+    // children and is not summed with theirs.
+    expect(region.own.elapsedNs).toEqual(13n);
     expect(region.transitive.elapsedNs).toEqual(13n);
     expect(region.transitive.arrangementRecords).toEqual(100n);
     expect(region.transitive.arrangementSize).toEqual(4096n);
@@ -244,13 +247,9 @@ describe("buildDataflowStructure", () => {
   });
 
   it("compares a region's own time against its direct children's own time, not their transitive rollup", () => {
-    // Timely's own-elapsed accounting is exclusive self time (verified
-    // against live introspection data: a real region's own.elapsedNs can
-    // sit well below its direct children's own.elapsedNs summed, which is
-    // only possible if "own" never included child execution to begin
-    // with). Join here has its own grandchild (a nested region inside it)
-    // whose time dwarfs Join's own row; overhead must compare Region
-    // against Join's own 5ns, not Join's transitive total.
+    // Elapsed time is inclusive, so Join's own 1005ns already covers its
+    // grandchild's 1000ns. Overhead subtracts Join's own time once, and
+    // must not add the grandchild on top.
     const nested = buildDataflowStructure(
       [
         { ...OPS[0], id: "20", address: ["6"], name: "Dataflow" },
@@ -259,14 +258,14 @@ describe("buildDataflowStructure", () => {
           id: "21",
           address: ["6", "1"],
           name: "Region",
-          elapsedNs: "10",
+          elapsedNs: "1010",
         },
         {
           ...OPS[0],
           id: "22",
           address: ["6", "1", "1"],
           name: "Join",
-          elapsedNs: "5",
+          elapsedNs: "1005",
         },
         {
           ...OPS[0],
@@ -280,8 +279,7 @@ describe("buildDataflowStructure", () => {
       [],
     );
     const region = nested.nodes.get(nodeIdOf([6, 1]))!;
-    // Join's transitive elapsed (5 + 1000 = 1005) would make this wildly
-    // negative if used instead of Join's own (5): 10 - 5 = 5.
+    // 1010 - 1005 = 5. Subtracting the grandchild too would give -995.
     expect(region.overheadNs).toEqual(5n);
   });
 
@@ -442,12 +440,12 @@ describe("deriveVisibleGraph", () => {
     expect(region.stats).toEqual(s.nodes.get(regionId)!.transitive);
     expect(region.childCount).toEqual(2);
     // `stats` collapses to the subtree total for a quick canvas-level read,
-    // but the detail panel needs the region's own activity (5ns) kept
-    // distinct from that total (5+7+1=13ns), or a region's own dispatch
-    // cost becomes invisible next to its children's.
+    // but the detail panel needs the region's own activity kept distinct
+    // from that total. Arrangements are per operator, so they differ: the
+    // region owns none, its subtree holds Join's 100 records.
     expect(region.own).toEqual(s.nodes.get(regionId)!.own);
-    expect(region.own!.elapsedNs).toEqual(5n);
-    expect(region.transitive!.elapsedNs).toEqual(13n);
+    expect(region.own!.arrangementRecords).toEqual(0n);
+    expect(region.transitive!.arrangementRecords).toEqual(100n);
   });
 
   it("drilling into the region shows its children and an inbound port", () => {

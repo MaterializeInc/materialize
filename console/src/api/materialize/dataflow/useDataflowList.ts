@@ -64,11 +64,15 @@ export function useDataflowList(params?: DataflowListParams) {
           COALESCE(el.elapsed_ns, 0) AS "elapsedNs"
         FROM mz_dataflows AS md
         LEFT JOIN mz_records_per_dataflow AS mrpd ON mrpd.id = md.id
+        -- Scheduling time is inclusive: an operator's elapsed time contains
+        -- its children's. The root operator, at address [dataflow id], holds
+        -- the whole dataflow's time, and summing over operators would count
+        -- nested time once per nesting level.
         LEFT JOIN (
-          SELECT mdod.dataflow_id, sum(mse.elapsed_ns) AS elapsed_ns
-          FROM mz_dataflow_operator_dataflows AS mdod
-          JOIN mz_scheduling_elapsed AS mse ON mse.id = mdod.id
-          GROUP BY mdod.dataflow_id
+          SELECT mda.address[1] AS dataflow_id, mse.elapsed_ns
+          FROM mz_dataflow_addresses AS mda
+          JOIN mz_scheduling_elapsed AS mse ON mse.id = mda.id
+          WHERE list_length(mda.address) = 1
         ) AS el ON el.dataflow_id = md.id
         ORDER BY size DESC`
         .$castTo<DataflowListRow>()

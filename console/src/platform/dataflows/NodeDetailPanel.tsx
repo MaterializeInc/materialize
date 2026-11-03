@@ -404,10 +404,6 @@ const NodeDetail = ({ node, onSelectLir, workerCount }: NodeDetailProps) => {
             value={formatBytesShort(node.transitive.arrangementSize)}
           />
           <Row
-            label="Subtree elapsed"
-            value={formatElapsedNs(node.transitive.elapsedNs)}
-          />
-          <Row
             label="Subtree schedules"
             value={<GroupedCount n={node.transitive.scheduleCount} />}
           />
