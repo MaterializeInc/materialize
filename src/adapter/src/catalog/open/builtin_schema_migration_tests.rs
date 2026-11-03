@@ -14,6 +14,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use itertools::Itertools;
 use mz_catalog::builtin::{BuiltinSource, BuiltinTable};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
@@ -357,6 +358,260 @@ fn test_builtin_schema_migration() {
         let mut ctx = context.borrow_mut();
         ctx.source_version = version;
         ctx.new_fingerprints.append(&mut result.new_fingerprints);
+    }
+}
+
+/// Covers a dev source at the target's version string and at an older one.
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_dev_source_migrates_changed_builtins() {
+    configure_tracing_for_turmoil();
+
+    for source in ["0.2.0-dev.0", "0.1.0-dev.0"] {
+        let mut sim = turmoil::Builder::new().build();
+        let persist_location = init_persist(&mut sim);
+
+        let (retyped, retyped_old) = make_builtin_table("retyped".into());
+        let (evolved, evolved_old) = make_builtin_table("evolved".into());
+        let (unchanged, unchanged_builtin) = make_builtin_table("unchanged".into());
+        let shards = [ShardId::new(), ShardId::new(), ShardId::new()];
+        let old_descs = [retyped_old, evolved_old, unchanged_builtin].map(table_desc);
+        register_schemas(
+            &mut sim,
+            &persist_location,
+            shards.into_iter().zip_eq(old_descs).collect(),
+        );
+
+        let system_objects = BTreeMap::from([
+            (
+                retyped.clone(),
+                ObjectInfo {
+                    global_id: GlobalId::System(1),
+                    shard_id: Some(shards[0]),
+                    builtin: with_table_desc(retyped_old, int_column_desc()),
+                    fingerprint: retyped_old.fingerprint(),
+                },
+            ),
+            (
+                evolved.clone(),
+                ObjectInfo {
+                    global_id: GlobalId::System(2),
+                    shard_id: Some(shards[1]),
+                    builtin: evolve_builtin_desc(evolved_old),
+                    fingerprint: evolved_old.fingerprint(),
+                },
+            ),
+            (
+                unchanged.clone(),
+                ObjectInfo {
+                    global_id: GlobalId::System(3),
+                    shard_id: Some(shards[2]),
+                    builtin: unchanged_builtin,
+                    fingerprint: unchanged_builtin.fingerprint(),
+                },
+            ),
+        ]);
+        let result = run_dev_migration(
+            &mut sim,
+            &persist_location,
+            source,
+            ShardId::new(),
+            system_objects,
+        )
+        .unwrap_or_else(|e| panic!("{source}: migration failed: {e}"));
+
+        assert_eq!(
+            result.new_shards.keys().collect::<Vec<_>>(),
+            [&GlobalId::System(1)],
+            "{source}: only the retyped builtin gets a fresh shard",
+        );
+        assert_eq!(
+            result.new_fingerprints.keys().collect::<BTreeSet<_>>(),
+            BTreeSet::from([&retyped, &evolved]),
+            "{source}: exactly the changed builtins are migrated",
+        );
+    }
+}
+
+/// A second dev build at the same version and deploy generation that replaces a builtin again
+/// must get a fresh shard. The migration shard still holds the first build's entry, which names
+/// the shard the builtin already uses.
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_dev_source_repeated_replacement_gets_fresh_shard() {
+    configure_tracing_for_turmoil();
+
+    let mut sim = turmoil::Builder::new().build();
+    let persist_location = init_persist(&mut sim);
+    let migration_shard = ShardId::new();
+
+    let (object, original) = make_builtin_table("table".into());
+    let first = with_table_desc(original, int_column_desc());
+    let second = with_table_desc(
+        original,
+        RelationDesc::builder()
+            .with_column("a", SqlScalarType::Bool.nullable(false))
+            .finish(),
+    );
+    let shard = ShardId::new();
+    register_schemas(
+        &mut sim,
+        &persist_location,
+        vec![(shard, table_desc(original))],
+    );
+
+    let info = |shard_id, builtin, fingerprint| ObjectInfo {
+        global_id: GlobalId::System(1),
+        shard_id: Some(shard_id),
+        builtin,
+        fingerprint,
+    };
+    let first_result = run_dev_migration(
+        &mut sim,
+        &persist_location,
+        "0.2.0-dev.0",
+        migration_shard,
+        BTreeMap::from([(object.clone(), info(shard, first, original.fingerprint()))]),
+    )
+    .unwrap();
+    let first_shard = first_result.new_shards[&GlobalId::System(1)];
+    assert_ne!(first_shard, shard);
+    // Bootstrap registers the new schema on the replacement shard.
+    register_schemas(
+        &mut sim,
+        &persist_location,
+        vec![(first_shard, table_desc(first))],
+    );
+
+    let second_result = run_dev_migration(
+        &mut sim,
+        &persist_location,
+        "0.2.0-dev.0",
+        migration_shard,
+        BTreeMap::from([(object, info(first_shard, second, first.fingerprint()))]),
+    )
+    .unwrap();
+    let second_shard = second_result.new_shards[&GlobalId::System(1)];
+    assert_ne!(
+        second_shard, first_shard,
+        "the live shard must not be handed back"
+    );
+}
+
+/// Runs a leader-mode migration from `source` to `0.2.0-dev.0` at deploy generation 0.
+fn run_dev_migration(
+    sim: &mut turmoil::Sim<'_>,
+    persist_location: &PersistLocation,
+    source: &'static str,
+    migration_shard: ShardId,
+    system_objects: BTreeMap<SystemObjectDescription, ObjectInfo>,
+) -> anyhow::Result<MigrationRunResult> {
+    run_on_host(sim, "migration", persist_location, move |persist_client| {
+        let migration = Migration {
+            source_version: Version::parse(source).unwrap(),
+            target_version: Version::parse("0.2.0-dev.0").unwrap(),
+            deploy_generation: 0,
+            system_objects: system_objects.clone(),
+            migration_shard,
+            config: BuiltinItemMigrationConfig {
+                persist_client,
+                read_only: false,
+                force_migration: None,
+            },
+        };
+        async move { migration.run(&[]).await }.boxed_local()
+    })
+}
+
+/// Registers each shard's schema, as a previous version's bootstrap would have.
+fn register_schemas(
+    sim: &mut turmoil::Sim<'_>,
+    persist_location: &PersistLocation,
+    schemas: Vec<(ShardId, RelationDesc)>,
+) {
+    run_on_host(sim, "register", persist_location, move |persist_client| {
+        let schemas = schemas.clone();
+        async move {
+            for (shard_id, desc) in schemas {
+                let diagnostics = Diagnostics {
+                    shard_name: shard_id.to_string(),
+                    handle_purpose: "test schema registration".into(),
+                };
+                persist_client
+                    .register_schema::<SourceData, (), Timestamp, StorageDiff>(
+                        shard_id,
+                        &desc,
+                        &UnitSchema,
+                        diagnostics,
+                    )
+                    .await
+                    .expect("valid usage")
+                    .expect("first registration");
+            }
+        }
+        .boxed_local()
+    });
+}
+
+/// Runs `f` with a persist client on a fresh turmoil host and returns its output.
+fn run_on_host<T: 'static>(
+    sim: &mut turmoil::Sim<'_>,
+    name: &str,
+    persist_location: &PersistLocation,
+    f: impl Fn(PersistClient) -> futures::future::LocalBoxFuture<'static, T> + 'static,
+) -> T {
+    thread_local! {
+        static NEXT_HOST: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    // Turmoil host names must be unique within a simulation.
+    let name = format!("{name}-{}", NEXT_HOST.replace(NEXT_HOST.get() + 1));
+    let result = Rc::new(RefCell::new(None));
+    let host_result = Rc::clone(&result);
+    let persist_location = persist_location.clone();
+    let f = Rc::new(f);
+    sim.host(name.as_str(), move || {
+        let result = Rc::clone(&host_result);
+        let persist_location = persist_location.clone();
+        let f = Rc::clone(&f);
+        async move {
+            let persist_cache = PersistClientCache::new_for_turmoil();
+            let persist_client = persist_cache.open(persist_location).await.unwrap();
+            let out = f(persist_client).await;
+            result.borrow_mut().replace(out);
+            Ok(())
+        }
+    });
+    while result.borrow().is_none() {
+        sim.step().unwrap();
+    }
+    let out = result.borrow_mut().take().unwrap();
+    sim.crash(name);
+    out
+}
+
+fn int_column_desc() -> RelationDesc {
+    RelationDesc::builder()
+        .with_column("a", SqlScalarType::Int64.nullable(false))
+        .finish()
+}
+
+fn table_desc(builtin: &Builtin<NameReference>) -> RelationDesc {
+    match builtin {
+        Builtin::Table(t) => t.desc.clone(),
+        _ => unimplemented!(),
+    }
+}
+
+fn with_table_desc(
+    builtin: &Builtin<NameReference>,
+    desc: RelationDesc,
+) -> &'static Builtin<NameReference> {
+    match builtin {
+        Builtin::Table(t) => leak(Builtin::Table(leak(BuiltinTable {
+            desc,
+            ..(*t).clone()
+        }))),
+        _ => unimplemented!(),
     }
 }
 
