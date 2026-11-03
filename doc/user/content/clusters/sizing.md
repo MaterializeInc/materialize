@@ -108,6 +108,13 @@ sizing. `heap_limit` is the memory plus disk the size provides, from
 [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes).
 Both figures are per process. Compare them to determine the ideal cluster size.
 
+On Materialize Self-Managed, sizes with swap enabled, the default, report a
+`disk_bytes` of 0, because Materialize does not limit their swap. There, this
+`heap_limit` shows memory only. Compare `peak_heap` with the `heap_limit` of a
+running replica of that size in
+[`mz_internal.mz_cluster_replica_metrics`](/sql/system-catalog/mz_internal/#mz_cluster_replica_metrics)
+instead, which includes the swap available to the replica.
+
 To find which object dominated the episode, read the per-object table,
 [`mz_internal.mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history).
 Its `object_id` is the ID of the object's dataflow, so reach the catalog item
