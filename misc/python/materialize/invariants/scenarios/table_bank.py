@@ -565,13 +565,9 @@ class ReplacementChurn(Action):
 class DdlChurn(Action):
     """Catalog and dataflow churn on the compute cluster.
 
-    Creates and drops a scratch index and MV over the ledger. The checked
-    objects never reference them, so the invariant checkers stay unaffected
-    by the churn itself, but dataflow (un)installation keeps happening on
-    the same cluster and table the invariants cover, also while that
-    cluster's leg is disrupted. Every statement is idempotent, and index
-    names carry a nonce, because an UNKNOWN outcome leaves the catalog state
-    uncertain.
+    Creates and drops scratch indexes and MVs on the same cluster and tables
+    the invariants cover. Index names carry a nonce because an UNKNOWN
+    outcome leaves the catalog state uncertain.
     """
 
     name = "ddl-churn"
@@ -594,9 +590,8 @@ class DdlChurn(Action):
             outcome = self.client.write(
                 f"DROP MATERIALIZED VIEW IF EXISTS churn_mv_{self.worker}"
             )
-            # Keep names whose drop outcome is uncertain: an UNKNOWN drop may
-            # not have applied, and untracking such an index would leak its
-            # dataflow for the rest of the run.
+            # Retry rejected and uncertain drops so their indexes remain
+            # eligible for cleanup once any dependents are gone.
             self.maybe_alive = [
                 name
                 for name in self.maybe_alive

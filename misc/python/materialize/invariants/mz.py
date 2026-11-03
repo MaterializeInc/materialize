@@ -26,7 +26,11 @@ import time
 from typing import Any
 
 import psycopg
-from psycopg.errors import QueryCanceled, SerializationFailure
+from psycopg.errors import (
+    DependentObjectsStillExist,
+    QueryCanceled,
+    SerializationFailure,
+)
 
 from materialize.invariants.framework import (
     Outcome,
@@ -311,6 +315,11 @@ class MzClient:
                 return Outcome.UNKNOWN
             if _is_connection_error(e):
                 return Outcome.UNKNOWN
+            if isinstance(e, DependentObjectsStillExist):
+                # Churn indexes can acquire dataflow dependents even when
+                # their names do not appear in those objects' definitions.
+                # The rejected DROP has no effect and can be retried later.
+                return Outcome.FAILED
             if any(snippet in str(e) for snippet in CONCURRENT_DDL_ERROR_SNIPPETS):
                 # DDL racing DDL: a name resolved to an item that another
                 # action retired before this plan was installed, e.g. an index
