@@ -355,6 +355,8 @@ pub struct Args {
     balancerd_internal_http_port: u16,
     #[clap(long, default_value = "/api/readyz")]
     balancerd_readiness_probe_path: String,
+    #[clap(long, default_value = "600")]
+    balancerd_termination_grace_period_seconds: i64,
 
     #[clap(long, default_value = "8080")]
     console_http_port: u16,
@@ -862,6 +864,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             balancerd_http_port: args.balancerd_http_port,
             balancerd_internal_http_port: args.balancerd_internal_http_port,
             balancerd_readiness_probe_path: args.balancerd_readiness_probe_path.clone(),
+            balancerd_termination_grace_period_seconds: args
+                .balancerd_termination_grace_period_seconds,
         };
         move || {
             k8s_controller::Controller::namespaced_all(
