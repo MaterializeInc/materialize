@@ -8,8 +8,9 @@
 // by the Apache License, Version 2.0.
 
 import * as Sentry from "@sentry/react";
-import { User } from "@sentry/react";
 import { initialize, LDClient, LDContext } from "launchdarkly-js-client-sdk";
+
+import { type User } from "~/external-library-wrappers/frontegg";
 
 // We use module state here because we need to ensure the client is only initialized
 // once. Because of suspense and concurrent rendering, multiple renders may happen with
