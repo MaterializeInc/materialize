@@ -46,6 +46,13 @@
   membership in the owning role as ownership, matching how Materialize decides
   who may run the swap in `deploy_promote`.
 
+* Warn in `strict_mode` when a `view`, `materialized_view` or `table` model is
+  built in a schema that also holds sources, sinks or source tables. The check
+  for this never ran, because the flags it set inside a loop did not survive
+  the loop. It warns instead of failing because runs that exclude sources and
+  sinks, as the docs recommend, have always passed it. It will become an error
+  in a future release.
+
 ## 1.9.11 - 2026-07-26
 
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)
