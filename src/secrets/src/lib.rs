@@ -20,18 +20,55 @@ use mz_repr::CatalogItemId;
 
 pub mod cache;
 
+/// Validates the name of an internal secret.
+///
+/// Internal secret names must be valid across all secrets backends (Kubernetes secret names,
+/// file names, AWS Secrets Manager names), so the accepted alphabet is the conservative
+/// intersection: lowercase alphanumerics and `-`, starting and ending with an alphanumeric,
+/// at most 128 characters.
+pub fn validate_internal_secret_name(name: &str) -> Result<(), anyhow::Error> {
+    let valid = !name.is_empty()
+        && name.len() <= 128
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.starts_with('-')
+        && !name.ends_with('-');
+    if valid {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("invalid internal secret name: {name:?}"))
+    }
+}
+
 /// Securely manages user secrets.
+///
+/// In addition to user secrets, which are keyed by the [`CatalogItemId`] of the corresponding
+/// `CREATE SECRET` item, a controller manages internal secrets, which are keyed by name and hold
+/// system-generated credentials (e.g. transport keys) rather than catalog state. The two
+/// namespaces are disjoint: internal secrets never collide with user secrets and are not
+/// returned by [`list`](SecretsController::list).
 #[async_trait]
 pub trait SecretsController: Debug + Send + Sync {
     /// Creates or updates the specified secret with the specified binary
     /// contents.
     async fn ensure(&self, id: CatalogItemId, contents: &[u8]) -> Result<(), anyhow::Error>;
 
+    /// Creates or updates the specified internal secret with the specified binary contents.
+    ///
+    /// The name must satisfy [`validate_internal_secret_name`].
+    async fn ensure_internal(&self, name: &str, contents: &[u8]) -> Result<(), anyhow::Error>;
+
     /// Deletes the specified secret.
     async fn delete(&self, id: CatalogItemId) -> Result<(), anyhow::Error>;
 
-    /// Lists known secrets. Unrecognized secret objects do not produce an error
-    /// and are ignored.
+    /// Deletes the specified internal secret.
+    ///
+    /// Deleting an internal secret that does not exist is not an error.
+    async fn delete_internal(&self, name: &str) -> Result<(), anyhow::Error>;
+
+    /// Lists known user secrets. Internal secrets are not included.
+    /// Unrecognized secret objects do not produce an error and are ignored.
     async fn list(&self) -> Result<Vec<CatalogItemId>, anyhow::Error>;
 
     /// Returns a reader for the secrets managed by this controller.
@@ -54,6 +91,15 @@ pub trait SecretsReader: Debug + Send + Sync {
     /// Returns the binary contents of the specified secret.
     async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error>;
 
+    /// Returns the binary contents of the specified internal secret, or `None` if the secret
+    /// does not exist.
+    ///
+    /// Nonexistence is reported in-band (rather than as an error) because callers bootstrapping
+    /// credentials must distinguish "not created yet" from transient read failures. Treating a
+    /// transient failure as nonexistence could cause a caller to regenerate and overwrite live
+    /// key material.
+    async fn read_internal(&self, name: &str) -> Result<Option<Vec<u8>>, anyhow::Error>;
+
     /// Returns the string contents of the specified secret.
     ///
     /// Returns an error if the secret's contents cannot be decoded as UTF-8.
@@ -66,12 +112,14 @@ pub trait SecretsReader: Debug + Send + Sync {
 #[derive(Debug)]
 pub struct InMemorySecretsController {
     data: Arc<Mutex<BTreeMap<CatalogItemId, Vec<u8>>>>,
+    internal_data: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
 }
 
 impl InMemorySecretsController {
     pub fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(BTreeMap::new())),
+            internal_data: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
@@ -83,8 +131,22 @@ impl SecretsController for InMemorySecretsController {
         Ok(())
     }
 
+    async fn ensure_internal(&self, name: &str, contents: &[u8]) -> Result<(), anyhow::Error> {
+        validate_internal_secret_name(name)?;
+        self.internal_data
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), contents.to_vec());
+        Ok(())
+    }
+
     async fn delete(&self, id: CatalogItemId) -> Result<(), anyhow::Error> {
         self.data.lock().unwrap().remove(&id);
+        Ok(())
+    }
+
+    async fn delete_internal(&self, name: &str) -> Result<(), anyhow::Error> {
+        self.internal_data.lock().unwrap().remove(name);
         Ok(())
     }
 
@@ -95,6 +157,7 @@ impl SecretsController for InMemorySecretsController {
     fn reader(&self) -> Arc<dyn SecretsReader> {
         Arc::new(InMemorySecretsController {
             data: Arc::clone(&self.data),
+            internal_data: Arc::clone(&self.internal_data),
         })
     }
 }
@@ -104,5 +167,55 @@ impl SecretsReader for InMemorySecretsController {
     async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
         let contents = self.data.lock().unwrap().get(&id).cloned();
         contents.ok_or_else(|| anyhow::anyhow!("secret does not exist"))
+    }
+
+    async fn read_internal(&self, name: &str) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        Ok(self.internal_data.lock().unwrap().get(name).cloned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_in_memory_internal_secrets_roundtrip() {
+        let controller = InMemorySecretsController::new();
+
+        controller
+            .ensure_internal("ctp-ca", b"key material")
+            .await
+            .unwrap();
+        let reader = controller.reader();
+        assert_eq!(
+            reader.read_internal("ctp-ca").await.unwrap().as_deref(),
+            Some(b"key material".as_slice())
+        );
+
+        // Internal secrets do not appear in the user secret listing, and do not collide with
+        // user secrets of a numeric name.
+        let id = CatalogItemId::User(1);
+        controller.ensure(id, b"user").await.unwrap();
+        assert_eq!(controller.list().await.unwrap(), vec![id]);
+        assert_eq!(reader.read(id).await.unwrap(), b"user");
+
+        controller.delete_internal("ctp-ca").await.unwrap();
+        assert_eq!(reader.read_internal("ctp-ca").await.unwrap(), None);
+        // Deleting a nonexistent internal secret is not an error.
+        controller.delete_internal("ctp-ca").await.unwrap();
+    }
+
+    #[mz_ore::test]
+    fn test_validate_internal_secret_name() {
+        for valid in ["a", "ctp-ca", "cluster-u1-replica-u3", "0-a-9"] {
+            validate_internal_secret_name(valid).unwrap();
+        }
+        let too_long = "a".repeat(129);
+        for invalid in ["", "-a", "a-", "A", "a_b", "a.b", "a/b", "ä", &too_long] {
+            assert!(
+                validate_internal_secret_name(invalid).is_err(),
+                "name {invalid:?} must be rejected"
+            );
+        }
     }
 }
