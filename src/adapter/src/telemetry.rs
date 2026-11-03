@@ -9,9 +9,14 @@
 
 //! Telemetry utilities.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
 use chrono::{DateTime, Utc};
+use itertools::Itertools;
 use mz_audit_log::ObjectType;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::feature_usage::FeatureSet;
 use mz_sql_parser::ast::StatementKind;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -168,5 +173,89 @@ pub fn analyze_audited_statement(
         StatementKind::CreateTable => Some((StatementAction::Create, ObjectType::Table)),
         StatementKind::CreateView => Some((StatementAction::Create, ObjectType::View)),
         _ => None,
+    }
+}
+
+/// The most distinct feature sets [`FeatureUsage`] tracks between drains.
+/// Executions of further sets are only counted in
+/// [`FeatureUsageSnapshot::overflow`]. Bounds memory and the number of
+/// Segment events per report.
+pub const MAX_FEATURE_SETS: usize = 500;
+
+/// Execution counts of distinct SQL feature sets, accumulated until the
+/// telemetry loop drains them.
+///
+/// Counting whole sets, rather than individual features, preserves which
+/// features were used together in one statement.
+#[derive(Debug, Clone, Default)]
+pub struct FeatureUsage {
+    inner: Arc<Mutex<FeatureUsageSnapshot>>,
+}
+
+/// The feature set counts accumulated since the previous drain.
+#[derive(Debug, Default)]
+pub struct FeatureUsageSnapshot {
+    /// Keyed by application name hint and the rendered, comma-separated
+    /// feature set.
+    pub counts: BTreeMap<(&'static str, String), u64>,
+    /// Executions whose feature set was not tracked because
+    /// [`MAX_FEATURE_SETS`] distinct sets had already been seen.
+    pub overflow: u64,
+}
+
+impl FeatureUsage {
+    pub fn record(&self, application_name: &'static str, features: &FeatureSet) {
+        let key = (application_name, features.iter().join(","));
+        let mut inner = self.inner.lock().expect("lock poisoned");
+        let at_capacity = inner.counts.len() >= MAX_FEATURE_SETS;
+        match inner.counts.get_mut(&key) {
+            Some(count) => *count += 1,
+            None if at_capacity => inner.overflow += 1,
+            None => {
+                inner.counts.insert(key, 1);
+            }
+        }
+    }
+
+    /// Returns the counts accumulated since the previous call and resets them.
+    pub fn drain(&self) -> FeatureUsageSnapshot {
+        std::mem::take(&mut *self.inner.lock().expect("lock poisoned"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_sql::feature_usage::{Feature, FeatureCategory};
+
+    use super::*;
+
+    fn feature_set(name: &str) -> FeatureSet {
+        [Feature {
+            category: FeatureCategory::Function,
+            name: name.to_string().into(),
+        }]
+        .into()
+    }
+
+    #[mz_ore::test]
+    fn feature_usage_counts_sets_and_overflows() {
+        let usage = FeatureUsage::default();
+        usage.record("psql", &feature_set("a"));
+        usage.record("psql", &feature_set("a"));
+        usage.record("dbt", &feature_set("a"));
+        let snapshot = usage.drain();
+        assert_eq!(snapshot.counts[&("psql", "fn:a".to_string())], 2);
+        assert_eq!(snapshot.counts[&("dbt", "fn:a".to_string())], 1);
+        assert!(usage.drain().counts.is_empty(), "drain resets the counts");
+
+        for i in 0..MAX_FEATURE_SETS {
+            usage.record("psql", &feature_set(&i.to_string()));
+        }
+        usage.record("psql", &feature_set("0"));
+        usage.record("psql", &feature_set("new"));
+        let snapshot = usage.drain();
+        assert_eq!(snapshot.counts.len(), MAX_FEATURE_SETS);
+        assert_eq!(snapshot.counts[&("psql", "fn:0".to_string())], 2);
+        assert_eq!(snapshot.overflow, 1, "only unseen sets overflow");
     }
 }
