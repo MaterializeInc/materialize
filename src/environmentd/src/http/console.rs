@@ -20,7 +20,7 @@ use axum::response::{IntoResponse, Response};
 use http::header::{CONTENT_TYPE, COOKIE, HOST, LOCATION, ORIGIN, SET_COOKIE};
 use http::{HeaderMap, HeaderValue, Method};
 use hyper::Uri;
-use hyper_tls::HttpsConnector;
+use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
@@ -64,7 +64,7 @@ impl ConsoleProxyConfig {
             .ok()
             .and_then(|uri| uri.host().map(|host| host.to_string()));
         Self {
-            client: Client::builder(TokioExecutor::new()).build(HttpsConnector::new()),
+            client: Client::builder(TokioExecutor::new()).build(https_connector()),
             url,
             route_prefix,
             preview_host_suffix,
@@ -95,6 +95,18 @@ const PREVIEW_BUILD_LABEL_PREFIX: &str = "console-git-";
 /// A valid preview build label is a DNS label (1-63 characters of lowercase
 /// ASCII alphanumerics and hyphens, not ending with a hyphen) starting with
 /// [`PREVIEW_BUILD_LABEL_PREFIX`].
+fn https_connector() -> HttpsConnector<HttpConnector> {
+    // NOTE: Panics when the platform trust store has no certificates, which
+    // every image we ship includes.
+    hyper_rustls::HttpsConnectorBuilder::new()
+        .with_provider_and_native_roots(rustls::crypto::aws_lc_rs::default_provider())
+        .expect("loading native root certificates")
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build()
+}
+
 fn is_valid_preview_build_label(label: &str) -> bool {
     label.len() <= 63
         && label.starts_with(PREVIEW_BUILD_LABEL_PREFIX)
