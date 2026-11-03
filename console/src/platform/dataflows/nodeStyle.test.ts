@@ -13,6 +13,7 @@ import {
   formatCount,
   formatSkew,
   hashString,
+  heatColorFor,
   hexToRgba,
   lirGroupColor,
   nodeFillColor,
@@ -224,6 +225,34 @@ describe("textColorFor", () => {
   it("picks dark text on a light background", () => {
     // colors.lineGraph's purple[200]
     expect(textColorFor("#C8B5FF")).toEqual("#111");
+  });
+});
+
+describe("heatColorFor", () => {
+  // WCAG contrast of the better of black and white text on a hex background.
+  const bestContrast = (hex: string) => {
+    const channel = (i: number) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    const l = 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+    return Math.max((l + 0.05) / 0.05, 1.05 / (l + 0.05));
+  };
+
+  it.each(["light", "dark"] as const)(
+    "%s ramp keeps text readable on every step",
+    (mode) => {
+      const heat = heatColorFor(mode);
+      for (let i = 0; i <= 20; i++) {
+        const color = heat(i / 20);
+        expect(color).toMatch(/^#[0-9a-f]{6}$/);
+        expect(bestContrast(color)).toBeGreaterThanOrEqual(4.5);
+      }
+    },
+  );
+
+  it("differs per theme", () => {
+    expect(heatColorFor("light")(1)).not.toEqual(heatColorFor("dark")(1));
   });
 });
 

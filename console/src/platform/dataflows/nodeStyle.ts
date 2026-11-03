@@ -7,10 +7,30 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { rgb } from "d3";
+import { interpolateInferno, interpolateViridis } from "d3-scale-chromatic";
+
 import colors from "~/theme/colors";
 import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
 import type { LirGroupNode, PortPeer, VisibleNode } from "./dataflowGraph";
+
+// Heat grows with distance from the canvas, so the hot end always stands out
+// against the background: dark on the light canvas, bright on the dark one.
+// Light mode runs viridis from yellow to dark purple. Dark mode runs inferno
+// from [0.2, 0.95] so the cold end is visibly lighter than the canvas yet the
+// hot end stays short of the white-yellow clipping at 1. Both ramps keep
+// black or white text at a contrast of at least 4.5 on every step
+// (textColorFor picks the better of the two). Returns "#RRGGBB" because
+// textColorFor and hexToRgba parse hex, not d3's "rgb(...)" strings.
+export const heatColorFor =
+  (colorMode: "light" | "dark") =>
+  (t: number): string =>
+    rgb(
+      colorMode === "dark"
+        ? interpolateInferno(0.2 + 0.75 * t)
+        : interpolateViridis(0.95 - 0.9 * t),
+    ).formatHex();
 
 // One opacity for every dimmed canvas element, so a node and the edges that
 // touch it fade together instead of at different strengths.

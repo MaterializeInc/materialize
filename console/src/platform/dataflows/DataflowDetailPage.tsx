@@ -7,8 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, Button, HStack, Spinner, Text, VStack } from "@chakra-ui/react";
-import { interpolateYlOrRd } from "d3-scale-chromatic";
+import {
+  Box,
+  Button,
+  HStack,
+  Spinner,
+  Text,
+  useTheme,
+  VStack,
+} from "@chakra-ui/react";
 import React from "react";
 import {
   Link,
@@ -31,6 +38,7 @@ import { useSelectedReplica } from "~/platform/clusters/ClusterPage/useSelectedR
 import { absoluteClusterPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import { useRegionSlug } from "~/store/environments";
+import { MaterializeTheme } from "~/theme";
 
 import { DataflowBreadcrumbs } from "./DataflowBreadcrumbs";
 import {
@@ -55,13 +63,13 @@ import { DataflowGraphView } from "./DataflowGraphView";
 import { DataflowToolbar } from "./DataflowToolbar";
 import { LirPanel } from "./LirPanel";
 import { NodeDetailPanel, type Selection } from "./NodeDetailPanel";
-import { hashString } from "./nodeStyle";
+import { hashString, heatColorFor } from "./nodeStyle";
 import { UsagePrivilegeAlert } from "./UsagePrivilegeAlert";
 
-// Injected into decorateGraph so the pure graph module stays d3-free.
-const heatColor = (t: number) => interpolateYlOrRd(0.15 + 0.85 * t);
-
 const DataflowDetailPage = () => {
+  const { colorMode } = useTheme<MaterializeTheme>();
+  // Injected into decorateGraph so the pure graph module stays d3-free.
+  const heatColor = React.useMemo(() => heatColorFor(colorMode), [colorMode]);
   const { clusterId, dataflowId } = useParams();
   const navigate = useNavigate();
   const regionSlug = useRegionSlug();
@@ -616,7 +624,15 @@ const DataflowDetailPage = () => {
       }
     }
     return d;
-  }, [data, focusedScope, visibleGraph, filters, lirHighlight, expandedScopes]);
+  }, [
+    data,
+    focusedScope,
+    visibleGraph,
+    filters,
+    heatColor,
+    lirHighlight,
+    expandedScopes,
+  ]);
 
   React.useEffect(() => {
     setMatchIndex(0);
@@ -771,7 +787,7 @@ const DataflowDetailPage = () => {
                     width="80px"
                     height="10px"
                     borderRadius="sm"
-                    background={`linear-gradient(to right, ${heatColor(0)}, ${heatColor(0.5)}, ${heatColor(1)})`}
+                    background={`linear-gradient(to right, ${[0, 0.25, 0.5, 0.75, 1].map(heatColor).join(", ")})`}
                   />
                   <Text fontSize="xs" color="foreground.secondary">
                     high

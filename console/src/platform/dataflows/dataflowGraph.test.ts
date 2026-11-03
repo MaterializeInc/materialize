@@ -1178,17 +1178,29 @@ describe("decorateGraph", () => {
     expect(d.hiddenEdgeIds.size).toBe(0); // all fixture edges have messages
   });
 
-  it("heatmap colors by transitive metric and dims below threshold", () => {
+  it("heatmap scales over operators only and clamps a region to the hot end", () => {
+    // Elapsed time is inclusive: the region (13n) outweighs its Join (7n),
+    // so scaling over regions too would put every operator below 0.54.
+    const structure = buildDataflowStructure(OPS, CHANNELS, [], []);
+    const expanded = deriveVisibleGraph(
+      structure,
+      structure.root,
+      new Set([regionId]),
+    );
     const d = decorateGraph(
-      root,
+      expanded,
       { ...DEFAULT_FILTERS, heatmap: "elapsed", heatmapThreshold: 0.5 },
       heat,
       null,
       1,
     );
-    // max transitive elapsed among visible non-ports is the region (13n)
     expect(d.nodeColors.get(regionId)).toEqual("heat(1.00)");
-    expect(d.dimmedNodeIds.has(nodeIdOf([5, 2]))).toBe(true); // 2/13 < 0.5
+    expect(d.nodeColors.get(nodeIdOf([5, 1, 1]))).toEqual("heat(1.00)"); // Join, 7n
+    expect(d.nodeColors.get(nodeIdOf([5, 2]))).toEqual(
+      `heat(${(2 / 7).toFixed(2)})`,
+    );
+    expect(d.dimmedNodeIds.has(nodeIdOf([5, 2]))).toBe(true);
+    expect(d.dimmedNodeIds.has(nodeIdOf([5, 1, 1]))).toBe(false);
   });
 
   it("heatmap with all-zero metric sets no colors", () => {

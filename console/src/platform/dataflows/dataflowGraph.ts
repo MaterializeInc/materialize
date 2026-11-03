@@ -1280,10 +1280,16 @@ export function decorateGraph(
         }
       }
     } else {
-      const max = candidates.reduce((m, n) => Math.max(m, metric(n)), 0);
+      // A region's transitive metric includes its children, so it is at
+      // least as large as any operator inside it. Letting regions set the
+      // scale would pin every leaf operator near the cold end, so the scale
+      // comes from operators only and a region clamps to the hot end.
+      const max = candidates
+        .filter((n) => n.kind === "operator")
+        .reduce((m, n) => Math.max(m, metric(n)), 0);
       if (max > 0) {
         for (const n of candidates) {
-          const t = metric(n) / max;
+          const t = Math.min(1, metric(n) / max);
           d.nodeColors.set(n.id, heatColor(t));
           if (t < filters.heatmapThreshold) d.dimmedNodeIds.add(n.id);
         }
