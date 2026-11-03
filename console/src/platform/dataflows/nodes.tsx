@@ -17,17 +17,25 @@ import { MaterializeTheme } from "~/theme";
 import {
   type FlowGroupData,
   type FlowNodeData,
-  HIGHLIGHT_COLORS,
   statLines,
   textColorFor,
 } from "./nodeStyle";
 
 // Selection (clicked) wins over the active search match when both apply to
-// the same node; both are visually distinct from ordinary dimming.
-const highlightShadow = (data: FlowNodeData): string | undefined => {
-  if (data.selected) return `0 0 0 2px ${HIGHLIGHT_COLORS.selected}`;
-  if (data.activeMatch) return `0 0 0 2px ${HIGHLIGHT_COLORS.activeMatch}`;
-  return undefined;
+// the same node; both are visually distinct from ordinary dimming. The ring
+// is double: the inner band in the canvas color separates the outer band
+// from any node fill, so the ring stays visible on a fill of the same hue.
+const highlightShadow = (
+  data: FlowNodeData,
+  colors: MaterializeTheme["colors"],
+): string | undefined => {
+  const ring = data.selected
+    ? colors.accent.brightPurple
+    : data.activeMatch
+      ? colors.accent.orange
+      : undefined;
+  if (!ring) return undefined;
+  return `0 0 0 2px ${colors.background.primary}, 0 0 0 4px ${ring}`;
 };
 
 // A subtle resting shadow (matching the app's other node-graph view) so
@@ -65,7 +73,7 @@ const CardShell = ({
       background={filled ? data.color : colors.background.secondary}
       color={filled ? textColorFor(data.color) : colors.foreground.primary}
       opacity={data.dimmed ? 0.25 : 1}
-      boxShadow={highlightShadow(data) ?? RESTING_SHADOW}
+      boxShadow={highlightShadow(data, colors) ?? RESTING_SHADOW}
       // Every card is at least selectable, so every card says so. The
       // controls inside carry the distinctions.
       cursor="pointer"
@@ -271,7 +279,7 @@ export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
       alignItems="center"
       background={colors.background.tertiary}
       opacity={data.dimmed ? 0.25 : 1}
-      boxShadow={highlightShadow(data)}
+      boxShadow={highlightShadow(data, colors)}
       cursor="pointer"
     >
       {peers.length === 0 ? (

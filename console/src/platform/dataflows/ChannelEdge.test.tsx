@@ -16,7 +16,6 @@ import { lightTheme } from "~/theme";
 
 import { ChannelEdge, type ChannelEdgeData } from "./ChannelEdge";
 import type { PortPeer } from "./dataflowGraph";
-import { HIGHLIGHT_COLORS } from "./nodeStyle";
 
 const BASE_POSITION = {
   id: "e1",
@@ -103,13 +102,17 @@ describe("ChannelEdge", () => {
   // gets a lighter highlight than the directly selected edge does.
   it("a connected edge gets the lighter highlight", () => {
     const path = renderEdge({ ...DATA, connected: true });
-    expect(path.style.stroke).toBe(cssColor(HIGHLIGHT_COLORS.connected));
+    expect(path.style.stroke).toBe(
+      cssColor(lightTheme.colors.dataflow.connectedEdge),
+    );
     expect(path.style.strokeWidth).toBe("1.75");
   });
 
   it("the directly selected edge gets the stronger highlight, not the connected one", () => {
     const path = renderEdge({ ...DATA, selected: true, connected: true });
-    expect(path.style.stroke).toBe(cssColor(HIGHLIGHT_COLORS.selected));
+    expect(path.style.stroke).toBe(
+      cssColor(lightTheme.colors.accent.brightPurple),
+    );
     expect(path.style.strokeWidth).toBe("2.5");
   });
 

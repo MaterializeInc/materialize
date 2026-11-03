@@ -79,6 +79,13 @@ export interface BasePalette {
     warn: string;
   };
   lineGraph: string[];
+  dataflow: {
+    // Edge stroke for an edge that touches the selected node. The selected
+    // node or edge itself uses `accent.brightPurple`, so this is its weaker
+    // sibling: lighter than the selection in light mode, darker in dark
+    // mode, i.e. always nearer the canvas background.
+    connectedEdge: string;
+  };
 }
 
 export type ComponentOverrides = {

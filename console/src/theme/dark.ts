@@ -67,6 +67,9 @@ const base: BasePalette = {
     colors.yellow[700],
     colors.green[500],
   ],
+  dataflow: {
+    connectedEdge: colors.purple[400],
+  },
 };
 
 const components: ComponentOverrides = {

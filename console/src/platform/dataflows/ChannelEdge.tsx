@@ -19,11 +19,7 @@ import React from "react";
 import { MaterializeTheme } from "~/theme";
 
 import type { PortPeer } from "./dataflowGraph";
-import {
-  formatCount,
-  HIGHLIGHT_COLORS,
-  prettyPrintChannelType,
-} from "./nodeStyle";
+import { formatCount, prettyPrintChannelType } from "./nodeStyle";
 
 export type ChannelEdgeData = {
   messagesSent: bigint;
@@ -96,9 +92,9 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
           strokeDasharray: idle ? "6 4" : undefined,
           opacity: dimmed ? 0.15 : 1,
           stroke: selected
-            ? HIGHLIGHT_COLORS.selected
+            ? colors.accent.brightPurple
             : connected
-              ? HIGHLIGHT_COLORS.connected
+              ? colors.dataflow.connectedEdge
               : undefined,
           strokeWidth: selected ? 2.5 : connected ? 1.75 : undefined,
         }}

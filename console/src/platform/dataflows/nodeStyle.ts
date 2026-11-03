@@ -12,21 +12,6 @@ import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
 import type { LirGroupNode, PortPeer, VisibleNode } from "./dataflowGraph";
 
-// Selection/match highlights read the same in light and dark mode (a bright
-// ring reads fine against either canvas background), so these pin to the
-// raw swatch module instead of a light/dark-aware theme token, only to keep
-// them from drifting out of sync with the rest of the palette.
-export const HIGHLIGHT_COLORS = {
-  selected: colors.blue[500],
-  activeMatch: colors.orange[400],
-  // Same hue as `selected`, for an edge that merely touches the selected
-  // node rather than being the clicked thing itself; ChannelEdge pairs this
-  // with a thinner stroke than `selected` gets, so the two read as a clear
-  // emphasis/de-emphasis pair rather than two unrelated colors. No exact
-  // swatch matches this shade; chosen for the pairing, not a token.
-  connected: "#8fd2f5",
-};
-
 /** Deterministic 32-bit string hash, for cycling a fixed color palette. */
 export function hashString(s: string): number {
   let h = 0;
