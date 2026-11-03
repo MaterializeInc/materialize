@@ -763,8 +763,7 @@ pub(crate) async fn initialize(
         .get_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string())
         .is_none()
     {
-        let mut nonce = [0u8; 24];
-        openssl::rand::rand_bytes(&mut nonce).expect("random number generation failed");
+        let nonce: [u8; 24] = rand::random();
         tx.set_setting(
             MOCK_AUTHENTICATION_NONCE_KEY.to_string(),
             Some(BASE64_STANDARD.encode(nonce)),
