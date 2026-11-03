@@ -1166,6 +1166,15 @@
       "dyncfg": true
     },
     {
+      "name": "enable_frontend_transaction_completion",
+      "typeName": "boolean",
+      "default": "on",
+      "description": "Whether Complete session-owned read-only transactions without a coordinator round trip. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
       "name": "enable_hydration_burst",
       "typeName": "boolean",
       "default": "on",
