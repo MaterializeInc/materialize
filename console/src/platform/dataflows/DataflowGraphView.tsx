@@ -162,6 +162,13 @@ const ViewportGuard = ({
   return null;
 };
 
+// An expanded region and an LIR group render as an outline around their
+// members, so the minimap must not paint them as a solid slab that hides the
+// members drawn over it.
+const isOutlineOnCanvas = (node: Node): boolean =>
+  node.type === "lirGroup" ||
+  (node.data as { expanded?: boolean }).expanded === true;
+
 export const DataflowGraphView = ({
   visible: rawVisible,
   focusedScope,
@@ -496,14 +503,22 @@ export const DataflowGraphView = ({
           pannable
           zoomable
           nodeColor={(node) =>
-            (node.data as { color?: string }).color ??
-            colors.background.tertiary
+            isOutlineOnCanvas(node)
+              ? colors.background.tertiary
+              : ((node.data as { color?: string }).color ??
+                colors.background.tertiary)
           }
           // Node fills are light (operator colors and the cold end of the
           // heatmap gradient both skew pale) in light mode, and dark in
           // dark mode, so without an explicit stroke a scope of same-toned
-          // nodes can render as an almost-blank minimap.
-          nodeStrokeColor={colors.border.secondary}
+          // nodes can render as an almost-blank minimap. A container drawn
+          // as an outline on the canvas keeps its own color as the stroke.
+          nodeStrokeColor={(node) =>
+            isOutlineOnCanvas(node)
+              ? ((node.data as { color?: string }).color ??
+                colors.border.secondary)
+              : colors.border.secondary
+          }
         />
         <FitHelper fitRef={fitRef} />
         <ViewportGuard
