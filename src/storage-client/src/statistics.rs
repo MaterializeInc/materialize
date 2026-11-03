@@ -505,8 +505,8 @@ pub struct SourceStatisticsUpdate {
     pub snapshot_records_staged: Gauge<ResettingNullableTotal>,
 
     pub snapshot_committed: Gauge<Boolean>,
-    // `offset_known` is enriched with a counter in `unpack` and `with_metrics` that is
-    // bumped whenever it regresses. This is distinct from `offset_committed`, which
+    // `offset_known` is enriched with a counter in `unpack` and `ControllerSourceStatistics::new`
+    // that is bumped whenever it regresses. This is distinct from `offset_committed`, which
     // `error!` logs.
     //
     // `offset_committed` is entirely in our control: it is calculated from source frontiers
@@ -646,10 +646,16 @@ impl SourceStatisticsUpdate {
         updates_committed.incorporate(other.updates_committed, "updates_committed");
     }
 
-    /// Enrich statistics that use prometheus metrics.
-    pub fn with_metrics(mut self, metrics: &crate::metrics::StorageControllerMetrics) -> Self {
-        self.offset_known.0.regressions = Some(metrics.regressed_offset_known(self.id));
-        self
+    /// Incorporates a newer record from the same worker. Unlike [`Self::incorporate`], a lower
+    /// `offset_known` replaces the held value: the worker read it from upstream, and an upstream
+    /// restore or failover can legitimately move it backwards. The controller counts that
+    /// regression, see [`ControllerSourceStatistics::new`].
+    pub fn incorporate_same_worker(&mut self, mut other: SourceStatisticsUpdate) {
+        let offset_known = std::mem::take(&mut other.offset_known);
+        self.incorporate(other);
+        if offset_known.0.total.is_some() {
+            self.offset_known.0.total = offset_known.0.total;
+        }
     }
 }
 
@@ -712,7 +718,7 @@ impl PackableStats for SourceStatisticsUpdate {
             offset_committed: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
         };
 
-        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
+        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id, None));
         (s.id, None, s)
     }
 }
@@ -761,7 +767,17 @@ pub struct ControllerSourceStatistics {
 }
 
 impl ControllerSourceStatistics {
-    pub fn new(id: GlobalId, replica_id: Option<ReplicaId>) -> Self {
+    pub fn new(
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> Self {
+        let mut stats = Self::zero(id, replica_id);
+        stats.offset_known.0.regressions = Some(metrics.regressed_offset_known(id, replica_id));
+        stats
+    }
+
+    fn zero(id: GlobalId, replica_id: Option<ReplicaId>) -> Self {
         Self {
             id,
             replica_id,
@@ -906,7 +922,7 @@ impl PackableStats for ControllerSourceStatistics {
             needs_zero_initialization: false,
         };
 
-        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
+        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id, replica_id));
         (s.id, replica_id, s)
     }
 }
@@ -927,7 +943,7 @@ impl ZeroInitializedStats for ControllerSourceStatistics {
     }
 
     fn zero_stat(&self) -> Self {
-        ControllerSourceStatistics::new(self.id, self.replica_id)
+        ControllerSourceStatistics::zero(self.id, self.replica_id)
     }
 }
 
@@ -1181,5 +1197,45 @@ impl WebhookStatistics {
             offset_known: Gauge::gauge(None::<u64>),
             offset_committed: Gauge::gauge(None::<u64>),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_cluster_client::metrics::ControllerMetrics;
+    use mz_ore::metrics::MetricsRegistry;
+
+    use super::*;
+
+    const ID: GlobalId = GlobalId::User(1);
+
+    fn update(offset_known: u64) -> SourceStatisticsUpdate {
+        let mut update = SourceStatisticsUpdate::new(ID);
+        update.offset_known = Gauge::gauge(Some(offset_known));
+        update
+    }
+
+    #[mz_ore::test]
+    fn offset_known_regression_is_counted() {
+        let registry = MetricsRegistry::new();
+        let metrics = crate::metrics::StorageControllerMetrics::new(
+            &registry,
+            ControllerMetrics::new(&registry),
+        );
+
+        let mut stats = ControllerSourceStatistics::new(ID, None, &metrics);
+        stats.incorporate(update(10));
+        stats.incorporate(update(5));
+
+        assert_eq!(stats.offset_known.0.total, Some(10));
+        assert_eq!(metrics.regressed_offset_known(ID, None).get(), 1);
+    }
+
+    #[mz_ore::test]
+    fn same_worker_offset_known_regression_is_taken() {
+        let mut stats = update(10);
+        stats.incorporate_same_worker(update(5));
+
+        assert_eq!(stats.offset_known.0.total, Some(5));
     }
 }

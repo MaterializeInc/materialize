@@ -630,12 +630,13 @@ where
                     introspection_config.statistics_interval.clone(),
                     introspection_config.statistics_interval_receiver.clone(),
                     introspection_config.statistics_retention_duration,
-                    introspection_config.metrics,
+                    introspection_config.metrics.clone(),
                 );
                 let web_token = statistics::spawn_webhook_statistics_scraper(
                     introspection_config.source_statistics,
                     introspection_config.statistics_interval,
                     introspection_config.statistics_interval_receiver,
+                    introspection_config.metrics,
                 );
 
                 // Make sure these are dropped when the controller is
