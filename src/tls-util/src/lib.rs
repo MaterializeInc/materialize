@@ -9,6 +9,12 @@
 
 //! A tiny utility library for making TLS connectors.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use anyhow::anyhow;
 use mz_ore::secure::{Zeroize, Zeroizing};
 use openssl::pkcs12::Pkcs12;
 use openssl::pkey::PKey;
@@ -16,7 +22,21 @@ use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::stack::Stack;
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
+use rustls::client::WebPkiServerVerifier;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::crypto::WebPkiSupportedAlgorithms;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, InvalidDnsNameError, PrivateKeyDer, ServerName, UnixTime};
+use rustls::server::ParsedCertificate;
+use rustls::{CertificateError, DigitallySignedStruct, SignatureScheme};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::config::SslMode;
+use tokio_postgres::tls::ChannelBinding;
+use tokio_rustls::TlsConnector;
+use x509_cert::Certificate;
+use x509_cert::der::Decode;
+use x509_cert::ext::pkix::SubjectAltName;
+use x509_cert::ext::pkix::name::GeneralName;
 
 macro_rules! bail_generic {
     ($err:expr $(,)?) => {
@@ -56,7 +76,7 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Tls
         },
         SslMode::VerifyCa => (SslVerifyMode::PEER, false),
         SslMode::VerifyFull => (SslVerifyMode::PEER, true),
-        _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
+        mode => bail_generic!(format!("unexpected sslmode {mode:?}")),
     };
 
     // Configure peer verification
@@ -94,6 +114,352 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Tls
     }
 
     Ok(tls_connector)
+}
+
+/// Creates a rustls TLS connector for the given
+/// [`Config`](tokio_postgres::Config), verifying the server as [`make_tls`]
+/// does for each `sslmode`.
+///
+/// The connector always uses the aws-lc-rs provider, independent of any
+/// process-default rustls provider.
+pub fn make_tls_rustls(config: &tokio_postgres::Config) -> Result<MakeRustlsConnect, TlsError> {
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+
+    // See `make_tls` for how each mode maps to peer and hostname verification.
+    let (verify_peer, verify_hostname) = match config.get_ssl_mode() {
+        SslMode::Disable | SslMode::Prefer => (false, false),
+        SslMode::Require => (config.get_ssl_root_cert().is_some(), false),
+        SslMode::VerifyCa => (true, false),
+        SslMode::VerifyFull => (true, true),
+        mode => bail_generic!(format!("unexpected sslmode {mode:?}")),
+    };
+
+    let verifier: Arc<dyn ServerCertVerifier> = if verify_peer {
+        let mut root_store = rustls::RootCertStore::empty();
+        let mut pinned = Vec::new();
+        if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
+            for cert in CertificateDer::pem_slice_iter(ssl_root_cert) {
+                let cert = cert.map_err(|e| anyhow!("failed to parse sslrootcert: {e}"))?;
+                root_store
+                    .add(cert.clone())
+                    .map_err(|e| anyhow!("invalid sslrootcert: {e}"))?;
+                pinned.push(cert);
+            }
+        } else if verify_hostname {
+            // Without an sslrootcert, verify-full trusts the platform roots, as
+            // libpq's `sslrootcert=system` does. Never combine them with a
+            // pinned CA or a mode that skips the hostname: any publicly issued
+            // certificate would then pass.
+            let native = rustls_native_certs::load_native_certs();
+            for error in &native.errors {
+                tracing::warn!("failed to load native root certs: {error}");
+            }
+            root_store.add_parsable_certificates(native.certs);
+        }
+        if root_store.is_empty() {
+            bail_generic!(format!(
+                "sslmode {:?} requires sslrootcert or platform root certificates",
+                config.get_ssl_mode()
+            ));
+        }
+        let webpki = WebPkiServerVerifier::builder_with_provider(
+            Arc::new(root_store),
+            Arc::clone(&provider),
+        )
+        .build()
+        .map_err(|e| anyhow!("failed to build certificate verifier: {e}"))?;
+        Arc::new(PostgresServerVerifier {
+            webpki,
+            pinned,
+            verify_hostname,
+        })
+    } else {
+        Arc::new(NoVerifier(provider.signature_verification_algorithms))
+    };
+
+    let builder = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| anyhow!("failed to configure TLS protocol versions: {e}"))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier);
+
+    let tls_config = match (config.get_ssl_cert(), config.get_ssl_key()) {
+        (Some(ssl_cert), Some(ssl_key)) => {
+            let certs = CertificateDer::pem_slice_iter(ssl_cert)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| anyhow!("failed to parse sslcert: {e}"))?;
+            let key = PrivateKeyDer::from_pem_slice(ssl_key)
+                .map_err(|e| anyhow!("failed to parse sslkey: {e}"))?;
+            builder
+                .with_client_auth_cert(certs, key)
+                .map_err(|e| anyhow!("failed to configure client certificate: {e}"))?
+        }
+        (None, Some(_)) => {
+            bail_generic!("must provide both sslcert and sslkey, but only provided sslkey")
+        }
+        (Some(_), None) => {
+            bail_generic!("must provide both sslcert and sslkey, but only provided sslcert")
+        }
+        (None, None) => builder.with_no_client_auth(),
+    };
+
+    Ok(MakeRustlsConnect {
+        config: Arc::new(tls_config),
+    })
+}
+
+/// A [`MakeTlsConnect`](tokio_postgres::tls::MakeTlsConnect) backed by rustls.
+#[derive(Clone)]
+pub struct MakeRustlsConnect {
+    config: Arc<rustls::ClientConfig>,
+}
+
+impl<S> tokio_postgres::tls::MakeTlsConnect<S> for MakeRustlsConnect
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    type Stream = RustlsTlsStream<S>;
+    type TlsConnect = RustlsConnect;
+    type Error = InvalidDnsNameError;
+
+    fn make_tls_connect(&mut self, domain: &str) -> Result<RustlsConnect, InvalidDnsNameError> {
+        // tokio-postgres passes the socket path, or an empty string, for Unix
+        // socket connections. TLS is never negotiated over those, so any valid
+        // name will do.
+        let server_name = if domain.is_empty() || domain.starts_with('/') {
+            ServerName::try_from("localhost").expect("valid DNS name")
+        } else {
+            ServerName::try_from(domain.to_owned())?
+        };
+        Ok(RustlsConnect {
+            connector: TlsConnector::from(Arc::clone(&self.config)),
+            server_name,
+        })
+    }
+}
+
+/// A [`TlsConnect`](tokio_postgres::tls::TlsConnect) for one server, created
+/// by [`MakeRustlsConnect`].
+pub struct RustlsConnect {
+    connector: TlsConnector,
+    server_name: ServerName<'static>,
+}
+
+impl<S> tokio_postgres::tls::TlsConnect<S> for RustlsConnect
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    type Stream = RustlsTlsStream<S>;
+    type Error = std::io::Error;
+    type Future = Pin<Box<dyn Future<Output = std::io::Result<RustlsTlsStream<S>>> + Send>>;
+
+    fn connect(self, stream: S) -> Self::Future {
+        Box::pin(async move {
+            let stream = self.connector.connect(self.server_name, stream).await?;
+            Ok(RustlsTlsStream(stream))
+        })
+    }
+}
+
+/// A rustls client stream that implements
+/// [`TlsStream`](tokio_postgres::tls::TlsStream).
+pub struct RustlsTlsStream<S>(tokio_rustls::client::TlsStream<S>);
+
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for RustlsTlsStream<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RustlsTlsStream<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> tokio_postgres::tls::TlsStream for RustlsTlsStream<S> {
+    fn channel_binding(&self) -> ChannelBinding {
+        ChannelBinding::none()
+    }
+}
+
+/// Verifies the server's certificate chain, and its hostname when
+/// `verify_hostname` is set, accepting the certificate shapes that the openssl
+/// connector accepts and webpki rejects.
+#[derive(Debug)]
+struct PostgresServerVerifier {
+    webpki: Arc<WebPkiServerVerifier>,
+    /// The sslrootcert entries. A server presenting one of these is trusted
+    /// directly, which covers self-signed `CA:TRUE` server certificates.
+    pinned: Vec<CertificateDer<'static>>,
+    verify_hostname: bool,
+}
+
+impl ServerCertVerifier for PostgresServerVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let result = if self.pinned.iter().any(|c| c == end_entity) {
+            check_validity(end_entity, now)?;
+            if !self.verify_hostname {
+                return Ok(ServerCertVerified::assertion());
+            }
+            let cert = ParsedCertificate::try_from(end_entity)?;
+            rustls::client::verify_server_name(&cert, server_name)
+                .map(|()| ServerCertVerified::assertion())
+        } else {
+            self.webpki.verify_server_cert(
+                end_entity,
+                intermediates,
+                server_name,
+                ocsp_response,
+                now,
+            )
+        };
+        // NOTE: `WebPkiServerVerifier` checks the name only after the chain
+        // has validated, so a name error implies an otherwise valid chain.
+        match result {
+            Err(
+                e @ rustls::Error::InvalidCertificate(
+                    CertificateError::NotValidForName
+                    | CertificateError::NotValidForNameContext { .. },
+                ),
+            ) => {
+                if !self.verify_hostname || common_name_matches(end_entity, server_name) {
+                    Ok(ServerCertVerified::assertion())
+                } else {
+                    Err(e)
+                }
+            }
+            result => result,
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.webpki.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.webpki.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.webpki.supported_verify_schemes()
+    }
+}
+
+/// Checks the validity period of a certificate that bypasses webpki.
+fn check_validity(cert: &CertificateDer<'_>, now: UnixTime) -> Result<(), rustls::Error> {
+    let cert = Certificate::from_der(cert)
+        .map_err(|_| rustls::Error::InvalidCertificate(CertificateError::BadEncoding))?;
+    let validity = cert.tbs_certificate().validity();
+    let now = now.as_secs();
+    if now < validity.not_before.to_unix_duration().as_secs() {
+        return Err(rustls::Error::InvalidCertificate(
+            CertificateError::NotValidYet,
+        ));
+    }
+    if now > validity.not_after.to_unix_duration().as_secs() {
+        return Err(rustls::Error::InvalidCertificate(CertificateError::Expired));
+    }
+    Ok(())
+}
+
+/// Whether `server_name` exactly matches the certificate's subject CN, which
+/// OpenSSL checks when the certificate has no DNS subjectAltName. Wildcard CNs
+/// are not matched.
+fn common_name_matches(cert: &CertificateDer<'_>, server_name: &ServerName<'_>) -> bool {
+    let ServerName::DnsName(name) = server_name else {
+        return false;
+    };
+    let Ok(cert) = Certificate::from_der(cert) else {
+        return false;
+    };
+    let tbs = cert.tbs_certificate();
+    let has_dns_san = match tbs.get_extension::<SubjectAltName>() {
+        Ok(Some((_, san))) => san.0.iter().any(|n| matches!(n, GeneralName::DnsName(_))),
+        Ok(None) => false,
+        Err(_) => return false,
+    };
+    if has_dns_san {
+        return false;
+    }
+    match tbs.subject().common_name() {
+        Ok(Some(cn)) => cn.value().eq_ignore_ascii_case(name.as_ref()),
+        _ => false,
+    }
+}
+
+/// Accepts any server certificate, as openssl does with
+/// `SslVerifyMode::NONE`. Handshake signatures are still checked against the
+/// presented certificate's key.
+#[derive(Debug)]
+struct NoVerifier(WebPkiSupportedAlgorithms);
+
+impl ServerCertVerifier for NoVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.supported_schemes()
+    }
 }
 
 pub struct Pkcs12Archive {
@@ -181,7 +547,7 @@ mod tests {
     use openssl::ssl::SslAcceptor;
     use openssl::x509::X509NameBuilder;
     use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
-    use tokio::io::{AsyncRead, AsyncReadExt};
+    use tokio::io::AsyncReadExt;
     use tokio::net::TcpStream;
     use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
 
@@ -201,10 +567,15 @@ mod tests {
 
     impl TestCa {
         fn new() -> TestCa {
+            TestCa::with_cn("mz-tls-util test CA")
+        }
+
+        /// A self-signed `CA:TRUE` certificate with no subjectAltName, the
+        /// shape of PostgreSQL's documented self-signed server certificate.
+        fn with_cn(cn: &str) -> TestCa {
             let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
             let mut name = X509NameBuilder::new().unwrap();
-            name.append_entry_by_text("CN", "mz-tls-util test CA")
-                .unwrap();
+            name.append_entry_by_text("CN", cn).unwrap();
             let name = name.build();
             let mut builder = X509::builder().unwrap();
             builder.set_version(2).unwrap();
@@ -284,11 +655,12 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                // A failed handshake drops the connection, which the client
-                // observes as a read error in `assert_server_ok`.
-                if let Ok(mut tls) = acceptor.accept(stream.unwrap()) {
-                    tls.write_all(b"ok").unwrap();
+            // Server-side errors are ignored so one bad connection can't kill
+            // the server thread. The client observes any failure as a missing
+            // "ok" in `assert_server_ok`.
+            for stream in listener.incoming().flatten() {
+                if let Ok(mut tls) = acceptor.accept(stream) {
+                    let _ = tls.write_all(b"ok");
                     let _ = tls.shutdown();
                 }
             }
@@ -296,19 +668,36 @@ mod tests {
         addr
     }
 
-    /// Completes a TLS handshake for `host` via `make_tls`, returning the
-    /// established stream. Panics if certificate validation fails.
+    /// Connects to `addr` and performs a TLS handshake that verifies the
+    /// server as `host`.
+    async fn handshake<M: MakeTlsConnect<TcpStream>>(
+        mut make: M,
+        host: &str,
+        addr: SocketAddr,
+    ) -> Result<M::Stream, Box<dyn std::error::Error + Sync + Send>> {
+        let connect = make.make_tls_connect(host).map_err(Into::into)?;
+        let tcp = TcpStream::connect(addr).await?;
+        connect.connect(tcp).await.map_err(Into::into)
+    }
+
     async fn openssl_connect(
         config: &tokio_postgres::Config,
         host: &str,
         addr: SocketAddr,
     ) -> postgres_openssl::TlsStream<TcpStream> {
-        let mut make = make_tls(config).unwrap();
-        let connect = MakeTlsConnect::<TcpStream>::make_tls_connect(&mut make, host).unwrap();
-        let tcp = TcpStream::connect(addr).await.unwrap();
-        TlsConnect::<TcpStream>::connect(connect, tcp)
+        handshake(make_tls(config).unwrap(), host, addr)
             .await
-            .unwrap()
+            .expect("openssl handshake failed")
+    }
+
+    async fn rustls_connect(
+        config: &tokio_postgres::Config,
+        host: &str,
+        addr: SocketAddr,
+    ) -> RustlsTlsStream<TcpStream> {
+        handshake(make_tls_rustls(config).unwrap(), host, addr)
+            .await
+            .expect("rustls handshake failed")
     }
 
     async fn assert_server_ok<S: AsyncRead + Unpin>(mut tls: S) {
@@ -337,6 +726,7 @@ mod tests {
         config.ssl_mode(SslMode::VerifyFull);
 
         assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+        assert_server_ok(rustls_connect(&config, "localhost", addr).await).await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -355,6 +745,138 @@ mod tests {
         config.ssl_key(&client_key);
 
         assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+        assert_server_ok(rustls_connect(&config, "localhost", addr).await).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn ssl_modes_verify_the_same_as_openssl() {
+        let ca = TestCa::new();
+        let other_ca = TestCa::new();
+        let (server_cert, server_key) = ca.issue("server", Some("localhost"));
+        let addr = run_tls_server(&server_cert, &server_key, None);
+
+        // (sslmode, sslrootcert, host, expect success)
+        let cases = [
+            (SslMode::Prefer, None, "wrong.example", true),
+            (SslMode::Require, None, "wrong.example", true),
+            (SslMode::Require, Some(&ca), "wrong.example", true),
+            (SslMode::Require, Some(&other_ca), "localhost", false),
+            (SslMode::VerifyCa, Some(&ca), "wrong.example", true),
+            (SslMode::VerifyCa, Some(&other_ca), "localhost", false),
+            (SslMode::VerifyFull, Some(&ca), "localhost", true),
+            (SslMode::VerifyFull, Some(&ca), "wrong.example", false),
+        ];
+        assert_cases_match_openssl(addr, &cases).await;
+    }
+
+    /// Certificates made with PostgreSQL's documented `openssl` recipes: a
+    /// self-signed `CA:TRUE` certificate used as both server certificate and
+    /// sslrootcert, and a CA-issued leaf with only a CN.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn postgres_recipe_certs_verify_the_same_as_openssl() {
+        let self_signed = TestCa::with_cn("localhost");
+        let addr = run_tls_server(
+            &self_signed.cert.to_pem().unwrap(),
+            &self_signed.key.private_key_to_pem_pkcs8().unwrap(),
+            None,
+        );
+        let cases = [
+            (SslMode::Require, Some(&self_signed), "wrong.example", true),
+            (SslMode::VerifyCa, Some(&self_signed), "wrong.example", true),
+            (SslMode::VerifyFull, Some(&self_signed), "localhost", true),
+            (
+                SslMode::VerifyFull,
+                Some(&self_signed),
+                "wrong.example",
+                false,
+            ),
+        ];
+        assert_cases_match_openssl(addr, &cases).await;
+
+        let ca = TestCa::new();
+        let (server_cert, server_key) = ca.issue("localhost", None);
+        let addr = run_tls_server(&server_cert, &server_key, None);
+        let cases = [
+            (SslMode::VerifyCa, Some(&ca), "wrong.example", true),
+            (SslMode::VerifyFull, Some(&ca), "localhost", true),
+            (SslMode::VerifyFull, Some(&ca), "wrong.example", false),
+        ];
+        assert_cases_match_openssl(addr, &cases).await;
+    }
+
+    /// With an sslrootcert, roots from the default store must not be trusted,
+    /// or any publicly issued certificate would pass verify-ca. Only rustls is
+    /// checked: the openssl connector's default paths differ between
+    /// `cargo test` and the shipped binaries.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn sslrootcert_excludes_default_store() {
+        let public_ca = TestCa::new();
+        let pinned_ca = TestCa::new();
+        let (server_cert, server_key) = public_ca.issue("server", Some("localhost"));
+
+        let mut ca_file = tempfile::NamedTempFile::new().unwrap();
+        ca_file
+            .write_all(&public_ca.cert.to_pem().unwrap())
+            .unwrap();
+        // SAFETY: see `verify_full_trusts_default_store`.
+        unsafe { std::env::set_var("SSL_CERT_FILE", ca_file.path()) };
+
+        let addr = run_tls_server(&server_cert, &server_key, None);
+        for mode in [SslMode::Require, SslMode::VerifyCa, SslMode::VerifyFull] {
+            let mut config = tokio_postgres::Config::new();
+            config.ssl_mode(mode);
+            config.ssl_root_cert(&pinned_ca.cert.to_pem().unwrap());
+            let rustls = make_tls_rustls(&config).unwrap();
+            assert_handshake(rustls, "localhost", addr, false, &format!("{mode:?}")).await;
+        }
+
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyCa);
+        assert!(
+            make_tls_rustls(&config).is_err(),
+            "verify-ca without sslrootcert must not trust the default store"
+        );
+    }
+
+    /// Checks that each (sslmode, sslrootcert, host, expect success) case
+    /// against the server at `addr` gives the same result for both connectors.
+    async fn assert_cases_match_openssl(
+        addr: SocketAddr,
+        cases: &[(SslMode, Option<&TestCa>, &str, bool)],
+    ) {
+        for &(mode, root, host, expect_ok) in cases {
+            let mut config = tokio_postgres::Config::new();
+            config.ssl_mode(mode);
+            if let Some(root) = root {
+                config.ssl_root_cert(&root.cert.to_pem().unwrap());
+            }
+            let case = format!("{mode:?} root={} host={host}", root.is_some());
+            let openssl = make_tls(&config).unwrap();
+            assert_handshake(openssl, host, addr, expect_ok, &format!("openssl {case}")).await;
+            let rustls = make_tls_rustls(&config).unwrap();
+            assert_handshake(rustls, host, addr, expect_ok, &format!("rustls {case}")).await;
+        }
+    }
+
+    async fn assert_handshake<M: MakeTlsConnect<TcpStream>>(
+        make: M,
+        host: &str,
+        addr: SocketAddr,
+        expect_ok: bool,
+        case: &str,
+    ) {
+        match handshake(make, host, addr).await {
+            Ok(tls) => {
+                assert!(expect_ok, "{case}: handshake succeeded");
+                // Reading the server's reply also keeps the server from writing
+                // to a connection the client has already reset.
+                assert_server_ok(tls).await;
+            }
+            Err(e) => assert!(!expect_ok, "{case}: handshake failed: {e}"),
+        }
     }
 
     #[mz_ore::test]
