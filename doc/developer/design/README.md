@@ -126,6 +126,11 @@ your thinking and inform the writing process.
    of stakeholders. Note that we have a bot that automatically posts
    notifications about new design documents in #rnd-design-docs.
 
+A design document can carry a Lean 4 model that CI checks. Put the document
+in its own date-prefixed directory and the model's `.lean` files next to it.
+See [`misc/lean/README.md`](../../../misc/lean/README.md) for how the models
+are built.
+
 ### Iteration
 
 6. As you begin to get feedback on your document, address the comments

@@ -9,18 +9,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# mz-lake: copy the Lake project mounted at /src into /workspace and run
-# `lake` there with the given arguments.
+# mz-lake: copy the Lake project mounted at /src into /mz/misc/lean and run
+# `lake` there with the given arguments. Design doc models are read from
+# /mz/doc/developer/design, which mirrors the repository layout that
+# `lakefile.lean` expects.
 
 set -euo pipefail
 
-# Mounting the project over /workspace would hide /workspace/.lake, which
-# holds the dependency closure built into the image. The host's own .lake is
-# skipped for the same reason. The entries are copied one by one because
-# copying `.` itself makes a non-root user try to change the mode and mtime
-# of the root-owned /workspace, which fails.
+# Mounting the project over /mz/misc/lean would hide its .lake, which holds the
+# dependency closure built into the image. The host's own .lake is skipped for
+# the same reason. The entries are copied one by one because copying `.` itself
+# makes a non-root user try to change the mode and mtime of the root-owned
+# project directory, which fails.
 cd /src
-find . -mindepth 1 -maxdepth 1 ! -name .lake -exec cp -R -t /workspace {} +
+find . -mindepth 1 -maxdepth 1 ! -name .lake -exec cp -R -t /mz/misc/lean {} +
 
-cd /workspace
-exec lake "$@"
+cd /mz/misc/lean
+# The image build cached a configuration elaborated without any design doc
+# models. `-R` elaborates `lakefile.lean` again so it finds them.
+exec lake -R "$@"
