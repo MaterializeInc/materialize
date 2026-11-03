@@ -73,6 +73,9 @@ export function useElkLayout(
     if (!graph) return;
     const cached = cacheRef.current.get(cacheKey);
     if (cached) {
+      // Supersede any layout still in flight for an earlier key, or its
+      // response would overwrite this cached result.
+      ++requestIdRef.current;
       remember(cacheKey, cached);
       setState({ key: cacheKey, positions: cached, error: null });
       return;
