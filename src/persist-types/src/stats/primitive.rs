@@ -17,7 +17,7 @@ use serde::Serialize;
 
 use crate::stats::{
     BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats,
-    ProtoPrimitiveBytesStats, ProtoPrimitiveStats, TrimStats, proto_primitive_stats,
+    ProtoPrimitiveBytesStats, ProtoPrimitiveStats, TrimStats, proto_primitive_stats, redact_json,
 };
 use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
 
@@ -160,7 +160,7 @@ where
     fn debug_json(&self) -> serde_json::Value {
         let l = serde_json::to_value(&self.lower).expect("valid json");
         let u = serde_json::to_value(&self.upper).expect("valid json");
-        serde_json::json!({"lower": l, "upper": u})
+        serde_json::json!({"lower": redact_json(l), "upper": redact_json(u)})
     }
 
     fn into_columnar_stats(self) -> ColumnarStats {
@@ -174,8 +174,8 @@ where
 impl DynStats for PrimitiveStats<Vec<u8>> {
     fn debug_json(&self) -> serde_json::Value {
         serde_json::json!({
-            "lower": hex::encode(&self.lower),
-            "upper": hex::encode(&self.upper),
+            "lower": redact_json(hex::encode(&self.lower).into()),
+            "upper": redact_json(hex::encode(&self.upper).into()),
         })
     }
 
