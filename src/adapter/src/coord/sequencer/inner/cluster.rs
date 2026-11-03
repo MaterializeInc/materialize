@@ -269,6 +269,33 @@ impl Coordinator {
             Unchanged => {}
         }
 
+        // Validate new hydration-size references before dispatching to any ALTER
+        // path. Policy-only changes may retain a size that is no longer allowed.
+        if let Managed(new_managed) = &new_config.variant {
+            if let Some(on_hydration) = new_managed
+                .auto_scaling_strategy
+                .as_ref()
+                .and_then(|strategy| strategy.on_hydration.as_ref())
+            {
+                let old_hydration_size = match &config.variant {
+                    Managed(managed) => managed
+                        .auto_scaling_strategy
+                        .as_ref()
+                        .and_then(|strategy| strategy.on_hydration.as_ref())
+                        .map(|policy| &policy.hydration_size),
+                    Unmanaged => None,
+                };
+                if old_hydration_size != Some(&on_hydration.hydration_size) {
+                    let role_id = Some(session.role_metadata().current_role);
+                    self.catalog.ensure_valid_replica_size(
+                        &self.catalog().get_role_allowed_cluster_sizes(&role_id),
+                        &on_hydration.hydration_size,
+                        false,
+                    )?;
+                }
+            }
+        }
+
         let reconfiguration_in_flight = matches!(
             &config.variant,
             Managed(managed) if managed
@@ -1484,21 +1511,11 @@ impl Coordinator {
             new_size,
             false,
         )?;
-        // A newly set (or changed) AUTO SCALING STRATEGY gets its HYDRATION
-        // SIZE validated like SIZE itself: it must name a real replica size the
-        // session role may use. Only a changed strategy is checked, so an
-        // existing policy does not block unrelated ALTERs if the size
-        // allow-list later shrinks (matching how SIZE itself behaves).
         if new_auto_scaling_strategy != auto_scaling_strategy {
             if let Some(on_hydration) = new_auto_scaling_strategy
                 .as_ref()
                 .and_then(|strategy| strategy.on_hydration.as_ref())
             {
-                self.catalog.ensure_valid_replica_size(
-                    &self.catalog().get_role_allowed_cluster_sizes(&role_id),
-                    &on_hydration.hydration_size,
-                    false,
-                )?;
                 // The planner validated the hydration size against the
                 // *realized* SIZE only. An in-flight reconfiguration will cut
                 // the realized SIZE over to its target, so also reject equality

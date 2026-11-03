@@ -1218,6 +1218,50 @@ contains:HYDRATION SIZE must differ from the cluster SIZE
 ! CREATE CLUSTER cc_burst_typo (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'notasize')))
 contains:unknown cluster replica size notasize
 
+# Combined resizes and unmanaged-to-managed conversions must validate newly
+# introduced hydration sizes before committing the cluster configuration.
+> CREATE CLUSTER cc_burst_validate (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+> CREATE CLUSTER cc_burst_convert REPLICAS ()
+
+! ALTER CLUSTER cc_burst_validate SET (SIZE = 'scale=1,workers=2', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'notasize')))
+contains:unknown cluster replica size notasize
+
+! ALTER CLUSTER cc_burst_convert SET (MANAGED, SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'notasize')))
+contains:unknown cluster replica size notasize
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1,workers=1', 'scale=1,workers=2'
+
+! ALTER CLUSTER cc_burst_validate SET (SIZE = 'scale=1,workers=2', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=4,workers=4')))
+contains:unknown cluster replica size scale=4,workers=4
+
+! ALTER CLUSTER cc_burst_convert SET (MANAGED, SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+contains:unknown cluster replica size scale=2,workers=2
+
+# Changing linger duration retains the existing size reference, even when the
+# allow-list no longer permits introducing that size.
+> ALTER CLUSTER cc_burst_validate SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2', LINGER DURATION = '600s')))
+
+> SELECT size FROM mz_clusters WHERE name = 'cc_burst_validate'
+scale=1,workers=1
+
+> SELECT create_sql LIKE '%LINGER DURATION = %' FROM (SHOW CREATE CLUSTER cc_burst_validate)
+true
+
+> SELECT managed FROM mz_clusters WHERE name = 'cc_burst_convert'
+false
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET allowed_cluster_replica_sizes
+
+> ALTER CLUSTER cc_burst_convert SET (MANAGED, SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+> SELECT managed FROM mz_clusters WHERE name = 'cc_burst_convert'
+true
+
+> DROP CLUSTER cc_burst_validate
+> DROP CLUSTER cc_burst_convert
+
 # AUTO SCALING STRATEGY combined with a non-MANUAL SCHEDULE is rejected.
 ! CREATE CLUSTER cc_burst_sched (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH, AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
 contains:AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
