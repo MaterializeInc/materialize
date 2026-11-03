@@ -74,7 +74,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tiberius::numeric::Numeric;
 
-use crate::desc::{SqlServerQualifiedTableName, SqlServerTableRaw};
+use crate::desc::{SqlServerQualifiedTableName, SqlServerTableConstraintRaw, SqlServerTableRaw};
 use crate::inspect::DDLEvent;
 use crate::{Client, SqlServerCdcMetrics, SqlServerError, TransactionIsolationLevel};
 
@@ -351,6 +351,32 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
                         }
                     }
 
+                    // Constraint changes are not recorded in `cdc.ddl_history`, so
+                    // re-read every tracked table's constraints whenever the log advanced.
+                    let constraints = crate::inspect::get_constraints_for_capture_instances(
+                        self.client,
+                        self.capture_instances.keys().map(|instance| instance.as_ref()),
+                    )
+                    .await?;
+                    for instance in self.capture_instances.keys() {
+                        // An instance absent from the result is a table this user cannot
+                        // see, not a table with no constraints. A revoked SELECT fails the
+                        // change read on every later poll, but a revoke landing between
+                        // this poll's change read and this query, or an instance skipped
+                        // above because its LSN is ahead of the database max, reaches
+                        // here. Treating it as a dropped key would make a recoverable
+                        // condition a definite error.
+                        let Some(constraints) = constraints.get(instance).cloned() else {
+                            Err(CdcError::SourceTableNotVisible {
+                                capture_instance: Arc::clone(instance),
+                            })?
+                        };
+                        yield CdcEvent::Constraints {
+                            capture_instance: Arc::clone(instance),
+                            constraints,
+                        };
+                    }
+
                     // Increment our LSN (`get_changes` is inclusive).
                     //
                     // TODO(sql_server2): We should occassionally check to see how close the LSN we
@@ -457,6 +483,13 @@ pub enum CdcEvent {
         /// DDL event
         ddl_event: DDLEvent,
     },
+    /// The PRIMARY KEY and UNIQUE constraints currently on the table a capture
+    /// instance tracks, re-read on every poll that found new changes. Emitted
+    /// only while the table is visible, see [`CdcError::SourceTableNotVisible`].
+    Constraints {
+        capture_instance: Arc<str>,
+        constraints: Vec<SqlServerTableConstraintRaw>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -479,6 +512,11 @@ pub enum CdcError {
         capture_instance: String,
         low_water_mark: Lsn,
     },
+    #[error(
+        "the source table for capture instance '{capture_instance}' is not visible: \
+         it was dropped, or the connection's user lost its permissions on it"
+    )]
+    SourceTableNotVisible { capture_instance: Arc<str> },
 }
 
 /// This type is used to represent the progress of each SQL Server instance in
