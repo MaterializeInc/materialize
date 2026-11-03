@@ -70,11 +70,17 @@ export const formatBytesShort = (bytes: bigint) => {
  * and gets "<1ms" rather than rounding away to look idle.
  */
 export function formatElapsedNs(ns: bigint): string {
+  if (ns < 0n) return `-${formatElapsedNs(-ns)}`;
   const seconds = Number(ns) / 1e9;
   if (seconds === 0) return "0s";
   if (seconds < 0.0005) return "<1ms";
-  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`;
-  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  // Each tier is chosen from the value as rounded for display, so a value
+  // that rounds up to the next tier's floor (999.6ms, 9.96s) reads in that
+  // tier ("1.0s", "10s") instead of as "1000ms" or "10.0s".
+  const millis = Math.round(seconds * 1000);
+  if (millis < 1000) return `${millis}ms`;
+  const tenths = Math.round(seconds * 10) / 10;
+  if (tenths < 10) return `${tenths.toFixed(1)}s`;
   return `${Math.round(seconds)}s`;
 }
 

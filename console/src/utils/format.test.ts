@@ -42,6 +42,20 @@ describe("formatElapsedNs", () => {
   it("rounds durations of 10s or more to whole seconds", () => {
     expect(formatElapsedNs(543_400_000_000n)).toEqual("543s");
   });
+
+  it("moves to the next unit when rounding reaches its floor", () => {
+    expect(formatElapsedNs(999_400_000n)).toEqual("999ms");
+    expect(formatElapsedNs(999_600_000n)).toEqual("1.0s");
+    expect(formatElapsedNs(9_940_000_000n)).toEqual("9.9s");
+    expect(formatElapsedNs(9_960_000_000n)).toEqual("10s");
+  });
+
+  it("formats a negative duration as its magnitude with a leading minus", () => {
+    expect(formatElapsedNs(-257_000_000n)).toEqual("-257ms");
+    expect(formatElapsedNs(-1_400_000_000n)).toEqual("-1.4s");
+    expect(formatElapsedNs(-9_960_000_000n)).toEqual("-10s");
+    expect(formatElapsedNs(-1_000n)).toEqual("-<1ms");
+  });
 });
 
 describe("formatIntervalShort", () => {
