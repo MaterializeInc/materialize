@@ -76,8 +76,8 @@ impl StorageControllerMetrics {
             )),
             regressed_offset_known: metrics_registry.register(metric!(
                 name: "mz_storage_regressed_offset_known",
-                help: "number of regressed offset_known stats for this id",
-                var_labels: ["id"],
+                help: "The number of times a replica reported an offset_known lower than the one the controller held, which an upstream restore or failover can cause.",
+                var_labels: ["id", "replica_id"],
             )),
             history_command_count: metrics_registry.register(metric!(
                 name: "mz_storage_controller_history_command_count",
@@ -106,10 +106,13 @@ impl StorageControllerMetrics {
 
     pub fn regressed_offset_known(
         &self,
-        id: mz_repr::GlobalId,
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
     ) -> DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>> {
-        self.regressed_offset_known
-            .get_delete_on_drop_metric(vec![id.to_string()])
+        self.regressed_offset_known.get_delete_on_drop_metric(vec![
+            id.to_string(),
+            replica_id.map(|id| id.to_string()).unwrap_or_default(),
+        ])
     }
 
     pub fn wallclock_lag_metrics(

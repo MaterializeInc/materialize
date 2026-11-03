@@ -253,6 +253,11 @@ impl StorageState {
             Arc::clone(&persist_clients),
         );
         let cluster_memory_limit = instance_context.cluster_memory_limit;
+        let aggregated_statistics = AggregatedStatistics::new(
+            timely_worker_index,
+            timely_worker_peers,
+            metrics.statistics_merge.clone(),
+        );
 
         let storage_state = StorageState {
             source_uppers: BTreeMap::new(),
@@ -271,10 +276,7 @@ impl StorageState {
             sink_tokens: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
             dropped_ids: Vec::new(),
-            aggregated_statistics: AggregatedStatistics::new(
-                timely_worker_index,
-                timely_worker_peers,
-            ),
+            aggregated_statistics,
             shared_status_updates: Default::default(),
             latest_status_updates: Default::default(),
             initial_status_reported: Default::default(),
@@ -733,6 +735,7 @@ impl<'w> Worker<'w> {
                         *export_id,
                         ingestion_id,
                         resume_upper.clone(),
+                        &export.storage_metadata.data_shard,
                         || {
                             SourceStatistics::new(
                                 *export_id,

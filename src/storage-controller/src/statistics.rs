@@ -206,6 +206,7 @@ pub(super) fn spawn_webhook_statistics_scraper(
     shared_stats: Arc<Mutex<SourceStatistics>>,
     initial_interval: Duration,
     mut interval_updated: Receiver<Duration>,
+    metrics: mz_storage_client::metrics::StorageControllerMetrics,
 ) -> Box<dyn Any + Send + Sync> {
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
@@ -241,7 +242,8 @@ pub(super) fn spawn_webhook_statistics_scraper(
 
                         match entry {
                             btree_map::Entry::Vacant(vacant_entry) => {
-                                let mut stats = ControllerSourceStatistics::new(*id, None);
+                                let mut stats =
+                                    ControllerSourceStatistics::new(*id, None, &metrics);
                                 stats.incorporate(update);
                                 vacant_entry.insert(stats);
                             }
