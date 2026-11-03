@@ -80,3 +80,57 @@ running
   JOIN mz_internal.mz_sink_statistics u ON s.id = u.id
   WHERE s.name IN ('simple_view_sink')
 simple_view_sink 3 3 true true
+
+# The librdkafka metrics are labeled by sink ID only, while every worker renders
+# the sink and only one runs the producer. They must survive both the idle
+# workers shutting down and the sink being re-rendered in the same process.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '1s'
+
+> CREATE CLUSTER rdkafka_four_workers SIZE 'scale=1,workers=4'
+> CREATE CLUSTER rdkafka_one_worker SIZE 'scale=1,workers=1'
+
+> CREATE SINK four_worker_sink
+  IN CLUSTER rdkafka_four_workers
+  FROM simple_view
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic-four-worker-${testdrive.seed}')
+  KEY (a)
+  FORMAT JSON
+  ENVELOPE DEBEZIUM
+
+> CREATE SINK one_worker_sink
+  IN CLUSTER rdkafka_one_worker
+  FROM simple_view
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic-one-worker-${testdrive.seed}')
+  KEY (a)
+  FORMAT JSON
+  ENVELOPE DEBEZIUM
+
+$ set-from-sql var=four-worker-sink-id
+SELECT id FROM mz_sinks WHERE name = 'four_worker_sink'
+
+$ set-from-sql var=one-worker-sink-id
+SELECT id FROM mz_sinks WHERE name = 'one_worker_sink'
+
+> SET cluster = rdkafka_four_workers
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_sink_rdkafka_txmsgs' AND labels->'sink_id' = '${four-worker-sink-id}'
+1
+
+> SET cluster = rdkafka_one_worker
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_sink_rdkafka_txmsgs' AND labels->'sink_id' = '${one-worker-sink-id}'
+1
+
+# Re-rendering builds the new dataflow before the old one is torn down.
+> ALTER SINK one_worker_sink SET FROM t
+
+# Wait out several scrape intervals so the check below cannot pass on a
+# snapshot taken before the old dataflow finished shutting down.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_sink_rdkafka_txmsgs' AND labels->'sink_id' = '${one-worker-sink-id}'
+1
