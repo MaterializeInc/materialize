@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
 import {
+  Link,
   Route,
   Routes,
   useLocation,
@@ -381,6 +382,12 @@ const LocationProbe = () => (
   <div data-testid="location-search">{useLocation().search}</div>
 );
 
+// Exposes the full path and search, for pages that navigate away.
+const PathProbe = () => {
+  const { pathname, search } = useLocation();
+  return <div data-testid="location-path">{`${pathname}${search}`}</div>;
+};
+
 // Exposes the type of the most recent navigation, so a test can tell a
 // `replace` (no new history entry) apart from a `push` without any direct
 // access to the router's own history stack (MemoryRouter doesn't expose one).
@@ -389,14 +396,20 @@ const NavigationProbe = () => (
 );
 
 describe("DataflowDetailPage", () => {
-  // CNS-109: switching to a replica whose query fails must surface the error
-  // state and drop the graph from the previously successful replica.
+  // CNS-109: landing on a replica whose query fails (here via a link, since
+  // the replica select leaves the page) must surface the error state and drop
+  // the graph from the previously successful replica.
   it("shows the error state and hides the stale graph when the new replica fails", async () => {
     await renderComponent(
       <Routes>
         <Route
           path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
-          element={<DataflowDetailPage />}
+          element={
+            <>
+              <DataflowDetailPage />
+              <Link to={`?replica=${FAILING_REPLICA}`}>switch</Link>
+            </>
+          }
         />
       </Routes>,
       {
@@ -407,23 +420,66 @@ describe("DataflowDetailPage", () => {
     // r1 succeeds, so the graph renders first.
     expect(await screen.findByTestId("react-flow")).toBeVisible();
 
-    // Switch to r2, whose query fails. The toolbar renders its own selects, so
-    // pick the replica select by its options rather than the ambiguous role.
-    const replicaSelect = screen
-      .getAllByRole("combobox")
-      .find((select) =>
-        Array.from((select as HTMLSelectElement).options).some(
-          (option) => option.value === FAILING_REPLICA,
-        ),
-      );
-    expect(replicaSelect).toBeDefined();
-    await userEvent.selectOptions(replicaSelect!, FAILING_REPLICA);
+    await userEvent.click(screen.getByRole("link", { name: "switch" }));
 
     expect(
       await screen.findByText("There was an error visualizing your dataflow"),
     ).toBeVisible();
     // The stale graph from r1 must be gone.
     expect(screen.queryByTestId("react-flow")).toBeNull();
+  });
+
+  describe("switching replicas", () => {
+    const selectReplica = async (name: string) => {
+      const replicaSelect = screen
+        .getAllByRole("combobox")
+        .find((select) =>
+          Array.from((select as HTMLSelectElement).options).some(
+            (option) => option.value === name,
+          ),
+        );
+      expect(replicaSelect).toBeDefined();
+      await userEvent.selectOptions(replicaSelect!, name);
+    };
+    const renderWithList = (initialEntry: string) =>
+      renderComponent(
+        <Routes>
+          <Route
+            path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+            element={<DataflowDetailPage />}
+          />
+          <Route
+            // The list lives under the region prefix the page navigates with.
+            path="*"
+            element={<PathProbe />}
+          />
+        </Routes>,
+        { initialRouterEntries: [initialEntry] },
+      );
+
+    // The same dataflow id on another replica is an unrelated dataflow, so
+    // the id must not survive the switch. The export id does.
+    it("re-resolves the dataflow's export on the new replica", async () => {
+      await renderWithList("/clusters/u5/test_cluster/dataflows/40?replica=r1");
+      await screen.findByTestId(`node-${nodeIdOf([40, 1])}`);
+
+      await selectReplica("r2");
+
+      expect(screen.getByTestId("location-path").textContent).toMatch(
+        /\/clusters\/u5\/test_cluster\/dataflows\?replica=r2&export=u7$/,
+      );
+    });
+
+    it("goes to the new replica's list when the dataflow has no export", async () => {
+      await renderWithList("/clusters/u5/test_cluster/dataflows/7?replica=r1");
+      await screen.findByTestId("react-flow");
+
+      await selectReplica("r2");
+
+      expect(screen.getByTestId("location-path").textContent).toMatch(
+        /\/clusters\/u5\/test_cluster\/dataflows\?replica=r2$/,
+      );
+    });
   });
 
   // A port's peer jump link should work the same regardless of which

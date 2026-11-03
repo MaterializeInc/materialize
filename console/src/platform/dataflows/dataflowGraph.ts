@@ -1340,6 +1340,19 @@ export function lirIndex(
   return index;
 }
 
+/**
+ * The ids of the exports whose LIR spans cover this dataflow's operators, in
+ * ascending string order so the choice among several is stable. A dataflow
+ * can back several exports (an index and the materialized view it serves).
+ */
+export function dataflowExportIds(structure: DataflowStructure): string[] {
+  const ids = new Set<string>();
+  for (const node of structure.nodes.values()) {
+    for (const { exportId } of node.lir) ids.add(exportId);
+  }
+  return [...ids].sort();
+}
+
 export interface LirTreeNode {
   key: string;
   info: LirInfo;

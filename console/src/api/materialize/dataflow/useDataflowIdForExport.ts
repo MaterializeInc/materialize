@@ -24,12 +24,18 @@ interface DataflowIdRow {
   dataflowId: string;
 }
 
+/**
+ * Export ids are of the form s<n>/t<n>/u<n>. Anything else is rejected before
+ * it is interpolated into SQL or put in a link.
+ */
+export const isResolvableExportId = (exportId: string) =>
+  /^[stu]\d+$/.test(exportId);
+
 export function useDataflowIdForExport(params?: DataflowIdForExportParams) {
   const exportId = params?.exportId;
   const queries = React.useMemo(() => {
-    // Export ids are of the form s<n>/t<n>/u<n>. Reject anything else before
-    // interpolating so a malformed param can never reach the query.
-    if (exportId === undefined || !/^[stu]\d+$/.test(exportId)) return null;
+    // A malformed param must never reach the query.
+    if (exportId === undefined || !isResolvableExportId(exportId)) return null;
     return {
       row: sql`
         SELECT dataflow_id::text AS "dataflowId"

@@ -20,6 +20,7 @@ import {
 } from "react-router-dom";
 
 import { useDataflowGraphData } from "~/api/materialize/dataflow/useDataflowGraphData";
+import { isResolvableExportId } from "~/api/materialize/dataflow/useDataflowIdForExport";
 import { useDataflowList } from "~/api/materialize/dataflow/useDataflowList";
 import { isInsufficientPrivilegeError } from "~/api/materialize/executeSql";
 import ErrorBox from "~/components/ErrorBox";
@@ -34,6 +35,7 @@ import {
   type Address,
   allSearchMatches,
   commonAncestorScope,
+  dataflowExportIds,
   decorateGraph,
   DEFAULT_FILTERS,
   deriveVisibleGraph,
@@ -623,6 +625,22 @@ const DataflowDetailPage = () => {
     const ids = [...data.structure.nodes.keys()].sort();
     return `${params?.dataflowId}/${params?.replicaName}/${ids.length}-${hashString(ids.join(","))}`;
   }, [data, params?.dataflowId, params?.replicaName]);
+  // Dataflow ids come from a per-replica counter, so the same id on another
+  // replica names an unrelated dataflow. Rather than keep the id across a
+  // replica switch, hand the list page this dataflow's export id to
+  // re-resolve on the new replica. A dataflow with no known export (no LIR
+  // data, or only ids the resolver rejects) goes to the new replica's plain
+  // list.
+  const onReplicaChange = (newReplicaName: string) => {
+    if (!cluster) return;
+    const listPath = `${absoluteClusterPath(regionSlug, cluster)}/dataflows`;
+    const exportId = data
+      ? dataflowExportIds(data.structure).find(isResolvableExportId)
+      : undefined;
+    const search = new URLSearchParams({ replica: newReplicaName });
+    if (exportId !== undefined) search.set("export", exportId);
+    navigate(`${listPath}?${search}`);
+  };
   if (!cluster) return null;
   if (cluster.replicas.length === 0) {
     return (
@@ -647,7 +665,7 @@ const DataflowDetailPage = () => {
           <LabeledSelect
             label="Replica"
             value={replicaName ?? ""}
-            onChange={(e) => setSearchParams({ replica: e.target.value })}
+            onChange={(e) => onReplicaChange(e.target.value)}
             flexShrink={0}
           >
             {cluster.replicas.map((r) => (
