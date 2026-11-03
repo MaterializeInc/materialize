@@ -52,6 +52,9 @@ const DURATION_STEPS_MS = [
 // and a gap from the next. Within 12px, the hit area of the dot drawn on top
 // covers the other's center and takes its clicks.
 const REPLICA_OFFSET_PX = 16;
+// Offsets move marks off their time, so they never span more than this. Past
+// four names, marks can overlap.
+const MAX_REPLICA_SPREAD_PX = 3 * REPLICA_OFFSET_PX;
 // A replica restarting in a loop restarts too often to draw each restart, so
 // restarts closer than this are one mark, counted in its tooltip.
 const RESTART_GROUP_PX = 12;
@@ -199,10 +202,16 @@ const HistoryPlot = ({
     [ticksMs, plotBottom],
   );
 
-  const offsetOf = (replicaId: string) => {
-    const index = replicaIds.indexOf(replicaId);
-    return (index - (replicaIds.length - 1) / 2) * REPLICA_OFFSET_PX;
-  };
+  // Replicas of one name, such as the ones a schedule or a resize replaced,
+  // share an offset, as they share a color and a legend entry.
+  const nameOf = (replicaId: string) => nameById.get(replicaId) ?? replicaId;
+  const names = [...new Set(replicaIds.map(nameOf))];
+  const offsetStepPx = Math.min(
+    REPLICA_OFFSET_PX,
+    MAX_REPLICA_SPREAD_PX / Math.max(1, names.length - 1),
+  );
+  const offsetOf = (replicaId: string) =>
+    (names.indexOf(nameOf(replicaId)) - (names.length - 1) / 2) * offsetStepPx;
   const laneY = plotBottom + LANE_HEIGHT_PX / 2;
   const restartGroups: Array<{ x: number; rows: UnfinishedRow[] }> = [];
   for (const row of rows

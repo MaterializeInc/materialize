@@ -280,7 +280,7 @@ const ObjectWaterfall = ({
 }) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
   const { parentRef, width } = useParentSize({ debounceTime: 10 });
-  const [order, setOrder] = React.useState<WaterfallOrder>("started");
+  const [order, setOrder] = React.useState<WaterfallOrder>("slowest");
   const [pageIndex, setPageIndex] = React.useState(0);
   // Slowest first compares working times, so each bar starts at zero and the
   // time spent waiting is left out.

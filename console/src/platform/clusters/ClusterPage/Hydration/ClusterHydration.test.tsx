@@ -255,12 +255,12 @@ const renderHydrationTab = async ({
       const queryKey = JSON.parse(
         new URL(request.url).searchParams.get("query_key") ?? "[]",
       );
-      if (queryKey[1]?.scope !== "droppedObjectCreationTimes") return undefined;
+      if (queryKey[1]?.scope !== "droppedObjectLifetimes") return undefined;
       return HttpResponse.json({
         results: [
           mapKyselyToTabular({
             rows: droppedObjectRows,
-            columns: [timestamptz("occurredAt")],
+            columns: [timestamptz("createdAt"), timestamptz("droppedAt")],
           }),
         ],
       });
@@ -578,7 +578,7 @@ describe("ClusterHydration", () => {
     expect(screen.getByText("90%")).toBeVisible();
   });
 
-  it("orders a hydration's objects by how long they worked", async () => {
+  it("orders a hydration's objects slowest first, or by when they started", async () => {
     await renderHydrationTab();
     const table = await screen.findByRole("table");
     const rows = within(table).getAllByRole("row").slice(1);
@@ -590,17 +590,18 @@ describe("ClusterHydration", () => {
       within(waterfall)
         .getAllByText(/^(orders_idx|customer_ltv)$/, { selector: "title" })
         .map(({ textContent }) => textContent);
-    expect(names()).toEqual(["orders_idx", "customer_ltv"]);
-    expect(screen.getByText("Waiting")).toBeVisible();
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Slowest first" }),
-    );
-
+    expect(
+      screen.getByRole("button", { name: "Slowest first", pressed: true }),
+    ).toBeVisible();
     expect(names()).toEqual(["customer_ltv", "orders_idx"]);
     // Working times alone: one bar per object, and no waiting in the legend.
     expect(screen.queryByText("Waiting")).not.toBeInTheDocument();
     expect(waterfall.querySelectorAll("rect")).toHaveLength(2);
+
+    await userEvent.click(screen.getByRole("button", { name: "By start" }));
+
+    expect(names()).toEqual(["orders_idx", "customer_ltv"]);
+    expect(screen.getByText("Waiting")).toBeVisible();
   });
 
   it("pages through a hydration's objects", async () => {
@@ -723,12 +724,14 @@ describe("ClusterHydration", () => {
         online("u1", NOW_MS - 9 * MINUTE_MS),
       ],
       progress: { u1: [3, 9], u2: [9, 9] },
-      // Created after r1's last finished hydration, before its first restart.
+      // Created after r1's last finished hydration, before its first restart,
+      // and dropped after its last.
       droppedObjectRows: [
         {
           id: "u12",
           objectType: "index",
-          occurredAt: String(NOW_MS - 55 * MINUTE_MS),
+          createdAt: String(NOW_MS - 55 * MINUTE_MS),
+          droppedAt: String(NOW_MS - 5 * MINUTE_MS),
         },
       ],
     });
