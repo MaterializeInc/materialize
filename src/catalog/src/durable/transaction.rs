@@ -1066,7 +1066,6 @@ impl<'a> Transaction<'a> {
             LogVariant::Compute(ComputeLog::HydrationTime) => 29,
             LogVariant::Compute(ComputeLog::LirMapping) => 30,
             LogVariant::Compute(ComputeLog::DataflowGlobal) => 31,
-            LogVariant::Compute(ComputeLog::OperatorHydrationStatus) => 32,
             LogVariant::Compute(ComputeLog::PrometheusMetrics) => 33,
             LogVariant::Compute(ComputeLog::ResourceUsage) => 34,
         };

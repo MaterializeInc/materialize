@@ -582,7 +582,6 @@ mz_cluster_replica_status_history            source  <null>     ""
 mz_compute_dependencies                      source  <null>     ""
 mz_compute_error_counts_raw_unified          source  <null>     ""
 mz_compute_hydration_times                   source  <null>     ""
-mz_compute_operator_hydration_statuses       source  <null>     ""
 mz_frontiers                                 source  <null>     ""
 mz_materialized_view_refreshes               source  <null>     ""
 mz_object_arrangement_sizes                  source  <null>     ""
@@ -768,7 +767,6 @@ mz_compute_hydration_times_per_worker        log   <null>    ""
 mz_compute_import_frontiers_per_worker       log   <null>    ""
 mz_compute_lir_mapping_per_worker            log   <null>    ""
 mz_compute_operator_durations_histogram_raw  log   <null>    ""
-mz_compute_operator_hydration_statuses_per_worker log <null> ""
 mz_cluster_replica_resource_usage             log   <null>    ""
 mz_cluster_prometheus_metrics     log   <null>    ""
 mz_dataflow_addresses_per_worker             log   <null>    ""
@@ -846,7 +844,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-280
+274
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

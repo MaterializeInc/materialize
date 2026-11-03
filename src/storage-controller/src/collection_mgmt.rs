@@ -675,7 +675,6 @@ where
             }
 
             IntrospectionType::ComputeDependencies
-            | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
             | IntrospectionType::ComputeErrorCounts
             | IntrospectionType::ComputeHydrationTimes
@@ -1094,7 +1093,6 @@ impl AppendOnlyWriteTask {
                 | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
                 | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
                 | Some(introspection_type @ IntrospectionType::ComputeDependencies)
-                | Some(introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus)
                 | Some(introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes)
                 | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
                 | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes)
@@ -1272,7 +1270,6 @@ impl AppendOnlyWriteTask {
             | introspection_type @ IntrospectionType::StorageSourceStatistics
             | introspection_type @ IntrospectionType::StorageSinkStatistics
             | introspection_type @ IntrospectionType::ComputeDependencies
-            | introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus
             | introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes
             | introspection_type @ IntrospectionType::ComputeErrorCounts
             | introspection_type @ IntrospectionType::ComputeHydrationTimes

@@ -176,8 +176,6 @@ pub enum ComputeLog {
     ErrorCount,
     /// Hydration times of exported collections.
     HydrationTime,
-    /// Hydration status of dataflow operators.
-    OperatorHydrationStatus,
     /// Mappings from `GlobalId`/`LirId`` pairs to dataflow addresses.
     LirMapping,
     /// Mappings from dataflows to `GlobalId`s.
@@ -370,14 +368,6 @@ impl LogVariant {
                     SqlScalarType::TimestampTz { precision: None }.nullable(true),
                 )
                 .with_key(vec![0, 1])
-                .finish(),
-
-            LogVariant::Compute(ComputeLog::OperatorHydrationStatus) => RelationDesc::builder()
-                .with_column("export_id", SqlScalarType::String.nullable(false))
-                .with_column("lir_id", SqlScalarType::UInt64.nullable(false))
-                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
-                .with_column("hydrated", SqlScalarType::Bool.nullable(false))
-                .with_key(vec![0, 1, 2])
                 .finish(),
 
             LogVariant::Compute(ComputeLog::LirMapping) => RelationDesc::builder()

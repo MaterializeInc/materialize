@@ -405,10 +405,6 @@ mz_compute_hydration_times
 SOURCE
 materialize
 mz_internal
-mz_compute_operator_hydration_statuses
-SOURCE
-materialize
-mz_internal
 mz_console_cluster_utilization_overview
 VIEW
 materialize
@@ -1030,10 +1026,6 @@ VIEW
 materialize
 mz_introspection
 mz_compute_operator_durations_histogram_raw
-SOURCE
-materialize
-mz_introspection
-mz_compute_operator_hydration_statuses_per_worker
 SOURCE
 materialize
 mz_introspection

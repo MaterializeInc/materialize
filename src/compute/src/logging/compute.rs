@@ -172,17 +172,6 @@ pub struct Hydration {
     pub export_id: GlobalId,
 }
 
-/// An operator's hydration status changed.
-#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
-pub struct OperatorHydration {
-    /// Identifier of the export.
-    pub export_id: GlobalId,
-    /// Identifier of the operator's LIR node.
-    pub lir_id: LirId,
-    /// Whether the operator is hydrated.
-    pub hydrated: bool,
-}
-
 /// Announce a mapping of an LIR operator to a dataflow operator for a global ID.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct LirMapping {
@@ -238,8 +227,6 @@ pub enum ComputeEvent {
     HydrationStart(HydrationStart),
     /// A dataflow export was hydrated.
     Hydration(Hydration),
-    /// A dataflow operator's hydration status changed.
-    OperatorHydration(OperatorHydration),
     /// An LIR operator was mapped to some particular dataflow operator.
     ///
     /// Cf. `ComputeLog::LirMaping`
@@ -360,8 +347,6 @@ pub(super) fn construct<'scope>(
         let mut error_count_out = OutputBuilder::from(error_count_out);
         let (hydration_time_out, hydration_time) = demux.new_output();
         let mut hydration_time_out = OutputBuilder::from(hydration_time_out);
-        let (operator_hydration_status_out, operator_hydration_status) = demux.new_output();
-        let mut operator_hydration_status_out = OutputBuilder::from(operator_hydration_status_out);
         let (lir_mapping_out, lir_mapping) = demux.new_output();
         let mut lir_mapping_out = OutputBuilder::from(lir_mapping_out);
         let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
@@ -380,7 +365,6 @@ pub(super) fn construct<'scope>(
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
                 let mut error_count = error_count_out.activate();
                 let mut hydration_time = hydration_time_out.activate();
-                let mut operator_hydration_status = operator_hydration_status_out.activate();
                 let mut lir_mapping = lir_mapping_out.activate();
                 let mut dataflow_global_ids = dataflow_global_ids_out.activate();
 
@@ -398,8 +382,6 @@ pub(super) fn construct<'scope>(
                         arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
                         error_count: error_count.session_with_builder(&cap),
                         hydration_time: hydration_time.session_with_builder(&cap),
-                        operator_hydration_status: operator_hydration_status
-                            .session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
                         dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
                     };
@@ -431,7 +413,6 @@ pub(super) fn construct<'scope>(
             (HydrationTime, hydration_time),
             (ImportFrontierCurrent, import_frontier),
             (LirMapping, lir_mapping),
-            (OperatorHydrationStatus, operator_hydration_status),
             (PeekCurrent, peek),
             (PeekDuration, peek_duration),
         ];
@@ -532,8 +513,6 @@ struct DemuxState {
     import_frontier_packer: PermutedRowPacker,
     /// A row packer for the LIR mapping output.
     lir_mapping_packer: PermutedRowPacker,
-    /// A row packer for the operator hydration status output.
-    operator_hydration_status_packer: PermutedRowPacker,
     /// A row packer for the peek durations output.
     peek_duration_packer: PermutedRowPacker,
     /// A row packer for the peek output.
@@ -568,9 +547,6 @@ impl DemuxState {
             hydration_time_packer: PermutedRowPacker::new(ComputeLog::HydrationTime),
             import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
             lir_mapping_packer: PermutedRowPacker::new(ComputeLog::LirMapping),
-            operator_hydration_status_packer: PermutedRowPacker::new(
-                ComputeLog::OperatorHydrationStatus,
-            ),
             peek_duration_packer: PermutedRowPacker::new(ComputeLog::PeekDuration),
             peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
         }
@@ -700,22 +676,6 @@ impl DemuxState {
         ])
     }
 
-    /// Pack an operator hydration status update key-value for the given export ID, LIR ID, and
-    /// hydration status.
-    fn pack_operator_hydration_status_update(
-        &mut self,
-        export_id: GlobalId,
-        lir_id: LirId,
-        hydrated: bool,
-    ) -> (&RowRef, &RowRef) {
-        self.operator_hydration_status_packer.pack_slice(&[
-            make_string_datum(export_id, &mut self.scratch_string_a),
-            Datum::UInt64(lir_id.into()),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
-            Datum::from(hydrated),
-        ])
-    }
-
     /// Pack a peek duration update key-value for the given peek and peek type.
     fn pack_peek_duration_update(
         &mut self,
@@ -797,8 +757,6 @@ struct ExportState {
     /// duration at nanosecond precision. These instants exist to identify and bound hydration
     /// episodes, which a duration cannot do.
     hydration_timestamps: HydrationTimestamps,
-    /// Hydration status of operators feeding this export.
-    operator_hydration: BTreeMap<LirId, bool>,
 }
 
 impl ExportState {
@@ -813,7 +771,6 @@ impl ExportState {
                 started_at: None,
                 hydrated_at: None,
             },
-            operator_hydration: BTreeMap::new(),
         }
     }
 }
@@ -837,7 +794,6 @@ struct DemuxOutput<'a, 'b> {
     arrangement_heap_capacity: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_size: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     hydration_time: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
-    operator_hydration_status: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     error_count: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     lir_mapping: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     dataflow_global_ids: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
@@ -888,7 +844,6 @@ impl DemuxHandler<'_, '_, '_> {
             ErrorCount(error_count) => self.handle_error_count(error_count),
             HydrationStart(hydration) => self.handle_hydration_start(hydration),
             Hydration(hydration) => self.handle_hydration(hydration),
-            OperatorHydration(hydration) => self.handle_operator_hydration(hydration),
             LirMapping(mapping) => self.handle_lir_mapping(mapping),
             DataflowGlobal(global) => self.handle_dataflow_global(global),
         }
@@ -963,16 +918,6 @@ impl DemuxHandler<'_, '_, '_> {
         self.output
             .hydration_time
             .give((datum, ts, Diff::MINUS_ONE));
-
-        // Remove operator hydration logging for this export.
-        for (lir_id, hydrated) in export.operator_hydration {
-            let datum = self
-                .state
-                .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
-            self.output
-                .operator_hydration_status
-                .give((datum, ts, Diff::MINUS_ONE));
-        }
     }
 
     fn handle_dataflow_shutdown(
@@ -1126,45 +1071,6 @@ impl DemuxHandler<'_, '_, '_> {
             self.state
                 .pack_hydration_time_update(export_id, Some(nanos), &new_timestamps);
         self.output.hydration_time.give((insertion, ts, Diff::ONE));
-    }
-
-    fn handle_operator_hydration(
-        &mut self,
-        OperatorHydrationReference {
-            export_id,
-            lir_id,
-            hydrated,
-        }: Ref<'_, OperatorHydration>,
-    ) {
-        let ts = self.ts();
-        let export_id = Columnar::into_owned(export_id);
-        let lir_id = Columnar::into_owned(lir_id);
-        let hydrated = Columnar::into_owned(hydrated);
-
-        let Some(export) = self.state.exports.get_mut(&export_id) else {
-            // The export might have already been dropped, in which case we are no longer
-            // interested in its operator hydration events.
-            return;
-        };
-
-        let old_status = export.operator_hydration.get(&lir_id).copied();
-        export.operator_hydration.insert(lir_id, hydrated);
-
-        if let Some(hydrated) = old_status {
-            let retraction = self
-                .state
-                .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
-            self.output
-                .operator_hydration_status
-                .give((retraction, ts, Diff::MINUS_ONE));
-        }
-
-        let insertion = self
-            .state
-            .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
-        self.output
-            .operator_hydration_status
-            .give((insertion, ts, Diff::ONE));
     }
 
     fn handle_peek_install(
