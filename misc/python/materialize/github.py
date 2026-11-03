@@ -11,6 +11,7 @@
 
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -312,6 +313,79 @@ def create_release(
             f"{response.status_code}, response={response.text[:500]}"
         )
     print(f"Created GitHub release: {response.json()['html_url']}")
+
+
+def repository_dispatch(
+    event_type: str,
+    client_payload: dict[str, Any],
+    repo: str = "MaterializeInc/materialize",
+    token: str | None = None,
+) -> None:
+    """Trigger the repository_dispatch workflows listening for `event_type`.
+
+    Dispatched workflows always run the definition on the default branch, so
+    the payload cannot be used to run workflow code from another ref.
+    """
+    response = requests.post(
+        f"https://api.github.com/repos/{repo}/dispatches",
+        headers=_auth_headers(token),
+        json={"event_type": event_type, "client_payload": client_payload},
+        timeout=60,
+    )
+    if response.status_code != 204:
+        raise ValueError(
+            f"Failed to dispatch {event_type} to {repo}: "
+            f"{response.status_code}, response={response.text[:500]}"
+        )
+
+
+def wait_for_workflow_run(
+    workflow: str,
+    match: str,
+    repo: str = "MaterializeInc/materialize",
+    token: str | None = None,
+    timeout_secs: int = 1800,
+    poll_secs: int = 15,
+) -> dict[str, Any]:
+    """Wait for a run of `workflow` whose name contains `match` to finish.
+
+    The dispatch API does not report which run it created, so the caller is
+    expected to put a unique identifier in the payload and the workflow is
+    expected to surface it in its `run-name`. Returns the completed run, whose
+    `conclusion` the caller must still check.
+    """
+    headers = _auth_headers(token)
+    deadline = time.monotonic() + timeout_secs
+    run: dict[str, Any] | None = None
+    while True:
+        response = requests.get(
+            f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs",
+            headers=headers,
+            params={"per_page": 50},
+            timeout=60,
+        )
+        if response.status_code != 200:
+            raise ValueError(
+                f"Failed to list runs of {workflow} in {repo}: "
+                f"{response.status_code}, response={response.text[:500]}"
+            )
+        for candidate in response.json()["workflow_runs"]:
+            if match in (candidate["display_title"] or ""):
+                run = candidate
+                break
+        if run is not None and run["status"] == "completed":
+            return run
+        if time.monotonic() >= deadline:
+            if run is None:
+                raise ValueError(
+                    f"No run of {workflow} matching {match!r} appeared within "
+                    f"{timeout_secs}s"
+                )
+            raise ValueError(
+                f"Run of {workflow} matching {match!r} did not complete within "
+                f"{timeout_secs}s: {run['html_url']}"
+            )
+        time.sleep(poll_secs)
 
 
 def for_github_re(text: bytes) -> bytes:
