@@ -685,8 +685,8 @@ chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "14
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git", rev = "a84c6b71825efaffb332c0d19f18c2bdf9ee7b40" }
 
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "06b2ab50cf4020be22cfeac185dc17c4b0fef584" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "06b2ab50cf4020be22cfeac185dc17c4b0fef584" }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "22f302333b8aaad5b2ec56d4513ed1a2106f9cd8" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "22f302333b8aaad5b2ec56d4513ed1a2106f9cd8" }
 
 # v0.37.1 plus the upstream rustls verifier fixes for `skip_domain_validation`
 # and `accept_invalid_certs` (blackbeam/mysql_async#408, #409). Drop this patch
