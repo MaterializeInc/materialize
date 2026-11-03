@@ -41,6 +41,7 @@ import {
 import fetchAvailableClusterSizes from "~/api/materialize/cluster/availableClusterSizes";
 import {
   AUTO_SCALING_MIN_VERSION,
+  fetchClusterAutoScaling,
   fetchClusterConfiguration,
 } from "~/api/materialize/cluster/clusterConfiguration";
 import {
@@ -129,6 +130,8 @@ import { useEnvironmentGate } from "~/store/environments";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 import { sortLagInfo } from "~/utils/freshness";
 
+import { parseAutoScaling } from "./ClusterPage/Configuration/clusterConfigurationModel";
+
 type ReplicaUtilizationHistoryFilters = {
   clusterIds: ReplicaUtilizationHistoryParameters["clusterIds"];
   replicaId: ReplicaUtilizationHistoryParameters["replicaId"];
@@ -191,6 +194,11 @@ export const clusterQueryKeys = {
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("configuration", params),
+    ] as const,
+  autoScaling: (params: { clusterId: string }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("autoScaling", params),
     ] as const,
   replicas: (params: ClusterReplicasParams) =>
     [...clusterQueryKeys.all(), buildQueryKeyPart("replicas", params)] as const,
@@ -691,6 +699,42 @@ export function useClusterConfiguration({
     data: query.data,
     isError: query.isError,
     includeAutoScaling,
+  };
+}
+
+/**
+ * What the Alter cluster form's auto-scaling section needs, as of a read made
+ * after mount: the cluster's policy, null for none, and the size an
+ * in-progress resize is heading to. Undefined until read, on a failed read,
+ * and where the environment or cluster has no autoscaling.
+ */
+export function useClusterAutoScalingPolicy({ cluster }: { cluster: Cluster }) {
+  const isAvailable =
+    useEnvironmentGate(AUTO_SCALING_MIN_VERSION) === true && cluster.managed;
+  const query = useQuery({
+    queryKey: clusterQueryKeys.autoScaling({ clusterId: cluster.id }),
+    queryFn: async ({ queryKey, signal }) => {
+      const { autoScaling, resizeTargetSize } = await fetchClusterAutoScaling({
+        clusterId: cluster.id,
+        queryKey,
+        requestOptions: { signal },
+      });
+      return {
+        policy: parseAutoScaling(autoScaling).policy,
+        resizeTargetSize,
+      };
+    },
+    enabled: isAvailable,
+    // NOTE: A cached policy can predate an alter: closing the modal drops the
+    // last observer, which cancels the alter's refetch and reverts the cache.
+    // So the policy waits for this fetch on mount.
+    refetchOnMount: "always",
+  });
+  const isFresh = query.isFetchedAfterMount;
+  return {
+    isAvailable,
+    data: isFresh && !query.isError ? query.data : undefined,
+    isError: isFresh && query.isError,
   };
 }
 

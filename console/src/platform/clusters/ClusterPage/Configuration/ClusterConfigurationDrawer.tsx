@@ -30,7 +30,6 @@ import { isSystemCluster } from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import Alert from "~/components/Alert";
 import { ConnectMethodCard } from "~/components/connect/connectComponents";
-import { CopyableBox } from "~/components/copyableComponents";
 import DeleteObjectMenuItem from "~/components/DeleteObjectMenuItem";
 import DeleteObjectModal from "~/components/DeleteObjectModal";
 import OverflowMenu, { OVERFLOW_BUTTON_WIDTH } from "~/components/OverflowMenu";
@@ -40,8 +39,8 @@ import { UniversalTable } from "~/components/Table/UniversalTable";
 import { useUniversalTable } from "~/components/Table/useUniversalTable";
 import TextLink from "~/components/TextLink";
 import { ActivityIcon, ClustersIcon, InfoIcon } from "~/icons";
-import docUrls from "~/mz-doc-urls.json";
 import { AlterClusterModal } from "~/platform/clusters/AlterClusterModal";
+import { AUTO_SCALING_DOCS } from "~/platform/clusters/constants";
 import NewReplicaModal from "~/platform/clusters/NewReplicaModal";
 import {
   availableClusterSizesQuery,
@@ -62,12 +61,8 @@ import {
   formatLinger,
   parseAutoScaling,
   replicaStatus,
-  resetAutoScalingStatement,
   resizeNote,
-  setAutoScalingStatement,
 } from "./clusterConfigurationModel";
-
-const AUTO_SCALING_DOCS = `${docUrls["/docs/sql/alter-cluster/"]}#speed-up-hydration-by-autoscaling-to-a-larger-size`;
 
 type Configuration = ReturnType<typeof useClusterConfiguration>["data"];
 
@@ -120,12 +115,14 @@ interface EditClusterButtonProps {
   cluster: Cluster;
   clusterSizes: string[] | null | undefined;
   maxReplicas: number | null | undefined;
+  focusAutoScaling?: boolean;
 }
 
 const EditClusterButton = ({
   cluster,
   clusterSizes,
   maxReplicas,
+  focusAutoScaling,
 }: EditClusterButtonProps) => {
   const { isOpen, onOpen, onClose } = useDisclosure();
   return (
@@ -145,6 +142,7 @@ const EditClusterButton = ({
           isOpen
           maxReplicas={maxReplicas ?? undefined}
           onClose={onClose}
+          focusAutoScaling={focusAutoScaling}
         />
       )}
     </>
@@ -203,8 +201,7 @@ interface OverviewPanelProps {
   ownerName: string | undefined;
   isClusterOwner: boolean;
   canEdit: boolean;
-  clusterSizes: string[] | null | undefined;
-  maxReplicas: number | null | undefined;
+  edit: Omit<EditClusterButtonProps, "cluster">;
   onDropped: () => void;
 }
 
@@ -214,8 +211,7 @@ const OverviewPanel = ({
   ownerName,
   isClusterOwner,
   canEdit,
-  clusterSizes,
-  maxReplicas,
+  edit,
   onDropped,
 }: OverviewPanelProps) => {
   const isUserCluster = !isSystemCluster(cluster.id);
@@ -229,15 +225,7 @@ const OverviewPanel = ({
     <VStack spacing={6} alignItems="stretch">
       <PanelHeader
         title="Overview"
-        action={
-          canEdit && (
-            <EditClusterButton
-              cluster={cluster}
-              clusterSizes={clusterSizes}
-              maxReplicas={maxReplicas}
-            />
-          )
-        }
+        action={canEdit && <EditClusterButton cluster={cluster} {...edit} />}
       />
       {resize && <Alert variant="info" message={resize} />}
       <Grid templateColumns="repeat(3, minmax(0, 1fr))" gap={5}>
@@ -454,16 +442,18 @@ interface AutoScalingPanelProps {
   /** Undefined until read. */
   autoScaling: AutoScaling | undefined;
   isError: boolean;
+  canEdit: boolean;
+  edit: Omit<EditClusterButtonProps, "cluster">;
 }
 
 const AutoScalingPanel = ({
   cluster,
   autoScaling,
   isError,
+  canEdit,
+  edit,
 }: AutoScalingPanelProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  // System clusters can't be altered, so they get no statements to copy.
-  const isUserCluster = !isSystemCluster(cluster.id);
   if (!cluster.managed) {
     return (
       <VStack spacing={4} alignItems="stretch">
@@ -494,6 +484,11 @@ const AutoScalingPanel = ({
               <StatusPill status="off" colorScheme="gray" />
             )}
           </HStack>
+        }
+        action={
+          canEdit && (
+            <EditClusterButton cluster={cluster} {...edit} focusAutoScaling />
+          )
         }
       />
       {policy && (
@@ -528,37 +523,6 @@ const AutoScalingPanel = ({
           Learn more
         </TextLink>
       </Text>
-      {isUserCluster && policy && (
-        <>
-          <Divider />
-          <Text textStyle="text-small">To change it, run:</Text>
-          <CopyableBox
-            contents={setAutoScalingStatement(
-              cluster.name,
-              policy.hydrationSize,
-              policy.lingerMs,
-            )}
-            wrap
-            variant="compact"
-          />
-          <Text textStyle="text-small">To remove it:</Text>
-          <CopyableBox
-            contents={resetAutoScalingStatement(cluster.name)}
-            wrap
-            variant="compact"
-          />
-        </>
-      )}
-      {isUserCluster && !policy && (
-        <>
-          <Text textStyle="text-small">To turn it on, run:</Text>
-          <CopyableBox
-            contents={setAutoScalingStatement(cluster.name, "<size>", 15_000)}
-            wrap
-            variant="compact"
-          />
-        </>
-      )}
     </VStack>
   );
 };
@@ -645,6 +609,7 @@ const ConfigurationContent = ({
     configuration?.autoScaling === undefined
       ? undefined
       : parseAutoScaling(configuration.autoScaling);
+  const edit = { clusterSizes, maxReplicas };
   const sections = [
     {
       id: "overview" as const,
@@ -710,8 +675,7 @@ const ConfigurationContent = ({
           ownerName={ownerName(cluster.ownerId)}
           isClusterOwner={isClusterOwner}
           canEdit={canEdit}
-          clusterSizes={clusterSizes}
-          maxReplicas={maxReplicas}
+          edit={edit}
           onDropped={onDropped}
         />
       )}
@@ -728,6 +692,8 @@ const ConfigurationContent = ({
           cluster={cluster}
           autoScaling={autoScaling}
           isError={isError}
+          canEdit={canEdit}
+          edit={edit}
         />
       )}
     </VStack>

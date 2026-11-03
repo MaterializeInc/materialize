@@ -10,7 +10,7 @@
 import { useAtom } from "jotai";
 import { atomFamily, atomWithStorage, createJSONStorage } from "jotai/utils";
 
-import { UI_PREVIEWS, UiPreviewKey } from "~/config/uiPreviews";
+import { UI_PREVIEWS, UiPreview, UiPreviewKey } from "~/config/uiPreviews";
 import { useAppConfig } from "~/config/useAppConfig";
 import { useFlags } from "~/hooks/useFlags";
 
@@ -38,21 +38,27 @@ const collapsedAtomFamily = atomFamily((key: UiPreviewKey) =>
   ),
 );
 
+// Previews are a cloud experiment mechanism. Self-managed builds have no
+// LaunchDarkly, so they ship the gated UI outright and offer no choice, unless
+// the preview asks for the opt-in there too.
+const offersOptIn = (isCloud: boolean, key: UiPreviewKey) => {
+  const preview: UiPreview = UI_PREVIEWS[key];
+  return isCloud || preview.selfManagedOptIn === true;
+};
+
 /** Gates a UI preview: offered via its LaunchDarkly flag, enabled per user. */
 export const useUiPreview = (key: UiPreviewKey) => {
   const appConfig = useAppConfig();
   const flags = useFlags();
   const [optIn, setOptIn] = useAtom(optInAtomFamily(key));
   const [isCollapsed, setCollapsed] = useAtom(collapsedAtomFamily(key));
-  // Previews are a cloud experiment mechanism. Self-managed builds have no
-  // LaunchDarkly, so they ship the gated UI outright and offer no choice.
-  const isCloud = appConfig.mode === "cloud";
+  const isOptIn = offersOptIn(appConfig.mode === "cloud", key);
   const flagOn = Boolean(flags[UI_PREVIEWS[key].ldFlag]);
   return {
     /** Whether to offer the preview toggle to this user at all. */
-    isAvailable: isCloud && flagOn,
+    isAvailable: isOptIn && flagOn,
     /** Whether to render the new UI. */
-    isEnabled: isCloud ? flagOn && optIn : flagOn,
+    isEnabled: isOptIn ? flagOn && optIn : flagOn,
     setOptIn,
     /** Whether the on-page pill is collapsed to its icon. The profile menu ignores this. */
     isCollapsed,
@@ -64,8 +70,9 @@ export const useUiPreview = (key: UiPreviewKey) => {
 export const useOfferedUiPreviewKeys = (): UiPreviewKey[] => {
   const appConfig = useAppConfig();
   const flags = useFlags();
-  if (appConfig.mode !== "cloud") return [];
-  return (Object.keys(UI_PREVIEWS) as UiPreviewKey[]).filter((key) =>
-    Boolean(flags[UI_PREVIEWS[key].ldFlag]),
+  const isCloud = appConfig.mode === "cloud";
+  return (Object.keys(UI_PREVIEWS) as UiPreviewKey[]).filter(
+    (key) =>
+      offersOptIn(isCloud, key) && Boolean(flags[UI_PREVIEWS[key].ldFlag]),
   );
 };
