@@ -42,7 +42,7 @@ skip = [
     # v2-based release back until it moves to `syn` v3.
     { name = "prettyplease", version = "0.2.37" },
     # held back by thrift 0.17.0 depended on by parquet 51.0.0
-    { name = "ordered-float", version = "2.10.1" },
+    { name = "ordered-float", version = "3.9.2" },
     { name = "ordered-float", version = "4.6.0" },
     { name = "hashbrown", version = "0.14.5" },
     # Required by hashbrown

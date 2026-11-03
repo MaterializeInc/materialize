@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
 derivative.workspace = true
@@ -41,6 +40,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
+async-trait.workspace = true
 bincode.workspace = true
 futures.workspace = true
 
