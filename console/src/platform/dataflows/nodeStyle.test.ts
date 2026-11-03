@@ -19,7 +19,6 @@ import {
   hashString,
   heatColorFor,
   hexToRgba,
-  lirGroupColor,
   nodeFillColor,
   operatorColor,
   operatorFamily,
@@ -29,7 +28,6 @@ import {
   textColorFor,
 } from "./nodeStyle";
 
-const PALETTE = ["#111111", "#222222", "#333333", "#444444"];
 const OPERATOR_PALETTE = lightColors.dataflow.operator;
 const ACCENT = { arranged: "#aaaaaa", notArranged: "#bbbbbb" };
 
@@ -58,23 +56,6 @@ describe("hashString", () => {
   it("differs for different strings often enough to be useful", () => {
     const hashes = new Set(["1", "2", "3", "4", "5", "6"].map(hashString));
     expect(hashes.size).toBeGreaterThan(1);
-  });
-});
-
-describe("lirGroupColor", () => {
-  it("is deterministic for the same lirId", () => {
-    expect(lirGroupColor("42", PALETTE)).toEqual(lirGroupColor("42", PALETTE));
-  });
-
-  it("differs for different lirIds often enough to be useful", () => {
-    const picked = new Set(
-      ["1", "2", "3", "4", "5", "6"].map((id) => lirGroupColor(id, PALETTE)),
-    );
-    expect(picked.size).toBeGreaterThan(1);
-  });
-
-  it("only ever picks from the given palette", () => {
-    expect(PALETTE).toContain(lirGroupColor("some-lir-id", PALETTE));
   });
 });
 
@@ -115,7 +96,10 @@ describe("operator palette tokens", () => {
   ] as const;
 
   it.each(themes)("%s: fills keep text at contrast >= 4.5", (_, theme) => {
-    for (const fill of Object.values(theme.dataflow.operator)) {
+    for (const fill of [
+      ...Object.values(theme.dataflow.operator),
+      theme.dataflow.lirGroup,
+    ]) {
       // textColorFor returns 3-digit hex, which relativeLuminance can't parse.
       const text = rgb(textColorFor(fill)).formatHex();
       const [lighter, darker] = [fill, text]

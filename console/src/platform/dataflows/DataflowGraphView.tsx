@@ -45,7 +45,7 @@ import {
   PortNode,
   RegionNode,
 } from "./nodes";
-import { hexToRgba, lirGroupColor, nodeFillColor } from "./nodeStyle";
+import { hexToRgba, nodeFillColor } from "./nodeStyle";
 import { useElkLayout } from "./useElkLayout";
 
 const edgeTypes = { channel: ChannelEdge };
@@ -298,7 +298,7 @@ export const DataflowGraphView = ({
         data: {
           group: g,
           label: g.operator,
-          color: lirGroupColor(g.lirId, colors.lineGraph),
+          color: colors.dataflow.lirGroup,
         },
       };
     });

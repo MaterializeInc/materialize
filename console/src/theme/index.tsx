@@ -80,6 +80,10 @@ export interface BasePalette {
   };
   lineGraph: string[];
   dataflow: {
+    // Border and label of every LIR group box. A single neutral color keeps
+    // groups apart from regions, which draw in the purple and green accents,
+    // and from operators, whose fills carry no gray hue to match it.
+    lirGroup: string;
     // Fill per operator family in the dataflow visualizer. The six hues share
     // one CIE-LCH lightness per theme (about 66 in light mode, 54 in dark
     // mode), so no family reads as more important than another, and they sit

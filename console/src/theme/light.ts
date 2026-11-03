@@ -68,6 +68,7 @@ const base: BasePalette = {
     colors.green[300],
   ],
   dataflow: {
+    lirGroup: colors.gray[500],
     operator: {
       join: "#df8b3f",
       reduce: "#3fabec",

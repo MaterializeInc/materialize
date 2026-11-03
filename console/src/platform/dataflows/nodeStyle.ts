@@ -37,24 +37,12 @@ export const heatColorFor =
 // touch it fade together instead of at different strengths.
 export const DIMMED_OPACITY = 0.25;
 
-/** Deterministic 32-bit string hash, for cycling a fixed color palette. */
+/** Deterministic 32-bit string hash, for building stable cache keys. */
 export function hashString(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++)
     h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
   return h;
-}
-
-// Cycled by a hash of lirId/operator name so the same id or name always
-// gets the same color within one render (and across re-renders, since both
-// are stable). Groups and operators share one palette: LirGroupNode's own
-// border/label already marks a box as a group, so the fill color doesn't
-// need to carry that distinction too.
-export function lirGroupColor(
-  lirId: string,
-  palette: readonly string[],
-): string {
-  return palette[Math.abs(hashString(lirId)) % palette.length];
 }
 
 export type OperatorFamily =
