@@ -64,7 +64,7 @@ original schema and the storage objects feeding them move to a parallel
 | `public_mysql_cdc` | MV `mysql_wmr` |
 | `public_mysql_cdc_sources` | MySQL source + source-tables + the `mysql_wmr` sinks |
 | `public_loadgen` | MV `sales_product_product_category` |
-| `public_loadgen_sources` | Kafka sources + source-tables + product/category seed tables + the loadgen Iceberg sinks |
+| `public_loadgen_sources` | Kafka sources + source-tables + product/category seed tables + the loadgen Kafka and Iceberg sinks |
 
 Each materialized view carries a default index on
 `qa_canary_environment_compute` and `GRANT ALL PRIVILEGES` to the canary roles.
@@ -106,6 +106,10 @@ sinks, the five `*_gcs_iceberg_sink` GCS model sinks, and both the
 disable a GCS sink, rename its `.sql` file to `.sql.disabled` (mz-deploy only
 reads `*.sql`, so it skips them) and remove the corresponding testdrive sink
 from `mzcompose.py`.
+
+The five model Kafka sinks and the testdrive-managed
+`public_table.table_mv_sink` are also active. The large loadgen tables sink to
+the `loadgen_customer` and `loadgen_sales` topics with keyed upsert envelopes.
 
 ## What `mz-deploy` does not manage
 
