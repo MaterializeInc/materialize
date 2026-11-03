@@ -15,6 +15,7 @@ import {
   HydrationReplica,
   latestFullHydration,
   mergeHydrationReplicas,
+  ObjectLifetime,
   replicaBootTimes,
   ReplicaTransition,
   restartsReadingAsFinished,
@@ -232,14 +233,14 @@ describe("findUnfinishedHydrations", () => {
     oomKills = [],
     hydrations = [],
     replicaList = replicas,
-    objectCreatedAtMs = [],
+    objectLifetimes = [],
     startMs = at("00:00:00").getTime(),
   }: {
     transitions: ReplicaTransition[];
     oomKills?: ReplicaTransition[];
     hydrations?: Hydration[];
     replicaList?: HydrationReplica[];
-    objectCreatedAtMs?: number[];
+    objectLifetimes?: ObjectLifetime[];
     startMs?: number;
   }) => {
     const bootTimes = replicaBootTimes(transitions, replicaList);
@@ -253,7 +254,7 @@ describe("findUnfinishedHydrations", () => {
       hydrations,
       replicas: replicaList,
       bootTimes,
-      objectCreatedAtMs,
+      objectLifetimes,
       startMs,
     }).map(({ startedAt, endedAt, reason }) => [
       startedAt?.toISOString(),
@@ -362,7 +363,7 @@ describe("findUnfinishedHydrations", () => {
       find({
         transitions,
         replicaList,
-        objectCreatedAtMs: [at("11:10:00").getTime()],
+        objectLifetimes: [{ createdAtMs: at("11:10:00").getTime() }],
         startMs: at("11:00:00").getTime(),
       }),
     ).toEqual([
@@ -431,10 +432,37 @@ describe("findUnfinishedHydrations", () => {
       find({
         transitions,
         hydrations,
-        objectCreatedAtMs: [at("10:10:00").getTime()],
+        objectLifetimes: [{ createdAtMs: at("10:10:00").getTime() }],
       }),
     ).toEqual([
       ["2026-10-20T10:10:00.000Z", "2026-10-20T10:12:00.000Z", "oom-killed"],
+    ]);
+  });
+
+  it("counts an object dropped since only for the restarts while it existed", () => {
+    const transitions = [
+      transition("u1", "10:00:00", "online"),
+      transition("u1", "10:20:00", "offline", "oom-killed"),
+    ];
+    const hydrations = transformHydrations(
+      [episode("u1", "10:00:01", "10:02:00")],
+      replicaBootTimes(transitions, replicas),
+    );
+    const droppedAt = (time: string) => [
+      {
+        createdAtMs: at("10:10:00").getTime(),
+        droppedAtMs: at(time).getTime(),
+      },
+    ];
+
+    // Dropped unfinished before the restart, which left the replica hydrated.
+    expect(
+      find({ transitions, hydrations, objectLifetimes: droppedAt("10:11:00") }),
+    ).toEqual([]);
+    expect(
+      find({ transitions, hydrations, objectLifetimes: droppedAt("10:25:00") }),
+    ).toEqual([
+      ["2026-10-20T10:10:00.000Z", "2026-10-20T10:20:00.000Z", "oom-killed"],
     ]);
   });
 
@@ -464,7 +492,7 @@ describe("findUnfinishedHydrations", () => {
           hydrations,
           replicas,
           bootTimes,
-          objectCreatedAtMs: [],
+          objectLifetimes: [],
           startMs,
         }),
         startMs,

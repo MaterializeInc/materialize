@@ -49,14 +49,14 @@ export function buildObjectCreationTimesQuery({
 
 /**
  * When each object of `objectTypes` on `clusterId` that was created at or
- * after `startDate`, and dropped since, was created.
+ * after `startDate`, and dropped since, was created and dropped.
  *
  * NOTE: `mz_object_history` is indexed only by id, so filtering by cluster
  * scans every object the environment has created. Measured on v26.47: 8.5 ms
  * at 32,000 objects, plus about 0.23 ms per 1,000. Looking up ids instead
  * costs about 60 µs an id, so it pays off only in much larger environments.
  */
-export function buildDroppedObjectCreationTimesQuery({
+export function buildDroppedObjectLifetimesQuery({
   clusterId,
   objectTypes,
   startDate,
@@ -70,9 +70,10 @@ export function buildDroppedObjectCreationTimesQuery({
     .select([
       "id",
       "object_type as objectType",
-      // Never null here: the filter on it leaves out built-in objects, which
-      // have no creation time.
-      sql<Date>`created_at`.as("occurredAt"),
+      // Never null here: the filters on them leave out built-in objects, which
+      // have no creation time, and objects not dropped.
+      sql<Date>`created_at`.as("createdAt"),
+      sql<Date>`dropped_at`.as("droppedAt"),
     ])
     .where("cluster_id", "=", clusterId)
     .where("object_type", "in", objectTypes)
@@ -80,17 +81,17 @@ export function buildDroppedObjectCreationTimesQuery({
     .where("created_at", ">=", sql<Date>`${sql.lit(startDate)}::timestamptz`);
 }
 
-export async function fetchDroppedObjectCreationTimes({
+export async function fetchDroppedObjectLifetimes({
   params,
   queryKey,
   requestOptions,
 }: {
-  params: Parameters<typeof buildDroppedObjectCreationTimesQuery>[0];
+  params: Parameters<typeof buildDroppedObjectLifetimesQuery>[0];
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
   const res = await executeSqlV2({
-    queries: buildDroppedObjectCreationTimesQuery(params).compile(),
+    queries: buildDroppedObjectLifetimesQuery(params).compile(),
     queryKey,
     requestOptions,
     sessionVariables: { transaction_isolation: "serializable" },

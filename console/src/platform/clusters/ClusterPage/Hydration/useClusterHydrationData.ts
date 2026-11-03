@@ -16,7 +16,7 @@ import {
   replicaStatusesUpdatedAt,
   useClusterHydrationEpisodes,
   useClusterReplicaHistory,
-  useDroppedObjectCreationTimes,
+  useDroppedObjectLifetimes,
   useEpisodeObjectHydrations,
   useObjectCreationTimes,
   useReplicaCpuPeak,
@@ -152,15 +152,15 @@ export function useClusterHydrationData({
       replicas,
       bootTimes,
     });
-    const createdAtMs = (createdObjects ?? []).map(({ occurredAt }) =>
-      occurredAt.getTime(),
-    );
+    const objectLifetimes = (createdObjects ?? []).map(({ occurredAt }) => ({
+      createdAtMs: occurredAt.getTime(),
+    }));
     const unfinishedByCurrentObjects = findUnfinishedHydrations({
       restarts,
       hydrations: allHydrations,
       replicas,
       bootTimes,
-      objectCreatedAtMs: createdAtMs,
+      objectLifetimes,
       startMs,
     });
     const heapLimitBytesById = new Map(
@@ -178,7 +178,7 @@ export function useClusterHydrationData({
       allHydrations,
       hydrations,
       restarts,
-      createdAtMs,
+      objectLifetimes,
       unfinishedByCurrentObjects,
       heapLimitBytesById,
       startMs,
@@ -204,7 +204,7 @@ export function useClusterHydrationData({
         startMs,
       )
     : [];
-  const droppedObjects = useDroppedObjectCreationTimes({
+  const droppedObjects = useDroppedObjectLifetimes({
     clusterId: cluster.id,
     timePeriodMinutes,
     refetchKey:
@@ -220,11 +220,12 @@ export function useClusterHydrationData({
             hydrations: derived.allHydrations,
             replicas,
             bootTimes: derived.bootTimes,
-            objectCreatedAtMs: [
-              ...derived.createdAtMs,
-              ...droppedObjects.data.map(({ occurredAt }) =>
-                occurredAt.getTime(),
-              ),
+            objectLifetimes: [
+              ...derived.objectLifetimes,
+              ...droppedObjects.data.map(({ createdAt, droppedAt }) => ({
+                createdAtMs: createdAt.getTime(),
+                droppedAtMs: droppedAt.getTime(),
+              })),
             ],
             startMs,
           })

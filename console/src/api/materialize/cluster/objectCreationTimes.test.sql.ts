@@ -14,9 +14,9 @@ import {
 } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
 
-import { buildDroppedObjectCreationTimesQuery } from "./objectCreationTimes";
+import { buildDroppedObjectLifetimesQuery } from "./objectCreationTimes";
 
-describe("buildDroppedObjectCreationTimesQuery", () => {
+describe("buildDroppedObjectLifetimesQuery", () => {
   it("returns the cluster's indexes and materialized views created since the start and dropped since", async () => {
     // Reset Materialize state.
     await testdrive(`
@@ -50,7 +50,7 @@ describe("buildDroppedObjectCreationTimesQuery", () => {
     }
 
     const { rows } = await executeSqlHttp(
-      buildDroppedObjectCreationTimesQuery({
+      buildDroppedObjectLifetimesQuery({
         clusterId,
         objectTypes: ["index", "materialized-view"],
         startDate: (startDate as Date).toISOString(),
@@ -66,8 +66,9 @@ describe("buildDroppedObjectCreationTimesQuery", () => {
         ])
         .sort(),
     );
-    expect(rows.every(({ occurredAt }) => occurredAt instanceof Date)).toBe(
-      true,
-    );
+    for (const { createdAt, droppedAt } of rows) {
+      expect(createdAt).toBeInstanceOf(Date);
+      expect(droppedAt.getTime()).toBeGreaterThan(createdAt.getTime());
+    }
   });
 });

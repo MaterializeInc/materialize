@@ -79,7 +79,7 @@ import {
 } from "~/api/materialize/cluster/materializationLag";
 import fetchMaxReplicasPerCluster from "~/api/materialize/cluster/maxReplicasPerCluster";
 import {
-  fetchDroppedObjectCreationTimes,
+  fetchDroppedObjectLifetimes,
   fetchObjectCreationTimes,
 } from "~/api/materialize/cluster/objectCreationTimes";
 import { fetchReplicaHeapLimits } from "~/api/materialize/cluster/replicaHeapLimits";
@@ -349,14 +349,14 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("objectCreationTimes", params),
     ] as const,
-  droppedObjectCreationTimes: (params: {
+  droppedObjectLifetimes: (params: {
     clusterId: string;
     timePeriodMinutes: number;
     refetchKey: string;
   }) =>
     [
       ...clusterQueryKeys.all(),
-      buildQueryKeyPart("droppedObjectCreationTimes", params),
+      buildQueryKeyPart("droppedObjectLifetimes", params),
     ] as const,
   maintainedObjectNames: (objectIds: string[]) =>
     [
@@ -1789,22 +1789,22 @@ export function useObjectCreationTimes(params: {
 }
 
 /**
- * Creation times of the cluster's indexes and materialized views created over
- * the window and dropped since. Fetched again when `refetchKey` changes, and
+ * When the cluster's indexes and materialized views created over the window
+ * and dropped since were created and dropped. Fetched again when `refetchKey` changes, and
  * idle while it's empty.
  */
-export function useDroppedObjectCreationTimes(params: {
+export function useDroppedObjectLifetimes(params: {
   clusterId: string;
   timePeriodMinutes: number;
   refetchKey: string;
 }) {
   return useQuery({
-    queryKey: clusterQueryKeys.droppedObjectCreationTimes(params),
+    queryKey: clusterQueryKeys.droppedObjectLifetimes(params),
     enabled: params.refetchKey !== "",
     staleTime: Infinity,
     queryFn: ({ queryKey, signal }) => {
       const [, queryKeyParams] = queryKey;
-      return fetchDroppedObjectCreationTimes({
+      return fetchDroppedObjectLifetimes({
         params: {
           clusterId: queryKeyParams.clusterId,
           objectTypes: ["index", "materialized-view"],

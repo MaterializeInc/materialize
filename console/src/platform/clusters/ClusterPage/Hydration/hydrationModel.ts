@@ -256,6 +256,11 @@ export function findRestarts({
   });
 }
 
+export interface ObjectLifetime {
+  createdAtMs: number;
+  droppedAtMs?: number;
+}
+
 /** Identifies a restart, and the unfinished hydration it ended if any. */
 const restartId = ({ replicaId, occurredAt }: ReplicaTransition) =>
   `${replicaId}|${occurredAt.getTime()}`;
@@ -280,7 +285,7 @@ export function findUnfinishedHydrations({
   hydrations,
   replicas,
   bootTimes,
-  objectCreatedAtMs,
+  objectLifetimes,
   startMs,
 }: {
   /** Every restart of the replicas, as `findRestarts` returns them. */
@@ -289,8 +294,8 @@ export function findUnfinishedHydrations({
   hydrations: Hydration[];
   replicas: HydrationReplica[];
   bootTimes: Map<string, number[]>;
-  /** When the cluster's objects were created, for those created in the window. */
-  objectCreatedAtMs: number[];
+  /** When the cluster's objects were created, and dropped if they were. */
+  objectLifetimes: ObjectLifetime[];
   startMs: number;
 }): UnfinishedHydration[] {
   const replicasById = new Map(
@@ -307,9 +312,16 @@ export function findUnfinishedHydrations({
       ?.occurredAt.getTime();
     const attemptStartMs =
       previousRestartMs ?? replica?.createdAt?.getTime() ?? -Infinity;
+    // An object dropped before the restart wasn't hydrating at it. Dropping an
+    // unfinished object records no finished hydration, so it would otherwise
+    // read as cut short.
     const lastCreatedMs =
-      max(objectCreatedAtMs, (ms) =>
-        ms > attemptStartMs && ms < endMs ? ms : undefined,
+      max(objectLifetimes, ({ createdAtMs, droppedAtMs }) =>
+        createdAtMs > attemptStartMs &&
+        createdAtMs < endMs &&
+        (droppedAtMs === undefined || droppedAtMs > endMs)
+          ? createdAtMs
+          : undefined,
       ) ?? attemptStartMs;
     if (lastCreatedMs < startMs) return [];
     const finishedBetween = (fromMs: number, toMs: number) =>

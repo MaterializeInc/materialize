@@ -42,7 +42,7 @@ import {
   replicaStatusesUpdatedAt,
   useClusterLineageIds,
   useClusterReplicaHistory,
-  useDroppedObjectCreationTimes,
+  useDroppedObjectLifetimes,
   useEpisodeObjectHydrations,
   useFreshnessObjects,
   useObjectHydrationStretches,
@@ -730,27 +730,29 @@ describe("useClusterReplicaHistory", () => {
   });
 });
 
-describe("useDroppedObjectCreationTimes", () => {
+describe("useDroppedObjectLifetimes", () => {
   const COLUMNS = [
     ...buildColumns(["id", "objectType"]),
-    buildColumn({ name: "occurredAt", type_oid: MzDataType.timestamptz }),
+    buildColumn({ name: "createdAt", type_oid: MzDataType.timestamptz }),
+    buildColumn({ name: "droppedAt", type_oid: MzDataType.timestamptz }),
   ];
   const DROPPED_INDEX = {
     id: "u20",
     objectType: "index",
-    occurredAt: String(Date.UTC(2026, 9, 20, 10, 10)),
+    createdAt: String(Date.UTC(2026, 9, 20, 10, 10)),
+    droppedAt: String(Date.UTC(2026, 9, 20, 10, 30)),
   };
 
   const renderDroppedObjects = async (refetchKey: string) => {
     const requests = answerByRequest(
-      "droppedObjectCreationTimes",
+      "droppedObjectLifetimes",
       () => [DROPPED_INDEX],
       COLUMNS,
     );
     const ProviderWrapper = await createProviderWrapper();
     const view = renderHook(
       () =>
-        useDroppedObjectCreationTimes({
+        useDroppedObjectLifetimes({
           clusterId: "u9",
           timePeriodMinutes: TIME_PERIOD_MINUTES,
           refetchKey,
@@ -779,7 +781,8 @@ describe("useDroppedObjectCreationTimes", () => {
         {
           id: "u20",
           objectType: "index",
-          occurredAt: new Date(Date.UTC(2026, 9, 20, 10, 10)),
+          createdAt: new Date(Date.UTC(2026, 9, 20, 10, 10)),
+          droppedAt: new Date(Date.UTC(2026, 9, 20, 10, 30)),
         },
       ]),
     );
