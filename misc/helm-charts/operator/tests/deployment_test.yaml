@@ -429,3 +429,39 @@ tests:
   - equal:
       path: spec.template.spec.terminationGracePeriodSeconds
       value: 30
+
+- it: should run the operator in a user namespace and pass the flag by default on Kubernetes 1.33+
+  capabilities:
+    majorVersion: 1
+    minorVersion: 33
+  asserts:
+  - equal:
+      path: spec.template.spec.hostUsers
+      value: false
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--enable-user-namespaces"
+
+- it: should skip user namespaces on Kubernetes older than 1.33
+  capabilities:
+    majorVersion: 1
+    minorVersion: 32
+  asserts:
+  - notExists:
+      path: spec.template.spec.hostUsers
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--enable-user-namespaces"
+
+- it: should not use user namespaces when disabled
+  capabilities:
+    majorVersion: 1
+    minorVersion: 34
+  set:
+    operator.args.enableUserNamespaces: false
+  asserts:
+  - notExists:
+      path: spec.template.spec.hostUsers
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--enable-user-namespaces"

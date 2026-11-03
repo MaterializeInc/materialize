@@ -62,6 +62,8 @@ pub const CONTROLLER_NAME: &str = "console";
 #[derive(Clone)]
 pub struct Config {
     pub enable_security_context: bool,
+    /// Whether to run pods in a Kubernetes user namespace (`hostUsers: false`).
+    pub enable_user_namespaces: bool,
     pub enable_prometheus_scrape_annotations: bool,
 
     pub image_pull_policy: KubernetesImagePullPolicy,
@@ -472,6 +474,9 @@ ssl_certificate_key /nginx/tls/tls.key;",
                         fs_group: Some(101),
                         ..Default::default()
                     }),
+                    // `None` rather than `Some(true)` when disabled, so the
+                    // pod spec is unchanged from before user namespace support.
+                    host_users: self.config.enable_user_namespaces.then_some(false),
                     ..Default::default()
                 }),
             },
@@ -719,6 +724,7 @@ mod tests {
     fn test_context(enable_prometheus_scrape_annotations: bool) -> Context {
         Context::new(Config {
             enable_security_context: false,
+            enable_user_namespaces: false,
             enable_prometheus_scrape_annotations,
             image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
             scheduler_name: None,
@@ -747,6 +753,22 @@ mod tests {
         console.metadata.uid = Some("test".to_owned());
         console.status = Some(console.status());
         console
+    }
+
+    #[mz_ore::test]
+    fn user_namespaces_set_host_users() {
+        for (enabled, expected) in [(false, None), (true, Some(false))] {
+            let mut context = test_context(false);
+            context.config.enable_user_namespaces = enabled;
+            let pod = context
+                .create_console_deployment_object(&test_console())
+                .spec
+                .unwrap()
+                .template
+                .spec
+                .unwrap();
+            assert_eq!(pod.host_users, expected);
+        }
     }
 
     #[mz_ore::test]

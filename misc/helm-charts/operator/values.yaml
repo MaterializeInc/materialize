@@ -64,6 +64,16 @@ operator:
     # deployments generally do not preserve (port-forwards and most ingress
     # setups present a proxy address), so they are disabled by default.
     enableDatabaseNetworkPolicies: false
+    # -- Whether to run the operator, environmentd, clusterd, balancerd, and
+    # console pods in Kubernetes user namespaces (`hostUsers: false`), so that
+    # root inside a container maps to an unprivileged user on the node. Only
+    # takes effect on Kubernetes 1.33 or later, and is skipped on older
+    # clusters. Nodes must also support it: Linux 6.3 or later (for idmapped
+    # mounts on tmpfs-backed volumes such as Secrets and emptyDir), and
+    # containerd 2.0 or later or CRI-O 1.25 or later. Set to `false` if your
+    # nodes do not meet these requirements. Changing this for an existing
+    # Materialize instance requires a rollout to take effect.
+    enableUserNamespaces: true
     # -- Whether to install the v1 version of the Materialize CRD and the
     # conversion webhook that converts between v1 and v1alpha1. When false,
     # only the v1alpha1 CRD version is installed and no webhook serving
