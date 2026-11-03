@@ -171,6 +171,27 @@ steps:
     skip: "Has been creating more toil than use"
     sanitizer: skip
 
+  - id: cargo-test-tls-external
+    # The composition declares these services, but --tls-external starts none.
+    topics: [kafka, mysql, postgres]
+    label: ":rust: TLS validation against public CAs"
+    depends_on: []
+    timeout_in_minutes: 45
+    retry:
+      automatic:
+        # Tolerate transient network failures reaching the external endpoint.
+        - exit_status: 1
+          limit: 1
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cargo-test
+          # Builds the test, which needs the full Rust toolchain and nextest.
+          ci-builder: stable
+          args: [--tls-external]
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    sanitizer: skip
+
   - group: Benchmarks
     key: benchmark
     steps:
