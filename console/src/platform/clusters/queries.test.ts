@@ -42,6 +42,7 @@ import {
   replicaStatusesUpdatedAt,
   useClusterLineageIds,
   useClusterReplicaHistory,
+  useDroppedObjectCreationTimes,
   useEpisodeObjectHydrations,
   useFreshnessObjects,
   useObjectHydrationStretches,
@@ -724,6 +725,62 @@ describe("useClusterReplicaHistory", () => {
           replicaId: "u2",
           droppedAt: new Date(BURST_DROPPED_AT),
         }),
+      ]),
+    );
+  });
+});
+
+describe("useDroppedObjectCreationTimes", () => {
+  const COLUMNS = [
+    ...buildColumns(["id", "objectType"]),
+    buildColumn({ name: "occurredAt", type_oid: MzDataType.timestamptz }),
+  ];
+  const DROPPED_INDEX = {
+    id: "u20",
+    objectType: "index",
+    occurredAt: String(Date.UTC(2026, 9, 20, 10, 10)),
+  };
+
+  const renderDroppedObjects = async (refetchKey: string) => {
+    const requests = answerByRequest(
+      "droppedObjectCreationTimes",
+      () => [DROPPED_INDEX],
+      COLUMNS,
+    );
+    const ProviderWrapper = await createProviderWrapper();
+    const view = renderHook(
+      () =>
+        useDroppedObjectCreationTimes({
+          clusterId: "u9",
+          timePeriodMinutes: TIME_PERIOD_MINUTES,
+          refetchKey,
+        }),
+      { wrapper: ProviderWrapper },
+    );
+    return { ...view, requests };
+  };
+
+  it("stays idle without a restart to explain", async () => {
+    const { result, requests } = await renderDroppedObjects("");
+    // Long enough for a request started on mount to land.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(result.current.fetchStatus).toEqual("idle");
+    expect(requests.count).toBe(0);
+  });
+
+  it("reads the cluster's dropped objects once a restart needs them", async () => {
+    const { result } = await renderDroppedObjects(
+      `1|${Date.UTC(2026, 9, 20, 10, 12)}`,
+    );
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual([
+        {
+          id: "u20",
+          objectType: "index",
+          occurredAt: new Date(Date.UTC(2026, 9, 20, 10, 10)),
+        },
       ]),
     );
   });

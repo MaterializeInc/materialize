@@ -16,6 +16,7 @@ import {
   replicaStatusesUpdatedAt,
   useClusterHydrationEpisodes,
   useClusterReplicaHistory,
+  useDroppedObjectCreationTimes,
   useEpisodeObjectHydrations,
   useObjectCreationTimes,
   useReplicaCpuPeak,
@@ -27,11 +28,13 @@ import { useClusterObjectsLive } from "~/store/allObjectsCollection";
 import { useEnvironmentGate } from "~/store/environments";
 
 import {
+  findRestarts,
   findUnfinishedHydrations,
   heapLimitBytes,
   Hydration,
   mergeHydrationReplicas,
   replicaBootTimes,
+  restartsReadingAsFinished,
   transformHydrations,
   transformObjectHydrationSpans,
 } from "./hydrationModel";
@@ -143,15 +146,21 @@ export function useClusterHydrationData({
     const hydrations = allHydrations.filter(
       ({ objectCount }) => objectCount > 0,
     );
-    const unfinished = findUnfinishedHydrations({
+    const restarts = findRestarts({
       transitions,
       oomKills: statusHistory.data?.oomKills ?? [],
+      replicas,
+      bootTimes,
+    });
+    const createdAtMs = (createdObjects ?? []).map(({ occurredAt }) =>
+      occurredAt.getTime(),
+    );
+    const unfinishedByCurrentObjects = findUnfinishedHydrations({
+      restarts,
       hydrations: allHydrations,
       replicas,
       bootTimes,
-      objectCreatedAtMs: (createdObjects ?? []).map(({ occurredAt }) =>
-        occurredAt.getTime(),
-      ),
+      objectCreatedAtMs: createdAtMs,
       startMs,
     });
     const heapLimitBytesById = new Map(
@@ -164,7 +173,16 @@ export function useClusterHydrationData({
         return limit === undefined ? [] : [[replica.id, limit]];
       }),
     );
-    return { bootTimes, hydrations, unfinished, heapLimitBytesById, startMs };
+    return {
+      bootTimes,
+      allHydrations,
+      hydrations,
+      restarts,
+      createdAtMs,
+      unfinishedByCurrentObjects,
+      heapLimitBytesById,
+      startMs,
+    };
   }, [
     statusHistory.data,
     objects,
@@ -176,11 +194,53 @@ export function useClusterHydrationData({
     allocations.data,
   ]);
 
+  // A restart that reads as finished can have cut short the hydration of an
+  // object dropped since, which the current objects don't show. Reading those
+  // is a scan, so it waits for such a restart. A failed read changes nothing.
+  const readingAsFinished = createdObjects
+    ? restartsReadingAsFinished(
+        derived.restarts,
+        derived.unfinishedByCurrentObjects,
+        startMs,
+      )
+    : [];
+  const droppedObjects = useDroppedObjectCreationTimes({
+    clusterId: cluster.id,
+    timePeriodMinutes,
+    refetchKey:
+      readingAsFinished.length > 0
+        ? `${readingAsFinished.length}|${readingAsFinished.at(-1)?.occurredAt.getTime()}`
+        : "",
+  });
+  const unfinished = React.useMemo(
+    () =>
+      droppedObjects.data && droppedObjects.data.length > 0
+        ? findUnfinishedHydrations({
+            restarts: derived.restarts,
+            hydrations: derived.allHydrations,
+            replicas,
+            bootTimes: derived.bootTimes,
+            objectCreatedAtMs: [
+              ...derived.createdAtMs,
+              ...droppedObjects.data.map(({ occurredAt }) =>
+                occurredAt.getTime(),
+              ),
+            ],
+            startMs,
+          })
+        : derived.unfinishedByCurrentObjects,
+    [derived, droppedObjects.data, replicas, startMs],
+  );
+
   return {
     /** Whether the environment records hydration history, null while unknown. */
     hasHistory,
     replicas,
-    ...derived,
+    bootTimes: derived.bootTimes,
+    hydrations: derived.hydrations,
+    unfinished,
+    heapLimitBytesById: derived.heapLimitBytesById,
+    startMs,
     progressByReplicaId: progress.progressByReplicaId,
     isProgressLoading: !progress.snapshotComplete,
     isLoading:

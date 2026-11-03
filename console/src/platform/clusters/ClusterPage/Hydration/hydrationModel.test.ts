@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import {
+  findRestarts,
   findUnfinishedHydrations,
   heapLimitBytes,
   Hydration,
@@ -16,6 +17,7 @@ import {
   mergeHydrationReplicas,
   replicaBootTimes,
   ReplicaTransition,
+  restartsReadingAsFinished,
   transformHydrations,
   transformObjectHydrationSpans,
 } from "./hydrationModel";
@@ -239,13 +241,18 @@ describe("findUnfinishedHydrations", () => {
     replicaList?: HydrationReplica[];
     objectCreatedAtMs?: number[];
     startMs?: number;
-  }) =>
-    findUnfinishedHydrations({
-      transitions,
-      oomKills,
+  }) => {
+    const bootTimes = replicaBootTimes(transitions, replicaList);
+    return findUnfinishedHydrations({
+      restarts: findRestarts({
+        transitions,
+        oomKills,
+        replicas: replicaList,
+        bootTimes,
+      }),
       hydrations,
       replicas: replicaList,
-      bootTimes: replicaBootTimes(transitions, replicaList),
+      bootTimes,
       objectCreatedAtMs,
       startMs,
     }).map(({ startedAt, endedAt, reason }) => [
@@ -253,6 +260,7 @@ describe("findUnfinishedHydrations", () => {
       endedAt.toISOString(),
       reason,
     ]);
+  };
 
   it("reports each out-of-memory restart of a replica that never finished hydrating", () => {
     const transitions = [
@@ -427,6 +435,48 @@ describe("findUnfinishedHydrations", () => {
       }),
     ).toEqual([
       ["2026-10-20T10:10:00.000Z", "2026-10-20T10:12:00.000Z", "oom-killed"],
+    ]);
+  });
+
+  it("names the restarts an object missing from the creation times could have cut short", () => {
+    const transitions = [
+      transition("u1", "10:00:00", "online"),
+      transition("u1", "10:12:00", "offline", "oom-killed"),
+      transition("u1", "10:13:00", "online"),
+      transition("u1", "10:20:00", "offline", "oom-killed"),
+    ];
+    const bootTimes = replicaBootTimes(transitions, replicas);
+    const hydrations = transformHydrations(
+      [episode("u1", "10:00:01", "10:02:00")],
+      bootTimes,
+    );
+    const restarts = findRestarts({
+      transitions,
+      oomKills: [],
+      replicas,
+      bootTimes,
+    });
+    const readingAsFinished = (startMs: number) =>
+      restartsReadingAsFinished(
+        restarts,
+        findUnfinishedHydrations({
+          restarts,
+          hydrations,
+          replicas,
+          bootTimes,
+          objectCreatedAtMs: [],
+          startMs,
+        }),
+        startMs,
+      ).map(({ occurredAt }) => occurredAt.toISOString());
+
+    // The first came after the replica finished. The second never finished.
+    expect(readingAsFinished(at("00:00:00").getTime())).toEqual([
+      "2026-10-20T10:12:00.000Z",
+    ]);
+    // With the window from 10:15, the second's attempt began before it.
+    expect(readingAsFinished(at("10:15:00").getTime())).toEqual([
+      "2026-10-20T10:20:00.000Z",
     ]);
   });
 

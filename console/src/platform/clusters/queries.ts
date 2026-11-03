@@ -78,7 +78,10 @@ import {
   MaterializationLagParams,
 } from "~/api/materialize/cluster/materializationLag";
 import fetchMaxReplicasPerCluster from "~/api/materialize/cluster/maxReplicasPerCluster";
-import { fetchObjectCreationTimes } from "~/api/materialize/cluster/objectCreationTimes";
+import {
+  fetchDroppedObjectCreationTimes,
+  fetchObjectCreationTimes,
+} from "~/api/materialize/cluster/objectCreationTimes";
 import { fetchReplicaHeapLimits } from "~/api/materialize/cluster/replicaHeapLimits";
 import { fetchReplicaHydration } from "~/api/materialize/cluster/replicaHydration";
 import {
@@ -345,6 +348,15 @@ export const clusterQueryKeys = {
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("objectCreationTimes", params),
+    ] as const,
+  droppedObjectCreationTimes: (params: {
+    clusterId: string;
+    timePeriodMinutes: number;
+    refetchKey: string;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("droppedObjectCreationTimes", params),
     ] as const,
   maintainedObjectNames: (objectIds: string[]) =>
     [
@@ -1773,6 +1785,43 @@ export function useObjectCreationTimes(params: {
         ? previous
         : undefined;
     },
+  });
+}
+
+/**
+ * Creation times of the cluster's indexes and materialized views created over
+ * the window and dropped since. Fetched again when `refetchKey` changes, and
+ * idle while it's empty.
+ */
+export function useDroppedObjectCreationTimes(params: {
+  clusterId: string;
+  timePeriodMinutes: number;
+  refetchKey: string;
+}) {
+  return useQuery({
+    queryKey: clusterQueryKeys.droppedObjectCreationTimes(params),
+    enabled: params.refetchKey !== "",
+    staleTime: Infinity,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchDroppedObjectCreationTimes({
+        params: {
+          clusterId: queryKeyParams.clusterId,
+          objectTypes: ["index", "materialized-view"],
+          startDate: subMinutes(
+            new Date(),
+            queryKeyParams.timePeriodMinutes,
+          ).toISOString(),
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    // The same cluster's earlier answer stays up while a new key loads.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1].clusterId === params.clusterId
+        ? previous
+        : undefined,
   });
 }
 
