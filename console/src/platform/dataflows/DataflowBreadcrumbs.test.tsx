@@ -51,6 +51,7 @@ const node = (
 const structure: DataflowStructure = {
   root: "root",
   channels: [],
+  lirSpans: [],
   nodes: new Map([
     ["root", node("root", "Dataflow", null, ["child"])],
     ["child", node("child", "RegionA", "root", ["grandchild"])],

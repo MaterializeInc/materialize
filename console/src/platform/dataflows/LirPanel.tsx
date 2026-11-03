@@ -36,7 +36,13 @@ const LirRow = ({ node, onHighlight, onSelect }: LirRowProps) => {
         pl={node.info.nesting * 3}
         cursor="pointer"
         _hover={{ background: colors.background.secondary }}
-        onMouseEnter={() => onHighlight(new Set(node.memberIds))}
+        // An empty member set would dim the whole canvas, which reads as "no
+        // match" rather than "this span has no operators".
+        onMouseEnter={() =>
+          onHighlight(
+            node.memberIds.length > 0 ? new Set(node.memberIds) : null,
+          )
+        }
         onMouseLeave={() => onHighlight(null)}
         onClick={() => onSelect(node.memberIds)}
       >

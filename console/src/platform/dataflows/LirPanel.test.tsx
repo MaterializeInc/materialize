@@ -48,29 +48,39 @@ const node = (
 const emptyStructure: DataflowStructure = {
   root: "root",
   channels: [],
+  lirSpans: [],
   nodes: new Map([["root", node("root")]]),
 };
 
+const joinSpan = {
+  exportId: "u1",
+  lirId: "1",
+  parentLirId: null,
+  nesting: 0,
+  operator: "Join",
+};
 const structureWithLir: DataflowStructure = {
   root: "root",
   channels: [],
+  lirSpans: [joinSpan],
   nodes: new Map([
-    [
-      "root",
-      node("root", {
-        children: ["op1"],
-        lir: [
-          {
-            exportId: "u1",
-            lirId: "1",
-            parentLirId: null,
-            nesting: 0,
-            operator: "Join",
-          },
-        ],
-      }),
-    ],
+    ["root", node("root", { children: ["op1"], lir: [joinSpan] })],
   ]),
+};
+
+// A span covering no logged operator, such as a Constant.
+const structureWithEmptySpan: DataflowStructure = {
+  ...structureWithLir,
+  lirSpans: [
+    ...structureWithLir.lirSpans,
+    {
+      exportId: "u1",
+      lirId: "2",
+      parentLirId: null,
+      nesting: 0,
+      operator: "Constant",
+    },
+  ],
 };
 
 const noop = () => {};
@@ -152,5 +162,23 @@ describe("LirPanel", () => {
     expect(
       screen.getByRole("button", { name: "Expand LIR panel" }),
     ).toBeVisible();
+  });
+
+  it("lists a span with no member operators, without highlighting anything on hover", async () => {
+    const onHighlight = vi.fn();
+    await renderComponent(
+      <LirPanel
+        structure={structureWithEmptySpan}
+        collapsed={false}
+        onToggleCollapsed={noop}
+        onHighlight={onHighlight}
+        onSelect={noop}
+      />,
+    );
+    const row = screen.getByText("LIR 2: Constant");
+    expect(row).toBeVisible();
+    // Highlighting an empty member set would dim every node on the canvas.
+    await userEvent.hover(row);
+    expect(onHighlight).not.toHaveBeenCalledWith(new Set());
   });
 });

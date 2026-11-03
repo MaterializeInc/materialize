@@ -1346,6 +1346,75 @@ describe("lirIndex", () => {
   });
 });
 
+describe("lirIndex with empty spans", () => {
+  const ops: OperatorRow[] = [
+    {
+      id: "1",
+      address: ["9"],
+      name: "Dataflow",
+      arrangementRecords: "0",
+      arrangementSize: "0",
+      elapsedNs: "0",
+    },
+    {
+      id: "2",
+      address: ["9", "1"],
+      name: "OpA",
+      arrangementRecords: "100",
+      arrangementSize: "0",
+      elapsedNs: "10",
+    },
+  ];
+  const span = (
+    lirId: string,
+    operator: string,
+    start: string,
+    end: string,
+  ): LirSpanRow => ({
+    exportId: "u1",
+    lirId,
+    parentLirId: null,
+    nesting: 0,
+    operator,
+    operatorIdStart: start,
+    operatorIdEnd: end,
+  });
+
+  it("keeps spans that cover no logged operator, with no members and a zero summary", () => {
+    const s = buildDataflowStructure(
+      ops,
+      [],
+      [
+        span("1", "Constant", "2", "2"), // empty: start == end
+        span("2", "Map", "2", "3"),
+        span("3", "Constant", "7", "9"), // covers no operator of this dataflow
+      ],
+    );
+    const index = lirIndex(s);
+    expect([...index.keys()].sort()).toEqual(["u1/1", "u1/2", "u1/3"]);
+    expect(index.get("u1/1")!.memberIds).toEqual([]);
+    expect(index.get("u1/3")!.memberIds).toEqual([]);
+    expect(index.get("u1/2")!.memberIds).toEqual([nodeIdOf([9, 1])]);
+    const tree = lirTree(s, index);
+    const empty = tree.get("u1")!.find((n) => n.key === "u1/1")!;
+    expect(empty.summary).toEqual({
+      arrangementRecords: 0n,
+      arrangementSize: 0n,
+      elapsedNs: 0n,
+      scheduleCount: 0n,
+    });
+  });
+
+  it("indexes a dataflow whose only spans are empty", () => {
+    const s = buildDataflowStructure(
+      ops,
+      [],
+      [span("1", "Constant", "2", "2")],
+    );
+    expect([...lirIndex(s).keys()]).toEqual(["u1/1"]);
+  });
+});
+
 describe("lirTree", () => {
   it("nests children under their parent via parentLirId, siblings descending by lir id", () => {
     const ops: OperatorRow[] = [
@@ -1374,6 +1443,7 @@ describe("lirTree", () => {
         elapsedNs: "20",
       },
     ];
+    // Spans do not nest: the root's own span covers no operator.
     const spans: LirSpanRow[] = [
       {
         exportId: "u1",
@@ -1381,7 +1451,7 @@ describe("lirTree", () => {
         parentLirId: null,
         nesting: 0,
         operator: "Root",
-        operatorIdStart: "2",
+        operatorIdStart: "4",
         operatorIdEnd: "4",
       },
       {
@@ -1408,15 +1478,13 @@ describe("lirTree", () => {
     const roots = tree.get("u1")!;
     expect(roots.map((n) => n.key)).toEqual(["u1/10"]);
     expect(roots[0].children.map((n) => n.key)).toEqual(["u1/12", "u1/11"]);
-    expect(roots[0].memberIds.sort()).toEqual(
-      [nodeIdOf([9, 1]), nodeIdOf([9, 2])].sort(),
-    );
+    expect(roots[0].memberIds).toEqual([]);
     expect(roots[0].children.find((n) => n.key === "u1/11")!.memberIds).toEqual(
       [nodeIdOf([9, 1])],
     );
   });
 
-  it("sums own stats over members, matching EXPLAIN ANALYZE's semantics: a parent's summary includes its children's", () => {
+  it("sums own stats over a span's own operators only, not its plan children's", () => {
     const ops: OperatorRow[] = [
       {
         id: "1",
@@ -1443,6 +1511,7 @@ describe("lirTree", () => {
         elapsedNs: "20",
       },
     ];
+    // Child OpA renders first (ids 2..3), then its parent (ids 3..4).
     const spans: LirSpanRow[] = [
       {
         exportId: "u1",
@@ -1450,7 +1519,7 @@ describe("lirTree", () => {
         parentLirId: null,
         nesting: 0,
         operator: "Root",
-        operatorIdStart: "2",
+        operatorIdStart: "3",
         operatorIdEnd: "4",
       },
       {
@@ -1467,9 +1536,9 @@ describe("lirTree", () => {
     const tree = lirTree(s, lirIndex(s));
     const root = tree.get("u1")![0];
     expect(root.summary).toEqual({
-      arrangementRecords: 300n,
+      arrangementRecords: 200n,
       arrangementSize: 0n,
-      elapsedNs: 30n,
+      elapsedNs: 20n,
       scheduleCount: 0n,
     });
     expect(root.children[0].summary).toEqual({

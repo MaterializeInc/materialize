@@ -119,6 +119,10 @@ export interface DataflowStructure {
   nodes: Map<NodeId, DataflowNode>;
   root: NodeId;
   channels: Channel[];
+  // Every LIR span of the dataflow, including those covering no logged
+  // operator (e.g. a Constant, or a span with operator_id_start ==
+  // operator_id_end), which no node's `lir` mentions.
+  lirSpans: LirInfo[];
 }
 
 /**
@@ -360,6 +364,7 @@ export function buildDataflowStructure(
       ]),
       root: placeholderId,
       channels: [],
+      lirSpans: [],
     };
   };
   if (operators.length === 0) return emptyStructure();
@@ -539,6 +544,14 @@ export function buildDataflowStructure(
       batchesSent: toBigInt(c.batchesSent),
       channelType: c.channelType,
     })),
+    lirSpans: [
+      ...new Map(
+        spans.map(({ exportId, lirId, parentLirId, nesting, operator }) => [
+          `${exportId}/${lirId}`,
+          { exportId, lirId, parentLirId, nesting, operator },
+        ]),
+      ).values(),
+    ],
   };
 }
 
@@ -1343,12 +1356,16 @@ export function allSearchMatches(
 /**
  * Groups operator nodes by the LIR span covering them, keyed
  * `${exportId}/${lirId}`. One dataflow can back several exports, so entries
- * are not unique per lir id across exports.
+ * are not unique per lir id across exports. Every span of the dataflow has an
+ * entry, with empty `memberIds` when it covers no logged operator.
  */
 export function lirIndex(
   structure: DataflowStructure,
 ): Map<string, { info: LirInfo; memberIds: NodeId[] }> {
   const index = new Map<string, { info: LirInfo; memberIds: NodeId[] }>();
+  for (const info of structure.lirSpans) {
+    index.set(`${info.exportId}/${info.lirId}`, { info, memberIds: [] });
+  }
   for (const node of structure.nodes.values()) {
     for (const info of node.lir) {
       const key = `${info.exportId}/${info.lirId}`;
@@ -1382,12 +1399,12 @@ export interface LirTreeNode {
 }
 
 /**
- * Sums each member's OWN stats (not transitive): every operator belonging to
- * a LIR id appears in memberIds exactly once, including a parent LIR id's
- * descendants (buildDataflowStructure assigns an operator to every ancestor
- * span that contains it), so this matches EXPLAIN ANALYZE's own total_memory/
- * total_records/total_elapsed exactly without a separate query: the same
- * operator rows are already fetched for the graph itself.
+ * Sums each member's OWN stats (not transitive). LIR spans do not nest: the
+ * renderer builds LIR nodes one at a time, so a span covers only the
+ * operators its own node created, not those of its plan children. The sum
+ * is therefore this node's own cost and matches EXPLAIN ANALYZE's
+ * total_memory/total_records/total_elapsed exactly without a separate query:
+ * the same operator rows are already fetched for the graph itself.
  */
 export function lirSummary(
   structure: DataflowStructure,
@@ -1475,9 +1492,10 @@ export interface LirGrouping {
 
 /**
  * Groups a scope's direct children into the LIR tree that encloses them, for
- * drawing nested boxes on the canvas. LIR spans are contiguous ranges over
- * operator ids and properly nested: a region is always fully enclosed by a
- * single LIR node's range. A dataflow can back several exports, and a shared
+ * drawing boxes on the canvas. LIR spans are contiguous ranges over operator
+ * ids and do not nest, so a region is always fully enclosed by a single LIR
+ * node's range. The stack walk below still orders several keys of one export
+ * outer to inner by `nesting`, which only matters should spans overlap. A dataflow can back several exports, and a shared
  * subplan can carry lir entries from more than one of them at once; a
  * compound-node tree needs one parent chain per node, so this groups by the
  * lowest exportId (string-compared) present among the given nodes only. A
