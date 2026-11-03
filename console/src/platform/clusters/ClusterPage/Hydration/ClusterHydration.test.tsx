@@ -9,6 +9,7 @@
 
 import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import React from "react";
 import { Route, Routes } from "react-router-dom";
 
@@ -184,6 +185,8 @@ interface Scenario {
   progressRows?: unknown[][];
   /** When the cluster's objects were created. */
   creationRows?: object[];
+  /** Indexes and materialized views created in the window and dropped since. */
+  droppedObjectRows?: object[];
   hasReplicas?: boolean;
   /** Replicas whose process reports offline. */
   offlineReplicaIds?: string[];
@@ -219,6 +222,7 @@ const renderHydrationTab = async ({
       occurredAt: String(NOW_MS - 2 * DAY_MS),
     },
   ],
+  droppedObjectRows = [],
   hasReplicas = true,
   offlineReplicaIds = [],
   droppedReplicas = [],
@@ -246,6 +250,21 @@ const renderHydrationTab = async ({
     LATEST_FULL.startedAtMs + LATEST_FULL.durationMs,
   ).toISOString();
   server.use(
+    // Keyed on the restarts that read as finished, so matched by scope.
+    http.post("*/api/sql", ({ request }) => {
+      const queryKey = JSON.parse(
+        new URL(request.url).searchParams.get("query_key") ?? "[]",
+      );
+      if (queryKey[1]?.scope !== "droppedObjectCreationTimes") return undefined;
+      return HttpResponse.json({
+        results: [
+          mapKyselyToTabular({
+            rows: droppedObjectRows,
+            columns: [timestamptz("occurredAt")],
+          }),
+        ],
+      });
+    }),
     buildSqlQueryHandlerV2({
       queryKey: clusterQueryKeys.clusterReplicaHistory({
         clusterId: "u9",
@@ -687,6 +706,36 @@ describe("ClusterHydration", () => {
     expect(
       await screen.findByRole("button", {
         name: /^r1 restarted 2 times before finishing, Each after going offline/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("counts a restart an index dropped since cut short", async () => {
+    await renderHydrationTab({
+      statusRows: [
+        online("u1", BOOTED_AT_MS),
+        online("u2", BOOTED_AT_MS),
+        offline("u1", NOW_MS - 50 * MINUTE_MS),
+        online("u1", NOW_MS - 49 * MINUTE_MS),
+        offline("u1", NOW_MS - 30 * MINUTE_MS),
+        online("u1", NOW_MS - 29 * MINUTE_MS),
+        offline("u1", NOW_MS - 10 * MINUTE_MS),
+        online("u1", NOW_MS - 9 * MINUTE_MS),
+      ],
+      progress: { u1: [3, 9], u2: [9, 9] },
+      // Created after r1's last finished hydration, before its first restart.
+      droppedObjectRows: [
+        {
+          id: "u12",
+          objectType: "index",
+          occurredAt: String(NOW_MS - 55 * MINUTE_MS),
+        },
+      ],
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: /^r1 restarted 3 times before finishing, Each after going offline/,
       }),
     ).toBeInTheDocument();
   });
