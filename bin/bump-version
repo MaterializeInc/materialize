@@ -110,10 +110,20 @@ if $sbom; then
     fi
     rm -rf sbom
     mkdir sbom
-    find . -type f -name "Dockerfile" -exec sed -i 's/MZFROM/FROM/g' {} +
+    # Inventory the tracked files only, as they stand after the bump above.
+    # The working tree also holds whatever the person cutting the release has
+    # lying around -- misc/python/venv, target-xcompile -- which once put
+    # thousands of packages no release ships into the SBOM, and pushed it past
+    # the 5,000 components the Inspector Scan API accepts.
+    sbom_tree=$(mktemp -d)
+    git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$sbom_tree"
+    # Test and editor tooling: tracked, but not part of a release.
+    rm -rf "$sbom_tree"/{ci/test,misc/vscode-ext}
+    find "$sbom_tree" -type f -name "Dockerfile" -exec sed -i 's/MZFROM/FROM/g' {} +
     mkdir -p ~/.inspector-sbomgen
-    inspector-sbomgen directory --path . --skip-files test --outfile "sbom/materialize.$version.cdx.json" --disable-progress-bar
-    git ls-files | grep 'Dockerfile$' | xargs git checkout --
+    # From inside the copy, so source paths stay relative to the repository.
+    (cd "$sbom_tree" && inspector-sbomgen directory --path . --skip-files test --outfile "$OLDPWD/sbom/materialize.$version.cdx.json" --disable-progress-bar)
+    rm -rf "$sbom_tree"
     git add sbom
 fi
 
