@@ -171,6 +171,19 @@ steps:
     skip: "Has been creating more toil than use"
     sanitizer: skip
 
+  - id: dns-rebinding
+    label: ":rust: DNS rebinding SSRF check"
+    command: "bin/ci-builder run stable cargo nextest run -p mz-storage-operators --run-ignored only -E 'test(build_http_client_pins_checked_address_under_dns_rebinding)'"
+    inputs:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/*.rs"
+    depends_on: []
+    timeout_in_minutes: 45
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+    sanitizer: skip
+
   - group: Benchmarks
     key: benchmark
     steps:
