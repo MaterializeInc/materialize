@@ -440,11 +440,13 @@ class MaterializedViewDeclaredSchema(Check):
                 """
                 > INSERT INTO mv_declared_table VALUES (3, 'z')
                 > CREATE MATERIALIZED VIEW mv_declared_schema2 (a int4 NOT NULL, b text) AS SELECT a, b FROM mv_declared_table
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_declared_replacement1 FOR mv_declared_schema1 AS SELECT a::int8, count(*) * 10 FROM mv_declared_table WHERE a IS NOT NULL GROUP BY a::int8
                 """,
                 """
                 > INSERT INTO mv_declared_table VALUES (4, 'w')
-                > CREATE REPLACEMENT MATERIALIZED VIEW mv_declared_replacement (k int8 NOT NULL, n int8) FOR mv_declared_schema1 AS SELECT a, count(*) * 10 FROM mv_declared_table WHERE a IS NOT NULL GROUP BY a
-                > ALTER MATERIALIZED VIEW mv_declared_schema1 APPLY REPLACEMENT mv_declared_replacement
+                > ALTER MATERIALIZED VIEW mv_declared_schema1 APPLY REPLACEMENT mv_declared_replacement1
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_declared_replacement2 (a int4 NOT NULL, b text) FOR mv_declared_schema2 AS SELECT a, upper(b) FROM mv_declared_table
+                > ALTER MATERIALIZED VIEW mv_declared_schema2 APPLY REPLACEMENT mv_declared_replacement2
                 """,
             ]
         ]
@@ -458,10 +460,10 @@ class MaterializedViewDeclaredSchema(Check):
                 4 10
 
                 > SELECT * FROM mv_declared_schema2
-                1 x
+                1 X
                 2 <null>
-                3 z
-                4 w
+                3 Z
+                4 W
 
                 > SELECT name, nullable, type FROM (SHOW COLUMNS FROM mv_declared_schema1)
                 k false bigint
