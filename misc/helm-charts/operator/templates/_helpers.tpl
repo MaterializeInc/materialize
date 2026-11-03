@@ -35,18 +35,6 @@ If release name contains chart name it will be used as a full name.
 {{- end }}
 
 {{/*
-Whether pods should run in Kubernetes user namespaces (`hostUsers: false`).
-Returns "true" or "". User namespaces are only enabled by default from
-Kubernetes 1.33, so the setting is skipped on older clusters. The `-0`
-suffix lets pre-release versions such as `v1.33.1-eks-1234` match.
-*/}}
-{{- define "materialize-operator.userNamespacesEnabled" -}}
-{{- if and .Values.operator.args.enableUserNamespaces (semverCompare ">=1.33.0-0" .Capabilities.KubeVersion.Version) -}}
-true
-{{- end -}}
-{{- end }}
-
-{{/*
 Create chart name and version as used by the chart label.
 */}}
 {{- define "materialize-operator.chart" -}}

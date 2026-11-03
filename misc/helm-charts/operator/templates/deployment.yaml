@@ -32,7 +32,7 @@ spec:
         runAsUser: 65532
         runAsNonRoot: true
       serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
-      {{- if include "materialize-operator.userNamespacesEnabled" . }}
+      {{- if .Values.operator.args.enableUserNamespaces }}
       hostUsers: false
       {{- end }}
       # On SIGTERM the operator releases its leadership lease, then keeps
@@ -306,7 +306,7 @@ spec:
         {{- end }}
         {{- end }}
         - "--enable-security-context"
-        {{- if include "materialize-operator.userNamespacesEnabled" . }}
+        {{- if .Values.operator.args.enableUserNamespaces }}
         - "--enable-user-namespaces"
         {{- end }}
         {{- if .Values.schedulerName }}
