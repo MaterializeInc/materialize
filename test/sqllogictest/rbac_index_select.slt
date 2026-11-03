@@ -212,6 +212,36 @@ ALTER SYSTEM RESET enable_frontend_subscribes;
 ----
 COMPLETE 0
 
+# COPY TO is checked the same way, both when it returns rows to the client and
+# when it exports to S3.
+
+simple conn=alice,user=alice
+COPY (SELECT * FROM v) TO STDOUT;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role may read VIEW "materialize.public.v" only through index "materialize.public.v_idx" in cluster "idx_cluster". Run the query on the cluster that maintains one of them.
+
+statement ok
+CREATE SECRET aws_secret AS 'secret_key'
+
+statement ok
+CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET aws_secret) WITH (VALIDATE = false)
+
+statement ok
+GRANT USAGE ON CONNECTION aws_conn TO alice
+
+simple conn=alice,user=alice
+COPY (SELECT * FROM v) TO 's3://path/to/dir' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role may read VIEW "materialize.public.v" only through index "materialize.public.v_idx" in cluster "idx_cluster". Run the query on the cluster that maintains one of them.
+
+statement ok
+DROP CONNECTION aws_conn
+
+statement ok
+DROP SECRET aws_secret
+
 # The grant covers only a query that names the relation. A view that alice
 # builds over it is read with alice's privileges as the view's owner, which do
 # not include SELECT on `v`, even when the query also names `v` directly.
@@ -350,3 +380,47 @@ SELECT name FROM mz_internal.mz_show_object_privileges WHERE grantee = 'bob' ORD
 mv
 t
 v
+
+# With several indexes on the relation, the plan may use only granted ones.
+
+statement ok
+GRANT SELECT ON INDEX v_idx TO alice
+
+statement ok
+CREATE INDEX v_other_idx IN CLUSTER other ON v (x)
+
+simple conn=alice,user=alice
+SET cluster = other;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+SELECT * FROM v;
+----
+db error: ERROR: permission denied for VIEW "materialize.public.v"
+DETAIL: The 'alice' role may read VIEW "materialize.public.v" only through index "materialize.public.v_idx" in cluster "idx_cluster". Run the query on the cluster that maintains one of them.
+
+simple conn=alice,user=alice
+SET cluster = idx_cluster;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+SELECT * FROM v;
+----
+1
+COMPLETE 1
+
+statement ok
+GRANT SELECT ON INDEX v_other_idx TO alice
+
+simple conn=alice,user=alice
+SET cluster = other;
+----
+COMPLETE 0
+
+simple conn=alice,user=alice
+SELECT * FROM v;
+----
+1
+COMPLETE 1
