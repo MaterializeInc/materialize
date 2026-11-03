@@ -704,7 +704,11 @@ const DataflowDetailPage = () => {
         ) : data.structure.nodes.size <= 1 ? (
           <Text>
             This dataflow no longer exists on this replica.{" "}
-            <Link to="..">Back to dataflows</Link>
+            <Link
+              to={`${absoluteClusterPath(regionSlug, cluster)}/dataflows${replicaSearch(replicaName)}`}
+            >
+              Back to dataflows
+            </Link>
           </Text>
         ) : (
           <VStack flex="1" minH={0} alignItems="stretch" spacing={2}>

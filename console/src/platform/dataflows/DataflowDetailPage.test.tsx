@@ -350,6 +350,12 @@ beforeEach(() => {
           ],
         });
       }
+      // A dataflow id that no longer exists on the replica: no operators.
+      if (body.includes("'66'")) {
+        return HttpResponse.json({
+          results: [okResult, okResult, okResult, okResult, okResult],
+        });
+      }
       if (body.includes("'50'")) {
         return HttpResponse.json({
           results: [
@@ -592,6 +598,27 @@ describe("DataflowDetailPage", () => {
   // one entirely. Navigating into a scope should recenter for that reason,
   // but an unrelated re-render within the same scope (e.g. selecting a
   // node) must not refit again, or it would fight the user's own panning.
+  it("links back to the cluster's dataflow list when the dataflow is gone", async () => {
+    await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={<DataflowDetailPage />}
+        />
+      </Routes>,
+      {
+        initialRouterEntries: [
+          "/clusters/u5/test_cluster/dataflows/66?replica=r1",
+        ],
+      },
+    );
+
+    const link = await screen.findByRole("link", { name: "Back to dataflows" });
+    expect(link.getAttribute("href")).toMatch(
+      /\/clusters\/u5\/test_cluster\/dataflows\?replica=r1$/,
+    );
+  });
+
   it("recenters after navigating into a scope, but not again within it", async () => {
     await renderComponent(
       <Routes>
