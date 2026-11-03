@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.12 - 2026-11-03
+
 * Fix the deployment timestamp in the schema comment `deploy_promote` leaves
   behind. It read the second row of the first column instead of the second
   column of the only row, so every tag said `Deployment by <user> on ` with
@@ -52,6 +54,8 @@
   the loop. It warns instead of failing because runs that exclude sources and
   sinks, as the docs recommend, have always passed it. It will become an error
   in a future release.
+
+* Allow installing with `dbt-postgres` 1.11.
 
 ## 1.9.11 - 2026-07-26
 
