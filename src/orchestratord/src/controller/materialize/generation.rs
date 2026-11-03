@@ -95,6 +95,17 @@ static V26_49_0: LazyLock<Version> = LazyLock::new(|| Version {
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 
+/// Version at which `environmentd` learned
+/// `--orchestrator-kubernetes-enable-user-namespaces`. Older images reject the
+/// unknown argument and fail to start.
+static V26_50_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 50,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
 static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 1,
@@ -997,6 +1008,11 @@ fn create_environmentd_statefulset_object(
     if config.enable_prometheus_scrape_annotations {
         args.push("--orchestrator-kubernetes-enable-prometheus-scrape-annotations".into());
     }
+    // Older environmentd images reject the unknown argument, so their clusterd
+    // pods keep running in the host user namespace.
+    if config.enable_user_namespaces && mz.meets_minimum_version(&V26_50_0) {
+        args.push("--orchestrator-kubernetes-enable-user-namespaces".into());
+    }
 
     // the --disable-license-key-checks environmentd flag only existed
     // between these versions
@@ -1336,6 +1352,10 @@ fn create_environmentd_statefulset_object(
                 run_as_group: Some(999),
                 ..Default::default()
             }),
+            // `None` rather than `Some(true)` when disabled, so the pod spec
+            // (and therefore the generation's resource hash) is unchanged from
+            // before user namespace support.
+            host_users: config.enable_user_namespaces.then_some(false),
             tolerations,
             // This (apparently) has the side effect of automatically starting a new pod
             // when the previous pod is currently terminating. This side steps the statefulset fencing

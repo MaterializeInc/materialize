@@ -121,6 +121,9 @@ pub struct KubernetesOrchestratorConfig {
     pub collect_pod_metrics: bool,
     /// Whether to annotate pods for prometheus service discovery.
     pub enable_prometheus_scrape_annotations: bool,
+    /// Whether to run service pods in a Kubernetes user namespace by setting
+    /// `hostUsers: false`.
+    pub enable_user_namespaces: bool,
 }
 
 impl KubernetesOrchestratorConfig {
@@ -1218,6 +1221,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }],
                 volumes,
                 security_context,
+                // `None` rather than `Some(true)` when disabled, so the pod
+                // template hash is unchanged from before user namespace support.
+                host_users: self.config.enable_user_namespaces.then_some(false),
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
                 priority_class_name: self.config.priority_class_name.clone(),
