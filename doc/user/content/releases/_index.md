@@ -28,36 +28,36 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 <red>*Materialize Cloud only*</red>
 
-Upsert sources that spill to disk now hydrate faster, with significantly lower lower heap (memory + disk) usage.
+Upsert sources that spill to disk now hydrate faster, with significantly lower heap (memory + disk) usage.
 
 ![Hydration time and peak memory plus disk usage for an upsert source, old versus new: hydration time drops from 206.1 minutes to 107.9–113.3 minutes, and peak memory plus disk usage drops from 542 GiB to 183–208 GiB](/images/releases/v2648_upsert_hydration.png)
 
 Materialize now uses its own buffer pool to keep hot data in memory and serve sequential work from disk. Previously, this was left to the operating system's swap. In addition, we now apply LZ4 compression to in-progress data while building an upsert source. See our [blog post](https://materialize.com/blog/materialize-out-of-core/) for details on how it works.
 
-We ran our performance tests on Materialize Cloud. We setup a Kafka topic, with a single partition, of about 1.5B messages (roughly 100 GB), holding 956M distinct keys, with records around 100 bytes. We ingested this data into Materialize, using a Kafka Upsert source, on an M.1-1.5xlarge cluster. This cluster size has 98 GB of memory, and 586 GB of Disk. We measured hydration times as how long it took from `CREATE SOURCE` until every key is indexed, and the source is keeping up with the topic. We ran the test four times, and observed that hydration times dropped from 206 minutes to between 108 and 113 minutes. Peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
+We ran our performance tests on Materialize Cloud. We set up a Kafka topic, with a single partition, of about 1.5B messages (roughly 100 GB), holding 956M distinct keys, with records around 100 bytes. We ingested this data into Materialize, using a Kafka Upsert source, on an M.1-1.5xlarge cluster. This cluster size has 98 GB of memory and 586 GB of disk. We measured hydration times as how long it took from `CREATE SOURCE` until every key was indexed and the source was keeping up with the topic. We ran the test four times and observed that hydration times dropped from 206 minutes to between 108 and 113 minutes. Peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
 
-In real world usage, we observed that hydration times improved by 49%-88%. Real world memory usage improved by 13-64%.
+In real-world usage, we observed that hydration times improved by 49-88%. Real-world memory usage improved by 13-64%.
 
 Note that the improved hydration times are most impactful for workloads that spill heavily to disk. Workloads that are fully resident in memory won't see a speedup.
 
 This change has been rolled out to all Materialize Cloud environments and applies to all existing and new clusters. It will be enabled by default in Materialize Self-Managed in the coming weeks.
 
-### Improved Freshness page in the Console {#v26.48-freshness-page}
+### Track environment-wide freshness using the new Freshness page in the Console {#v26.48-freshness-page}
 
 <red>*Materialize Cloud only*</red>
 
-The Console's new **Freshness** page lets you track aggregate freshness across your environment. Filter by cluster, time range, and object type to see p90, p99, p99.9, and pMax freshness across the objects. If you're not meeting your freshness target, use the page to find the lagging objects, and start to debug why. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
+The Console's new **Freshness** page lets you track aggregate freshness across your environment. Filter by cluster or schema, time range, and object type to see p90, p99, p99.9, and pMax freshness across the objects. If you're not meeting your freshness target, use the page to find the lagging objects, and start to debug why. The page is available today on Materialize Cloud, and will be available on Self-Managed in two weeks.
 
 ![Freshness page filtered to the materialized views on one cluster over 6 hours, showing p90, p99, p99.9, and pMAX lag, a lag over time chart with a 2-second threshold line, and a table of the objects that exceeded it](/images/releases/v2648_freshness.png)
 
-### Kafka sink headers are generally available {#v26.48-kafka-sink-headers-ga}
+### Use Kafka sink headers to deliver transactional updates to your consumers {#v26.48-kafka-sink-headers-ga}
 
-The `HEADERS` option for Kafka sinks and the `materialize-sink-id` header, both previously in private preview, are now generally available. `HEADERS` adds the entries of a `map[text => text]` or `map[text => bytea]` column as headers on every message the sink produces. Every Kafka sink now also attaches a `materialize-sink-id` header carrying the sink's ID, so downstream consumers can correlate a data topic with its progress topic without querying Materialize. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
+Every Kafka sink now attaches a `materialize-sink-id` header to each message by default. This is especially useful if you load data from Kafka into an external system, like a warehouse or analytics store, and want that system to stay transactionally consistent with Materialize. Downstream loaders can use the header to match each message to the sink's progress topic and only expose fully committed timestamps, without querying Materialize. To get started, see [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/).
 
-To see how a downstream loader can use the `materialize-sink-id` header to expose only fully committed timestamps, see [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/).
+The `HEADERS` option is also now generally available, after being in private preview. `HEADERS` adds the entries of a `map[text => text]` or `map[text => bytea]` column as headers on every message the sink produces, so you can attach custom headers to each message using data in Materialize. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
 
-### Safely drop upstream `NOT NULL` constraints in your MySQL sources {#v26.48-exclude-not-null-constraints}
-Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a MySQL source, as it already did for PostgreSQL sources. Every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
+### Drop upstream `NOT NULL` constraints from your MySQL database, without downtime in Materialize {#v26.48-exclude-not-null-constraints}
+Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a MySQL source, as it already did for PostgreSQL sources. When turned on, every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
 
 ```mzsql
 CREATE TABLE orders
@@ -101,7 +101,7 @@ For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/mysql/)
 
 ### Turn cast errors into `NULL`s with `TRY_CAST` {#v26.47-try-cast}
 
-`TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type. It produces `NULL` instead of an error when the value cannot be converted. This means that bad values in an ingest pipeline don't cause errors which block reads.
+`TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type. It produces `NULL` instead of an error when the value cannot be converted. This means that bad values in an ingest pipeline don't cause errors that block reads.
 
 ```mzsql
 CREATE TABLE raw_orders (id int, amount text);

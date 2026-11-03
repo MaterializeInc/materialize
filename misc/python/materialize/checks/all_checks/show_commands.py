@@ -74,16 +74,8 @@ class ShowCommands(Check):
             > SELECT count(*) > 0 FROM (SHOW PRIVILEGES FOR show_cmds_r1)
             true
 
-            # TODO(SQL-531): Re-enable once SHOW CLUSTER REPLICAS
-            # (mz_show_cluster_replicas) stops dropping replicas. The view joins
-            # mz_cluster_replicas.id against mz_comments.id and filters on
-            # object_type in a WHERE clause. Replica ids and catalog-item ids are
-            # separate allocators that both render as u<N>, so when a commented
-            # non-replica object shares a replica's numeric id the join pulls in
-            # its comment and the filter drops the replica. In parallel runs
-            # show_cmds_replica collides with another check's commented type.
-            # > SHOW CLUSTER REPLICAS WHERE cluster = 'show_cmds_cluster'
-            # show_cmds_cluster show_cmds_replica scale=1,workers=1 true ""
+            >[version>=2603600] SHOW CLUSTER REPLICAS WHERE cluster = 'show_cmds_cluster'
+            show_cmds_cluster show_cmds_replica scale=1,workers=1 true ""
 
             $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
             SHOW CREATE TABLE show_cmds_schema.show_cmds_table

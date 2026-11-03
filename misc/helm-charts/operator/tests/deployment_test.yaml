@@ -429,7 +429,6 @@ tests:
   - equal:
       path: spec.template.spec.terminationGracePeriodSeconds
       value: 30
-
 - it: should pass the balancerd readiness probe path
   set:
     balancerd.readinessProbePath: /api/livez
@@ -437,3 +436,21 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].args
       content: "--balancerd-readiness-probe-path=/api/livez"
+- it: should run the operator in a user namespace and pass the flag by default
+  asserts:
+  - equal:
+      path: spec.template.spec.hostUsers
+      value: false
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--enable-user-namespaces"
+
+- it: should not use user namespaces when disabled
+  set:
+    operator.args.enableUserNamespaces: false
+  asserts:
+  - notExists:
+      path: spec.template.spec.hostUsers
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--enable-user-namespaces"

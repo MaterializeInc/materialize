@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::thread::Thread;
 use std::time::{Duration, Instant};
 
@@ -25,17 +26,17 @@ use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
-use mz_compute_client::service::ComputeClient;
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_rocksdb::config::SharedWriteBufferManager;
+use mz_service::client::GenericClient;
 use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use mz_storage::metrics::StorageMetrics;
 use mz_storage::storage_state::{StorageInstanceContext, StorageState, Worker as StorageWorker};
-use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
+use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_operators::persist::SharedBatches;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
@@ -188,7 +189,7 @@ pub async fn serve(
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
-) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
+) -> Result<impl Fn() -> ComputeServerClient + use<>, Error> {
     let workers_per_process = timely_config.workers;
     let config = Config {
         persist_batches: SharedBatches::new(),
@@ -224,8 +225,8 @@ pub async fn serve_unified(
     storage_instance_context: StorageInstanceContext,
 ) -> Result<
     (
-        impl Fn() -> Box<dyn ComputeClient> + use<>,
-        impl Fn() -> Box<dyn StorageClient> + use<>,
+        impl Fn() -> ComputeServerClient + use<>,
+        impl Fn() -> GuestClusterClient<StorageCommand, StorageResponse> + use<>,
     ),
     Error,
 > {
@@ -265,12 +266,8 @@ pub async fn serve_unified(
     let (worker_threads, compute_client_builder) = serve_inner(config, timely_config).await?;
 
     let storage_client_txs = Arc::new(storage_client_txs);
-    let storage_client_builder = move || {
-        let client =
-            GuestClusterClient::new(Arc::clone(&storage_client_txs), worker_threads.clone());
-        let client: Box<dyn StorageClient> = Box::new(client);
-        client
-    };
+    let storage_client_builder =
+        move || GuestClusterClient::new(Arc::clone(&storage_client_txs), worker_threads.clone());
 
     Ok((compute_client_builder, storage_client_builder))
 }
@@ -280,7 +277,7 @@ pub async fn serve_unified(
 async fn serve_inner(
     config: Config,
     timely_config: TimelyConfig,
-) -> Result<(Vec<Thread>, impl Fn() -> Box<dyn ComputeClient> + use<>), Error> {
+) -> Result<(Vec<Thread>, impl Fn() -> ComputeServerClient + use<>), Error> {
     mz_timely_util::column_pager::metrics::register(
         &config.metrics_registry,
         mz_timely_util::column_pager::tiered_policy(),
@@ -294,13 +291,24 @@ async fn serve_inner(
     let worker_threads = timely_container.worker_threads();
     let timely_container = Arc::new(Mutex::new(timely_container));
 
-    let client_builder = move || {
-        let client = ClusterClient::new(Arc::clone(&timely_container));
-        let client: Box<dyn ComputeClient> = Box::new(client);
-        client
-    };
+    let client_builder =
+        move || ComputeServerClient(ClusterClient::new(Arc::clone(&timely_container)));
 
     Ok((worker_threads, client_builder))
+}
+
+/// A client to the Timely cluster of a compute server.
+#[derive(Debug)]
+pub struct ComputeServerClient(ClusterClient<Config>);
+
+impl GenericClient<ComputeCommand, ComputeResponse> for ComputeServerClient {
+    fn send(&mut self, cmd: ComputeCommand) -> impl Future<Output = Result<(), Error>> + Send {
+        self.0.send(cmd)
+    }
+
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<ComputeResponse>, Error>> {
+        self.0.poll_recv(cx)
+    }
 }
 
 /// Error type returned on connection nonce changes.

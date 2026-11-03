@@ -5861,7 +5861,8 @@ fn run_mcp_datadriven_inner(
     });
 }
 
-/// Tests the MCP agent endpoint with the query tool explicitly disabled.
+/// Tests the MCP agent endpoint with the query tool explicitly disabled,
+/// and with 2026-07-28 off so the file covers that path.
 #[mz_ore::test]
 fn test_mcp_agent() {
     let harness = test_util::TestHarness::default()
@@ -5869,6 +5870,10 @@ fn test_mcp_agent() {
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(
             "enable_mcp_agent_query_tool".to_string(),
+            "false".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
             "false".to_string(),
         );
     run_mcp_datadriven("tests/testdata/mcp/agent", harness);
@@ -5983,7 +5988,8 @@ fn test_mcp_developer_protocol_2026_07_28() {
     run_mcp_datadriven("tests/testdata/mcp/developer_2026_07_28", harness);
 }
 
-/// Tests the MCP developer endpoint with the query tool explicitly disabled.
+/// Tests the MCP developer endpoint with the query tool explicitly disabled,
+/// and with 2026-07-28 off so the file covers that path.
 #[mz_ore::test]
 fn test_mcp_developer_with_query_tool_disabled() {
     let harness = test_util::TestHarness::default()
@@ -5991,6 +5997,10 @@ fn test_mcp_developer_with_query_tool_disabled() {
         .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
         .with_system_parameter_default(
             "enable_mcp_developer_query_tool".to_string(),
+            "false".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
             "false".to_string(),
         );
     run_mcp_datadriven("tests/testdata/mcp/developer", harness);

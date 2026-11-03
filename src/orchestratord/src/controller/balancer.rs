@@ -57,6 +57,8 @@ pub const CONTROLLER_NAME: &str = "balancer";
 #[derive(Clone)]
 pub struct Config {
     pub enable_security_context: bool,
+    /// Whether to run pods in a Kubernetes user namespace (`hostUsers: false`).
+    pub enable_user_namespaces: bool,
     pub enable_prometheus_scrape_annotations: bool,
 
     pub image_pull_policy: KubernetesImagePullPolicy,
@@ -443,6 +445,9 @@ impl Context {
                     }),
                     scheduler_name: self.config.scheduler_name.clone(),
                     volumes: Some(volumes),
+                    // `None` rather than `Some(true)` when disabled, so the
+                    // pod spec is unchanged from before user namespace support.
+                    host_users: self.config.enable_user_namespaces.then_some(false),
                     ..Default::default()
                 }),
             },
@@ -739,6 +744,7 @@ mod tests {
     fn test_context() -> Context {
         Context::new(Config {
             enable_security_context: false,
+            enable_user_namespaces: false,
             enable_prometheus_scrape_annotations: false,
             image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
             scheduler_name: None,
@@ -785,6 +791,24 @@ mod tests {
             let deployment = context.create_deployment_object(&balancer).unwrap();
             assert_eq!(deployment.spec.unwrap().replicas, expected);
             assert_eq!(balancer.initial_replicas(), 3);
+        }
+    }
+
+    #[mz_ore::test]
+    fn user_namespaces_set_host_users() {
+        let balancer = test_balancer(BalancerSpec::default());
+        for (enabled, expected) in [(false, None), (true, Some(false))] {
+            let mut context = test_context();
+            context.config.enable_user_namespaces = enabled;
+            let pod = context
+                .create_deployment_object(&balancer)
+                .unwrap()
+                .spec
+                .unwrap()
+                .template
+                .spec
+                .unwrap();
+            assert_eq!(pod.host_users, expected);
         }
     }
 

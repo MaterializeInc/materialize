@@ -35,6 +35,7 @@ describe("buildClusterSubscribe", () => {
       disk: true,
       managed: true,
       size: "bootstrap",
+      replicationFactor: 1,
       replicas: [
         {
           disk: true,
@@ -72,6 +73,7 @@ describe("buildClusterSubscribe", () => {
         disk: true,
         managed: true,
         size: "bootstrap",
+        replicationFactor: 1,
         replicas: [
           {
             disk: true,
@@ -151,5 +153,23 @@ describe("buildClusterSubscribe", () => {
     } finally {
       await testdrive(`> DROP CLUSTER IF EXISTS test_multi;`);
     }
+  });
+
+  it("reads a managed cluster's replication factor, and none for an unmanaged one", async () => {
+    await testdrive(`
+      > CREATE CLUSTER managed (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2);
+      > CREATE CLUSTER unmanaged (REPLICAS (r1 (SIZE 'scale=1,workers=1')));
+    `);
+    const { rows } = await executeSqlHttp(
+      buildClustersQuery({
+        queryOwnership: false,
+        includeSystemObjects: false,
+      }).compile(),
+    );
+    const factorOf = (name: string) =>
+      rows.find((row) => row.name === name)?.replicationFactor;
+
+    expect(factorOf("managed")).toEqual(2);
+    expect(factorOf("unmanaged")).toBeNull();
   });
 });

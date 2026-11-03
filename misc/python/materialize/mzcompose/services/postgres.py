@@ -75,7 +75,7 @@ class Postgres(Service):
                 "ports": ports,
                 "environment": environment,
                 "healthcheck": {
-                    "test": ["CMD", "pg_isready", "-U", "postgres"],
+                    "test": ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
                     "interval": "1s",
                     "start_period": "30s",
                 },

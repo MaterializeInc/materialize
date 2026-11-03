@@ -40,6 +40,11 @@ import {
 } from "~/api/materialize/cluster/arrangementMemory";
 import fetchAvailableClusterSizes from "~/api/materialize/cluster/availableClusterSizes";
 import {
+  AUTO_SCALING_MIN_VERSION,
+  fetchClusterAutoScaling,
+  fetchClusterConfiguration,
+} from "~/api/materialize/cluster/clusterConfiguration";
+import {
   expandClusterLineage,
   fetchClusterDeploymentLineage,
 } from "~/api/materialize/cluster/clusterDeploymentLineage";
@@ -125,6 +130,8 @@ import { useEnvironmentGate } from "~/store/environments";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 import { sortLagInfo } from "~/utils/freshness";
 
+import { parseAutoScaling } from "./ClusterPage/Configuration/clusterConfigurationModel";
+
 type ReplicaUtilizationHistoryFilters = {
   clusterIds: ReplicaUtilizationHistoryParameters["clusterIds"];
   replicaId: ReplicaUtilizationHistoryParameters["replicaId"];
@@ -178,6 +185,20 @@ export const clusterQueryKeys = {
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("maxReplicasPerCluster"),
+    ] as const,
+  configuration: (params: {
+    clusterId: string;
+    replicaIds: string[];
+    includeAutoScaling: boolean;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("configuration", params),
+    ] as const,
+  autoScaling: (params: { clusterId: string }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("autoScaling", params),
     ] as const,
   replicas: (params: ClusterReplicasParams) =>
     [...clusterQueryKeys.all(), buildQueryKeyPart("replicas", params)] as const,
@@ -405,7 +426,12 @@ export function useClusters(filters?: ClusterListFilters) {
 // select is a new function every render, which makes react-query re-run it and
 // hand back a fresh Map, which in turn breaks `isOwner`'s referential stability.
 const selectOwnersById = (result: Awaited<ReturnType<typeof fetchOwners>>) =>
-  new Map(result.rows.map((row) => [row.id, row.isOwner]));
+  new Map(
+    result.rows.map((row) => [
+      row.id,
+      { isOwner: row.isOwner, name: row.name },
+    ]),
+  );
 
 /**
  * Returns `isOwner`, a predicate on an object's owner id, for deriving
@@ -416,7 +442,8 @@ const selectOwnersById = (result: Awaited<ReturnType<typeof fetchOwners>>) =>
  * appearing and then disappearing.
  *
  * `isOwner` keeps a stable reference while the underlying data is unchanged, so
- * callers can safely put it in a dependency array.
+ * callers can safely put it in a dependency array. `ownerName` names an owner
+ * id, or is undefined until the roles load.
  */
 export function useOwners() {
   const { data: ownersById, isPending } = useQuery({
@@ -431,11 +458,16 @@ export function useOwners() {
   });
 
   const isOwner = useCallback(
-    (ownerId: string) => !isPending && (ownersById?.get(ownerId) ?? false),
+    (ownerId: string) =>
+      !isPending && (ownersById?.get(ownerId)?.isOwner ?? false),
     [isPending, ownersById],
   );
+  const ownerName = useCallback(
+    (ownerId: string) => ownersById?.get(ownerId)?.name,
+    [ownersById],
+  );
 
-  return { isOwner };
+  return { isOwner, ownerName };
 }
 
 export type AlterClusterParams = AlterClusterSettingsParams &
@@ -630,6 +662,81 @@ export const availableClusterSizesQuery = () => ({
     });
   },
 });
+
+/**
+ * What the configuration drawer shows beyond the cluster list: replication
+ * factor, creation times and the autoscaling strategy, with whether this
+ * environment has autoscaling at all.
+ */
+export function useClusterConfiguration({
+  clusterId,
+  replicaIds,
+}: {
+  clusterId: string;
+  replicaIds: string[];
+}) {
+  const includeAutoScaling =
+    useEnvironmentGate(AUTO_SCALING_MIN_VERSION) === true;
+  const params = {
+    clusterId,
+    replicaIds: [...replicaIds].sort(),
+    includeAutoScaling,
+  };
+  const query = useQuery({
+    queryKey: clusterQueryKeys.configuration(params),
+    queryFn: ({ queryKey, signal }) =>
+      fetchClusterConfiguration({
+        params,
+        queryKey,
+        requestOptions: { signal },
+      }),
+    // A replica added or dropped changes the key. The same cluster's earlier
+    // answer stays up meanwhile, but never another cluster's.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1].clusterId === clusterId ? previous : undefined,
+  });
+  return {
+    data: query.data,
+    isError: query.isError,
+    includeAutoScaling,
+  };
+}
+
+/**
+ * What the Alter cluster form's auto-scaling section needs, as of a read made
+ * after mount: the cluster's policy, null for none, and the size an
+ * in-progress resize is heading to. Undefined until read, on a failed read,
+ * and where the environment or cluster has no autoscaling.
+ */
+export function useClusterAutoScalingPolicy({ cluster }: { cluster: Cluster }) {
+  const isAvailable =
+    useEnvironmentGate(AUTO_SCALING_MIN_VERSION) === true && cluster.managed;
+  const query = useQuery({
+    queryKey: clusterQueryKeys.autoScaling({ clusterId: cluster.id }),
+    queryFn: async ({ queryKey, signal }) => {
+      const { autoScaling, resizeTargetSize } = await fetchClusterAutoScaling({
+        clusterId: cluster.id,
+        queryKey,
+        requestOptions: { signal },
+      });
+      return {
+        policy: parseAutoScaling(autoScaling).policy,
+        resizeTargetSize,
+      };
+    },
+    enabled: isAvailable,
+    // NOTE: A cached policy can predate an alter: closing the modal drops the
+    // last observer, which cancels the alter's refetch and reverts the cache.
+    // So the policy waits for this fetch on mount.
+    refetchOnMount: "always",
+  });
+  const isFresh = query.isFetchedAfterMount;
+  return {
+    isAvailable,
+    data: isFresh && !query.isError ? query.data : undefined,
+    isError: isFresh && query.isError,
+  };
+}
 
 export function useMaxReplicasPerCluster() {
   return useQuery({
@@ -1461,6 +1568,7 @@ export function useObjectCreationTimes(params: {
       return fetchObjectCreationTimes({
         params: {
           objectIds: queryKeyParams.objectIds,
+          objectTypes: ["index", "materialized-view"],
           startDate: subMinutes(
             new Date(),
             queryKeyParams.timePeriodMinutes,

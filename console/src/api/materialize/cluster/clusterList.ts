@@ -9,7 +9,7 @@
 
 import * as Sentry from "@sentry/react";
 import { QueryKey } from "@tanstack/react-query";
-import { InferResult } from "kysely";
+import { InferResult, sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 import { getOwners, jsonArrayFrom } from "~/api/materialize/expressionBuilders";
@@ -59,6 +59,9 @@ export const buildClustersQuery = ({
       "c.disk",
       "c.managed",
       "c.size",
+      sql<number | null>`${sql.ref("c.replication_factor")}::int4`.as(
+        "replicationFactor",
+      ),
       "c.owner_id as ownerId",
       jsonArrayFrom<{
         id: string;

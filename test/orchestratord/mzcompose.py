@@ -408,7 +408,11 @@ def install_metrics_server() -> None:
 def recreate_kind_cluster() -> None:
     ensure_kind_version()
 
-    spawn.runv(["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME])
+    # Docker can report a missing exit event after a node has already exited.
+    retry(
+        lambda: spawn.runv(["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME]),
+        30,
+    )
 
     try:
         spawn.runv(["docker", "network", "create", "kind"])
@@ -5190,6 +5194,9 @@ def setup(c: Composition, args) -> dict[str, Any]:
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
     # TODO: Remove once the pinned operator image knows '--disable-database-network-policies'
     definition["operator"]["operator"]["args"]["enableDatabaseNetworkPolicies"] = True
+    # TODO: Remove once the pinned operator image knows '--enable-user-namespaces'
+    if not args.orchestratord_override:
+        definition["operator"]["operator"]["args"]["enableUserNamespaces"] = False
     definition["operator"]["clusterd"]["nodeSelector"][
         "workload"
     ] = "materialize-instance"

@@ -229,6 +229,13 @@ pub struct Args {
     teleport_cluster_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
+    /// Run the environmentd, clusterd, balancerd, and console pods in a
+    /// Kubernetes user namespace by setting `hostUsers: false` on their pod
+    /// specs. Requires Kubernetes 1.33 or later (or 1.30 or later with the
+    /// `UserNamespacesSupport` feature gate enabled), plus node kernel and
+    /// container runtime support for idmapped mounts.
+    #[clap(long)]
+    enable_user_namespaces: bool,
     #[clap(long)]
     enable_internal_statement_logging: bool,
     /// Overrides environmentd's default `statement_logging_max_sample_rate`. A
@@ -718,6 +725,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             ephemeral_volume_class: args.ephemeral_volume_class,
             scheduler_name: args.scheduler_name.clone(),
             enable_security_context: args.enable_security_context,
+            enable_user_namespaces: args.enable_user_namespaces,
             enable_internal_statement_logging: args.enable_internal_statement_logging,
             statement_logging_max_sample_rate: args.statement_logging_max_sample_rate,
             statement_logging_target_data_rate: args.statement_logging_target_data_rate,
@@ -839,6 +847,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let events = event_recorder(controller::balancer::CONTROLLER_NAME);
         let config = controller::balancer::Config {
             enable_security_context: args.enable_security_context,
+            enable_user_namespaces: args.enable_user_namespaces,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
             image_pull_policy: args.image_pull_policy,
             scheduler_name: args.scheduler_name.clone(),
@@ -902,6 +911,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let events = event_recorder(controller::console::CONTROLLER_NAME);
         let config = controller::console::Config {
             enable_security_context: args.enable_security_context,
+            enable_user_namespaces: args.enable_user_namespaces,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
             image_pull_policy: args.image_pull_policy,
             scheduler_name: args.scheduler_name,

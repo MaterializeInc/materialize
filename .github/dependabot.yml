@@ -119,6 +119,22 @@ updates:
       update-types:
         - minor
         - patch
+- package-ecosystem: cargo
+  directory: /misc/materialize-sdk
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 # The `test/terraform` roots pin the self-managed modules to a tag rather than
 # floating on `main`, so an upstream release arrives here as a PR that can
 # adapt the roots in the same change, instead of breaking the nightly overnight
@@ -174,8 +190,6 @@ updates:
     - /misc/images/tini-static
     - /misc/images/distroless-prod-base
     - /misc/dbt-materialize
-    - /misc/mcp-materialize
-    - /misc/mcp-materialize-agents
     - /ci/builder
     - /test
     - /test/playwright
@@ -221,6 +235,14 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  ignore:
+    # psycopg 3.3.6 rejects the two error responses pgwire sends for a failed
+    # implicit BEGIN, which breaks the parallel workload tests. Remove this
+    # once SQL-840 is fixed.
+    - dependency-name: psycopg
+      versions: [">3.3.3"]
+    - dependency-name: psycopg-binary
+      versions: [">3.3.3"]
   groups:
     simple:
       applies-to: version-updates
@@ -286,26 +308,6 @@ updates:
   directory: /ci/test/docs-widget
   schedule:
     interval: daily
-  cooldown:
-    default-days: 3
-  open-pull-requests-limit: 50
-  labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
-# uv projects need the `uv` ecosystem. Under `pip` these directories produced
-# no update PRs at all, and `uv.lock` was never bumped.
-- package-ecosystem: uv
-  directories:
-    - /misc/mcp-materialize
-    - /misc/mcp-materialize-agents
-  schedule:
-    interval: weekly
-    day: sunday
-    time: "22:00"
   cooldown:
     default-days: 3
   open-pull-requests-limit: 50
