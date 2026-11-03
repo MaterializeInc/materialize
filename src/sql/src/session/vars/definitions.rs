@@ -2401,7 +2401,7 @@ feature_flags!(
     {
         name: enable_frontend_transaction_completion, // changes take effect for new sessions
         desc: "Complete session-owned read-only transactions without a coordinator round trip.",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
