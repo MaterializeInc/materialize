@@ -429,6 +429,65 @@ describe("DataflowDetailPage", () => {
     expect(screen.queryByTestId("react-flow")).toBeNull();
   });
 
+  it("falls back to the first replica when ?replica= names none", async () => {
+    await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={<DataflowDetailPage />}
+        />
+      </Routes>,
+      {
+        initialRouterEntries: [
+          "/clusters/u5/test_cluster/dataflows/7?replica=gone",
+        ],
+      },
+    );
+
+    // r1 succeeds and the stale name never reaches SQL (a request to an
+    // unknown replica would fail instead of drawing the graph).
+    expect(await screen.findByTestId("react-flow")).toBeVisible();
+    expect(
+      screen
+        .getAllByRole("combobox")
+        .some((s) => (s as HTMLSelectElement).value === "r1"),
+    ).toBe(true);
+  });
+
+  it("shows the no-replicas state without querying when the cluster has none", async () => {
+    getStore().set(
+      allClusters,
+      mockSubscribeState({
+        data: [{ ...cluster, replicas: [] } as unknown as Cluster],
+      }),
+    );
+    let sqlRequests = 0;
+    server.use(
+      http.post("*/api/sql", () => {
+        sqlRequests++;
+        return HttpResponse.json({ results: [] });
+      }),
+    );
+    await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={<DataflowDetailPage />}
+        />
+      </Routes>,
+      {
+        initialRouterEntries: [
+          "/clusters/u5/test_cluster/dataflows/7?replica=gone",
+        ],
+      },
+    );
+
+    expect(
+      await screen.findByText("This cluster has no replicas."),
+    ).toBeVisible();
+    expect(sqlRequests).toBe(0);
+  });
+
   describe("switching replicas", () => {
     const selectReplica = async (name: string) => {
       const replicaSelect = screen

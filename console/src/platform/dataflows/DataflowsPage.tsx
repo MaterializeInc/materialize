@@ -12,6 +12,7 @@ import {
   Table,
   Tbody,
   Td,
+  Text,
   Th,
   Thead,
   Tr,
@@ -26,7 +27,8 @@ import { isInsufficientPrivilegeError } from "~/api/materialize/executeSql";
 import ErrorBox from "~/components/ErrorBox";
 import LabeledSelect from "~/components/LabeledSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
-import { replicaSearch } from "~/platform/routeHelpers";
+import { replicaSearch } from "~/platform/clusters/ClusterPage/tabLinks";
+import { useSelectedReplica } from "~/platform/clusters/ClusterPage/useSelectedReplica";
 import { useAllClusters } from "~/store/allClusters";
 import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
@@ -37,8 +39,12 @@ const DataflowsPage = () => {
   const { clusterId } = useParams();
   const { getClusterById } = useAllClusters();
   const cluster = clusterId ? getClusterById(clusterId) : undefined;
-  const [searchParams, setSearchParams] = useSearchParams();
-  const replicaName = searchParams.get("replica") ?? cluster?.replicas[0]?.name;
+  const [searchParams] = useSearchParams();
+  // A `?replica=` naming no current replica (a stale link, a dropped
+  // replica) falls back to the first replica rather than reaching SQL.
+  const { selectedReplica, setSelectedReplicaName } =
+    useSelectedReplica(cluster);
+  const replicaName = selectedReplica?.name ?? cluster?.replicas[0]?.name;
   const params = React.useMemo(
     () =>
       cluster && replicaName
@@ -68,6 +74,13 @@ const DataflowsPage = () => {
   } = useDataflowIdForExport(exportParams);
 
   if (!cluster) return null;
+  if (cluster.replicas.length === 0) {
+    return (
+      <MainContentContainer width="100%">
+        <Text>This cluster has no replicas.</Text>
+      </MainContentContainer>
+    );
+  }
 
   if (exportParams) {
     if (exportLoading) return <Spinner />;
@@ -102,7 +115,7 @@ const DataflowsPage = () => {
         <LabeledSelect
           label="Replica"
           value={replicaName ?? ""}
-          onChange={(e) => setSearchParams({ replica: e.target.value })}
+          onChange={(e) => setSelectedReplicaName(e.target.value)}
         >
           {cluster.replicas.map((r) => (
             <option key={r.name} value={r.name}>

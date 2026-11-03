@@ -26,7 +26,9 @@ import { isInsufficientPrivilegeError } from "~/api/materialize/executeSql";
 import ErrorBox from "~/components/ErrorBox";
 import LabeledSelect from "~/components/LabeledSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
-import { absoluteClusterPath, replicaSearch } from "~/platform/routeHelpers";
+import { replicaSearch } from "~/platform/clusters/ClusterPage/tabLinks";
+import { useSelectedReplica } from "~/platform/clusters/ClusterPage/useSelectedReplica";
+import { absoluteClusterPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import { useRegionSlug } from "~/store/environments";
 
@@ -66,7 +68,10 @@ const DataflowDetailPage = () => {
   const { getClusterById } = useAllClusters();
   const cluster = clusterId ? getClusterById(clusterId) : undefined;
   const [searchParams, setSearchParams] = useSearchParams();
-  const replicaName = searchParams.get("replica") ?? cluster?.replicas[0]?.name;
+  // A `?replica=` naming no current replica (a stale link, a dropped
+  // replica) falls back to the first replica rather than reaching SQL.
+  const { selectedReplica } = useSelectedReplica(cluster);
+  const replicaName = selectedReplica?.name ?? cluster?.replicas[0]?.name;
 
   const params = React.useMemo(
     () =>

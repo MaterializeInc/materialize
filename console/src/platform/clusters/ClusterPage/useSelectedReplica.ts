@@ -20,14 +20,18 @@ export const REPLICA_SEARCH_PARAM = "replica";
  * stale name stays in the URL, so the selection comes back if a replica of
  * that name does.
  */
-export function useSelectedReplica(cluster: Cluster) {
+export function useSelectedReplica(
+  // Undefined while the cluster is still loading: callers need this hook
+  // before they can return early.
+  cluster: Pick<Cluster, "replicas"> | undefined,
+) {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedReplicaName =
     searchParams.get(REPLICA_SEARCH_PARAM) ?? undefined;
   const selectedReplica =
     selectedReplicaName === undefined
       ? undefined
-      : cluster.replicas.find(({ name }) => name === selectedReplicaName);
+      : cluster?.replicas.find(({ name }) => name === selectedReplicaName);
 
   /** Undefined removes the param. */
   const setSelectedReplicaName = (replicaName: string | undefined) =>
