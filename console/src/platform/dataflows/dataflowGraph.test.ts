@@ -1595,6 +1595,113 @@ describe("rerouteHiddenNodes", () => {
     expect(r.edges.map((e) => e.id)).toEqual(["a=>c"]);
   });
 
+  it("does not splice a self-edge for a hidden node on a loop back to its source", () => {
+    const g = {
+      nodes: [node("a"), node("h"), node("c")],
+      edges: [
+        edge("a=>h", "a", "h"),
+        edge("h=>a", "h", "a"), // feedback
+        edge("h=>c", "h", "c"),
+      ],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["h"]));
+    expect(r.edges.map((e) => e.id)).toEqual(["a=>c"]);
+    expect(r.edges.every((e) => e.source !== e.target)).toBe(true);
+  });
+
+  it("reaches through a hidden cycle from either entry and counts each channel once", () => {
+    const g = {
+      nodes: [node("a"), node("l"), node("m"), node("c")],
+      edges: [
+        edge("a=>l", "a", "l", 1n, 1n),
+        edge("l=>m", "l", "m", 2n, 2n),
+        edge("m=>l", "m", "l", 4n, 4n), // cycle
+        edge("m=>c", "m", "c", 8n, 8n),
+      ],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["l", "m"]));
+    // The cycle's m=>l channel lies on a walk a, l, m, l, m, c, but is not
+    // on any simple path. It is still a channel the traffic could use, and
+    // is counted once however often a walk revisits it.
+    expect(r.edges).toHaveLength(1);
+    expect(r.edges[0].messagesSent).toBe(1n + 2n + 4n + 8n);
+  });
+
+  it("counts a channel shared by several paths once", () => {
+    // a -> p -> {q1, q2} -> r -> c has two paths, which share a=>p and r=>c.
+    // Each of the six channels counts once.
+    const g = {
+      nodes: [
+        node("a"),
+        node("p"),
+        node("q1"),
+        node("q2"),
+        node("r"),
+        node("c"),
+      ],
+      edges: [
+        edge("a=>p", "a", "p", 1n, 1n, ["x"]),
+        edge("p=>q1", "p", "q1", 2n, 2n),
+        edge("p=>q2", "p", "q2", 4n, 4n, ["y"]),
+        edge("q1=>r", "q1", "r", 8n, 8n),
+        edge("q2=>r", "q2", "r", 16n, 16n),
+        edge("r=>c", "r", "c", 32n, 32n),
+      ],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["p", "q1", "q2", "r"]));
+    expect(r.edges).toHaveLength(1);
+    expect(r.edges[0].messagesSent).toBe(63n);
+    expect(r.edges[0].channelTypes).toEqual(["x", "y"]);
+  });
+
+  it("only counts channels on a path to the target", () => {
+    // h also leads to d, so h=>d must not inflate a=>c.
+    const g = {
+      nodes: [node("a"), node("h"), node("c"), node("d")],
+      edges: [
+        edge("a=>h", "a", "h", 1n),
+        edge("h=>c", "h", "c", 2n),
+        edge("h=>d", "h", "d", 100n),
+      ],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["h"]));
+    const ac = r.edges.find((e) => e.id === "a=>c");
+    const ad = r.edges.find((e) => e.id === "a=>d");
+    expect(ac?.messagesSent).toBe(3n);
+    expect(ad?.messagesSent).toBe(101n);
+  });
+
+  it("handles a long chain of hidden diamonds in linear-ish time", () => {
+    // 2^30 distinct paths from a to z: enumerating them takes minutes.
+    const diamonds = 30;
+    const ids = ["a"];
+    const edges: VisibleEdge[] = [];
+    const hidden = new Set<string>();
+    let prev = "a";
+    for (let i = 0; i < diamonds; i++) {
+      const l = `l${i}`;
+      const r = `r${i}`;
+      const join = i === diamonds - 1 ? "z" : `j${i}`;
+      ids.push(l, r, join);
+      if (join !== "z") hidden.add(join);
+      hidden.add(l);
+      hidden.add(r);
+      edges.push(
+        edge(`${prev}=>${l}`, prev, l, 1n),
+        edge(`${prev}=>${r}`, prev, r, 1n),
+        edge(`${l}=>${join}`, l, join, 1n),
+        edge(`${r}=>${join}`, r, join, 1n),
+      );
+      prev = join;
+    }
+    const start = performance.now();
+    const out = rerouteHiddenNodes({ nodes: ids.map(node), edges }, hidden);
+    expect(performance.now() - start).toBeLessThan(1000);
+    expect(out.edges.map((e) => e.id)).toEqual(["a=>z"]);
+    // Every channel counted once: 4 per diamond.
+    expect(out.edges[0].messagesSent).toBe(BigInt(4 * diamonds));
+  });
+
   it("drops an entirely hidden component with no visible endpoint", () => {
     const g = {
       nodes: [node("a"), node("b")],
