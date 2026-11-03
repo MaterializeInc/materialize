@@ -9,6 +9,11 @@
 
 # Tests to verify that source timestamps are rounded to the timestamp interval.
 
+# Event-driven bindings land on the minimum binding interval grid rather than
+# on the timestamp interval, so this test pins the plain tick.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_event_driven_bindings = false
+
 > CREATE CLUSTER test SIZE 'scale=1,workers=1'
 
 $ kafka-create-topic topic=test
@@ -97,3 +102,6 @@ ALTER SOURCE mysql_src SET (TIMESTAMP INTERVAL = '500ms')
 kafka_src          true
 pg_src             true
 mysql_src          true
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET storage_event_driven_bindings
