@@ -33,7 +33,7 @@ export const DataflowBreadcrumbs = ({
 }: DataflowBreadcrumbsProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const path: DataflowNode[] = [];
-  for (let id: NodeId | null = focusedScope; id; ) {
+  for (let id: NodeId | null = focusedScope; id;) {
     const node = structure.nodes.get(id);
     if (!node) {
       throw new Error(`missing dataflow node for id ${id} in breadcrumb path`);

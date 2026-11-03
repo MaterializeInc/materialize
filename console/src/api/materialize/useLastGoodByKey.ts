@@ -56,7 +56,6 @@ export function useLastGoodByKey<TResult, TData>({
     // Deliberate render-phase write, not a side effect: it must land before
     // this render commits, so a stale sawLoadingRef can't be read by the
     // effect below in the same commit (one render later would be too late).
-    // eslint-disable-next-line react-compiler/react-compiler
     sawLoadingRef.current = false;
   }
 

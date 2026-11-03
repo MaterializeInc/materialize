@@ -121,7 +121,6 @@ const FitHelper = ({
   React.useEffect(() => {
     // Assigning to the ref inside an effect is safe: it never runs during
     // render, so the ref just receives the latest fit callback.
-    // eslint-disable-next-line react-compiler/react-compiler
     fitRef.current = (ids: string[]) => {
       void reactFlow.fitView({
         nodes: ids.map((id) => ({ id })),

@@ -65,6 +65,14 @@ function renderEdge(data: ChannelEdgeData) {
   return container.querySelector("path")!;
 }
 
+// jsdom serializes colors in rgb() form, so compare against the same
+// serialization of the expected color.
+function cssColor(color: string): string {
+  const el = document.createElement("div");
+  el.style.color = color;
+  return el.style.color;
+}
+
 const DATA: ChannelEdgeData = {
   messagesSent: 1n,
   batchesSent: 1n,
@@ -95,13 +103,13 @@ describe("ChannelEdge", () => {
   // gets a lighter highlight than the directly selected edge does.
   it("a connected edge gets the lighter highlight", () => {
     const path = renderEdge({ ...DATA, connected: true });
-    expect(path.style.stroke).toBe(HIGHLIGHT_COLORS.connected);
+    expect(path.style.stroke).toBe(cssColor(HIGHLIGHT_COLORS.connected));
     expect(path.style.strokeWidth).toBe("1.75");
   });
 
   it("the directly selected edge gets the stronger highlight, not the connected one", () => {
     const path = renderEdge({ ...DATA, selected: true, connected: true });
-    expect(path.style.stroke).toBe(HIGHLIGHT_COLORS.selected);
+    expect(path.style.stroke).toBe(cssColor(HIGHLIGHT_COLORS.selected));
     expect(path.style.strokeWidth).toBe("2.5");
   });
 

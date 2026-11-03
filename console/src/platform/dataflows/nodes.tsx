@@ -103,7 +103,7 @@ const ExpandGutter = ({ data }: { data: FlowNodeData }) => {
       borderColor={colors.border.secondary}
       cursor="pointer"
       _hover={{ background: colors.background.tertiary }}
-      onClick={(e) => {
+      onClick={(e: React.MouseEvent) => {
         e.stopPropagation();
         data.onToggleExpand?.(data.node.id);
       }}
@@ -220,7 +220,7 @@ export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
             borderRadius="4px"
             cursor="pointer"
             _hover={{ background: colors.background.tertiary }}
-            onClick={(e) => {
+            onClick={(e: React.MouseEvent) => {
               e.stopPropagation();
               data.onToggleExpand?.(data.node.id);
             }}
