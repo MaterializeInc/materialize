@@ -418,9 +418,13 @@ balancerd internal HTTP port, and disable the target group's
 The AWS modules in the Materialize Terraform repository configure this for the
 NLB they create. If you instead expose balancerd with your own
 `type: LoadBalancer` Service and let the AWS Load Balancer Controller create the
-target group, add these annotations to the Service:
+target group, set `balancerd.readinessProbePath` as above and add these
+annotations to the Service. If the Service already sets
+`aws-load-balancer-target-group-attributes`, append the attribute to its
+comma-separated value instead of replacing it.
 
 ```yaml
+service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
 service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: HTTP
 service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
 service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: /api/readyz
