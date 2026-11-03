@@ -36,11 +36,20 @@ vi.mock("~/hooks/useFlags", () => ({
   useFlags: () => mockFlags,
 }));
 
+// The Messenger reports itself shown whenever it's asked to open.
+const messengerCallbacks = vi.hoisted(() => ({
+  onShow: undefined as undefined | (() => void),
+}));
+
 vi.mock("@intercom/messenger-js-sdk", () => ({
   Intercom: vi.fn(),
   update: vi.fn(),
-  show: vi.fn(),
-  showNewMessage: vi.fn(),
+  show: vi.fn(() => messengerCallbacks.onShow?.()),
+  showNewMessage: vi.fn(() => messengerCallbacks.onShow?.()),
+  onShow: vi.fn((callback: () => void) => {
+    messengerCallbacks.onShow = callback;
+  }),
+  onHide: vi.fn(),
   onUnreadCountChange: vi.fn((callback: (count: number) => void) =>
     callback(2),
   ),
@@ -328,6 +337,57 @@ describe("SupportPage", () => {
         screen.getByRole("link", { name: "All tickets in Help Center ↗" }),
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
       expect(screen.queryByRole("link", { name: "View tickets" })).toBeNull();
+    });
+
+    it("loads more tickets", async () => {
+      server.use(
+        http.get(TICKETS_URL, ({ request }) => {
+          const cursor = new URL(request.url).searchParams.get("cursor");
+          return HttpResponse.json(
+            cursor === "page-2"
+              ? {
+                  data: [buildTicket({ id: "7", title: "Sink is lagging" })],
+                  nextCursor: null,
+                }
+              : { data: [buildTicket()], nextCursor: "page-2" },
+          );
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      expect(
+        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+      ).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Load more" }));
+
+      expect(
+        await screen.findByRole("button", { name: "Sink is lagging" }),
+      ).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: "Load more" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("keeps looking when a page has no visible tickets", async () => {
+      server.use(
+        http.get(TICKETS_URL, ({ request }) => {
+          const cursor = new URL(request.url).searchParams.get("cursor");
+          return HttpResponse.json(
+            cursor === "page-2"
+              ? { data: [buildTicket()], nextCursor: null }
+              : { data: [], nextCursor: "page-2" },
+          );
+        }),
+      );
+      await renderComponent(<SupportPage />);
+
+      expect(
+        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+      ).toBeVisible();
+      expect(
+        screen.queryByTestId("support-tickets-empty"),
+      ).not.toBeInTheDocument();
     });
 
     it("shows an empty state", async () => {

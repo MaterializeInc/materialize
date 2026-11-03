@@ -7,12 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { onShow, showNewMessage } from "@intercom/messenger-js-sdk";
 import { act, renderHook } from "@testing-library/react";
 
 import {
   INTERCOM_BOOT_FAST_CHECK_INTERVAL_MS,
   INTERCOM_BOOT_FAST_CHECKS,
   INTERCOM_BOOT_SLOW_CHECK_INTERVAL_MS,
+  INTERCOM_OPEN_TIMEOUT_MS,
+  openIntercomNewConversation,
+  resetMessengerVisibilityForTests,
   useIsIntercomIdentified,
 } from "./useIntercom";
 
@@ -21,6 +25,8 @@ vi.mock("@intercom/messenger-js-sdk", () => ({
   update: vi.fn(),
   show: vi.fn(),
   showNewMessage: vi.fn(),
+  onShow: vi.fn(),
+  onHide: vi.fn(),
   onUnreadCountChange: vi.fn(),
 }));
 
@@ -75,5 +81,46 @@ describe("useIsIntercomIdentified", () => {
     installStub().booted = true;
     const { result } = renderHook(() => useIsIntercomIdentified());
     expect(result.current).toBe(true);
+  });
+});
+
+describe("openIntercomNewConversation", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetMessengerVisibilityForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    delete (window as unknown as { Intercom?: IntercomStub }).Intercom;
+  });
+
+  it("falls back when the Messenger never boots", () => {
+    installStub();
+    const onUnavailable = vi.fn();
+    expect(openIntercomNewConversation(onUnavailable)).toBe(false);
+    expect(showNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back when the booted Messenger never appears", () => {
+    installStub().booted = true;
+    const onUnavailable = vi.fn();
+    expect(openIntercomNewConversation(onUnavailable)).toBe(true);
+    expect(showNewMessage).toHaveBeenCalled();
+
+    vi.advanceTimersByTime(INTERCOM_OPEN_TIMEOUT_MS);
+    expect(onUnavailable).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't fall back once the Messenger appears", () => {
+    installStub().booted = true;
+    const onUnavailable = vi.fn();
+    openIntercomNewConversation(onUnavailable);
+    const [shown] = vi.mocked(onShow).mock.calls[0] as [() => void];
+    shown();
+
+    vi.advanceTimersByTime(INTERCOM_OPEN_TIMEOUT_MS);
+    expect(onUnavailable).not.toHaveBeenCalled();
   });
 });

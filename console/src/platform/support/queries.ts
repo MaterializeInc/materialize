@@ -7,7 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import { buildGlobalQueryKey } from "~/api/buildQueryKeySchema";
 import {
@@ -39,17 +44,25 @@ const retryUnlessUnavailable = (failureCount: number, error: unknown) =>
   ) && failureCount < 2;
 
 /**
- * The signed-in user's tickets. While this errors, the page falls back to
- * the Messenger and Help Center links, so it works before the endpoints are
- * deployed.
+ * The signed-in user's tickets, a page at a time. While this errors, the page
+ * falls back to the Messenger and Help Center links, so it works before the
+ * endpoints are deployed.
+ *
+ * The global API hides internal and unshared tickets after searching, so a
+ * page can be short or even empty while there are more pages.
  */
 export function useSupportTickets() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: supportTicketQueryKeys.list(),
-    queryFn: async ({ signal }) => {
-      const { data } = await listSupportTickets({ signal });
+    queryFn: async ({ pageParam, signal }) => {
+      const { data } = await listSupportTickets(
+        { cursor: pageParam },
+        { signal },
+      );
       return data;
     },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     retry: retryUnlessUnavailable,
     refetchOnWindowFocus: true,
   });

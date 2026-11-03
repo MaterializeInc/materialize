@@ -25,6 +25,8 @@ vi.mock("@intercom/messenger-js-sdk", () => ({
   update: vi.fn(),
   show: vi.fn(),
   showNewMessage: vi.fn(),
+  onShow: vi.fn(),
+  onHide: vi.fn(),
   onUnreadCountChange: vi.fn(),
 }));
 

@@ -80,14 +80,25 @@ const EXTERNAL_LINK_PROPS = {
 /**
  * Opens the Intercom Messenger instead of following the link when the
  * Messenger is booted for the signed-in user. Otherwise the link's href (email
- * or the Help Center) is the fallback. `open` checks that the Messenger has
- * booted at click time, so a late boot is picked up without waiting for the
- * next readiness check.
+ * or the Help Center) is the fallback, including when the Messenger reports
+ * booted but never appears. `open` checks that the Messenger has booted at
+ * click time, so a late boot is picked up without waiting for the next
+ * readiness check.
  */
 const preferIntercom =
-  (hasJwt: boolean, open: () => boolean) =>
+  (hasJwt: boolean, open: (onUnavailable: () => void) => boolean) =>
   (event: React.MouseEvent<HTMLElement>) => {
-    if (hasJwt && open()) event.preventDefault();
+    const link = event.currentTarget;
+    const followLink = () => {
+      const href = link.getAttribute("href");
+      if (!href) return;
+      if (link.getAttribute("target") === "_blank") {
+        window.open(href, "_blank", "noopener,noreferrer");
+      } else {
+        window.location.assign(href);
+      }
+    };
+    if (hasJwt && open(followLink)) event.preventDefault();
   };
 
 const SEVERITIES = [
@@ -259,6 +270,23 @@ const SupportPage = () => {
   // they answer, "Open a ticket" uses the Messenger and the tickets card
   // links to Help Center.
   const areTicketsAvailable = ticketsQuery.isSuccess;
+  const tickets = React.useMemo(
+    () => ticketsQuery.data?.pages.flatMap((page) => page.data) ?? [],
+    [ticketsQuery.data],
+  );
+  const {
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    fetchNextPage,
+  } = ticketsQuery;
+  // A page can come back empty when all its tickets are hidden, so keep
+  // going until there's something to show or no more pages.
+  const isLookingForTickets =
+    tickets.length === 0 && hasNextPage && !isFetchNextPageError;
+  React.useEffect(() => {
+    if (isLookingForTickets && !isFetchingNextPage) fetchNextPage();
+  }, [isLookingForTickets, isFetchingNextPage, fetchNextPage]);
   const flags = useFlags();
   // The form needs the ticket endpoints, so it only replaces the Messenger
   // once they answer, and is behind its own flag until launch.
@@ -378,13 +406,26 @@ const SupportPage = () => {
                 )}
               </CardTitle>
               <CardContent>
-                {ticketsQuery.isPending ? (
+                {ticketsQuery.isPending || isLookingForTickets ? (
                   <LoadingContainer minHeight="24" />
                 ) : areTicketsAvailable ? (
-                  <SupportTicketsTable
-                    tickets={ticketsQuery.data.data}
-                    onSelect={setSelectedTicketId}
-                  />
+                  <VStack spacing="3" align="stretch">
+                    <SupportTicketsTable
+                      tickets={tickets}
+                      onSelect={setSelectedTicketId}
+                    />
+                    {hasNextPage && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        alignSelf="start"
+                        onClick={() => fetchNextPage()}
+                        isLoading={isFetchingNextPage}
+                      >
+                        Load more
+                      </Button>
+                    )}
+                  </VStack>
                 ) : (
                   <VStack spacing="3" align="start">
                     <Text

@@ -9,6 +9,8 @@
 
 import {
   Intercom,
+  onHide,
+  onShow,
   onUnreadCountChange,
   show,
   showNewMessage,
@@ -111,22 +113,65 @@ export const INTERCOM_BOOT_FAST_CHECKS = 30;
 export const INTERCOM_BOOT_SLOW_CHECK_INTERVAL_MS = 10_000;
 
 /**
- * Opens a new Messenger conversation. The Messenger's workflow offers the
- * ticket types the user's organization is eligible for, including "Report
- * Production Outage" for SLA customers. Returns false when the Messenger is
- * not available, so callers can fall back to email.
+ * How long to wait for the Messenger to appear after asking it to open. The
+ * SDK can report itself booted while the Messenger's frame fails to load, in
+ * which case it never shows.
  */
-export function openIntercomNewConversation() {
+export const INTERCOM_OPEN_TIMEOUT_MS = 3_000;
+
+const messengerState = { isWatching: false, isShown: false, shownAt: 0 };
+
+function watchMessengerVisibility() {
+  if (messengerState.isWatching) return;
+  messengerState.isWatching = true;
+  onShow(() => {
+    messengerState.isShown = true;
+    messengerState.shownAt = Date.now();
+  });
+  onHide(() => {
+    messengerState.isShown = false;
+  });
+}
+
+/**
+ * Asks the Messenger to open, and calls `onUnavailable` if it doesn't appear
+ * within `INTERCOM_OPEN_TIMEOUT_MS`. Returns false when the Messenger hasn't
+ * booted, so callers can fall back right away.
+ */
+function openMessenger(open: () => void, onUnavailable?: () => void) {
   if (!isIntercomBooted()) return false;
-  showNewMessage("");
+  watchMessengerVisibility();
+  const requestedAt = Date.now();
+  open();
+  if (onUnavailable && !messengerState.isShown) {
+    window.setTimeout(() => {
+      if (messengerState.shownAt < requestedAt) onUnavailable();
+    }, INTERCOM_OPEN_TIMEOUT_MS);
+  }
   return true;
 }
 
+/**
+ * Opens a new Messenger conversation. The Messenger's workflow offers the
+ * ticket types the user's organization is eligible for, including "Report
+ * Production Outage" for SLA customers. Returns false when the Messenger is
+ * not available, so callers can fall back to email; `onUnavailable` covers a
+ * Messenger that booted but never appears.
+ */
+export function openIntercomNewConversation(onUnavailable?: () => void) {
+  return openMessenger(() => showNewMessage(""), onUnavailable);
+}
+
 /** Opens the Messenger home, where Matty answers questions. */
-export function openIntercomMessenger() {
-  if (!isIntercomBooted()) return false;
-  show();
-  return true;
+export function openIntercomMessenger(onUnavailable?: () => void) {
+  return openMessenger(show, onUnavailable);
+}
+
+/** Resets the Messenger visibility tracking. For tests only. */
+export function resetMessengerVisibilityForTests() {
+  messengerState.isWatching = false;
+  messengerState.isShown = false;
+  messengerState.shownAt = 0;
 }
 
 /**
