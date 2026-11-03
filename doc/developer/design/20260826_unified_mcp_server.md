@@ -99,9 +99,10 @@ one is advertised under. The new route shows the new names. The old routes show
 what they show today, under the names they use today. The list is a small piece
 of config on top of one implementation, not a fork of the logic.
 
-Both MCP endpoints are marked as public preview in our docs, so we are not bound to
-keep the old shape forever. The list is there to avoid a surprise, not to
-promise a contract.
+Both MCP endpoints are generally available, so their tool lists are a stable
+interface. The per-route list is what keeps that promise on one implementation,
+until a route is retired as described in
+[What changes for existing users](#what-changes-for-existing-users).
 
 ### Tool names
 
@@ -137,8 +138,8 @@ Two tools do not carry over:
 
 Neither is removed on the day `/api/mcp` ships. Both stay on the old routes,
 marked deprecated, and age out over several releases as the replacements land.
-The endpoints are public preview, so we are free to make the break. Doing it
-with a migration window is a choice, not an obligation.
+The endpoints are generally available, so removing a tool is a breaking change.
+It needs a deprecation notice and a stated window before the removal release.
 
 ### The system catalog guard retires with the tool
 
@@ -321,14 +322,16 @@ on the old URLs keep working.
 - Clients that move to `/api/mcp` see three tools under the new names.
 - `read_data_product` is deprecated and goes away under DEX-65.
 
-The old routes should not live forever. Both are marked public preview, so we
-are not bound to keep them, but "not bound" is not a plan. The path:
+The old routes should not live forever. Both are generally available, so they
+are retired through a deprecation window, not removed outright. The path:
 
 1. Measure. The request metric is already labelled by endpoint, so usage of each
    old route is visible without new instrumentation.
-2. Announce. Say it in release notes, and add a line to the `initialize`
-   instructions the old routes return, which is the one place every client
-   reliably reads.
+2. Announce. Say it in release notes, add a line to the instructions the old
+   routes return from `initialize` and `server/discover`, and mark each
+   deprecated tool in its `tools/list` description. A 2026-07-28 client can
+   skip `server/discover`, so the tool description is the one place every
+   client reads.
 3. Remove, once the metric shows the route is quiet and a release has passed
    with the notice in place.
 
