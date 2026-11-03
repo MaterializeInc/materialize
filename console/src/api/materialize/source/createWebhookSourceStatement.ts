@@ -77,7 +77,8 @@ export const createWebhookSourceStatement = (
   const bodyFormat = createBodyFormatStatement(params);
   const includeSpec = createIncludeStatement(params);
   const checkStatement = params.validateRequests
-    ? sql.raw(params.checkStatement)
+    ? // eslint-disable-next-line no-restricted-syntax -- the user writes this CHECK expression
+      sql.raw(params.checkStatement)
     : sql``;
   return sql`
 CREATE SOURCE ${name}

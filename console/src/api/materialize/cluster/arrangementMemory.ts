@@ -10,7 +10,7 @@
 import { QueryKey } from "@tanstack/react-query";
 import { InferResult, sql } from "kysely";
 
-import { executeSqlV2, queryBuilder } from "../";
+import { executeSqlV2, queryBuilder, rawNumber } from "../";
 
 export type ArrangmentMemoryUsageParams = {
   arrangmentIds?: string[];
@@ -38,9 +38,11 @@ export function buildArrangmentMemoryUsageQuery({
         "o.id",
         eb.ref("das.size").$castTo<bigint | null>().as("size"),
         replicaHeapLimit
-          ? sql<number | null>`(${sql.id("das", "size")}::float8 / ${sql.raw(
-              replicaHeapLimit.toString(),
-            )}) * 100`.as("memoryPercentage")
+          ? sql<
+              number | null
+            >`(${sql.id("das", "size")}::float8 / ${rawNumber(replicaHeapLimit)}) * 100`.as(
+              "memoryPercentage",
+            )
           : sql<null>`null`.as("memoryPercentage"),
       ];
     })

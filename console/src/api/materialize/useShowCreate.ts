@@ -13,6 +13,7 @@ import React from "react";
 import {
   buildFullyQualifiedObjectName,
   queryBuilder,
+  rawKeyword,
   SchemaObject,
   useSqlTyped,
 } from "~/api/materialize";
@@ -29,7 +30,7 @@ function useShowCreate(noun: DDLNoun, schemaObject?: SchemaObject) {
     return sql<{
       name: string;
       create_sql: string;
-    }>`SHOW CREATE ${sql.raw(noun)} ${buildFullyQualifiedObjectName(
+    }>`SHOW CREATE ${rawKeyword(noun)} ${buildFullyQualifiedObjectName(
       schemaObject,
     )}`.compile(queryBuilder);
   }, [noun, schemaObject]);

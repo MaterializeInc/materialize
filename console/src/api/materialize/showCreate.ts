@@ -12,7 +12,12 @@ import { sql } from "kysely";
 
 import { kebabToScreamingSpaceCase } from "~/util";
 
-import { buildFullyQualifiedObjectName, executeSqlV2, queryBuilder } from ".";
+import {
+  buildFullyQualifiedObjectName,
+  executeSqlV2,
+  queryBuilder,
+  rawKeyword,
+} from ".";
 
 export const SHOW_CREATE_OBJECT_TYPES = [
   "index",
@@ -42,7 +47,7 @@ export function buildShowCreateStatement(
   // TODO: (#3400) Remove once all subsources are tables
   const type = parameters.isSourceTable
     ? sql.raw("source")
-    : sql.raw(kebabToScreamingSpaceCase(parameters.objectType));
+    : rawKeyword(kebabToScreamingSpaceCase(parameters.objectType));
   return sql<{
     sql: string;
   }>`SELECT create_sql AS sql FROM (SHOW CREATE ${type} ${buildFullyQualifiedObjectName(

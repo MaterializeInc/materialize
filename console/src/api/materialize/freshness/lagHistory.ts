@@ -14,6 +14,7 @@ import {
   executeSqlV2,
   IPostgresInterval,
   queryBuilder,
+  rawNumber,
 } from "~/api/materialize";
 import { buildIdListQuery } from "~/api/materialize/expressionBuilders";
 
@@ -67,9 +68,7 @@ export function buildObjectLagHistoryQuery({
   objectIds: string[];
   lookbackMs: number;
 }) {
-  const bucketSizeMs = sql.raw(
-    `${calculateBucketSizeFromLookback(lookbackMs)}`,
-  );
+  const bucketSizeMs = rawNumber(calculateBucketSizeFromLookback(lookbackMs));
 
   return (
     queryBuilder
@@ -89,7 +88,7 @@ export function buildObjectLagHistoryQuery({
           ])
           .where(
             (eb) =>
-              sql`${eb.ref("occurred_at")} + INTERVAL '${sql.raw(`${lookbackMs}`)} MILLISECONDS'`,
+              sql`${eb.ref("occurred_at")} + INTERVAL '${rawNumber(lookbackMs)} MILLISECONDS'`,
             ">=",
             sql<Date>`mz_now()`,
           ),
@@ -168,7 +167,7 @@ function lagReadingsSince(objectIds: string[], lookbackMs: number) {
     .select(["object_id", "lag"])
     .where(
       (eb) =>
-        sql`${eb.ref("occurred_at")} + INTERVAL '${sql.raw(`${lookbackMs}`)} MILLISECONDS'`,
+        sql`${eb.ref("occurred_at")} + INTERVAL '${rawNumber(lookbackMs)} MILLISECONDS'`,
       ">=",
       sql<Date>`mz_now()`,
     );
@@ -438,7 +437,7 @@ export function buildLagHistoryQuery(
       } else {
         lagHistoryQuery = lagHistoryQuery.where(
           (eb) =>
-            sql`${eb.ref("occurred_at")} + INTERVAL '${sql.raw(`${lookback.lookbackMs}`)} MILLISECONDS'`,
+            sql`${eb.ref("occurred_at")} + INTERVAL '${rawNumber(lookback.lookbackMs)} MILLISECONDS'`,
           ">=",
           sql<Date>`mz_now()`,
         );
@@ -447,8 +446,10 @@ export function buildLagHistoryQuery(
       return lagHistoryQuery;
     })
     .with("lag_history_binned", (cte) => {
-      const bucketSizeMs = sql.raw(
-        `${lookback.type === "getLatest" ? MIN_BUCKET_SIZE_MS : calculateBucketSizeFromLookback(lookback.lookbackMs)}`,
+      const bucketSizeMs = rawNumber(
+        lookback.type === "getLatest"
+          ? MIN_BUCKET_SIZE_MS
+          : calculateBucketSizeFromLookback(lookback.lookbackMs),
       );
 
       return cte.selectFrom("lag_history_with_temporal_filter").select([
@@ -513,7 +514,7 @@ export function buildLagHistoryQuery(
         }
 
         if (lookback.limit) {
-          cteQuery = cteQuery.limit(sql.raw(`${lookback.limit}`));
+          cteQuery = cteQuery.limit(sql.lit(lookback.limit));
         }
       } else if (groupByCluster) {
         cteQuery = cteQuery.orderBy([

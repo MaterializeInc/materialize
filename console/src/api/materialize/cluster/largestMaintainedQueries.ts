@@ -14,6 +14,7 @@ import {
   buildSessionVariables,
   executeSqlV2,
   queryBuilder,
+  rawNumber,
 } from "~/api/materialize";
 import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 
@@ -75,9 +76,11 @@ export function buildLargestMaintainedQueriesQuery({
           "o.name",
           eb.ref("s.size").$castTo<bigint | null>().as("size"),
           replicaHeapLimit
-            ? sql<number | null>`(${sql.id("s", "size")}::float8 / ${sql.raw(
-                replicaHeapLimit.toString(),
-              )}) * 100`.as("memoryPercentage")
+            ? sql<
+                number | null
+              >`(${sql.id("s", "size")}::float8 / ${rawNumber(replicaHeapLimit)}) * 100`.as(
+                "memoryPercentage",
+              )
             : sql<null>`null`.as("memoryPercentage"),
           sql<"materialized-view" | "index">`o.type`.as("type"),
           "sc.name as schemaName",
@@ -91,7 +94,7 @@ export function buildLargestMaintainedQueriesQuery({
       // Order by size: without a heap limit, memoryPercentage is NULL on every
       // row.
       .orderBy("size", sql`desc NULLS LAST`)
-      .limit(() => sql.raw(limit.toString()))
+      .limit(() => rawNumber(limit))
   );
 }
 
@@ -152,16 +155,18 @@ export function buildLargestMaintainedObjectSizesQuery({
         "s.object_id",
         eb.ref("s.size").$castTo<bigint | null>().as("size"),
         replicaHeapLimit
-          ? sql<number | null>`(${sql.id("s", "size")}::float8 / ${sql.raw(
-              replicaHeapLimit.toString(),
-            )}) * 100`.as("memoryPercentage")
+          ? sql<
+              number | null
+            >`(${sql.id("s", "size")}::float8 / ${rawNumber(replicaHeapLimit)}) * 100`.as(
+              "memoryPercentage",
+            )
           : sql<null>`null`.as("memoryPercentage"),
       ])
       // Ties are common because sizes are 10 MiB-quantized; break them by id so
       // rows keep a stable order across polls.
       .orderBy("size", sql`desc NULLS LAST`)
       .orderBy("s.object_id")
-      .limit(() => sql.raw(limit.toString()))
+      .limit(() => rawNumber(limit))
   );
 }
 

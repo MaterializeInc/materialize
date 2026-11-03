@@ -10,6 +10,7 @@
 import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
+import { escapedLiteral, rawNumber } from "~/api/materialize";
 import { queryBuilder } from "~/api/materialize/db";
 import { executeSqlV2 } from "~/api/materialize/executeSqlV2";
 import { hasSuperUserPrivileges } from "~/api/materialize/expressionBuilders";
@@ -62,9 +63,9 @@ SELECT DISTINCT relation, privilege, "hasTablePrivilege"
 FROM
     (
         VALUES
-            ('${sql.raw(QUERY_HISTORY_LIST_TABLE)}', 'SELECT', has_table_privilege(${sql.raw(String(RELATION_OIDS[QUERY_HISTORY_LIST_TABLE]))}, 'SELECT')),
-            ('${sql.raw(QUERY_HISTORY_LIST_TABLE_REDACTED)}', 'SELECT', true),
-            ('${sql.raw(STATEMENT_LIFECYCLE_TABLE)}', 'SELECT', has_table_privilege(${sql.raw(String(RELATION_OIDS[STATEMENT_LIFECYCLE_TABLE]))}, 'SELECT'))
+            (${escapedLiteral(QUERY_HISTORY_LIST_TABLE)}, 'SELECT', has_table_privilege(${rawNumber(RELATION_OIDS[QUERY_HISTORY_LIST_TABLE])}, 'SELECT')),
+            (${escapedLiteral(QUERY_HISTORY_LIST_TABLE_REDACTED)}, 'SELECT', true),
+            (${escapedLiteral(STATEMENT_LIFECYCLE_TABLE)}, 'SELECT', has_table_privilege(${rawNumber(RELATION_OIDS[STATEMENT_LIFECYCLE_TABLE])}, 'SELECT'))
     )
     AS _ (relation, privilege, "hasTablePrivilege");
   `;

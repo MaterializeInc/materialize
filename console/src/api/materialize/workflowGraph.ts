@@ -47,12 +47,8 @@ WITH MUTUALLY RECURSIVE
     SELECT object_id, dependency_id FROM mz_materialization_dependencies
     JOIN mz_objects AS parent_o ON parent_o.id = dependency_id
     JOIN mz_objects AS child_o ON child_o.id = object_id
-    AND parent_o.type in (${sql.raw(
-      ALLOWED_OBJECT_TYPES.map((t) => `'${t}'`).join(", "),
-    )})
-    AND child_o.type in (${sql.raw(
-      ALLOWED_OBJECT_TYPES.map((t) => `'${t}'`).join(", "),
-    )})
+    AND parent_o.type in (${sql.join(ALLOWED_OBJECT_TYPES.map(lit))})
+    AND child_o.type in (${sql.join(ALLOWED_OBJECT_TYPES.map(lit))})
   ),
   -- TODO: (#3400) Remove once all subsources are tables
   sources_with_subsources_object_dependencies(child_id text, parent_id text) AS (

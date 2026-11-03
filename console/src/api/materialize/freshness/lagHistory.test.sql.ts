@@ -13,6 +13,7 @@ import PostgresInterval from "postgres-interval";
 import {
   IPostgresInterval,
   queryBuilder,
+  rawNumber,
   SEARCH_PATH,
 } from "~/api/materialize";
 import {
@@ -244,7 +245,7 @@ const readingsIn = async (lookbackMs: number) => {
       .where("object_id", "in", OBJECT_IDS)
       .where(
         (eb) =>
-          sql`${eb.ref("occurred_at")} + INTERVAL '${sql.raw(`${lookbackMs}`)} MILLISECONDS'`,
+          sql`${eb.ref("occurred_at")} + INTERVAL '${rawNumber(lookbackMs)} MILLISECONDS'`,
         ">=",
         sql<Date>`mz_now()`,
       )

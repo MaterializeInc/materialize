@@ -10,7 +10,7 @@
 import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
-import { executeSqlV2, queryBuilder } from "~/api/materialize";
+import { executeSqlV2, queryBuilder, rawNumber } from "~/api/materialize";
 import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 
 import {
@@ -52,7 +52,7 @@ export function buildReplicaUtilizationHistoryQuery({
   bucketSizeMs,
   includeMemoryBreakdown = false,
 }: ReplicaUtilizationHistoryParameters) {
-  const bucketSizeMsSqlStr = sql.raw(`${bucketSizeMs}`);
+  const bucketSizeMsSqlStr = rawNumber(bucketSizeMs);
   const startDateLit = sql.lit(startDate);
   const endDateLit = sql.lit(startDate);
 

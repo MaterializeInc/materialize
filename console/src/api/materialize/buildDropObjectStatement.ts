@@ -11,7 +11,7 @@ import { sql } from "kysely";
 
 import { queryBuilder } from "~/api/materialize/db";
 
-import { buildFullyQualifiedObjectName } from ".";
+import { buildFullyQualifiedObjectName, rawKeyword } from ".";
 import { DatabaseObject } from "./types";
 
 export type DeletableObjectType =
@@ -38,7 +38,7 @@ export function buildDropObjectStatement({
   dbObject: DatabaseObject;
   objectType: DeletableObjectType;
 }) {
-  const query = sql`DROP ${sql.raw(objectType)} ${buildFullyQualifiedObjectName(
+  const query = sql`DROP ${rawKeyword(objectType)} ${buildFullyQualifiedObjectName(
     dbObject,
   )} ${supportsDropCascade(objectType) ? sql.raw("CASCADE") : sql.raw("")}`;
   return query.compile(queryBuilder).sql;

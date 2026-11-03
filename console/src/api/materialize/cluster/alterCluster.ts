@@ -71,7 +71,7 @@ export const alterClusterSettingsStatement = ({
     ...(size === undefined ? [] : [sql`SIZE = ${lit(size)}`]),
     ...(replicas === undefined
       ? []
-      : [sql`REPLICATION FACTOR = ${sql.raw(replicas.toString())}`]),
+      : [sql`REPLICATION FACTOR = ${sql.lit(replicas)}`]),
   ];
   if (autoScalingPolicy === null && options.length === 0) {
     // NOTE: Unlike a SET naming the strategy, RESET works with autoscaling's

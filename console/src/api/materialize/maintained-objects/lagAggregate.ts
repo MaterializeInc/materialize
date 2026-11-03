@@ -9,7 +9,7 @@
 
 import { sql } from "kysely";
 
-import { IPostgresInterval, queryBuilder } from "~/api/materialize";
+import { IPostgresInterval, queryBuilder, rawNumber } from "~/api/materialize";
 
 export interface LagAggregateParams {
   /** Lookback window in minutes for the temporal filter on lag history. */
@@ -33,7 +33,7 @@ export function buildLagAggregateQuery({
     .select(["object_id", sql<IPostgresInterval | null>`max(lag)`.as("lag")])
     .where(
       (eb) =>
-        sql`${eb.ref("occurred_at")} + INTERVAL '${sql.raw(`${lookbackMinutes}`)} MINUTES'`,
+        sql`${eb.ref("occurred_at")} + INTERVAL '${rawNumber(lookbackMinutes)} MINUTES'`,
       ">=",
       sql<Date>`mz_now()`,
     )
