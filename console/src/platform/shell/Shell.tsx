@@ -17,10 +17,7 @@ import React, { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useSegment } from "~/analytics/segment";
 import { EditorCommand, EditorEvent } from "~/components/CommandBlock";
-import {
-  useGetView,
-  useViewDispatch,
-} from "~/components/CommandBlock/provider";
+import { useGetView } from "~/components/CommandBlock/provider";
 import { useCancelQuery } from "~/queries/cancelQuery";
 import { exhaustiveGuard } from "~/util";
 import { FocusableElement } from "~/utils/focusableElement";
@@ -77,7 +74,6 @@ const Shell = () => {
   const { mutate: cancelQueryMutation } = useCancelQuery();
 
   const getView = useGetView();
-  const viewDispatch = useViewDispatch();
 
   const { track } = useSegment();
 
@@ -114,9 +110,9 @@ const Shell = () => {
         changes: { from: 0, to: view.state.doc.length, insert: value },
         selection: { anchor: value.length },
       };
-      viewDispatch(updateEvent);
+      view.dispatch(updateEvent);
     },
-    [getView, viewDispatch],
+    [getView],
   );
 
   // Scroll to the bottom whenever we update the Shell's history list.
