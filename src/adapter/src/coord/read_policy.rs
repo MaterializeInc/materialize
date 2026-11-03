@@ -29,6 +29,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as _;
 
+use crate::AdapterError;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::util::ResultExt;
@@ -40,10 +41,26 @@ use crate::util::ResultExt;
 /// that read frontiers cannot advance past the held time as long as they exist.
 /// Dropping a [`ReadHolds`] also drops the [`ReadHold`] tokens within and
 /// relinquishes the associated read capabilities.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct ReadHolds {
     pub storage_holds: BTreeMap<GlobalId, ReadHold>,
     pub compute_holds: BTreeMap<(ComputeInstanceId, GlobalId), ReadHold>,
+}
+
+/// The error for a storage hold whose issuer hung up.
+fn storage_hold_hung_up(id: GlobalId) -> AdapterError {
+    AdapterError::ConcurrentDependencyDrop {
+        dependency_kind: "collection",
+        dependency_id: id.to_string(),
+    }
+}
+
+/// The error for a compute hold whose issuer, its compute instance, hung up.
+fn compute_hold_hung_up(instance_id: ComputeInstanceId) -> AdapterError {
+    AdapterError::ConcurrentDependencyDrop {
+        dependency_kind: "cluster",
+        dependency_id: instance_id.to_string(),
+    }
 }
 
 impl ReadHolds {
@@ -102,22 +119,41 @@ impl ReadHolds {
         self.compute_holds.remove(&(instance_id, id));
     }
 
-    /// Returns a new ReadHolds containing only the holds for collections in `id_bundle`.
-    pub fn subset(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
+    /// Clones the holds, failing with [`AdapterError::ConcurrentDependencyDrop`] if
+    /// the issuer of one of them hung up, see
+    /// [`ReadHoldIssuerHungUp`](mz_storage_types::read_holds::ReadHoldIssuerHungUp).
+    /// A transaction's stored holds, for example, outlive a `DROP CLUSTER` of
+    /// their cluster.
+    pub fn try_clone(&self) -> Result<Self, AdapterError> {
+        let mut result = ReadHolds::new();
+        for (id, hold) in &self.storage_holds {
+            let hold = hold.try_clone().map_err(|_| storage_hold_hung_up(*id))?;
+            result.storage_holds.insert(*id, hold);
+        }
+        for ((instance_id, id), hold) in &self.compute_holds {
+            let hold = hold
+                .try_clone()
+                .map_err(|_| compute_hold_hung_up(*instance_id))?;
+            result.compute_holds.insert((*instance_id, *id), hold);
+        }
+        Ok(result)
+    }
+
+    /// Returns a new ReadHolds containing only the holds for collections in `id_bundle`,
+    /// moved out of `self`.
+    pub fn subset(mut self, id_bundle: &CollectionIdBundle) -> ReadHolds {
         let mut result = ReadHolds::new();
 
         for id in &id_bundle.storage_ids {
-            if let Some(hold) = self.storage_holds.get(id) {
-                result.storage_holds.insert(*id, hold.clone());
+            if let Some(hold) = self.storage_holds.remove(id) {
+                result.storage_holds.insert(*id, hold);
             }
         }
 
         for (instance_id, ids) in &id_bundle.compute_ids {
             for id in ids {
-                if let Some(hold) = self.compute_holds.get(&(*instance_id, *id)) {
-                    result
-                        .compute_holds
-                        .insert((*instance_id, *id), hold.clone());
+                if let Some(hold) = self.compute_holds.remove(&(*instance_id, *id)) {
+                    result.compute_holds.insert((*instance_id, *id), hold);
                 }
             }
         }
@@ -164,29 +200,38 @@ impl ReadHolds {
     }
 
     /// Merge the read holds in `other` into the contained read holds.
-    fn merge(&mut self, other: Self) {
+    ///
+    /// Fails like [`ReadHolds::try_clone`] if the issuer of a hold hung up. The
+    /// holds merged until then stay in `self`, and the rest of `other` is
+    /// released.
+    fn merge(&mut self, other: Self) -> Result<(), AdapterError> {
         use std::collections::btree_map::Entry;
 
         for (id, other_hold) in other.storage_holds {
             match self.storage_holds.entry(id) {
                 Entry::Occupied(mut o) => {
-                    o.get_mut().merge_assign(other_hold);
+                    o.get_mut()
+                        .merge_assign(other_hold)
+                        .map_err(|_| storage_hold_hung_up(id))?;
                 }
                 Entry::Vacant(v) => {
                     v.insert(other_hold);
                 }
             }
         }
-        for (id, other_hold) in other.compute_holds {
-            match self.compute_holds.entry(id) {
+        for ((instance_id, id), other_hold) in other.compute_holds {
+            match self.compute_holds.entry((instance_id, id)) {
                 Entry::Occupied(mut o) => {
-                    o.get_mut().merge_assign(other_hold);
+                    o.get_mut()
+                        .merge_assign(other_hold)
+                        .map_err(|_| compute_hold_hung_up(instance_id))?;
                 }
                 Entry::Vacant(v) => {
                     v.insert(other_hold);
                 }
             }
         }
+        Ok(())
     }
 
     /// Extend the contained read holds with those in `other`.
@@ -401,21 +446,20 @@ impl crate::coord::Coordinator {
     }
 
     /// Stash transaction read holds. They will be released when the transaction
-    /// is cleaned up.
+    /// is cleaned up, also after a failed merge, see [`ReadHolds::merge`].
     pub(crate) fn store_transaction_read_holds(
         &mut self,
         conn_id: ConnectionId,
         read_holds: ReadHolds,
-    ) {
+    ) -> Result<(), AdapterError> {
         use std::collections::btree_map::Entry;
 
         match self.txn_read_holds.entry(conn_id) {
             Entry::Vacant(v) => {
                 v.insert(read_holds);
+                Ok(())
             }
-            Entry::Occupied(mut o) => {
-                o.get_mut().merge(read_holds);
-            }
+            Entry::Occupied(mut o) => o.get_mut().merge(read_holds),
         }
     }
 }
