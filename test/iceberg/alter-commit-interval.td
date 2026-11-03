@@ -11,6 +11,9 @@
 # running Iceberg sink. The sink dataflow restarts with the new interval and
 # subsequent batches follow the new cadence.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '1s'
+
 > CREATE CONNECTION polaris TO ICEBERG CATALOG (
     CATALOG TYPE = 'REST',
     URL = 'http://polaris:8181/api/catalog',
@@ -65,6 +68,15 @@ SELECT a, b FROM iceberg_scan('s3://test-bucket/default_namespace/alter_ci_table
 1 one
 2 two
 
+# The sink's metrics must survive the ALTER below, which builds the new sink
+# dataflow before the old one is torn down.
+$ set-from-sql var=sink-id
+SELECT id FROM mz_sinks WHERE name = 'alter_demo'
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_sink_iceberg_snapshots_committed' AND labels->'sink_id' = '${sink-id}'
+true
+
 # Stretch the commit interval to an hour.
 $ set-from-sql var=status_count
 SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'alter_demo' AND status = 'running'
@@ -102,6 +114,12 @@ $ duckdb-query name=iceberg
 SELECT a, b FROM iceberg_scan('s3://test-bucket/default_namespace/alter_ci_table') ORDER BY a
 1 one
 2 two
+
+# The sleeps since the ALTER span many scrape intervals, so this cannot pass on
+# a snapshot taken before the old dataflow finished shutting down.
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_sink_iceberg_snapshots_committed' AND labels->'sink_id' = '${sink-id}'
+true
 
 # Shrink the interval back down. This also re-plans the create_sql that the
 # previous ALTER rewrote. The pending row must now commit promptly.

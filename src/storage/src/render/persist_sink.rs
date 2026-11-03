@@ -1291,7 +1291,7 @@ fn append_batches<'scope>(
         let [upper_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
         // This may SEEM unnecessary, but metrics contains extra
-        // `DeleteOnDrop`-wrapped fields that will NOT be moved into this
+        // `DeregisterOnDrop`-wrapped fields that will NOT be moved into this
         // closure otherwise, dropping and destroying
         // those metrics. This is because rust now only moves the
         // explicitly-referenced fields into closures.
