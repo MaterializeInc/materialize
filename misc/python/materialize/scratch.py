@@ -10,13 +10,18 @@
 """Utilities for launching and interacting with scratch EC2 instances."""
 
 import asyncio
+import atexit
 import csv
 import datetime
+import functools
 import os
+import pathlib
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 from subprocess import CalledProcessError
 from typing import NamedTuple, cast
 
@@ -50,9 +55,6 @@ AMIS_BY_ARCH: dict[str, str] = {
     "x86_64": "ami-0b6d9d3d33ba97d99",
     "arm64": "ami-0bc7f2dbdcc6b5303",
 }
-
-SSH_COMMAND = ["mssh", "-o", "StrictHostKeyChecking=off"]
-SFTP_COMMAND = ["msftp", "-o", "StrictHostKeyChecking=off"]
 
 say = ui.speaker("scratch> ")
 
@@ -193,7 +195,7 @@ def print_instances(
         raise RuntimeError("Unknown format passed to print_instances")
 
     # Table is for humans: a compact subset that fits a default terminal.
-    # Private IP is omitted (mssh connects by instance id, not IP) and the
+    # Private IP is omitted (ssh connects by instance id, not IP) and the
     # owner only shown when listing instances beyond your own.
     headers = ["INSTANCE ID", "NAME", "STATE", "EXPIRES", "PUBLIC IP"]
     if show_launched_by:
@@ -226,6 +228,56 @@ def print_instances(
     render_table(headers, rows)
 
 
+@functools.cache
+def _ssh_key() -> pathlib.Path:
+    """A per-process ed25519 key, deleted at exit. It never leaves this machine
+    except as the public half pushed by `ssh_options`."""
+    for tool in ("aws", "session-manager-plugin"):
+        if shutil.which(tool) is None:
+            raise RuntimeError(
+                f"`{tool}` not found on PATH. Scratch SSH runs over SSM Session "
+                "Manager, which needs the AWS CLI and the Session Manager plugin "
+                "(macOS: `brew install awscli session-manager-plugin`)."
+            )
+    keydir = pathlib.Path(tempfile.mkdtemp(prefix="mzscratch-"))
+    atexit.register(shutil.rmtree, keydir, ignore_errors=True)
+    key = keydir / "id_ed25519"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True
+    )
+    return key
+
+
+def ssh_options(instance: Instance) -> list[str]:
+    """Authorize this process's key on `instance` and return the `ssh`/`sftp`
+    options that reach it through an SSM tunnel.
+
+    The instance needs no inbound rules, only the SSM agent and an instance
+    profile that lets it register. EC2 Instance Connect honours the pushed key
+    for 60 seconds, so call this immediately before each connection."""
+    key = _ssh_key()
+    boto3.client("ec2-instance-connect").send_ssh_public_key(
+        InstanceId=instance.id,
+        InstanceOSUser=ami_user(tags(instance)) or "ubuntu",
+        SSHPublicKey=key.with_suffix(".pub").read_text(),
+    )
+    region = boto3.session.Session().region_name
+    proxy = (
+        f"aws ssm start-session --region {region} --target %h "
+        "--document-name AWS-StartSSHSession --parameters portNumber=%p"
+    )
+    return [
+        "-i",
+        str(key),
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "StrictHostKeyChecking=off",
+        "-o",
+        f"ProxyCommand={proxy}",
+    ]
+
+
 def mssh(
     instance: Instance,
     command: str,
@@ -234,24 +286,22 @@ def mssh(
     input: bytes | None = None,
     quiet: bool = False,
 ) -> None:
-    """Runs a command over SSH via EC2 Instance Connect."""
+    """Runs a command over SSH through SSM Session Manager."""
     extra_ssh_args = extra_ssh_args or []
     host = instance_host(instance)
     if command:
         if not quiet:
             print(f"{host}$ {command}", file=sys.stderr)
-        # Quote to work around:
-        # https://github.com/aws/aws-ec2-instance-connect-cli/pull/26
-        command = shlex.quote(command)
     else:
-        print(f"$ mssh {host}")
+        print(f"$ ssh {host}")
 
     result = subprocess.run(
         [
-            *SSH_COMMAND,
+            "ssh",
+            *ssh_options(instance),
             *extra_ssh_args,
             host,
-            command,
+            *([command] if command else []),
         ],
         input=input,
         stdout=subprocess.DEVNULL if quiet else None,
@@ -267,9 +317,8 @@ def mssh(
 def msftp(
     instance: Instance,
 ) -> None:
-    """Connects over SFTP via EC2 Instance Connect."""
-    host = instance_host(instance)
-    spawn.runv([*SFTP_COMMAND, host])
+    """Connects over SFTP through SSM Session Manager."""
+    spawn.runv(["sftp", *ssh_options(instance), instance_host(instance)])
 
 
 def setup_ai_tools(instance: Instance) -> None:
@@ -359,7 +408,9 @@ def mkrepo(
     spawn.runv(
         cmd,
         cwd=MZ_ROOT,
-        env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
+        env=dict(
+            os.environ, GIT_SSH_COMMAND=shlex.join(["ssh", *ssh_options(instance)])
+        ),
     )
     git_config_cmds = f"git checkout -f {rev}"
 
@@ -441,20 +492,17 @@ def launch(
         if vpc_id is None:
             default_vpc = ec2.create_default_vpc()
             vpc_id = default_vpc["Vpc"]["VpcId"]
+        # No ingress rules: SSH arrives through the SSM agent's outbound
+        # connection (see `ssh_options`).
         securitygroup = ec2.create_security_group(
             GroupName=security_group_name,
-            Description="Allows all.",
+            Description="Scratch instances. No ingress, access is via SSM.",
             VpcId=vpc_id,
         )
         security_group_id = securitygroup["GroupId"]
-        ec2.authorize_security_group_ingress(
-            GroupId=security_group_id,
-            CidrIp="0.0.0.0/0",
-            IpProtocol="tcp",
-            FromPort=22,
-            ToPort=22,
-        )
 
+    # The public IP is for egress only. The default VPC has no NAT gateway, and
+    # the SSM agent needs outbound HTTPS to register.
     network_interface: InstanceNetworkInterfaceSpecificationTypeDef = {
         "AssociatePublicIpAddress": True,
         "DeviceIndex": 0,
@@ -542,9 +590,10 @@ async def setup(
             f"Instance {i} did not become ready in a reasonable amount of time"
         )
 
-    # Wait for SSH to be available
+    # Wait for SSH to be available. This includes the SSM agent registering
+    # after boot, which usually takes under a minute.
     done = False
-    async for remaining in ui.async_timeout_loop(120, 2):
+    async for remaining in ui.async_timeout_loop(240, 2):
         print(
             f"\rscratch> Waiting for SSH access: {remaining:0.0f}s remaining\033[K",
             end="",
@@ -555,7 +604,7 @@ async def setup(
             mssh(i, "true", quiet=True)
             done = True
             break
-        except CalledProcessError:
+        except (CalledProcessError, ClientError):
             continue
     print(file=sys.stderr)
     if not done:
@@ -580,7 +629,7 @@ async def setup(
             mssh(i, "[[ -f /opt/provision/done ]]", quiet=True)
             done = True
             break
-        except CalledProcessError:
+        except (CalledProcessError, ClientError):
             continue
     print(file=sys.stderr)
     if not done:
