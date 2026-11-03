@@ -12,8 +12,6 @@ aliases:
   - /integrations/mcp-server/mcp-agent/
 ---
 
-{{< public-preview />}}
-
 Starting in v26.24, Materialize provides a built-in `materialize-agent` Model
 Context Protocol (MCP) server (`/api/mcp/agent`, port 6876) for querying data
 products. The server is provided directly by Materialize; no sidecar process or
