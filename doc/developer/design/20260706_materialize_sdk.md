@@ -604,6 +604,11 @@ error text can contain row data too, so it is not logged by default. A retried
 batch can reject the same row again, so the counter counts rejections, not
 distinct rows.
 
+`max_consumer_wait` will be how long the fetch loop waits for room in the client
+buffer before the stream fails with `ConsumerFellBehind`, 30 seconds by default.
+While it waits, the session sits idle in its transaction, so it must stay below
+`idle_in_transaction_session_timeout`, two minutes by default.
+
 `commit_interval` will be the minimum time between commits, for targets that
 prefer fewer, larger writes. `max_commit_bytes` will be a soft bound on one
 commit. A batch after a catch-up can be large, and every timestamp in it is
@@ -1015,14 +1020,14 @@ Each call guarantees the SDK:
   generation older than the one given. It can run again with the same
   generations, after a retry or a restart, and must change nothing more then. It
   runs between writes, so a long sweep delays the next write. Fetching continues
-  into the bounded buffer meanwhile, and a sweep that outlasts the buffer ends
-  the stream with `ConsumerFellBehind`. A sink with much to delete commits its
-  deletes in parts, so each attempt keeps the progress of the one before. Until
-  it returns, readers can still see such rows, for example keys deleted before
-  the snapshot's `AS OF`. A sink whose readers must never see them hides older
-  generations in the write that completes the snapshot. A sink that switched
-  readers to a new incarnation in that write, or that has no keyed state, does
-  nothing here.
+  into the bounded buffer meanwhile, and a sweep that keeps the buffer full for
+  `max_consumer_wait` ends the stream with `ConsumerFellBehind`. A sink with
+  much to delete commits its deletes in parts, so each attempt keeps the
+  progress of the one before. Until it returns, readers can still see such rows,
+  for example keys deleted before the snapshot's `AS OF`. A sink whose readers
+  must never see them hides older generations in the write that completes the
+  snapshot. A sink that switched readers to a new incarnation in that write, or
+  that has no keyed state, does nothing here.
 
 ### Sink module
 
