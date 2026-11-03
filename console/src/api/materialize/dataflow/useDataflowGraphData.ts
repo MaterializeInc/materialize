@@ -106,8 +106,13 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
         .compile(queryBuilder),
       // mz_lir_mapping is keyed by the built object's global id (often a
       // transient id), which mz_compute_exports does not bridge to a dataflow.
-      // Operator id ranges do: a span belongs to this dataflow when one of the
-      // dataflow's operators falls inside its [start, end) range.
+      // Operator id ranges do: a worker renders each dataflow to completion
+      // before the next (`handle_create_dataflow` in mz-compute), so each
+      // dataflow's operator ids form a block no other dataflow's ids fall in,
+      // and a span belongs to the dataflow whose block it overlaps. Comparing
+      // against the block's bounds, rather than testing each span for a
+      // contained operator, keeps the plan linear in the span count. It also
+      // returns spans that contain no logged operator, which lirIndex drops.
       lirSpans: sql`
         SELECT DISTINCT
           mlm.global_id AS "exportId",
@@ -117,14 +122,13 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
           mlm.operator,
           mlm.operator_id_start AS "operatorIdStart",
           mlm.operator_id_end AS "operatorIdEnd"
-        FROM mz_lir_mapping AS mlm
-        WHERE EXISTS (
-          SELECT 1
-          FROM mz_dataflow_operator_dataflows AS dod
-          WHERE dod.dataflow_id = ${id}
-            AND dod.id >= mlm.operator_id_start
-            AND dod.id < mlm.operator_id_end
-        )`
+        FROM mz_lir_mapping AS mlm, (
+          SELECT min(id) AS lo, max(id) AS hi
+          FROM mz_dataflow_operator_dataflows
+          WHERE dataflow_id = ${id}
+        ) AS block
+        WHERE mlm.operator_id_start <= block.hi
+          AND mlm.operator_id_end > block.lo`
         .$castTo<LirSpanRow>()
         .compile(queryBuilder),
       // Per-worker CPU/memory/schedule count, for the skew heatmap (worst
