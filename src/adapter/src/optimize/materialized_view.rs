@@ -28,14 +28,16 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use itertools::Itertools;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
 };
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{ColumnName, GlobalId, RelationDesc, SqlRelationType};
+use mz_repr::{ColumnName, GlobalId, RelationDesc, ReprScalarType, SqlRelationType};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::TransformCtx;
@@ -66,6 +68,8 @@ pub struct Optimizer {
     view_id: GlobalId,
     /// The resulting column names.
     column_names: Vec<ColumnName>,
+    /// The declared schema, if any. It replaces the inferred one.
+    declared_desc: Option<RelationDesc>,
     /// Output columns that are asserted to be not null in the `CREATE VIEW`
     /// statement.
     non_null_assertions: Vec<usize>,
@@ -88,6 +92,7 @@ impl Optimizer {
         sink_id: GlobalId,
         view_id: GlobalId,
         column_names: Vec<ColumnName>,
+        declared_desc: Option<RelationDesc>,
         non_null_assertions: Vec<usize>,
         refresh_schedule: Option<RefreshSchedule>,
         debug_name: String,
@@ -101,6 +106,7 @@ impl Optimizer {
             sink_id,
             view_id,
             column_names,
+            declared_desc,
             non_null_assertions,
             refresh_schedule,
             debug_name,
@@ -226,11 +232,30 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let expr = OptimizedMirRelationExpr(plan.expr);
         let mut df_meta = plan.df_meta;
 
-        let mut rel_typ = plan.typ;
-        for &i in self.non_null_assertions.iter() {
-            rel_typ.column_types[i].nullable = false;
-        }
-        let rel_desc = RelationDesc::new(rel_typ, self.column_names.clone());
+        let rel_desc = match &self.declared_desc {
+            Some(desc) => {
+                soft_assert_or_log!(
+                    desc.typ()
+                        .column_types
+                        .iter()
+                        .zip_eq(plan.typ.column_types.iter())
+                        .all(
+                            |(declared, inferred)| ReprScalarType::from(&declared.scalar_type)
+                                == ReprScalarType::from(&inferred.scalar_type)
+                        ),
+                    "declared types {desc:?} do not match the query's types {:?}",
+                    plan.typ,
+                );
+                desc.clone()
+            }
+            None => {
+                let mut rel_typ = plan.typ;
+                for &i in self.non_null_assertions.iter() {
+                    rel_typ.column_types[i].nullable = false;
+                }
+                RelationDesc::new(rel_typ, self.column_names.clone())
+            }
+        };
 
         let mut df_builder = {
             let compute = self.compute_instance.clone();

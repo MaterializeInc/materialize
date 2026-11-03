@@ -432,6 +432,7 @@ impl Coordinator {
             materialized_view:
                 plan::MaterializedView {
                     column_names,
+                    declared_desc,
                     cluster_id,
                     non_null_assertions,
                     refresh_schedule,
@@ -465,6 +466,7 @@ impl Coordinator {
             global_id,
             view_id,
             column_names.clone(),
+            declared_desc.clone(),
             non_null_assertions.clone(),
             refresh_schedule.clone(),
             debug_name,
@@ -576,6 +578,7 @@ impl Coordinator {
                             mut create_sql,
                             expr: raw_expr,
                             column_names,
+                            declared_desc,
                             dependencies,
                             replacement_target,
                             cluster_id,
@@ -613,6 +616,13 @@ impl Coordinator {
                 return Err(AdapterError::ReplaceMaterializedViewSealed {
                     name: target_entry.name().item.clone(),
                 });
+            }
+
+            // Applying the replacement makes its `create_sql` the target's, so
+            // an implicit replacement would turn a declared schema back into an
+            // inferred one.
+            if target.declared_schema && declared_desc.is_none() {
+                return Err(AdapterError::ReplacementSchemaNotDeclared);
             }
 
             // For now, we don't support schema evolution for materialized views.
@@ -691,6 +701,7 @@ impl Coordinator {
                     raw_expr: raw_expr.into(),
                     locally_optimized_expr: local_mir_plan.expr().into(),
                     desc,
+                    declared_schema: declared_desc.is_some(),
                     collections,
                     resolved_ids,
                     dependencies,

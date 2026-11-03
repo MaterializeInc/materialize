@@ -6874,7 +6874,7 @@ impl<'a> QueryContext<'a> {
         }
     }
 
-    fn relation_type(&self, expr: &HirRelationExpr) -> SqlRelationType {
+    pub(crate) fn relation_type(&self, expr: &HirRelationExpr) -> SqlRelationType {
         expr.typ(&self.outer_relation_types, &self.scx.param_types.borrow())
     }
 
