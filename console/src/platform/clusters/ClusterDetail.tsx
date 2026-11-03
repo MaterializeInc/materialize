@@ -20,6 +20,10 @@ import {
   Tab,
 } from "~/layouts/BaseLayout";
 import { ClusterDetailParams } from "~/platform/clusters/ClusterRoutes";
+import {
+  DataflowDetailPage,
+  DataflowsPage,
+} from "~/platform/dataflows/lazyPages";
 import { SentryRoutes } from "~/sentry";
 
 import { ClusterDetailBreadcrumbs } from "./ClusterDetailBreadcrumbs";
@@ -32,13 +36,6 @@ import IndexList from "./IndexList";
 import MaterializedViewsList from "./MaterializedViewsList";
 import Sinks from "./Sinks";
 import Sources from "./Sources";
-
-const DataflowDetailPage = React.lazy(
-  () => import("~/platform/dataflows/DataflowDetailPage"),
-);
-const DataflowsPage = React.lazy(
-  () => import("~/platform/dataflows/DataflowsPage"),
-);
 
 // The redesigned page nests the object lists under `objects/`. Send those links
 // to the matching classic tab so they still land somewhere for opted-out users.
