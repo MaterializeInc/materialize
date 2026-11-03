@@ -113,6 +113,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
 | `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``{}`` |
 | `balancerd.readinessProbePath` | HTTP path of the balancerd readiness probe. `/api/readyz` fails once a pod reaches `balancerd_connection_high_watermark`, which removes it from the Service endpoints. Use `/api/livez` when the load balancer health-checks `/api/readyz` itself, for example an NLB whose targets the AWS Load Balancer Controller registers from the endpoints: deregistration cuts held sessions after the deregistration delay and excludes the pod from fail-open. | ``"/api/readyz"`` |
+| `balancerd.terminationGracePeriodSeconds` | Termination grace period for balancerd pods. Keep it at least `balancerd_sigterm_listen_wait` plus `balancerd_sigterm_connection_wait` (10 minutes by default), or open connections are cut before they drain. | ``600`` |
 | `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``{}`` |
 | `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``{}`` |
 | `clusterd.nodeSelector` | Node selector to use for all clusterd pods spawned by the operator | ``{}`` |

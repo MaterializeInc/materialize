@@ -417,6 +417,10 @@ balancerd:
   # Controller registers from the endpoints: deregistration cuts held sessions
   # after the deregistration delay and excludes the pod from fail-open.
   readinessProbePath: /api/readyz
+  # -- Termination grace period for balancerd pods. Keep it at least
+  # `balancerd_sigterm_listen_wait` plus `balancerd_sigterm_connection_wait`
+  # (10 minutes by default), or open connections are cut before they drain.
+  terminationGracePeriodSeconds: 600
   # @notationType -- k8s/resources
   defaultResources:
     # -- Default resource limits for balancerd's CPU and memory
