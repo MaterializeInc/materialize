@@ -582,6 +582,31 @@ describe("SupportPage", () => {
       );
     });
 
+    it("asks to email support when the support contact needs linking", async () => {
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}, 409),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.type(
+        await screen.findByRole("textbox", { name: /Subject/ }),
+        "Sink is lagging",
+      );
+      await user.type(
+        screen.getByRole("textbox", { name: /What happened/ }),
+        "Kafka sink is 10 minutes behind.",
+      );
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      expect(
+        await screen.findByText(/support account needs to be linked/),
+      ).toBeVisible();
+    });
+
     it("sends urgent tickets to the Messenger's outage workflow", async () => {
       setIntercom("booted");
       let createdWith: unknown;

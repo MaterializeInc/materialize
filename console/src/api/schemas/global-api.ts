@@ -1313,6 +1313,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description An existing support contact with this email is not linked to the user */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description The support system could not be reached */
             502: {
                 headers: {

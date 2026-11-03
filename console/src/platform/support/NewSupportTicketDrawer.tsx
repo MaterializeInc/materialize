@@ -39,6 +39,7 @@ import React from "react";
 import { useForm, UseFormRegisterReturn } from "react-hook-form";
 
 import { SupportTicket } from "~/api/cloudGlobalApi";
+import { OpenApiFetchError } from "~/api/OpenApiFetchError";
 import { Alert } from "~/components/Alert";
 import { HELP_CENTER_TICKETS_URL, SUPPORT_EMAIL } from "~/externalUrls";
 import { useHideIntercomLauncher } from "~/hooks/useIntercom";
@@ -278,7 +279,14 @@ const NewTicketForm = ({
             <Alert
               variant="error"
               minWidth="0"
-              message={`Your ticket couldn't be opened. Try again, or email ${SUPPORT_EMAIL}.`}
+              message={
+                // Intercom already has a contact with this email that support
+                // needs to link to the user; retrying won't help.
+                submit.error instanceof OpenApiFetchError &&
+                submit.error.status === 409
+                  ? `Your support account needs to be linked before you can open tickets here. Email ${SUPPORT_EMAIL} and we'll set it up.`
+                  : `Your ticket couldn't be opened. Try again, or email ${SUPPORT_EMAIL}.`
+              }
             />
           )}
 
