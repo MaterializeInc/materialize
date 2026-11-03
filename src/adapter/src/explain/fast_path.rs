@@ -54,6 +54,7 @@ impl<'a> Explainable<'a, FastPathPlan> {
             context,
             sources,
             plans,
+            export_schemas: Vec::new(),
         })
     }
 }

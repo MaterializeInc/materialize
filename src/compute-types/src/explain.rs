@@ -16,11 +16,12 @@ use std::collections::BTreeMap;
 
 use mz_expr::explain::{ExplainContext, ExplainMultiPlan, ExplainSource, enforce_linear_chains};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-use mz_repr::GlobalId;
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
+use mz_repr::{GlobalId, RelationDesc};
 
 use crate::dataflows::{DataflowDescription, LirDataflowDescription};
 use crate::plan::LirRelationExpr;
+use crate::sinks::ComputeSinkDesc;
 
 impl<'a> Explain<'a> for LirDataflowDescription {
     type Context = ExplainContext<'a>;
@@ -79,10 +80,13 @@ impl<'a> LirDataflowDescription {
             })
             .collect::<Vec<_>>();
 
+        let export_schemas = export_schemas(&self.sink_exports, context);
+
         Ok(ExplainMultiPlan {
             context,
             sources,
             plans,
+            export_schemas,
         })
     }
 }
@@ -147,12 +151,36 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
             })
             .collect::<Vec<_>>();
 
+        let export_schemas = export_schemas(&self.sink_exports, context);
+
         Ok(ExplainMultiPlan {
             context,
             sources,
             plans,
+            export_schemas,
         })
     }
+}
+
+/// The humanized names and schemas of `sink_exports`, if `context` asks for
+/// them with [`ExplainConfig::schema`](mz_repr::explain::ExplainConfig::schema).
+pub fn export_schemas<'a, S>(
+    sink_exports: &'a BTreeMap<GlobalId, ComputeSinkDesc<S>>,
+    context: &ExplainContext<'_>,
+) -> Vec<(String, &'a RelationDesc)> {
+    if !context.config.schema {
+        return Vec::new();
+    }
+    sink_exports
+        .iter()
+        .map(|(id, sink)| {
+            let name = context
+                .humanizer
+                .humanize_id(*id)
+                .unwrap_or_else(|| id.to_string());
+            (name, &sink.from_desc)
+        })
+        .collect()
 }
 
 /// TODO(database-issues#7533): Add documentation.
