@@ -38,11 +38,7 @@ import {
   type VisibleGraph,
   type VisibleNode,
 } from "./dataflowGraph";
-import {
-  NODE_DIMENSIONS,
-  type Positions,
-  resolveAbsolutePositions,
-} from "./elkGraph";
+import { NODE_DIMENSIONS, type Positions } from "./elkGraph";
 import {
   LirGroupNode as LirGroupNodeComponent,
   OperatorNode,
@@ -136,51 +132,33 @@ const FitHelper = ({
   return null;
 };
 
-// elk lays each scope out independently, starting near its own origin, so a
-// viewport pan/zoom left over from a previous, unrelated scope (or from the
-// user having panned away) can land on a spot with nothing from the new
-// scope in it at all. Once this scope's layout lands, if none of its nodes
-// are actually on screen, refit rather than leaving the canvas looking
-// empty. Checked once per scope (skipping the initial one, which React
-// Flow's own `fitView` prop already covers), not on every render, so
-// panning away deliberately after landing doesn't get fought.
+// elk lays each scope out independently, starting near its own origin, so the
+// viewport left over from the previous scope is sized for a different graph:
+// it can show the new scope at a fraction of the canvas, or miss it entirely.
+// Once a new scope's layout lands, fit to it. Checked once per scope (skipping
+// the initial one, which React Flow's own `fitView` prop already covers), not
+// on every render, so panning away deliberately after landing doesn't get
+// fought. A pending targeted fit (a search or port jump into this scope) wins.
 const ViewportGuard = ({
   focusedScope,
-  nodes,
+  hasNodes,
   positions,
-  paneRef,
+  targetedFitPending,
 }: {
   focusedScope: NodeId;
-  nodes: VisibleNode[];
+  hasNodes: boolean;
   positions: Positions | null;
-  paneRef: React.RefObject<HTMLDivElement>;
+  targetedFitPending: boolean;
 }) => {
   const reactFlow = useReactFlow();
   const checkedScopeRef = React.useRef<NodeId | null>(focusedScope);
   React.useEffect(() => {
-    if (!positions || nodes.length === 0) return;
+    if (!positions || !hasNodes) return;
     if (checkedScopeRef.current === focusedScope) return;
     checkedScopeRef.current = focusedScope;
-    const pane = paneRef.current;
-    if (!pane) return;
-    const rect = pane.getBoundingClientRect();
-    const { x, y, zoom } = reactFlow.getViewport();
-    const visMinX = -x / zoom;
-    const visMinY = -y / zoom;
-    const visMaxX = visMinX + rect.width / zoom;
-    const visMaxY = visMinY + rect.height / zoom;
-    const anyVisible = nodes.some((n) => {
-      const p = positions[n.id];
-      return (
-        p &&
-        p.x < visMaxX &&
-        p.x + p.width > visMinX &&
-        p.y < visMaxY &&
-        p.y + p.height > visMinY
-      );
-    });
-    if (!anyVisible) void reactFlow.fitView({ padding: 0.3, duration: 300 });
-  }, [focusedScope, nodes, positions, paneRef, reactFlow]);
+    if (targetedFitPending) return;
+    void reactFlow.fitView({ padding: 0.3, duration: 300 });
+  }, [focusedScope, hasNodes, positions, targetedFitPending, reactFlow]);
   return null;
 };
 
@@ -249,11 +227,11 @@ export const DataflowGraphView = ({
     grouping ?? undefined,
   );
 
-  // Unified parent map for both React Flow's parentId (member nodes below)
-  // and resolveAbsolutePositions: LIR grouping and scope nesting are mutually
-  // exclusive (see the grouping memo above), but this merges them into one
-  // map anyway rather than picking a source conditionally, so both consumers
-  // stay correct regardless of which one is populated.
+  // Unified parent map for React Flow's parentId (member nodes below): LIR
+  // grouping and scope nesting are mutually exclusive (see the grouping memo
+  // above), but this merges them into one map anyway rather than picking a
+  // source conditionally, so it stays correct regardless of which one is
+  // populated.
   const parentOf = React.useMemo(() => {
     const m = new Map<string, string>(grouping?.parentOf ?? []);
     // Scope nesting is structural; it wins over the grouping overlay if both
@@ -261,14 +239,6 @@ export const DataflowGraphView = ({
     for (const n of visible.nodes) if (n.parentId) m.set(n.id, n.parentId);
     return m;
   }, [grouping, visible.nodes]);
-
-  // Only ViewportGuard needs this: everything else either reads positions
-  // relative to parentId (React Flow's own convention, matching elk's) or
-  // resolves absolute position through React Flow's internal APIs.
-  const absolutePositions = React.useMemo(
-    () => (positions ? resolveAbsolutePositions(positions, parentOf) : null),
-    [positions, parentOf],
-  );
 
   const fitRef = React.useRef<((ids: string[]) => void) | null>(null);
 
@@ -425,8 +395,6 @@ export const DataflowGraphView = ({
     [visible],
   );
 
-  const paneRef = React.useRef<HTMLDivElement>(null);
-
   if (error) {
     return (
       <VStack width="100%" flex="1" alignItems="flex-start" spacing={2} p={4}>
@@ -439,7 +407,6 @@ export const DataflowGraphView = ({
   }
   return (
     <Box
-      ref={paneRef}
       width="100%"
       flex="1"
       position="relative"
@@ -541,9 +508,9 @@ export const DataflowGraphView = ({
         <FitHelper fitRef={fitRef} />
         <ViewportGuard
           focusedScope={focusedScope}
-          nodes={visible.nodes}
-          positions={absolutePositions}
-          paneRef={paneRef}
+          hasNodes={visible.nodes.length > 0}
+          positions={positions}
+          targetedFitPending={(fitOnIds?.length ?? 0) > 0}
         />
       </ReactFlow>
     </Box>
