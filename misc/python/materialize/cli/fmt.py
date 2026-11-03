@@ -22,7 +22,11 @@ from materialize.parallel_task import TaskSpec, run_parallel
 # reports the one it is pointed at. The `src/*/fuzz` cargo-fuzz crates attach to
 # the `test/cargo-fuzz` workspace, which the root workspace does not include, so
 # without a second invocation here they go unformatted entirely.
-RUST_MANIFESTS = ["Cargo.toml", "test/cargo-fuzz/Cargo.toml"]
+RUST_MANIFESTS = [
+    "Cargo.toml",
+    "test/cargo-fuzz/Cargo.toml",
+    "misc/materialize-sdk/Cargo.toml",
+]
 
 
 def main() -> int:
