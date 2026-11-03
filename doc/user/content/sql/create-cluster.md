@@ -149,7 +149,7 @@ When legacy sizes are enabled for a region, the following sizes are available:
 
 See also:
 
-- [cc to M.1 size mapping](/sql/m1-cc-mapping/).
+- [Materialize Cloud cluster sizes](/materialize-cloud/cluster-sizes/).
 
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
