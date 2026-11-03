@@ -71,6 +71,27 @@ pub(crate) mod u64_string {
     }
 }
 
+/// Serde adapter for an `Option<u64>` field, for use with
+/// `#[serde(default, with = "...")]`.
+pub(crate) mod opt_u64_string {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::U64;
+
+    pub(crate) fn serialize<S: Serializer>(
+        value: &Option<u64>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.map(U64).serialize(serializer)
+    }
+
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        Ok(Option::<U64>::deserialize(deserializer)?.map(|v| v.0))
+    }
+}
+
 /// Serde adapter for an `i64` field, for use with `#[serde(with = "...")]`.
 pub(crate) mod i64_string {
     use std::fmt;
