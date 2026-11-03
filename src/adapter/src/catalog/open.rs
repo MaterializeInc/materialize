@@ -241,7 +241,10 @@ impl Catalog {
                 config.boot_ts,
             )?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
-            sync_builtin_cluster_replica_sizes(&mut txn, &config.cluster_replica_sizes)?;
+            // A read-only catalog can't commit, so it uses the durable sizes.
+            if !txn.is_read_only() {
+                sync_builtin_cluster_replica_sizes(&mut txn, &config.cluster_replica_sizes)?;
+            }
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
             remove_pending_cluster_replicas_migration(&mut txn, config.boot_ts)?;
 
