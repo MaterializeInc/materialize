@@ -26,6 +26,8 @@ yarn-error.log
 .direnv
 .envrc
 .env
+.env.local
+.env.*.local
 
 .vscode
 

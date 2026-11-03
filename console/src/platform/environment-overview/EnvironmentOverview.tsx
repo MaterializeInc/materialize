@@ -17,7 +17,9 @@ import {
   PageHeading,
 } from "~/layouts/BaseLayout";
 
+import AttentionFeed from "./AttentionFeed";
 import ClusterFreshness from "./ClusterFreshness";
+import DataProducts from "./DataProducts";
 import MemDiskUtilization from "./MemDiskUtilization";
 
 export const EnvironmentOverview = () => {
@@ -30,8 +32,10 @@ export const EnvironmentOverview = () => {
         </HStack>
       </PageHeader>
       <VStack alignItems="flex-start" width="100%" gap="10" paddingBottom="10">
+        <AttentionFeed />
         <MemDiskUtilization />
         {flags["console-freshness-2855"] && <ClusterFreshness />}
+        <DataProducts />
       </VStack>
     </MainContentContainer>
   );
