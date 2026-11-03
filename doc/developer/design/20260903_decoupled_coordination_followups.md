@@ -2,8 +2,8 @@
 
 This is an audit backlog, not an expansion of Milestone 3. The two-adapter
 startup/frontier repair takes priority. Implementation of the opportunities
-below needs separate scope agreement. Findings are based on source inspection,
-not measured performance.
+below needs separate scope agreement. Findings are based on source inspection
+unless runtime evidence is cited.
 
 The direction is incremental observation and publication by the component that
 owns a fact. Reuse existing identities, catalog changes and Persist listeners.
@@ -110,7 +110,55 @@ relations. Transactionally sourced lifecycle events are a separate possible
 follow-up. Neither is approval to add projection-recovery protocols, watermarks
 or another policy owner during this milestone.
 
-## Separate correctness investigation
+## Separate correctness investigations
+
+### Own-build plans for peer-created indexes
+
+A fresh two-version deployment reproduced a post-admission gap: an index created
+through generation 0 serves queries there, while generation 1 reports the index
+as a pending plan and its query stalls. Both deployments had finished bootstrap.
+An index created before generation 1 joins works on both versions.
+
+Originating DDL writes its own build's selection through
+`Catalog::prepare_item_plan`. Bootstrap prepares missing own-build selections,
+but the native branch of `apply_catalog_implications` does not compile an index
+added by a peer after admission. Replicas correctly wait for their configured
+build's selection. Adapter planning needs to incorporate these committed changes,
+not rely on bootstrap or make replicas reuse another build's plan.
+
+The regression should admit both builds first, then create an index and require
+bounded reads and valid selections in both namespaces without restarting. Keep
+catalog validation and existing selection protection. This is not a request for
+controller-owned planning or another coordination protocol.
+
+Evidence: `~/.local/share/aj/m3-evidence/authority-projection/replacement/`, runs
+`run-1793730433` and `run-1793730854`. Both show generation 1 pending `u4` while
+generation 0 serves the indexed count.
+
+### Data-shard closure during txn-WAL application
+
+The seeded replacement workload also exposed an adapter panic during concurrent
+writes after temporary-table creation and deletion. The stack reaches
+`small_caa` through `empty_caa` in `TxnsHandle::apply_le`'s register/forget branch.
+This is a data-shard operation despite the panic text saying the txn shard closed.
+
+`empty_caa` and `apply_caa` already accept a closed data shard when the cached
+upper shows closure on entry. Their CAS mismatch paths instead panic on closure.
+Independent clients can discover closure at different points. Lawful retirement
+of a temporary shard is the leading explanation, but the captured logs do not
+identify the shard or exclude premature closure of live data.
+
+Use separate Persist caches to test delayed application after definitive Forget
+and physical closure. Verify subsequent writes and snapshot/listen progress for
+a surviving shard, while writes to the forgotten shard remain rejected. Preserve
+WAL-closure errors, membership checks and retirement acknowledgement gates. Do
+not replace this with an all-shard cleanup sweep.
+
+Evidence: `authority-projection/replacement/run-1793731130/initial-g{0,1}.log`
+under the evidence root. The failure occurred during INSERT after the first
+measurement succeeded. It is separate from authority projection publication.
+
+### Startup history pruning
 
 `src/adapter/src/coord.rs::prune_storage_usage_events_on_startup` and adjacent
 startup history pruning derive negatives from snapshots and submit ordinary
