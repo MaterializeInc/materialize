@@ -590,7 +590,12 @@ const TicketSent = ({
             as="a"
             variant="link"
             href={outageLink.href}
-            onClick={outageLink.onClick}
+            onClick={(event: React.MouseEvent<HTMLElement>) => {
+              outageLink.onClick(event);
+              // The drawer traps focus, which would keep keyboard users out
+              // of the Messenger.
+              onClose();
+            }}
             fontWeight="500"
             fontSize="inherit"
             color={colors.accent.red}

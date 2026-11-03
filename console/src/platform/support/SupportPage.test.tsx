@@ -555,6 +555,40 @@ describe("SupportPage", () => {
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
     });
 
+    it("closes the confirmation before opening the outage chat", async () => {
+      setIntercom("booted");
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.type(
+        await screen.findByRole("textbox", { name: /Subject/ }),
+        "Sink is lagging",
+      );
+      await user.type(
+        screen.getByRole("textbox", { name: /What happened/ }),
+        "Kafka sink is 10 minutes behind.",
+      );
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      const sent = await screen.findByTestId("support-ticket-sent");
+
+      await user.click(
+        within(sent).getByRole("link", { name: "Report a production outage" }),
+      );
+
+      expect(showNewMessage).toHaveBeenCalled();
+      await waitFor(() =>
+        expect(
+          screen.queryByTestId("support-ticket-sent"),
+        ).not.toBeInTheDocument(),
+      );
+    });
+
     it("leaves out environment details when unchecked", async () => {
       let createdWith: Record<string, unknown> | undefined;
       server.use(
