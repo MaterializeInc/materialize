@@ -317,6 +317,10 @@ mz_builtin_views
 VIEW
 materialize
 mz_internal
+mz_catalog_deployment_authority
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_catalog_raw
 SOURCE
 materialize
@@ -437,7 +441,23 @@ mz_console_cluster_utilization_overview_3h
 VIEW
 materialize
 mz_internal
+mz_current_replica_frontiers
+VIEW
+materialize
+mz_internal
+mz_current_storage_frontiers
+VIEW
+materialize
+mz_internal
+mz_frontier_object_placement
+VIEW
+materialize
+mz_internal
 mz_frontiers
+VIEW
+materialize
+mz_internal
+mz_frontiers_raw
 SOURCE
 materialize
 mz_internal
@@ -635,6 +655,10 @@ materialize
 mz_internal
 mz_replacements
 MATERIALIZED VIEW
+materialize
+mz_internal
+mz_replica_frontier_observations
+SOURCE
 materialize
 mz_internal
 mz_replica_hydration_history
@@ -850,6 +874,10 @@ VIEW
 materialize
 mz_internal
 mz_statement_lifecycle_history
+SOURCE
+materialize
+mz_internal
+mz_storage_frontier_observations
 SOURCE
 materialize
 mz_internal

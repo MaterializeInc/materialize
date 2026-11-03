@@ -24,6 +24,30 @@ SELECT count(*) > 0 FROM mz_internal.mz_catalog_raw;
 t
 COMPLETE 1
 
+# Authority is a public, singleton durable projection. Its values agree with the
+# catalog at the query timestamp, including legacy mode with no protection flag.
+
+query I
+SELECT count(*) FROM mz_internal.mz_catalog_deployment_authority
+----
+1
+
+simple conn=mz_system,user=mz_system
+SELECT count(*) = 1 AND bool_and(
+    active_deployment_generation IS NOT DISTINCT FROM (
+        SELECT max((data->>'deploy_generation')::uint8)
+        FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken'
+    ) AND catalog_read_protection_enabled = EXISTS (
+        SELECT 1 FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Config'
+          AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+          AND data->'value'->'value' <> '0'::jsonb
+    )
+) FROM mz_internal.mz_catalog_deployment_authority;
+----
+t
+COMPLETE 1
+
 # Creating a table makes it appear in mz_catalog_raw.
 
 statement ok

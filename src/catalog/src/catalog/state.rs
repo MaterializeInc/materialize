@@ -4754,6 +4754,35 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn retained_metrics_do_not_retain_catalog_history() {
+        Catalog::with_debug(|catalog| async move {
+            let raw = catalog.resolve_builtin_storage_collection(&crate::builtin::MZ_CATALOG_RAW);
+            let raw = catalog.get_entry(&raw).latest_global_id();
+            let mut violations = Vec::new();
+            for entry in catalog.entries() {
+                if let CatalogItem::Index(index) = entry.item()
+                    && index.is_retained_metrics_object
+                    && catalog
+                        .state
+                        .logical_collection_inputs([index.on])
+                        .contains(&raw)
+                {
+                    violations.push(entry.name().item.clone());
+                }
+            }
+            // Retained metrics may keep authority history, but must do so through
+            // a durable output whose recovery frontier can advance independently.
+            assert!(
+                violations.is_empty(),
+                "retained metrics pin raw catalog history: {violations:?}"
+            );
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn logical_collection_inputs_stop_at_materialized_views() {
         Catalog::with_debug(|mut catalog| async move {
             let mut ids = Vec::new();

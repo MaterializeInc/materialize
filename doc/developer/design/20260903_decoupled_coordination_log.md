@@ -16,46 +16,42 @@ M2 remains closed within its approved scope. Preserve native execution and the
 
 ## Next concrete action
 
-The readiness and batch-format repairs are committed and pushed through
-`606f1a2d`. Their targeted tests, storage library suite and strict all-target Clippy
-pass. The newer default-development candidate built successfully and is pinned at
-`full-writer/artifacts/v26.47.0-dev.0-readiness-fix`. Version overrides are restored.
+M3 pursuit is paused in favor of smaller scoped goals. The current goal is to
+decouple catalog history from retained builtin metrics, then verify recovery on an
+isolated copy of the original deployment. Do not resume the full upgrade
+walkthrough yet.
 
-The live attempt served shared DDL and writes on both versions but timed out waiting
-for ReadyToPromote, before any promotion request. Candidate diagnostics reported
-lagging frontier-related collections. An unchanged driver repeat later timed out
-connecting to the newer adapter. Agent83 / task439 identified persistent deficits
-in s836 (mz_frontiers_ind), s854 (mz_cluster_replica_frontiers_ind), s788
-(mz_hydration_statuses_ind) and s805 (mz_show_cluster_replicas_ind). Initial
-s451/s488/s730 hydration failures recovered. Reader-heartbeat gaps and eventual
-expiry are also confirmed, but a common cause is not established.
+The retention cause is established: metric indexes imported raw catalog authority
+lookups, propagating their history windows to the catalog journal. The durable
+`mz_catalog_deployment_authority` projection now separates those histories. All
+authority consumers use it, while other catalog facts remain unchanged. Structural,
+behavior and selected-plan checks pass. A fresh default-debug two-adapter run
+advanced raw catalog compaction beyond the authority snapshot retained by the
+indexes. Both adapters could still read that old authority snapshot after restart.
 
-Next capture synchronized replica-local output/import/hydration frontiers for
-those four IDs, adapter observations and the active reference, with separate SQL
-connection/SELECT 1 timing. Distinguish execution/input lag from observation lag
-before editing code. Keep fresh lease health visible. The private
-`run-bounded-promotion.py` now provides bounded waits and automatic cleanup for
-future walkthroughs. It passes Black/Ruff/syntax checks but has not been executed.
+Resolve the existing-state migration scope next. Aljoscha accepts rebuilding the
+affected derived builtin/index history rather than backfilling it. However,
+protected joins require matching builtin definitions, and there is no supported
+cold schema-cutover entrypoint. Replacement also needs consistent native bounds
+and requirements, not just new shards. Approval was requested to include that
+operation here or pursue it as a separate goal. Do not bypass admission, fencing
+or reader protection, or reset original catalog, metric sources, user data or WAL.
 
-No promotion or retirement has executed. Generation 0 remains active. After
-promotion succeeds, verify explicit relay handoff and retirement. Both versions
-must retain SQL, DDL and writes across promotion, with warmed replicas unchanged.
+The original retained deployment has not been migrated. Its since advancement
+and replay-cost improvement remain unverified. Fresh-deployment results do not
+satisfy that part of the goal. Evidence and exact next steps are in
+`~/.local/share/aj/m3-evidence/authority-projection/progress.md`.
 
 ## Live blockers and pending decisions
 
-- **Version overlap:** transferred txn-WAL batches used the newer binary's version
-  instead of the admitted format. `37ed82b7ef` fixes envelope labels without changing
-  writer-key identity or decode guards. Real cross-version transfer/snapshot tests
-  and strict Persist Clippy pass. The rebuilt pair passed pre-promotion SQL/DDL/writes, but promotion remains unverified. Evidence:
-  `local-batch-version-final-{test,clippy}.log`.
-- **Readiness:** the repair chooses a snapshot cut after acquiring a
-  Persist reader and retains that reader through consumption or cancellation.
-  Unavailable status history means not ready. Do not replace selected-cut semantics
-  with latest-state sampling or dispatch QueryClient acquisition back to the
-  coordinator from its own handler. Evidence: `local-snapshot-lifetime-final.log`
-  and `local-protected-snapshot-final-{full-lib,clippy}.log`. The lifetime regression
-  reproduced early expiry before repair. Its maintenance step reapplies committed
-  permission because reader expiry alone does not recompute Persist since.
+- **Version overlap:** the rebuilt pair passed pre-promotion SQL/DDL/writes after
+  the txn-WAL format repair. Promotion and explicit post-promotion retirement
+  remain unverified. No promotion or retirement has executed on the retained
+  deployment. Generation 0 remains active.
+- **Readiness:** long reads have been moved off the coordinator. Keep the selected
+  snapshot cut and reader alive through consumption or cancellation. Unavailable
+  status history means not ready. Do not replace this with latest-state sampling
+  or dispatch QueryClient acquisition back to the coordinator from its own handler.
 - **Adjacent lifetime bug:** the standalone CollectionReader helper has the same
   early-drop pattern. Scope approval was requested before changing that path.
 - **Persist suite:** `state_inspect_serde_json` fails unchanged on object-key order.
@@ -88,7 +84,7 @@ Use old `full-writer/artifacts/v26.46.0-dev.0-temp-fix` against new
 Validation-only version/lock overrides were restored. These are distinct prototype
 development versions, not evidence of released-version compatibility.
 
-The latest evidence is `local-readiness-live-promotion{,-repeat}.log`,
+The prior upgrade attempt is recorded in `local-readiness-live-promotion{,-repeat}.log`,
 `live-promotion-before.json`, `local-readiness-{old,new}-runtime.log`, and
 `local-readiness-failure-extract.txt`. Automatic cleanup completed successfully
 (`local-readiness-post-test-stop.log`). All controllerd, adapterd, clusterd and
@@ -110,8 +106,9 @@ The runtime database is `materialize_controllerd`, with state in the default
 controller directory. Never print credentials or unfiltered process arguments.
 
 Keep heavy jobs serial and low priority on this 18GiB VM. Stop idle runtime
-processes and preserve database volumes, evidence and candidate binaries. Scratch
-is optional, not a blocker. Confirm remote worker state before syncing anything.
+processes, preserve the original retained state and needed evidence, and remove
+obsolete fixture data and binaries. Scratch is optional, not a blocker. Confirm
+remote worker state before syncing anything.
 
 ## Verified outcomes and remaining gaps
 
@@ -134,6 +131,20 @@ Registry visibility needs its owner, not a gate bypass. Upstream merge-skew fail
 remain outside the authorized integration scope. Newer changes need broad CI.
 
 ## Worker and evidence
+
+The current projection evidence is under `authority-projection/`:
+- `progress.md`: next action, migration blocker and exact verification pointers.
+- `fresh-1793720779/native-plan-imports.json`: actual retained-index imports.
+- `fresh-1793720779/samples.json`: catalog and authority progress.
+- `fresh-1793720779/restart-1793721954/result.json`: historical authority reads
+  after restart with raw catalog since beyond that timestamp.
+- `slt-verify.log`: passing catalog SQL and selected-plan checks.
+
+The retention diagnosis is in `catalog-history/findings.md`. The original state
+remains untouched. A separate scratch creation attempt,
+`c9ee5c87-decoupled-coordination`, timed out waiting for SSH and returned no instance
+ID. It had a six-hour expiry. Inventory it after reauthentication before launching
+another worker.
 
 The prior scratch worker `i-0f5a60529f57d6ac7` had an expiry of
 2026-10-30T18:13:29Z. Do not assume it still exists. Use the local VM and archived

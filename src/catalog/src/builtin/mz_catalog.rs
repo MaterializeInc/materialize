@@ -2772,8 +2772,8 @@ FROM (
         SELECT data FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'ClusterReplica'
     ) replicas
     JOIN (
-        SELECT (data->>'deploy_generation')::uint8 AS generation
-        FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'FenceToken'
+        SELECT active_deployment_generation AS generation
+        FROM mz_internal.mz_catalog_deployment_authority
     ) active ON COALESCE((replicas.data->'key'->>'deployment_generation')::uint8, 0) = active.generation
 ) raw
 LEFT JOIN mz_internal.mz_cluster_replica_size_internal internal
@@ -3113,9 +3113,8 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|
     // process's deployment. Legacy execution has no deployment qualifier.
     sql: "
 WITH protected AS (
-    SELECT 1 FROM mz_internal.mz_catalog_shared
-    WHERE data->>'kind' = 'Config' AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-      AND data->'value'->'value' <> '0'::jsonb
+    SELECT 1 FROM mz_internal.mz_catalog_deployment_authority
+    WHERE catalog_read_protection_enabled
 )
 SELECT object_id, replica_id, write_frontier
 FROM mz_internal.mz_cluster_replica_frontiers_raw

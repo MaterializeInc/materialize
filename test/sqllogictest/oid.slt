@@ -913,7 +913,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16757  mz_aws_connections
 16758  mz_cluster_replica_metrics
 16759  mz_cluster_replica_frontiers
-16760  mz_frontiers
+16760  mz_frontiers_raw
 16761  mz_global_frontiers
 16762  mz_subscriptions
 16763  mz_sessions
@@ -1271,3 +1271,10 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17139  mz_adapters
 17140  mz_adapter_statuses
 17141  mz_adapter_endpoints
+17142  mz_replica_frontier_observations
+17143  mz_storage_frontier_observations
+17144  mz_frontier_object_placement
+17145  mz_current_replica_frontiers
+17146  mz_current_storage_frontiers
+17147  mz_frontiers
+17148  mz_catalog_deployment_authority

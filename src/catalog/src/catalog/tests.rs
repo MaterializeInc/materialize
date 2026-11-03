@@ -1114,6 +1114,156 @@ async fn test_get_privileges() {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn deployment_authority_preserves_legacy_and_native_modes() {
+    use mz_expr::MirRelationExpr;
+    use mz_repr::{Datum, Row};
+    use serde_json::json;
+
+    Catalog::with_debug(|catalog| async move {
+        let projection = &crate::builtin::MZ_CATALOG_DEPLOYMENT_AUTHORITY;
+        // Evaluate the actual builtin SQL over literal catalog inputs. No runtime
+        // catalog mutations or test-only production API are needed for these cases.
+        for (generation, mode, enabled) in [
+            (None, None, false),
+            (Some(7_u64), None, false),
+            (Some(7), Some(0_u64), false),
+            (Some(0), Some(1), true),
+            (Some(8), Some(2), true),
+            (None, Some(1), true),
+        ] {
+            let mut records = vec![
+                json!({"kind": "Config", "key": {"key": "unrelated"}, "value": {"value": 1}}),
+                json!({"kind": "ClientReadRequirement", "key": {"incarnation": 1, "id": "s1"}}),
+            ];
+            if let Some(generation) = generation {
+                records.push(json!({"kind": "FenceToken", "deploy_generation": generation}));
+            }
+            if let Some(mode) = mode {
+                records.push(json!({"kind": "Config", "key": {"key": "catalog_read_protection_enabled"}, "value": {"value": mode}}));
+            }
+            let values = records.iter()
+                .map(|record| format!("('{}'::jsonb)", record.to_string().replace('\'', "''")))
+                .join(", ");
+            let sql = projection.create_sql()
+                .replace("mz_internal.mz_catalog_deployment_authority", "materialize.public.authority_test")
+                .replace("mz_internal.mz_catalog_raw", &format!("(VALUES {values}) AS input(data)"));
+            let item = catalog.state().deserialize_item(
+                GlobalId::User(42), &sql, &BTreeMap::new(), &mut LocalExpressionCache::Closed, None,
+            ).expect("plan authority projection");
+            let CatalogItem::MaterializedView(view) = item else {
+                panic!("expected materialized view");
+            };
+            let expr = view.locally_optimized_expr.as_inner();
+            let MirRelationExpr::Constant { rows, .. } = expr else {
+                panic!("literal authority projection did not evaluate: {expr:?}");
+            };
+            let expected = Row::pack([
+                generation.map(Datum::UInt64).unwrap_or(Datum::Null),
+                Datum::from(enabled),
+            ]);
+            assert_eq!(rows.as_ref().expect("evaluate authority projection"), &vec![(expected, mz_repr::Diff::ONE)], "generation={generation:?}, mode={mode:?}");
+        }
+        catalog.expire().await;
+    }).await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn deployment_authority_filters_observations() {
+    use crate::builtin::{MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED, MZ_SOURCE_STATISTICS};
+    use mz_expr::MirRelationExpr;
+
+    Catalog::with_debug(|catalog| async move {
+        let evaluate = |sql: String| {
+            let item = catalog
+                .state()
+                .deserialize_item(
+                    GlobalId::User(42),
+                    &format!("CREATE VIEW materialize.public.authority_test AS {sql}"),
+                    &BTreeMap::new(),
+                    &mut LocalExpressionCache::Closed,
+                    None,
+                )
+                .expect("plan observation filter");
+            let CatalogItem::View(view) = item else {
+                panic!("expected view");
+            };
+            let expr = view.locally_optimized_expr.as_inner();
+            let MirRelationExpr::Constant { rows, .. } = expr else {
+                panic!("literal observation filter did not evaluate: {expr:?}");
+            };
+            let mut ids: Vec<_> = rows
+                .as_ref()
+                .expect("evaluate observation filter")
+                .iter()
+                .map(|(row, diff)| {
+                    assert_eq!(*diff, mz_repr::Diff::ONE);
+                    row.unpack_first().unwrap_str().to_owned()
+                })
+                .collect();
+            ids.sort();
+            ids
+        };
+        let errors = "(VALUES
+            ('r1', 'legacy', 1::int8, NULL::uint8),
+            ('r1', 'zero', 1::int8, 0::uint8),
+            ('r1', 'seven', 1::int8, 7::uint8)
+        ) AS observations(replica_id, object_id, count, deployment_generation)";
+        let sources = "(SELECT id, replica_id, deployment_generation,
+            0::uint8 AS messages_received, 0::uint8 AS bytes_received,
+            0::uint8 AS updates_staged, 0::uint8 AS updates_committed,
+            0::uint8 AS records_indexed, 0::uint8 AS bytes_indexed,
+            NULL::interval AS rehydration_latency,
+            0::uint8 AS snapshot_records_known, 0::uint8 AS snapshot_records_staged,
+            false AS snapshot_committed, 0::uint8 AS offset_known, 0::uint8 AS offset_committed
+            FROM (VALUES
+                ('legacy', 'r1', NULL::uint8),
+                ('zero', 'r1', 0::uint8),
+                ('seven', 'r1', 7::uint8),
+                ('replica-less', NULL, NULL::uint8),
+                ('invalid-replica-less', NULL, 0::uint8),
+                ('invalid-replica-less', NULL, 7::uint8),
+                ('', NULL, NULL::uint8)
+            ) AS observations(id, replica_id, deployment_generation)
+        ) AS sources";
+        for (generation, enabled, expected) in [
+            ("NULL::uint8", false, "legacy"),
+            ("7::uint8", false, "legacy"),
+            ("NULL::uint8", true, "legacy"),
+            ("0::uint8", true, "zero"),
+            ("7::uint8", true, "seven"),
+        ] {
+            let authority = format!(
+                "(SELECT {generation} AS active_deployment_generation,
+                {enabled} AS catalog_read_protection_enabled) AS authority"
+            );
+            let query = MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED
+                .sql
+                .replace("mz_internal.mz_catalog_deployment_authority", &authority)
+                .replace("mz_internal.mz_compute_error_counts_by_deployment", errors);
+            assert_eq!(
+                evaluate(format!("SELECT object_id FROM ({query}) AS selected")),
+                [expected]
+            );
+
+            let query = MZ_SOURCE_STATISTICS
+                .sql
+                .replace("mz_internal.mz_catalog_deployment_authority", &authority)
+                .replace("mz_internal.mz_source_statistics_with_history", sources);
+            let mut expected = vec![expected, "replica-less"];
+            expected.sort();
+            assert_eq!(
+                evaluate(format!("SELECT id FROM ({query}) AS selected")),
+                expected
+            );
+        }
+        catalog.expire().await;
+    })
+    .await;
+}
+
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn verify_builtin_descs() {
     // Provide a full AWS context so the builtin AWS connection views resolve

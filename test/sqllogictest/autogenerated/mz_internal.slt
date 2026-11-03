@@ -816,6 +816,8 @@ query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY object
 ----
 mz_activity_log_thinned
+mz_adapter_endpoints
+mz_adapter_statuses
 mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
@@ -824,6 +826,7 @@ mz_builtin_materialized_views
 mz_builtin_sources
 mz_builtin_tables
 mz_builtin_views
+mz_catalog_deployment_authority
 mz_catalog_raw
 mz_catalog_shared
 mz_cluster_auto_scaling_strategies
@@ -854,7 +857,11 @@ mz_compute_operator_hydration_statuses_raw
 mz_console_cluster_utilization_overview
 mz_console_cluster_utilization_overview_24h
 mz_console_cluster_utilization_overview_3h
+mz_current_replica_frontiers
+mz_current_storage_frontiers
+mz_frontier_object_placement
 mz_frontiers
+mz_frontiers_raw
 mz_global_frontiers
 mz_history_retention_strategies
 mz_hydration_statuses
@@ -904,6 +911,7 @@ mz_recent_activity_log_thinned
 mz_recent_sql_text
 mz_recent_sql_text_redacted
 mz_replacements
+mz_replica_frontier_observations
 mz_replica_hydration_history
 mz_replica_system_parameters
 mz_session_history
@@ -958,6 +966,7 @@ mz_sql_text_redacted
 mz_statement_execution_history
 mz_statement_execution_history_redacted
 mz_statement_lifecycle_history
+mz_storage_frontier_observations
 mz_storage_shards
 mz_storage_statuses_raw
 mz_storage_usage_by_shard
