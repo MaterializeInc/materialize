@@ -165,6 +165,14 @@ Materialize console.
 
 <img width="1440" alt="Screenshot 2023-12-28 at 18 45 11" src="https://github.com/MaterializeInc/materialize/assets/23521087/c530769e-3445-49c8-8f36-9f7166352ac4">
 
+### VisuaLeaf
+
+To connect to Materialize using [VisuaLeaf](https://visualeaf.com/database/materialize/),
+click **New Connection**, select **Materialize**, and enter the credentials provided in
+the Materialize console. VisuaLeaf fills in Materialize's default port (`6875`) and
+database (`materialize`), and recognizes a pasted `*.materialize.cloud` connection
+string.
+
 ### `psql`
 
 {{< warning >}}
