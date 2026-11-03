@@ -237,9 +237,10 @@
     {% for type_name, is_found in [('source', found.source), ('sink', found.sink), ('source_table', found.source_table)] %}
       {% if is_found %}
         {{ exceptions.warn(
-          "Schema '" ~ target_schema ~ "' contains " ~ type_name ~ " objects, " ~
-          "but strict_mode requires " ~ type_name ~ " materializations to be in " ~
-          "a dedicated schema. This will become an error in a future release."
+          "Model '" ~ model.name ~ "' is in schema '" ~ target_schema ~ "', which " ~
+          "contains " ~ type_name ~ " objects, but strict_mode requires " ~ type_name ~
+          " materializations to be in a dedicated schema. This will become an error " ~
+          "in a future release."
         ) }}
       {% endif %}
     {% endfor %}

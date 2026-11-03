@@ -292,6 +292,7 @@ class TestStrictModeViewBlocked:
         # The source_table's own check does not run when only the view is
         # selected, so this pins the view side.
         _, output = run_dbt_and_capture(["run", "--select", "test_view"])
+        assert "Model 'test_view' is in schema" in output
         assert "contains source_table objects" in output
 
 
@@ -369,6 +370,7 @@ class TestStrictModeViewBlockedBySink:
         # The sink's own check does not run when only the view is selected, so
         # this pins the view side.
         _, output = run_dbt_and_capture(["run", "--select", "test_view"])
+        assert "Model 'test_view' is in schema" in output
         assert "contains sink objects" in output
 
 
@@ -445,6 +447,7 @@ class TestStrictModeViewBlockedBySource:
         # The source's own check does not run when only the view is selected,
         # so this pins the view side.
         _, output = run_dbt_and_capture(["run", "--select", "test_view"])
+        assert "Model 'test_view' is in schema" in output
         assert "contains source objects" in output
 
 
