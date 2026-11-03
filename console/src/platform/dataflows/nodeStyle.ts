@@ -12,6 +12,10 @@ import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
 import type { LirGroupNode, PortPeer, VisibleNode } from "./dataflowGraph";
 
+// One opacity for every dimmed canvas element, so a node and the edges that
+// touch it fade together instead of at different strengths.
+export const DIMMED_OPACITY = 0.25;
+
 /** Deterministic 32-bit string hash, for cycling a fixed color palette. */
 export function hashString(s: string): number {
   let h = 0;

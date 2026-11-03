@@ -15,6 +15,7 @@ import TextLink from "~/components/TextLink";
 import { MaterializeTheme } from "~/theme";
 
 import {
+  DIMMED_OPACITY,
   type FlowGroupData,
   type FlowNodeData,
   statLines,
@@ -72,7 +73,7 @@ const CardShell = ({
       display="flex"
       background={filled ? data.color : colors.background.secondary}
       color={filled ? textColorFor(data.color) : colors.foreground.primary}
-      opacity={data.dimmed ? 0.25 : 1}
+      opacity={data.dimmed ? DIMMED_OPACITY : 1}
       boxShadow={highlightShadow(data, colors) ?? RESTING_SHADOW}
       // Every card is at least selectable, so every card says so. The
       // controls inside carry the distinctions.
@@ -278,7 +279,7 @@ export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
       display="flex"
       alignItems="center"
       background={colors.background.tertiary}
-      opacity={data.dimmed ? 0.25 : 1}
+      opacity={data.dimmed ? DIMMED_OPACITY : 1}
       boxShadow={highlightShadow(data, colors)}
       cursor="pointer"
     >
