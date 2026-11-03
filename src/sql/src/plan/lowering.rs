@@ -1074,77 +1074,70 @@ impl HirScalarExpr {
                     // we should just retain a `ScalarExpr::If` expression; the inverse
                     // transformation as above is complicated to recover after the fact,
                     // and we would benefit from not introducing the complexity.
+                    //
+                    // We lower each branch once, against its filtered relation from the
+                    // strategy above, and only then check whether it introduced columns.
+                    // Lowering a branch also lowers the `If`s nested in it, so lowering each
+                    // branch twice (in place to find out, then again for the strategy above)
+                    // would double the work at every nesting level whose branches introduce
+                    // columns, for example in a long CASE with a subquery in its last arm.
 
                     let inner_arity = inner.arity();
                     let cond_expr =
                         cond.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?;
-
-                    // Defensive copies, in case we mangle these in decorrelation.
-                    let inner_clone = inner.clone();
-                    let then_clone = then.clone();
-                    let else_clone = els.clone();
-
                     let cond_arity = inner.arity();
-                    let then_expr =
-                        then.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?;
-                    let else_expr =
-                        els.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?;
 
-                    if cond_arity == inner.arity() {
-                        // If no additional columns were added, we simply return the
-                        // `If` variant with the updated expressions.
+                    // `inner` is bound to `inner_id` only if a branch introduces columns.
+                    let (get_inner, inner_id) = inner.let_get(id_gen);
+
+                    // Restrict to records satisfying `cond_expr` and apply `then` there.
+                    let mut then_inner = get_inner.clone().filter(vec![cond_expr.clone()]);
+                    let then_expr = then.applied_to(
+                        id_gen,
+                        col_map,
+                        cte_map,
+                        &mut then_inner,
+                        subquery_map,
+                        context,
+                    )?;
+
+                    // Restrict to records not satisfying `cond_expr` and apply `els` there.
+                    let mut else_inner = get_inner.filter(vec![SS::call_variadic(
+                        variadic::Or,
+                        vec![
+                            cond_expr.clone().call_binary(SS::literal_false(), func::Eq),
+                            cond_expr.clone().call_is_null(),
+                        ],
+                    )]);
+                    let else_expr = els.applied_to(
+                        id_gen,
+                        col_map,
+                        cte_map,
+                        &mut else_inner,
+                        subquery_map,
+                        context,
+                    )?;
+
+                    if then_inner.arity() == cond_arity && else_inner.arity() == cond_arity {
+                        // Neither branch introduced columns, so both refer only to columns
+                        // of `inner`, which the filtered relations share.
                         SS::If {
                             cond: Box::new(cond_expr),
                             then: Box::new(then_expr),
                             els: Box::new(else_expr),
                         }
                     } else {
-                        // If columns were added, we need a more careful approach, as
-                        // described above. First, we need to de-correlate each of
-                        // the two expressions independently, and apply their cases
-                        // as `MirRelationExpr::Map` operations.
-
-                        *inner = inner_clone.let_in(id_gen, |id_gen, get_inner| {
-                            // Restrict to records satisfying `cond_expr` and apply `then` as a map.
-                            let mut then_inner = get_inner.clone().filter(vec![cond_expr.clone()]);
-                            let then_expr = then_clone.applied_to(
-                                id_gen,
-                                col_map,
-                                cte_map,
-                                &mut then_inner,
-                                subquery_map,
-                                context,
-                            )?;
-                            let then_arity = then_inner.arity();
-                            then_inner = then_inner
-                                .map_one(then_expr)
-                                .project((0..inner_arity).chain(Some(then_arity)).collect());
-
-                            // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
-                            let mut else_inner = get_inner.filter(vec![SS::call_variadic(
-                                variadic::Or,
-                                vec![
-                                    cond_expr.clone().call_binary(SS::literal_false(), func::Eq),
-                                    cond_expr.clone().call_is_null(),
-                                ],
-                            )]);
-                            let else_expr = else_clone.applied_to(
-                                id_gen,
-                                col_map,
-                                cte_map,
-                                &mut else_inner,
-                                subquery_map,
-                                context,
-                            )?;
-                            let else_arity = else_inner.arity();
-                            else_inner = else_inner
-                                .map_one(else_expr)
-                                .project((0..inner_arity).chain(Some(else_arity)).collect());
-
-                            // concatenate the two results.
-                            Ok::<MirRelationExpr, PlanError>(then_inner.union(else_inner))
-                        })?;
-
+                        let then_arity = then_inner.arity();
+                        let then_inner = then_inner
+                            .map_one(then_expr)
+                            .project((0..inner_arity).chain(Some(then_arity)).collect());
+                        let else_arity = else_inner.arity();
+                        let else_inner = else_inner
+                            .map_one(else_expr)
+                            .project((0..inner_arity).chain(Some(else_arity)).collect());
+                        *inner = inner
+                            .take_dangerous()
+                            .let_bind(inner_id, then_inner.union(else_inner));
                         SS::Column(inner_arity, name)
                     }
                 }
