@@ -429,7 +429,13 @@ tests:
   - equal:
       path: spec.template.spec.terminationGracePeriodSeconds
       value: 30
-
+- it: should pass the balancerd readiness probe path
+  set:
+    balancerd.readinessProbePath: /api/livez
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--balancerd-readiness-probe-path=/api/livez"
 - it: should run the operator in a user namespace and pass the flag by default
   asserts:
   - equal:
