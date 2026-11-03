@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { renderHook, waitFor } from "@testing-library/react";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 
 import { ErrorCode } from "~/api/materialize/types";
 import server from "~/api/mocks/server";
@@ -120,6 +120,51 @@ describe("useDataflowGraphData", () => {
 
     await waitFor(() => expect(result.current.data).not.toBeNull());
     expect(result.current.data?.structure).not.toBe(firstStructure);
+  });
+
+  it("never shows an earlier selection's graph after switching twice mid-fetch", async () => {
+    // Dataflow 7 answers immediately, 8 and 9 slowly, and each root is named
+    // after its own dataflow so a mislabeled result is visible.
+    server.use(
+      http.post("*/api/sql", async ({ request }) => {
+        const body = await request.text();
+        const id = ["7", "8", "9"].find((d) => body.includes(`'${d}'`));
+        if (id !== "7") await delay(100);
+        return HttpResponse.json({
+          results: [
+            {
+              ...operatorsResult,
+              rows: [["10", [id], `Dataflow-${id}`, "0", "0", "0"]],
+            },
+            okResult,
+            okResult,
+            okResult,
+            okResult,
+          ],
+        });
+      }),
+    );
+    const Wrapper = await createProviderWrapper();
+    const { result, rerender } = renderHook(
+      (params) => useDataflowGraphData(params),
+      {
+        wrapper: Wrapper,
+        initialProps: { clusterName: "c", replicaName: "r1", dataflowId: "7" },
+      },
+    );
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+
+    // Switch to 8, then to 9 while 8 is still in flight. Aborting 8 must not
+    // clear the loading state that 9's own request still holds.
+    rerender({ clusterName: "c", replicaName: "r1", dataflowId: "8" });
+    rerender({ clusterName: "c", replicaName: "r1", dataflowId: "9" });
+
+    const rootLabel = () => {
+      const structure = result.current.data?.structure;
+      return structure && structure.nodes.get(structure.root)?.name;
+    };
+    await waitFor(() => expect(rootLabel()).toBeDefined());
+    expect(rootLabel()).toBe("Dataflow-9");
   });
 
   it("threads the replica's worker count through from workers * processes", async () => {
