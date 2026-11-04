@@ -63,7 +63,9 @@ use mz_sql::plan::{
     AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule, PlanError,
     StatementContext,
 };
-use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
+use mz_sql::pure::{
+    PurifiedSourceExport, generate_progress_subsource_statement, generate_subsource_statements,
+};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -519,7 +521,7 @@ impl Coordinator {
         &mut self,
         ctx: &ExecuteContext,
         params: Params,
-        progress_stmt: Option<CreateSubsourceStatement<Aug>>,
+        create_progress_subsource: bool,
         mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
         available_source_references: plan::SourceReferences,
@@ -527,7 +529,12 @@ impl Coordinator {
         let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
 
         // 1. First plan the progress subsource, if any.
-        if let Some(progress_stmt) = progress_stmt {
+        if create_progress_subsource {
+            let progress_stmt = {
+                let catalog = self.catalog().for_session(ctx.session());
+                let scx = StatementContext::new(None, &catalog);
+                generate_progress_subsource_statement(&scx, &source_stmt)?
+            };
             // The primary source depends on this subsource because the primary
             // source needs to know its shard ID, and the easiest way of
             // guaranteeing that the shard ID is discoverable is to create this
