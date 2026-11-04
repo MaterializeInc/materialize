@@ -535,6 +535,8 @@ export const DataflowGraphView = ({
         <MiniMap
           pannable
           zoomable
+          // The default 200x150 covers a third of a laptop canvas.
+          style={{ width: 140, height: 90 }}
           nodeColor={(node) =>
             isOutlineOnCanvas(node)
               ? colors.background.tertiary
