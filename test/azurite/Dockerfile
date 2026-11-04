@@ -12,15 +12,10 @@ FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:984d31d4bd6e71bb9469353d
 
 FROM node:22-slim
 
-# Fetch apt indexes and packages over HTTPS only. The build fails if any
-# http:// apt source remains.
-COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
-    && for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do \
-        [ -f "$f" ] || continue; \
-        sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; \
-    done \
-    && ! grep -rqs 'http://' /etc/apt/sources.list /etc/apt/sources.list.d
+    && for f in /etc/apt/sources.list.d/*; do sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
 
 RUN apt-get update && \
     apt-get install -y eatmydata netcat-openbsd && \

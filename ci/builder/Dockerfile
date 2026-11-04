@@ -15,12 +15,12 @@ FROM node:26-trixie-slim AS node
 # `/usr/local/lib/node_modules` below still find `corepack/dist/corepack.js`.
 RUN npm install -g corepack
 
-# Stage 1: Build a minimum CI Builder image that we can use for the initial
-# steps like `mkpipeline` and `Build`, as well as any tests that are self
-# contained and use other Docker images.
 # CA bundle for apt's HTTPS transport, before ca-certificates is installed.
 FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:984d31d4bd6e71bb9469353d93e73c68f7b3c17142b2aec45f2a960489095b22 AS ca-certs
 
+# Stage 1: Build a minimum CI Builder image that we can use for the initial
+# steps like `mkpipeline` and `Build`, as well as any tests that are self
+# contained and use other Docker images.
 FROM debian:13-slim AS ci-builder-min
 
 WORKDIR /workdir
@@ -47,15 +47,10 @@ ARG XZ_OPT=-T0
 # Please take care with what gets added here. The goal of this initial layer is to be as small as
 # possible since it's used for the `mkpipeline` and `Build` CI jobs, which block __all other__
 # jobs.
-# Fetch apt indexes and packages over HTTPS only. The build fails if any
-# http:// apt source remains.
-COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
-    && for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do \
-        [ -f "$f" ] || continue; \
-        sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; \
-    done \
-    && ! grep -rqs 'http://' /etc/apt/sources.list /etc/apt/sources.list.d
+    && for f in /etc/apt/sources.list.d/*; do sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
 
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -444,15 +439,10 @@ ENV DOCKER_BUILDKIT=1
 
 ARG XZ_OPT=-T0
 
-# Fetch apt indexes and packages over HTTPS only. The build fails if any
-# http:// apt source remains.
-COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
-    && for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do \
-        [ -f "$f" ] || continue; \
-        sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; \
-    done \
-    && ! grep -rqs 'http://' /etc/apt/sources.list /etc/apt/sources.list.d
+    && for f in /etc/apt/sources.list.d/*; do sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
 
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \

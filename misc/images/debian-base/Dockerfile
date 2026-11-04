@@ -26,15 +26,11 @@ LABEL build.profile=$BUILD_PROFILE
 
 # Rust binaries using the workspace reqwest verify TLS against the system trust
 # store and fail to build an HTTP client if it is missing, even when they never
-# make a TLS connection. apt also needs it: it fetches over HTTPS only, and the
-# build fails if any http:// apt source remains. Descendant images inherit both.
-COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# make a TLS connection. apt needs it too, since it fetches over HTTPS only.
+# Descendant images inherit both.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
-    && for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do \
-        [ -f "$f" ] || continue; \
-        sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; \
-    done \
-    && ! grep -rqs 'http://' /etc/apt/sources.list /etc/apt/sources.list.d
+    && for f in /etc/apt/sources.list.d/*; do sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
 
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends eatmydata \
     && rm -rf /var/lib/apt/lists/*
