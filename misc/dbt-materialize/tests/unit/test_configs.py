@@ -80,6 +80,11 @@ class TestRefreshIntervalConfig:
         with pytest.raises(RefreshIntervalConfigError):
             MaterializeRefreshIntervalConfig.parse({"every": 1})
 
+    @pytest.mark.parametrize("raw", ["every 1 day", 5, ["every"]])
+    def test_not_a_dict(self, raw):
+        with pytest.raises(RefreshIntervalConfigError):
+            MaterializeRefreshIntervalConfig.parse(raw)
+
 
 class TestPartitionByConfig:
     @pytest.fixture
