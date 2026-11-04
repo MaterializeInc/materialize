@@ -1015,10 +1015,10 @@ export function commonAncestorScope(
 }
 
 /**
- * Hiding a run of idle operators would otherwise sever every path through
+ * Hiding a run of unused operators would otherwise sever every path through
  * them, splitting the graph into disconnected islands even though a real
- * (idle) path exists. Splices a pass-through edge from each visible source to
- * every visible target it reaches through hidden nodes only, so hiding idle
+ * (unused) path exists. Splices a pass-through edge from each visible source to
+ * every visible target it reaches through hidden nodes only, so hiding unused
  * nodes never removes connectivity, only the boxes in between.
  *
  * The spliced edge's counts are the sum over the DISTINCT underlying edges
@@ -1157,7 +1157,8 @@ export function rerouteHiddenNodes(
 
 export interface Filters {
   search: string;
-  hideIdle: boolean;
+  // Hides operators and channels that have moved no data (see decorateGraph).
+  hideUnused: boolean;
   heatmap:
     | "off"
     | "elapsed"
@@ -1172,7 +1173,7 @@ export interface Filters {
 
 export const DEFAULT_FILTERS: Filters = {
   search: "",
-  hideIdle: false,
+  hideUnused: false,
   heatmap: "off",
   heatmapThreshold: 0,
   showLirGroups: true,
@@ -1217,23 +1218,45 @@ export function decorateGraph(
     nodeColors: new Map(),
     searchMatches: [],
   };
+  // Per node with at least one incident edge: whether any of them carried data. Timely schedules every operator at least once, so elapsed
+  // time is never 0 and cannot tell used from unused. Traffic on the
+  // incident channels can.
+  const incident = new Map<string, { moved: boolean }>();
+  if (filters.hideUnused) {
+    for (const e of graph.edges) {
+      for (const id of [e.source, e.target]) {
+        const state = incident.get(id) ?? { moved: false };
+        if (e.messagesSent !== 0n) state.moved = true;
+        incident.set(id, state);
+      }
+    }
+  }
   for (const n of graph.nodes) {
     if (searchInfo && n.kind !== "port") {
       if (searchInfo.matches.has(n.id)) d.searchMatches.push(n.id);
       else if (!searchInfo.containsMatch.has(n.id)) d.dimmedNodeIds.add(n.id);
     }
+    // An expanded region is a container for its children, and a node with
+    // no incident edge has no evidence of being unused, so both stay.
     if (
-      filters.hideIdle &&
-      n.kind === "operator" &&
-      n.stats !== null &&
-      n.stats.elapsedNs === 0n &&
-      n.stats.arrangementRecords === 0n
+      filters.hideUnused &&
+      n.kind !== "port" &&
+      !(n.kind === "region" && n.expanded)
     ) {
-      d.hiddenNodeIds.add(n.id);
+      const edges = incident.get(n.id);
+      if (
+        edges !== undefined &&
+        !edges.moved &&
+        (n.stats?.arrangementRecords ?? 0n) === 0n
+      ) {
+        d.hiddenNodeIds.add(n.id);
+      }
     }
   }
   for (const e of graph.edges) {
-    if (filters.hideIdle && e.messagesSent === 0n) d.hiddenEdgeIds.add(e.id);
+    if (filters.hideUnused && e.messagesSent === 0n) {
+      d.hiddenEdgeIds.add(e.id);
+    }
   }
   if (filters.heatmap !== "off") {
     const heatmap = filters.heatmap;

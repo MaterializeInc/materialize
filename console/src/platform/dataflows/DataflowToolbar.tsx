@@ -17,6 +17,7 @@ import {
   SliderThumb,
   SliderTrack,
   Switch,
+  Tooltip,
   Text,
 } from "@chakra-ui/react";
 import React from "react";
@@ -110,14 +111,16 @@ export const DataflowToolbar = ({
         </HStack>
       )}
       <FormControl display="flex" alignItems="center" width="auto">
-        <FormLabel fontSize="xs" mb={0}>
-          Hide idle
-        </FormLabel>
+        <Tooltip label="Hides operators and channels that have not moved any data since the replica started. In a healthy dataflow this is mostly error handling.">
+          <FormLabel fontSize="xs" mb={0}>
+            Hide unused paths
+          </FormLabel>
+        </Tooltip>
         <Switch
           size="sm"
-          isChecked={filters.hideIdle}
+          isChecked={filters.hideUnused}
           onChange={(e) =>
-            onFiltersChange({ ...filters, hideIdle: e.target.checked })
+            onFiltersChange({ ...filters, hideUnused: e.target.checked })
           }
         />
       </FormControl>

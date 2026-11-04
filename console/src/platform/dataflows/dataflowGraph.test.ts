@@ -1142,40 +1142,101 @@ describe("decorateGraph", () => {
     expect(d.dimmedNodeIds.has(nodeIdOf([5, 1, 2]))).toBe(true);
   });
 
-  it("hideIdle hides zero-activity operators and zero-message edges, never regions or ports", () => {
-    const d = decorateGraph(
-      root,
-      { ...DEFAULT_FILTERS, hideIdle: true },
-      heat,
-      null,
-      1,
-    );
-    // every fixture operator has elapsed > 0 except none; hide check via a synthetic idle op
-    const idle = buildDataflowStructure(
+  it("hideUnused hides operators whose every incident edge is silent, whatever their elapsed time", () => {
+    // Mirrors an error-handling chain: every operator was scheduled (elapsed
+    // is nonzero) but no data ever crossed its channels.
+    const op = (n: number, name: string) => ({
+      id: String(20 + n),
+      address: ["5", String(n)],
+      name,
+      arrangementRecords: "0",
+      arrangementSize: "0",
+      elapsedNs: "300",
+    });
+    const channel = (id: string, from: number, to: number, msgs: string) => ({
+      id,
+      fromOperatorAddress: ["5", String(from)],
+      fromPort: "0",
+      toOperatorAddress: ["5", String(to)],
+      toPort: "0",
+      messagesSent: msgs,
+      batchesSent: msgs,
+      channelType: "rows",
+    });
+    const structure = buildDataflowStructure(
       [
         ...OPS,
-        {
-          id: "15",
-          address: ["5", "3"],
-          name: "Idle",
-          arrangementRecords: "0",
-          arrangementSize: "0",
-          elapsedNs: "0",
-        },
+        op(3, "FlatMap"),
+        op(4, "ArrangeErrors"),
+        op(5, "AsCollection"),
+        op(6, "Live"),
       ],
-      CHANNELS,
+      [
+        ...CHANNELS,
+        channel("10", 2, 3, "0"),
+        channel("11", 3, 4, "0"),
+        channel("12", 4, 5, "0"),
+        channel("13", 6, 5, "7"),
+      ],
       [],
     );
-    const d2 = decorateGraph(
-      deriveVisibleGraph(idle, idle.root),
-      { ...DEFAULT_FILTERS, hideIdle: true },
+    const graph = deriveVisibleGraph(structure, structure.root);
+    const d = decorateGraph(
+      graph,
+      { ...DEFAULT_FILTERS, hideUnused: true },
       heat,
       null,
       1,
     );
-    expect(d2.hiddenNodeIds.has(nodeIdOf([5, 3]))).toBe(true);
-    expect(d2.hiddenNodeIds.has(nodeIdOf([5, 1]))).toBe(false);
-    expect(d.hiddenEdgeIds.size).toBe(0); // all fixture edges have messages
+    expect(d.hiddenNodeIds).toEqual(
+      new Set([nodeIdOf([5, 3]), nodeIdOf([5, 4])]),
+    );
+    // One live incident edge keeps a node even though its other edge is silent.
+    expect(d.hiddenNodeIds.has(nodeIdOf([5, 5]))).toBe(false);
+    expect(d.hiddenNodeIds.has(nodeIdOf([5, 2]))).toBe(false);
+    expect(d.hiddenEdgeIds.size).toBe(3);
+
+    const off = decorateGraph(graph, DEFAULT_FILTERS, heat, null, 1);
+    expect(off.hiddenNodeIds.size).toBe(0);
+    expect(off.hiddenEdgeIds.size).toBe(0);
+  });
+
+  it("hideUnused keeps nodes with arrangement records, nodes with no edges, expanded regions and ports", () => {
+    const structure = buildDataflowStructure(
+      OPS.map((o) => ({
+        ...o,
+        arrangementRecords: o.id === "14" ? "9" : o.arrangementRecords,
+      })),
+      CHANNELS.map((c) => ({ ...c, messagesSent: "0" })),
+      [],
+    );
+    const graph = deriveVisibleGraph(structure, structure.root);
+    const d = decorateGraph(
+      graph,
+      { ...DEFAULT_FILTERS, hideUnused: true },
+      heat,
+      null,
+      1,
+    );
+    // The collapsed region only touches silent channels and holds records in
+    // its subtree (the Join), so it stays. The Sink holds records itself.
+    expect(d.hiddenNodeIds.size).toBe(0);
+    const expanded = deriveVisibleGraph(
+      structure,
+      structure.root,
+      new Set([regionId]),
+    );
+    const d2 = decorateGraph(
+      expanded,
+      { ...DEFAULT_FILTERS, hideUnused: true },
+      heat,
+      null,
+      1,
+    );
+    expect(d2.hiddenNodeIds.has(regionId)).toBe(false);
+    for (const n of expanded.nodes) {
+      if (n.kind === "port") expect(d2.hiddenNodeIds.has(n.id)).toBe(false);
+    }
   });
 
   it("heatmap scales over operators only and clamps a region to the hot end", () => {

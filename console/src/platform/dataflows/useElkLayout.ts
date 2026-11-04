@@ -22,7 +22,7 @@ import { extractPositions, type Positions, toElkGraph } from "./elkGraph";
 
 // Every distinct cacheKey holds a full position map for its graph, and the
 // key folds in the filter and expansion state (see DataflowGraphView's
-// layoutKey), so a session that toggles hide-idle and expands regions on a
+// layoutKey), so a session that toggles hide-unused and expands regions on a
 // large dataflow would otherwise accumulate one map per combination for as
 // long as the page is mounted. Bounded as an LRU: the point of the cache is
 // that walking back up a drill-down path, or flipping a filter off and on,

@@ -93,7 +93,7 @@ export interface DataflowGraphViewProps {
   fitOnIds?: string[] | null;
   onFit?: () => void;
   // Toggled from the toolbar; grouping is computed here (from the same
-  // post-hideIdle, post-reroute node list elk actually lays out) rather than
+  // post-hideUnused, post-reroute node list elk actually lays out) rather than
   // by the caller, so a hidden node can never end up as a group's only
   // member.
   showLirGroups?: boolean;
@@ -191,7 +191,7 @@ export const DataflowGraphView = ({
   const { colors, shadows } = useTheme<MaterializeTheme>();
 
   const visible = React.useMemo(() => {
-    // Hidden nodes get spliced out with connectivity preserved (a hidden idle
+    // Hidden nodes get spliced out with connectivity preserved (a hidden unused
     // run still shows a pass-through edge). Hidden edges (independently
     // zero-message) are a plain removal: nothing to reroute since both
     // endpoints stay visible.
