@@ -364,4 +364,6 @@ def execute_workload(
                 raise
         conn.autocommit = False
         if actual_result != expected_result:
-            raise ValueError(f"Unexpected result for {type(executor).__name__}: {actual_result} != {expected_result}")  # type: ignore
+            raise ValueError(
+                f"Unexpected result for {type(executor).__name__}: {actual_result} != {expected_result}"
+            )  # type: ignore
