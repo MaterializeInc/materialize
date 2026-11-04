@@ -219,14 +219,7 @@ class LedgerTransfer(Action):
         return outcome
 
     def _read_back(self, seq: int) -> None:
-        """A committed write must be visible to the session that wrote it.
-
-        Read-your-writes is a guarantee no timestamp-free invariant covers, and
-        it is the one a stale read breaks first. The read goes through this
-        action's own client, on purpose: another session may legitimately be
-        behind. A read that fails or times out under disruption raises
-        TransientError, which the worker loop treats as a skipped op.
-        """
+        """Verify a strict-serializable read sees the committed write."""
         if self.rng.random() >= 0.25 or not self.ctx.checking.is_set():
             return
         rows = self.client.query(
@@ -295,18 +288,9 @@ class ReversalTransfer(Action):
 class FarFrontierWrite(Action):
     """INSERT..SELECT whose selection reads a far-future write frontier.
 
-    Every other read-then-write here reads the table it writes, so the
-    selection's frontier tracks the clock and a write timestamp taken from the
-    oracle is indistinguishable from one taken from that frontier. `total_far`
-    separates them: it settles until a refresh a millennium out. Committing
-    there ratchets the monotone, durable oracle into the future, which
-    `OracleSkewPeek` names directly.
-
-    `serializable` never consults the oracle, so such a write is invisible to
-    it rather than slow. The read-back is the witness and stays exact under any
-    concurrency, asking only for this session's own row. The value written is
-    the conserved total, so a wrong one is durable evidence for
-    `far-frontier-total`.
+    `total_far` settles until a refresh a millennium out. Committing at that
+    frontier would advance the durable oracle into the future, which
+    `OracleSkewPeek` checks.
     """
 
     name = "far-frontier-write"
@@ -326,20 +310,16 @@ class FarFrontierWrite(Action):
         )
         if outcome != Outcome.COMMITTED:
             return outcome
-        self.client.query("SET transaction_isolation = 'serializable'")
-        try:
-            rows = self.client.query(
-                "SELECT count(*) FROM frontier_probe"
-                f" WHERE worker = {self.worker} AND seq = {seq}"
-            )
-            self.client.query("SET transaction_isolation = 'strict serializable'")
-        except Exception:
-            # The isolation is only known again on a fresh connection.
-            self.client.reset()
-            raise
+        # Separate serializable transactions may be reordered, even in one
+        # session. Use strict serializability to require the committed row.
+        self.client.query("SET transaction_isolation = 'strict serializable'")
+        rows = self.client.query(
+            "SELECT count(*) FROM frontier_probe"
+            f" WHERE worker = {self.worker} AND seq = {seq}"
+        )
         if int(rows[0][0]) != 1:
             raise InvariantViolation(
-                "a serializable read does not see its own committed write"
+                "a strict-serializable read does not see its own committed write"
                 f" (worker {self.worker}, seq {seq}): {rows}"
             )
         return outcome
@@ -1252,26 +1232,17 @@ class RefreshMvPeek(PeekChecker):
         self.validations += 1
 
 
-# A local write timestamp is clamped to `now + 2 * timestamp_interval`, 10s
-# with our defaults, so anything past this did not come from the oracle. The
-# bound need not be tight: a frontier-derived one is a millennium out.
 ORACLE_SKEW_LIMIT_MS = 30_000
 
 
 class OracleSkewPeek(PeekChecker):
-    """The write timeline's oracle keeps tracking the wall clock.
+    """Detect an oracle advanced to a far-future input frontier.
 
-    Every write allocates from the oracle, which is clamped to the clock, so a
-    timestamp from anywhere else shows up only as the oracle carrying it. It is
-    monotone and durable, so once out there every write and strict-serializable
-    read blocks until the clock catches up, restarts included.
-
-    This query reads no collection, so it still answers in exactly that state,
-    where any table read would block. That is what makes it the attribution
-    rather than a wave of unrelated timeouts.
+    The probe reads no collections, so an unreadable table frontier cannot
+    block it.
     """
 
-    QUERY = "SELECT mz_now()::text::bigint - (extract(epoch FROM now()) * 1000)::bigint"
+    QUERY = "SELECT mz_now()::text::bigint"
 
     pause = (1.0, 4.0)
 
@@ -1279,13 +1250,21 @@ class OracleSkewPeek(PeekChecker):
         super().__init__(rng, ctx, "oracle-skew", ["compute", "quickstart"])
 
     def check_once(self) -> None:
-        skew = int(self.peek(self.QUERY)[0][0])
+        self.check_timestamp(self.client, int(self.peek(self.QUERY)[0][0]))
+        self.validations += 1
+
+    @staticmethod
+    def check_timestamp(client: MzClient, timestamp: int) -> None:
+        # now() is fixed at transaction start. A delayed oracle read can be
+        # much later, so sample the wall clock in a subsequent transaction.
+        wall_time = int(
+            client.query("SELECT (extract(epoch FROM now()) * 1000)::bigint")[0][0]
+        )
+        skew = timestamp - wall_time
         if skew > ORACLE_SKEW_LIMIT_MS:
             raise InvariantViolation(
-                f"the write timeline's oracle is {skew}ms ahead of the wall clock,"
-                " so a write took its timestamp from something other than the oracle"
+                f"the write timeline's oracle is at least {skew}ms ahead of the wall clock"
             )
-        self.validations += 1
 
 
 class SwapTotalPeek(PeekChecker):
@@ -1765,13 +1744,9 @@ class TableBank(Scenario):
                 f"a read-then-write over a far-future frontier recorded {wrong},"
                 f" not {self.total}"
             )
-        # A frontier-derived write timestamp leaves the oracle out in the
-        # future durably, so a run is only usable at the end if this holds.
-        skew = int(client.query(OracleSkewPeek.QUERY)[0][0])
-        if skew > ORACLE_SKEW_LIMIT_MS:
-            raise InvariantViolation(
-                f"the write timeline's oracle ended {skew}ms ahead of the wall clock"
-            )
+        OracleSkewPeek.check_timestamp(
+            client, int(client.query(OracleSkewPeek.QUERY)[0][0])
+        )
         swap_total = int(client.query("SELECT total FROM blue.total_swap")[0][0])
         if swap_total != self.total:
             raise InvariantViolation(
