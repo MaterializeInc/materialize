@@ -73,7 +73,7 @@ import { MaterializeTheme } from "~/theme";
 
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { NewSupportTicketDrawer, OutageLink } from "./NewSupportTicketDrawer";
-import { useSupportTickets } from "./queries";
+import { isTicketsUnavailableError, useSupportTickets } from "./queries";
 import { SupportTicketModal, SupportTicketsTable } from "./SupportTickets";
 import { SEVERITY_OPTIONS } from "./ticketForm";
 
@@ -290,6 +290,12 @@ const SupportPage = () => {
     [ticketsQuery.data],
   );
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = ticketsQuery;
+  // 404 and 503 mean the endpoints aren't deployed or configured here, so the
+  // card links to Help Center. Anything else is worth retrying.
+  const isTicketsLoadError =
+    !areTicketsAvailable &&
+    ticketsQuery.isError &&
+    !isTicketsUnavailableError(ticketsQuery.error);
   const flags = useFlags();
   // The form needs the ticket endpoints, so it only replaces the Messenger
   // once they answer, and is behind its own flag until launch.
@@ -419,7 +425,7 @@ const SupportPage = () => {
                     textStyle="text-small"
                     fontWeight="500"
                   >
-                    All tickets in Help Center ↗
+                    View in Help Center ↗
                   </TextLink>
                 )}
               </CardTitle>
@@ -446,14 +452,41 @@ const SupportPage = () => {
                       </Button>
                     )}
                   </VStack>
+                ) : isTicketsLoadError ? (
+                  <VStack spacing="3" align="start">
+                    <Alert
+                      variant="error"
+                      minWidth="0"
+                      message="Your tickets couldn't be loaded. You can still view them in Help Center."
+                    />
+                    <HStack spacing="2" flexWrap="wrap">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => ticketsQuery.refetch()}
+                        isLoading={ticketsQuery.isRefetching}
+                      >
+                        Try again
+                      </Button>
+                      <Button
+                        as="a"
+                        href={HELP_CENTER_TICKETS_URL}
+                        {...EXTERNAL_LINK_PROPS}
+                        variant="outline"
+                        size="sm"
+                      >
+                        View in Help Center ↗
+                      </Button>
+                    </HStack>
+                  </VStack>
                 ) : (
                   <VStack spacing="3" align="start">
                     <Text
                       textStyle="text-ui-reg"
                       color={colors.foreground.secondary}
                     >
-                      Tickets for your organization, including ones your
-                      teammates opened. Reply, add files, or check status.
+                      See the tickets you opened, reply, add files, or check
+                      status in Help Center.
                     </Text>
                     <HStack spacing="2" flexWrap="wrap">
                       <Button

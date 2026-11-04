@@ -52,11 +52,13 @@ const useTicketOwner = (): TicketOwner => {
  */
 const UNAVAILABLE_STATUSES = [404, 503];
 
+/** Whether an error means the ticket endpoints can't be used here. */
+export const isTicketsUnavailableError = (error: unknown) =>
+  error instanceof OpenApiFetchError &&
+  UNAVAILABLE_STATUSES.includes(error.status);
+
 const retryUnlessUnavailable = (failureCount: number, error: unknown) =>
-  !(
-    error instanceof OpenApiFetchError &&
-    UNAVAILABLE_STATUSES.includes(error.status)
-  ) && failureCount < 2;
+  !isTicketsUnavailableError(error) && failureCount < 2;
 
 /**
  * How many empty pages in a row to skip before returning one anyway, so a

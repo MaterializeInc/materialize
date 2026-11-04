@@ -28,7 +28,7 @@ import {
 } from "~/externalUrls";
 import { resetMessengerStateForTests, useIntercom } from "~/hooks/useIntercom";
 import { incidentIOQueryKeys } from "~/queries/incident-io";
-import { renderComponent } from "~/test/utils";
+import { defaultRegionId, renderComponent } from "~/test/utils";
 
 import { supportTicketQueryKeys } from "./queries";
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
@@ -375,7 +375,7 @@ describe("SupportPage", () => {
         screen.getByRole("button", { name: "RBAC for a dbt service account" }),
       ).toBeVisible();
       expect(
-        screen.getByRole("link", { name: "All tickets in Help Center ↗" }),
+        screen.getByRole("link", { name: "View in Help Center ↗" }),
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
       expect(screen.queryByRole("link", { name: "View tickets" })).toBeNull();
     });
@@ -462,6 +462,37 @@ describe("SupportPage", () => {
       await user.click(await screen.findByText("#4821 · opened by you"));
 
       expect(await screen.findByRole("dialog")).toBeVisible();
+    });
+
+    it("offers a retry when the tickets fail to load", async () => {
+      let isFailing = true;
+      server.use(
+        http.get(TICKETS_URL, () =>
+          isFailing
+            ? HttpResponse.json({}, { status: 500 })
+            : HttpResponse.json({ data: [buildTicket()], nextCursor: null }),
+        ),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />, { queryClient });
+
+      // The query retries a 500 itself before giving up.
+      expect(
+        await screen.findByText(/Your tickets couldn't be loaded/, undefined, {
+          timeout: 5000,
+        }),
+      ).toBeVisible();
+      // The fallback for missing endpoints isn't shown for a failure.
+      expect(screen.queryByText(/See the tickets you opened/)).toBeNull();
+      isFailing = false;
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+
+      expect(
+        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+      ).toBeVisible();
     });
 
     it("shows an empty state", async () => {
@@ -682,6 +713,7 @@ describe("SupportPage", () => {
         environmentType: "staging",
       });
       expect(sent).toHaveTextContent("Ticket #4821 is open");
+      expect(sent).toHaveTextContent(defaultRegionId);
       expect(
         within(sent).getByRole("link", { name: "View in Help Center ↗" }),
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
@@ -734,11 +766,14 @@ describe("SupportPage", () => {
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const context = await screen.findByTestId("support-ticket-context");
+      expect(context).toHaveTextContent(defaultRegionId);
       await user.click(
-        await screen.findByRole("checkbox", {
-          name: /Include environment details/,
-        }),
+        screen.getByRole("checkbox", { name: /Include environment details/ }),
       );
+      // The org ID is always sent, so it stays listed.
+      expect(context).toHaveTextContent("Organization");
+      expect(context).not.toHaveTextContent(defaultRegionId);
       await user.type(
         screen.getByRole("textbox", { name: /Subject/ }),
         "Question",
@@ -749,9 +784,11 @@ describe("SupportPage", () => {
       );
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
-      await screen.findByTestId("support-ticket-sent");
+      const sent = await screen.findByTestId("support-ticket-sent");
       expect(createdWith).not.toHaveProperty("region");
       expect(createdWith).not.toHaveProperty("environmentVersion");
+      // The confirmation only lists what was sent.
+      expect(sent).not.toHaveTextContent(defaultRegionId);
     });
 
     it("keeps the form open with an error when opening fails", async () => {

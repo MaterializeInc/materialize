@@ -210,9 +210,11 @@ const NewTicketForm = ({
   const severityField = register("severity");
   const environmentField = register("environmentType");
 
-  const details: TicketDetails = [];
+  // The global API always adds the org ID (and the user's email), so the
+  // organization is shown whether or not the optional details are included.
+  const alwaysSent: TicketDetails = [];
   if (organizationName || organizationId) {
-    details.push({
+    alwaysSent.push({
       label: "Organization",
       value: (
         <>
@@ -231,11 +233,12 @@ const NewTicketForm = ({
       ),
     });
   }
+  const optional: TicketDetails = [];
   if (context.region) {
-    details.push({ label: "Environment", value: `${context.region} · Cloud` });
+    optional.push({ label: "Environment", value: `${context.region} · Cloud` });
   }
   if (context.environmentVersion) {
-    details.push({
+    optional.push({
       label: "Version",
       value: (
         <Text as="span" textStyle="monospace" fontSize="xs">
@@ -383,7 +386,7 @@ const NewTicketForm = ({
                 </FormErrorMessage>
               </FormControl>
 
-              {details.length > 0 && (
+              {(alwaysSent.length > 0 || optional.length > 0) && (
                 <Box
                   as="section"
                   aria-label="Sent with your ticket"
@@ -392,32 +395,43 @@ const NewTicketForm = ({
                   borderRadius="lg"
                   bg={colors.background.secondary}
                 >
-                  <HStack spacing="2.5" px="3" py="2.5">
-                    <Checkbox {...register("includeDetails")} flex="1">
-                      <Text textStyle="text-ui-med" fontWeight="600">
-                        Include environment details
+                  {optional.length > 0 ? (
+                    <HStack spacing="2.5" px="3" py="2.5">
+                      <Checkbox {...register("includeDetails")} flex="1">
+                        <Text textStyle="text-ui-med" fontWeight="600">
+                          Include environment details
+                        </Text>
+                      </Checkbox>
+                      <Text
+                        textStyle="text-small"
+                        color={colors.foreground.secondary}
+                      >
+                        Saves a round trip
                       </Text>
-                    </Checkbox>
+                    </HStack>
+                  ) : (
                     <Text
-                      textStyle="text-small"
-                      color={colors.foreground.secondary}
+                      textStyle="text-ui-med"
+                      fontWeight="600"
+                      px="3"
+                      py="2.5"
                     >
-                      Saves a round trip
+                      Sent with your ticket
                     </Text>
-                  </HStack>
-                  {includeDetails && (
-                    <Grid
-                      as="dl"
-                      templateColumns="132px minmax(0, 1fr)"
-                      columnGap="3"
-                      rowGap="1.5"
-                      pl="38px"
-                      pr="3"
-                      pb="3"
-                      textStyle="text-small"
-                      data-testid="support-ticket-context"
-                    >
-                      {details.map((detail) => (
+                  )}
+                  <Grid
+                    as="dl"
+                    templateColumns="132px minmax(0, 1fr)"
+                    columnGap="3"
+                    rowGap="1.5"
+                    pl={optional.length > 0 ? "38px" : "3"}
+                    pr="3"
+                    pb="3"
+                    textStyle="text-small"
+                    data-testid="support-ticket-context"
+                  >
+                    {[...alwaysSent, ...(includeDetails ? optional : [])].map(
+                      (detail) => (
                         <React.Fragment key={detail.label}>
                           <Text as="dt" color={colors.foreground.secondary}>
                             {detail.label}
@@ -426,9 +440,9 @@ const NewTicketForm = ({
                             {detail.value}
                           </Text>
                         </React.Fragment>
-                      ))}
-                    </Grid>
-                  )}
+                      ),
+                    )}
+                  </Grid>
                 </Box>
               )}
             </>
@@ -478,14 +492,12 @@ const ENVIRONMENT_LABELS = Object.fromEntries(
 const TicketSent = ({
   ticket,
   values,
-  organizationName,
   region,
   outageLink,
   onClose,
 }: {
   ticket: SupportTicket;
   values: TicketFormValues;
-  organizationName?: string;
   region?: string;
   outageLink: OutageLink;
   onClose: () => void;
@@ -494,7 +506,8 @@ const TicketSent = ({
   const tags = [
     severityLabel(values.severity),
     ENVIRONMENT_LABELS[values.environmentType],
-    region,
+    // Only what was sent with the ticket.
+    values.includeDetails ? region : undefined,
   ].filter(Boolean);
 
   return (
@@ -555,12 +568,6 @@ const TicketSent = ({
               plan.
             </ListItem>
             <ListItem>Replies arrive by email and in Help Center.</ListItem>
-            {organizationName && (
-              <ListItem>
-                Admins in {organizationName} can see and reply to this ticket
-                too.
-              </ListItem>
-            )}
           </OrderedList>
         </VStack>
 
@@ -681,7 +688,6 @@ export const NewSupportTicketDrawer = ({
             <TicketSent
               ticket={sent.ticket}
               values={sent.values}
-              organizationName={organizationName}
               region={region}
               outageLink={outageLink}
               onClose={onClose}
