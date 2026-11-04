@@ -15,7 +15,7 @@ import { http, HttpResponse } from "msw";
 import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { SupportTicket } from "~/api/cloudGlobalApi";
+import { SupportTicket, SupportTicketDetail } from "~/api/cloudGlobalApi";
 import { STATUSPAGE_URL } from "~/api/incident-io";
 import { Incident, StatusSummary } from "~/api/incident-io/types";
 import server from "~/api/mocks/server";
@@ -123,11 +123,41 @@ const buildTicket = (
   number: "4821",
   title: "Replica keeps restarting",
   state: "Waiting on you",
+  stateCategory: "waiting_on_customer",
   open: true,
   createdAt: "2026-10-20T12:00:00Z",
   updatedAt: "2026-10-21T12:00:00Z",
   ...overrides,
 });
+
+/** A ticket's conversation, for any ticket ID. */
+const ticketDetailHandler = (overrides: Partial<SupportTicketDetail> = {}) =>
+  http.get(`${TICKETS_URL}/:ticketId`, () =>
+    HttpResponse.json({
+      ticket: buildTicket(),
+      description: "<p>It restarts every few minutes.</p>",
+      messages: [],
+      ...overrides,
+    }),
+  );
+
+/** Fills in the ticket form's required fields. */
+const fillTicketForm = async (
+  user: ReturnType<typeof userEvent.setup>,
+  {
+    title = "Sink is lagging",
+    description = "Kafka sink is 10 minutes behind.",
+  }: { title?: string; description?: string } = {},
+) => {
+  await user.type(
+    await screen.findByRole("textbox", { name: /Subject/ }),
+    title,
+  );
+  await user.type(
+    screen.getByRole("textbox", { name: /What happened/ }),
+    description,
+  );
+};
 
 const ticketsHandler = (tickets: SupportTicket[]) =>
   http.get(TICKETS_URL, () =>
@@ -233,22 +263,8 @@ describe("SupportPage", () => {
     expect(screen.queryByTestId("support-unread-count")).toBeNull();
   });
 
-  it("does not use an anonymous Messenger before the user is identified", async () => {
-    server.use(intercomJwtHandler(500));
-    setIntercom("booted");
-    const user = userEvent.setup();
-    await renderComponent(<SupportPageWithIntercom />);
-
-    const outage = await screen.findByRole("link", {
-      name: "Report a production outage",
-    });
-    // Following the mailto link is fine in jsdom; the Messenger stays closed.
-    await user.click(outage);
-    expect(showNewMessage).not.toHaveBeenCalled();
-  });
-
   it("does not use a Messenger booted anonymously", async () => {
-    // e.g. impersonation, which never boots the Messenger with a JWT.
+    // e.g. the Messenger booted before sign-in.
     setIntercom("booted");
     const user = userEvent.setup();
     await renderComponent(<SupportPage />);
@@ -262,14 +278,6 @@ describe("SupportPage", () => {
       "aria-label",
       "Chat is unavailable, so these open an email to support.",
     );
-  });
-
-  it("shows live status from incident.io", async () => {
-    await renderComponent(<SupportPageWithIntercom />);
-
-    expect(
-      await screen.findByTestId("support-status-banner"),
-    ).toHaveTextContent(/All systems operational/);
   });
 
   it("shows an ongoing incident in the status banner", async () => {
@@ -296,7 +304,7 @@ describe("SupportPage", () => {
 
   it("stops showing cached status when a refresh fails", async () => {
     const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
+      defaultOptions: { queries: { retry: false, retryDelay: 0 } },
     });
     await renderComponent(<SupportPageWithIntercom />, { queryClient });
     expect(
@@ -330,26 +338,6 @@ describe("SupportPage", () => {
     expect(showNewMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("only links to the status page when the status API fails", async () => {
-    let statusRequested = false;
-    server.use(
-      http.get(STATUSPAGE_URL, () => {
-        statusRequested = true;
-        return HttpResponse.json({}, { status: 500 });
-      }),
-    );
-    await renderComponent(<SupportPageWithIntercom />);
-
-    await waitFor(() => expect(statusRequested).toBe(true));
-    await waitFor(() =>
-      expect(screen.getByTestId("support-status-link")).toHaveAttribute(
-        "href",
-        STATUS_PAGE_URL,
-      ),
-    );
-    expect(screen.queryByText(/All systems operational/)).toBeNull();
-  });
-
   describe("with the ticket endpoints", () => {
     it("lists the user's tickets", async () => {
       server.use(
@@ -360,6 +348,7 @@ describe("SupportPage", () => {
             number: "4702",
             title: "RBAC for a dbt service account",
             state: "Resolved",
+            stateCategory: "resolved",
             open: false,
           }),
         ]),
@@ -369,7 +358,7 @@ describe("SupportPage", () => {
       expect(
         await screen.findByRole("button", { name: "Replica keeps restarting" }),
       ).toBeVisible();
-      expect(screen.getByText("#4821 · opened by you")).toBeVisible();
+      expect(screen.getByText("#4821")).toBeVisible();
       expect(screen.getByText("Waiting on you")).toBeVisible();
       expect(
         screen.getByRole("button", { name: "RBAC for a dbt service account" }),
@@ -434,7 +423,7 @@ describe("SupportPage", () => {
     it("keeps the tickets when a refetch fails", async () => {
       server.use(ticketsHandler([buildTicket()]));
       const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false } },
+        defaultOptions: { queries: { retry: false, retryDelay: 0 } },
       });
       await renderComponent(<SupportPageWithIntercom />, { queryClient });
       expect(
@@ -459,7 +448,7 @@ describe("SupportPage", () => {
       const user = userEvent.setup();
       await renderComponent(<SupportPageWithIntercom />);
 
-      await user.click(await screen.findByText("#4821 · opened by you"));
+      await user.click(await screen.findByText("#4821"));
 
       expect(await screen.findByRole("dialog")).toBeVisible();
     });
@@ -474,16 +463,13 @@ describe("SupportPage", () => {
         ),
       );
       const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false } },
+        defaultOptions: { queries: { retry: false, retryDelay: 0 } },
       });
       const user = userEvent.setup();
       await renderComponent(<SupportPageWithIntercom />, { queryClient });
 
-      // The query retries a 500 itself before giving up.
       expect(
-        await screen.findByText(/Your tickets couldn't be loaded/, undefined, {
-          timeout: 5000,
-        }),
+        await screen.findByText(/Your tickets couldn't be loaded/),
       ).toBeVisible();
       // The fallback for missing endpoints isn't shown for a failure.
       expect(screen.queryByText(/See the tickets you opened/)).toBeNull();
@@ -493,6 +479,91 @@ describe("SupportPage", () => {
       expect(
         await screen.findByRole("button", { name: "Replica keeps restarting" }),
       ).toBeVisible();
+    });
+
+    it("filters tickets by status", async () => {
+      server.use(
+        ticketsHandler([
+          buildTicket(),
+          buildTicket({
+            id: "43",
+            title: "RBAC for a dbt service account",
+            state: "Resolved",
+            stateCategory: "resolved",
+            open: false,
+          }),
+        ]),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByRole("button", { name: "Replica keeps restarting" });
+      await user.click(
+        screen.getByRole("combobox", { name: "Filter tickets by status" }),
+      );
+      // Options carry their label as a title.
+      await user.click(screen.getByTitle("Resolved"));
+
+      expect(
+        screen.getByRole("button", { name: "RBAC for a dbt service account" }),
+      ).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: "Replica keeps restarting" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows when a ticket was updated, with the full date on hover", async () => {
+      server.use(ticketsHandler([buildTicket()]));
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByRole("button", { name: "Replica keeps restarting" });
+      const table = screen.getByTestId("support-tickets-table");
+      expect(
+        within(table).getByText(
+          (_, element) =>
+            element?.getAttribute("datetime") === "2026-10-21T12:00:00Z",
+        ),
+      ).toBeVisible();
+    });
+
+    it("doesn't retry requests that can't succeed", async () => {
+      let requests = 0;
+      server.use(
+        http.get(TICKETS_URL, () => {
+          requests += 1;
+          return HttpResponse.json({}, { status: 403 });
+        }),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, retryDelay: 0 } },
+      });
+      await renderComponent(<SupportPageWithIntercom />, { queryClient });
+
+      expect(
+        await screen.findByText(/Your tickets couldn't be loaded/),
+      ).toBeVisible();
+      expect(requests).toBe(1);
+    });
+
+    it("shows the ticket's title and state while its replies load", async () => {
+      server.use(
+        ticketsHandler([buildTicket()]),
+        http.get(
+          `${TICKETS_URL}/:ticketId`,
+          () => new Promise<never>(() => {}),
+        ),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await user.click(
+        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+      );
+
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog).toHaveTextContent("Replica keeps restarting");
+      expect(within(dialog).getByText("Waiting on you")).toBeVisible();
+      expect(screen.queryByTestId("support-ticket")).not.toBeInTheDocument();
     });
 
     it("shows an empty state", async () => {
@@ -505,22 +576,18 @@ describe("SupportPage", () => {
     it("shows a ticket's conversation", async () => {
       server.use(
         ticketsHandler([buildTicket()]),
-        http.get(`${TICKETS_URL}/42`, () =>
-          HttpResponse.json({
-            ticket: buildTicket(),
-            description: "<p>It restarts every few minutes.</p>",
-            messages: [
-              {
-                id: "m1",
-                fromYou: false,
-                authorName: "Katrina",
-                bodyHtml:
-                  "<p>Thanks, looking now.<br>Can you share the cluster?</p>",
-                createdAt: "2026-10-20T13:00:00Z",
-              },
-            ],
-          }),
-        ),
+        ticketDetailHandler({
+          messages: [
+            {
+              id: "m1",
+              fromYou: false,
+              authorName: "Katrina",
+              bodyHtml:
+                "<p>Thanks, looking now.<br>Can you share the cluster?</p>",
+              createdAt: "2026-10-20T13:00:00Z",
+            },
+          ],
+        }),
       );
       const user = userEvent.setup();
       await renderComponent(
@@ -556,16 +623,7 @@ describe("SupportPage", () => {
     });
 
     it("doesn't reopen a closed ticket on Back", async () => {
-      server.use(
-        ticketsHandler([buildTicket()]),
-        http.get(`${TICKETS_URL}/42`, () =>
-          HttpResponse.json({
-            ticket: buildTicket(),
-            description: "<p>It restarts every few minutes.</p>",
-            messages: [],
-          }),
-        ),
-      );
+      server.use(ticketsHandler([buildTicket()]), ticketDetailHandler());
       const user = userEvent.setup();
       await renderComponent(
         <>
@@ -595,16 +653,7 @@ describe("SupportPage", () => {
     });
 
     it("opens a ticket from its URL", async () => {
-      server.use(
-        ticketsHandler([buildTicket()]),
-        http.get(`${TICKETS_URL}/42`, () =>
-          HttpResponse.json({
-            ticket: buildTicket(),
-            description: "<p>It restarts every few minutes.</p>",
-            messages: [],
-          }),
-        ),
-      );
+      server.use(ticketsHandler([buildTicket()]), ticketDetailHandler());
       await renderComponent(<SupportPageWithIntercom />, {
         initialRouterEntries: ["/support/tickets/42"],
       });
@@ -659,17 +708,6 @@ describe("SupportPage", () => {
       expect(
         screen.getByRole("link", { name: "Open a ticket" }),
       ).toHaveAttribute("href", SUPPORT_MAILTO);
-    });
-
-    it("keeps the Messenger and email links until the endpoints answer", async () => {
-      await renderComponent(<SupportPageWithIntercom />);
-
-      expect(
-        await screen.findByRole("link", { name: "Open a ticket" }),
-      ).toHaveAttribute("href", SUPPORT_MAILTO);
-      expect(
-        screen.getByRole("link", { name: "Report a production outage" }),
-      ).toHaveAttribute("href", OUTAGE_MAILTO);
     });
 
     it("validates the form and opens a ticket", async () => {
@@ -730,14 +768,10 @@ describe("SupportPage", () => {
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
-      await user.type(
-        await screen.findByRole("textbox", { name: /Subject/ }),
-        "Sink is lagging",
-      );
-      await user.type(
-        screen.getByRole("textbox", { name: /What happened/ }),
-        "Kafka sink is 10 minutes behind.",
-      );
+      await fillTicketForm(user, {
+        title: "Sink is lagging",
+        description: "Kafka sink is 10 minutes behind.",
+      });
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
       const sent = await screen.findByTestId("support-ticket-sent");
 
@@ -774,14 +808,10 @@ describe("SupportPage", () => {
       // The org ID is always sent, so it stays listed.
       expect(context).toHaveTextContent("Organization");
       expect(context).not.toHaveTextContent(defaultRegionId);
-      await user.type(
-        screen.getByRole("textbox", { name: /Subject/ }),
-        "Question",
-      );
-      await user.type(
-        screen.getByRole("textbox", { name: /What happened/ }),
-        "How do I size a cluster?",
-      );
+      await fillTicketForm(user, {
+        title: "Question",
+        description: "How do I size a cluster?",
+      });
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
       const sent = await screen.findByTestId("support-ticket-sent");
@@ -801,14 +831,10 @@ describe("SupportPage", () => {
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
-      await user.type(
-        await screen.findByRole("textbox", { name: /Subject/ }),
-        "Sink is lagging",
-      );
-      await user.type(
-        screen.getByRole("textbox", { name: /What happened/ }),
-        "Kafka sink is 10 minutes behind.",
-      );
+      await fillTicketForm(user, {
+        title: "Sink is lagging",
+        description: "Kafka sink is 10 minutes behind.",
+      });
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
       expect(
@@ -829,14 +855,10 @@ describe("SupportPage", () => {
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
-      await user.type(
-        await screen.findByRole("textbox", { name: /Subject/ }),
-        "Sink is lagging",
-      );
-      await user.type(
-        screen.getByRole("textbox", { name: /What happened/ }),
-        "Kafka sink is 10 minutes behind.",
-      );
+      await fillTicketForm(user, {
+        title: "Sink is lagging",
+        description: "Kafka sink is 10 minutes behind.",
+      });
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
       expect(

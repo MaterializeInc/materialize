@@ -285,10 +285,7 @@ const SupportPage = () => {
   // they answer, "Open a ticket" uses the Messenger and the tickets card
   // links to Help Center. A failed refetch keeps the tickets already loaded.
   const areTicketsAvailable = ticketsQuery.data !== undefined;
-  const tickets = React.useMemo(
-    () => ticketsQuery.data?.pages.flatMap((page) => page.data) ?? [],
-    [ticketsQuery.data],
-  );
+  const tickets = ticketsQuery.data?.pages.flatMap((page) => page.data) ?? [];
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = ticketsQuery;
   // 404 and 503 mean the endpoints aren't deployed or configured here, so the
   // card links to Help Center. Anything else is worth retrying.

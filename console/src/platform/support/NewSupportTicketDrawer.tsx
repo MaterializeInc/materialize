@@ -38,7 +38,10 @@ import { useAtomValue } from "jotai";
 import React from "react";
 import { useForm, UseFormRegisterReturn } from "react-hook-form";
 
-import { SupportTicket } from "~/api/cloudGlobalApi";
+import {
+  CreateSupportTicketRequest,
+  SupportTicket,
+} from "~/api/cloudGlobalApi";
 import { OpenApiFetchError } from "~/api/OpenApiFetchError";
 import { Alert } from "~/components/Alert";
 import { HELP_CENTER_TICKETS_URL, SUPPORT_EMAIL } from "~/externalUrls";
@@ -52,6 +55,8 @@ import { MaterializeTheme } from "~/theme";
 
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { useCreateSupportTicket } from "./queries";
+
+type CreateTicketMutation = ReturnType<typeof useCreateSupportTicket>;
 import {
   buildCreateTicketRequest,
   ENVIRONMENT_OPTIONS,
@@ -180,18 +185,17 @@ const NewTicketForm = ({
   organizationId,
   organizationName,
   outageLink,
-  onSubmitted,
+  submit,
   onClose,
 }: {
   organizationId?: string;
   organizationName?: string;
   outageLink: OutageLink;
-  onSubmitted: (ticket: SupportTicket, values: TicketFormValues) => void;
+  submit: CreateTicketMutation;
   onClose: () => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const context = useTicketContext();
-  const submit = useCreateSupportTicket();
   const { register, handleSubmit, formState, watch } =
     useForm<TicketFormValues>({
       mode: "onTouched",
@@ -258,7 +262,6 @@ const NewTicketForm = ({
         { ...values, severity: values.severity },
         context,
       ),
-      { onSuccess: (ticket) => onSubmitted(ticket, values) },
     );
   };
 
@@ -489,25 +492,24 @@ const ENVIRONMENT_LABELS = Object.fromEntries(
   ENVIRONMENT_OPTIONS.map((option) => [option.value, option.label]),
 );
 
+/** The confirmation, built from the request that was sent. */
 const TicketSent = ({
   ticket,
-  values,
-  region,
+  request,
   outageLink,
   onClose,
 }: {
   ticket: SupportTicket;
-  values: TicketFormValues;
-  region?: string;
+  request: CreateSupportTicketRequest;
   outageLink: OutageLink;
   onClose: () => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
+  // The request has the region only when it was included.
   const tags = [
-    severityLabel(values.severity),
-    ENVIRONMENT_LABELS[values.environmentType],
-    // Only what was sent with the ticket.
-    values.includeDetails ? region : undefined,
+    severityLabel(request.severity),
+    ENVIRONMENT_LABELS[request.environmentType],
+    request.region,
   ].filter(Boolean);
 
   return (
@@ -534,7 +536,7 @@ const TicketSent = ({
               ? `Ticket #${ticket.number} is open`
               : "Your ticket is open"}
           </Text>
-          <Text color={colors.foreground.secondary}>{values.title.trim()}</Text>
+          <Text color={colors.foreground.secondary}>{request.title}</Text>
           <HStack spacing="1.5" flexWrap="wrap">
             {tags.map((tag, index) => (
               <Tag
@@ -569,7 +571,7 @@ const TicketSent = ({
           <OrderedList spacing="2" pl="1">
             <ListItem>
               A support engineer picks it up within the{" "}
-              {severityLabel(values.severity)} response target in your support
+              {severityLabel(request.severity)} response target in your support
               plan.
             </ListItem>
             <ListItem>Replies arrive by email and in Help Center.</ListItem>
@@ -641,10 +643,11 @@ export const NewSupportTicketDrawer = ({
   const region = useAtomValue(currentRegionIdAtom) ?? undefined;
   // The Messenger launcher floats over the drawer's footer buttons.
   useHideIntercomLauncher(isOpen);
-  const [sent, setSent] = React.useState<{
-    ticket: SupportTicket;
-    values: TicketFormValues;
-  } | null>(null);
+  const submit = useCreateSupportTicket();
+  const sent =
+    submit.isSuccess && submit.variables
+      ? { ticket: submit.data, request: submit.variables }
+      : null;
 
   const scope = [organizationName, region].filter(Boolean).join(" · ");
 
@@ -653,7 +656,7 @@ export const NewSupportTicketDrawer = ({
       isOpen={isOpen}
       onClose={onClose}
       // Start over the next time it opens.
-      onCloseComplete={() => setSent(null)}
+      onCloseComplete={() => submit.reset()}
       placement="right"
       size="md"
     >
@@ -692,8 +695,7 @@ export const NewSupportTicketDrawer = ({
           (sent ? (
             <TicketSent
               ticket={sent.ticket}
-              values={sent.values}
-              region={region}
+              request={sent.request}
               outageLink={outageLink}
               onClose={onClose}
             />
@@ -702,7 +704,7 @@ export const NewSupportTicketDrawer = ({
               organizationId={organizationId}
               organizationName={organizationName}
               outageLink={outageLink}
-              onSubmitted={(ticket, values) => setSent({ ticket, values })}
+              submit={submit}
               onClose={onClose}
             />
           ))}

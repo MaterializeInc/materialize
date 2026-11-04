@@ -119,8 +119,7 @@ describe("openIntercomNewConversation", () => {
   it("falls back when the Messenger never boots", () => {
     installStub();
     identify();
-    const onUnavailable = vi.fn();
-    expect(openIntercomNewConversation(onUnavailable)).toBe(false);
+    expect(openIntercomNewConversation(vi.fn())).toBe(false);
     expect(showNewMessage).not.toHaveBeenCalled();
   });
 

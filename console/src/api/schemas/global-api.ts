@@ -736,6 +736,7 @@ export interface components {
                 title: string;
                 /** @description The state label customers see, e.g. "Submitted" or "Resolved". */
                 state?: string | null;
+                stateCategory?: null | components["schemas"]["SupportTicketStateCategory"];
                 open: boolean;
                 /** Format: date-time */
                 createdAt: string;
@@ -806,6 +807,7 @@ export interface components {
             title: string;
             /** @description The state label customers see, e.g. "Submitted" or "Resolved". */
             state?: string | null;
+            stateCategory?: null | components["schemas"]["SupportTicketStateCategory"];
             open: boolean;
             /** Format: date-time */
             createdAt: string;
@@ -813,6 +815,12 @@ export interface components {
             updatedAt: string;
         };
         /** @description A ticket with its description and replies. */
+        /**
+         * @description Intercom's category for a ticket's state. Stays the same when support
+         *     renames the label customers see.
+         * @enum {string}
+         */
+        SupportTicketStateCategory: "submitted" | "in_progress" | "waiting_on_customer" | "resolved";
         SupportTicketDetail: {
             ticket: components["schemas"]["SupportTicket"];
             /** @description The description the ticket was opened with. May contain HTML. */

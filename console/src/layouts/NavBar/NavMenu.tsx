@@ -18,6 +18,7 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
+import { useQueryClient } from "@tanstack/react-query";
 import React from "react";
 import { Location, useLocation } from "react-router-dom";
 
@@ -29,6 +30,10 @@ import { useFlags } from "~/hooks/useFlags";
 import { useIntercomUnreadCount } from "~/hooks/useIntercom";
 import { useIsSuperUser } from "~/hooks/useIsSuperUser";
 import { shellPath, SUPPORT_PAGE_PATH } from "~/platform/routeHelpers";
+import {
+  supportTicketsQueryOptions,
+  useTicketOwner,
+} from "~/platform/support/queries";
 import { useRegionSlug } from "~/store/environments";
 import { MonitorIcon } from "~/svg/Monitor";
 import AdminIcon from "~/svg/nav/AdminIcon";
@@ -290,9 +295,20 @@ const CloudSupportNavItem = ({
   closeMenu?: () => void;
 }) => {
   const unreadCount = useIntercomUnreadCount();
+  const queryClient = useQueryClient();
+  const owner = useTicketOwner();
+  // Start loading the tickets on hover or focus, so they're often there by
+  // the time the page opens. A fresh cached list isn't fetched again.
+  const prefetchTickets = () =>
+    void queryClient.prefetchInfiniteQuery(supportTicketsQueryOptions(owner));
 
   return (
-    <Box mx="2" width={isCollapsed ? undefined : "calc(100% - 16px)"}>
+    <Box
+      mx="2"
+      width={isCollapsed ? undefined : "calc(100% - 16px)"}
+      onPointerEnter={prefetchTickets}
+      onFocus={prefetchTickets}
+    >
       <NavItem
         href={SUPPORT_PAGE_PATH}
         icon={<HelpIcon />}

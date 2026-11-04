@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 import { onUnreadCountChange } from "@intercom/messenger-js-sdk";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
 
@@ -83,6 +84,25 @@ describe("SupportNavItem", () => {
       await screen.findByRole("link", { name: /Help and support/ }),
     ).toHaveAttribute("href", "/support");
     expect(screen.queryByTestId("nav-indicator")).toBeNull();
+  });
+
+  it("starts loading the tickets on hover", async () => {
+    setFlag(true);
+    let ticketRequests = 0;
+    server.use(
+      http.get("*/api/organization/support/tickets", () => {
+        ticketRequests += 1;
+        return HttpResponse.json({ data: [], nextCursor: null });
+      }),
+    );
+    const user = userEvent.setup();
+    await renderComponent(<SupportNavItemWithIntercom />);
+    const link = await screen.findByRole("link", { name: /Help and support/ });
+    expect(ticketRequests).toBe(0);
+
+    await user.hover(link);
+
+    await waitFor(() => expect(ticketRequests).toBe(1));
   });
 
   it("shows a dot driven by the Messenger's unread count", async () => {
