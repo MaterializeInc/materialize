@@ -694,12 +694,21 @@ const DataflowDetailPage = () => {
     // than the viewport instead of the graph area shrinking to absorb it.
     <MainContentContainer width="100%" minH={0}>
       <VStack width="100%" height="100%" alignItems="stretch">
-        <HStack flexShrink={0} alignItems="flex-end">
+        {/* One wrapping row: the graph canvas is the point of this page, so
+            every row above it costs usable height. */}
+        <HStack
+          flexShrink={0}
+          alignItems="flex-end"
+          flexWrap="wrap"
+          spacing={3}
+          rowGap={2}
+        >
           <LabeledSelect
             label="Replica"
             value={replicaName ?? ""}
             onChange={(e) => onReplicaChange(e.target.value)}
             flexShrink={0}
+            width="auto"
           >
             {cluster.replicas.map((r) => (
               <option key={r.name} value={r.name}>
@@ -716,7 +725,7 @@ const DataflowDetailPage = () => {
               )
             }
             flex="1"
-            minWidth="320px"
+            minWidth="240px"
           >
             {dataflowId && !dataflowList?.some((d) => d.id === dataflowId) && (
               // The list query hasn't resolved yet (or this dataflow just
@@ -730,17 +739,17 @@ const DataflowDetailPage = () => {
               </option>
             ))}
           </LabeledSelect>
+          {data && (
+            <HStack flexShrink={0} height="10" spacing={2}>
+              <Button size="sm" onClick={refetch} isDisabled={loading}>
+                Refresh
+              </Button>
+              <Text fontSize="sm" color="foreground.secondary">
+                Last fetched {data.fetchedAt.toLocaleTimeString()}
+              </Text>
+            </HStack>
+          )}
         </HStack>
-        {data && (
-          <HStack flexShrink={0}>
-            <Button size="sm" onClick={refetch} isDisabled={loading}>
-              Refresh
-            </Button>
-            <Text fontSize="sm" color="foreground.secondary">
-              Last fetched {data.fetchedAt.toLocaleTimeString()}
-            </Text>
-          </HStack>
-        )}
         {permissionError ? (
           <UsagePrivilegeAlert action="visualize this dataflow" />
         ) : error ? (
@@ -763,12 +772,23 @@ const DataflowDetailPage = () => {
           </Text>
         ) : (
           <VStack flex="1" minH={0} alignItems="stretch" spacing={2}>
-            <DataflowBreadcrumbs
-              structure={data.structure}
-              focusedScope={focusedScope}
-              onNavigate={setFocusedScope}
-            />
-            <HStack flexShrink={0} flexWrap="wrap" alignItems="center">
+            <HStack
+              flexShrink={0}
+              flexWrap="wrap"
+              alignItems="center"
+              spacing={3}
+              rowGap={2}
+            >
+              {/* At the root the Dataflow select above already names the
+                  dataflow, so a trail would only repeat it. Drilled in, the
+                  root crumb is the way back out. */}
+              {focusedScope !== data.structure.root && (
+                <DataflowBreadcrumbs
+                  structure={data.structure}
+                  focusedScope={focusedScope}
+                  onNavigate={setFocusedScope}
+                />
+              )}
               <DataflowToolbar
                 filters={filters}
                 onFiltersChange={setFilters}

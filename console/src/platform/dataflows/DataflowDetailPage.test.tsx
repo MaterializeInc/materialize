@@ -983,6 +983,39 @@ describe("DataflowDetailPage", () => {
     expect(screen.getByText("Memory")).toBeInTheDocument();
   });
 
+  describe("breadcrumbs", () => {
+    const renderDataflow8 = (search = "") =>
+      renderComponent(
+        <Routes>
+          <Route
+            path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+            element={<DataflowDetailPage />}
+          />
+        </Routes>,
+        {
+          initialRouterEntries: [
+            `/clusters/u5/test_cluster/dataflows/8${search}`,
+          ],
+        },
+      );
+
+    it("are hidden at the root, where the dataflow select already names it", async () => {
+      await renderDataflow8();
+      await screen.findByTestId(`node-${nodeIdOf([8, 1])}`);
+      expect(screen.queryByRole("button", { name: "Dataflow" })).toBeNull();
+    });
+
+    it("show a root crumb that navigates back out when drilled in", async () => {
+      await renderDataflow8("?scope=8.1");
+      await screen.findByTestId(`node-${nodeIdOf([8, 1, 1])}`);
+      await userEvent.click(screen.getByRole("button", { name: "Dataflow" }));
+      expect(
+        await screen.findByTestId(`node-${nodeIdOf([8, 1])}`),
+      ).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Dataflow" })).toBeNull();
+    });
+  });
+
   describe("region in-place expansion", () => {
     it("toggling a region writes the expand param without a history push", async () => {
       await renderComponent(
