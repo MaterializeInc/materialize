@@ -32,7 +32,10 @@ Choose the next scoped repair, rather than resuming the full M3 walkthrough:
 
 - **Txn-WAL closure race:** a data-shard register/forget apply operation panicked
   when CAS discovered a closed upper. Cached closure on entry is already accepted.
-  Establish retirement ownership and test with independent Persist caches.
+  Saved metadata identifies all five closed WAL participants as dropped temporary
+  tables with catalog retirement and committed Forget. Reproduce delayed apply
+  with independent Persist caches. Separately, stale new writes encounter a
+  membership assertion after Forget rather than a recoverable rejection.
 - **Post-admission index planning:** an index created after both builds join
   works on its creating build but stalls the other build waiting for a selection.
   Adapters must incorporate peer-created maintained objects into own-build
