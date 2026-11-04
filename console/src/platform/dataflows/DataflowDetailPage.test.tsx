@@ -1001,6 +1001,7 @@ describe("DataflowDetailPage", () => {
         configurable: true,
         value,
       });
+
     afterEach(() => {
       Reflect.deleteProperty(document, "fullscreenEnabled");
       Reflect.deleteProperty(document, "fullscreenElement");
@@ -1066,6 +1067,71 @@ describe("DataflowDetailPage", () => {
       });
       expect(
         await screen.findByRole("button", { name: "Enter full screen" }),
+      ).toBeVisible();
+    });
+  });
+
+  describe("details panel", () => {
+    const renderWithProbe = (search = "") =>
+      renderComponent(
+        <Routes>
+          <Route
+            path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+            element={
+              <>
+                <DataflowDetailPage />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>,
+        {
+          initialRouterEntries: [
+            `/clusters/u5/test_cluster/dataflows/8${search}`,
+          ],
+        },
+      );
+
+    it("Focus on region drills into the selected region", async () => {
+      await renderWithProbe();
+      const regionAId = nodeIdOf([8, 1]);
+      await userEvent.click(await screen.findByTestId(`node-${regionAId}`));
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        `?select=${encodeURIComponent(`node:${regionAId}`)}`,
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Focus on region" }),
+      );
+      await screen.findByTestId(`node-${nodeIdOf([8, 1, 1])}`);
+      expect(screen.getByTestId("location-search").textContent).toBe(
+        "?scope=8.1",
+      );
+    });
+
+    it("a new selection reopens a collapsed panel", async () => {
+      await renderWithProbe();
+      const regionAId = nodeIdOf([8, 1]);
+      const regionBId = nodeIdOf([8, 2]);
+      await userEvent.click(await screen.findByTestId(`node-${regionAId}`));
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Collapse details panel" }),
+      );
+      expect(
+        screen.getByRole("button", { name: "Expand details panel" }),
+      ).toBeVisible();
+
+      await userEvent.click(screen.getByTestId(`node-${regionBId}`));
+      expect(
+        await screen.findByRole("button", { name: "Collapse details panel" }),
+      ).toBeVisible();
+
+      // Returning to the first selection must not resurrect its old collapse.
+      await userEvent.click(
+        screen.getByRole("button", { name: "Collapse details panel" }),
+      );
+      await userEvent.click(screen.getByTestId(`node-${regionAId}`));
+      expect(
+        await screen.findByRole("button", { name: "Collapse details panel" }),
       ).toBeVisible();
     });
   });

@@ -89,6 +89,7 @@ const renderPanel = (
       onJumpTo={overrides.onJumpTo ?? noop}
       onSelectLir={noop}
       onSelectNode={overrides.onSelectNode ?? noop}
+      onFocusRegion={noop}
       workerCount={overrides.workerCount ?? 1}
     />,
   );
@@ -238,5 +239,63 @@ describe("NodeDetailPanel skew gating", () => {
     );
     expect(screen.getByText("Skew")).toBeVisible();
     expect(screen.getByText("CPU skew")).toBeVisible();
+  });
+});
+
+describe("NodeDetailPanel region view", () => {
+  const renderRegion = (
+    kind: VisibleNode["kind"],
+    onFocusRegion: (id: string) => void,
+  ) =>
+    renderComponent(
+      <NodeDetailPanel
+        selection={{
+          kind: "node",
+          node: { ...baseNode, id: "region-1", kind, label: "RegionA" },
+        }}
+        collapsed={false}
+        onToggleCollapsed={noop}
+        onJumpTo={noop}
+        onSelectLir={noop}
+        onSelectNode={noop}
+        onFocusRegion={onFocusRegion}
+        workerCount={1}
+      />,
+    );
+
+  it("offers Focus on region for a region selection", async () => {
+    const onFocusRegion = vi.fn();
+    await renderRegion("region", onFocusRegion);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Focus on region" }),
+    );
+    expect(onFocusRegion).toHaveBeenCalledWith("region-1");
+  });
+
+  it("does not offer Focus on region for an operator", async () => {
+    await renderRegion("operator", vi.fn());
+    expect(
+      screen.queryByRole("button", { name: "Focus on region" }),
+    ).toBeNull();
+  });
+
+  it("is a single clickable strip when collapsed", async () => {
+    const onToggleCollapsed = vi.fn();
+    await renderComponent(
+      <NodeDetailPanel
+        selection={{ kind: "node", node: { ...baseNode, id: "n" } }}
+        collapsed={true}
+        onToggleCollapsed={onToggleCollapsed}
+        onJumpTo={noop}
+        onSelectLir={noop}
+        onSelectNode={noop}
+        onFocusRegion={noop}
+        workerCount={1}
+      />,
+    );
+    const strip = screen.getByRole("button", { name: "Expand details panel" });
+    expect(strip).toHaveTextContent("Details");
+    await userEvent.click(screen.getByText("Details"));
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
   });
 });

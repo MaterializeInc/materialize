@@ -13,6 +13,7 @@ import React from "react";
 import { ChevronLeftIcon, ChevronRightIcon } from "~/icons";
 import { MaterializeTheme } from "~/theme";
 
+import { CollapsedPanelStrip } from "./CollapsedPanelStrip";
 import {
   type DataflowStructure,
   lirIndex,
@@ -94,23 +95,13 @@ export const LirPanel = ({
   if (index.size === 0) return null;
   if (collapsed) {
     return (
-      <Box
-        width="24px"
+      <CollapsedPanelStrip
+        label="LIR"
+        ariaLabel="Expand LIR panel"
+        chevron={<ChevronRightIcon boxSize="3" />}
+        onClick={onToggleCollapsed}
         borderRightWidth="1px"
-        flexShrink={0}
-        display="flex"
-        justifyContent="center"
-        pt={2}
-      >
-        <Button
-          size="2xs"
-          variant="ghost"
-          onClick={onToggleCollapsed}
-          aria-label="Expand LIR panel"
-        >
-          <ChevronRightIcon boxSize="3" />
-        </Button>
-      </Box>
+      />
     );
   }
   return (

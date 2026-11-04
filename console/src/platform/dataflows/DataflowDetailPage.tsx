@@ -234,12 +234,19 @@ const DataflowDetailPage = () => {
   const [pendingFitIds, setPendingFitIds] = React.useState<string[] | null>(
     null,
   );
-  // Persist independently of `selection`: clearing the selection (a click on
-  // empty canvas) takes the panel away with it and the next click reopens
-  // it, whereas collapsing should keep the panel out of the way across
-  // subsequent clicks too.
   const [lirPanelCollapsed, setLirPanelCollapsed] = React.useState(false);
-  const [detailPanelCollapsed, setDetailPanelCollapsed] = React.useState(false);
+  // Collapsing applies to the selection it was done for. Any different
+  // selection reopens the panel, including returning to an earlier one, so
+  // the collapse is dropped render-phase (like resetKey below) as soon as
+  // `select` moves, whichever handler or navigation moved it.
+  const [collapsedForSelect, setCollapsedForSelect] = React.useState<
+    string | null
+  >(null);
+  if (collapsedForSelect !== null && collapsedForSelect !== selectParam) {
+    setCollapsedForSelect(null);
+  }
+  const detailPanelCollapsed =
+    selectParam !== null && collapsedForSelect === selectParam;
 
   // Toggling doesn't move the focused scope, so it's worth a lot less as a
   // back-button stop than an actual navigation: replace rather than push, so
@@ -880,58 +887,66 @@ const DataflowDetailPage = () => {
                 onHighlight={setLirHighlight}
                 onSelect={onLirSelect}
               />
-              <DataflowGraphView
-                // Non-null: this branch only renders once data and
-                // focusedScope are both set, which is exactly when
-                // visibleGraph is computed above.
-                visible={visibleGraph!}
-                focusedScope={focusedScope}
-                onNavigate={setFocusedScope}
-                cacheKey={structureKey ?? ""}
-                decorations={decorations}
-                showLirGroups={filters.showLirGroups}
-                fitOnIds={pendingFitIds}
-                onFit={() => setPendingFitIds(null)}
-                selectedId={
-                  selection?.kind === "node"
-                    ? selection.node.id
-                    : selection?.kind === "edge"
-                      ? selection.edge.id
-                      : undefined
-                }
-                activeMatchId={
-                  allMatches.length > 0
-                    ? nodeIdOf(allMatches[activeMatchIndex].address)
-                    : undefined
-                }
-                onNodeClick={(node, connectedEdges) =>
-                  setSelection({
-                    kind: "node",
-                    node,
-                    connectedEdges:
-                      node.kind === "port" ? connectedEdges : undefined,
-                  })
-                }
-                onEdgeClick={(edge) => setSelection({ kind: "edge", edge })}
-                onPaneClick={() => setSelection(null)}
-                onJumpToPeer={onJumpToPeer}
-                onLirGroupClick={onLirGroupClick}
-                expandedScopes={expandedScopes}
-                onToggleExpand={onToggleExpand}
-              />
-              {selection && (
-                <NodeDetailPanel
-                  selection={selection}
-                  collapsed={detailPanelCollapsed}
-                  onToggleCollapsed={() =>
-                    setDetailPanelCollapsed((prev) => !prev)
+              {/* The details panel floats over this wrapper's right edge
+                  rather than sitting beside the graph, so opening it never
+                  shrinks the canvas. */}
+              <Box flex="1" minW={0} position="relative" display="flex">
+                <DataflowGraphView
+                  // Non-null: this branch only renders once data and
+                  // focusedScope are both set, which is exactly when
+                  // visibleGraph is computed above.
+                  visible={visibleGraph!}
+                  focusedScope={focusedScope}
+                  onNavigate={setFocusedScope}
+                  cacheKey={structureKey ?? ""}
+                  decorations={decorations}
+                  showLirGroups={filters.showLirGroups}
+                  fitOnIds={pendingFitIds}
+                  onFit={() => setPendingFitIds(null)}
+                  selectedId={
+                    selection?.kind === "node"
+                      ? selection.node.id
+                      : selection?.kind === "edge"
+                        ? selection.edge.id
+                        : undefined
                   }
-                  onJumpTo={onJumpToPeer}
-                  onSelectLir={onSelectLir}
-                  onSelectNode={onSelectNode}
-                  workerCount={data.workerCount}
+                  activeMatchId={
+                    allMatches.length > 0
+                      ? nodeIdOf(allMatches[activeMatchIndex].address)
+                      : undefined
+                  }
+                  onNodeClick={(node, connectedEdges) =>
+                    setSelection({
+                      kind: "node",
+                      node,
+                      connectedEdges:
+                        node.kind === "port" ? connectedEdges : undefined,
+                    })
+                  }
+                  onEdgeClick={(edge) => setSelection({ kind: "edge", edge })}
+                  onPaneClick={() => setSelection(null)}
+                  onJumpToPeer={onJumpToPeer}
+                  onLirGroupClick={onLirGroupClick}
+                  expandedScopes={expandedScopes}
+                  onToggleExpand={onToggleExpand}
                 />
-              )}
+                {selection && (
+                  <NodeDetailPanel
+                    selection={selection}
+                    collapsed={detailPanelCollapsed}
+                    onToggleCollapsed={() =>
+                      setCollapsedForSelect(
+                        detailPanelCollapsed ? null : selectParam,
+                      )
+                    }
+                    onFocusRegion={setFocusedScope}
+                    onJumpTo={onJumpToPeer}
+                    onSelectLir={onSelectLir}
+                    onSelectNode={onSelectNode}
+                    workerCount={data.workerCount}
+                  />
+                )}
+              </Box>
             </HStack>
           </VStack>
         )}

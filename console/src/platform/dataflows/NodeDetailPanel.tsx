@@ -22,6 +22,7 @@ import { ArrowRightIcon, ChevronLeftIcon, ChevronRightIcon } from "~/icons";
 import { MaterializeTheme } from "~/theme";
 import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
+import { CollapsedPanelStrip } from "./CollapsedPanelStrip";
 import {
   type LirTreeNode,
   type PortPeer,
@@ -465,8 +466,22 @@ export interface NodeDetailPanelProps {
   onJumpTo: (peer: PortPeer) => void;
   onSelectLir: (exportId: string, lirId: string) => void;
   onSelectNode: (id: string) => void;
+  /** Drills into the selected region, making it the focused scope. */
+  onFocusRegion: (id: string) => void;
   workerCount: number;
 }
+
+// Floats over the canvas instead of sharing its flex row, so opening it does
+// not shrink the graph. The parent must be `position: relative`. `docked`
+// sits above React Flow's own controls (z-index 5).
+const overlayProps = {
+  position: "absolute",
+  top: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: "docked",
+  boxShadow: "level2",
+} as const;
 
 export const NodeDetailPanel = ({
   selection,
@@ -475,27 +490,19 @@ export const NodeDetailPanel = ({
   onJumpTo,
   onSelectLir,
   onSelectNode,
+  onFocusRegion,
   workerCount,
 }: NodeDetailPanelProps) => {
   if (collapsed) {
     return (
-      <Box
-        width="24px"
+      <CollapsedPanelStrip
+        label="Details"
+        ariaLabel="Expand details panel"
+        chevron={<ChevronLeftIcon boxSize="3" />}
+        onClick={onToggleCollapsed}
+        {...overlayProps}
         borderLeftWidth="1px"
-        flexShrink={0}
-        display="flex"
-        justifyContent="center"
-        pt={2}
-      >
-        <Button
-          size="2xs"
-          variant="ghost"
-          onClick={onToggleCollapsed}
-          aria-label="Expand details panel"
-        >
-          <ChevronLeftIcon boxSize="3" />
-        </Button>
-      </Box>
+      />
     );
   }
   const title =
@@ -510,7 +517,8 @@ export const NodeDetailPanel = ({
       borderLeftWidth="1px"
       p={3}
       overflowY="auto"
-      flexShrink={0}
+      background="background.primary"
+      {...overlayProps}
     >
       <HStack justifyContent="space-between">
         <Text fontWeight="600" noOfLines={2}>
@@ -525,6 +533,17 @@ export const NodeDetailPanel = ({
           <ChevronRightIcon boxSize="3" />
         </Button>
       </HStack>
+      {selection.kind === "node" && selection.node.kind === "region" && (
+        // A click on a region only selects it, so this is the way in.
+        <Button
+          size="sm"
+          variant="secondary"
+          mt={2}
+          onClick={() => onFocusRegion(selection.node.id)}
+        >
+          Focus on region
+        </Button>
+      )}
       {selection.kind === "node" ? (
         selection.node.kind === "port" ? (
           <PortDetail
