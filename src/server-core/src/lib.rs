@@ -277,6 +277,13 @@ impl ListenerHandle {
     }
 }
 
+/// The message reported to clients that connect while the server is booting.
+///
+/// It is PostgreSQL's message for SQLSTATE `57P03` (`cannot_connect_now`), which
+/// drivers and connection poolers already recognize, and it is shared by the
+/// pgwire and HTTP servers so both report boot the same way.
+pub const STARTING_UP_MESSAGE: &str = "the database system is starting up";
+
 /// The accept-queue length requested for listening sockets.
 ///
 /// `environmentd` binds its listeners before it boots and only starts accepting
