@@ -117,7 +117,7 @@ missing_ownership AS (
     FROM cluster_with_ownership
 )
 
-SELECT name, quote_ident(current_role)
+SELECT name, quote_ident(current_role), quote_ident(name)
 FROM missing_ownership
 {% endset %}
 
@@ -128,7 +128,7 @@ FROM missing_ownership
             Missing necessary permissions to execute a deployment. The current role """
             ~ cluster_ownership.rows[0][1] ~ """ needs to be an owner of cluster """ ~ cluster_ownership.rows[0][0] ~ """, or a member of the role that owns it.
 
-            Hint: `ALTER CLUSTER """ ~ cluster_ownership.rows[0][0] ~ """ OWNER TO """ ~ cluster_ownership.rows[0][1] ~ """;`
+            Hint: `ALTER CLUSTER """ ~ cluster_ownership.rows[0][2] ~ """ OWNER TO """ ~ cluster_ownership.rows[0][1] ~ """;`
         """)}}
     {% endif %}
 {% endif %}
@@ -169,7 +169,7 @@ missing_ownership AS (
     FROM schemas_with_ownership
 )
 
-SELECT name, quote_ident(current_role)
+SELECT name, quote_ident(current_role), quote_ident(name)
 FROM missing_ownership
 {% endset %}
 
@@ -181,7 +181,7 @@ FROM missing_ownership
             ~ schema_ownership.rows[0][1] ~ """ needs to be an owner of schema """ ~
             schema_ownership.rows[0][0] ~ """, or a member of the role that owns it.
 
-            Hint: `ALTER SCHEMA """ ~ schema_ownership.rows[0][0] ~ """ OWNER TO """ ~ schema_ownership.rows[0][1] ~ """;`
+            Hint: `ALTER SCHEMA """ ~ schema_ownership.rows[0][2] ~ """ OWNER TO """ ~ schema_ownership.rows[0][1] ~ """;`
         """)}}
     {% endif %}
 {% endif %}

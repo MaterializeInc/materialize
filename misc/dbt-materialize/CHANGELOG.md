@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* Quote the cluster or schema name in the `ALTER ... OWNER TO` hint that
+  `deploy_init` prints when the deploying role does not own a production
+  cluster or schema, so the hint can be run as is for names that need quoting.
+
 ## 1.9.12 - 2026-11-03
 
 * Fix the deployment timestamp in the schema comment `deploy_promote` leaves

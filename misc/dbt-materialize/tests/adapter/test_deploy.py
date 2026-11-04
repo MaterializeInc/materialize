@@ -286,6 +286,8 @@ class TestPermissionValidation:
         project.run_sql("DROP SCHEMA IF EXISTS team_schema CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS not_my_cluster CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS team_cluster CASCADE")
+        project.run_sql('DROP SCHEMA IF EXISTS "Not_My_Schema" CASCADE')
+        project.run_sql('DROP CLUSTER IF EXISTS "Not_My_Cluster" CASCADE')
 
     def test_createcluster_permissions(self, project):
         run_dbt(["run-operation", "internal_ensure_createcluster_permission"])
@@ -427,6 +429,46 @@ class TestPermissionValidation:
         )
 
         assert "needs to be an owner of cluster not_my_cluster" in output
+
+    def test_cluster_owner_hint_quotes_the_name(self, project):
+        project.run_sql("CREATE ROLE other_role")
+        project.run_sql("GRANT other_role TO materialize")
+        project.run_sql(
+            """CREATE CLUSTER "Not_My_Cluster" SIZE = 'scale=1,workers=1'"""
+        )
+        project.run_sql('ALTER CLUSTER "Not_My_Cluster" OWNER TO other_role')
+        project.run_sql("REVOKE other_role FROM materialize")
+
+        _, output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "internal_ensure_cluster_ownership",
+                "--args",
+                "{clusters: ['Not_My_Cluster']}",
+            ],
+            expect_pass=False,
+        )
+
+        assert 'ALTER CLUSTER "Not_My_Cluster" OWNER TO materialize;' in output
+
+    def test_schema_owner_hint_quotes_the_name(self, project):
+        project.run_sql("CREATE ROLE other_role")
+        project.run_sql("GRANT other_role TO materialize")
+        project.run_sql('CREATE SCHEMA "Not_My_Schema"')
+        project.run_sql('ALTER SCHEMA "Not_My_Schema" OWNER TO other_role')
+        project.run_sql("REVOKE other_role FROM materialize")
+
+        _, output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "internal_ensure_schema_ownership",
+                "--args",
+                "{schemas: ['Not_My_Schema']}",
+            ],
+            expect_pass=False,
+        )
+
+        assert 'ALTER SCHEMA "Not_My_Schema" OWNER TO materialize;' in output
 
 
 class TestRunWithDeploy:
