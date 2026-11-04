@@ -19,7 +19,7 @@ steps keeps its own copy of the data in memory.
 The [`jq`](/sql/functions/jq/) function lets you write this logic as a
 [jq program](https://jqlang.org/manual/) that runs on a
 [`jsonb`](/sql/types/jsonb/) value. Materialize evaluates the program one row
-at a time, in the same step that reads the row. It does not keep extra copies
+at a time, as it reads the row. It does not keep extra copies
 of the data, so list operations use less memory than the equivalent SQL.
 
 jq is expressive enough for more than list operations, such as string

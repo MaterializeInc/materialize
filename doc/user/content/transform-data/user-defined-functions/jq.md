@@ -102,10 +102,20 @@ EXPLAIN MATERIALIZED VIEW order_tags;
 ```
 
 ```nofmt
-$TODO
+                    Physical Plan
+------------------------------------------------------
+ materialize.public.order_tags:
+   →Read materialize.public.orders
+
+ Source materialize.public.orders
+   project=(#0, #3)
+   map=(jq["map(ascii_downcase) | unique"](#1{tags}))
+
+ Target cluster: quickstart
 ```
 
-The program runs inside a single `Map` operator, which keeps no state.
+The program runs as a `map` while Materialize reads `orders`. The plan has no
+arrangements, so the view keeps no state beyond its output.
 
 For comparison, create the same view in SQL:
 
@@ -122,13 +132,11 @@ FROM orders AS o;
 EXPLAIN MATERIALIZED VIEW order_tags_sql;
 ```
 
-```nofmt
-$TODO
-```
-
-The SQL plan unnests the list, aggregates it back with a `Reduce`, and joins
-the result to the original rows. Each of these operators maintains an
-arrangement, which keeps a copy of the data in memory.
+The SQL plan is much longer. It unnests the list (`Table Function
+jsonb_array_elements_text`), aggregates it back (`Distinct GroupAggregate` and
+`Non-incremental GroupAggregate`), and joins the result to the original rows
+(`Differential Join`). These operators maintain arrangements, which keep
+copies of the data in memory.
 
 ## Step 5. Clean up
 
