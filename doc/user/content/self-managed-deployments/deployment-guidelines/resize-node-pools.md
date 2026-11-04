@@ -206,7 +206,22 @@ kubectl cordon -l karpenter.sh/nodepool=materialize
 
 Nodes that NAP provisions after this point are not cordoned.
 
-##### 3. Roll out the Materialize instance
+##### 3. Restart balancerd and console
+
+The Materialize rollout doesn't move the `balancerd` and `console` pods,
+which also run on the Materialize nodes. Restart them now so their new pods
+land on new nodes, and wait for the new pods to be ready. Otherwise NAP
+evicts them as soon as the rollout removes the old `environmentd` and
+`clusterd` pods, and SQL connections fail for several seconds.
+
+```bash
+kubectl get deployments -n <materialize-instance-namespace> -o name | grep -E -- '-(balancerd|console)$' |
+  xargs kubectl rollout restart -n <materialize-instance-namespace>
+kubectl get deployments -n <materialize-instance-namespace> -o name | grep -E -- '-(balancerd|console)$' |
+  xargs -n1 kubectl rollout status -n <materialize-instance-namespace>
+```
+
+##### 4. Roll out the Materialize instance
 
 {{% include-headless "/headless/self-managed-deployments/force-rollout-terraform" %}}
 
@@ -221,11 +236,10 @@ NAP provisions new-spec nodes for the pending pods of the new generation. See
 Verify the new `environmentd` and `clusterd` pods are only scheduled onto the
 new nodes.
 
-##### 4. Verify the old nodes are removed
+##### 5. Verify the old nodes are removed
 
-Once the rollout has completed and the old generation's pods are gone, the
-cordoned nodes are empty and NAP consolidates them away (the modules configure
-`consolidationPolicy: WhenEmpty`). Confirm they disappear:
+Once no `environmentd`, `clusterd`, `balancerd`, or `console` pods are left on
+the cordoned nodes, NAP removes them as drifted. Confirm they disappear:
 
 ```bash
 kubectl get nodes -l karpenter.sh/nodepool=materialize
@@ -297,7 +311,22 @@ done
 
 Nodes that Karpenter provisions after this point are not cordoned.
 
-##### 3. Roll out the Materialize instance
+##### 3. Restart balancerd and console
+
+The Materialize rollout doesn't move the `balancerd` and `console` pods,
+which also run on the Materialize nodes. Restart them now so their new pods
+land on new nodes, and wait for the new pods to be ready. Otherwise Karpenter
+evicts them as soon as the rollout removes the old `environmentd` and
+`clusterd` pods, and SQL connections fail for several seconds.
+
+```bash
+kubectl get deployments -n <materialize-instance-namespace> -o name | grep -E -- '-(balancerd|console)$' |
+  xargs kubectl rollout restart -n <materialize-instance-namespace>
+kubectl get deployments -n <materialize-instance-namespace> -o name | grep -E -- '-(balancerd|console)$' |
+  xargs -n1 kubectl rollout status -n <materialize-instance-namespace>
+```
+
+##### 4. Roll out the Materialize instance
 
 {{% include-headless "/headless/self-managed-deployments/force-rollout-terraform" %}}
 
@@ -312,11 +341,10 @@ generation. See [Rollout behavior](#rollout-behavior) for what to expect
 during the rollout. Verify the new `environmentd` and `clusterd` pods are
 only scheduled onto the new nodes.
 
-##### 4. Verify the old nodes are removed
+##### 5. Verify the old nodes are removed
 
-Once the rollout has completed and the old generation's pods are gone, the
-cordoned nodes are empty and Karpenter consolidates them away (the modules
-configure `consolidationPolicy: WhenEmpty`). Confirm they disappear:
+Once no `environmentd`, `clusterd`, `balancerd`, or `console` pods are left on
+the cordoned nodes, Karpenter removes them as drifted. Confirm they disappear:
 
 ```bash
 kubectl get nodes -l karpenter.sh/nodepool=materialize
