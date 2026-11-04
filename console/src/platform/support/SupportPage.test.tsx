@@ -13,7 +13,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { SupportTicket } from "~/api/cloudGlobalApi";
 import { STATUSPAGE_URL } from "~/api/incident-io";
@@ -99,6 +99,12 @@ const TICKETS_URL = "*/api/organization/support/tickets";
 const SupportPageWithIntercom = () => {
   useIntercom();
   return <SupportPage />;
+};
+
+/** The browser's Back button. */
+const BackButton = () => {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(-1)}>Back</button>;
 };
 
 /** Shows the current path, to check where the page navigated. */
@@ -518,6 +524,45 @@ describe("SupportPage", () => {
       );
     });
 
+    it("doesn't reopen a closed ticket on Back", async () => {
+      server.use(
+        ticketsHandler([buildTicket()]),
+        http.get(`${TICKETS_URL}/42`, () =>
+          HttpResponse.json({
+            ticket: buildTicket(),
+            description: "<p>It restarts every few minutes.</p>",
+            messages: [],
+          }),
+        ),
+      );
+      const user = userEvent.setup();
+      await renderComponent(
+        <>
+          <SupportPageWithIntercom />
+          <BackButton />
+          <CurrentPath />
+        </>,
+        { initialRouterEntries: ["/support"] },
+      );
+
+      await user.click(
+        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+      );
+      await screen.findByTestId("support-ticket");
+      const closeButtons = screen.getAllByRole("button", { name: "Close" });
+      await user.click(closeButtons[closeButtons.length - 1]);
+      await waitFor(() =>
+        expect(screen.queryByTestId("support-ticket")).not.toBeInTheDocument(),
+      );
+
+      await user.click(screen.getByRole("button", { name: "Back" }));
+
+      expect(screen.getByTestId("current-path")).toHaveTextContent(
+        /^\/support$/,
+      );
+      expect(screen.queryByTestId("support-ticket")).not.toBeInTheDocument();
+    });
+
     it("opens a ticket from its URL", async () => {
       server.use(
         ticketsHandler([buildTicket()]),
@@ -780,6 +825,37 @@ describe("SupportPage", () => {
       ).toHaveAttribute("href", OUTAGE_MAILTO);
       expect(
         screen.queryByRole("link", { name: "Report in chat" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("doesn't reopen a closed form on Back", async () => {
+      server.use(ticketsHandler([]));
+      const user = userEvent.setup();
+      await renderComponent(
+        <>
+          <SupportPageWithIntercom />
+          <BackButton />
+          <CurrentPath />
+        </>,
+        { initialRouterEntries: ["/support"] },
+      );
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.click(await screen.findByRole("button", { name: "Cancel" }));
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("textbox", { name: /Subject/ }),
+        ).not.toBeInTheDocument(),
+      );
+
+      await user.click(screen.getByRole("button", { name: "Back" }));
+
+      expect(screen.getByTestId("current-path")).toHaveTextContent(
+        /^\/support$/,
+      );
+      expect(
+        screen.queryByRole("textbox", { name: /Subject/ }),
       ).not.toBeInTheDocument();
     });
 

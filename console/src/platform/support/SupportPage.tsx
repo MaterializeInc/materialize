@@ -309,7 +309,9 @@ const SupportPage = () => {
   const isNewTicketRoute = useMatch(NEW_SUPPORT_TICKET_PATH) !== null;
   const selectedTicketId =
     useMatch(SUPPORT_TICKET_PATH)?.params.ticketId ?? null;
-  const backToSupport = () => navigate(SUPPORT_PAGE_PATH);
+  // Replace rather than push, so Back doesn't reopen what was just closed.
+  // Not navigate(-1): after a deep link, that would leave the console.
+  const backToSupport = () => navigate(SUPPORT_PAGE_PATH, { replace: true });
   // The form can't be used without the ticket endpoints. Wait for them to
   // answer before sending a link to it back to the page.
   const isNewTicketUnavailable =
