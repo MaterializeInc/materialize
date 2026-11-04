@@ -1409,6 +1409,15 @@
       "dyncfg": true
     },
     {
+      "name": "enable_mcp_unified",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether the unified MCP HTTP endpoint is enabled. When false, requests to /api/mcp return 503 Service Unavailable.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "enable_metric_sink",
       "typeName": "boolean",
       "default": "on",

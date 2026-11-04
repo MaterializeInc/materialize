@@ -3477,6 +3477,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
             "enable_mcp_protocol_2026_07_28",
+            "enable_mcp_unified",
             "mcp_max_response_size",
             "mcp_request_timeout",
             "mz_metrics_lgalloc_map_refresh_interval",
