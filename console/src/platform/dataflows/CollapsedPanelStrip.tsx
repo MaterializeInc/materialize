@@ -10,7 +10,7 @@
 import { chakra, type ChakraProps, Text } from "@chakra-ui/react";
 import React from "react";
 
-export const COLLAPSED_STRIP_WIDTH = "28px";
+export const COLLAPSED_STRIP_WIDTH_PX = 28;
 
 export interface CollapsedPanelStripProps extends ChakraProps {
   /** Vertical text shown on the strip. */
@@ -34,7 +34,7 @@ export const CollapsedPanelStrip = ({
     aria-label={ariaLabel}
     title={ariaLabel}
     onClick={onClick}
-    width={COLLAPSED_STRIP_WIDTH}
+    width={`${COLLAPSED_STRIP_WIDTH_PX}px`}
     flexShrink={0}
     display="flex"
     flexDirection="column"

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
@@ -30,30 +30,18 @@ import { renderComponent } from "~/test/utils";
 import DataflowDetailPage from "./DataflowDetailPage";
 import { nodeIdOf } from "./dataflowGraph";
 
+// Drills into a region the way a user does: select it, then use the details
+// panel's focus action.
+const focusRegion = async (regionId: string) => {
+  await userEvent.click(screen.getByTestId(`node-${regionId}`));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Focus on region" }),
+  );
+};
+
 // Declared via vi.hoisted so the vi.mock factory below (itself hoisted
 // above regular imports) can close over it.
 const fitViewSpy = vi.hoisted(() => vi.fn());
-
-// Region nodes no longer navigate on click, so drilling into a scope is not
-// reachable through the flat renderer's node data. The wrapper below captures
-// the page's onNavigate so the stand-in "region-enter" control can call it,
-// standing in for the detail panel's focus action.
-const navigateRef = vi.hoisted(() => ({
-  current: null as null | ((scope: string) => void),
-}));
-
-vi.mock("./DataflowGraphView", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./DataflowGraphView")>();
-  return {
-    ...actual,
-    DataflowGraphView: (
-      props: React.ComponentProps<typeof actual.DataflowGraphView>,
-    ) => {
-      navigateRef.current = props.onNavigate;
-      return <actual.DataflowGraphView {...props} />;
-    },
-  };
-});
 
 // jsdom lacks ResizeObserver/DOMMatrixReadOnly, so replace @xyflow/react with a
 // flat renderer that preserves the decision under test (whether the canvas and
@@ -90,31 +78,19 @@ vi.mock("@xyflow/react", () => ({
             data-testid={`node-${n.id}`}
             onClick={() => onNodeClick?.(null, n)}
           >
-            {/* Mirrors the two controls RegionNode and PortNode render
-                (nodes.tsx): the chevron gutter that expands a region in
-                place, plus a stand-in for the navigation the detail panel
-                offers. The flat renderer above never instantiates the real
-                node components, so the callbacks have to be reached through
-                node data. */}
+            {/* Mirrors RegionNode's chevron gutter (nodes.tsx), which
+                expands a region in place. The flat renderer above never
+                instantiates the real node components, so the callback has to
+                be reached through node data. */}
             {n.type === "region" && node && (
-              <>
-                <button
-                  type="button"
-                  data-testid="region-toggle"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    n.data.onToggleExpand?.(n.id);
-                  }}
-                />
-                <button
-                  type="button"
-                  data-testid="region-enter"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    navigateRef.current?.(n.id);
-                  }}
-                />
-              </>
+              <button
+                type="button"
+                data-testid="region-toggle"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  n.data.onToggleExpand?.(n.id);
+                }}
+              />
             )}
             {/* A port's label is a link whenever it has peers at all, but
                 it only jumps when there is exactly one. With several it
@@ -591,11 +567,7 @@ describe("DataflowDetailPage", () => {
     // Drill into RegionA: its only channel is its own output (port 0)
     // reaching sibling RegionB, which isn't part of this view, so it
     // should surface as a dangling "out" port.
-    await userEvent.click(
-      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
-        "region-enter",
-      ),
-    );
+    await focusRegion(regionAId);
     const outPortId = `${regionAId}:out:0`;
     const outPortNode = await screen.findByTestId(`node-${outPortId}`);
 
@@ -634,11 +606,7 @@ describe("DataflowDetailPage", () => {
     const regionAId = nodeIdOf([8, 1]);
     const regionBId = nodeIdOf([8, 2]);
     await screen.findByTestId(`node-${regionAId}`);
-    await userEvent.click(
-      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
-        "region-enter",
-      ),
-    );
+    await focusRegion(regionAId);
 
     const outPortId = `${regionAId}:out:0`;
     const outPortNode = await screen.findByTestId(`node-${outPortId}`);
@@ -674,11 +642,7 @@ describe("DataflowDetailPage", () => {
     // A fresh, undrilled link carries no scope param at all.
     expect(screen.getByTestId("location-search").textContent).toBe("");
 
-    await userEvent.click(
-      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
-        "region-enter",
-      ),
-    );
+    await focusRegion(regionAId);
     await screen.findByTestId(`node-${nodeIdOf([8, 1, 1])}`);
     const search = screen.getByTestId("location-search").textContent;
     expect(search).toBe("?scope=8.1");
@@ -819,11 +783,7 @@ describe("DataflowDetailPage", () => {
     // covers first load.
     expect(fitViewSpy).not.toHaveBeenCalled();
 
-    await userEvent.click(
-      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
-        "region-enter",
-      ),
-    );
+    await focusRegion(regionAId);
     const leafAId = nodeIdOf([8, 1, 1]);
     await screen.findByTestId(`node-${leafAId}`);
     expect(fitViewSpy).toHaveBeenCalledTimes(1);
@@ -850,11 +810,7 @@ describe("DataflowDetailPage", () => {
 
     const regionAId = nodeIdOf([9, 1]);
     await screen.findByTestId(`node-${regionAId}`);
-    await userEvent.click(
-      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
-        "region-enter",
-      ),
-    );
+    await focusRegion(regionAId);
 
     const outPortId = `${regionAId}:out:0`;
     const outPortNode = await screen.findByTestId(`node-${outPortId}`);
@@ -896,11 +852,7 @@ describe("DataflowDetailPage", () => {
 
     const regionAId = nodeIdOf([8, 1]);
     await screen.findByTestId(`node-${regionAId}`);
-    await userEvent.click(
-      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
-        "region-enter",
-      ),
-    );
+    await focusRegion(regionAId);
     // Drilled in: RegionA's own id no longer names anything in dataflow 7.
     await screen.findByTestId(`node-${regionAId}:out:0`);
 
@@ -940,9 +892,8 @@ describe("DataflowDetailPage", () => {
     const groupNode = screen.getByTestId("node-u7/1");
     expect(groupNode).toHaveTextContent("Join::Differential");
 
-    // A group is a label over its members, not a scope, so it carries
-    // neither of the canvas's two navigation controls.
-    expect(within(groupNode).queryByTestId("region-enter")).toBeNull();
+    // A group is a label over its members, not a scope, so it has no
+    // expand control.
     expect(within(groupNode).queryByTestId("region-toggle")).toBeNull();
 
     await userEvent.click(screen.getByLabelText("Show LIR groups"));
@@ -995,76 +946,29 @@ describe("DataflowDetailPage", () => {
         { initialRouterEntries: ["/clusters/u5/test_cluster/dataflows/8"] },
       );
 
-    // jsdom implements none of the Fullscreen API.
-    const setFullscreenEnabled = (value: boolean) =>
-      Object.defineProperty(document, "fullscreenEnabled", {
-        configurable: true,
-        value,
-      });
-
-    afterEach(() => {
-      Reflect.deleteProperty(document, "fullscreenEnabled");
-      Reflect.deleteProperty(document, "fullscreenElement");
-      Reflect.deleteProperty(document, "exitFullscreen");
-      Reflect.deleteProperty(HTMLElement.prototype, "requestFullscreen");
-    });
-
-    it("hides the toggle when the Fullscreen API is unavailable", async () => {
-      setFullscreenEnabled(false);
+    it("maximizes over the app chrome and exits on the button or Escape", async () => {
       await renderDataflow8();
       await screen.findByTestId("react-flow");
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Enter full screen" }),
+      );
+      const exit = screen.getByRole("button", { name: "Exit full screen" });
+      // The pinned root holds the header row as well as the canvas.
+      let pinned: HTMLElement | null = exit;
+      while (pinned && getComputedStyle(pinned).position !== "fixed") {
+        pinned = pinned.parentElement;
+      }
+      expect(pinned).toContainElement(screen.getByTestId("react-flow"));
+      await userEvent.click(exit);
       expect(
-        screen.queryByRole("button", { name: "Enter full screen" }),
-      ).toBeNull();
-    });
-
-    it("requests fullscreen on the visualizer root and syncs on fullscreenchange", async () => {
-      setFullscreenEnabled(true);
-      const requestFullscreen = vi.fn().mockResolvedValue(undefined);
-      const exitFullscreen = vi.fn().mockResolvedValue(undefined);
-      Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
-        configurable: true,
-        value: requestFullscreen,
-      });
-      Object.defineProperty(document, "exitFullscreen", {
-        configurable: true,
-        value: exitFullscreen,
-      });
-      await renderDataflow8();
-      await screen.findByTestId("react-flow");
+        screen.getByRole("button", { name: "Enter full screen" }),
+      ).toBeVisible();
 
       await userEvent.click(
         screen.getByRole("button", { name: "Enter full screen" }),
       );
-      expect(requestFullscreen).toHaveBeenCalledTimes(1);
-      const root = requestFullscreen.mock.contexts[0] as HTMLElement;
-      // The root, not just the canvas: the header row has to stay reachable.
-      expect(root).toContainElement(screen.getByTestId("react-flow"));
-      expect(root).toContainElement(
-        screen.getByRole("button", { name: "Enter full screen" }),
-      );
-
-      // The browser, not the click, decides when fullscreen starts.
-      Object.defineProperty(document, "fullscreenElement", {
-        configurable: true,
-        value: root,
-      });
-      act(() => {
-        document.dispatchEvent(new Event("fullscreenchange"));
-      });
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Exit full screen" }),
-      );
-      expect(exitFullscreen).toHaveBeenCalledTimes(1);
-
-      // Escape exits without the button: state follows the document.
-      Object.defineProperty(document, "fullscreenElement", {
-        configurable: true,
-        value: null,
-      });
-      act(() => {
-        document.dispatchEvent(new Event("fullscreenchange"));
-      });
+      await userEvent.keyboard("{Escape}");
       expect(
         await screen.findByRole("button", { name: "Enter full screen" }),
       ).toBeVisible();
@@ -1224,11 +1128,7 @@ describe("DataflowDetailPage", () => {
 
       const regionAId = nodeIdOf([8, 1]);
       await screen.findByTestId(`node-${regionAId}`);
-      await userEvent.click(
-        within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
-          "region-enter",
-        ),
-      );
+      await focusRegion(regionAId);
 
       await screen.findByTestId(`node-${nodeIdOf([8, 1, 1])}`);
       expect(screen.getByTestId("location-search").textContent).toBe(

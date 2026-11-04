@@ -42,6 +42,7 @@ import { useAllClusters } from "~/store/allClusters";
 import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
+import { COLLAPSED_STRIP_WIDTH_PX } from "./CollapsedPanelStrip";
 import { DataflowBreadcrumbs } from "./DataflowBreadcrumbs";
 import {
   type Address,
@@ -64,7 +65,11 @@ import {
 import { DataflowGraphView } from "./DataflowGraphView";
 import { DataflowToolbar } from "./DataflowToolbar";
 import { LirPanel } from "./LirPanel";
-import { NodeDetailPanel, type Selection } from "./NodeDetailPanel";
+import {
+  DETAIL_PANEL_WIDTH_PX,
+  NodeDetailPanel,
+  type Selection,
+} from "./NodeDetailPanel";
 import { hashString, heatColorFor } from "./nodeStyle";
 import { UsagePrivilegeAlert } from "./UsagePrivilegeAlert";
 
@@ -657,27 +662,19 @@ const DataflowDetailPage = () => {
     },
     [allMatches, activeMatchIndex, navigateAndFit],
   );
-  // The visualizer root itself goes fullscreen, which hides the app nav,
-  // cluster header and tabs. State mirrors the document rather than the
-  // button, since Escape and browser chrome can exit fullscreen too.
-  const fullscreenRootRef = React.useRef<HTMLDivElement>(null);
-  const [isFullscreen, setIsFullscreen] = React.useState(false);
+  // Maximizing pins the visualizer root over the whole window, hiding the
+  // app nav, cluster header and tabs. NOTE: the browser Fullscreen API would
+  // hide Chakra tooltips, because they portal into document.body, which is
+  // outside a fullscreen element.
+  const [isMaximized, setIsMaximized] = React.useState(false);
   React.useEffect(() => {
-    const sync = () =>
-      setIsFullscreen(
-        document.fullscreenElement !== null &&
-          document.fullscreenElement === fullscreenRootRef.current,
-      );
-    document.addEventListener("fullscreenchange", sync);
-    return () => document.removeEventListener("fullscreenchange", sync);
-  }, []);
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) {
-      void document.exitFullscreen();
-    } else {
-      void fullscreenRootRef.current?.requestFullscreen();
-    }
-  };
+    if (!isMaximized) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsMaximized(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isMaximized]);
 
   // Digest of the sorted node ids: identical structure across a stats-only
   // refresh yields the same key, so layout and collapse state are preserved.
@@ -725,14 +722,17 @@ const DataflowDetailPage = () => {
     // than the viewport instead of the graph area shrinking to absorb it.
     <MainContentContainer width="100%" minH={0}>
       <VStack
-        ref={fullscreenRootRef}
         width="100%"
         height="100%"
         alignItems="stretch"
-        // The browser's fullscreen backdrop is black and the element is
-        // transparent by default, so the page background has to be set
-        // explicitly, along with some inset the app layout otherwise supplies.
-        {...(isFullscreen && {
+        // Below the "tooltip" and "popover" z-index tokens, so tooltips and
+        // menus still render above the maximized page. The element is
+        // transparent by default, so it needs the page background and the
+        // inset the app layout otherwise supplies.
+        {...(isMaximized && {
+          position: "fixed",
+          inset: 0,
+          zIndex: "overlay",
           background: "background.primary",
           p: 4,
         })}
@@ -792,27 +792,21 @@ const DataflowDetailPage = () => {
               </Text>
             </HStack>
           )}
-          {/* Hidden where the Fullscreen API is unavailable or blocked (an
-              iframe without allow=fullscreen, some mobile browsers). */}
-          {document.fullscreenEnabled && (
-            <IconButton
-              aria-label={
-                isFullscreen ? "Exit full screen" : "Enter full screen"
-              }
-              title={isFullscreen ? "Exit full screen" : "Enter full screen"}
-              size="sm"
-              variant="outline"
-              marginLeft="auto"
-              icon={
-                isFullscreen ? (
-                  <MinimizeIcon boxSize="4" />
-                ) : (
-                  <MaximizeIcon boxSize="4" />
-                )
-              }
-              onClick={toggleFullscreen}
-            />
-          )}
+          <IconButton
+            aria-label={isMaximized ? "Exit full screen" : "Enter full screen"}
+            title={isMaximized ? "Exit full screen" : "Enter full screen"}
+            size="sm"
+            variant="outline"
+            marginLeft="auto"
+            icon={
+              isMaximized ? (
+                <MinimizeIcon boxSize="4" />
+              ) : (
+                <MaximizeIcon boxSize="4" />
+              )
+            }
+            onClick={() => setIsMaximized((prev) => !prev)}
+          />
         </HStack>
         {permissionError ? (
           <UsagePrivilegeAlert action="visualize this dataflow" />
@@ -929,6 +923,13 @@ const DataflowDetailPage = () => {
                   onLirGroupClick={onLirGroupClick}
                   expandedScopes={expandedScopes}
                   onToggleExpand={onToggleExpand}
+                  occludedRight={
+                    !selection
+                      ? 0
+                      : detailPanelCollapsed
+                        ? COLLAPSED_STRIP_WIDTH_PX
+                        : DETAIL_PANEL_WIDTH_PX
+                  }
                 />
                 {selection && (
                   <NodeDetailPanel
