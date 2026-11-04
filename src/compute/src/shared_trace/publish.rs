@@ -12,9 +12,8 @@
 
 use std::sync::Arc;
 
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::{Trace, TraceReader};
-use mz_timely_util::shared_trace::{Shared, SharedReader, SharedSpine};
+use mz_timely_util::shared_trace::{Shared, SharedAgent, SharedReader};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::worker::Worker;
@@ -22,7 +21,7 @@ use timely::worker::Worker;
 /// A publication point for one arrangement.
 ///
 /// Holding it keeps the point registered. Once it and every reader minted from it are dropped, the
-/// writer detaches the point at its next mutation, see `SharedSpine::detach_unreachable`.
+/// trace stops publishing into the point at its next mutation.
 pub(crate) struct Published<Tr: TraceReader> {
     pub(super) shared: Arc<Shared<Tr::Batch>>,
 }
@@ -85,21 +84,17 @@ where
 /// arrangement's seal is re-examined only through this callback, so it must observe the
 /// advanced `upper`. See the lost-wakeup contract on
 /// `crate::sharing::ArrangementSharingRegistry::notify`.
-pub(crate) fn adopt_trace<Inner, F>(
-    trace: &TraceAgent<SharedSpine<Inner>>,
+pub(crate) fn adopt_trace<Tr, F>(
+    trace: &SharedAgent<Tr>,
     worker: &Worker,
-    point: &Published<SharedSpine<Inner>>,
+    point: &Published<Tr>,
     on_seal: F,
 ) where
-    Inner: Trace + 'static,
-    Inner::Time: TotalOrder,
+    Tr: Trace + 'static,
+    Tr::Time: TotalOrder,
     F: Fn() + 'static,
 {
     // A reader moving a hold wakes the arrange operator, whose `exert` applies it to the trace.
     let activator = worker.sync_activator_for(trace.operator().address.to_vec());
-    trace.trace_box_unstable().borrow().trace().attach(
-        Arc::clone(&point.shared),
-        activator,
-        on_seal,
-    );
+    trace.publish(Arc::clone(&point.shared), activator, on_seal);
 }

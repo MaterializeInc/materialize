@@ -13,12 +13,12 @@
 
 use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
+use mz_timely_util::shared_trace::SharedAgent;
 
 use mz_row_spine::RowValBuilder;
 
@@ -39,31 +39,24 @@ pub(crate) mod spines {
     use mz_timely_util::columnation::ColumnationStack;
 
     use mz_row_spine::{ArcBatch, ArcBuilder, OffsetOptimized};
-    use mz_timely_util::shared_trace::SharedSpine;
 
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
-    // Every spine is wrapped in `SharedSpine`, so any arrangement can be published for readers on
-    // another thread.
-
     /// A spine for `(Row, Row)` updates.
-    pub type RowRowSpine<T, R> = SharedSpine<mz_row_spine::RowRowSpine<T, R>>;
+    pub type RowRowSpine<T, R> = mz_row_spine::RowRowSpine<T, R>;
     /// A spine for `Row` keys with generic values.
-    pub type RowValSpine<V, T, R> = SharedSpine<mz_row_spine::RowValSpine<V, T, R>>;
+    pub type RowValSpine<V, T, R> = mz_row_spine::RowValSpine<V, T, R>;
     /// A spine for `Row` keys with unit values.
-    pub type RowSpine<T, R, DC = ColumnationStack<R>> =
-        SharedSpine<mz_row_spine::RowSpine<T, R, DC>>;
+    pub type RowSpine<T, R, DC = ColumnationStack<R>> = mz_row_spine::RowSpine<T, R, DC>;
 
     /// A spine for generic keys and values.
-    pub type ColValSpine<K, V, T, R> =
-        SharedSpine<Spine<ArcBatch<OrdValBatch<MzStack<((K, V), T, R)>>>>>;
+    pub type ColValSpine<K, V, T, R> = Spine<ArcBatch<OrdValBatch<MzStack<((K, V), T, R)>>>>;
     pub type ColValBatcher<K, V, T, R> = KeyValBatcher<K, V, T, R>;
     pub type ColValBuilder<K, V, T, R> =
         ArcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, ColumnationStack<((K, V), T, R)>>>;
 
     /// A spine for generic keys
-    pub type ColKeySpine<K, T, R> =
-        SharedSpine<Spine<ArcBatch<OrdKeyBatch<MzStack<((K, ()), T, R)>>>>>;
+    pub type ColKeySpine<K, T, R> = Spine<ArcBatch<OrdKeyBatch<MzStack<((K, ()), T, R)>>>>;
     pub type ColKeyBatcher<K, T, R> = KeyBatcher<K, T, R>;
     pub type ColKeyBuilder<K, T, R> =
         ArcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, ColumnationStack<((K, ()), T, R)>>>;
@@ -89,30 +82,31 @@ pub(crate) mod spines {
 }
 
 // Spines are data structures that collect and maintain updates.
-// Agents are wrappers around spines that allow shared read access.
+// Agents are wrappers around spines that allow shared read access. Every agent is a `SharedAgent`,
+// so any arrangement can be published for readers on another thread.
 
 // Fully generic spines and agents.
 pub type KeyValSpine<K, V, T, R> = ColValSpine<K, V, T, R>;
-pub type KeyValAgent<K, V, T, R> = TraceAgent<KeyValSpine<K, V, T, R>>;
+pub type KeyValAgent<K, V, T, R> = SharedAgent<KeyValSpine<K, V, T, R>>;
 pub type KeyValEnter<K, V, T, R, TEnter> =
     TraceEnter<TraceFrontier<KeyValAgent<K, V, T, R>>, TEnter>;
 
 // Fully generic key-only spines and agents
 pub type KeySpine<K, T, R> = ColKeySpine<K, T, R>;
-pub type KeyAgent<K, T, R> = TraceAgent<KeySpine<K, T, R>>;
+pub type KeyAgent<K, T, R> = SharedAgent<KeySpine<K, T, R>>;
 pub type KeyEnter<K, T, R, TEnter> = TraceEnter<TraceFrontier<KeyAgent<K, T, R>>, TEnter>;
 
 // Row specialized spines and agents.
-pub type RowValAgent<V, T, R> = TraceAgent<RowValSpine<V, T, R>>;
+pub type RowValAgent<V, T, R> = SharedAgent<RowValSpine<V, T, R>>;
 pub type RowValArrangement<'scope, T, V> = Arranged<'scope, RowValAgent<V, T, Diff>>;
 pub type RowValEnter<V, T, R, TEnter> = TraceEnter<TraceFrontier<RowValAgent<V, T, R>>, TEnter>;
 // Row specialized spines and agents.
-pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
+pub type RowRowAgent<T, R> = SharedAgent<RowRowSpine<T, R>>;
 pub type RowRowArrangement<'scope, T> = Arranged<'scope, RowRowAgent<T, Diff>>;
 /// An index's `oks` trace, imported into a render scope whose timestamp is `TEnter`.
 pub type ImportedRowRowEnter<TEnter> = TraceEnter<TraceFrontier<OksTrace>, TEnter>;
 // Row specialized spines and agents.
-pub type RowAgent<T, R, DC = ColumnationStack<R>> = TraceAgent<RowSpine<T, R, DC>>;
+pub type RowAgent<T, R, DC = ColumnationStack<R>> = SharedAgent<RowSpine<T, R, DC>>;
 pub type RowArrangement<'scope, T> = Arranged<'scope, RowAgent<T, Diff>>;
 pub type RowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnter>;
 
@@ -121,7 +115,7 @@ pub type ErrSpine<T, R> = ColKeySpine<DataflowErrorSer, T, R>;
 pub type ErrBatcher<T, R> = ColKeyBatcher<DataflowErrorSer, T, R>;
 pub type ErrBuilder<T, R> = ColKeyBuilder<DataflowErrorSer, T, R>;
 
-pub type ErrAgent<T, R> = TraceAgent<ErrSpine<T, R>>;
+pub type ErrAgent<T, R> = SharedAgent<ErrSpine<T, R>>;
 /// An index's `errs` trace, imported into a render scope whose timestamp is `TEnter`.
 pub type ImportedErrEnter<TEnter> = TraceEnter<TraceFrontier<ErrsTrace>, TEnter>;
 
