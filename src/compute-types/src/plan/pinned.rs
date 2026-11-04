@@ -22,7 +22,8 @@
 //!
 //! Only dataflows behind catalog items can be pinned: indexes, materialized
 //! views, and metric sinks. Subscribes and one-shot copies have no durable
-//! identity to pin under, and the [`TryFrom`] conversion rejects them.
+//! identity to pin under, and the [`TryFrom`] conversion rejects them, along
+//! with a peek's transient index export and a dataflow that exports nothing.
 //!
 //! Index keys are stored as [`LirScalarExpr`] and converted back to
 //! `MirScalarExpr` on instantiation. LIR scalars are a subset of MIR scalars,
@@ -39,6 +40,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_expr::{Id, MfpPlan, MirScalarExpr};
+use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationDesc, ReprRelationType, SqlRelationType};
 use serde::de::{self, Visitor};
@@ -198,6 +200,10 @@ pub enum PinnedSinkKind {
 pub enum PinError {
     /// The dataflow exports a sink kind that has no catalog identity.
     UnpinnableSink(GlobalId),
+    /// The dataflow exports an index under a transient id, as a peek does.
+    TransientIndexExport(GlobalId),
+    /// The dataflow exports nothing, so no catalog item anchors it.
+    NoExports,
 }
 
 impl fmt::Display for PinError {
@@ -206,6 +212,13 @@ impl fmt::Display for PinError {
             PinError::UnpinnableSink(id) => {
                 write!(f, "sink {id} is a one-shot sink and cannot be pinned")
             }
+            PinError::TransientIndexExport(id) => {
+                write!(
+                    f,
+                    "index {id} is a peek's transient result and cannot be pinned"
+                )
+            }
+            PinError::NoExports => write!(f, "a dataflow with no exports cannot be pinned"),
         }
     }
 }
@@ -232,6 +245,16 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
             debug_name: _,
             time_dependence: _,
         } = desc;
+
+        // Every dataflow we run should have exports; missing exports indicate
+        // a serious error somewhere.
+        soft_assert_or_log!(
+            !(index_exports.is_empty() && sink_exports.is_empty()),
+            "pinning a dataflow with no exports"
+        );
+        if index_exports.is_empty() && sink_exports.is_empty() {
+            return Err(PinError::NoExports);
+        }
 
         let source_imports = source_imports
             .into_iter()
@@ -282,8 +305,13 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
 
         let index_exports = index_exports
             .into_iter()
-            .map(|(id, (IndexDesc { on_id, key: _ }, _typ))| (id, on_id))
-            .collect();
+            .map(|(id, (IndexDesc { on_id, key: _ }, _typ))| {
+                if id.is_transient() {
+                    return Err(PinError::TransientIndexExport(id));
+                }
+                Ok((id, on_id))
+            })
+            .collect::<Result<_, _>>()?;
 
         let sink_exports = sink_exports
             .into_iter()
@@ -956,6 +984,32 @@ mod tests {
             PinnedDataflow::try_from(df),
             Err(PinError::UnpinnableSink(MV_SINK))
         );
+    }
+
+    #[mz_ore::test]
+    fn rejects_transient_index_exports() {
+        let mut df = imports_only();
+        let peek_index = GlobalId::Transient(9);
+        df.index_exports.insert(
+            peek_index,
+            (
+                IndexDesc {
+                    on_id: VIEW,
+                    key: key(),
+                },
+                repr_typ(),
+            ),
+        );
+        assert_eq!(
+            PinnedDataflow::try_from(df),
+            Err(PinError::TransientIndexExport(peek_index))
+        );
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "pinning a dataflow with no exports")]
+    fn rejects_dataflows_without_exports() {
+        let _ = PinnedDataflow::try_from(imports_only());
     }
 
     fn materialized_view_dataflow() -> LirDataflowDescription {
