@@ -94,9 +94,6 @@ spec:
         {{- if not .Values.operator.args.enableLicenseKeyChecks }}
         - "--disable-license-key-checks"
         {{- end }}
-        {{- range .Values.operator.args.licenseKeyIntermediateCerts }}
-        - "--license-key-intermediate-cert={{ . }}"
-        {{- end }}
         {{- if not .Values.operator.args.enableDatabaseNetworkPolicies }}
         - "--disable-database-network-policies"
         {{- end }}

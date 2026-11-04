@@ -12,7 +12,7 @@ use std::time::Duration;
 use aws_sdk_kms::config::Region;
 use clap::Parser;
 
-use mz_license_keys::make_intermediate_key;
+use mz_license_keys::make_intermediate_jwt;
 
 #[derive(clap::Parser)]
 struct Opt {
@@ -20,10 +20,10 @@ struct Opt {
     region: String,
     #[clap(long)]
     profile: String,
-    /// The root key to sign the intermediate certificate with.
+    /// The root key to sign the intermediate JWT with.
     #[clap(long)]
     key_id: String,
-    /// Name recorded in the certificate, e.g. the stack it is issued for.
+    /// Name recorded in the intermediate JWT, e.g. the stack it is issued for.
     #[clap(long)]
     name: String,
     /// PEM file containing the intermediate public key.
@@ -46,7 +46,7 @@ async fn main() {
         .await;
     let client = aws_sdk_kms::Client::new(&config);
 
-    let cert = make_intermediate_key(
+    let intermediate_jwt = make_intermediate_jwt(
         &client,
         &opt.key_id,
         Duration::from_secs(opt.validity_secs),
@@ -56,5 +56,5 @@ async fn main() {
     .await
     .unwrap();
 
-    println!("{cert}");
+    println!("{intermediate_jwt}");
 }
