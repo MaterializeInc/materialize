@@ -101,8 +101,9 @@ while staying outcome-independent:
   independent of table size. The ledger is append-only, so any retraction is a
   bug outright, even the ones that cancel against their insert and leave the
   folded state looking correct.
-- **read-your-writes**, on the writer's own session right after a commit. No
-  timestamp-free invariant covers it, and it is what a stale read breaks first.
+- **read-your-writes**, with strict-serializable isolation right after a commit.
+  Plain serializable isolation may read an older snapshot, even on the writer's
+  own session.
 - **predicate results, recomputed**. An aggregate with a predicate lets persist
   skip parts by their statistics, and getting that wrong is silent: the answer is
   just too small. The same predicate is re-evaluated on the client over the rows
@@ -110,12 +111,9 @@ while staying outcome-independent:
 - **the write timestamp a read-then-write chooses**. A selection over a
   materialized view whose next refresh is a millennium out reports a frontier
   that far ahead, while the table being written is near the clock. The timestamp
-  must still come from the oracle, which is clamped to the clock. Taking it from
-  that frontier ratchets the monotone, durable oracle into the future, so every
-  later write and strict-serializable read blocks until the clock catches up,
-  and under `serializable` an acknowledged write is simply invisible. A standing
-  checker compares `mz_now()` against the wall clock, and since that query reads
-  no collection it answers in exactly the state where every other read blocks.
+  must still come from the oracle. Taking it from that frontier advances the
+  durable oracle into the future. A standing checker compares `mz_now()` against
+  a later wall-clock sample without reading any collections.
 
 The ledger carries the values those oracles need in order to be able to fail: a
 numeric mirror of each amount (its own encoding and scale handling), a tag
