@@ -266,6 +266,7 @@ describe("PortNode", () => {
 describe("LirGroupNode", () => {
   const groupInfo: LirGroupInfo = {
     id: "u1/1",
+    key: "u1/1",
     exportId: "u1",
     lirId: "1",
     operator: "Join",
@@ -277,6 +278,7 @@ describe("LirGroupNode", () => {
       group: groupInfo,
       label: "LIR 1: Join",
       color: "#391D7E",
+      selected: false,
     };
     await renderComponent(
       <LirGroupNode

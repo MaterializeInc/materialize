@@ -15,6 +15,7 @@ import { lightColors } from "~/theme/light";
 
 import {
   formatCount,
+  formatCountSi,
   formatSkew,
   hashString,
   heatColorFor,
@@ -203,6 +204,21 @@ describe("formatSkew", () => {
   });
 });
 
+describe("formatCountSi", () => {
+  it("keeps three significant digits under an SI prefix", () => {
+    expect(formatCountSi(577351288n)).toEqual("577M");
+    expect(formatCountSi(1214000000n)).toEqual("1.21G");
+    expect(formatCountSi(12345n)).toEqual("12.3k");
+    expect(formatCountSi(42n)).toEqual("42");
+  });
+
+  it("moves to the next prefix when rounding reaches 1000", () => {
+    expect(formatCountSi(999n)).toEqual("999");
+    expect(formatCountSi(999600n)).toEqual("1M");
+    expect(formatCountSi(999400n)).toEqual("999k");
+  });
+});
+
 describe("formatCount", () => {
   it("groups digits so a large count reads at a glance", () => {
     expect(formatCount(221245721n)).toEqual("221,245,721");
@@ -230,7 +246,7 @@ describe("statLines", () => {
         scheduleCount: 0n,
       },
     };
-    expect(statLines(withStats)).toEqual(["3.0s · 221,245,721 r · 4 KB"]);
+    expect(statLines(withStats)).toEqual(["3.0s · 221M r · 4 KB"]);
   });
 
   it("omits records and size when there are none, keeping duration alone", () => {

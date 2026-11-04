@@ -135,6 +135,25 @@ export function formatCount(n: bigint): string {
   return countFormatter.format(n);
 }
 
+const SI_PREFIXES = ["", "k", "M", "G", "T", "P", "E"];
+
+// A count in SI prefixes with three significant digits ("578M", "1.21G"), for
+// canvas text, where a full digit string would overflow its box. Exact
+// figures belong in tooltips and the details panel (see formatCount).
+export function formatCountSi(n: bigint): string {
+  // Precision lost above 2^53 is far below the three digits shown.
+  let value = Number(n);
+  let prefix = 0;
+  // 999.5 rather than 1000, so a value that rounds up to 1000 moves to the
+  // next prefix ("1M", not "1000k").
+  while (Math.abs(value) >= 999.5 && prefix < SI_PREFIXES.length - 1) {
+    value /= 1000;
+    prefix++;
+  }
+  const digits = prefix === 0 ? value : Number(value.toPrecision(3));
+  return `${digits}${SI_PREFIXES[prefix]}`;
+}
+
 // The same digits, split into the formatter's own parts, for a caller that
 // needs to treat grouping separators differently from digits (see
 // NodeDetailPanel's GroupedCount). The separator is locale-dependent -- a
@@ -155,7 +174,7 @@ export const statLines = (node: VisibleNode) => {
   const parts: string[] = [];
   if (stats.elapsedNs > 0n) parts.push(formatElapsedNs(stats.elapsedNs));
   if (stats.arrangementRecords > 0n) {
-    parts.push(`${formatCount(stats.arrangementRecords)} r`);
+    parts.push(`${formatCountSi(stats.arrangementRecords)} r`);
     parts.push(formatBytesShort(stats.arrangementSize));
   }
   if (parts.length > 0) lines.push(parts.join(" · "));
@@ -220,4 +239,5 @@ export type FlowGroupData = {
   group: LirGroupNode;
   label: string;
   color: string;
+  selected: boolean;
 };

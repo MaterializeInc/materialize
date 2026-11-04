@@ -341,20 +341,6 @@ const DataflowDetailPage = () => {
     [data, setFocusedScope],
   );
 
-  const onLirSelect = React.useCallback(
-    (memberIds: NodeId[]) => {
-      if (!data) return;
-      const addresses = memberIds
-        .map((id) => data.structure.nodes.get(id)?.address)
-        // The dataflow root is never a direct child of any scope, so it
-        // can never be shown or highlighted; a LIR span that happens to
-        // cover it simply can't anchor navigation on it.
-        .filter((a): a is Address => a !== undefined && a.length > 1);
-      navigateAndFit(addresses);
-    },
-    [data, navigateAndFit],
-  );
-
   // Navigates to a scope and selects one specific box in it. Deriving the
   // destination's graph to find that box doesn't need to wait for anything
   // async (unlike fitting, which needs real layout positions from elk), so
@@ -430,7 +416,8 @@ const DataflowDetailPage = () => {
   );
 
   const onLirGroupClick = React.useCallback(
-    (group: { id: string }) => selectLirGroup(group.id),
+    // A group's id is unique per drawn box; its key names the span.
+    (group: { key: string }) => selectLirGroup(group.key),
     [selectLirGroup],
   );
 
@@ -446,8 +433,26 @@ const DataflowDetailPage = () => {
       if (!entry) return;
       const addresses = entry.memberIds
         .map((id) => data.structure.nodes.get(id)?.address)
+        // The dataflow root is never a direct child of any scope, so it
+        // can never be shown or highlighted; a LIR span that happens to
+        // cover it simply can't anchor navigation on it.
         .filter((a): a is Address => a !== undefined && a.length > 1);
-      if (addresses.length === 0) return;
+      const lirSelection: Selection = {
+        kind: "lirGroup",
+        node: {
+          key,
+          info: entry.info,
+          memberIds: entry.memberIds,
+          children: [],
+          summary: lirSummary(data.structure, entry.memberIds),
+        },
+      };
+      // A span with no drawable member (a Constant, say) is still selected,
+      // so the details panel can describe it, but there is nowhere to go.
+      if (addresses.length === 0) {
+        setSelection(lirSelection);
+        return;
+      }
       // Inlines navigateAndFit's scope computation and selectLirGroup's
       // param value, rather than calling both, to land scope and
       // selection in one updateSearchParams call: two separate calls in
@@ -463,22 +468,12 @@ const DataflowDetailPage = () => {
         ),
       ];
       setPendingFitIds(targets);
-      const lirSelection: Selection = {
-        kind: "lirGroup",
-        node: {
-          key,
-          info: entry.info,
-          memberIds: entry.memberIds,
-          children: [],
-          summary: lirSummary(data.structure, entry.memberIds),
-        },
-      };
       updateSearchParams((urlParams) => {
         applyScope(urlParams, scopeAddress);
         urlParams.set("select", selectionParamValue(lirSelection));
       });
     },
-    [data, lirEntries, updateSearchParams],
+    [data, lirEntries, setSelection, updateSearchParams],
   );
 
   const allMatches = React.useMemo(
@@ -590,6 +585,9 @@ const DataflowDetailPage = () => {
     resolveNodeSelection,
   ]);
 
+  const selectedLirKey =
+    selection?.kind === "lirGroup" ? selection.node.key : undefined;
+
   // Back/forward (and opening a shared link directly, which react-router
   // also reports as "POP") can restore a selection the current viewport
   // isn't anywhere near — a click, by contrast, always selects something
@@ -630,16 +628,22 @@ const DataflowDetailPage = () => {
       searchInfo,
       data.workerCount,
     );
-    // Hovering a LIR row in the sidebar dims everything outside its members.
-    // A member outside the current scope, or rolled up into one of its
-    // boxes, highlights that box instead of being silently dropped.
-    if (lirHighlight) {
+    // Hovering a LIR row in the sidebar, or else selecting a LIR span, dims
+    // everything outside its members. A member outside the current scope, or
+    // rolled up into one of its boxes, highlights that box instead of being
+    // silently dropped.
+    const lirMembers =
+      lirHighlight ??
+      (selection?.kind === "lirGroup" && selection.node.memberIds.length > 0
+        ? selection.node.memberIds
+        : null);
+    if (lirMembers) {
       const focusedScopeAddress = mustGet(
         data.structure.nodes,
         focusedScope,
       ).address;
       const highlighted = new Set<string>();
-      for (const id of lirHighlight) {
+      for (const id of lirMembers) {
         const address = data.structure.nodes.get(id)?.address;
         const rep =
           address &&
@@ -658,6 +662,7 @@ const DataflowDetailPage = () => {
     filters,
     heatColor,
     lirHighlight,
+    selection,
     expandedScopes,
   ]);
 
@@ -756,24 +761,11 @@ const DataflowDetailPage = () => {
             every row above it costs usable height. */}
           <HStack
             flexShrink={0}
-            alignItems="flex-end"
+            alignItems="center"
             flexWrap="wrap"
             spacing={3}
             rowGap={2}
           >
-            <LabeledSelect
-              label="Replica"
-              value={replicaName ?? ""}
-              onChange={(e) => onReplicaChange(e.target.value)}
-              flexShrink={0}
-              width="auto"
-            >
-              {cluster.replicas.map((r) => (
-                <option key={r.name} value={r.name}>
-                  {r.name}
-                </option>
-              ))}
-            </LabeledSelect>
             <LabeledSelect
               label="Dataflow"
               value={dataflowId ?? ""}
@@ -798,8 +790,25 @@ const DataflowDetailPage = () => {
                 </option>
               ))}
             </LabeledSelect>
+            {/* Every replica runs the same dataflows, so the choice only
+              matters, and only shows, when there is one to make. */}
+            {cluster.replicas.length > 1 && (
+              <LabeledSelect
+                label="Replica"
+                value={replicaName ?? ""}
+                onChange={(e) => onReplicaChange(e.target.value)}
+                flexShrink={0}
+                width="auto"
+              >
+                {cluster.replicas.map((r) => (
+                  <option key={r.name} value={r.name}>
+                    {r.name}
+                  </option>
+                ))}
+              </LabeledSelect>
+            )}
             {data && (
-              <HStack flexShrink={0} height="10" spacing={2}>
+              <HStack flexShrink={0} spacing={2}>
                 <Button size="sm" onClick={refetch} isDisabled={loading}>
                   Refresh
                 </Button>
@@ -872,7 +881,6 @@ const DataflowDetailPage = () => {
                   matchIndex={activeMatchIndex}
                   onJump={onJump}
                   workerCount={data.workerCount}
-                  regionExpanded={expandedScopes.size > 0}
                 />
                 {filters.heatmap !== "off" && (
                   <HStack spacing={1} flexShrink={0}>
@@ -899,7 +907,8 @@ const DataflowDetailPage = () => {
                     setLirPanelCollapsed((prev) => !prev)
                   }
                   onHighlight={setLirHighlight}
-                  onSelect={onLirSelect}
+                  onSelect={onSelectLir}
+                  selectedKey={selectedLirKey}
                 />
                 {/* The details panel floats over this wrapper's right edge
                   rather than sitting beside the graph, so opening it never
@@ -941,6 +950,7 @@ const DataflowDetailPage = () => {
                     onPaneClick={() => setSelection(null)}
                     onJumpToPeer={onJumpToPeer}
                     onLirGroupClick={onLirGroupClick}
+                    selectedLirKey={selectedLirKey}
                     expandedScopes={expandedScopes}
                     onToggleExpand={onToggleExpand}
                     occludedRight={

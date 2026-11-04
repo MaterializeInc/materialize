@@ -22,6 +22,7 @@ import type { PortPeer } from "./dataflowGraph";
 import {
   DIMMED_OPACITY,
   formatCount,
+  formatCountSi,
   prettyPrintChannelType,
 } from "./nodeStyle";
 
@@ -45,13 +46,6 @@ export type ChannelEdgeData = {
   onJumpTo?: (peer: PortPeer) => void;
 };
 
-const compactCount = Intl.NumberFormat("default", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-
-const compact = (n: bigint) => compactCount.format(n);
-
 export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const [path, labelX, labelY] = getBezierPath(props);
@@ -74,7 +68,7 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
   const label =
     idle && !selected
       ? ""
-      : `${compact(messagesSent)} / ${compact(batchesSent)}`;
+      : `${formatCountSi(messagesSent)} / ${formatCountSi(batchesSent)}`;
   const prettyTypes = channelTypes.map(prettyPrintChannelType);
   const tooltip = idle
     ? prettyTypes.join(", ") || "unknown channel type"

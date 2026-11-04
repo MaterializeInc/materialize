@@ -19,16 +19,16 @@ import {
   lirIndex,
   lirTree,
   type LirTreeNode,
-  type NodeId,
 } from "./dataflowGraph";
 
 interface LirRowProps {
   node: LirTreeNode;
+  selectedKey?: string;
   onHighlight: (ids: ReadonlySet<string> | null) => void;
-  onSelect: (memberIds: NodeId[]) => void;
+  onSelect: (exportId: string, lirId: string) => void;
 }
 
-const LirRow = ({ node, onHighlight, onSelect }: LirRowProps) => {
+const LirRow = ({ node, selectedKey, onHighlight, onSelect }: LirRowProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   // An empty member set would dim the whole canvas, which reads as "no
   // match" rather than "this span has no operators".
@@ -48,13 +48,18 @@ const LirRow = ({ node, onHighlight, onSelect }: LirRowProps) => {
         fontSize="xs"
         pl={node.info.nesting * 3}
         cursor="pointer"
+        aria-current={node.key === selectedKey || undefined}
+        fontWeight={node.key === selectedKey ? "600" : undefined}
+        background={
+          node.key === selectedKey ? colors.background.secondary : undefined
+        }
         _hover={{ background: colors.background.secondary }}
         _focusVisible={{ background: colors.background.secondary }}
         onMouseEnter={highlight}
         onMouseLeave={clearHighlight}
         onFocus={highlight}
         onBlur={clearHighlight}
-        onClick={() => onSelect(node.memberIds)}
+        onClick={() => onSelect(node.info.exportId, node.info.lirId)}
       >
         LIR {node.info.lirId}: {node.info.operator}
       </Text>
@@ -62,6 +67,7 @@ const LirRow = ({ node, onHighlight, onSelect }: LirRowProps) => {
         <LirRow
           key={child.key}
           node={child}
+          selectedKey={selectedKey}
           onHighlight={onHighlight}
           onSelect={onSelect}
         />
@@ -75,7 +81,9 @@ export interface LirPanelProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onHighlight: (ids: ReadonlySet<string> | null) => void;
-  onSelect: (memberIds: NodeId[]) => void;
+  onSelect: (exportId: string, lirId: string) => void;
+  /** The `${exportId}/${lirId}` key of the selected span, marked in the list. */
+  selectedKey?: string;
 }
 
 export const LirPanel = ({
@@ -84,6 +92,7 @@ export const LirPanel = ({
   onToggleCollapsed,
   onHighlight,
   onSelect,
+  selectedKey,
 }: LirPanelProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const index = React.useMemo(() => lirIndex(structure), [structure]);
@@ -134,6 +143,7 @@ export const LirPanel = ({
             <LirRow
               key={root.key}
               node={root}
+              selectedKey={selectedKey}
               onHighlight={onHighlight}
               onSelect={onSelect}
             />

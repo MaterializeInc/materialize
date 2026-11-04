@@ -22,10 +22,14 @@ import {
   textColorFor,
 } from "./nodeStyle";
 
+// The ring is double: the inner band in the canvas color separates the outer
+// band from any node fill, so the ring stays visible on a fill of the same
+// hue.
+const ringShadow = (ring: string, colors: MaterializeTheme["colors"]) =>
+  `0 0 0 2px ${colors.background.primary}, 0 0 0 4px ${ring}`;
+
 // Selection (clicked) wins over the active search match when both apply to
-// the same node; both are visually distinct from ordinary dimming. The ring
-// is double: the inner band in the canvas color separates the outer band
-// from any node fill, so the ring stays visible on a fill of the same hue.
+// the same node; both are visually distinct from ordinary dimming.
 const highlightShadow = (
   data: FlowNodeData,
   colors: MaterializeTheme["colors"],
@@ -35,8 +39,7 @@ const highlightShadow = (
     : data.activeMatch
       ? colors.accent.orange
       : undefined;
-  if (!ring) return undefined;
-  return `0 0 0 2px ${colors.background.primary}, 0 0 0 4px ${ring}`;
+  return ring && ringShadow(ring, colors);
 };
 
 // A subtle resting shadow (matching the app's other node-graph view) so
@@ -310,30 +313,38 @@ export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
 // since React Flow's own node wrapper defaults to pointer-events:all and
 // this component's root cannot override an ancestor. Its width/height come
 // from elk's auto-sized bounds, same as every other node in this file.
-export const LirGroupNode = ({ data }: NodeProps & { data: FlowGroupData }) => (
-  <Box width="100%" height="100%" position="relative" pointerEvents="none">
-    <Box
-      position="absolute"
-      inset={0}
-      borderWidth="2px"
-      borderStyle="dashed"
-      borderRadius="md"
-      borderColor={data.color}
-    />
-    <Box
-      position="absolute"
-      top={0}
-      left={0}
-      px={2}
-      py="1px"
-      pointerEvents="auto"
-      cursor="pointer"
-      background={data.color}
-      borderBottomRightRadius="md"
-    >
-      <Text fontSize="2xs" color={textColorFor(data.color)} noOfLines={1}>
-        {data.label}
-      </Text>
+export const LirGroupNode = ({ data }: NodeProps & { data: FlowGroupData }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Box width="100%" height="100%" position="relative" pointerEvents="none">
+      <Box
+        position="absolute"
+        inset={0}
+        borderWidth="2px"
+        borderStyle="dashed"
+        borderRadius="md"
+        borderColor={data.color}
+        boxShadow={
+          data.selected
+            ? ringShadow(colors.accent.brightPurple, colors)
+            : undefined
+        }
+      />
+      <Box
+        position="absolute"
+        top={0}
+        left={0}
+        px={2}
+        py="1px"
+        pointerEvents="auto"
+        cursor="pointer"
+        background={data.color}
+        borderBottomRightRadius="md"
+      >
+        <Text fontSize="2xs" color={textColorFor(data.color)} noOfLines={1}>
+          {data.label}
+        </Text>
+      </Box>
     </Box>
-  </Box>
-);
+  );
+};

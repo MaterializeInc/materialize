@@ -31,7 +31,6 @@ function renderToolbar(
         matchIndex={0}
         onJump={() => {}}
         workerCount={workerCount}
-        regionExpanded={false}
       />
     </ThemeProvider>,
   );
@@ -99,7 +98,6 @@ describe("DataflowToolbar", () => {
           matchIndex={0}
           onJump={() => {}}
           workerCount={4}
-          regionExpanded={false}
         />
       </ThemeProvider>,
     );

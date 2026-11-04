@@ -70,10 +70,9 @@ const REGION_LAYOUT_OPTIONS: Record<string, string> = {
   "elk.layered.spacing.nodeNodeBetweenLayers": "48",
 };
 
-// A view is always one scope's direct children, so without a grouping this
-// is flat: nothing is nested inside anything else. With a grouping, a
-// group's members (VisibleNodes or other groups) become its elk children;
-// everything else stays a direct child of the root, exactly like today.
+// A node's elk parent is its LIR group when it has one, else the region it
+// is expanded inside, else the root. A group's parent is its enclosing group
+// or the expanded region it was grouped in (see groupByLirPerContainer).
 export function toElkGraph(
   graph: VisibleGraph,
   grouping?: LirGrouping,
@@ -87,7 +86,7 @@ export function toElkGraph(
     else childrenOf.set(parentKey, [id]);
   };
   for (const n of graph.nodes)
-    addChild(n.parentId ?? grouping?.parentOf.get(n.id) ?? "", n.id);
+    addChild(grouping?.parentOf.get(n.id) ?? n.parentId ?? "", n.id);
   for (const g of groupById.values())
     addChild(grouping?.parentOf.get(g.id) ?? "", g.id);
 

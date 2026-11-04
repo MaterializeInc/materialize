@@ -18,6 +18,7 @@ import {
   DEFAULT_FILTERS,
   deriveVisibleGraph,
   groupByLir,
+  groupByLirPerContainer,
   lirIndex,
   type LirInfo,
   type LirSpanRow,
@@ -27,7 +28,6 @@ import {
   type PerWorkerStatRow,
   representativeInView,
   subtreeSearchMatches,
-  type VisibleEdge,
   type VisibleNode,
 } from "./dataflowGraph";
 
@@ -1711,6 +1711,29 @@ describe("groupByLir", () => {
     expect(g.parentOf.get("a")).toEqual("u1/10");
     expect(g.parentOf.has("p")).toEqual(false);
     expect(g.parentOf.has("b")).toEqual(false);
+  });
+
+  it("groups an expanded region's members inside the region, omitting spans that enclose it", () => {
+    // Region r (op 2) sits in span 10 next to a (op 1). Its members b and c
+    // are also in span 10, and c is in the inner span 11 as well.
+    const outer = span("u1", "10", 0, null);
+    const inner = span("u1", "11", 1, "10");
+    const region = { ...node("r", 2, [outer]), kind: "region" as const };
+    const g = groupByLirPerContainer([
+      node("a", 1, [outer]),
+      region,
+      { ...node("b", 3, [outer]), parentId: "r" },
+      { ...node("c", 4, [outer, inner]), parentId: "r" },
+    ]);
+    expect(g.groups.map((x) => [x.id, x.key])).toEqual([
+      ["u1/10", "u1/10"],
+      ["r>u1/11", "u1/11"],
+    ]);
+    expect(g.parentOf.get("a")).toEqual("u1/10");
+    expect(g.parentOf.get("r")).toEqual("u1/10");
+    expect(g.parentOf.get("r>u1/11")).toEqual("r");
+    expect(g.parentOf.has("b")).toEqual(false);
+    expect(g.parentOf.get("c")).toEqual("r>u1/11");
   });
 
   it("picks the lowest exportId, leaving other-export-only nodes ungrouped", () => {

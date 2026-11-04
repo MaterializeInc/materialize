@@ -546,6 +546,20 @@ export const NodeDetailPanel = ({
           Focus on region
         </Button>
       )}
+      {selection.kind === "lirGroup" && selection.node.memberIds.length > 0 && (
+        // Selecting a box on the canvas leaves the view where it is. This
+        // moves to the scope holding the span's operators and fits them.
+        <Button
+          size="sm"
+          variant="secondary"
+          mt={2}
+          onClick={() =>
+            onSelectLir(selection.node.info.exportId, selection.node.info.lirId)
+          }
+        >
+          Focus on LIR
+        </Button>
+      )}
       {selection.kind === "node" ? (
         selection.node.kind === "port" ? (
           <PortDetail

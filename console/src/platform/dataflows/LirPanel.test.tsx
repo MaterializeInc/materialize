@@ -133,7 +133,7 @@ describe("LirPanel", () => {
     expect(onHighlight).toHaveBeenCalledWith(null);
   });
 
-  it("selects a span's members on click", async () => {
+  it("selects a span on click", async () => {
     const onSelect = vi.fn();
     await renderComponent(
       <LirPanel
@@ -145,7 +145,26 @@ describe("LirPanel", () => {
       />,
     );
     await userEvent.click(screen.getByText("LIR 1: Join"));
-    expect(onSelect).toHaveBeenCalledWith(["root"]);
+    expect(onSelect).toHaveBeenCalledWith("u1", "1");
+  });
+
+  it("marks the selected span", async () => {
+    await renderComponent(
+      <LirPanel
+        structure={structureWithEmptySpan}
+        collapsed={false}
+        onToggleCollapsed={noop}
+        onHighlight={noop}
+        onSelect={noop}
+        selectedKey="u1/2"
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "LIR 2: Constant" }),
+    ).toHaveAttribute("aria-current", "true");
+    expect(
+      screen.getByRole("button", { name: "LIR 1: Join" }),
+    ).not.toHaveAttribute("aria-current");
   });
 
   it("shows only the expand toggle when collapsed", async () => {
@@ -204,7 +223,7 @@ describe("LirPanel", () => {
     expect(onHighlight).toHaveBeenLastCalledWith(new Set(["root"]));
 
     await userEvent.keyboard("{Enter}");
-    expect(onSelect).toHaveBeenCalledWith(["root"]);
+    expect(onSelect).toHaveBeenCalledWith("u1", "1");
 
     await userEvent.tab();
     expect(onHighlight).toHaveBeenLastCalledWith(null);

@@ -270,11 +270,10 @@ const lirSpansResult = {
   rows: [["u7", "1", null, "0", "Join::Differential", "41", "42"]],
 };
 
-// Dataflow 50: root [50], leaf Join [50,1] (op 51) covered by a LIR span at
-// root scope, and unrelated sibling region RegionA [50,2] (op 52) with child
-// LeafA [50,2,1] (op 53). Exercises the LIR-grouping/in-place-expansion
-// interlock: Join's group box must disappear the instant RegionA is
-// expanded, even though the two aren't nested under each other.
+// Dataflow 50: root [50], leaf Join [50,1] (op 51) and region RegionA [50,2]
+// (op 52), both covered by one LIR span at root scope, and RegionA's child
+// LeafA [50,2,1] (op 53). Exercises LIR grouping together with in-place
+// expansion: the expanded region stays inside the span's box.
 const expandInteractionOperatorsResult = {
   ...operatorsResult,
   rows: [
@@ -1136,7 +1135,7 @@ describe("DataflowDetailPage", () => {
       );
     });
 
-    it("does not group by LIR while a region is expanded", async () => {
+    it("keeps LIR grouping while a region is expanded", async () => {
       await renderComponent(
         <Routes>
           <Route
@@ -1152,12 +1151,12 @@ describe("DataflowDetailPage", () => {
       );
 
       await screen.findByTestId(`node-${nodeIdOf([50, 2])}`);
-      // The LIR group box that would otherwise wrap Join is suppressed while
-      // RegionA is expanded, even though the two are unrelated siblings.
-      expect(screen.queryByTestId("node-u8/1")).not.toBeInTheDocument();
-      // Join itself still renders, just ungrouped.
+      expect(screen.getByTestId("node-u8/1")).toBeInTheDocument();
       expect(
         screen.getByTestId(`node-${nodeIdOf([50, 1])}`),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId(`node-${nodeIdOf([50, 2, 1])}`),
       ).toBeInTheDocument();
     });
   });

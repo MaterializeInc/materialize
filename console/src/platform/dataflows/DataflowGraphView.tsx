@@ -30,8 +30,9 @@ import { MaterializeTheme } from "~/theme";
 import { ChannelEdge } from "./ChannelEdge";
 import {
   type GraphDecorations,
-  groupByLir,
+  groupByLirPerContainer,
   type LirGroupNode as LirGroupNodeData,
+  mustGet,
   type NodeId,
   type PortPeer,
   type VisibleEdge,
@@ -104,6 +105,9 @@ export interface DataflowGraphViewProps {
   // member.
   showLirGroups?: boolean;
   onLirGroupClick?: (group: LirGroupNodeData) => void;
+  // The LIR key (`${exportId}/${lirId}`) of the selected span. Rings every
+  // box drawn for it, one per container it spans.
+  selectedLirKey?: string;
   // The scopes expanded in place; drives nested node emission (via the
   // caller's deriveVisibleGraph) and the layout cache key.
   expandedScopes: Set<NodeId>;
@@ -239,6 +243,7 @@ export const DataflowGraphView = ({
   onFit,
   showLirGroups,
   onLirGroupClick,
+  selectedLirKey,
   expandedScopes,
   onToggleExpand,
   occludedRight = 0,
@@ -258,17 +263,9 @@ export const DataflowGraphView = ({
     };
   }, [rawVisible, decorations?.hiddenNodeIds, decorations?.hiddenEdgeIds]);
 
-  // Grouping and in-place expansion are mutually exclusive: a LIR group can
-  // straddle scope boundaries in ways the ELK container layout (which nests
-  // by scope) can't represent, so any expansion turns grouping off regardless
-  // of the toolbar toggle. This also protects a bookmarked ?expand= link from
-  // restoring grouping and expansion together.
   const grouping = React.useMemo(
-    () =>
-      showLirGroups && expandedScopes.size === 0
-        ? groupByLir(visible.nodes)
-        : null,
-    [showLirGroups, expandedScopes, visible.nodes],
+    () => (showLirGroups ? groupByLirPerContainer(visible.nodes) : null),
+    [showLirGroups, visible.nodes],
   );
 
   const layoutKey = `${cacheKey}|${focusedScope}|${showLirGroups ?? false}|${
@@ -297,16 +294,14 @@ export const DataflowGraphView = ({
     grouping ?? undefined,
   );
 
-  // Unified parent map for React Flow's parentId (member nodes below): LIR
-  // grouping and scope nesting are mutually exclusive (see the grouping memo
-  // above), but this merges them into one map anyway rather than picking a
-  // source conditionally, so it stays correct regardless of which one is
-  // populated.
+  // React Flow's parentId for every node and group, matching the elk
+  // hierarchy toElkGraph builds: a node's LIR group wins over the expanded
+  // region it sits in, because that group is itself nested in the region.
   const parentOf = React.useMemo(() => {
     const m = new Map<string, string>(grouping?.parentOf ?? []);
-    // Scope nesting is structural; it wins over the grouping overlay if both
-    // ever populate an entry (they never do under the interlock).
-    for (const n of visible.nodes) if (n.parentId) m.set(n.id, n.parentId);
+    for (const n of visible.nodes) {
+      if (n.parentId && !m.has(n.id)) m.set(n.id, n.parentId);
+    }
     return m;
   }, [grouping, visible.nodes]);
 
@@ -330,14 +325,13 @@ export const DataflowGraphView = ({
 
   const nodes: Node[] = React.useMemo(() => {
     if (!positions) return [];
-    const groupParentOf = grouping?.parentOf;
     const groupNodes: Node[] = (grouping?.groups ?? []).map((g) => {
       const pos = positions[g.id] ?? { x: 0, y: 0, width: 0, height: 0 };
       return {
         id: g.id,
         type: "lirGroup",
         position: { x: pos.x, y: pos.y },
-        parentId: groupParentOf?.get(g.id),
+        parentId: parentOf.get(g.id),
         width: pos.width,
         height: pos.height,
         // pointerEvents: "none" on React Flow's own node wrapper (not just
@@ -352,16 +346,13 @@ export const DataflowGraphView = ({
         style: { width: pos.width, height: pos.height, pointerEvents: "none" },
         draggable: false,
         connectable: false,
-        // Below its members, which draw over it; React Flow requires a
-        // group node to precede its children in this array, which the
-        // groupNodes-then-memberNodes concat below already guarantees, but
-        // an explicit zIndex also protects against member nodes elsewhere
-        // in the array being reordered by a future change.
+        // Below its members, which draw over it.
         zIndex: -1,
         data: {
           group: g,
           label: g.operator,
           color: colors.dataflow.lirGroup,
+          selected: g.key === selectedLirKey,
         },
       };
     });
@@ -412,12 +403,22 @@ export const DataflowGraphView = ({
         },
       };
     });
-    return [...groupNodes, ...memberNodes];
+    // React Flow requires a parent to precede its children. Groups and
+    // expanded regions nest in each other, so order by depth.
+    const depth = (id: string): number => {
+      let d = 0;
+      for (let p = parentOf.get(id); p !== undefined; p = parentOf.get(p)) d++;
+      return d;
+    };
+    const all = [...groupNodes, ...memberNodes];
+    const depths = new Map(all.map((n) => [n.id, depth(n.id)]));
+    return all.sort((a, b) => mustGet(depths, a.id) - mustGet(depths, b.id));
   }, [
     visible,
     positions,
     grouping,
     parentOf,
+    selectedLirKey,
     decorations?.dimmedNodeIds,
     decorations?.nodeColors,
     selectedId,

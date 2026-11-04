@@ -1361,7 +1361,11 @@ export function lirTree(
 }
 
 export interface LirGroupNode {
-  id: NodeId; // `${exportId}/${lirId}`, matching lirIndex's key
+  // Unique per drawn box. Equals `key` at the view root. Inside an expanded
+  // region it is prefixed with the region's id, since one span can draw a box
+  // in several containers.
+  id: NodeId;
+  key: string; // `${exportId}/${lirId}`, matching lirIndex's key
   exportId: string;
   lirId: string;
   operator: string;
@@ -1445,6 +1449,7 @@ export function groupByLir(nodes: readonly VisibleNode[]): LirGrouping {
         }
         group = {
           id: key,
+          key,
           exportId: info.exportId,
           lirId: info.lirId,
           operator: info.operator,
@@ -1457,6 +1462,58 @@ export function groupByLir(nodes: readonly VisibleNode[]): LirGrouping {
       stack.push(group);
     }
     if (stack.length > 0) parentOf.set(node.id, stack[stack.length - 1].id);
+  }
+  return { groups, parentOf };
+}
+
+/**
+ * Groups every container of the view by LIR: the view root and each region
+ * expanded in place. An expanded region's members are grouped among
+ * themselves and the resulting boxes are nested inside the region. Spans that
+ * already enclose the region itself are left out inside it, since the box
+ * around the region already shows them.
+ */
+export function groupByLirPerContainer(
+  nodes: readonly VisibleNode[],
+): LirGrouping {
+  const byContainer = new Map<string, VisibleNode[]>(); // "" = view root
+  for (const n of nodes) {
+    const container = n.parentId ?? "";
+    const list = byContainer.get(container);
+    if (list) list.push(n);
+    else byContainer.set(container, [n]);
+  }
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const groups: LirGroupNode[] = [];
+  const parentOf = new Map<NodeId, NodeId>();
+  for (const [container, members] of byContainer) {
+    const enclosing = new Set(
+      (nodeById.get(container)?.lir ?? []).map(
+        (l) => `${l.exportId}/${l.lirId}`,
+      ),
+    );
+    const inner = groupByLir(
+      enclosing.size === 0
+        ? members
+        : members.map((n) => ({
+            ...n,
+            lir: n.lir.filter(
+              (l) => !enclosing.has(`${l.exportId}/${l.lirId}`),
+            ),
+          })),
+    );
+    const rename = (id: NodeId) => (container ? `${container}>${id}` : id);
+    const groupIds = new Set(inner.groups.map((g) => g.id));
+    for (const g of inner.groups) {
+      groups.push({ ...g, id: rename(g.id) });
+      // A group with no enclosing group sits directly in the container.
+      if (container && !inner.parentOf.has(g.id)) {
+        parentOf.set(rename(g.id), container);
+      }
+    }
+    for (const [child, parent] of inner.parentOf) {
+      parentOf.set(groupIds.has(child) ? rename(child) : child, rename(parent));
+    }
   }
   return { groups, parentOf };
 }
