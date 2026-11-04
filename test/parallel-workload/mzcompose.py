@@ -61,6 +61,10 @@ from materialize.parallel_workload.settings import (
     Complexity,
     Scenario,
 )
+from materialize.parallel_workload.staged_catalog import (
+    PREPARATION_LOG_FILTER,
+    purification_connection_change,
+)
 
 SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
@@ -208,7 +212,14 @@ def workflow_catalog_transactions(
         "swap",
         "hammer",
     ]
-    cases = [*rename_cases, "source", "source-binding", "source-noop", "source-drop"]
+    cases = [
+        *rename_cases,
+        "source",
+        "source-binding",
+        "source-noop",
+        "source-drop",
+        "source-preparation",
+    ]
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--rounds", type=int, default=25)
     parser.add_argument("--seed", type=int, default=0)
@@ -232,7 +243,8 @@ def workflow_catalog_transactions(
             Materialized(
                 image=args.materialized_image,
                 additional_system_parameter_defaults={
-                    "enable_alter_table_add_column": "true"
+                    "log_filter": PREPARATION_LOG_FILTER,
+                    "enable_alter_table_add_column": "true",
                 },
             )
         ),
@@ -270,6 +282,9 @@ def workflow_catalog_transactions(
                     schema_swap(c)
                 elif case == "source-drop":
                     source_drop_conflicts(c)
+                elif case == "source-preparation":
+                    c.up("postgres")
+                    purification_connection_change(c)
                 else:
                     for steps in (0, 8):
                         late_binding(c, case, args.seed, steps)
