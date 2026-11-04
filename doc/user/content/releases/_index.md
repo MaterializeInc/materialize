@@ -51,6 +51,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - **mz-docs**: The skill now finds pages through the live documentation's `llms.txt` index and fetches them from materialize.com instead of bundling a copy of the docs, so it reads the current documentation and needs network access to materialize.com.
 
 ### Bug Fixes {#v26.49-bug-fixes}
+- Fixed `CASE` expressions with many or deeply nested arms overflowing the stack when creating a view, using excessive memory, or taking time exponential in the nesting depth when the branches contain subqueries; creating one large machine-generated materialized view now raises memory use by 1.2 GiB instead of 3.8 GiB.
 - Fixed saving the Console's Alter cluster form during a graceful resize or while a burst replica was running, which could cancel the resize even when only renaming the cluster, or keep the extra replicas of the resize or the burst replica.
 - Fixed `SELECT DISTINCT` and `GROUP BY` returning duplicate rows on a view or materialized view column computed from a keyed column by a cast that rounds or truncates sub-microsecond `time`, `timestamp`, or `timestamptz` values.
 - Fixed `SET LOCAL` values carrying over to a session's next transaction when a waiting `COMMIT` was canceled, which with connection pooling could make an unrelated query run with another transaction's isolation level or real-time recency setting.
