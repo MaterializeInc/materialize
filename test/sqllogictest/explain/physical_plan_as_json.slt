@@ -10930,3 +10930,213 @@ WHERE a = c and a = e
   "sources": []
 }
 EOF
+
+# Filter pushdown for a materialized view with a temporal filter. CI runs with
+# soft assertions on, which turns the option off by default, so it is spelled
+# out here to cover what users see outside CI.
+
+statement ok
+CREATE TABLE events (
+  content text,
+  insert_ts timestamp,
+  delete_ts timestamp,
+  severity int
+)
+
+statement ok
+CREATE MATERIALIZED VIEW temporal_mv AS
+SELECT content
+FROM events
+WHERE mz_now() >= insert_ts
+  AND mz_now() < delete_ts
+  AND severity > 3
+
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH (filter pushdown) AS JSON FOR
+MATERIALIZED VIEW temporal_mv
+----
+{
+  "plans": [
+    {
+      "id": "materialize.public.temporal_mv",
+      "plan": {
+        "lir_id": 1,
+        "node": {
+          "Get": {
+            "id": {
+              "Global": {
+                "User": 19
+              }
+            },
+            "keys": {
+              "raw": true,
+              "arranged": []
+            },
+            "plan": {
+              "Collection": {
+                "mfp": {
+                  "mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [
+                      0
+                    ],
+                    "input_arity": 1
+                  }
+                },
+                "lower_bounds": [],
+                "upper_bounds": []
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": {
+        "User": 19
+      },
+      "op": {
+        "mfp": {
+          "mfp": {
+            "expressions": [],
+            "predicates": [
+              [
+                4,
+                {
+                  "CallBinary": {
+                    "func": {
+                      "Gt": null
+                    },
+                    "expr1": {
+                      "Column": [
+                        3,
+                        "severity"
+                      ]
+                    },
+                    "expr2": {
+                      "Literal": [
+                        {
+                          "Ok": [
+                            10,
+                            2,
+                            24,
+                            3
+                          ]
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            ],
+            "projection": [
+              0
+            ],
+            "input_arity": 4
+          }
+        },
+        "lower_bounds": [
+          {
+            "CallUnary": {
+              "func": {
+                "CastTimestampToMzTimestamp": null
+              },
+              "expr": {
+                "Column": [
+                  1,
+                  "insert_ts"
+                ]
+              }
+            }
+          }
+        ],
+        "upper_bounds": [
+          {
+            "CallUnary": {
+              "func": {
+                "CastTimestampToMzTimestamp": null
+              },
+              "expr": {
+                "Column": [
+                  2,
+                  "delete_ts"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "pushdown": [
+        {
+          "CallBinary": {
+            "func": {
+              "Gt": null
+            },
+            "expr1": {
+              "Column": [
+                3,
+                "severity"
+              ]
+            },
+            "expr2": {
+              "Literal": [
+                {
+                  "Ok": [
+                    10,
+                    2,
+                    24,
+                    3
+                  ]
+                },
+                {
+                  "scalar_type": "Int32",
+                  "nullable": false
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "pushdown_temporal": {
+        "lower_bounds": [
+          {
+            "CallUnary": {
+              "func": {
+                "CastTimestampToMzTimestamp": null
+              },
+              "expr": {
+                "Column": [
+                  1,
+                  "insert_ts"
+                ]
+              }
+            }
+          }
+        ],
+        "upper_bounds": [
+          {
+            "CallUnary": {
+              "func": {
+                "CastTimestampToMzTimestamp": null
+              },
+              "expr": {
+                "Column": [
+                  2,
+                  "delete_ts"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+EOF

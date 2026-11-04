@@ -112,7 +112,7 @@ where
     }
 }
 
-/// Renders `TemporalFilter: <lowers> <= mz_now() < <uppers>`, omitting the
+/// Renders `temporal filter=<lowers> <= mz_now() < <uppers>`, omitting the
 /// `<lowers> <=` or `< <uppers>` part when the corresponding list is empty,
 /// and ends the line.
 pub fn fmt_temporal_filter<'a, T, M, E>(
