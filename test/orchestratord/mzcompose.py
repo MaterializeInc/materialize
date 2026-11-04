@@ -4799,6 +4799,7 @@ def check_environment_metrics_agree_with_resource() -> None:
         ],
     }
     holder = get_lease_holder(LEADER_ELECTION_LEASE)
+    assert holder is not None, f"lease {LEADER_ELECTION_LEASE} has no holder"
     reported = {
         pod: get_operator_environment_series(pod) for pod in get_operator_pod_names()
     }
