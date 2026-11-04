@@ -1,0 +1,13 @@
+- name: "syntax"
+  code: |
+    jq ( <input>, <program> )
+  syntax_elements:
+    - name: "`<input>`"
+      description: |
+        A [`jsonb`](/sql/types/jsonb/) value to pass to the program.
+    - name: "`<program>`"
+      description: |
+        A [`text`](/sql/types/text/) literal containing a
+        [jq program](https://jqlang.org/manual/). The program is compiled when
+        the query is planned, so it cannot come from a column or a query
+        parameter.
