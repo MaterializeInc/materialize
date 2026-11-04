@@ -53,6 +53,11 @@ type AdditionalMenuProps<
   renderMenuBottom?: (props: MenuProps<Option, IsMulti>) => React.ReactNode;
   /* Render the menu in a portal to avoid overflow clipping in modals. */
   usePortal?: boolean;
+  /*
+   * Draw no border, rounded corners or focus ring, for a parent that frames
+   * this select together with another control, such as `ScopedSelect`.
+   */
+  frameless?: boolean;
 };
 
 declare module "react-select/base" {
@@ -200,6 +205,7 @@ const SearchableSelect = <
     isMulti,
     variant = "default",
     usePortal,
+    frameless,
     ...props
   }: SearchableSelectProps<Option, IsMulti>,
   ref: React.LegacyRef<Select<Option, IsMulti, GroupBase<Option>>>,
@@ -232,6 +238,7 @@ const SearchableSelect = <
         containerWidth,
         menuWidth,
         usePortal,
+        frameless,
       })}
       {...props}
     />

@@ -46,6 +46,9 @@ declare -A external_redirects=(
     [docs/self-managed/v25.2/support/index.html]="https://materialize.com/support/"
 )
 
+# Works around a Hugo data race, see ci/test/preview-docs.sh.
+export HUGO_NUMWORKERMULTIPLIER=1
+
 cd doc/user
 if [[ "$BUILDKITE_ORGANIZATION_SLUG" == "materialize" ]] && [[ "$BUILDKITE_BRANCH" == self-managed-docs/* ]]; then
     VERSION=${BUILDKITE_BRANCH#self-managed-docs/}

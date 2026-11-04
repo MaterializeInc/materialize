@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "ManyKafkaSourcesOnSameCluster":
+        # PR#40271 (kafka: update librdkafka to 2.16.0) increased wallclock by ~40%
+        min_ancestor_mz_version_per_commit[
+            "a98fc037e9a7b9b92eeaa9a89c94629df3b99678"
+        ] = MzVersion.parse_mz("v26.49.0")
+
     if scenario_class_name in (
         "MySqlInitialLoad",
         "MySqlInitialLoadMultiWorkerSampled",

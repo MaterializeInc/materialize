@@ -39,6 +39,8 @@ deadpool-postgres.workspace = true
 differential-dataflow.workspace = true
 fail.workspace = true
 futures-util.workspace = true
+google-cloud-gax.workspace = true
+google-cloud-storage.workspace = true
 itertools.workspace = true
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-dyncfg = { path = "../dyncfg" }

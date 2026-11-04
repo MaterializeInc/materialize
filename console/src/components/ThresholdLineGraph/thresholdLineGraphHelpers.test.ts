@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { scaleTime } from "@visx/scale";
 import { hcl } from "d3";
 import { describe, expect, it } from "vitest";
 
@@ -15,6 +16,9 @@ import {
   generateRainbowPalette,
   isBreaching,
   quantizeThreshold,
+  timeAxisTicks,
+  X_TICK_LABEL_HALF_WIDTH_PX,
+  X_TICK_SPACING_PX,
 } from "./thresholdLineGraphHelpers";
 import { ThresholdLineSeries } from "./types";
 
@@ -167,5 +171,68 @@ describe("quantizeThreshold", () => {
     expect(quantizeThreshold(0.00000123, { step: 1e-7, min: 0, max: 1 })).toBe(
       0.0000012,
     );
+  });
+});
+
+describe("timeAxisTicks", () => {
+  const HOUR = 3_600_000;
+  const END = new Date(2026, 9, 28, 11, 6).getTime();
+  const scaleFor = (spanMs: number, width: number) =>
+    scaleTime({ domain: [END - spanMs, END], range: [0, width] });
+
+  it("lands on round clock times", () => {
+    const ticks = timeAxisTicks(scaleFor(24 * HOUR, 1000));
+
+    expect(ticks.length).toBeGreaterThan(1);
+    for (const tick of ticks) {
+      expect(tick.getMinutes()).toBe(0);
+      expect(tick.getHours() % 3).toBe(0);
+    }
+  });
+
+  it("offers fewer ticks on a narrow graph", () => {
+    const wide = timeAxisTicks(scaleFor(24 * HOUR, 1000));
+    const narrow = timeAxisTicks(scaleFor(24 * HOUR, 300));
+
+    expect(narrow.length).toBeLessThan(wide.length);
+    expect(narrow.length).toBeLessThanOrEqual(
+      Math.floor(300 / X_TICK_SPACING_PX),
+    );
+  });
+
+  it.each([
+    ["1 hour", HOUR],
+    ["6 hours", 6 * HOUR],
+    ["24 hours", 24 * HOUR],
+  ])("leaves room between labels over %s", (_, span) => {
+    // The scale treats a tick count as a hint and can return more ticks than
+    // asked for, which is what made the labels collide.
+    for (const width of [380, 500, 700, 1040]) {
+      const scale = scaleFor(span, width);
+      const xs = timeAxisTicks(scale).map((tick) => scale(tick));
+      for (let i = 1; i < xs.length; i++) {
+        expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(X_TICK_SPACING_PX);
+      }
+    }
+  });
+
+  it("keeps every label clear of the plot's edges", () => {
+    const scale = scaleFor(24 * HOUR, 1000);
+    for (const tick of timeAxisTicks(scale)) {
+      expect(scale(tick)).toBeGreaterThanOrEqual(X_TICK_LABEL_HALF_WIDTH_PX);
+      expect(scale(tick)).toBeLessThanOrEqual(
+        1000 - X_TICK_LABEL_HALF_WIDTH_PX,
+      );
+    }
+  });
+
+  it("never repeats a minute when the range is only minutes long", () => {
+    // A young object's series spans a few minutes, where the scale would
+    // otherwise tick every few seconds and print the same HH:mm twice.
+    const ticks = timeAxisTicks(scaleFor(3 * 60_000, 1000));
+    const minutes = ticks.map((tick) => Math.floor(tick.getTime() / 60_000));
+
+    expect(new Set(minutes).size).toBe(minutes.length);
+    for (const tick of ticks) expect(tick.getSeconds()).toBe(0);
   });
 });

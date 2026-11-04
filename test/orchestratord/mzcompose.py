@@ -81,6 +81,10 @@ SERVICES = [
 
 KIND_CLUSTER_NAME = "kind"
 
+# Each version recreates kind. Limit each of the two CI shards to ten versions
+# to leave room for setup and cleanup within the one-hour job timeout.
+DOCUMENTATION_DEFAULTS_VERSION_COUNT = 20
+
 
 def run_mz_debug() -> None:
     # TODO: Hangs a lot in CI
@@ -408,7 +412,11 @@ def install_metrics_server() -> None:
 def recreate_kind_cluster() -> None:
     ensure_kind_version()
 
-    spawn.runv(["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME])
+    # Docker can report a missing exit event after a node has already exited.
+    retry(
+        lambda: spawn.runv(["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME]),
+        30,
+    )
 
     try:
         spawn.runv(["docker", "network", "create", "kind"])
@@ -446,6 +454,22 @@ def recreate_kind_cluster() -> None:
             MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
         ]
     )
+
+    # TODO: Remove when https://github.com/kubernetes-sigs/kind/issues/3436 is fixed.
+    for node in spawn.capture(
+        ["kind", "get", "nodes", "--name", KIND_CLUSTER_NAME]
+    ).split():
+        spawn.runv(
+            [
+                "docker",
+                "exec",
+                node,
+                "sh",
+                "-c",
+                "mkdir -p /run/userns-sysfs && "
+                "mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /run/userns-sysfs",
+            ]
+        )
 
     retry(install_metrics_server, 20)
 
@@ -712,6 +736,48 @@ class LicenseKeyCheck(Modification):
             ), f"Expected {expected} in environmentd args, but only found {args}"
 
 
+def check_pod_disruption_budget(app: str, enabled: bool) -> None:
+    namespace = "materialize-environment"
+    pdbs = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "poddisruptionbudget",
+                "-l",
+                f"app.kubernetes.io/name={app}",
+                "-n",
+                namespace,
+                "-o",
+                "json",
+            ]
+        )
+    )["items"]
+    if not enabled:
+        assert not pdbs, f"Unexpected {app} PDBs: {pdbs}"
+        return
+    assert len(pdbs) == 1, f"Expected one {app} PDB, got {pdbs}"
+    pdb = pdbs[0]
+    name = pdb["metadata"]["name"]
+    assert pdb["spec"]["maxUnavailable"] == 1, pdb["spec"]
+    assert pdb["spec"]["unhealthyPodEvictionPolicy"] == "AlwaysAllow", pdb["spec"]
+    deployment = json.loads(
+        spawn.capture(
+            ["kubectl", "get", "deployment", name, "-n", namespace, "-o", "json"]
+        )
+    )
+    pod_labels = deployment["spec"]["template"]["metadata"]["labels"]
+    match_labels = pdb["spec"]["selector"]["matchLabels"]
+    assert (
+        match_labels and match_labels.items() <= pod_labels.items()
+    ), f"{app} PDB selector {match_labels} does not match pod labels {pod_labels}"
+    # With every pod healthy, one may be evicted whatever the replica count,
+    # so the PDB never blocks a drain.
+    status = pdb.get("status", {})
+    assert status.get("expectedPods", 0) >= 1, status
+    assert status.get("disruptionsAllowed") == 1, status
+
+
 class BalancerdEnabled(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:
@@ -748,6 +814,7 @@ class BalancerdEnabled(Modification):
                 assert result, f"Unexpected result: {result}"
             else:
                 assert not result, f"Unexpected result: {result}"
+            check_pod_disruption_budget("balancerd", self.value)
 
         # Balancerd can take a while to start up
         retry(check, 240)
@@ -894,7 +961,8 @@ class ConsoleEnabled(Modification):
             return
 
         def check() -> None:
-            pass  # TODO: https://linear.app/materializeinc/issue/DB-105
+            check_pod_disruption_budget("console", self.value)
+            # TODO: https://linear.app/materializeinc/issue/DB-105
             # result = spawn.capture(
             #     [
             #         "kubectl",
@@ -1755,6 +1823,76 @@ class EnvironmentdResources(Modification):
         retry(check_pods, 120)
 
 
+class EnvironmentdProbes(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.48.0-dev.0"):
+            return [
+                None,
+                {
+                    "readiness": {"periodSeconds": 5},
+                    "liveness": {"failureThreshold": 60, "timeoutSeconds": 3},
+                    "startup": {"failureThreshold": 360},
+                },
+            ]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            spec = definition["materialize"]["spec"]
+            spec["environmentdReadinessProbe"] = self.value["readiness"]
+            spec["environmentdLivenessProbe"] = self.value["liveness"]
+            spec["environmentdStartupProbe"] = self.value["startup"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.48.0-dev.0"
+        ):
+            return
+
+        # The CR's fields are overlaid onto the operator's built-in probe.
+        base = {"initialDelaySeconds": 1, "failureThreshold": 12}
+        overrides = self.value or {"readiness": {}, "liveness": {}}
+        expected = {
+            "readinessProbe": {**base, **overrides["readiness"]},
+            "livenessProbe": {**base, **overrides["liveness"]},
+        }
+        # There is no startup probe unless one is configured.
+        expected_startup = (
+            {**base, **self.value["startup"]} if self.value is not None else None
+        )
+
+        def check_pods() -> None:
+            container = get_environmentd_data()["items"][0]["spec"]["containers"][0]
+            for probe_name, expected_fields in expected.items():
+                probe = container[probe_name]
+                assert (
+                    "tcpSocket" in probe
+                ), f"Expected tcpSocket in {probe_name}: {probe}"
+                actual = {k: probe.get(k) for k in expected_fields}
+                assert (
+                    actual == expected_fields
+                ), f"Expected environmentd {probe_name} {expected_fields}, but got {probe}"
+            startup = container.get("startupProbe")
+            if expected_startup is None:
+                assert startup is None, f"Expected no startupProbe, but got {startup}"
+            else:
+                assert startup is not None, "Expected a startupProbe"
+                assert (
+                    "tcpSocket" in startup
+                ), f"Expected tcpSocket in startupProbe: {startup}"
+                actual = {k: startup.get(k) for k in expected_startup}
+                assert (
+                    actual == expected_startup
+                ), f"Expected environmentd startupProbe {expected_startup}, but got {startup}"
+
+        retry(check_pods, 120)
+
+
 class BalancerdResources(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:
@@ -2402,7 +2540,14 @@ def workflow_documentation_defaults(
         type=str,
         help="Custom version tag to use",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=int(os.getenv("BUILDKITE_BUILD_NUMBER", "0")),
+        help="Version sampling seed, shared by all shards (default: build number or 0)",
+    )
     args = parser.parse_args()
+    print(f"--- Version selection seed: {args.seed}")
 
     c.up(Service("mz-debug", idle=True))
     c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
@@ -2412,20 +2557,31 @@ def workflow_documentation_defaults(
     # Following https://materialize.com/docs/installation/install-on-local-kind/
     # orchestratord test can't run against future versions, so ignore those
     # Pre-v26 versions don't have balancerd/console images on Docker Hub
-    versions = buildkite.shard_list(
-        list(
-            reversed(
-                [
-                    version
-                    for version in get_self_managed_versions()
-                    if version < current_version
-                    and version >= MzVersion.parse_mz("v26.0.0")
-                ]
-                + [current_version]
-            )
-        ),
-        lambda version: str(version),
+    versions = list(
+        reversed(
+            [
+                version
+                for version in get_self_managed_versions()
+                if version < current_version
+                and version >= MzVersion.parse_mz("v26.0.0")
+            ]
+            + [current_version]
+        )
     )
+    if len(versions) > DOCUMENTATION_DEFAULTS_VERSION_COUNT:
+        # Always cover the current build and newest and oldest eligible releases.
+        versions = [
+            versions[0],
+            versions[1],
+            *sorted(
+                random.Random(args.seed).sample(
+                    versions[2:-1], k=DOCUMENTATION_DEFAULTS_VERSION_COUNT - 3
+                ),
+                reverse=True,
+            ),
+            versions[-1],
+        ]
+    versions = buildkite.shard_list(versions, lambda version: str(version))
     for version in versions:
         print(f"--- Running with defaults against {version}")
         dir = "my-local-mz"
@@ -5076,6 +5232,9 @@ def setup(c: Composition, args) -> dict[str, Any]:
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
     # TODO: Remove once the pinned operator image knows '--disable-database-network-policies'
     definition["operator"]["operator"]["args"]["enableDatabaseNetworkPolicies"] = True
+    # TODO: Remove once the pinned operator image knows '--enable-user-namespaces'
+    if not args.orchestratord_override:
+        definition["operator"]["operator"]["args"]["enableUserNamespaces"] = False
     definition["operator"]["clusterd"]["nodeSelector"][
         "workload"
     ] = "materialize-instance"

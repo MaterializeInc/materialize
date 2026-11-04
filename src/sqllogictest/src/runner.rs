@@ -1290,7 +1290,7 @@ impl<'a> RunnerInner<'a> {
                 },
             ],
         };
-        let listeners = mz_environmentd::Listeners::bind(listeners_config).await?;
+        let listeners = mz_environmentd::Listeners::bind(listeners_config)?;
         let host_name = format!(
             "localhost:{}",
             listeners.http["external"].handle.local_addr.port()
@@ -1342,6 +1342,7 @@ impl<'a> RunnerInner<'a> {
             cors_allowed_origin_list: Vec::new(),
             unsafe_mode: true,
             all_features: false,
+            restarted_in_place: false,
             metrics_registry,
             now,
             environment_id,

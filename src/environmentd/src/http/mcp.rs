@@ -2201,6 +2201,7 @@ mod tests {
             ok: String::new(),
             notices: vec![],
             parameters: vec![],
+            execution_time: None,
         }
     }
 

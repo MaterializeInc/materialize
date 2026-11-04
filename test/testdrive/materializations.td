@@ -128,10 +128,16 @@ b  max
 1  3
 2  1
 
-# Unmaterialize data view.
+# Unmaterialize data view. test4 was planned to read from the index, so it is
+# dropped first and recreated once the index is gone.
+> DROP MATERIALIZED VIEW test4
+
 > DROP INDEX data_view_primary_idx
 
-# Can continue to select from view that depends on the unmaterialized view.
+> CREATE MATERIALIZED VIEW test4 AS
+  SELECT b, max(a) FROM data_view GROUP BY b
+
+# Can select from a view that depends on the unmaterialized view.
 > SELECT * FROM test4
 b  max
 ------
@@ -201,8 +207,13 @@ b  c
 contains:index materialize.public.idx1 cannot be depended upon
 
 # If there exists a second primary index, dropping one primary index will not
-# unmaterialize the view.
+# unmaterialize the view. idx1 reads from test5_primary_idx, so it is dropped
+# first and recreated once test5_primary_idx is gone.
+> DROP INDEX idx1
+
 > DROP INDEX test5_primary_idx
+
+> CREATE INDEX idx1 ON test5(c)
 
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM test5
 Explained Query (fast path):
@@ -309,9 +320,9 @@ b  c
 1  3
 2  1
 
-# Delete the first copy of the same index and ensure everything selects as
-# normal.
-> DROP INDEX data_view_idx
+# Delete one copy of the same index and ensure everything selects as normal.
+# The second copy reads from the first, so the second copy is the one dropped.
+> DROP INDEX data_view_idx2
 
 > SELECT * from data_view
 a b
@@ -376,7 +387,9 @@ mat_data          kafka     ${arg.single-replica-cluster}  ""
 
 > CREATE DEFAULT INDEX ON mat_data
 
-> DROP INDEX mat_data_primary_idx
+# mat_data_primary_idx1 reads from mat_data_primary_idx, so it is the one
+# dropped here.
+> DROP INDEX mat_data_primary_idx1
 
 > SELECT a+b from mat_data_tbl
 -1
@@ -404,7 +417,7 @@ c  d
 -2 -1
 
 # Unmaterialize source.
-> DROP INDEX mat_data_primary_idx1
+> DROP INDEX mat_data_primary_idx
 
 # Still works.
 > SELECT * from mat_data_tbl
@@ -483,8 +496,6 @@ c    d
 "Dataflow: materialize.public.test6" "ReduceMonotonic"
 "Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0, \"a\")]]"
 "Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0, \"a\")]]-errors"
-"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]"
-"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]-errors"
 "Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1, \"b\")]]"
 "Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1, \"b\")]]-errors"
 "Dataflow: materialize.public.test1" AccumulableErrorCheck

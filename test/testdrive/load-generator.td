@@ -152,8 +152,10 @@ org_id false bigint ""
   FROM LOAD GENERATOR AUCTION FOR TABLES (user);
 contains:reference to user not found in source
 
-> CREATE SCHEMA another;
+# Source and export preparation must use a schema renamed in the same transaction.
+> CREATE SCHEMA another_before;
 > BEGIN
+> ALTER SCHEMA another_before RENAME TO another;
 > CREATE SOURCE another.auction_house
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION;

@@ -94,9 +94,9 @@ true
 
 # Drop the installed dataflows
 
-> DROP INDEX divergent_index
-
 > DROP MATERIALIZED VIEW divergent_materialized
+
+> DROP INDEX divergent_index
 
 # Force a statement timeout
 

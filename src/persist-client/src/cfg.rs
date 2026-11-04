@@ -318,6 +318,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&BLOB_READ_TIMEOUT)
         .add(&SHARD_METRICS)
         .add(&PER_SHARD_METRICS_ENABLE_REGEX)
+        .add(&SHARD_INFO_METRIC)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
@@ -407,7 +408,8 @@ impl PersistConfig {
 
 /// Sets the maximum size of the connection pool that is used by consensus.
 ///
-/// Requires a restart of the process to take effect.
+/// Applies to existing pools without a restart. Each pool picks up a changed
+/// value the next time a connection is requested from it.
 pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
     "persist_consensus_connection_pool_max_size",
     50,
@@ -755,7 +757,7 @@ pub const SHARD_METRICS: Config<&'static str> = Config::new(
     "persist_shard_metrics",
     ShardMetricsExport::default().as_str(),
     "Which persist shard metrics to export: 'per_shard' (the `mz_persist_shard_*` families \
-    with one series per shard), 'summary' (their bounded `_percentile`, `_topk` and \
+    with one series per shard), 'summary' (their bounded `_percentile`, `_sum`, `_topk` and \
     per-version aggregates), 'both', or 'none'. Shard counts and process-level counters are \
     always exported.",
     ParameterScope::Environment,
@@ -773,10 +775,10 @@ pub enum ShardMetricsExport {
 impl ShardMetricsExport {
     pub const ALL: [Self; 4] = [Self::None, Self::Summary, Self::PerShard, Self::Both];
 
-    /// The value [`SHARD_METRICS`] defaults to, which exports everything this
-    /// setting can turn off.
+    /// The value [`SHARD_METRICS`] defaults to, whose series count is bounded
+    /// by the per-version aggregates rather than the shard count.
     pub const fn default() -> Self {
-        Self::Both
+        Self::Summary
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -829,6 +831,17 @@ pub const PER_SHARD_METRICS_ENABLE_REGEX: Config<&'static str> = Config::new(
     "While `persist_shard_metrics` is 'summary' or 'none', keep exporting the per-shard series \
     whose `shard` or `name` label matches this regex (unanchored). Empty or invalid keeps \
     none.",
+    ParameterScope::Environment,
+);
+
+/// Whether to export `mz_persist_shard_info`, one series per shard, so that
+/// dashboards can list the shards when [`SHARD_METRICS`] leaves the per-shard
+/// families out.
+pub const SHARD_INFO_METRIC: Config<bool> = Config::new(
+    "persist_shard_info_metric",
+    false,
+    "Whether to export `mz_persist_shard_info`, which lists this process's shards by `shard` \
+    and `name` with one series each.",
     ParameterScope::Environment,
 );
 

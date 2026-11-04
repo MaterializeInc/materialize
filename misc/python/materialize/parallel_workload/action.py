@@ -332,14 +332,12 @@ class Action:
             "division by zero",
             "out of range",
             "is only defined for finite arguments",
-            "Window function performance issue",  # TODO: Remove when SQL-640 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
             # A persistent object (sink, non-temp view) referencing a temporary
             # one is correctly rejected. We still let the workload attempt it,
             # a path that wrongly accepts it instead panics the coordinator on
             # catalog apply, which surfaces as an unexpected failure.
             "non-temporary items cannot depend on temporary item",
-            "is not of expected type SqlColumnType",  # TODO: Remove when SQL-566 is fixed
             # generate_select_query occasionally emits a WITH MUTUALLY
             # RECURSIVE body with ERROR AT RECURSION LIMIT, which errors on
             # purpose when the iteration outruns the limit. Only our generated
@@ -1744,6 +1742,12 @@ class CreateIndexAction(Action):
 
 
 class DropIndexAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # A materialized view or a newer index may read from it.
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.indexes:
@@ -3003,6 +3007,7 @@ class FlipFlagsAction(Action):
             "'^u1'",
             "'.*'",
         ]
+        self.flags_with_values["persist_shard_info_metric"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_part_decode_batch_rows"] = [
             "''",
             "7",
@@ -3200,10 +3205,10 @@ class FlipFlagsAction(Action):
         self.flags_with_values["column_paged_batcher_swap_pageout"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["column_paged_batcher_spill_worker_count"] = [
-            "0",
-            "2",
-            "4",
+        self.flags_with_values["column_paged_batcher_spill_worker_fraction"] = [
+            "0.0",
+            "0.125",
+            "0.5",
         ]
         self.flags_with_values["column_paged_batcher_eager_backing"] = (
             BOOLEAN_FLAG_VALUES
@@ -3472,6 +3477,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
             "enable_mcp_protocol_2026_07_28",
+            "enable_mcp_unified",
             "mcp_max_response_size",
             "mcp_request_timeout",
             "mz_metrics_lgalloc_map_refresh_interval",
@@ -4665,6 +4671,7 @@ class SetSessionVariableAction(Action):
             "client_min_messages": ["debug1", "info", "notice", "warning", "error"],
             "max_query_result_size": ["100000", "1000000", "1000000000"],
             "emit_timestamp_notice": ["true", "false"],
+            "emit_execution_time_notice": ["true", "false"],
             "emit_trace_id_notice": ["true", "false"],
             # Only UTC is accepted, the rejection of other time zones is
             # deliberate error path coverage.
@@ -6536,7 +6543,7 @@ dml_nontrans_action_list = ActionList(
         (FlipFlagsAction, 2),
         (SetSessionVariableAction, 2),
         (DiscardAction, 2),
-        # TODO: Reenable when SS-193 and SS-325 are fixed
+        # TODO: Reenable when SS-325 is fixed
         # (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
     ],

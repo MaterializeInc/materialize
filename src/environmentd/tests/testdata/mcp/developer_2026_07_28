@@ -271,7 +271,7 @@ Mcp-Name: nonexistent_tool
 {"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":16,"error":{"code":-32602,"message":"Invalid params: Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 212","data":{"error_type":"InvalidParams"}}}
+{"jsonrpc":"2.0","id":16,"error":{"code":-32602,"message":"Invalid params: Failed to deserialize the JSON body into the target type: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 212","data":{"error_type":"InvalidParams"}}}
 
 mcp-developer
 MCP-Protocol-Version: 2026-07-28
@@ -280,7 +280,7 @@ Mcp-Name: query_system_catalog
 {"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":18,"error":{"code":-32602,"message":"Invalid params: Failed to deserialize the JSON body into the target type: .: missing field `sql_query` at line 1 column 216","data":{"error_type":"InvalidParams"}}}
+{"jsonrpc":"2.0","id":18,"error":{"code":-32602,"message":"Invalid params: Failed to deserialize the JSON body into the target type: missing field `sql_query` at line 1 column 216","data":{"error_type":"InvalidParams"}}}
 
 # The header and _meta checks still come first.
 mcp-developer
@@ -353,7 +353,7 @@ MCP-Protocol-Version: 2026-07-28
 {"jsonrpc":"2.0","method":"tools/call","params":{"name":"nonexistent_tool"}}
 ----
 400 Bad Request
-{"jsonrpc":"2.0","error":{"code":-32602,"message":"Invalid params: Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 76","data":{"error_type":"InvalidParams"}}}
+{"jsonrpc":"2.0","error":{"code":-32602,"message":"Invalid params: Failed to deserialize the JSON body into the target type: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 76","data":{"error_type":"InvalidParams"}}}
 
 # =============================================================================
 # Earlier revisions are never checked
@@ -374,10 +374,10 @@ MCP-Protocol-Version: 2025-11-25
 {"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"nonexistent_tool"}}
 ----
 422 Unprocessable Entity
-Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 84
+Failed to deserialize the JSON body into the target type: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 84
 
 mcp-developer
 {"jsonrpc":"2.0","id":37,"method":"tools/call","params":{"name":"nonexistent_tool"}}
 ----
 422 Unprocessable Entity
-Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 84
+Failed to deserialize the JSON body into the target type: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 84

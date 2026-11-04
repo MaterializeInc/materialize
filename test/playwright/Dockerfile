@@ -7,11 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:24-trixie-slim
+# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# digest for security fixes. mzbuild only rebuilds when this directory changes,
+# so an unpinned tag kept serving whatever Node it resolved to at the last edit.
+FROM node:26-trixie-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39
 
-# NOTE: Keep this version in sync with `@playwright/test` in
-# test/dataflow-visualizer/package.json. Each Playwright release pins its own
-# browser build, and the test run resolves the browser from this prebaked cache.
-# A mismatch fails at launch with "Executable doesn't exist", not at install.
-RUN npx --yes playwright@1.62.1 install --with-deps chromium \
+COPY package.json /tmp/playwright-package.json
+RUN playwright_version=$(node -p 'require("/tmp/playwright-package.json").devDependencies["@playwright/test"]') \
+    && npx --yes "playwright@$playwright_version" install --with-deps chromium \
     && rm -rf /root/.npm /var/lib/apt/lists/*

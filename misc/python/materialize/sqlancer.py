@@ -114,6 +114,7 @@ IGNORED_ERROR_PATTERNS = [
     r"must use value within",
     r"zero raised to a negative power is undefined",
     r"range type over",
+    r"cannot drop index(?:es)? .*: still depended upon by ",
     r"Evaluation error: Unexpected keyword .* at the beginning of a statement",
 ]
 
@@ -198,12 +199,12 @@ def run_sqlancer(
     c.up("materialized")
 
     c.sql(
-        "ALTER SYSTEM SET max_databases TO 1000",
+        "ALTER SYSTEM SET max_databases TO 10000",
         user="mz_system",
         port=6877,
     )
     c.sql(
-        "ALTER SYSTEM SET max_tables TO 1000",
+        "ALTER SYSTEM SET max_tables TO 10000",
         user="mz_system",
         port=6877,
     )

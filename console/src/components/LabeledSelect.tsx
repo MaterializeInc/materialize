@@ -115,6 +115,10 @@ const LabeledSelect = forwardRef<LabeledSelectProps, "select">((props, ref) => {
           padding: "8px 12px",
           borderRight: `1px solid ${colors.border.secondary}`,
           backgroundColor: colors.background.secondary,
+          // The field takes the rest of the width, which would otherwise
+          // squeeze a multi-word label onto two lines.
+          flexShrink: 0,
+          whiteSpace: "nowrap",
         }}
       >
         {props.label}

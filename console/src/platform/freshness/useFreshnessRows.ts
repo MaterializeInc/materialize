@@ -9,7 +9,7 @@
 
 import React from "react";
 
-import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
+import { GraphLineSeries } from "~/components/FreshnessGraph/types";
 import { FreshnessObject } from "~/platform/clusters/queries";
 
 import {
@@ -19,12 +19,12 @@ import {
   judgeLines,
   Predicate,
 } from "./freshnessRows";
-import { HydrationCounts } from "./queries";
+import { HydrationCounts, LagPercentiles } from "./queries";
 
 export interface FreshnessRowsParams {
   lines: GraphLineSeries[];
-  historicalData: DataPoint[];
   latestByObjectId: Map<string, number | null>;
+  percentilesByObjectId: Map<string, LagPercentiles>;
   objectsById: Map<string, FreshnessObject>;
   hydrationByObjectId: Map<string, HydrationCounts>;
   typeFilters: string[];
@@ -47,8 +47,8 @@ export interface FreshnessRowsParams {
  */
 export function useFreshnessRows({
   lines,
-  historicalData,
   latestByObjectId,
+  percentilesByObjectId,
   objectsById,
   hydrationByObjectId,
   typeFilters,
@@ -72,13 +72,13 @@ export function useFreshnessRows({
   );
 
   const statsByKey = React.useMemo(
-    () => buildStats(visibleLines, historicalData, latestByObjectId),
-    [visibleLines, historicalData, latestByObjectId],
+    () => buildStats(visibleLines, latestByObjectId, percentilesByObjectId),
+    [visibleLines, latestByObjectId, percentilesByObjectId],
   );
 
   const judged = React.useMemo(
-    () => judgeLines(visibleLines, historicalData, predicate, statsByKey),
-    [visibleLines, historicalData, predicate, statsByKey],
+    () => judgeLines(visibleLines, predicate, statsByKey),
+    [visibleLines, predicate, statsByKey],
   );
 
   const rows = React.useMemo(

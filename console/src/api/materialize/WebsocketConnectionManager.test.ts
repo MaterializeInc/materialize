@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { atom } from "jotai";
+import { SemVer } from "semver";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getStore } from "~/jotai";
@@ -24,10 +25,14 @@ import {
   WebsocketConnectionManager,
 } from "./WebsocketConnectionManager";
 
-function createHealthyEnvironment(httpAddress: string) {
+function createHealthyEnvironment(httpAddress: string, crateVersion = "0.0.0") {
   return {
     state: "enabled" as const,
-    status: { health: "healthy" as const, version: "0.0.0", errors: [] },
+    status: {
+      health: "healthy" as const,
+      version: { crateVersion: new SemVer(crateVersion), sha: "0" },
+      errors: [],
+    },
     httpAddress,
     sqlAddress: "localhost:6876",
     resolvable: true,
@@ -396,6 +401,80 @@ describe("WebsocketConnectionManager", () => {
         "addr-b:6876",
         undefined,
       );
+    });
+  });
+
+  describe("session variables", () => {
+    afterEach(() => {
+      getStore().set(currentRegionIdAtom, defaultRegionId);
+    });
+
+    it("passes the environment that turned healthy to the connect", () => {
+      const store = getStore();
+      const booting = {
+        ...createHealthyEnvironment("addr-a:6876"),
+        status: { health: "booting" as const, errors: [] },
+      };
+      store.set(
+        environmentsWithHealth,
+        new Map([
+          [defaultRegionId, booting],
+        ]) as unknown as EnvironmentsWithHealth,
+      );
+      const getSessionVariables = vi.fn(() => undefined);
+      manager = new WebsocketConnectionManager(
+        mockTarget,
+        store,
+        reconnectionStateAtom,
+        { getSessionVariables },
+      );
+      expect(getSessionVariables).not.toHaveBeenCalled();
+
+      // The connect runs inside this store update, before React re-renders any
+      // component that reads the environment.
+      const healthy = createHealthyEnvironment("addr-a:6876", "26.49.0-dev.0");
+      store.set(
+        environmentsWithHealth,
+        new Map([
+          [defaultRegionId, healthy],
+        ]) as unknown as EnvironmentsWithHealth,
+      );
+      expect(getSessionVariables).toHaveBeenCalledTimes(1);
+      expect(getSessionVariables).toHaveBeenCalledWith({
+        hasEverConnected: false,
+        environment: healthy,
+      });
+    });
+
+    it("passes the new region's environment after a region switch", () => {
+      const store = getStore();
+      const regionA = createHealthyEnvironment("addr-a:6876", "26.48.0");
+      const regionB = createHealthyEnvironment("addr-b:6876", "26.49.0");
+      store.set(
+        environmentsWithHealth,
+        new Map([
+          [defaultRegionId, regionA],
+          ["aws/eu-west-1", regionB],
+        ]) as unknown as EnvironmentsWithHealth,
+      );
+      const getSessionVariables = vi.fn(() => undefined);
+      manager = new WebsocketConnectionManager(
+        mockTarget,
+        store,
+        reconnectionStateAtom,
+        { getSessionVariables },
+      );
+      expect(getSessionVariables).toHaveBeenLastCalledWith({
+        hasEverConnected: false,
+        environment: regionA,
+      });
+      mockTarget.simulateOpen();
+
+      store.set(currentRegionIdAtom, "aws/eu-west-1");
+      expect(getSessionVariables).toHaveBeenLastCalledWith({
+        hasEverConnected: true,
+        environment: regionB,
+      });
     });
   });
 

@@ -31,7 +31,7 @@ pub struct CastMapToString {
 }
 
 // TODO? If we moved typeconv into expr, we could evaluate the inverse of this cast
-#[sqlfunc(CastMapToString, sqlname = "maptostr", preserves_uniqueness = true)]
+#[sqlfunc(CastMapToString, sqlname = "maptostr", preserves_uniqueness = super::text_preserves_uniqueness(&self.ty))]
 fn cast_map_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError> {
     let mut buf = String::new();
     stringify_datum(&mut buf, *a, &self.ty)?;

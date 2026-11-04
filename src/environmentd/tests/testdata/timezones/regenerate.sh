@@ -24,12 +24,17 @@
 # image's package the build compiles /usr/share/zoneinfo from the pinned IANA
 # source release with zic (Debian's PostgreSQL reads system tzdata). Update
 # EXPECTED_TZDATA when bumping chrono-tz.
+#
+# NOTE: `-b fat` is required. The image's zic predates 2026b, and its default
+# slim output drops abbreviation and is_dst transitions from the Canadian
+# temporary-hack zones (e.g. America/Edmonton reports MDT, not CST, after
+# 2026-11-01). See "NOTE FOR 2026b TEMPORARY HACK" in the IANA NEWS file.
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-EXPECTED_TZDATA=2026c
+EXPECTED_TZDATA=2026e
 IMAGE=mz-timezone-snapshot
 
 DATES=("$@")
@@ -44,7 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends faketime curl c
     && rm -rf /var/lib/apt/lists/* \
     && mkdir /tmp/tzdata && cd /tmp/tzdata \
     && curl -fsSL "https://data.iana.org/time-zones/releases/tzdata${TZDATA_VERSION}.tar.gz" | tar xz \
-    && zic -d /usr/share/zoneinfo africa antarctica asia australasia \
+    && zic -b fat -d /usr/share/zoneinfo africa antarctica asia australasia \
         etcetera europe northamerica southamerica backward factory \
     && cp version /usr/share/zoneinfo/+VERSION \
     && rm -rf /tmp/tzdata

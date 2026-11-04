@@ -10,6 +10,7 @@
 //! An interactive dataflow server.
 
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_cluster_client::client::TimelyConfig;
@@ -18,7 +19,8 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_rocksdb::config::SharedWriteBufferManager;
-use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
+use mz_service::client::GenericClient;
+use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use timely::worker::Worker as TimelyWorker;
@@ -60,7 +62,7 @@ pub async fn serve(
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
-) -> Result<impl Fn() -> Box<dyn StorageClient> + use<>, anyhow::Error> {
+) -> Result<impl Fn() -> StorageServerClient + use<>, anyhow::Error> {
     let config = Config {
         persist_clients,
         txns_ctx,
@@ -79,13 +81,30 @@ pub async fn serve(
     let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
     let timely_container = Arc::new(Mutex::new(timely_container));
 
-    let client_builder = move || {
-        let client = ClusterClient::new(Arc::clone(&timely_container));
-        let client: Box<dyn StorageClient> = Box::new(client);
-        client
-    };
+    let client_builder =
+        move || StorageServerClient(ClusterClient::new(Arc::clone(&timely_container)));
 
     Ok(client_builder)
+}
+
+/// A client to the Timely cluster of a storage server.
+#[derive(Debug)]
+pub struct StorageServerClient(ClusterClient<Config>);
+
+impl GenericClient<StorageCommand, StorageResponse> for StorageServerClient {
+    fn send(
+        &mut self,
+        cmd: StorageCommand,
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + Send {
+        self.0.send(cmd)
+    }
+
+    fn poll_recv(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Option<StorageResponse>, anyhow::Error>> {
+        self.0.poll_recv(cx)
+    }
 }
 
 impl ClusterSpec for Config {

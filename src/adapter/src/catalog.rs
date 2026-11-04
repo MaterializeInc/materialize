@@ -107,6 +107,7 @@ use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
+pub(crate) mod command;
 pub(crate) mod consistency;
 mod migrate;
 
@@ -295,6 +296,11 @@ impl ConnCatalog<'_> {
 
     pub fn state(&self) -> &CatalogState {
         &*self.state
+    }
+
+    /// Returns a system-role view of this catalog snapshot.
+    pub fn for_system_session(&self) -> ConnCatalog<'_> {
+        self.state.for_system_session()
     }
 
     /// Prevent planning from resolving item with the provided ID. Instead,
@@ -1611,6 +1617,26 @@ impl Catalog {
             },
         )];
         self.update_expression_cache(local_exprs, global_exprs, Default::default())
+    }
+
+    /// Cache the local expression for the given `GlobalId` of an item being
+    /// created, which has no dataflow, such as a view. Otherwise the same as
+    /// [`Catalog::cache_expressions`].
+    pub(crate) fn cache_local_expression(
+        &self,
+        id: GlobalId,
+        local_mir: OptimizedMirRelationExpr,
+        optimizer_features: OptimizerFeatures,
+    ) -> BoxFuture<'static, ()> {
+        let local_exprs = vec![(
+            id,
+            LocalExpressions {
+                local_mir,
+                optimizer_features,
+                item_version: RelationVersion::root(),
+            },
+        )];
+        self.update_expression_cache(local_exprs, Vec::new(), Default::default())
     }
 
     pub(crate) fn update_expression_cache<'a, 'b>(

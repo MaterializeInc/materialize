@@ -36,7 +36,7 @@ use scopeguard::ScopeGuard;
 use serde::{Deserialize, Serialize};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, Interest, ReadBuf, Ready};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_metrics::TaskMetrics;
@@ -277,15 +277,34 @@ impl ListenerHandle {
     }
 }
 
+/// The accept-queue length requested for listening sockets.
+///
+/// `environmentd` binds its listeners before it boots and only starts accepting
+/// once boot completes, so every connection made during boot, including
+/// Kubernetes TCP probes, waits in this queue. Once it is full, Linux drops new
+/// connection attempts, which fails TCP probes and can get the pod killed
+/// mid-boot. Linux silently caps this at `net.core.somaxconn`.
+const LISTEN_BACKLOG: u32 = 1024;
+
 /// Listens for incoming TCP connections on the specified address.
 ///
 /// Returns a handle to the listener and the stream of incoming connections
 /// produced by the listener. When the handle is dropped, the listener is
 /// closed, and the stream of incoming connections terminates.
-pub async fn listen(
+///
+/// Panics if called outside a Tokio runtime.
+pub fn listen(
     addr: &SocketAddr,
 ) -> Result<(ListenerHandle, Pin<Box<dyn ConnectionStream>>), io::Error> {
-    let listener = TcpListener::bind(addr).await?;
+    let socket = match addr {
+        SocketAddr::V4(_) => TcpSocket::new_v4()?,
+        SocketAddr::V6(_) => TcpSocket::new_v6()?,
+    };
+    // `TcpListener::bind` sets this on Unix. Without it, a restarted process
+    // cannot rebind while connections from the previous one are in TIME_WAIT.
+    socket.set_reuseaddr(true)?;
+    socket.bind(*addr)?;
+    let listener = socket.listen(LISTEN_BACKLOG)?;
     let local_addr = listener.local_addr()?;
     let (trigger, trigger_rx) = trigger::channel();
     let handle = ListenerHandle {
@@ -627,6 +646,34 @@ impl TlsCliArgs {
             let cert = self.tls_cert.unwrap();
             let key = self.tls_key.unwrap();
             Ok(Some(TlsCertConfig { cert, key }))
+        }
+    }
+}
+
+// macOS caps the backlog at `kern.ipc.somaxconn`, 128 by default, so the queue
+// length is only meaningful on Linux.
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use std::net::SocketAddr;
+    use std::time::Duration;
+
+    use tokio::net::TcpStream;
+
+    use super::{LISTEN_BACKLOG, listen};
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `socket`
+    async fn listen_queues_backlog_connections_before_accepting() {
+        let (handle, _conns) = listen(&SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let addr = handle.local_addr();
+        // Nothing accepts these, so each one stays in the accept queue even
+        // after the client closes it, as a TCP probe does.
+        for i in 0..LISTEN_BACKLOG {
+            let stream = tokio::time::timeout(Duration::from_secs(1), TcpStream::connect(addr))
+                .await
+                .unwrap_or_else(|_| panic!("connection {i} timed out, accept queue is full"))
+                .unwrap();
+            drop(stream);
         }
     }
 }

@@ -980,6 +980,11 @@ fn test_pgtest_mz_discard() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_execution_time() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/execution-time.pt"), true);
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_notice() {
     pg_test_inner(Path::new("../../test/pgtest-mz/notice.pt"), true);
 }

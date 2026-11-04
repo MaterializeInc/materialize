@@ -5,7 +5,7 @@ How to build, run, and publish the `mz-deploy` VS Code extension.
 ## Prerequisites
 
 - **Rust toolchain** — for building the `mz-deploy` binary
-- **Node.js + npm** — for building the extension
+- **Node.js 22 or later + npm** for building and packaging the extension
 - **VS Code** ^1.88.0
 
 ## Building

@@ -1,0 +1,44 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+import React from "react";
+
+import { Cluster } from "~/api/materialize/cluster/clusterList";
+import { SizeAllocation } from "~/api/materialize/cluster/replicaProcessMetrics";
+import { useReplicaSizeAllocations } from "~/platform/clusters/queries";
+
+export interface SizedReplica {
+  id: string;
+  name: string;
+  size: string;
+  /** One process's allocation. */
+  allocation: SizeAllocation;
+}
+
+/** The cluster's replicas whose size's allocation is known, each with it. */
+export function useSizedReplicas(cluster: Cluster) {
+  const {
+    data: allocationsBySize,
+    isLoading,
+    isError,
+  } = useReplicaSizeAllocations(
+    [
+      ...new Set(cluster.replicas.flatMap(({ size }) => (size ? [size] : []))),
+    ].sort(),
+  );
+  const replicas = React.useMemo(
+    () =>
+      cluster.replicas.flatMap(({ id, name, size }): SizedReplica[] => {
+        const allocation = size ? allocationsBySize?.get(size) : undefined;
+        return size && allocation ? [{ id, name, size, allocation }] : [];
+      }),
+    [cluster.replicas, allocationsBySize],
+  );
+  return { replicas, isLoading, isError };
+}

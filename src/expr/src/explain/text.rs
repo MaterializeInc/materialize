@@ -155,7 +155,7 @@ where
                     if let Some(cols) = cols.as_mut() {
                         let anonymous = std::iter::repeat(String::new());
                         cols.extend(
-                            anonymous.take(src.op.map(|op| op.expressions.len()).unwrap_or(0)),
+                            anonymous.take(src.op.as_ref().map_or(0, |op| op.expressions.len())),
                         )
                     };
                     // Render source with humanized expressions.

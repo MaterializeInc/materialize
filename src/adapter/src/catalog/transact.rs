@@ -102,6 +102,9 @@ pub struct InjectedAuditEvent {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    RenameCommand(Arc<super::command::RenameCommand>),
+    CatalogResult(Arc<super::command::CatalogResultCommand>),
+    Description(Arc<super::command::DescriptionCommand>),
     AlterRetainHistory {
         id: CatalogItemId,
         value: Option<Value>,
@@ -978,7 +981,23 @@ impl Catalog {
 
         let mut updates = Vec::new();
 
-        for op in ops {
+        let mut pending_ops: std::collections::VecDeque<_> = ops.into();
+        while let Some(op) = pending_ops.pop_front() {
+            if let Op::RenameCommand(command) = op {
+                let compiled = command.execute(&preliminary_state)?;
+                for op in compiled.into_iter().rev() {
+                    pending_ops.push_front(op);
+                }
+                continue;
+            }
+            if let Op::CatalogResult(command) = op {
+                command.execute(&preliminary_state)?;
+                continue;
+            }
+            if let Op::Description(command) = op {
+                command.execute(&preliminary_state)?;
+                continue;
+            }
             Self::transact_op(
                 oracle_write_ts,
                 session,
@@ -1002,6 +1021,16 @@ impl Catalog {
                     .to_mut()
                     .apply_updates(op_updates.clone(), &mut local_expr_cache)
                     .await;
+                let updated_item_ids = op_updates.iter().filter_map(|update| match &update.kind {
+                    mz_catalog::memory::objects::StateUpdateKind::Item(item)
+                        if update.diff == mz_catalog::memory::objects::StateDiff::Addition =>
+                    {
+                        Some(item.id)
+                    }
+                    _ => None,
+                });
+                // Durably record metadata such as an item's columns.
+                preliminary_state.record_item_metadata(tx, updated_item_ids)?;
             }
             updates.append(&mut op_updates);
         }
@@ -1077,6 +1106,9 @@ impl Catalog {
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), AdapterError> {
         match op {
+            Op::RenameCommand(_) | Op::CatalogResult(_) | Op::Description(_) => {
+                unreachable!("commands are expanded by transact_inner")
+            }
             Op::CheckClusterState {
                 cluster_id,
                 expected,

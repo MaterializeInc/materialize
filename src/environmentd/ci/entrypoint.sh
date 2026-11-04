@@ -17,6 +17,12 @@ else
     export LD_PRELOAD=libeatmydata.so
 fi
 
+# Exit code of mz_ore::restart_in_place!, which environmentd uses only for
+# halts that are safe to repeat inside this container. Restarting here avoids
+# Kubernetes crash backoff. Every other failure, including mz_ore::halt!
+# (166), exits the container and leaves the restart to Kubernetes.
+restart_in_place=75
+
 # tini -g forwards shutdown signals to both this shell and environmentd.
 # Exit even if environmentd handles the signal by halting or exiting cleanly.
 trap 'exit 143' TERM
@@ -28,10 +34,11 @@ while true; do
         exec sleep infinity
     else
         status=$?
-        if [ "$status" -ne 166 ]; then
+        if [ "$status" -ne "$restart_in_place" ]; then
             exit "$status"
         fi
-        # mz_ore::halt! requests a restart without Kubernetes crash backoff.
-        echo "environmentd halted; restarting" >&2
+        echo "environmentd requested a restart in place; restarting" >&2
+        # Keeps the restarted process from booting writable, see preflight_0dt.
+        export MZ_RESTARTED_IN_PLACE=true
     fi
 done

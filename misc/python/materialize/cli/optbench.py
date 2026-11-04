@@ -12,7 +12,7 @@ import re
 import tempfile
 from contextlib import closing
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import click
 import numpy as np
@@ -62,12 +62,12 @@ def _required_path_callback(
 
 
 class Arg:
-    scenario = dict(
+    scenario: dict[str, Any] = dict(
         type=click.Choice(scenarios()),
         callback=_scenario_callback,
     )
 
-    base = dict(
+    base: dict[str, Any] = dict(
         type=click.Path(
             exists=True,
             file_okay=True,
@@ -79,7 +79,7 @@ class Arg:
         callback=_path_callback,
     )
 
-    diff = dict(
+    diff: dict[str, Any] = dict(
         type=click.Path(
             exists=True,
             file_okay=True,
@@ -93,7 +93,7 @@ class Arg:
 
 
 class Opt:
-    repository = dict(
+    repository: dict[str, Any] = dict(
         default=Path(tempfile.gettempdir()),
         type=click.Path(
             exists=True,
@@ -107,21 +107,33 @@ class Opt:
         callback=_required_path_callback,
     )
 
-    samples = dict(default=11, help="Samples per query.")
+    samples: dict[str, Any] = dict(default=11, help="Samples per query.")
 
-    print_results = dict(default=False, help="Print the experiment results.")
+    print_results: dict[str, Any] = dict(
+        default=False, help="Print the experiment results."
+    )
 
-    no_indexes = dict(default=False, help="Skip CREATE [DEFAULT]/DROP INDEX DDL.")
+    no_indexes: dict[str, Any] = dict(
+        default=False, help="Skip CREATE [DEFAULT]/DROP INDEX DDL."
+    )
 
-    db_port = dict(default=6875, help="DB connection port.", envvar="PGPORT")
+    db_port: dict[str, Any] = dict(
+        default=6875, help="DB connection port.", envvar="PGPORT"
+    )
 
-    db_host = dict(default="localhost", help="DB connection host.", envvar="PGHOST")
+    db_host: dict[str, Any] = dict(
+        default="localhost", help="DB connection host.", envvar="PGHOST"
+    )
 
-    db_user = dict(default="materialize", help="DB connection user.", envvar="PGUSER")
+    db_user: dict[str, Any] = dict(
+        default="materialize", help="DB connection user.", envvar="PGUSER"
+    )
 
-    db_pass = dict(default=None, help="DB connection password.", envvar="PGPASSWORD")
+    db_pass: dict[str, Any] = dict(
+        default=None, help="DB connection password.", envvar="PGPASSWORD"
+    )
 
-    db_require_ssl = dict(
+    db_require_ssl: dict[str, Any] = dict(
         is_flag=True,
         help="DB connection requires SSL.",
         envvar="PGREQUIRESSL",

@@ -15,6 +15,9 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+# Works around a Hugo data race, see ci/test/preview-docs.sh.
+export HUGO_NUMWORKERMULTIPLIER=1
+
 git clean -ffdX ci/www/public ci/www/preview
 try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --destination ../../ci/www/public/docs
 try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination ../../ci/www/public/docs/markdown-docs

@@ -8,21 +8,33 @@
 // by the Apache License, Version 2.0.
 
 import { renderHook, waitFor } from "@testing-library/react";
+import { createStore } from "jotai";
 import { delay, http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MzDataType } from "~/api/materialize/types";
 import {
   buildColumns,
+  buildSqlQueryHandlerV2,
   mapKyselyToTabular,
 } from "~/api/mocks/buildSqlQueryHandler";
 import server from "~/api/mocks/server";
 import {
   FreshnessObject,
   useClusterFreshness,
+  useFreshnessObjectsWhere,
 } from "~/platform/clusters/queries";
-import { createProviderWrapper } from "~/test/utils";
+import { allObjects } from "~/store/allObjects";
+import { buildDatabaseObject, createProviderWrapper } from "~/test/utils";
 
-import { useFreshnessHydration, useLatestLag } from "./queries";
+import { FreshnessScope } from "./constants";
+import {
+  freshnessQueryKeys,
+  inFreshnessScope,
+  useFreshnessHydration,
+  useLatestLag,
+  useObjectLagPercentiles,
+} from "./queries";
 
 const objects: FreshnessObject[] = [
   {
@@ -30,6 +42,9 @@ const objects: FreshnessObject[] = [
     objectName: "orders_mv",
     schemaName: "public",
     databaseName: "materialize",
+    schemaId: "u3",
+    clusterId: "u1",
+    clusterName: "quickstart",
     objectType: "materialized-view",
   },
 ];
@@ -57,12 +72,13 @@ describe("freshness queries", () => {
       () => {
         useClusterFreshness({ lookbackMs: 3_600_000, objects });
         useLatestLag(["u1"]);
+        useObjectLagPercentiles({ objectIds: ["u1"], lookbackMs: 3_600_000 });
         useFreshnessHydration(["u1"]);
       },
       { wrapper: ProviderWrapper },
     );
 
-    await waitFor(() => expect(pending).toHaveLength(3));
+    await waitFor(() => expect(pending).toHaveLength(4));
   });
 
   it("asks only for the series when only the graph is shown", async () => {
@@ -131,5 +147,112 @@ describe("freshness queries", () => {
       await openPage();
       expect(requests).toBe(1);
     });
+  });
+});
+
+describe("useObjectLagPercentiles", () => {
+  it("passes a NULL lag through and leaves out an object with no readings", async () => {
+    const params = { objectIds: ["u1", "u2", "u3"], lookbackMs: 3_600_000 };
+    const interval = { type_oid: MzDataType.interval };
+    server.use(
+      buildSqlQueryHandlerV2({
+        queryKey: freshnessQueryKeys.objectLagPercentiles(params),
+        results: mapKyselyToTabular({
+          columns: buildColumns([
+            { name: "peak", ...interval },
+            { name: "p90", ...interval },
+            { name: "p99", ...interval },
+            { name: "p99_9", ...interval },
+          ]),
+          rows: [
+            {
+              objectId: "u1",
+              peak: "00:00:09",
+              p90: "00:00:00.43",
+              p99: "00:00:09",
+              p99_9: "00:00:09",
+            },
+            {
+              objectId: "u2",
+              peak: null,
+              p90: "00:00:00.4",
+              p99: null,
+              p99_9: null,
+            },
+          ],
+        }),
+      }),
+    );
+
+    const ProviderWrapper = await createProviderWrapper();
+    const { result } = renderHook(() => useObjectLagPercentiles(params), {
+      wrapper: ProviderWrapper,
+    });
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual(
+        new Map([
+          ["u1", { peak: 9_000, p90: 430, p99: 9_000, p99_9: 9_000 }],
+          [
+            "u2",
+            // Unreadable readings arrive as null. `computeStats` marks them.
+            { peak: null, p90: 400, p99: null, p99_9: null },
+          ],
+        ]),
+      ),
+    );
+  });
+});
+
+// Schema u3 holds objects on two clusters and none, of every type the page
+// either shows or must skip. Schema u9 and cluster u2 hold the decoys.
+const ENVIRONMENT = [
+  ...[
+    { id: "u10", objectType: "table", clusterId: null },
+    { id: "u11", objectType: "materialized-view", clusterId: "u1" },
+    { id: "u12", objectType: "index", clusterId: "u2" },
+    { id: "u13", objectType: "source", clusterId: "u2" },
+    { id: "u14", objectType: "sink", clusterId: "u1" },
+    { id: "u15", objectType: "view", clusterId: null },
+    { id: "u16", objectType: "secret", clusterId: null },
+    { id: "u17", objectType: "connection", clusterId: null },
+    {
+      id: "u18",
+      objectType: "source",
+      sourceType: "subsource",
+      clusterId: "u2",
+    },
+  ].map((object) => buildDatabaseObject({ schemaId: "u3", ...object })),
+  buildDatabaseObject({ id: "u20", schemaId: "u9", clusterId: "u1" }),
+];
+
+async function objectIdsIn(scope: FreshnessScope, scopeId: string) {
+  const store = createStore();
+  store.set(allObjects, {
+    data: ENVIRONMENT,
+    error: undefined,
+    snapshotComplete: true,
+  });
+  const ProviderWrapper = await createProviderWrapper({ store });
+  const { result } = renderHook(
+    () => useFreshnessObjectsWhere(inFreshnessScope(scope, scopeId)),
+    { wrapper: ProviderWrapper },
+  );
+  return result.current.map((object) => object.objectId);
+}
+
+describe("inFreshnessScope", () => {
+  it("gathers a schema's objects that report lag, whichever cluster runs them", async () => {
+    expect(await objectIdsIn("schema", "u3")).toEqual([
+      "u10",
+      "u11",
+      "u12",
+      "u13",
+      "u14",
+    ]);
+  });
+
+  it("gathers a cluster's objects, which never include a table", async () => {
+    expect(await objectIdsIn("cluster", "u2")).toEqual(["u12", "u13"]);
   });
 });

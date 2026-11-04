@@ -561,6 +561,8 @@ Snapshot {
     },
     role_auth: {},
     items: {},
+    item_columns: {},
+    index_columns: {},
     comments: {},
     clusters: {
         ClusterKey {

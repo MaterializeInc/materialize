@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v26.48.0-dev.0](https://img.shields.io/badge/Version-v26.48.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.48.0-dev.0](https://img.shields.io/badge/AppVersion-v26.48.0--dev.0-informational?style=flat-square)
+![Version: v26.50.0-dev.0](https://img.shields.io/badge/Version-v26.50.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.50.0-dev.0](https://img.shields.io/badge/AppVersion-v26.50.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -112,6 +112,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `balancerd.defaultResources.requests` | Default resources requested for balancerd's CPU and memory if not set in the Materialize CR | ``{"cpu":"500m","memory":"256Mi"}`` |
 | `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
 | `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``{}`` |
+| `balancerd.readinessProbePath` | HTTP path of the balancerd readiness probe. `/api/readyz` fails once a pod reaches `balancerd_connection_high_watermark`, which removes it from the Service endpoints. Use `/api/livez` when the load balancer health-checks `/api/readyz` itself, for example an NLB whose targets the AWS Load Balancer Controller registers from the endpoints: deregistration cuts held sessions after the deregistration delay and excludes the pod from fail-open. | ``"/api/readyz"`` |
 | `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``{}`` |
 | `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``{}`` |
 | `clusterd.nodeSelector` | Node selector to use for all clusterd pods spawned by the operator | ``{}`` |
@@ -127,8 +128,11 @@ The following table lists the configurable parameters of the Materialize operato
 | `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``{}`` |
 | `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``{}`` |
 | `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``{}`` |
+| `environmentd.defaultLivenessProbe` | Default liveness probe overrides for environmentd, overlaid onto the built-in TCP check against environmentd's SQL port. Only the fields set here are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) replaces the built-in one. The Materialize CR's `environmentdLivenessProbe` is overlaid on top of this. | ``{}`` |
+| `environmentd.defaultReadinessProbe` | Default readiness probe overrides for environmentd, overlaid onto the built-in TCP check against environmentd's SQL port. Only the fields set here are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) replaces the built-in one. The Materialize CR's `environmentdReadinessProbe` is overlaid on top of this. | ``{}`` |
 | `environmentd.defaultResources.limits` | Default resource limits for environmentd's CPU and memory if not set in the Materialize CR | ``{"memory":"4Gi"}`` |
 | `environmentd.defaultResources.requests` | Default resources requested for environmentd's CPU and memory if not set in the Materialize CR | ``{"cpu":"1","memory":"4095Mi"}`` |
+| `environmentd.defaultStartupProbe` | Default startup probe for environmentd. Liveness and readiness checks are held off until it succeeds. No startup probe runs unless this or the Materialize CR's `environmentdStartupProbe` sets one. It is overlaid onto the built-in TCP check against environmentd's SQL port in the same way as `defaultReadinessProbe`. | ``{}`` |
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
 | `environmentd.priorityClassName` | PriorityClass to use for environmentd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all. | ``""`` |
 | `environmentd.tolerations` | Tolerations to use for environmentd pods spawned by the operator | ``{}`` |
@@ -146,7 +150,9 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.enableDatabaseNetworkPolicies` | Whether to allow `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY` in environmentd. Network policies match on client IP, which self-managed deployments generally do not preserve (port-forwards and most ingress setups present a proxy address), so they are disabled by default. | ``false`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.enableLicenseKeyChecks` |  | ``false`` |
+| `operator.args.enableUserNamespaces` | Whether to run the operator, environmentd, clusterd, balancerd, and console pods in Kubernetes user namespaces (`hostUsers: false`), so that root inside a container maps to an unprivileged user on the node. Nodes must support it: Linux 6.3 or later (for idmapped mounts on tmpfs-backed volumes such as Secrets and emptyDir), and containerd 2.0 or later or CRI-O 1.25 or later. Set to `false` if your nodes do not meet these requirements. Changing this for an existing Materialize instance requires a rollout to take effect. | ``true`` |
 | `operator.args.installV1CRD` | Whether to install the v1 version of the Materialize CRD and the conversion webhook that converts between v1 and v1alpha1. When false, only the v1alpha1 CRD version is installed and no webhook serving certificate or service is created. | ``false`` |
+| `operator.args.licenseKeyIntermediateCerts` | Root-signed intermediate certificates whose keys may also sign license keys. Requires an operator built from v26.49.0-dev.0 or later. | ``[]`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.args.statementLoggingMaxSampleRate` | Caps the fraction of statements recorded in query history, via environmentd's `statement_logging_max_sample_rate`. This is the rate Materialize Cloud runs at. Sampling costs CPU on environmentd, but the volume written is bounded by `statementLoggingTargetDataRate` rather than by this, so lowering this gives up query history completeness without lowering the ceiling on what statement logging stores. Set it to `0` to disable statement logging entirely, or to `null` to inherit environmentd's default. | ``0.99`` |
 | `operator.args.statementLoggingTargetDataRate` | Caps the sustained volume statement logging writes, in bytes per second, via environmentd's `statement_logging_target_data_rate`. This is what actually bounds how fast query history grows, and the recorded history is retained for the lifetime of the environment, so lower it on environments with limited storage. Must be greater than 0. Set it to `null` to inherit environmentd's default of 2071 bytes per second, which is the rate Materialize Cloud runs at. | ``nil`` |
@@ -179,7 +185,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.swap_enabled` | Configure sizes such that the pod QoS class is not Guaranteed, as is required for swap to be enabled. Disk doesn't make much sense with swap, as swap performs better than lgalloc, so it also gets disabled. | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.46.0"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.48.2"`` |
 | `operator.nodeSelector` | Node selector to use for the operator pod | ``{}`` |
 | `operator.podDisruptionBudget.enabled` | Whether to create a PodDisruptionBudget for the operator. Only created when `replicas` is greater than 1, since a budget over a single replica either blocks node drains or protects nothing. | ``true`` |
 | `operator.podDisruptionBudget.maxUnavailable` | Maximum number of operator pods that may be unavailable at once during voluntary disruptions. Expressed as a maximum rather than a minimum so that node drains are never blocked outright, they are only serialized. | ``1`` |
@@ -201,15 +207,13 @@ The following table lists the configurable parameters of the Materialize operato
 | `storage.storageClass.reclaimPolicy` |  | ``"Delete"`` |
 | `storage.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
 | `telemetry.enabled` |  | ``true`` |
-| `telemetry.segmentApiKey` |  | ``"hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A"`` |
-| `telemetry.segmentClientSide` |  | ``true`` |
 | `tls.defaultCertificateSpecs` |  | ``{}`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v26.48.0-dev.0 \
+  --set operator.image.tag=v26.50.0-dev.0 \
   materialize/materialize-operator
 ```
 
@@ -244,7 +248,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.48.0-dev.0
+  environmentdImageRef: materialize/environmentd:v26.50.0-dev.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
@@ -280,6 +284,13 @@ You manage its contents and lifecycle.
 
 For setup, runtime updates, and verification, see
 [Configure balancerd dynamic configuration](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/#configure-balancerd-dynamic-configuration).
+
+Before setting the connection watermarks
+(`balancerd_connection_high_watermark` and `balancerd_connection_low_watermark`),
+confirm that the load balancer in front of balancerd keeps established
+connections open when a backend is not ready, and whether
+`balancerd.readinessProbePath` should be `/api/livez` for it. See
+[Take a nearly full balancerd out of load balancer rotation](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/#take-a-nearly-full-balancerd-out-of-load-balancer-rotation).
 
 ### Network Policies
 

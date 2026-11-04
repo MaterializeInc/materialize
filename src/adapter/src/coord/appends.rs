@@ -532,8 +532,7 @@ impl GroupCommitter {
         // rather than the oracle has to cope with this window, so a test can
         // hold it open here. Every txns-shard write parks here while armed,
         // including the keepalives that advance table uppers, so arm it with a
-        // bounded `sleep` rather than a `pause`. Used by
-        // workflow_test_occ_zero_row_write_linearization.
+        // bounded `sleep` rather than a `pause`.
         fail::fail_point!("group_commit_before_apply_write");
 
         self.oracle.apply_write(write_ts.timestamp).await;
@@ -986,15 +985,22 @@ pub type BuiltinTableAppendNotify = Pin<Box<dyn Future<Output = ()> + Send + Syn
 
 /// Completion handle for a builtin-table append response barrier.
 pub struct BuiltinTableAppendCompletion {
-    notify: BuiltinTableAppendNotify,
+    notify: Option<BuiltinTableAppendNotify>,
 }
 
 impl BuiltinTableAppendCompletion {
     pub fn new(notify: BuiltinTableAppendNotify) -> Self {
-        Self { notify }
+        Self {
+            notify: Some(notify),
+        }
     }
 
-    pub fn into_notify(self) -> BuiltinTableAppendNotify {
+    /// No work remains, so callers need not schedule a response barrier.
+    pub fn completed() -> Self {
+        Self { notify: None }
+    }
+
+    pub fn into_notify(self) -> Option<BuiltinTableAppendNotify> {
         self.notify
     }
 }

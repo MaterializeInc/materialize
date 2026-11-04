@@ -54,6 +54,7 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-rocksdb = { path = "../rocksdb" }
 mz-row-spine = { path = "../row-spine" }
+mz-service = { path = "../service" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
 mz-ssh-util = { path = "../ssh-util" }

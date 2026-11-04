@@ -233,6 +233,14 @@ where
             })
     }
 
+    /// Whether the shard is a tombstone, which has no readers or writers.
+    pub(crate) fn is_tombstone(&self) -> bool {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                state.collections.is_tombstone()
+            })
+    }
+
     /// See [crate::PersistClient::get_schema].
     pub fn get_schema(&self, schema_id: SchemaId) -> Option<(K::Schema, V::Schema)> {
         self.state

@@ -58,7 +58,7 @@ the additions below.
 
 | Resource | Description |
 |----------|-------------|
-| Ory Kratos | Helm release in the `ory` namespace. Identity management: login, registration, recovery, account flows. |
+| Ory Kratos | Helm release in the `ory` namespace. Identity management: SSO sign-in, creating each identity on first sign-in. |
 | Ory Hydra | Helm release in the `ory` namespace. OAuth2 / OIDC provider that the Materialize Console trusts. Hydra Maester is enabled. |
 | Ory Selfservice UI | Helm release in the `ory` namespace. Renders the Kratos login, consent, and recovery pages. |
 | Ory Polis (optional) | Helm release in the `ory` namespace when `enable_polis = true`. SAML-to-OIDC bridge plus SCIM endpoint. |

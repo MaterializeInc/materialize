@@ -17,6 +17,7 @@ datadriven.workspace = true
 fallible-iterator.workspace = true
 mz-ore = { path = "../ore", features = ["cli"] }
 postgres-protocol.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

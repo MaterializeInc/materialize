@@ -18,9 +18,10 @@ use aws_sdk_kms::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, Header};
 use pem::Pem;
+use serde::Serialize;
 use uuid::Uuid;
 
-use crate::{ExpirationBehavior, ISSUER, Payload};
+use crate::{ExpirationBehavior, INTERMEDIATE_TYP, ISSUER, IntermediatePayload, Payload};
 
 const VERSION: u64 = 1;
 
@@ -42,10 +43,6 @@ pub async fn make_license_key(
     expiration_behavior: ExpirationBehavior,
     entitlements: Vec<String>,
 ) -> anyhow::Result<String> {
-    let mut headers = Header::new(Algorithm::PS256);
-    headers.typ = Some("JWT".to_string());
-    let headers = URL_SAFE_NO_PAD.encode(serde_json::to_string(&headers).unwrap().as_bytes());
-
     let now = SystemTime::now();
     let expiration = now + validity;
     let payload = Payload {
@@ -62,7 +59,43 @@ pub async fn make_license_key(
         expiration_behavior,
         entitlements,
     };
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_string(&payload).unwrap().as_bytes());
+    sign_jwt(client, key_id, "JWT", &payload).await
+}
+
+/// Signs a certificate with the root key `root_key_id` that allows license
+/// keys signed by the private half of `public_key_pem` to validate.
+pub async fn make_intermediate_key(
+    client: &aws_sdk_kms::Client,
+    root_key_id: &str,
+    validity: Duration,
+    name: String,
+    public_key_pem: String,
+) -> anyhow::Result<String> {
+    let now = SystemTime::now();
+    let expiration = now + validity;
+    let payload = IntermediatePayload {
+        sub: name,
+        exp: format_time(&expiration),
+        nbf: format_time(&now),
+        iss: ISSUER.to_string(),
+        iat: format_time(&now),
+        jti: Uuid::new_v4().to_string(),
+        version: VERSION,
+        public_key: public_key_pem,
+    };
+    sign_jwt(client, root_key_id, INTERMEDIATE_TYP, &payload).await
+}
+
+async fn sign_jwt(
+    client: &aws_sdk_kms::Client,
+    key_id: &str,
+    typ: &str,
+    payload: &impl Serialize,
+) -> anyhow::Result<String> {
+    let mut headers = Header::new(Algorithm::PS256);
+    headers.typ = Some(typ.to_string());
+    let headers = URL_SAFE_NO_PAD.encode(serde_json::to_string(&headers).unwrap().as_bytes());
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_string(payload).unwrap().as_bytes());
 
     let signing_string = format!("{}.{}", headers, payload);
     let signature = URL_SAFE_NO_PAD.encode(sign(client, key_id, signing_string.as_bytes()).await?);

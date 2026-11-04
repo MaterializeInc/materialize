@@ -28,6 +28,8 @@ export interface Connectable {
 
 export interface ConnectionInfo {
   hasEverConnected: boolean;
+  /** The environment being connected to, read from the store at the connect. */
+  environment: Environment | undefined;
 }
 
 export interface WebsocketConnectionManagerOptions {
@@ -42,6 +44,21 @@ const DEFAULT_OPTIONS = {
   baseDelayMs: 1000,
   maxDelayMs: 30000,
 };
+
+/** Calculates delay with exponential backoff and jitter */
+export function backoffDelayMs(
+  attempt: number,
+  {
+    baseDelayMs,
+    maxDelayMs,
+  }: { baseDelayMs: number; maxDelayMs: number } = DEFAULT_OPTIONS,
+) {
+  const baseDelay = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
+
+  // Add jitter (±25%) to prevent thundering herd
+  const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
+  return Math.round(baseDelay + jitter);
+}
 
 export type ConnectionStatus =
   "disconnected" | "connected" | "reconnecting" | "failed";
@@ -255,6 +272,7 @@ export class WebsocketConnectionManager {
 
     const sessionVariables = this.options.getSessionVariables?.({
       hasEverConnected: this.hasEverConnected,
+      environment: this.getCurrentEnvironment(),
     });
     this.connectInFlight = true;
     this.attemptedHttpAddress = this.currentHttpAddress;
@@ -292,18 +310,9 @@ export class WebsocketConnectionManager {
     }
   }
 
-  /** Calculates delay with exponential backoff and jitter */
   private getNextRetryDelay(): number | null {
     if (!this.isHealthy) return null;
     if (this.retryAttempt >= this.options.maxAttempts) return null;
-
-    const baseDelay = Math.min(
-      this.options.baseDelayMs * Math.pow(2, this.retryAttempt),
-      this.options.maxDelayMs,
-    );
-
-    // Add jitter (±25%) to prevent thundering herd
-    const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
-    return Math.round(baseDelay + jitter);
+    return backoffDelayMs(this.retryAttempt, this.options);
   }
 }

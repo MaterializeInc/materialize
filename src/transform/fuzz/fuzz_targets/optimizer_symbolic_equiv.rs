@@ -31,7 +31,7 @@
 //! `Let`/local `Get` bindings (e.g. from CSE) are collapsed by `collapse`, which
 //! iterates `FoldConstants` + `NormalizeLets` until the plan reduces to a
 //! `Constant`. The comparison is conservative (only asserted when both sides
-//! fold, and a plan matching the open bug CLU-137 is skipped via
+//! fold, and non-strict operand error folding is skipped via
 //! `hits_non_strict_error_fold`), so a surviving divergence or an optimizer panic
 //! is a genuine finding. An optimizer *error* is not a skip: a rejected plan
 //! shape panics inside `Typecheck` long before it could become one, so every
@@ -100,10 +100,6 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
         gen_rel(u, 3, &mut leaf)?
     };
 
-    // Skip the shape of the open bug CLU-137, which the optimizer gets wrong for
-    // reasons unrelated to whatever else the plan exercises. The bound data is
-    // checked too: a `Get`'s constant collection carries no scalars today, but
-    // `substitute` inlines it into the plan the optimizer sees.
     if hits_non_strict_error_fold(&plan) || data.values().any(hits_non_strict_error_fold) {
         return Ok(());
     }

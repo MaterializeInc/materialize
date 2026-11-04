@@ -23,9 +23,10 @@ use k8s_openapi::{
     api::{
         apps::v1::Deployment,
         core::v1::{
-            Affinity, ConfigMap, ResourceRequirements, Service, ServiceAccount, Toleration,
+            Affinity, ConfigMap, Probe, ResourceRequirements, Service, ServiceAccount, Toleration,
         },
         networking::v1::NetworkPolicy,
+        policy::v1::PodDisruptionBudget,
         rbac::v1::{Role, RoleBinding},
     },
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
@@ -228,6 +229,13 @@ pub struct Args {
     teleport_cluster_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
+    /// Run the environmentd, clusterd, balancerd, and console pods in a
+    /// Kubernetes user namespace by setting `hostUsers: false` on their pod
+    /// specs. Requires Kubernetes 1.33 or later (or 1.30 or later with the
+    /// `UserNamespacesSupport` feature gate enabled), plus node kernel and
+    /// container runtime support for idmapped mounts.
+    #[clap(long)]
+    enable_user_namespaces: bool,
     #[clap(long)]
     enable_internal_statement_logging: bool,
     /// Overrides environmentd's default `statement_logging_max_sample_rate`. A
@@ -252,6 +260,12 @@ pub struct Args {
     environmentd_tolerations: Option<Vec<Toleration>>,
     #[clap(long, value_parser = parse_resources)]
     environmentd_default_resources: Option<ResourceRequirements>,
+    #[clap(long, value_parser = parse_probe)]
+    environmentd_default_readiness_probe: Option<Probe>,
+    #[clap(long, value_parser = parse_probe)]
+    environmentd_default_liveness_probe: Option<Probe>,
+    #[clap(long, value_parser = parse_probe)]
+    environmentd_default_startup_probe: Option<Probe>,
     #[clap(long)]
     environmentd_priority_class_name: Option<String>,
     #[clap(long)]
@@ -339,15 +353,24 @@ pub struct Args {
     balancerd_http_port: u16,
     #[clap(long, default_value = "8080")]
     balancerd_internal_http_port: u16,
+    #[clap(long, default_value = "/api/readyz")]
+    balancerd_readiness_probe_path: String,
 
     #[clap(long, default_value = "8080")]
     console_http_port: u16,
+    #[clap(long, default_value = "8081")]
+    console_internal_http_port: u16,
 
     #[clap(long, default_value = "{}")]
     default_certificate_specs: DefaultCertificateSpecs,
 
     #[clap(long, hide = true)]
     disable_license_key_checks: bool,
+
+    /// Root-signed intermediate certificates whose keys may also sign license
+    /// keys. Passed through to environmentd.
+    #[clap(long, value_delimiter = ',')]
+    license_key_intermediate_cert: Vec<String>,
 
     #[clap(long)]
     disable_database_network_policies: bool,
@@ -369,6 +392,12 @@ fn parse_tolerations(s: &str) -> anyhow::Result<Toleration> {
 
 fn parse_resources(s: &str) -> anyhow::Result<ResourceRequirements> {
     Ok(serde_json::from_str(s)?)
+}
+
+fn parse_probe(s: &str) -> anyhow::Result<Probe> {
+    let probe = serde_json::from_str(s)?;
+    controller::materialize::generation::validate_probe_handlers(&probe)?;
+    Ok(probe)
 }
 
 fn parse_crd_columns(val: &str) -> Result<Vec<CustomResourceColumnDefinition>, serde_json::Error> {
@@ -446,6 +475,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             metrics_registry.clone(),
         )
         .await?;
+
+    mz_alloc::register_metrics_into(&metrics_registry).await;
 
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
@@ -694,6 +725,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             ephemeral_volume_class: args.ephemeral_volume_class,
             scheduler_name: args.scheduler_name.clone(),
             enable_security_context: args.enable_security_context,
+            enable_user_namespaces: args.enable_user_namespaces,
             enable_internal_statement_logging: args.enable_internal_statement_logging,
             statement_logging_max_sample_rate: args.statement_logging_max_sample_rate,
             statement_logging_target_data_rate: args.statement_logging_target_data_rate,
@@ -702,6 +734,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             environmentd_affinity: args.environmentd_affinity,
             environmentd_tolerations: args.environmentd_tolerations,
             environmentd_default_resources: args.environmentd_default_resources,
+            environmentd_default_readiness_probe: args.environmentd_default_readiness_probe,
+            environmentd_default_liveness_probe: args.environmentd_default_liveness_probe,
+            environmentd_default_startup_probe: args.environmentd_default_startup_probe,
             environmentd_priority_class_name: args.environmentd_priority_class_name,
             clusterd_node_selector: args.clusterd_node_selector,
             clusterd_affinity: args.clusterd_affinity,
@@ -743,6 +778,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .environmentd_internal_persist_pubsub_port,
             default_certificate_specs: args.default_certificate_specs.clone(),
             disable_license_key_checks: args.disable_license_key_checks,
+            license_key_intermediate_certs: args.license_key_intermediate_cert,
             disable_database_network_policies: args.disable_database_network_policies,
             tracing: args.tracing,
             orchestratord_namespace: namespace,
@@ -811,6 +847,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let events = event_recorder(controller::balancer::CONTROLLER_NAME);
         let config = controller::balancer::Config {
             enable_security_context: args.enable_security_context,
+            enable_user_namespaces: args.enable_user_namespaces,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
             image_pull_policy: args.image_pull_policy,
             scheduler_name: args.scheduler_name.clone(),
@@ -824,6 +861,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             balancerd_sql_port: args.balancerd_sql_port,
             balancerd_http_port: args.balancerd_http_port,
             balancerd_internal_http_port: args.balancerd_internal_http_port,
+            balancerd_readiness_probe_path: args.balancerd_readiness_probe_path.clone(),
         };
         move || {
             k8s_controller::Controller::namespaced_all(
@@ -847,6 +885,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         watcher::Config::default()
                             .labels("materialize.cloud/mz-resource-id")
                             .timeout(29),
+                    )
+                    .owns(
+                        Api::<PodDisruptionBudget>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
                     );
                 if has_cert_manager {
                     controller.owns(
@@ -867,6 +911,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let events = event_recorder(controller::console::CONTROLLER_NAME);
         let config = controller::console::Config {
             enable_security_context: args.enable_security_context,
+            enable_user_namespaces: args.enable_user_namespaces,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
             image_pull_policy: args.image_pull_policy,
             scheduler_name: args.scheduler_name,
@@ -878,6 +923,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
             default_certificate_specs: args.default_certificate_specs,
             console_http_port: args.console_http_port,
+            console_internal_http_port: args.console_internal_http_port,
             balancerd_http_port: args.balancerd_http_port,
         };
         move || {
@@ -899,6 +945,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     )
                     .owns(
                         Api::<Service>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
+                    )
+                    .owns(
+                        Api::<PodDisruptionBudget>::all(client.clone()),
                         watcher::Config::default()
                             .labels("materialize.cloud/mz-resource-id")
                             .timeout(29),
@@ -1082,6 +1134,30 @@ mod tests {
         assert_eq!(
             args.webhook_service_namespace.as_deref(),
             Some("materialize")
+        );
+    }
+
+    #[mz_ore::test]
+    fn default_probe_args_reject_multiple_handlers() {
+        let args = Args::try_parse_from(
+            REQUIRED_ARGS
+                .iter()
+                .copied()
+                .chain([r#"--environmentd-default-startup-probe={"failureThreshold":360}"#]),
+        )
+        .expect("parses a probe without a handler");
+        assert_eq!(
+            args.environmentd_default_startup_probe
+                .and_then(|probe| probe.failure_threshold),
+            Some(360)
+        );
+
+        assert!(
+            Args::try_parse_from(REQUIRED_ARGS.iter().copied().chain([
+                r#"--environmentd-default-liveness-probe={"exec":{"command":["true"]},"tcpSocket":{"port":6875}}"#,
+            ]))
+            .is_err(),
+            "a probe with two handlers should be rejected"
         );
     }
 

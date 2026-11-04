@@ -9,11 +9,12 @@
 
 import psycopg
 
-from materialize import git
+from materialize import git, spawn
 from materialize.docker import get_mz_version_from_image_tag
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.listener_config import (
     resolve_listeners_config_path,
 )
@@ -218,8 +219,24 @@ class MaterializeContainer(MaterializeNonRemote):
             self.composition.sql("grant materialize to user1;")
 
             if self.use_balancerd:
-                self.composition.up("balancerd")
-                self._port = self.composition.default_port("balancerd")
+                container_id = self.composition.container_id("materialized")
+                assert container_id is not None
+                backend_ip = spawn.capture(
+                    [
+                        "docker",
+                        "inspect",
+                        "--format={{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                        container_id,
+                    ]
+                ).strip()
+                with self.composition.override(
+                    Balancerd(
+                        static_resolver_addr=f"{backend_ip}:6875",
+                        https_resolver_template=f"{backend_ip}:6876",
+                    )
+                ):
+                    self.composition.up("balancerd")
+                    self._port = self.composition.default_port("balancerd")
             else:
                 self._port = self.composition.default_port("materialized")
             # TODO: Also make it work through balancerd

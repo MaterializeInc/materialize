@@ -8,3 +8,8 @@
 # by the Apache License, Version 2.0.
 
 name: playwright
+pre-image:
+  - type: copy
+    source: test/dataflow-visualizer
+    destination: .
+    matching: package.json

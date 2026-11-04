@@ -23,7 +23,8 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
+    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Index, Sink, Source, Table,
+    TableDataSource, Type,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::LirDataflowDescription;
@@ -36,7 +37,6 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument, soft_panic_or_log};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
@@ -99,6 +99,7 @@ use timely::progress::Antichain;
 use tokio::sync::watch;
 use tracing::{Instrument, Span, info, warn};
 
+use crate::active_compute_sink::ActiveComputeSink;
 use crate::catalog::{
     self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
 };
@@ -112,7 +113,7 @@ use crate::coord::{
     Staged, StagedContext, TargetCluster, WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
-use crate::notice::{AdapterNotice, DroppedInUseIndex};
+use crate::notice::{AdapterNotice, DroppedInUseIndex, InFlightIndexReaders};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -186,7 +187,15 @@ struct DropOps {
     ops: Vec<catalog::Op>,
     dropped_active_db: bool,
     dropped_active_cluster: bool,
-    dropped_in_use_indexes: Vec<DroppedInUseIndex>,
+}
+
+/// The outcome of [`Coordinator::check_index_dependents`].
+struct IndexDropNotices {
+    /// Indexes dropped while durable readers survive. Non-empty only when
+    /// `enable_drop_in_use_index` let the drop through.
+    orphaned: Vec<DroppedInUseIndex>,
+    /// Indexes still read by one-shot dataflows, which never block a drop.
+    in_flight: Vec<InFlightIndexReaders>,
 }
 
 // A bundle of values returned from create_source_inner
@@ -237,10 +246,9 @@ impl Coordinator {
             } else {
                 cancel_enabled = false
             };
-            let next = stage
-                .stage(self, &mut ctx)
-                .instrument(parent_span.clone())
-                .await;
+            // Stage implementations can contain large optimizer and DDL futures.
+            // Keep that state out of the generic plan dispatcher's allocation.
+            let next = Box::pin(stage.stage(self, &mut ctx).instrument(parent_span.clone())).await;
             let res = return_if_err!(next, ctx);
             stage = match res {
                 StageResult::Handle(handle) => {
@@ -530,7 +538,8 @@ impl Coordinator {
                 self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
             let progress_full_name = self
                 .catalog()
-                .resolve_full_name(&progress_plan.plan.name, None);
+                .for_session(ctx.session())
+                .resolve_full_name(&progress_plan.plan.name);
             let progress_subsource = ResolvedItemName::Item {
                 id: progress_plan.item_id,
                 qualifiers: progress_plan.plan.name.qualifiers.clone(),
@@ -572,7 +581,10 @@ impl Coordinator {
 
         let (item_id, global_id) = self.allocate_user_id().await?;
 
-        let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
+        let source_full_name = self
+            .catalog()
+            .for_session(ctx.session())
+            .resolve_full_name(&source_plan.name);
         let of_source = ResolvedItemName::Item {
             id: item_id,
             qualifiers: source_plan.name.qualifiers.clone(),
@@ -582,7 +594,8 @@ impl Coordinator {
         };
 
         // Generate subsource statements
-        let conn_catalog = self.catalog().for_system_session();
+        let session_catalog = self.catalog().for_session(ctx.session());
+        let conn_catalog = session_catalog.for_system_session();
         let pcx = plan::PlanContext::zero();
         let scx = StatementContext::new(Some(&pcx), &conn_catalog);
 
@@ -1304,6 +1317,11 @@ impl Coordinator {
             referenced_ids,
         }: plan::DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let IndexDropNotices {
+            orphaned,
+            in_flight,
+        } = self.check_index_dependents(ctx.session(), &drop_ids)?;
+
         let referenced_ids_hashset = referenced_ids.iter().collect::<HashSet<_>>();
         let mut objects = Vec::new();
         for obj_id in &drop_ids {
@@ -1336,7 +1354,6 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
-            dropped_in_use_indexes,
         } = self.sequence_drop_common(ctx.session(), drop_ids)?;
 
         self.catalog_transact_with_context(None, Some(ctx), ops)
@@ -1365,14 +1382,7 @@ impl Coordinator {
                     name: ctx.session().vars().cluster().to_string(),
                 });
         }
-        for dropped_in_use_index in dropped_in_use_indexes {
-            ctx.session()
-                .add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
-            self.metrics
-                .optimization_notices
-                .with_label_values(&["DroppedInUseIndex"])
-                .inc_by(1);
-        }
+        self.emit_index_drop_notices(ctx.session(), orphaned, in_flight);
         Ok(ExecuteResponse::DroppedObject(object_type))
     }
 
@@ -1597,11 +1607,14 @@ impl Coordinator {
                 variant: UpdatePrivilegeVariant::Revoke,
             },
         );
+        let IndexDropNotices {
+            orphaned,
+            in_flight,
+        } = self.check_index_dependents(session, &plan.drop_ids)?;
         let DropOps {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
-            dropped_in_use_indexes,
         } = self.sequence_drop_common(session, plan.drop_ids)?;
 
         let ops = privilege_revoke_ops
@@ -1621,10 +1634,180 @@ impl Coordinator {
                 name: session.vars().cluster().to_string(),
             });
         }
-        for dropped_in_use_index in dropped_in_use_indexes {
-            session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
-        }
+        self.emit_index_drop_notices(session, orphaned, in_flight);
         Ok(ExecuteResponse::DroppedOwned)
+    }
+
+    /// Refuses to drop indexes that a surviving materialized view, index, or metric sink reads
+    /// from, naming every blocked index in one error.
+    ///
+    /// A reader survives unless it is itself in `drop_ids`. With `enable_drop_in_use_index`
+    /// set, the drop proceeds instead and the orphaned indexes are reported for a warning.
+    ///
+    /// One-shot dataflows (`SUBSCRIBE`, `COPY TO`, slow-path `SELECT`, and system dataflows
+    /// such as curated metric sinks) never block a drop. They finish on their own or are
+    /// reinstalled, and are reported only for a notice.
+    ///
+    /// TODO: once pinned LIR makes a dataflow's index imports a durable property, record them
+    /// as catalog dependencies so the planner can do this with its regular dependency walk.
+    ///
+    /// NOTE: The check is sound only because `DROP` is serialized DDL (`must_serialize_ddl`)
+    /// and callers do not await between it and the catalog commit. Otherwise a concurrent
+    /// `CREATE MATERIALIZED VIEW` could start reading the index in between.
+    fn check_index_dependents(
+        &self,
+        session: &Session,
+        drop_ids: &[ObjectId],
+    ) -> Result<IndexDropNotices, AdapterError> {
+        let humanizer = self.catalog().for_session(session);
+        let drop_in_use_allowed = self.catalog().system_config().enable_drop_in_use_index();
+        let humanize_index = |index: &Index, item_id: &CatalogItemId| {
+            humanizer
+                .humanize_id(index.global_id())
+                .unwrap_or_else(|| item_id.to_string())
+        };
+
+        let drop_set: BTreeSet<ObjectId> = drop_ids.iter().cloned().collect();
+        let mut orphaned = Vec::new();
+        let mut blocked = Vec::new();
+        let mut transient_by_index = Vec::new();
+        for id in drop_ids {
+            let ObjectId::Item(item_id) = id else {
+                continue;
+            };
+            let Some(index) = self.catalog().get_entry(item_id).index() else {
+                continue;
+            };
+            let (durable, transient) = self.index_readers(index, &drop_set);
+            if !transient.is_empty() {
+                transient_by_index.push((index, item_id, transient));
+            }
+            if durable.is_empty() {
+                continue;
+            }
+            if !drop_in_use_allowed {
+                let dependents = durable
+                    .into_iter()
+                    .map(|dependent_id| {
+                        let entry = self.catalog().get_entry(&dependent_id);
+                        (
+                            entry.item_type().to_string(),
+                            humanizer.minimal_qualification(entry.name()).to_string(),
+                        )
+                    })
+                    .collect();
+                // Minimal qualification, like the planner's RESTRICT error.
+                let index_name = humanizer
+                    .minimal_qualification(self.catalog().get_entry(item_id).name())
+                    .to_string();
+                blocked.push((index_name, dependents));
+                continue;
+            }
+            let dependant_objects = durable
+                .into_iter()
+                .filter_map(|dependent_id| {
+                    let entry = self.catalog().get_entry(&dependent_id);
+                    humanizer.humanize_id(entry.latest_global_id())
+                })
+                .collect();
+            orphaned.push(DroppedInUseIndex {
+                index_name: humanize_index(index, item_id),
+                dependant_objects,
+            });
+        }
+
+        if !blocked.is_empty() {
+            return Err(AdapterError::IndexInUse { blocked });
+        }
+
+        let mut in_flight = Vec::new();
+        for (index, item_id, transient) in transient_by_index {
+            let mut readers = InFlightIndexReaders {
+                index_name: humanize_index(index, item_id),
+                ..Default::default()
+            };
+            for gid in transient {
+                match self.active_compute_sinks.get(&gid) {
+                    Some(ActiveComputeSink::Subscribe(_)) => readers.subscribes += 1,
+                    Some(ActiveComputeSink::CopyTo(_)) => readers.copy_tos += 1,
+                    None if self.introspection_subscribes.contains_key(&gid)
+                        || self.is_metric_sink(gid) =>
+                    {
+                        readers.system += 1
+                    }
+                    // Slow-path peeks are the remaining owners of transient compute
+                    // collections that import user indexes.
+                    None => readers.selects += 1,
+                }
+            }
+            in_flight.push(readers);
+        }
+
+        Ok(IndexDropNotices {
+            orphaned,
+            in_flight,
+        })
+    }
+
+    /// Compute collections that read from `index`, split into catalog items not in `drop_set`
+    /// and transient (one-shot) dataflows.
+    fn index_readers(
+        &self,
+        index: &Index,
+        drop_set: &BTreeSet<ObjectId>,
+    ) -> (Vec<CatalogItemId>, Vec<GlobalId>) {
+        let mut durable = Vec::new();
+        let mut transient = Vec::new();
+        let readers = self
+            .controller
+            .compute
+            .collection_reverse_dependencies(index.cluster_id, index.global_id())
+            .ok()
+            .into_iter()
+            .flatten();
+        for gid in readers {
+            if gid.is_transient() {
+                transient.push(gid);
+                continue;
+            }
+            // A collection whose item is gone from the catalog is already being torn down.
+            let Some(entry) = self.catalog().try_get_entry_by_global_id(&gid) else {
+                continue;
+            };
+            if !drop_set.contains(&ObjectId::Item(entry.id())) {
+                durable.push(entry.id());
+            }
+        }
+        (durable, transient)
+    }
+
+    /// Reports the outcome of [`Coordinator::check_index_dependents`] to the session.
+    ///
+    /// An orphaned index is loud on purpose: it only happens under `enable_drop_in_use_index`,
+    /// and every occurrence should be visible to us as well as to the user.
+    fn emit_index_drop_notices(
+        &self,
+        session: &Session,
+        orphaned: Vec<DroppedInUseIndex>,
+        in_flight: Vec<InFlightIndexReaders>,
+    ) {
+        for orphaned in orphaned {
+            tracing::error!(
+                index = %orphaned.index_name,
+                dependents = ?orphaned.dependant_objects,
+                "dropped an index that other dataflows read from because enable_drop_in_use_index is set"
+            );
+            self.metrics
+                .optimization_notices
+                .with_label_values(&["DroppedInUseIndex"])
+                .inc();
+            session.add_notice(AdapterNotice::DroppedInUseIndex(orphaned));
+        }
+        session.add_notices(
+            in_flight
+                .into_iter()
+                .map(AdapterNotice::DroppedIndexReadByInFlightStatements),
+        );
     }
 
     fn sequence_drop_common(
@@ -1634,7 +1817,6 @@ impl Coordinator {
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
-        let mut dropped_in_use_indexes = Vec::new();
         let mut dropped_roles = BTreeMap::new();
         let mut dropped_databases = BTreeSet::new();
         let mut dropped_schemas = BTreeSet::new();
@@ -1649,7 +1831,6 @@ impl Coordinator {
         // Clusters we're dropping
         let mut clusters_to_drop = BTreeSet::new();
 
-        let ids_set = ids.iter().collect::<BTreeSet<_>>();
         for id in &ids {
             match id {
                 ObjectId::Database(id) => {
@@ -1684,54 +1865,6 @@ impl Coordinator {
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
                         role_revokes.insert((*group_id, *id, *grantor_id));
-                    }
-                }
-                ObjectId::Item(id) => {
-                    if let Some(index) = self.catalog().get_entry(id).index() {
-                        let humanizer = self.catalog().for_session(session);
-                        let dependants = self
-                            .controller
-                            .compute
-                            .collection_reverse_dependencies(index.cluster_id, index.global_id())
-                            .ok()
-                            .into_iter()
-                            .flatten()
-                            .filter(|dependant_id| {
-                                // Transient Ids belong to Peeks. We are not interested for now in
-                                // peeks depending on a dropped index.
-                                // TODO: show a different notice in this case. Something like
-                                // "There is an in-progress ad hoc SELECT that uses the dropped
-                                // index. The resources used by the index will be freed when all
-                                // such SELECTs complete."
-                                if dependant_id.is_transient() {
-                                    return false;
-                                }
-                                // The item should exist, but don't panic if it doesn't.
-                                let Some(dependent_id) = humanizer
-                                    .try_get_item_by_global_id(dependant_id)
-                                    .map(|item| item.id())
-                                else {
-                                    return false;
-                                };
-                                // If the dependent object is also being dropped, then there is no
-                                // problem, so we don't want a notice.
-                                !ids_set.contains(&ObjectId::Item(dependent_id))
-                            })
-                            .flat_map(|dependant_id| {
-                                // If we are not able to find a name for this ID it probably means
-                                // we have already dropped the compute collection, in which case we
-                                // can ignore it.
-                                humanizer.humanize_id(dependant_id)
-                            })
-                            .collect_vec();
-                        if !dependants.is_empty() {
-                            dropped_in_use_indexes.push(DroppedInUseIndex {
-                                index_name: humanizer
-                                    .humanize_id(index.global_id())
-                                    .unwrap_or_else(|| id.to_string()),
-                                dependant_objects: dependants,
-                            });
-                        }
                     }
                 }
                 _ => {}
@@ -1825,7 +1958,6 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
-            dropped_in_use_indexes,
         })
     }
 
@@ -1833,12 +1965,11 @@ impl Coordinator {
         &self,
         ExplainSinkSchemaPlan { json_schema, .. }: ExplainSinkSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let json_value: serde_json::Value = serde_json::from_str(&json_schema).map_err(|e| {
-            AdapterError::Explain(mz_repr::explain::ExplainError::SerdeJsonError(e))
+        let value: serde_json::Value = serde_json::from_str(&json_schema).map_err(|error| {
+            AdapterError::Explain(mz_repr::explain::ExplainError::SerdeJsonError(error))
         })?;
-
-        let json_string = json_string(&json_value);
-        let row = Row::pack_slice(&[Datum::String(&json_string)]);
+        let json = mz_repr::explain::json::json_string(&value);
+        let row = Row::pack_slice(&[Datum::String(&json)]);
         Ok(Self::send_immediate_rows(row))
     }
 
@@ -2112,7 +2243,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument]
+    #[instrument(level = "debug")]
     pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2174,9 +2305,11 @@ impl Coordinator {
                     num_requeues: 0,
                     otel_ctx: OpenTelemetryContext::obtain(),
                 };
-                self.strict_serializable_reads_tx
-                    .send((conn_id, pending_read_txn))
-                    .expect("sending to strict_serializable_reads_tx cannot fail");
+                if let Some(pending_read_txn) = pending_read_txn.try_finish_read(&self.metrics) {
+                    self.strict_serializable_reads_tx
+                        .send((conn_id, pending_read_txn))
+                        .expect("sending to strict_serializable_reads_tx cannot fail");
+                }
                 return;
             }
             Ok(Some(TransactionOps::Peeks {
@@ -2217,7 +2350,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
-    #[instrument]
+    #[instrument(level = "debug")]
     async fn sequence_end_transaction_inner(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -2247,10 +2380,21 @@ impl Coordinator {
                         state: _,
                         side_effects,
                         revision,
+                        revision_fenced,
                         snapshot: _,
                     } => {
-                        // Make sure our catalog hasn't changed.
-                        if *revision != self.catalog().transient_revision() {
+                        // Statements without replay require their original catalog revision.
+                        if *revision != self.catalog().transient_revision()
+                            && (*revision_fenced
+                                || !ops.iter().all(|op| {
+                                    matches!(
+                                        op,
+                                        catalog::Op::RenameCommand(_)
+                                            | catalog::Op::CatalogResult(_)
+                                            | catalog::Op::Description(_)
+                                    )
+                                }))
+                        {
                             return Err(AdapterError::DDLTransactionRace);
                         }
                         // Commit all of our queued ops.
@@ -2539,26 +2683,6 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) async fn sequence_alter_item_rename(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        plan: plan::AlterItemRenamePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let op = catalog::Op::RenameItem {
-            id: plan.id,
-            current_full_name: plan.current_full_name,
-            to_name: plan.to_name,
-        };
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
-            Err(err) => Err(err),
-        }
-    }
-
-    #[instrument]
     pub(super) async fn sequence_alter_retain_history(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -2588,72 +2712,6 @@ impl Coordinator {
         self.catalog_transact_with_context(None, Some(ctx), ops)
             .await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_alter_schema_rename(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        plan: plan::AlterSchemaRenamePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let (database_spec, schema_spec) = plan.cur_schema_spec;
-        let op = catalog::Op::RenameSchema {
-            database_spec,
-            schema_spec,
-            new_name: plan.new_schema_name,
-            check_reserved_names: true,
-        };
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
-            Err(err) => Err(err),
-        }
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_alter_schema_swap(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        plan: plan::AlterSchemaSwapPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::AlterSchemaSwapPlan {
-            schema_a_spec: (schema_a_db, schema_a),
-            schema_a_name,
-            schema_b_spec: (schema_b_db, schema_b),
-            schema_b_name,
-            name_temp,
-        } = plan;
-
-        let op_a = catalog::Op::RenameSchema {
-            database_spec: schema_a_db,
-            schema_spec: schema_a,
-            new_name: name_temp,
-            check_reserved_names: false,
-        };
-        let op_b = catalog::Op::RenameSchema {
-            database_spec: schema_b_db,
-            schema_spec: schema_b,
-            new_name: schema_a_name,
-            check_reserved_names: false,
-        };
-        let op_c = catalog::Op::RenameSchema {
-            database_spec: schema_a_db,
-            schema_spec: schema_a,
-            new_name: schema_b_name,
-            check_reserved_names: false,
-        };
-
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_c], |_, _| {
-                Box::pin(async {})
-            })
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
-            Err(err) => Err(err),
-        }
     }
 
     #[instrument]
@@ -4327,19 +4385,22 @@ impl Coordinator {
             "preparing materialized view replacement application",
         );
 
-        let Some(replacement_upper_ts) = replacement_upper.into_option() else {
-            // A replacement's write frontier can only become empty if the target's write frontier
-            // has advanced to the empty frontier. In this case the MV is sealed for all times and
-            // applying the replacement wouldn't have any effect. We use this opportunity to alert
-            // the user by returning an error, rather than applying the useless replacement.
-            //
-            // Note that we can't assert on `target_upper` being empty here, because the reporting
-            // of the target's frontier might be delayed. We'd have to fetch the current frontier
-            // from persist, which we cannot do without incurring I/O.
-            ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed {
-                name: target.name().item.clone(),
-            }));
-            return;
+        // Once the target's write frontier is empty, its contents are final for all times and the
+        // replacement could never write to it. The replacement's write frontier then becomes
+        // empty too, but the frontiers are reported independently, so either one can be observed
+        // first.
+        //
+        // NOTE: `_finish` checks the target again, but checking it here is needed too. If only
+        // compute has seen the seal so far, the watch set below never resolves: installing it
+        // reads the storage frontier, and compute doesn't report the target's frontier again.
+        let replacement_upper_ts = match replacement_upper.into_option() {
+            Some(ts) if !self.materialized_view_sealed(target) => ts,
+            _ => {
+                ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed {
+                    name: target.name().item.clone(),
+                }));
+                return;
+            }
         };
 
         // A watch set resolves when the watched objects' frontier becomes _greater_ than the
@@ -4383,6 +4444,18 @@ impl Coordinator {
             return;
         }
 
+        // The target can also seal while we wait, which resolves the watch set as well. The
+        // compute controller records a frontier before reporting it, so this check sees that seal.
+        //
+        // NOTE: The target can still seal after this check, until its old dataflow is dropped.
+        // The replacement then never writes.
+        let target = self.catalog().get_entry(&id);
+        if self.materialized_view_sealed(target) {
+            let name = target.name().item.clone();
+            ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed { name }));
+            return;
+        }
+
         info!(
             %id, %replacement_id,
             "finishing materialized view replacement application",
@@ -4408,6 +4481,27 @@ impl Coordinator {
             ))),
             Err(err) => ctx.retire(Err(err)),
         }
+    }
+
+    /// Reports whether the write frontier of the materialized view `entry` is known to be empty.
+    ///
+    /// The compute controller and storage collections learn about the frontier independently,
+    /// so either one can see it first.
+    fn materialized_view_sealed(&self, entry: &CatalogEntry) -> bool {
+        let gid = entry.latest_global_id();
+        let compute_upper = self
+            .controller
+            .compute
+            .collection_frontiers(gid, entry.cluster_id())
+            .expect("materialized view exists")
+            .write_frontier;
+        let storage_upper = self
+            .controller
+            .storage_collections
+            .collection_frontiers(gid)
+            .expect("materialized view exists")
+            .write_frontier;
+        compute_upper.is_empty() || storage_upper.is_empty()
     }
 }
 

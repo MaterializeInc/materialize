@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::SYSTEM_CONN_ID;
@@ -82,7 +81,7 @@ use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
-use crate::util::ClientTransmitter;
+use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
@@ -112,11 +111,9 @@ fn role_login_status(role: Option<&Role>) -> RoleLoginStatus {
 }
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Dispatches a command in a size-bounded, heap-allocated future.
     pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<'_, ()> {
-        async move {
+        let future = async move {
             if let Some(session) = cmd.session_mut() {
                 session.apply_external_metadata_updates();
             }
@@ -195,8 +192,7 @@ impl Coordinator {
                 } => {
                     let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
 
-                    self.handle_execute(portal_name, session, tx, outer_ctx_extra)
-                        .await;
+                    Box::pin(self.handle_execute(portal_name, session, tx, outer_ctx_extra)).await;
                 }
 
                 Command::StartCopyFromStdin {
@@ -664,8 +660,8 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(debug_span!("handle_command"))
-        .boxed_local()
+        .instrument(debug_span!("handle_command"));
+        crate::coord::box_dispatcher(future)
     }
 
     fn handle_role_can_login(
@@ -1329,6 +1325,12 @@ impl Coordinator {
         //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
         //    awaits dequeuing caused by the lock being released.
 
+        if StatementKind::from(&*stmt).is_explain() {
+            if let Err(error) = ctx.session_mut().transaction_mut().record_explain() {
+                return ctx.retire(Err(error));
+            }
+        }
+
         // For `Started`, this separates the first statement of an extended-protocol
         // pipeline from a later one that joins the ops staged before it.
         let txn_contains_ops = ctx.session().transaction().contains_ops();
@@ -1388,12 +1390,6 @@ impl Coordinator {
                     | Statement::Declare(_)
                     | Statement::Discard(_)
                     | Statement::Execute(_)
-                    | Statement::ExplainPlan(_)
-                    | Statement::ExplainPushdown(_)
-                    | Statement::ExplainAnalyzeObject(_)
-                    | Statement::ExplainAnalyzeCluster(_)
-                    | Statement::ExplainTimestamp(_)
-                    | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)
                     | Statement::Prepare(_)
                     | Statement::Rollback(_)
@@ -1404,7 +1400,13 @@ impl Coordinator {
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
                     | Statement::Subscribe(_)
-                    | Statement::Raise(_) => {
+                    | Statement::Raise(_)
+                    | Statement::ExplainPlan(_)
+                    | Statement::ExplainPushdown(_)
+                    | Statement::ExplainAnalyzeObject(_)
+                    | Statement::ExplainAnalyzeCluster(_)
+                    | Statement::ExplainSinkSchema(_)
+                    | Statement::ExplainTimestamp(_) => {
                         // Always safe.
                     }
 
@@ -1420,20 +1422,49 @@ impl Coordinator {
                     | Statement::AlterObjectSwap(_)
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
-                        let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let revision = self.catalog().transient_revision();
+                        if !ctx.session().transaction().is_ddl() {
+                            let state = self.catalog().for_session(ctx.session()).state().clone();
+                            let revision = self.catalog().transient_revision();
 
-                        // Initialize our transaction with a set of empty ops, or return an error
-                        // if we can't run a DDL transaction
-                        let txn_status = ctx.session_mut().transaction_mut();
-                        if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
-                            ops: vec![],
-                            state,
-                            revision,
-                            side_effects: vec![],
-                            snapshot: None,
-                        }) {
-                            return ctx.retire(Err(err));
+                            // Initialize our transaction with a set of empty ops, or return an error
+                            // if we can't run a DDL transaction
+                            let txn_status = ctx.session_mut().transaction_mut();
+                            if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
+                                ops: vec![],
+                                state,
+                                revision,
+                                revision_fenced: false,
+                                side_effects: vec![],
+                                snapshot: None,
+                            }) {
+                                return ctx.retire(Err(err));
+                            }
+                        }
+                        if matches!(
+                            &*stmt,
+                            Statement::CreateTableFromSource(_) | Statement::CreateSource(_)
+                        ) {
+                            let revision = self.catalog().transient_revision();
+                            let TransactionOps::DDL {
+                                revision: txn_revision,
+                                revision_fenced,
+                                ops: _,
+                                state: _,
+                                side_effects: _,
+                                snapshot: _,
+                            } = &mut ctx
+                                .session_mut()
+                                .transaction_mut()
+                                .inner_mut()
+                                .expect("active transaction")
+                                .ops
+                            else {
+                                unreachable!("DDL mode initialized above");
+                            };
+                            *revision_fenced = true;
+                            if *txn_revision != revision {
+                                return ctx.retire(Err(AdapterError::DDLTransactionRace));
+                            }
                         }
                     }
 
@@ -1572,6 +1603,18 @@ impl Coordinator {
                 });
                 return;
             }
+        }
+
+        if catalog::command::CatalogResultCommand::supports_statement(&stmt) {
+            self.sequence_catalog_result_command(ctx, stmt, params);
+            return;
+        }
+        if matches!(
+            &*stmt,
+            Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_)
+        ) {
+            self.sequence_rename_command(ctx, stmt, params).await;
+            return;
         }
 
         let catalog = self.catalog();
@@ -2001,6 +2044,8 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         let mut maybe_ctx = None;
+        // A COMMIT waiting for group commit or for its read to be linearized.
+        let mut maybe_commit_ctx = None;
 
         // Cancel all pending writes for this connection:
         // - At most one session-bound write (`UserWriteResponder::Session`),
@@ -2028,7 +2073,7 @@ impl Coordinator {
                     responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
                     ..
                 } => {
-                    maybe_ctx = Some(ctx);
+                    maybe_commit_ctx = Some(ctx);
                 }
                 PendingWriteTxn::User {
                     responder: UserWriteResponder::Internal { result, .. },
@@ -2061,10 +2106,24 @@ impl Coordinator {
         // Cancel reads waiting on being linearized. There is at most one linearized read per
         // session.
         if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
-            let ctx = pending_read_txn.take_context();
-            maybe_ctx = Some(ctx);
+            maybe_commit_ctx = Some(pending_read_txn.take_context());
         }
 
+        if let Some(ctx) = maybe_commit_ctx {
+            // The COMMIT already cleared the session's transaction status, so the transaction's
+            // `SET LOCAL` and staged variable values are the only transaction state left. Without
+            // ending them here they apply to the session's next transaction.
+            //
+            // NOTE: The error response cannot carry the changed parameters, so a reverted
+            // parameter in the notify set is not announced to the client.
+            let (ctx, result) = CompletedClientTransmitter::new(
+                ctx,
+                Err(AdapterError::Canceled),
+                EndTransactionAction::Rollback,
+            )
+            .finalize();
+            ctx.retire(result);
+        }
         if let Some(ctx) = maybe_ctx {
             ctx.retire(Err(AdapterError::Canceled));
         }
@@ -2122,16 +2181,17 @@ impl Coordinator {
         self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
 
-        // Queue the builtin table update, but do not wait for it to complete. We explicitly do
-        // this to prevent blocking the Coordinator in the case that a lot of connections are
-        // closed at once, which occurs regularly in some workflows.
+        // Queue the retraction for the next group commit without waiting for it, so closing many
+        // connections at once doesn't block the Coordinator. Forcing a commit here (`defer`)
+        // would hand every `mz_catalog_server` dataflow a new timestamp per closed session,
+        // making connection churn cost catalog server CPU per connection.
         let update = self
             .catalog()
             .state()
             .pack_session_update(&conn, Diff::MINUS_ONE);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
-        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
+        let _builtin_update_notify = self.builtin_table_update().background(vec![update]);
     }
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send

@@ -55,7 +55,8 @@ use crate::durable::objects::{
     ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
     ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    IndexColumnsKey, IndexColumnsValue, IntrospectionSourceIndex, Item, ItemColumnsKey,
+    ItemColumnsValue, ItemKey, ItemMetadata, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
     ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
@@ -89,6 +90,8 @@ pub struct Transaction<'a> {
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
+    item_columns: TableTransaction<ItemColumnsKey, ItemColumnsValue>,
+    index_columns: TableTransaction<IndexColumnsKey, IndexColumnsValue>,
     comments: TableTransaction<CommentKey, CommentValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
     role_auth: TableTransaction<RoleAuthKey, RoleAuthValue>,
@@ -159,6 +162,8 @@ impl<'a> Transaction<'a> {
             roles,
             role_auth,
             items,
+            item_columns,
+            index_columns,
             comments,
             clusters,
             network_policies,
@@ -232,6 +237,8 @@ impl<'a> Transaction<'a> {
                         && prev.item_type() == next.item_type()
                 },
             )?,
+            item_columns: TableTransaction::new(item_columns)?,
+            index_columns: TableTransaction::new(index_columns)?,
             comments: TableTransaction::new(comments)?,
             roles: TableTransaction::new_with_uniqueness_fn(roles, role_key, role_key)?,
             role_auth: TableTransaction::new(role_auth)?,
@@ -802,10 +809,47 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Records `metadata` as the planner-resolved metadata of item `id`,
+    /// replacing whatever it had.
+    pub fn set_item_metadata(
+        &mut self,
+        id: CatalogItemId,
+        metadata: ItemMetadata,
+    ) -> Result<(), CatalogError> {
+        let ItemMetadata {
+            columns,
+            index_columns,
+        } = metadata;
+        // An item without columns or keys has no row, so a relation without
+        // columns and an item that is not a relation read the same.
+        let columns = (!columns.is_empty()).then_some(ItemColumnsValue { columns });
+        let key = ItemColumnsKey { id };
+        if self.item_columns.get(&key) != columns.as_ref() {
+            self.item_columns.set(key, columns, self.op_id)?;
+        }
+        let index_columns = (!index_columns.is_empty()).then_some(IndexColumnsValue {
+            columns: index_columns,
+        });
+        let key = IndexColumnsKey { id };
+        if self.index_columns.get(&key) != index_columns.as_ref() {
+            self.index_columns.set(key, index_columns, self.op_id)?;
+        }
+        Ok(())
+    }
+
+    /// Deletes the recorded columns and index keys of item `id`.
+    fn delete_item_metadata(&mut self, id: CatalogItemId) {
+        self.item_columns
+            .delete_by_key(ItemColumnsKey { id }, self.op_id);
+        self.index_columns
+            .delete_by_key(IndexColumnsKey { id }, self.op_id);
+    }
+
     /// Removes every item owned by an ephemeral session from the transaction,
     /// along with the durable state a graceful drop would have removed with
     /// it: storage collection metadata (moving the backing shards to the
-    /// finalization WAL), comments, and source references.
+    /// finalization WAL), recorded columns and index keys, comments, and
+    /// source references.
     ///
     /// Used to reclaim temporary items when the catalog is opened with write
     /// intent, at which point every session that could own one is dead.
@@ -830,6 +874,9 @@ impl<'a> Transaction<'a> {
             keys.push(key.clone());
         }
         self.items.delete_by_keys(keys, self.op_id);
+        for id in &item_ids {
+            self.delete_item_metadata(*id);
+        }
 
         // Move the items' storage mappings to the finalization WAL, like
         // `StorageCollections::prepare_state` does for a graceful drop. Every
@@ -1185,6 +1232,8 @@ impl<'a> Transaction<'a> {
             roles: self.roles.current_items_proto(),
             role_auth: self.role_auth.current_items_proto(),
             items: self.items.current_items_proto(),
+            item_columns: self.item_columns.current_items_proto(),
+            index_columns: self.index_columns.current_items_proto(),
             comments: self.comments.current_items_proto(),
             clusters: self.clusters.current_items_proto(),
             network_policies: self.network_policies.current_items_proto(),
@@ -1503,6 +1552,7 @@ impl<'a> Transaction<'a> {
     pub fn remove_item(&mut self, id: CatalogItemId) -> Result<(), CatalogError> {
         let prev = self.items.set(ItemKey { id }, None, self.op_id)?;
         if prev.is_some() {
+            self.delete_item_metadata(id);
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
@@ -1522,6 +1572,9 @@ impl<'a> Transaction<'a> {
 
         let ks: Vec<_> = ids.clone().into_iter().map(|id| ItemKey { id }).collect();
         let n = self.items.delete_by_keys(ks, self.op_id).len();
+        for id in ids {
+            self.delete_item_metadata(*id);
+        }
         if n == ids.len() {
             Ok(())
         } else {
@@ -2582,6 +2635,9 @@ impl<'a> Transaction<'a> {
             configs: _,
             settings: _,
             txn_wal_shard: _,
+            // Not consumed by the in-memory catalog, which plans items itself.
+            item_columns: _,
+            index_columns: _,
             upper,
             op_id: _,
             commit_capability: _,
@@ -2702,6 +2758,10 @@ impl<'a> Transaction<'a> {
         self.durable_catalog.is_savepoint()
     }
 
+    pub fn is_read_only(&self) -> bool {
+        self.durable_catalog.is_read_only()
+    }
+
     fn commit_op(&mut self) {
         self.op_id += 1;
     }
@@ -2744,6 +2804,8 @@ impl<'a> Transaction<'a> {
             databases: self.databases.pending(),
             schemas: self.schemas.pending(),
             items: self.items.pending(),
+            item_columns: self.item_columns.pending(),
+            index_columns: self.index_columns.pending(),
             comments: self.comments.pending(),
             roles: self.roles.pending(),
             role_auth: self.role_auth.pending(),
@@ -2797,6 +2859,8 @@ impl<'a> Transaction<'a> {
             databases,
             schemas,
             items,
+            item_columns,
+            index_columns,
             comments,
             roles,
             role_auth,
@@ -2826,6 +2890,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(databases);
         differential_dataflow::consolidation::consolidate_updates(schemas);
         differential_dataflow::consolidation::consolidate_updates(items);
+        differential_dataflow::consolidation::consolidate_updates(item_columns);
+        differential_dataflow::consolidation::consolidate_updates(index_columns);
         differential_dataflow::consolidation::consolidate_updates(comments);
         differential_dataflow::consolidation::consolidate_updates(roles);
         differential_dataflow::consolidation::consolidate_updates(role_auth);
@@ -3021,6 +3087,8 @@ pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
     pub(crate) items: Vec<(proto::ItemKey, proto::ItemValue, Diff)>,
+    pub(crate) item_columns: Vec<(proto::ItemColumnsKey, proto::ItemColumnsValue, Diff)>,
+    pub(crate) index_columns: Vec<(proto::IndexColumnsKey, proto::IndexColumnsValue, Diff)>,
     pub(crate) comments: Vec<(proto::CommentKey, proto::CommentValue, Diff)>,
     pub(crate) roles: Vec<(proto::RoleKey, proto::RoleValue, Diff)>,
     pub(crate) role_auth: Vec<(proto::RoleAuthKey, proto::RoleAuthValue, Diff)>,
@@ -3087,6 +3155,8 @@ impl TransactionBatch {
             databases,
             schemas,
             items,
+            item_columns,
+            index_columns,
             comments,
             roles,
             role_auth,
@@ -3114,6 +3184,8 @@ impl TransactionBatch {
         databases.is_empty()
             && schemas.is_empty()
             && items.is_empty()
+            && item_columns.is_empty()
+            && index_columns.is_empty()
             && comments.is_empty()
             && roles.is_empty()
             && role_auth.is_empty()
@@ -3202,6 +3274,8 @@ mod unique_name {
         DefaultPrivilegesValue,
         GidMappingValue,
         IdAllocValue,
+        IndexColumnsValue,
+        ItemColumnsValue,
         ReplicaSystemConfigurationValue,
         ServerConfigurationValue,
         SettingValue,

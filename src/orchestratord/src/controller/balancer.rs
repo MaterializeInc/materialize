@@ -18,6 +18,7 @@ use k8s_openapi::{
             SeccompProfile, SecretVolumeSource, SecurityContext, Service, ServicePort, ServiceSpec,
             Toleration, Volume, VolumeMount,
         },
+        policy::v1::PodDisruptionBudget,
     },
     apimachinery::pkg::{
         apis::meta::v1::{Condition, LabelSelector, Time},
@@ -27,7 +28,7 @@ use k8s_openapi::{
 };
 use kube::{
     Api, Client, Resource, ResourceExt,
-    api::{DeleteParams, ObjectMeta, PostParams},
+    api::{DeleteParams, ObjectMeta, Patch, PatchParams, PostParams},
     runtime::{conditions::is_deployment_completed, controller::Action, wait::await_condition},
 };
 use maplit::btreemap;
@@ -35,7 +36,10 @@ use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, get_resource, recommended_k8s_labels, replace_resource},
+    k8s::{
+        FIELD_MANAGER, apply_resource, get_resource, pod_disruption_budget, recommended_k8s_labels,
+        replace_resource,
+    },
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -53,6 +57,8 @@ pub const CONTROLLER_NAME: &str = "balancer";
 #[derive(Clone)]
 pub struct Config {
     pub enable_security_context: bool,
+    /// Whether to run pods in a Kubernetes user namespace (`hostUsers: false`).
+    pub enable_user_namespaces: bool,
     pub enable_prometheus_scrape_annotations: bool,
 
     pub image_pull_policy: KubernetesImagePullPolicy,
@@ -69,6 +75,10 @@ pub struct Config {
     pub balancerd_sql_port: u16,
     pub balancerd_http_port: u16,
     pub balancerd_internal_http_port: u16,
+    /// `/api/readyz` takes a balancerd at its connection high watermark out of
+    /// the Service endpoints. `/api/livez` keeps it in, for load balancers that
+    /// read `/api/readyz` in their own health check instead.
+    pub balancerd_readiness_probe_path: String,
 }
 
 pub struct Context {
@@ -342,14 +352,16 @@ impl Context {
             timeout_seconds: Some(1),
             ..Default::default()
         };
+        // Tighter than liveness so that, on `/api/readyz`, a balancerd at its
+        // connection high watermark leaves the Service endpoints within seconds.
         let readiness_probe = Probe {
             http_get: Some(HTTPGetAction {
                 port: IntOrString::Int(self.config.balancerd_internal_http_port.into()),
-                path: Some("/api/readyz".into()),
+                path: Some(self.config.balancerd_readiness_probe_path.clone()),
                 ..Default::default()
             }),
-            failure_threshold: Some(3),
-            period_seconds: Some(10),
+            failure_threshold: Some(2),
+            period_seconds: Some(2),
             success_threshold: Some(1),
             timeout_seconds: Some(1),
             ..Default::default()
@@ -391,7 +403,7 @@ impl Context {
         pod_template_labels.extend(recommended_k8s_labels(balancer.app_name()));
 
         let deployment_spec = DeploymentSpec {
-            replicas: Some(balancer.replicas()),
+            replicas: balancer.replicas(),
             selector: LabelSelector {
                 match_labels: Some(match_labels),
                 ..Default::default()
@@ -433,6 +445,9 @@ impl Context {
                     }),
                     scheduler_name: self.config.scheduler_name.clone(),
                     volumes: Some(volumes),
+                    // `None` rather than `Some(true)` when disabled, so the
+                    // pod spec is unchanged from before user namespace support.
+                    host_users: self.config.enable_user_namespaces.then_some(false),
                     ..Default::default()
                 }),
             },
@@ -480,6 +495,53 @@ impl Context {
             spec: Some(spec),
             status: None,
         }
+    }
+
+    /// Hands `spec.replicas` to [`REPLICAS_HANDOVER_MANAGER`] at its live value
+    /// while [`FIELD_MANAGER`] still owns it, creating the Deployment with
+    /// `initial_replicas` first if it does not exist yet.
+    ///
+    /// NOTE: Dropping a field from an apply when no other manager owns it
+    /// deletes it, which defaults the Deployment to 1 replica. An autoscaler
+    /// cannot become a co-owner first, because each of its writes triggers a
+    /// reconcile whose forced apply reclaims the field. The handover apply is
+    /// not forced, so a concurrent scale by the autoscaler conflicts and the
+    /// reconcile retries.
+    async fn release_replicas(
+        &self,
+        deployment_api: &Api<Deployment>,
+        deployment: &Deployment,
+        initial_replicas: i32,
+    ) -> Result<(), Error> {
+        let name = deployment.name_unchecked();
+        let existing = match get_resource(deployment_api, &name).await? {
+            Some(existing) => existing,
+            None => {
+                // The handover apply carries no selector or template, so it
+                // cannot create the Deployment. Create it with the initial
+                // count under FIELD_MANAGER, then hand that count over below.
+                let mut seeded = deployment.clone();
+                seeded.spec.as_mut().unwrap().replicas = Some(initial_replicas);
+                apply_resource(deployment_api, &seeded).await?
+            }
+        };
+        if !owns_replicas(&existing) {
+            return Ok(());
+        }
+        let replicas = existing.spec.and_then(|spec| spec.replicas);
+        deployment_api
+            .patch(
+                &name,
+                &PatchParams::apply(REPLICAS_HANDOVER_MANAGER),
+                &Patch::Apply(serde_json::json!({
+                    "apiVersion": "apps/v1",
+                    "kind": "Deployment",
+                    "metadata": { "name": name },
+                    "spec": { "replicas": replicas },
+                })),
+            )
+            .await?;
+        Ok(())
     }
 
     // TODO: remove this once everyone is upgraded to an orchestratord
@@ -616,6 +678,7 @@ impl k8s_controller::Context for Context {
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
+        let pdb_api: Api<PodDisruptionBudget> = Api::namespaced(client.clone(), &namespace);
 
         let step = metadata.step("certificate");
         if let Some(external_certificate) = self.create_external_certificate_object(balancer)? {
@@ -629,8 +692,21 @@ impl k8s_controller::Context for Context {
         let step = metadata.step("deployment");
         let deployment = self.create_deployment_object(balancer)?;
         self.fix_deployment(&deployment_api, &deployment).await?;
+        // Must precede the apply that omits `replicas`; see `release_replicas`.
+        if balancer.replicas().is_none() {
+            self.release_replicas(&deployment_api, &deployment, balancer.initial_replicas())
+                .await?;
+        }
         trace!("creating new balancerd deployment");
         apply_resource(&deployment_api, &deployment).await?;
+        step.finish(Outcome::Completed);
+
+        let step = metadata.step("pod_disruption_budget");
+        let pdb = pod_disruption_budget(
+            balancer.managed_resource_meta(balancer.deployment_name()),
+            &deployment,
+        );
+        apply_resource(&pdb_api, &pdb).await?;
         step.finish(Outcome::Completed);
 
         let step = metadata.step("service");
@@ -647,15 +723,28 @@ impl k8s_controller::Context for Context {
     }
 }
 
+const REPLICAS_HANDOVER_MANAGER: &str = "orchestratord.materialize.cloud/replicas-handover";
+
+fn owns_replicas(deployment: &Deployment) -> bool {
+    deployment
+        .metadata
+        .managed_fields
+        .iter()
+        .flatten()
+        .filter(|entry| entry.manager.as_deref() == Some(FIELD_MANAGER))
+        .filter_map(|entry| entry.fields_v1.as_ref())
+        .any(|fields| fields.0.pointer("/f:spec/f:replicas").is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use mz_cloud_resources::crd::balancer::v1alpha1::{BalancerSpec, StaticRoutingConfig};
 
-    #[mz_ore::test]
-    fn configmap_reference_controls_file_sync() {
-        let context = Context::new(Config {
+    fn test_context() -> Context {
+        Context::new(Config {
             enable_security_context: false,
+            enable_user_namespaces: false,
             enable_prometheus_scrape_annotations: false,
             image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
             scheduler_name: None,
@@ -669,22 +758,121 @@ mod tests {
             balancerd_sql_port: 6875,
             balancerd_http_port: 6876,
             balancerd_internal_http_port: 6878,
-        });
-        for configmap_name in [None, Some("balancerd-settings".to_owned())] {
-            let mut balancer = Balancer::new(
-                "test",
-                BalancerSpec {
-                    configmap_name: configmap_name.clone(),
-                    static_routing: Some(StaticRoutingConfig {
-                        environmentd_namespace: "test".to_owned(),
-                        environmentd_service_name: "environmentd".to_owned(),
-                    }),
+            balancerd_readiness_probe_path: "/api/readyz".to_owned(),
+        })
+    }
+
+    fn test_balancer(spec: BalancerSpec) -> Balancer {
+        let mut balancer = Balancer::new(
+            "test",
+            BalancerSpec {
+                static_routing: Some(StaticRoutingConfig {
+                    environmentd_namespace: "test".to_owned(),
+                    environmentd_service_name: "environmentd".to_owned(),
+                }),
+                ..spec
+            },
+        );
+        balancer.metadata.namespace = Some("test".to_owned());
+        balancer.metadata.uid = Some("test".to_owned());
+        balancer.status = Some(balancer.status());
+        balancer
+    }
+
+    #[mz_ore::test]
+    fn externally_scaled_omits_replicas() {
+        let context = test_context();
+        for (externally_scaled, expected) in [(None, Some(3)), (Some(true), None)] {
+            let balancer = test_balancer(BalancerSpec {
+                replicas: Some(3),
+                externally_scaled,
+                ..Default::default()
+            });
+            let deployment = context.create_deployment_object(&balancer).unwrap();
+            assert_eq!(deployment.spec.unwrap().replicas, expected);
+            assert_eq!(balancer.initial_replicas(), 3);
+        }
+    }
+
+    #[mz_ore::test]
+    fn user_namespaces_set_host_users() {
+        let balancer = test_balancer(BalancerSpec::default());
+        for (enabled, expected) in [(false, None), (true, Some(false))] {
+            let mut context = test_context();
+            context.config.enable_user_namespaces = enabled;
+            let pod = context
+                .create_deployment_object(&balancer)
+                .unwrap()
+                .spec
+                .unwrap()
+                .template
+                .spec
+                .unwrap();
+            assert_eq!(pod.host_users, expected);
+        }
+    }
+
+    #[mz_ore::test]
+    fn pdb_selects_deployment_pods() {
+        let balancer = test_balancer(BalancerSpec::default());
+        let deployment = test_context().create_deployment_object(&balancer).unwrap();
+        let pdb = pod_disruption_budget(
+            balancer.managed_resource_meta(balancer.deployment_name()),
+            &deployment,
+        );
+        let spec = pdb.spec.unwrap();
+        assert_eq!(spec.max_unavailable, Some(IntOrString::Int(1)));
+        assert_eq!(
+            spec.unhealthy_pod_eviction_policy.as_deref(),
+            Some("AlwaysAllow")
+        );
+        let match_labels = spec.selector.unwrap().match_labels.unwrap();
+        let pod_labels = deployment
+            .spec
+            .unwrap()
+            .template
+            .metadata
+            .unwrap()
+            .labels
+            .unwrap();
+        assert!(!match_labels.is_empty());
+        assert!(
+            match_labels
+                .iter()
+                .all(|(k, v)| pod_labels.get(k) == Some(v)),
+            "PDB selector {match_labels:?} does not match pod labels {pod_labels:?}",
+        );
+    }
+
+    #[mz_ore::test]
+    fn owns_replicas_reads_managed_fields() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{FieldsV1, ManagedFieldsEntry};
+        let deployment = |manager: &str| Deployment {
+            metadata: ObjectMeta {
+                managed_fields: Some(vec![ManagedFieldsEntry {
+                    manager: Some(manager.to_owned()),
+                    fields_v1: Some(FieldsV1(
+                        serde_json::json!({ "f:spec": { "f:replicas": {} } }),
+                    )),
                     ..Default::default()
-                },
-            );
-            balancer.metadata.namespace = Some("test".to_owned());
-            balancer.metadata.uid = Some("test".to_owned());
-            balancer.status = Some(balancer.status());
+                }]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(owns_replicas(&deployment(FIELD_MANAGER)));
+        assert!(!owns_replicas(&deployment(REPLICAS_HANDOVER_MANAGER)));
+        assert!(!owns_replicas(&Deployment::default()));
+    }
+
+    #[mz_ore::test]
+    fn configmap_reference_controls_file_sync() {
+        let context = test_context();
+        for configmap_name in [None, Some("balancerd-settings".to_owned())] {
+            let balancer = test_balancer(BalancerSpec {
+                configmap_name: configmap_name.clone(),
+                ..Default::default()
+            });
             let pod = context
                 .create_deployment_object(&balancer)
                 .unwrap()

@@ -33,10 +33,9 @@ use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogError, ObjectType};
 use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::{
-    self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
-    AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    PlanClusterOption,
+    self, AlterClusterPlanStrategy, AlterOptionParameter, AlterSetClusterPlan,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
 };
 use mz_sql::plan::{AlterClusterPlan, OnTimeoutAction};
 use mz_sql::session::metadata::SessionMetadata;
@@ -1788,89 +1787,6 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
         Ok(())
-    }
-
-    pub(crate) async fn sequence_alter_cluster_rename(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        AlterClusterRenamePlan { id, name, to_name }: AlterClusterRenamePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let op = Op::RenameCluster {
-            id,
-            name,
-            to_name,
-            check_reserved_names: true,
-        };
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
-            Err(err) => Err(err),
-        }
-    }
-
-    pub(crate) async fn sequence_alter_cluster_swap(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        AlterClusterSwapPlan {
-            id_a,
-            id_b,
-            name_a,
-            name_b,
-            name_temp,
-        }: AlterClusterSwapPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let op_a = Op::RenameCluster {
-            id: id_a,
-            name: name_a.clone(),
-            to_name: name_temp.clone(),
-            check_reserved_names: false,
-        };
-        let op_b = Op::RenameCluster {
-            id: id_b,
-            name: name_b.clone(),
-            to_name: name_a,
-            check_reserved_names: false,
-        };
-        let op_temp = Op::RenameCluster {
-            id: id_a,
-            name: name_temp,
-            to_name: name_b,
-            check_reserved_names: false,
-        };
-
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_temp], |_, _| {
-                Box::pin(async {})
-            })
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
-            Err(err) => Err(err),
-        }
-    }
-
-    pub(crate) async fn sequence_alter_cluster_replica_rename(
-        &mut self,
-        session: &Session,
-        AlterClusterReplicaRenamePlan {
-            cluster_id,
-            replica_id,
-            name,
-            to_name,
-        }: AlterClusterReplicaRenamePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let op = catalog::Op::RenameClusterReplica {
-            cluster_id,
-            replica_id,
-            name,
-            to_name,
-        };
-        match self.catalog_transact(Some(session), vec![op]).await {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::ClusterReplica)),
-            Err(err) => Err(err),
-        }
     }
 
     /// Convert a [`AlterSetClusterPlan`] to a sequence of catalog operators and adjust state.

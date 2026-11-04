@@ -96,7 +96,7 @@ use uncased::UncasedStr;
 use crate::ast::Ident;
 use crate::session::user::User;
 
-pub(crate) mod constraints;
+pub mod constraints;
 pub(crate) mod definitions;
 pub(crate) mod errors;
 pub(crate) mod polyfill;
@@ -449,6 +449,7 @@ impl SessionVars {
             &SQL_SAFE_UPDATES,
             &REAL_TIME_RECENCY,
             &EMIT_PLAN_INSIGHTS_NOTICE,
+            &EMIT_EXECUTION_TIME_NOTICE,
             &EMIT_TIMESTAMP_NOTICE,
             &EMIT_TRACE_ID_NOTICE,
             &AUTO_ROUTE_CATALOG_QUERIES,
@@ -896,6 +897,11 @@ impl SessionVars {
     /// Returns the value of `emit_plan_insights_notice` configuration parameter.
     pub fn emit_plan_insights_notice(&self) -> bool {
         *self.expect_value(&EMIT_PLAN_INSIGHTS_NOTICE)
+    }
+
+    /// Returns the value of `emit_execution_time_notice` configuration parameter.
+    pub fn emit_execution_time_notice(&self) -> bool {
+        *self.expect_value(&EMIT_EXECUTION_TIME_NOTICE)
     }
 
     /// Returns the value of `emit_timestamp_notice` configuration parameter.
@@ -1455,6 +1461,11 @@ impl SystemVars {
     /// that shouldn't be synced by SystemParameterFrontend.
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
         self.iter().filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
+    }
+
+    /// Returns the [`VarDefinition`] of the named configuration parameter, if it exists.
+    pub fn definition(&self, name: &str) -> Option<&VarDefinition> {
+        self.vars.get(UncasedStr::new(name)).map(|v| &v.definition)
     }
 
     /// Returns an iterator over the configuration parameters that can be overriden per-Session.
@@ -2453,7 +2464,7 @@ impl SystemVars {
     }
 
     /// Returns whether the named variable is a dyncfg configuration parameter.
-    fn is_dyncfg_var(&self, name: &str) -> bool {
+    pub fn is_dyncfg_var(&self, name: &str) -> bool {
         self.dyncfgs.entries().any(|e| name == e.name())
     }
 }

@@ -377,6 +377,86 @@ describe("replicaUtilizationHistory", () => {
       await cleanup();
     }
   });
+
+  it("takes the memory split from each bucket's max-heap sample, as shares of one process's RAM", async () => {
+    const mockedSearchPath = "internal_test, " + SEARCH_PATH;
+    const client = await getMaterializeClient();
+    const processMemoryBytes = 4000;
+
+    await testdrive(`
+        > DROP CLUSTER IF EXISTS c CASCADE;
+        > CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=2,workers=1'));
+        > CREATE SCHEMA IF NOT EXISTS internal_test;
+        > SET schema = internal_test;
+        > DROP TABLE IF EXISTS internal_test.mz_cluster_replica_metrics_history;
+        > DROP TABLE IF EXISTS internal_test.mz_cluster_replica_status_history;
+        > DROP TABLE IF EXISTS internal_test.mz_cluster_replica_sizes;
+        > CREATE TABLE mz_cluster_replica_metrics_history (
+            occurred_at TIMESTAMP NOT NULL, replica_id TEXT NOT NULL, process_id uint8 NOT NULL,
+            cpu_nano_cores double, memory_bytes double, disk_bytes double, heap_bytes double,
+            heap_limit double, swap_bytes double);
+        > CREATE TABLE mz_cluster_replica_status_history (
+            replica_id TEXT NOT NULL, process_id uint8 NOT NULL, occurred_at TIMESTAMP NOT NULL,
+            status TEXT NOT NULL, reason TEXT);
+        > CREATE TABLE mz_cluster_replica_sizes (
+            size TEXT NOT NULL, processes uint8 NOT NULL, cpu_nano_cores uint8 NOT NULL,
+            memory_bytes uint8 NOT NULL, disk_bytes uint8);
+        > INSERT INTO internal_test.mz_cluster_replica_sizes VALUES
+            ('scale=2,workers=1', 2, ${size25cc.cpuNanoCores}, ${processMemoryBytes}, ${size25cc.diskBytes});
+    `);
+
+    await client.query(`SET search_path TO ${mockedSearchPath};`);
+
+    const {
+      rows: [replica],
+    } = await client.query(
+      `SELECT r.id, r.cluster_id AS "clusterId" FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'c'`,
+    );
+
+    // Two samples in one minute, with a row per process. The first has the
+    // highest heap. The second has more swap and a higher limit, which the
+    // split must not mix in.
+    await client.query(`INSERT INTO internal_test.mz_cluster_replica_metrics_history VALUES
+      (TIMESTAMP '2030-01-01T00:00:00Z', '${replica.id}', 0, 1, 1000, 0, 1100, 5000, 100),
+      (TIMESTAMP '2030-01-01T00:00:00Z', '${replica.id}', 1, 1, 3000, 0, 3400, 5000, 400),
+      (TIMESTAMP '2030-01-01T00:00:30Z', '${replica.id}', 0, 1, 500, 0, 500, 6000, 0),
+      (TIMESTAMP '2030-01-01T00:00:30Z', '${replica.id}', 1, 1, 600, 0, 1400, 6000, 800)`);
+
+    const params = {
+      startDate: "2030-01-01T00:00:00Z",
+      bucketSizeMs: 60_000,
+      clusterIds: [replica.clusterId],
+    };
+    const runQuery = async (includeMemoryBreakdown?: boolean) =>
+      (
+        await executeSqlHttp(
+          buildReplicaUtilizationHistoryQuery({
+            ...params,
+            includeMemoryBreakdown,
+          }).compile(),
+          {
+            sessionVariables: {
+              search_path: mockedSearchPath,
+              cluster: QUICKSTART_CLUSTER,
+            },
+          },
+        )
+      ).rows;
+
+    const [bucket] = await runQuery(true);
+    expect(bucket.maxHeapAt.toISOString()).toEqual("2030-01-01T00:00:00.000Z");
+    // Shares of one process's RAM from the worst process, where the memory
+    // percent is replica-wide.
+    expect(bucket.swapOfRamPercent).toEqual(400 / processMemoryBytes);
+    expect(bucket.heapLimitPercent).toEqual(5000 / processMemoryBytes);
+    expect(bucket.maxMemoryPercent).toEqual(
+      (1000 + 3000) / (processMemoryBytes * 2),
+    );
+
+    const [classicBucket] = await runQuery();
+    expect(classicBucket).not.toHaveProperty("swapOfRamPercent");
+    expect(classicBucket).not.toHaveProperty("heapLimitPercent");
+  });
 });
 
 // The indexed-view builders read the maintained `_overview*` views (point-lookup

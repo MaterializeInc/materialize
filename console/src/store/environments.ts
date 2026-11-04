@@ -686,23 +686,23 @@ export const useRegionSlug = () => {
 };
 
 /**
- * Gate code on the current version being greater than or equal to a specified version.
- * The tri-state return-value is true if the current environment version
+ * Whether `environment`'s version is greater than or equal to `version`.
+ * The tri-state return-value is true if the environment version
  * is greater than or equal to the supplied version,
- * false if it is less than the supplied version, and undefined
- * if it can't be found (because there is no current environment or because the current
+ * false if it is less than the supplied version, and null
+ * if it can't be found (because there is no environment or because the
  * environment is unhealthy).
  *
  * It is recommended to call this function with pre-release semver strings. For example,
- * `useEnvironmentGate("0.55.0-dev")` will return true on v0.55.x and their pre-release builds,
- * but false on v0.54.x
+ * `environmentMeetsVersion(environment, "0.55.0-dev")` will return true on v0.55.x and their
+ * pre-release builds, but false on v0.54.x
  */
-export const useEnvironmentGate = (
+export const environmentMeetsVersion = (
+  environment: Environment | undefined,
   version: string | SemVer,
 ): boolean | null => {
   const suppliedVersion = semverParse(version);
   assert(suppliedVersion);
-  const [environment] = useAtom(currentEnvironmentState);
   if (
     environment &&
     environment.state === "enabled" &&
@@ -712,6 +712,20 @@ export const useEnvironmentGate = (
     return semverGte(actualVersion.crateVersion, suppliedVersion);
   }
   return null;
+};
+
+/**
+ * Gate code on the current environment's version, see `environmentMeetsVersion`.
+ *
+ * It answers for the environment of the latest render. Code that runs inside a
+ * store subscription, before React re-renders, must call
+ * `environmentMeetsVersion` with the environment it reads from the store.
+ */
+export const useEnvironmentGate = (
+  version: string | SemVer,
+): boolean | null => {
+  const [environment] = useAtom(currentEnvironmentState);
+  return environmentMeetsVersion(environment, version);
 };
 
 /** The number of enabled environments. */

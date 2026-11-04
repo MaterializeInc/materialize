@@ -216,6 +216,7 @@ The payload is a `string` containing the statement's tag.
 
 A rows-returning statement is executing and some number (possibly 0) of `Row` messages will follow.
 Either a `CommandComplete` or `Error` message will then follow indicating there are no more rows and the final result of the statement.
+Until then, the rows do not mean that the statement succeeded.
 The payload has the following structure:
 
 ```
@@ -248,7 +249,7 @@ Numeric results are converted to strings to avoid possible JavaScript number ina
 #### `ParameterStatus`
 
 Announces the value of a session setting.
-These are sent during startup and when a statement caused a session parameter to change.
+These are sent during startup, when a statement changes a session parameter, and when the end of a transaction restores a value set with `SET LOCAL`.
 The payload has the following structure:
 
 ```

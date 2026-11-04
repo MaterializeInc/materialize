@@ -630,6 +630,9 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),
+            (Self::GlueSchemaRegistry(s), Self::GlueSchemaRegistry(o)) => s.alter_compatible(id, o),
+            (Self::IcebergCatalog(s), Self::IcebergCatalog(o)) => s.alter_compatible(id, o),
             _ => {
                 tracing::warn!(
                     "Connection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -698,6 +701,24 @@ impl IcebergAccessDelegation {
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for RestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        // Auth and access delegation are not considered for compatibility, because they can
+        // be changed without breaking existing tables.
+        if (self.warehouse != other.warehouse) || (self.storage_provider != other.storage_provider)
+        {
+            tracing::warn!(
+                "RestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct S3TablesRestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     /// The AWS connection details, for s3tables
@@ -745,6 +766,26 @@ impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
         S3TablesRestIcebergCatalog {
             aws_connection: self.aws_connection.into_inline_connection(&r),
             warehouse: self.warehouse,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for S3TablesRestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self.aws_connection.connection_id != other.aws_connection.connection_id
+            || self.warehouse != other.warehouse
+        {
+            tracing::warn!(
+                "S3TablesRestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            self.aws_connection
+                .connection
+                .alter_compatible(id, &other.aws_connection.connection)?;
+            Ok(())
         }
     }
 }
@@ -806,6 +847,21 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogImpl, R>
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogImpl<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        match (self, other) {
+            (IcebergCatalogImpl::Rest(rest), IcebergCatalogImpl::Rest(other_rest)) => {
+                rest.alter_compatible(id, other_rest)
+            }
+            (
+                IcebergCatalogImpl::S3TablesRest(s3tables),
+                IcebergCatalogImpl::S3TablesRest(other_s3tables),
+            ) => s3tables.alter_compatible(id, other_s3tables),
+            _ => Err(AlterError { id }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     /// The catalog impl impl of that catalog
@@ -814,9 +870,26 @@ pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     pub uri: reqwest_0_12::Url,
 }
 
-impl AlterCompatible for IcebergCatalogConnection {
-    fn alter_compatible(&self, id: GlobalId, _other: &Self) -> Result<(), AlterError> {
-        Err(AlterError { id })
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let compatibility_checks = [
+            (
+                self.catalog.alter_compatible(id, &other.catalog).is_ok(),
+                "catalog",
+            ),
+            (self.uri == other.uri, "uri"),
+        ];
+        for (is_ok, field) in compatibility_checks {
+            if !is_ok {
+                tracing::warn!(
+                    "IcebergCatalogConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -2848,12 +2921,25 @@ impl MySqlConnection<InlinedConnection> {
             self.tls_mode,
             MySqlSslMode::VerifyCa | MySqlSslMode::VerifyIdentity
         ) {
+            // Trust the platform's roots, not the Mozilla set compiled into
+            // mysql_async, so a distrusted root goes away with an OS update.
+            let native = rustls_native_certs::load_native_certs();
+            for error in &native.errors {
+                tracing::warn!("failed to load native root certs: {error}");
+            }
+            let mut roots: Vec<_> = native
+                .certs
+                .into_iter()
+                .map(|cert| cert.to_vec().into())
+                .collect();
             if let Some(tls_root_cert) = &self.tls_root_cert {
                 let tls_root_cert = tls_root_cert.get_string(in_task, secrets_reader).await?;
-                ssl_opts = ssl_opts.map(|opts| {
-                    opts.with_root_certs(vec![tls_root_cert.as_bytes().to_vec().into()])
-                });
+                roots.push(tls_root_cert.into_bytes().into());
             }
+            ssl_opts = ssl_opts.map(|opts| {
+                opts.with_disable_built_in_roots(true)
+                    .with_root_certs(roots)
+            });
         }
 
         if let Some(identity) = &self.tls_identity {
@@ -2861,14 +2947,11 @@ impl MySqlConnection<InlinedConnection> {
                 .read_string_in_task_if(in_task, identity.key)
                 .await?;
             let cert = identity.cert.get_string(in_task, secrets_reader).await?;
-            let (der, pass) =
-                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?.into_parts();
-
-            // Add client identity to SSLOpts
             ssl_opts = ssl_opts.map(|opts| {
-                opts.with_client_identity(Some(
-                    mysql_async::ClientIdentity::new(der.into()).with_password(pass),
-                ))
+                opts.with_client_identity(Some(mysql_async::ClientIdentity::new(
+                    cert.into_bytes().into(),
+                    key.into_bytes().into(),
+                )))
             });
         }
 
