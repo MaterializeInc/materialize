@@ -27,6 +27,7 @@ use timely::{Container, PartialOrder};
 use tokio::sync::Notify;
 
 use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use crate::frontier_queue::FrontierObserver;
 
 /// Monitors progress at a `Stream`.
 pub trait ProbeNotify<'scope, T: Timestamp> {
@@ -61,7 +62,6 @@ where
     }
 }
 
-#[derive(Debug)]
 pub struct Handle<T: Timestamp> {
     /// The overall shared frontier managed by all the handles
     frontier: Rc<RefCell<MutableAntichain<T>>>,
@@ -70,6 +70,20 @@ pub struct Handle<T: Timestamp> {
     notify: Rc<Notify>,
     /// Activators to notify when the frontier progresses
     activators: Rc<RefCell<Vec<Activator>>>,
+    /// Observers to call with the frontier when it progresses
+    observers: Rc<RefCell<Vec<FrontierObserver<T>>>>,
+}
+
+impl<T: Timestamp> std::fmt::Debug for Handle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Handle")
+            .field("frontier", &self.frontier)
+            .field("handle_frontier", &self.handle_frontier)
+            .field("notify", &self.notify)
+            .field("activators", &self.activators)
+            .field("observers", &self.observers.borrow().len())
+            .finish()
+    }
 }
 
 impl<T: Timestamp> Default for Handle<T> {
@@ -82,6 +96,7 @@ impl<T: Timestamp> Default for Handle<T> {
             handle_frontier: Antichain::new(),
             notify: Rc::new(Notify::new()),
             activators: Rc::default(),
+            observers: Rc::default(),
         }
     }
 }
@@ -128,19 +143,26 @@ impl<T: Timestamp> Handle<T> {
 
     #[inline]
     fn update_frontier(&mut self, new_frontier: &[T]) {
-        let mut frontier = self.frontier.borrow_mut();
-        let changes = frontier.update_iter(
-            self.handle_frontier
-                .iter()
-                .map(|t| (t.clone(), -1))
-                .chain(new_frontier.iter().map(|t| (t.clone(), 1))),
-        );
+        let changed = {
+            let mut frontier = self.frontier.borrow_mut();
+            let changes = frontier.update_iter(
+                self.handle_frontier
+                    .iter()
+                    .map(|t| (t.clone(), -1))
+                    .chain(new_frontier.iter().map(|t| (t.clone(), 1))),
+            );
+            changes.count() > 0
+        };
         self.handle_frontier.clear();
         self.handle_frontier.extend(new_frontier.iter().cloned());
-        if changes.count() > 0 {
+        if changed {
             self.notify.notify_waiters();
             for activator in self.activators.borrow().iter() {
                 activator.activate();
+            }
+            let frontier = self.frontier.borrow();
+            for observer in self.observers.borrow().iter() {
+                observer(frontier.frontier());
             }
         }
     }
@@ -148,6 +170,15 @@ impl<T: Timestamp> Handle<T> {
     /// Register an activator to be notified when the frontier progresses
     pub fn activate(&self, activator: Activator) {
         self.activators.borrow_mut().push(activator);
+    }
+
+    /// Register an observer to call with the frontier when it progresses.
+    ///
+    /// The observer is not called with the current frontier. A handle that has not yet been
+    /// attached to a stream has the empty frontier, which an observer must not mistake for
+    /// completion.
+    pub fn observe(&self, observer: FrontierObserver<T>) {
+        self.observers.borrow_mut().push(observer);
     }
 }
 
@@ -167,6 +198,7 @@ impl<T: Timestamp> Clone for Handle<T> {
             handle_frontier: Antichain::new(),
             notify: Rc::clone(&self.notify),
             activators: Rc::clone(&self.activators),
+            observers: Rc::clone(&self.observers),
         }
     }
 }
