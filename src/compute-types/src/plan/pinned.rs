@@ -39,6 +39,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use itertools::Itertools;
 use mz_expr::{Id, MfpPlan, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -178,9 +179,15 @@ pub struct PinnedSink {
 /// The kinds of sink a pinned dataflow may export.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PinnedSinkKind {
-    /// A materialized view. Its description, non-null assertions, and refresh
-    /// schedule come from the catalog item.
-    MaterializedView,
+    /// A materialized view. Its column names, non-null assertions, and
+    /// refresh schedule come from the catalog item.
+    MaterializedView {
+        /// The sink's relation type as the optimizer built it: the plan's
+        /// inferred nullability and keys, with the non-null assertions
+        /// applied. A builtin view declares its nullability and keys by hand
+        /// in the catalog, and those need not agree with the plan's.
+        typ: SqlRelationType,
+    },
     /// A metric sink. Its label and the shaped description of its input come
     /// from the catalog item.
     MetricSink,
@@ -318,7 +325,7 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
             .map(|(id, sink)| {
                 let ComputeSinkDesc {
                     from,
-                    from_desc: _,
+                    from_desc,
                     connection,
                     with_snapshot: _,
                     up_to: _,
@@ -327,7 +334,11 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
                     from_arrangement,
                 } = sink;
                 let kind = match connection {
-                    ComputeSinkConnection::MaterializedView(_) => PinnedSinkKind::MaterializedView,
+                    ComputeSinkConnection::MaterializedView(_) => {
+                        PinnedSinkKind::MaterializedView {
+                            typ: from_desc.into_typ(),
+                        }
+                    }
                     ComputeSinkConnection::MetricSink(_) => PinnedSinkKind::MetricSink,
                     ComputeSinkConnection::Subscribe(_)
                     | ComputeSinkConnection::CopyToS3Oneshot(_) => {
@@ -390,9 +401,9 @@ pub struct IndexInfo {
 /// The catalog facts an exported materialized view sink is rebuilt from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaterializedViewInfo {
-    /// The view's description. Instantiation makes the asserted columns
-    /// non-nullable itself, so a description that already reflects the
-    /// assertions, as the catalog's does, is fine.
+    /// The view's description. Instantiation takes its column names from it
+    /// and checks its column types against the pinned type. Its nullability
+    /// and keys are not used.
     pub desc: RelationDesc,
     /// Columns asserted non-null.
     pub non_null_assertions: Vec<usize>,
@@ -658,19 +669,53 @@ impl PinnedDataflow {
                 });
             }
             let desc = match kind {
-                PinnedSinkKind::MaterializedView => {
+                PinnedSinkKind::MaterializedView { typ } => {
                     let info =
                         ctx.materialized_view(id)
                             .ok_or(InstantiateError::MissingCatalogItem {
                                 id,
                                 kind: "materialized view",
                             })?;
-                    // Mirrors the materialized view optimizer: the sink's
-                    // description is the catalog description with the
-                    // asserted columns made non-nullable.
-                    let mut typ = info.desc.typ().clone();
-                    for &column in &info.non_null_assertions {
-                        typ.column_types[column].nullable = false;
+
+                    // TODO(mgree): once we're loading pinned plans, this check compares the
+                    // pinned type against itself.
+                    let catalog_typ = info.desc.typ();
+                    if typ.column_types.len() != catalog_typ.column_types.len() {
+                        return Err(InstantiateError::ExportDrift {
+                            id,
+                            detail: format!(
+                                "pinned {} columns, catalog says {}",
+                                typ.column_types.len(),
+                                catalog_typ.column_types.len()
+                            ),
+                        });
+                    }
+                    for (column, (pinned, catalog)) in typ
+                        .column_types
+                        .iter()
+                        .zip_eq(&catalog_typ.column_types)
+                        .enumerate()
+                    {
+                        if pinned.scalar_type != catalog.scalar_type {
+                            return Err(InstantiateError::ExportDrift {
+                                id,
+                                detail: format!(
+                                    "column {column}: pinned type {:?}, catalog says {:?}",
+                                    pinned.scalar_type, catalog.scalar_type
+                                ),
+                            });
+                        }
+                    }
+                    // For user objects, we expect the computed types to match exactly.
+                    // For builtins, they may not (e.g., keys are programmer assertions).
+                    //
+                    // NB we've already checked arity and scalar types, so this only
+                    // checks nullability and key information.
+                    if !id.is_system() && typ != *catalog_typ {
+                        return Err(InstantiateError::ExportDrift {
+                            id,
+                            detail: format!("pinned type {typ:?}, catalog says {catalog_typ:?}"),
+                        });
                     }
                     let rel_desc = RelationDesc::new(typ, info.desc.iter_names().cloned());
                     refresh_schedule.clone_from(&info.refresh_schedule);
@@ -762,6 +807,7 @@ mod tests {
     const ON: GlobalId = GlobalId::User(3);
     const INDEX: GlobalId = GlobalId::User(4);
     const MV_SINK: GlobalId = GlobalId::User(5);
+    const BUILTIN_MV_SINK: GlobalId = GlobalId::System(5);
     const VIEW: GlobalId = GlobalId::Transient(1);
 
     ///////////////////////////////////////////////////////////////////////////
@@ -869,9 +915,18 @@ mod tests {
         }
     }
 
+    /// `mv_desc()` with column 0 asserted non-null, which is what both the
+    /// catalog and the optimizer hold for a view with that assertion.
+    fn asserted_mv_desc() -> RelationDesc {
+        RelationDesc::new(
+            SqlRelationType::new(vec![SqlScalarType::Int64.nullable(false)]),
+            mv_desc().iter_names().cloned(),
+        )
+    }
+
     fn mv_info() -> MaterializedViewInfo {
         MaterializedViewInfo {
-            desc: mv_desc(),
+            desc: asserted_mv_desc(),
             non_null_assertions: vec![0],
             refresh_schedule: Some(schedule()),
         }
@@ -879,10 +934,7 @@ mod tests {
 
     /// The sink the materialized view optimizer emits for `mv_info()`.
     fn mv_sink(from: GlobalId) -> ComputeSinkDesc {
-        let asserted = RelationDesc::new(
-            SqlRelationType::new(vec![SqlScalarType::Int64.nullable(false)]),
-            mv_desc().iter_names().cloned(),
-        );
+        let asserted = asserted_mv_desc();
         ComputeSinkDesc {
             from,
             from_desc: asserted.clone(),
@@ -1037,6 +1089,49 @@ mod tests {
         let ctx = Ctx::new(None, Some(mv_info()));
         let rebuilt = pinned.instantiate(&ctx, "test".to_string()).unwrap();
         assert_eq!(rebuilt, df);
+    }
+
+    /// The catalog declares a key the plan did not establish. A builtin view
+    /// declares its type by hand, so the sink keeps the plan's type. A user
+    /// view's catalog type is inferred like the plan's, so a difference is
+    /// drift.
+    #[mz_ore::test]
+    fn declared_materialized_view_type_is_drift_only_for_user_views() {
+        let ctx = || {
+            Ctx::new(
+                None,
+                Some(MaterializedViewInfo {
+                    desc: RelationDesc::new(asserted_mv_desc().into_typ().with_key(vec![0]), ["c"]),
+                    ..mv_info()
+                }),
+            )
+        };
+
+        let mut builtin = materialized_view_dataflow();
+        let sink = builtin.sink_exports.remove(&MV_SINK).unwrap();
+        builtin.sink_exports.insert(BUILTIN_MV_SINK, sink);
+        assert_eq!(instantiate(&builtin, &ctx()), builtin);
+
+        let user = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+        let detail = export_drift_detail(user.instantiate(&ctx(), "test".to_string()), MV_SINK);
+        assert!(detail.contains("pinned type"), "{detail}");
+    }
+
+    #[mz_ore::test]
+    fn materialized_view_column_type_drift_is_detected() {
+        let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+        let ctx = Ctx::new(
+            None,
+            Some(MaterializedViewInfo {
+                desc: RelationDesc::new(
+                    SqlRelationType::new(vec![SqlScalarType::String.nullable(true)]),
+                    ["c"],
+                ),
+                ..mv_info()
+            }),
+        );
+        let detail = export_drift_detail(pinned.instantiate(&ctx, "test".to_string()), MV_SINK);
+        assert!(detail.contains("column 0"), "{detail}");
     }
 
     #[mz_ore::test]

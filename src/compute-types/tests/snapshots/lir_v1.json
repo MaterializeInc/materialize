@@ -3196,7 +3196,13 @@
   },
   "PinnedSinkKind": {
     "ENUM": {
-      "MaterializedView": "UNIT",
+      "MaterializedView": {
+        "STRUCT": {
+          "typ": {
+            "TYPENAME": "SqlRelationType"
+          }
+        }
+      },
       "MetricSink": "UNIT"
     }
   },
