@@ -202,7 +202,7 @@
     "glob": "^12.0.0",
     "ip-address": "^10.4.0",
     "js-cookie": "^3.0.7",
-    "js-yaml": "^4.3.1",
+    "js-yaml": "^4.3.2",
     "jsondiffpatch": "^0.7.2",
     "tar": "^7.5.22",
     "uuid": "^14.0.2"
