@@ -12,10 +12,9 @@ aliases:
 When you need a larger (or smaller) VM type for the nodes that Materialize
 runs on, how to proceed depends on how the nodes are managed:
 
-- **Static node pools** (the GCP and Azure modules, and AWS node groups when
-  not using Karpenter) cannot change VM type in place. The underlying cloud
-  APIs do not support it, so the Terraform providers mark the VM type field
-  `ForceNew` (GKE: `machine_type`, AKS: `vm_size`, EKS node groups:
+- **Static node pools** (the GCP modules, and AWS node groups when not using
+  Karpenter) cannot change VM type in place. The underlying cloud APIs do not
+  support it, so the Terraform providers mark the VM type field `ForceNew` (GKE: `machine_type`, AKS: `vm_size`, EKS node groups:
   `instance_types`), and changing it plans a `destroy + create`. The destroy
   fails if the pool still has Materialize pods on it, because nothing in the
   Terraform graph migrates the workloads to a replacement pool first. The
@@ -24,9 +23,10 @@ runs on, how to proceed depends on how the nodes are managed:
   pods lands on the new pool, then drop the old pool**.
 
 - **Karpenter-managed nodes** (the default for Materialize nodes in the AWS
-  modules) size nodes per pod rather than per pool. Changing the VM type is a
-  template change on the Karpenter `NodePool`, followed by a Materialize
-  rollout to move the pods onto new-spec nodes.
+  modules, and in the Azure modules through Node Auto Provisioning) size
+  nodes per pod rather than per pool. Changing the VM type is a template
+  change on the Karpenter `NodePool`, followed by a Materialize rollout to
+  move the pods onto new-spec nodes.
 
 {{< note >}}
 
@@ -154,80 +154,74 @@ any references.
 {{< /tab >}}
 {{< tab "Azure" >}}
 
-##### 1. Declare a second node pool with the new VM type
+{{< warning >}}
+Prior to v18.0.0 of the Terraform modules, the Azure modules ran Materialize on
+static VMSS node pools. These steps require Node Auto Provisioning.
 
-Add a new nodepool module instance alongside the existing one, keeping the old
-pool unchanged. Copy the existing configuration, then change:
+If you are running an older version of the Terraform modules, upgrade to at
+least v18.0.0 first, following the steps in the
+[upgrade notes](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v18.0.0/README.md#v1800).
+You can set the new VM sizes on the `materialize` NodePool during that
+migration.
+{{</ warning >}}
 
-- The `prefix`, so the pool gets a distinct name. The AKS node pool name is
-  the prefix with dashes removed, truncated to 12 characters, so the new
-  prefix must differ from the old one within those characters. A suffix
-  appended to a long prefix is silently truncated away and the apply fails
-  because the pool name already exists.
-- The `vm_size`.
-- For a swap-enabled pool, a distinct `disk_setup_name` (e.g.
-  `disk-setup-xl`). It names the disk-setup namespace and daemonset, which
-  otherwise collide with the old pool's.
+The Azure modules provision nodes with AKS [Node Auto
+Provisioning](https://learn.microsoft.com/en-us/azure/aks/node-auto-provisioning)
+(NAP), Azure's managed Karpenter, so there is no second pool to create. NAP
+provisions new-spec nodes on demand.
 
-Keep the same labels and taints as the existing pool so Materialize pods are
-eligible to schedule on it. For example:
+##### 1. Update the VM sizes
 
-```hcl
-module "materialize_nodepool" {
-  # ... existing pool config, unchanged ...
-  prefix  = "mzpool"
-  vm_size = "Standard_E4pds_v6"
-}
-
-module "materialize_nodepool_xl" {
-  # ... copy of the existing config ...
-  prefix          = "mzpoolxl"
-  vm_size         = "Standard_E8pds_v6"
-  disk_setup_name = "disk-setup-xl"
-}
-```
-
-Run `terraform init` to pick up the new module instance, then apply:
-
-```bash
-terraform init
-terraform apply
-```
-
-Both pools now exist. Materialize pods have not yet been scheduled on the new
-pool.
-
-##### 2. Taint the old pool so no new pods schedule on it
-
-Add a decommission taint to the old pool's `node_taints`:
+Change `vm_sizes` on the Materialize `nap-nodepool` module instance and apply.
+For swap, use sizes with local NVMe disks:
 
 ```hcl
-node_taints = [
-  # ... existing taints ...
-  {
-    key    = "materialize.cloud/decommissioned"
-    value  = "true"
-    effect = "NO_SCHEDULE"
-  }
-]
+module "nodepool_materialize" {
+  # ...
+  vm_sizes = ["Standard_E8pds_v6"]
+}
 ```
-
-Taints update in place (no pool replacement) on the provider versions the
-modules require. Running pods are not evicted, but no new pods schedule to the
-old pool, and the cluster autoscaler will not scale it up for pending pods,
-since they don't tolerate the taint. Use a taint key the Materialize pods
-don't tolerate (not `materialize.cloud/workload` or `kubernetes.io/arch`).
-
-Apply:
 
 ```bash
 terraform apply
 ```
 
-##### 3. Roll out the Materialize instance
+NAP marks the existing nodes as drifted but does not drain them: the
+`environmentd` and `clusterd` pods carry the `karpenter.sh/do-not-disrupt`
+annotation, which blocks voluntary disruption while they run. This relies on
+the NodePool's `expire_after` being `Never`, see [Karpenter node
+expiry](/self-managed-deployments/deployment-guidelines/azure-deployment-guidelines/#karpenter-node-expiry).
 
-With the old pool tainted, a forced rollout lands the new generation of pods
-on the new pool.
+##### 2. Cordon the drifted nodes
+
+Cordon the existing Materialize nodes so the rollout's new pods cannot
+schedule onto them and instead trigger NAP to provision nodes with the new
+VM sizes:
+
+```bash
+# The NodePool name is the `name` input of the nap-nodepool module
+# ("materialize" in the examples).
+kubectl cordon -l karpenter.sh/nodepool=materialize
+```
+
+Nodes that NAP provisions after this point are not cordoned.
+
+##### 3. Restart balancerd and console
+
+The Materialize rollout doesn't move the `balancerd` and `console` pods,
+which also run on the Materialize nodes. Restart them now so their new pods
+land on new nodes, and wait for the new pods to be ready. Otherwise NAP
+evicts them as soon as the rollout removes the old `environmentd` and
+`clusterd` pods, and SQL connections fail for several seconds.
+
+```bash
+kubectl get deployments -n <materialize-instance-namespace> -o name | grep -E -- '-(balancerd|console)$' |
+  xargs kubectl rollout restart -n <materialize-instance-namespace>
+kubectl get deployments -n <materialize-instance-namespace> -o name | grep -E -- '-(balancerd|console)$' |
+  xargs -n1 kubectl rollout status -n <materialize-instance-namespace>
+```
+
+##### 4. Roll out the Materialize instance
 
 {{% include-headless "/headless/self-managed-deployments/force-rollout-terraform" %}}
 
@@ -237,28 +231,19 @@ Apply:
 terraform apply
 ```
 
-See [Rollout behavior](#rollout-behavior) for what to expect during the
-rollout. Verify the new `environmentd` and `clusterd` pods are only scheduled
-onto the new pool.
+NAP provisions new-spec nodes for the pending pods of the new generation. See
+[Rollout behavior](#rollout-behavior) for what to expect during the rollout.
+Verify the new `environmentd` and `clusterd` pods are only scheduled onto the
+new nodes.
 
-##### 4. Remove the old pool
+##### 5. Verify the old nodes are removed
 
-Once the rollout has completed, the old pool's nodes have no Materialize
-workloads on them. Remove the old nodepool module instance from your Terraform
-configuration and apply:
+Once no `environmentd`, `clusterd`, `balancerd`, or `console` pods are left on
+the cordoned nodes, NAP removes them as drifted. Confirm they disappear:
 
 ```bash
-terraform apply
+kubectl get nodes -l karpenter.sh/nodepool=materialize
 ```
-
-The destroy step now succeeds because the pool has no running workloads.
-
-##### 5. Optional: rename the new pool back
-
-If you want the pool to keep the original name (for example because other
-Terraform or kubectl tooling references it), repeat these steps with a third
-pool that carries the original name. Otherwise, accept the new name and update
-any references.
 
 {{< /tab >}}
 {{< tab "AWS" >}}
@@ -280,7 +265,7 @@ The AWS modules provision Materialize nodes with Karpenter, so there is no
 second pool to create. Karpenter provisions new-spec nodes on demand.
 
 If you have disabled Karpenter and run Materialize on a static EKS node
-group, follow the blue-green pattern from the GCP and Azure tabs instead,
+group, follow the blue-green pattern from the GCP tab instead,
 changing `instance_types` on a second node group module instance.
 
 ##### 1. Update the instance types
@@ -326,7 +311,22 @@ done
 
 Nodes that Karpenter provisions after this point are not cordoned.
 
-##### 3. Roll out the Materialize instance
+##### 3. Restart balancerd and console
+
+The Materialize rollout doesn't move the `balancerd` and `console` pods,
+which also run on the Materialize nodes. Restart them now so their new pods
+land on new nodes, and wait for the new pods to be ready. Otherwise Karpenter
+evicts them as soon as the rollout removes the old `environmentd` and
+`clusterd` pods, and SQL connections fail for several seconds.
+
+```bash
+kubectl get deployments -n <materialize-instance-namespace> -o name | grep -E -- '-(balancerd|console)$' |
+  xargs kubectl rollout restart -n <materialize-instance-namespace>
+kubectl get deployments -n <materialize-instance-namespace> -o name | grep -E -- '-(balancerd|console)$' |
+  xargs -n1 kubectl rollout status -n <materialize-instance-namespace>
+```
+
+##### 4. Roll out the Materialize instance
 
 {{% include-headless "/headless/self-managed-deployments/force-rollout-terraform" %}}
 
@@ -341,11 +341,10 @@ generation. See [Rollout behavior](#rollout-behavior) for what to expect
 during the rollout. Verify the new `environmentd` and `clusterd` pods are
 only scheduled onto the new nodes.
 
-##### 4. Verify the old nodes are removed
+##### 5. Verify the old nodes are removed
 
-Once the rollout has completed and the old generation's pods are gone, the
-cordoned nodes are empty and Karpenter consolidates them away (the modules
-configure `consolidationPolicy: WhenEmpty`). Confirm they disappear:
+Once no `environmentd`, `clusterd`, `balancerd`, or `console` pods are left on
+the cordoned nodes, Karpenter removes them as drifted. Confirm they disappear:
 
 ```bash
 kubectl get nodes -l karpenter.sh/nodepool=materialize
