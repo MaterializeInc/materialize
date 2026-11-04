@@ -106,6 +106,10 @@ fn main() {
             (input, arranged.trace)
         });
         // The registry's slot and a peer's hold, which keep a published point reachable and held.
+        #[expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the point's API takes an `Arc`, and this example reads it on one thread"
+        )]
         let point: Arc<Shared<api::Batch>> = Arc::new(Shared::new());
         let mut peer = None;
         if published {

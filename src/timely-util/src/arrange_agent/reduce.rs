@@ -95,6 +95,10 @@ where
 /// `factory` is called once, when the operator is built. The operator reads its prior output
 /// through its clone of the agent, and returns another clone in the `Arranged`. See [`Agent`]
 /// for the contract.
+#[expect(
+    clippy::debug_assert_with_mut_call,
+    reason = "upstream's tiling check mutates only a local of the assertion"
+)]
 pub fn reduce_with_tactic_with<'scope, Tr1, A, T, F>(
     trace: Arranged<'scope, Tr1>,
     name: &str,

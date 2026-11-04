@@ -904,7 +904,7 @@ impl<Tr: Trace + 'static> SharedAgent<Tr> {
 
 impl<Tr: Trace + 'static> SharedAgent<Tr> {
     /// Attaches a queue that replays the trace's batches and then follows its writer.
-    fn new_listener(&mut self, activator: Activator) -> LocalQueueReader<Tr> {
+    fn new_listener(&self, activator: Activator) -> LocalQueueReader<Tr> {
         let mut new_queue = VecDeque::new();
         let mut upper = None;
         self.trace.borrow().trace.map_batches(|batch| {

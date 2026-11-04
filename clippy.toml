@@ -88,7 +88,6 @@ disallowed-methods = [
     { path = "differential_dataflow::operators::arrange::arrangement::arrange_core", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "mz_timely_util::arrange_agent::arrange_core_with", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "mz_timely_util::arrange_agent::reduce_trace_with", reason = "use the `MzReduce::mz_reduce_abelian` function instead" },
-    { path = "mz_timely_util::arrange_agent::reduce_with_tactic_with", reason = "use the `MzReduce::mz_reduce_abelian` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arranged::reduce_abelian", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "differential_dataflow::operators::arrange::arrangement::Arranged::reduce_core", reason = "use the `MzArrange::mz_arrange_core` function instead" },
     { path = "differential_dataflow::Collection::arrange_by_key", reason = "use the `MzArrange::mz_arrange` function instead" },
