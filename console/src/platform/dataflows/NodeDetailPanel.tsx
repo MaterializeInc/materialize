@@ -557,7 +557,7 @@ export const NodeDetailPanel = ({
             onSelectLir(selection.node.info.exportId, selection.node.info.lirId)
           }
         >
-          Focus on LIR
+          Zoom to LIR
         </Button>
       )}
       {selection.kind === "node" ? (
