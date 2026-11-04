@@ -201,7 +201,7 @@ export const AuthenticatedRoutes = () => {
           <Route index path="*" element={<UsageRoutesWrapper />} />
         </Route>
         {flags["support-page-cns-147"] && (
-          <Route path="support" element={<SupportPageWrapper />} />
+          <Route path="support/*" element={<SupportPageWrapper />} />
         )}
         {flags["internal-apps"] && (
           <Route path="internal">

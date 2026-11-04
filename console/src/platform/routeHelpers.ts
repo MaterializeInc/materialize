@@ -184,3 +184,12 @@ export const newConnectionPath = (regionSlug: string) => {
 
 /** The account-level support page. */
 export const SUPPORT_PAGE_PATH = "/support";
+
+/** The support page with the new ticket form open. */
+export const NEW_SUPPORT_TICKET_PATH = `${SUPPORT_PAGE_PATH}/new`;
+
+/** The support page with one of the user's tickets open. */
+export const SUPPORT_TICKET_PATH = `${SUPPORT_PAGE_PATH}/tickets/:ticketId`;
+
+export const supportTicketPath = (ticketId: string) =>
+  `${SUPPORT_PAGE_PATH}/tickets/${encodeURIComponent(ticketId)}`;

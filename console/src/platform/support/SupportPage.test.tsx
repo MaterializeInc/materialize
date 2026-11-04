@@ -13,6 +13,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
+import { useLocation } from "react-router-dom";
 
 import { SupportTicket } from "~/api/cloudGlobalApi";
 import { STATUSPAGE_URL } from "~/api/incident-io";
@@ -89,6 +90,11 @@ const buildStatusResponse = (incidents: Incident[] = []) =>
   });
 
 const TICKETS_URL = "*/api/organization/support/tickets";
+
+/** Shows the current path, to check where the page navigated. */
+const CurrentPath = () => (
+  <span data-testid="current-path">{useLocation().pathname}</span>
+);
 
 const ticketsUnavailableHandler = http.get(TICKETS_URL, () =>
   HttpResponse.json({}, { status: 503 }),
@@ -452,7 +458,12 @@ describe("SupportPage", () => {
         ),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(
+        <>
+          <SupportPage />
+          <CurrentPath />
+        </>,
+      );
 
       await user.click(
         await screen.findByRole("button", { name: "Replica keeps restarting" }),
@@ -465,6 +476,54 @@ describe("SupportPage", () => {
       expect(
         screen.getByRole("link", { name: "Reply in Help Center ↗" }),
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
+      expect(screen.getByTestId("current-path")).toHaveTextContent(
+        "/support/tickets/42",
+      );
+
+      // The footer's Close; the header has an icon button with the same name.
+      const closeButtons = screen.getAllByRole("button", { name: "Close" });
+      await user.click(closeButtons[closeButtons.length - 1]);
+      await waitFor(() =>
+        expect(screen.getByTestId("current-path")).toHaveTextContent(
+          /^\/support$/,
+        ),
+      );
+    });
+
+    it("opens a ticket from its URL", async () => {
+      server.use(
+        ticketsHandler([buildTicket()]),
+        http.get(`${TICKETS_URL}/42`, () =>
+          HttpResponse.json({
+            ticket: buildTicket(),
+            description: "<p>It restarts every few minutes.</p>",
+            messages: [],
+          }),
+        ),
+      );
+      await renderComponent(<SupportPage />, {
+        initialRouterEntries: ["/support/tickets/42"],
+      });
+
+      expect(await screen.findByTestId("support-ticket")).toHaveTextContent(
+        "It restarts every few minutes.",
+      );
+    });
+
+    it("sends unknown support paths to the support page", async () => {
+      await renderComponent(
+        <>
+          <SupportPage />
+          <CurrentPath />
+        </>,
+        { initialRouterEntries: ["/support/nope"] },
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId("current-path")).toHaveTextContent(
+          /^\/support$/,
+        ),
+      );
     });
   });
 
@@ -693,6 +752,36 @@ describe("SupportPage", () => {
       ).toHaveAttribute("href", OUTAGE_MAILTO);
       expect(
         screen.queryByRole("link", { name: "Report in chat" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("opens the form from its URL", async () => {
+      server.use(ticketsHandler([]));
+      await renderComponent(<SupportPage />, {
+        initialRouterEntries: ["/support/new"],
+      });
+
+      expect(
+        await screen.findByRole("textbox", { name: /Subject/ }),
+      ).toBeVisible();
+    });
+
+    it("sends the form's URL to the support page when the form is unavailable", async () => {
+      await renderComponent(
+        <>
+          <SupportPage />
+          <CurrentPath />
+        </>,
+        { initialRouterEntries: ["/support/new"] },
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId("current-path")).toHaveTextContent(
+          /^\/support$/,
+        ),
+      );
+      expect(
+        screen.queryByRole("textbox", { name: /Subject/ }),
       ).not.toBeInTheDocument();
     });
 

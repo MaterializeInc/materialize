@@ -23,6 +23,7 @@ import {
 import { ErrorBoundary } from "@sentry/react";
 import { useAtomValue } from "jotai";
 import React, { Suspense } from "react";
+import { Navigate, useMatch, useNavigate } from "react-router-dom";
 
 import {
   useCurrentOrganization,
@@ -59,6 +60,12 @@ import {
   PageHeading,
 } from "~/layouts/BaseLayout";
 import docUrls from "~/mz-doc-urls.json";
+import {
+  NEW_SUPPORT_TICKET_PATH,
+  SUPPORT_PAGE_PATH,
+  SUPPORT_TICKET_PATH,
+  supportTicketPath,
+} from "~/platform/routeHelpers";
 import { useSummary } from "~/queries/incident-io";
 import { currentRegionIdAtom } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
@@ -291,13 +298,28 @@ const SupportPage = () => {
     // so a Messenger that boots late keeps working.
     isChat: isIntercomIdentified,
   };
-  const [isTicketFormOpen, setIsTicketFormOpen] = React.useState(false);
-  const [selectedTicketId, setSelectedTicketId] = React.useState<string | null>(
-    null,
-  );
+  // The form and an open ticket have their own URLs, so a reload keeps the
+  // user's place and other pages can link straight to them.
+  const navigate = useNavigate();
+  const isSupportRoute = useMatch(SUPPORT_PAGE_PATH) !== null;
+  const isNewTicketRoute = useMatch(NEW_SUPPORT_TICKET_PATH) !== null;
+  const selectedTicketId =
+    useMatch(SUPPORT_TICKET_PATH)?.params.ticketId ?? null;
+  const backToSupport = () => navigate(SUPPORT_PAGE_PATH);
+  // The form can't be used without the ticket endpoints. Wait for them to
+  // answer before sending a link to it back to the page.
+  const isNewTicketUnavailable =
+    isNewTicketRoute && !isTicketFormEnabled && !ticketsQuery.isPending;
   const outageHint = isIntercomIdentified
     ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
     : "Chat is unavailable, so these open an email to support.";
+
+  if (
+    isNewTicketUnavailable ||
+    (!isSupportRoute && !isNewTicketRoute && selectedTicketId === null)
+  ) {
+    return <Navigate to={SUPPORT_PAGE_PATH} replace />;
+  }
 
   return (
     <MainContentContainer>
@@ -311,7 +333,7 @@ const SupportPage = () => {
             <Button
               variant="primary"
               size="sm"
-              onClick={() => setIsTicketFormOpen(true)}
+              onClick={() => navigate(NEW_SUPPORT_TICKET_PATH)}
             >
               Open a ticket
             </Button>
@@ -402,7 +424,9 @@ const SupportPage = () => {
                   <VStack spacing="3" align="stretch">
                     <SupportTicketsTable
                       tickets={tickets}
-                      onSelect={setSelectedTicketId}
+                      onSelect={(ticketId) =>
+                        navigate(supportTicketPath(ticketId))
+                      }
                     />
                     {hasNextPage && (
                       <Button
@@ -564,16 +588,13 @@ const SupportPage = () => {
         </Flex>
       </VStack>
       <NewSupportTicketDrawer
-        isOpen={isTicketFormOpen}
-        onClose={() => setIsTicketFormOpen(false)}
+        isOpen={isNewTicketRoute && isTicketFormEnabled}
+        onClose={backToSupport}
         outageLink={outageLink}
         organizationId={organizationId}
         organizationName={organization?.name}
       />
-      <SupportTicketModal
-        ticketId={selectedTicketId}
-        onClose={() => setSelectedTicketId(null)}
-      />
+      <SupportTicketModal ticketId={selectedTicketId} onClose={backToSupport} />
     </MainContentContainer>
   );
 };
