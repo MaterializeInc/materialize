@@ -1229,6 +1229,105 @@ mod tests {
         );
     }
 
+    /// Unwraps an `ExportDrift` on `id` and returns what disagreed.
+    fn export_drift_detail(
+        result: Result<LirDataflowDescription, InstantiateError>,
+        id: GlobalId,
+    ) -> String {
+        match result {
+            Err(InstantiateError::ExportDrift {
+                id: drifted,
+                detail,
+            }) if drifted == id => detail,
+            other => panic!("expected export drift on {id}, got {other:?}"),
+        }
+    }
+
+    #[mz_ore::test]
+    fn index_on_drift_is_detected() {
+        let pinned = PinnedDataflow::try_from(index_dataflow()).unwrap();
+        let ctx = Ctx::new(
+            Some(IndexInfo {
+                on: SOURCE,
+                keys: key(),
+                typ: repr_typ(),
+            }),
+            None,
+        );
+        let detail = export_drift_detail(pinned.instantiate(&ctx, "test".to_string()), INDEX);
+        assert!(detail.contains("pinned on"), "{detail}");
+    }
+
+    #[mz_ore::test]
+    fn index_export_without_a_build_is_drift() {
+        let mut df = index_dataflow();
+        df.objects_to_build.retain(|object| object.id != INDEX);
+        let pinned = PinnedDataflow::try_from(df).unwrap();
+        let ctx = Ctx::new(
+            Some(IndexInfo {
+                on: ON,
+                keys: key(),
+                typ: repr_typ(),
+            }),
+            None,
+        );
+        let detail = export_drift_detail(pinned.instantiate(&ctx, "test".to_string()), INDEX);
+        assert!(detail.contains("builds no object"), "{detail}");
+    }
+
+    #[mz_ore::test]
+    fn sink_reading_an_unbuilt_object_is_drift() {
+        let mut df = materialized_view_dataflow();
+        df.sink_exports
+            .insert(MV_SINK, mv_sink(GlobalId::Transient(42)));
+        let pinned = PinnedDataflow::try_from(df).unwrap();
+        let ctx = Ctx::new(None, Some(mv_info()));
+        let detail = export_drift_detail(pinned.instantiate(&ctx, "test".to_string()), MV_SINK);
+        assert!(detail.contains("builds no object"), "{detail}");
+    }
+
+    #[mz_ore::test]
+    fn missing_materialized_view_is_detected() {
+        let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+        let ctx = Ctx::new(None, None);
+        assert_eq!(
+            pinned.instantiate(&ctx, "test".to_string()),
+            Err(InstantiateError::MissingCatalogItem {
+                id: MV_SINK,
+                kind: "materialized view"
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn missing_metric_sink_is_detected() {
+        let mut df = imports_only();
+        df.sink_exports.insert(
+            MV_SINK,
+            ComputeSinkDesc {
+                from: VIEW,
+                from_desc: mv_desc(),
+                connection: ComputeSinkConnection::MetricSink(MetricSinkConnection {
+                    label: "u5".to_string(),
+                }),
+                with_snapshot: true,
+                up_to: Antichain::new(),
+                non_null_assertions: Vec::new(),
+                refresh_schedule: None,
+                from_arrangement: None,
+            },
+        );
+        let pinned = PinnedDataflow::try_from(df).unwrap();
+        let ctx = Ctx::new(None, None);
+        assert_eq!(
+            pinned.instantiate(&ctx, "test".to_string()),
+            Err(InstantiateError::MissingCatalogItem {
+                id: MV_SINK,
+                kind: "metric sink"
+            })
+        );
+    }
+
     #[mz_ore::test]
     fn missing_source_import_is_detected() {
         let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
