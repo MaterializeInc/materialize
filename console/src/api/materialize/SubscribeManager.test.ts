@@ -100,4 +100,83 @@ describe("SubscribeManager", () => {
     expect(manager.getSnapshot().error).toBeUndefined();
     expect(queries).toHaveLength(1);
   });
+
+  it("follows a subscribe the server ends and runs again, dropping its error and old rows", async () => {
+    const rowsByRun = [[["a"], ["b"]], [["c"]]];
+    let run = 0;
+    const queries: MockSubscribeConnection[] = [];
+    server.use(
+      mockSubscribeSocket((_sql, _params, connection) => {
+        queries.push(connection);
+        return {
+          columns: buildColumns(["id"]),
+          rows: rowsByRun[Math.min(run++, rowsByRun.length - 1)],
+          timestamp: 10,
+        };
+      }),
+    );
+    const manager = connect();
+    await vi.waitFor(() =>
+      expect(manager.getSnapshot().data).toEqual([{ id: "a" }, { id: "b" }]),
+    );
+
+    queries[0].endWithError("target replica failed or was dropped");
+
+    await vi.waitFor(() =>
+      expect(manager.getSnapshot().data).toEqual([{ id: "c" }]),
+    );
+    expect(manager.getSnapshot().error).toBeUndefined();
+    expect(manager.getSnapshot().snapshotComplete).toBe(true);
+  });
+
+  it("waits longer before each resend of a statement that fails every time", async () => {
+    const queries: MockSubscribeConnection[] = [];
+    server.use(
+      mockSubscribeSocket((_sql, _params, connection) => {
+        queries.push(connection);
+        connection.endWithError('permission denied for CLUSTER "analytics"');
+        return undefined;
+      }),
+    );
+    connect();
+
+    // Resent at once, then after a second.
+    await vi.waitFor(() => expect(queries).toHaveLength(3), {
+      timeout: 3_000,
+    });
+    // Then after two more.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(queries).toHaveLength(3);
+  });
+
+  it("keeps reporting the error of a subscribe that fails every time it runs", async () => {
+    const queries: MockSubscribeConnection[] = [];
+    server.use(
+      mockSubscribeSocket((_sql, _params, connection) => {
+        queries.push(connection);
+        if (queries.length > 1) {
+          connection.error("unknown catalog item");
+          return undefined;
+        }
+        return { columns: buildColumns(["id"]), rows: [["a"]], timestamp: 10 };
+      }),
+    );
+    const manager = connect();
+    const errors: Array<string | undefined> = [];
+    manager.onChange(() => errors.push(manager.getSnapshot().error?.message));
+    await vi.waitFor(() =>
+      expect(manager.getSnapshot().snapshotComplete).toBe(true),
+    );
+
+    queries[0].endWithError("unknown catalog item");
+
+    await vi.waitFor(() => expect(queries).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(manager.getSnapshot().error?.message).toBe("unknown catalog item"),
+    );
+    // No update in between drops the error.
+    expect(errors.slice(errors.indexOf("unknown catalog item"))).not.toContain(
+      undefined,
+    );
+  });
 });
