@@ -1224,6 +1224,30 @@ metrics:
   - respond_immediately
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_environment_active_generation
+  help: "The deployment generation each Materialize environment serves: the one the operator last promoted, from the resource's status.activeGeneration. During a rollout it is the older generation until the new one is promoted. The generation label carries the same number, so it joins to the generation in a pod's name. Only the operator replica holding the leadership lease reports it."
+  labels:
+  - environment_id
+  - environment_name
+  - environment_namespace
+  - generation
+  source: src/orchestratord/src/metrics.rs
+  visibility: public
+  tags:
+  - environment
+- name: mz_environment_info
+  help: >-
+    Maps Materialize environment IDs to the environment's name and the namespace of
+    its Materialize resource. Constant 1. Only the operator replica holding the
+    leadership lease reports it.
+  labels:
+  - environment_id
+  - environment_name
+  - environment_namespace
+  source: src/orchestratord/src/metrics.rs
+  visibility: public
+  tags:
+  - environment
 - name: mz_group_commit_catalog_upper_seconds_bucket
   help: >-
     The time it takes to advance the catalog shard upper for a txns-shard write
