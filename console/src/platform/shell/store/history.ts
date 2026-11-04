@@ -20,15 +20,15 @@ export interface CommandListEntry {
   label: string;
 }
 
-function searchCommand(
-  { generation, value, originalValue }: PromptValue,
+function searchText(
+  id: string,
+  searchValue: string,
   searchQuery: string,
 ): CommandListEntry | null {
-  const searchValue = originalValue ?? value;
   if (searchValue === "") return null;
   if (searchQuery === "")
     return {
-      id: generation.toString(),
+      id,
       command: searchValue,
       label: searchValue,
     };
@@ -36,10 +36,31 @@ function searchCommand(
   if (firstStartPosition === -1) return null;
   const leadingSymbol = firstStartPosition === 0 ? "" : "…";
   return {
-    id: generation.toString(),
+    id,
     command: searchValue,
     label: `${leadingSymbol}${searchValue.substring(firstStartPosition)}`,
   };
+}
+
+function searchCommand(
+  { generation, value, originalValue }: PromptValue,
+  searchQuery: string,
+): CommandListEntry | null {
+  return searchText(generation.toString(), originalValue ?? value, searchQuery);
+}
+
+/**
+ * Filters a plain list of commands, given newest first, the way the shell's
+ * own history is filtered.
+ */
+export function filterCommandList(
+  commands: readonly string[],
+  searchQuery: string,
+): CommandListEntry[] {
+  return commands.flatMap((command, ix) => {
+    const entry = searchText(ix.toString(), command, searchQuery);
+    return entry ? [entry] : [];
+  });
 }
 
 function getPromptCommandReducer(filter: string) {
