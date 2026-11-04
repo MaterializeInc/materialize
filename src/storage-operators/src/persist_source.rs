@@ -148,6 +148,11 @@ impl Subtime {
     }
 }
 
+/// The scalar expression type of a source's [`MfpPlan`]: anything the plan can
+/// evaluate per row and the filter-pushdown interpreter can summarize per part.
+pub trait PlanExpr: OptimizableExpr + Eval + Interpretable + Send + Sync + 'static {}
+impl<X: OptimizableExpr + Eval + Interpretable + Send + Sync + 'static> PlanExpr for X {}
+
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
 ///
@@ -155,11 +160,6 @@ impl Subtime {
 ///
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 /// All updates at times greater or equal to `until` will be suppressed.
-/// The scalar expression type of a source's [`MfpPlan`]: anything the plan can
-/// evaluate per row and the filter-pushdown interpreter can summarize per part.
-pub trait PlanExpr: OptimizableExpr + Eval + Interpretable + Send + Sync + 'static {}
-impl<X: OptimizableExpr + Eval + Interpretable + Send + Sync + 'static> PlanExpr for X {}
-
 /// The `map_filter_project` argument, if supplied, may be partially applied,
 /// and any un-applied part of the argument will be left behind in the argument.
 ///
