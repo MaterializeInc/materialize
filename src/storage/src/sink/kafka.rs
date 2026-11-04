@@ -743,11 +743,7 @@ fn sink_collection<'scope>(
                 // ..but the since frontier is now beyond that
                 !PartialOrder::less_equal(&as_of, &resume_upper);
             if overcompacted {
-                let err = format!(
-                    "{name}: input compacted past resume upper: as_of {}, resume_upper: {}",
-                    as_of.pretty(),
-                    resume_upper.pretty()
-                );
+                let err = super::overcompacted_error(&name, &as_of, &resume_upper);
                 // This would normally be an assertion but because it can happen after a
                 // Materialize backup/restore we log an error so that it appears on Sentry but
                 // leaves the rest of the objects in the cluster unaffected.

@@ -1313,11 +1313,7 @@ fn mint_batch_descriptions<'scope>(
                 PartialOrder::less_than(&resume_upper, &as_of);
 
             if overcompacted {
-                let err = format!(
-                    "{name_for_error}: input compacted past resume upper: as_of {}, resume_upper: {}",
-                    as_of.pretty(),
-                    resume_upper.pretty()
-                );
+                let err = super::overcompacted_error(&name_for_error, &as_of, &resume_upper);
                 // This would normally be an assertion but because it can happen after a
                 // Materialize backup/restore we log an error so that it appears on Sentry but
                 // leaves the rest of the objects in the cluster unaffected.
