@@ -113,7 +113,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
+    use mz_catalog::memory::objects::{CatalogItem, Index, MaterializedView};
     use mz_compute_types::plan::pinned::{InstantiateError, PinnedDataflow};
     use mz_compute_types::plan::scalar::LirScalarExpr;
     use mz_controller_types::ClusterId;
@@ -154,9 +154,17 @@ mod tests {
             .clone()
             .instantiate(&ctx, original.debug_name.clone())
             .expect("instantiates");
-        assert_eq!(rebuilt, original, "pin then instantiate is the identity");
+        assert_eq!(
+            rebuilt, original,
+            "pin then instantiate is the identity for {}",
+            original.debug_name
+        );
         let repinned = PinnedDataflow::try_from(rebuilt).expect("pinnable");
-        assert_eq!(repinned, pinned, "instantiate then pin is the identity");
+        assert_eq!(
+            repinned, pinned,
+            "instantiate then pin is the identity for {}",
+            original.debug_name
+        );
         pinned
     }
 
@@ -166,13 +174,42 @@ mod tests {
         TransientIdGen::new().allocate_id().1
     }
 
+    /// Runs the index optimizer pipeline over the catalog item.
+    fn optimize_index(
+        catalog: &Arc<Catalog>,
+        name: QualifiedItemName,
+        index: &Index,
+        indexes: BTreeSet<GlobalId>,
+    ) -> LirDataflowDescription {
+        let (compute, config, metrics) = optimizer_parts(catalog, index.cluster_id, indexes);
+        let mut optimizer = optimize::index::Optimizer::new(
+            Arc::<Catalog>::clone(catalog),
+            compute,
+            index.global_id,
+            config,
+            metrics,
+        );
+        let global_mir_plan = optimizer
+            .optimize(optimize::index::Index::new(
+                name,
+                index.on,
+                index.keys.to_vec(),
+            ))
+            .expect("MIR optimization succeeds");
+        let global_lir_plan = optimizer
+            .optimize(global_mir_plan)
+            .expect("LIR optimization succeeds");
+        global_lir_plan.unapply().0
+    }
+
     /// Runs the materialized view optimizer pipeline over the catalog item.
     fn optimize_materialized_view(
         catalog: &Arc<Catalog>,
         mv: &MaterializedView,
+        debug_name: String,
         indexes: BTreeSet<GlobalId>,
     ) -> LirDataflowDescription {
-        let (compute, config, metrics) = optimizer_parts(catalog, indexes);
+        let (compute, config, metrics) = optimizer_parts(catalog, mv.cluster_id, indexes);
         let mut optimizer = optimize::materialized_view::Optimizer::new(
             Arc::<Catalog>::clone(catalog),
             compute,
@@ -181,7 +218,7 @@ mod tests {
             mv.desc.latest().iter_names().cloned().collect(),
             mv.non_null_assertions.clone(),
             mv.refresh_schedule.clone(),
-            "mv".to_string(),
+            debug_name,
             config,
             metrics,
         );
@@ -271,18 +308,14 @@ mod tests {
     }
 
     /// TEST FIXTURE
-    fn cluster() -> ClusterId {
-        ClusterId::user(1).expect("valid cluster id")
-    }
-
-    /// TEST FIXTURE
-    /// The optimizer's inputs, with `indexes` the indexes the cluster has.
+    /// The optimizer's inputs, with `indexes` the indexes `cluster` has.
     fn optimizer_parts(
         catalog: &Catalog,
+        cluster: ClusterId,
         indexes: BTreeSet<GlobalId>,
     ) -> (ComputeInstanceSnapshot, OptimizerConfig, OptimizerMetrics) {
         (
-            ComputeInstanceSnapshot::new_from_parts(cluster(), indexes),
+            ComputeInstanceSnapshot::new_from_parts(cluster, indexes),
             OptimizerConfig::from(catalog.system_config()),
             OptimizerMetrics::register_into(&MetricsRegistry::new(), Duration::MAX),
         )
@@ -292,7 +325,6 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn index_round_trips() {
         Catalog::with_debug(|mut catalog| async move {
-            let index_gid = GlobalId::User(1);
             let CatalogItem::Index(index) = create_item(
                 &mut catalog,
                 1,
@@ -304,27 +336,8 @@ mod tests {
                 panic!("expected an index");
             };
             let catalog = Arc::new(catalog);
-
-            let (compute, config, metrics) = optimizer_parts(&catalog, BTreeSet::new());
-            let mut optimizer = optimize::index::Optimizer::new(
-                Arc::<Catalog>::clone(&catalog),
-                compute,
-                index_gid,
-                config,
-                metrics,
-            );
             let name = catalog.get_entry(&CatalogItemId::User(1)).name().clone();
-            let global_mir_plan = optimizer
-                .optimize(optimize::index::Index::new(
-                    name,
-                    index.on,
-                    index.keys.to_vec(),
-                ))
-                .expect("MIR optimization succeeds");
-            let global_lir_plan = optimizer
-                .optimize(global_mir_plan)
-                .expect("LIR optimization succeeds");
-            let (df_desc, _) = global_lir_plan.unapply();
+            let df_desc = optimize_index(&catalog, name, &index, BTreeSet::new());
 
             assert_round_trips(&catalog, df_desc);
         })
@@ -348,7 +361,8 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
+            let df_desc =
+                optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::new());
 
             assert_round_trips(&catalog, df_desc);
         })
@@ -377,7 +391,8 @@ mod tests {
             };
             assert!(mv.refresh_schedule.is_some(), "the item carries a schedule");
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
+            let df_desc =
+                optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::new());
 
             assert_eq!(df_desc.refresh_schedule, mv.refresh_schedule);
             assert_eq!(
@@ -409,7 +424,8 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
+            let df_desc =
+                optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::new());
             let (_, lower_bounds, upper_bounds) = source_operators(&df_desc).clone().into_parts();
             assert_eq!(
                 (lower_bounds.len(), upper_bounds.len()),
@@ -469,7 +485,8 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
+            let df_desc =
+                optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::new());
             let (_, lower_bounds, upper_bounds) = source_operators(&df_desc).clone().into_parts();
             assert_eq!(
                 (lower_bounds.len(), upper_bounds.len()),
@@ -513,7 +530,8 @@ mod tests {
             };
             let catalog = Arc::new(catalog);
 
-            let (compute, config, metrics) = optimizer_parts(&catalog, BTreeSet::new());
+            let (compute, config, metrics) =
+                optimizer_parts(&catalog, sink.cluster_id, BTreeSet::new());
             let mut optimizer = optimize::metric_sink::Optimizer::new(
                 Arc::<Catalog>::clone(&catalog),
                 compute,
@@ -572,7 +590,12 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::from([index_gid]));
+            let df_desc = optimize_materialized_view(
+                &catalog,
+                &mv,
+                "mv".to_string(),
+                BTreeSet::from([index_gid]),
+            );
             assert!(
                 df_desc.index_imports.contains_key(&index_gid),
                 "the plan reads the index"
@@ -623,7 +646,8 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
+            let df_desc =
+                optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::new());
             assert!(
                 df_desc.source_imports.contains_key(&table_gid),
                 "the plan reads the table"
@@ -659,6 +683,68 @@ mod tests {
                 pinned.instantiate(&ctx, "mv".to_string()),
                 Err(InstantiateError::ImportDrift { id, .. }) if id == table_gid
             ));
+        })
+        .await
+    }
+    /// Every builtin index and materialized view, optimized as its cluster
+    /// would optimize it, with the indexes that cluster has. Builtins declare
+    /// keys and nullability by hand, so this is where the pinned sink type
+    /// and the catalog's description disagree.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn builtin_items_round_trip() {
+        Catalog::with_debug(|catalog| async move {
+            let catalog = Arc::new(catalog);
+            let mut indexes_by_cluster: BTreeMap<ClusterId, BTreeSet<GlobalId>> = BTreeMap::new();
+            for entry in catalog.entries() {
+                if let CatalogItem::Index(index) = entry.item() {
+                    indexes_by_cluster
+                        .entry(index.cluster_id)
+                        .or_default()
+                        .insert(index.global_id);
+                }
+            }
+            let cluster_indexes = |cluster: ClusterId| {
+                indexes_by_cluster
+                    .get(&cluster)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+
+            let (mut indexes, mut views) = (0, 0);
+            for entry in catalog.entries() {
+                if !entry.id().is_system() {
+                    continue;
+                }
+                let debug_name = catalog.resolve_full_name(entry.name(), None).to_string();
+                match entry.item() {
+                    CatalogItem::Index(index) => {
+                        // Bootstrap plans indexes in id order, so an index
+                        // sees only the indexes created before it.
+                        let mut available = cluster_indexes(index.cluster_id);
+                        available.retain(|id| *id < index.global_id);
+                        let df_desc =
+                            optimize_index(&catalog, entry.name().clone(), index, available);
+                        assert_round_trips(&catalog, df_desc);
+                        indexes += 1;
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        let df_desc = optimize_materialized_view(
+                            &catalog,
+                            mv,
+                            debug_name,
+                            cluster_indexes(mv.cluster_id),
+                        );
+                        assert_round_trips(&catalog, df_desc);
+                        views += 1;
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                indexes > 0 && views > 0,
+                "the debug catalog has builtin indexes ({indexes}) and materialized views ({views})"
+            );
         })
         .await
     }
