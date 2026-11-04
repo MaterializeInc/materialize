@@ -787,12 +787,16 @@ export type LagMap = Map<string, LagInfo>;
  * Fetches a normalized table of an object, the lag between its direct parent, and
  * the lag between its source/table objects
  */
-export function useMaterializationLag(params: MaterializationLagParams) {
+export function useMaterializationLag(
+  params: MaterializationLagParams,
+  options?: { placeholderData?: typeof keepPreviousData },
+) {
   return useQuery({
     queryKey: clusterQueryKeys.materializationLag(params),
     queryFn: ({ queryKey, signal }) => {
       return fetchMaterializationLag(params, queryKey, { signal });
     },
+    placeholderData: options?.placeholderData,
     select: (lagData) => {
       const lagMap: LagMap = new Map();
       for (const r of lagData?.rows ?? []) {
