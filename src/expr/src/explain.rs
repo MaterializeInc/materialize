@@ -125,7 +125,7 @@ where
     M: HumanizerMode,
     E: HumanizeDisplay,
 {
-    write!(f, "TemporalFilter: ")?;
+    write!(f, "temporal filter=")?;
     if !lower_bounds.is_empty() {
         let lowers = lower_bounds.iter().map(|b| humanizer.child(b));
         write!(f, "{} <= ", separated(", ", lowers))?;
