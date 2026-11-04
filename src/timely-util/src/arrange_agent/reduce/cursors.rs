@@ -309,11 +309,14 @@ mod history_replay {
 
     // NOTE: Not upstream. `ValueHistory::replay_key` and the `HistoryReplay` it returns are private
     // to differential, so this rebuilds `replay_key` from the public `load_iter`. It returns the
-    // history itself, whose public methods match `HistoryReplay`'s. The call sites differ from
-    // upstream only in binding the returned `&mut` without `mut`.
+    // history itself, whose public methods match `HistoryReplay`'s. `scratch` stages the key's edits
+    // and keeps its capacity across keys, so loading a key allocates no more than upstream does. The
+    // call sites differ from upstream in passing `scratch` and binding the returned `&mut` without
+    // `mut`.
     trait ReplayKey<V, T, D> {
         fn replay_key<'a, 'history, C>(
             &'history mut self,
+            scratch: &mut Vec<(V, T, D)>,
             cursor: &mut C,
             storage: &'a C::Storage,
             key: C::Key<'a>,
@@ -328,6 +331,7 @@ mod history_replay {
     {
         fn replay_key<'a, 'history, C>(
             &'history mut self,
+            scratch: &mut Vec<(V, T, D)>,
             cursor: &mut C,
             storage: &'a C::Storage,
             key: C::Key<'a>,
@@ -338,18 +342,18 @@ mod history_replay {
         {
             // As upstream's `Cursor::populate_key`: an absent key loads an empty history. The edits
             // arrive grouped by value, which is the order `load_iter` consolidates in.
-            let mut edits = Vec::new();
+            scratch.clear();
             cursor.seek_key(storage, key);
             if cursor.get_key(storage) == Some(key) {
                 cursor.rewind_vals(storage);
                 while let Some(val) = cursor.get_val(storage) {
                     cursor.map_times(storage, |time, diff| {
-                        edits.push((val, C::owned_time(time), C::owned_diff(diff)));
+                        scratch.push((val, C::owned_time(time), C::owned_diff(diff)));
                     });
                     cursor.step_val(storage);
                 }
             }
-            self.load_iter(edits.into_iter(), meet);
+            self.load_iter(scratch.drain(..), meet);
             self
         }
     }
@@ -368,6 +372,10 @@ mod history_replay {
         meets: Vec<T>,
         times_current: Vec<T>,
         temporary: Vec<T>,
+        // Not upstream: the `ReplayKey::replay_key` scratch of each history.
+        input_edits: Vec<(V1, T, D1)>,
+        output_edits: Vec<(V2, T, D2)>,
+        batch_edits: Vec<(V1, T, D1)>,
     }
 
     impl<V1, V2, V, T, D1, D2> HistoryReplayer<V1, V2, V, T, D1, D2>
@@ -392,6 +400,9 @@ mod history_replay {
                 meets: Vec::new(),
                 times_current: Vec::new(),
                 temporary: Vec::new(),
+                input_edits: Vec::new(),
+                output_edits: Vec::new(),
+                batch_edits: Vec::new(),
             }
         }
         #[inline(never)]
@@ -422,9 +433,13 @@ mod history_replay {
             // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            let batch_replay =
-                self.batch_history
-                    .replay_key(batch_cursor, batch_storage, key, None);
+            let batch_replay = self.batch_history.replay_key(
+                &mut self.batch_edits,
+                batch_cursor,
+                batch_storage,
+                key,
+                None,
+            );
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -447,12 +462,20 @@ mod history_replay {
             // and guaranteed to accumulate identically for times greater or equal to `meet`.
 
             // Load the input and output histories.
-            let input_replay =
-                self.input_history
-                    .replay_key(source_cursor, source_storage, key, meet.as_ref());
-            let output_replay =
-                self.output_history
-                    .replay_key(output_cursor, output_storage, key, meet.as_ref());
+            let input_replay = self.input_history.replay_key(
+                &mut self.input_edits,
+                source_cursor,
+                source_storage,
+                key,
+                meet.as_ref(),
+            );
+            let output_replay = self.output_history.replay_key(
+                &mut self.output_edits,
+                output_cursor,
+                output_storage,
+                key,
+                meet.as_ref(),
+            );
 
             self.synth_times.clear();
             self.times_current.clear();
