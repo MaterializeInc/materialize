@@ -87,10 +87,31 @@ def merge_logs(paths: list[Path], clients: int, warmup: float, duration: float) 
     if min(last.values()) < end:
         raise ValueError("pgbench logs do not cover a common full measurement window")
     histogram: Counter[int] = Counter()
+    seconds: dict[int, dict] = {}
+    slow_transactions = []
+    slow_count = 0
     for path in paths:
-        for _, latency, completed in records(path):
+        for client, latency, completed in records(path):
             if start <= completed < end:
                 histogram[latency] += 1
+                second = completed // 1_000_000
+                bucket = seconds.setdefault(
+                    second, {"queries": 0, "latency_us": 0, "max_latency_us": 0}
+                )
+                bucket["queries"] += 1
+                bucket["latency_us"] += latency
+                bucket["max_latency_us"] = max(bucket["max_latency_us"], latency)
+                if latency >= 50_000:
+                    slow_count += 1
+                    if len(slow_transactions) < 2000:
+                        slow_transactions.append(
+                            {
+                                "log": path.name,
+                                "client": client,
+                                "completed_us": completed,
+                                "latency_us": latency,
+                            }
+                        )
     count = sum(histogram.values())
     if not count:
         raise ValueError("empty measurement window")
@@ -115,6 +136,13 @@ def merge_logs(paths: list[Path], clients: int, warmup: float, duration: float) 
         "p95_latency_ms": percentile(0.95),
         "p99_latency_ms": percentile(0.99),
         "max_latency_ms": max(histogram) / 1000,
+        "timing_diagnostics": {
+            "seconds": seconds,
+            "slow_threshold_us": 50_000,
+            "slow_count": slow_count,
+            "slow_transactions": slow_transactions,
+            "truncated": slow_count > len(slow_transactions),
+        },
     }
 
 
