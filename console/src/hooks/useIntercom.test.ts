@@ -16,7 +16,7 @@ import {
   INTERCOM_BOOT_SLOW_CHECK_INTERVAL_MS,
   INTERCOM_OPEN_TIMEOUT_MS,
   openIntercomNewConversation,
-  resetMessengerVisibilityForTests,
+  resetMessengerStateForTests,
   useIntercom,
   useIsIntercomIdentified,
 } from "./useIntercom";
@@ -47,9 +47,13 @@ const installStub = () => {
   return intercom;
 };
 
+/** Boots the Messenger with the signed-in user's JWT, as the app does. */
+const identify = () => renderHook(() => useIntercom());
+
 describe("useIsIntercomIdentified", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    resetMessengerStateForTests();
   });
 
   afterEach(() => {
@@ -59,6 +63,7 @@ describe("useIsIntercomIdentified", () => {
 
   it("notices a Messenger that boots after the fast checks stop", () => {
     const intercom = installStub();
+    identify();
     const { result } = renderHook(() => useIsIntercomIdentified());
     expect(result.current).toBe(false);
 
@@ -80,7 +85,21 @@ describe("useIsIntercomIdentified", () => {
 
   it("is true right away when the Messenger has already booted", () => {
     installStub().booted = true;
+    identify();
     const { result } = renderHook(() => useIsIntercomIdentified());
+    expect(result.current).toBe(true);
+  });
+
+  it("isn't fooled by an anonymously booted Messenger", () => {
+    // e.g. the sign-in page booted it, or impersonation, which never boots
+    // it with a JWT.
+    installStub().booted = true;
+    const { result } = renderHook(() => useIsIntercomIdentified());
+    expect(result.current).toBe(false);
+
+    act(() => {
+      identify();
+    });
     expect(result.current).toBe(true);
   });
 });
@@ -88,7 +107,7 @@ describe("useIsIntercomIdentified", () => {
 describe("openIntercomNewConversation", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    resetMessengerVisibilityForTests();
+    resetMessengerStateForTests();
   });
 
   afterEach(() => {
@@ -99,13 +118,21 @@ describe("openIntercomNewConversation", () => {
 
   it("falls back when the Messenger never boots", () => {
     installStub();
+    identify();
     const onUnavailable = vi.fn();
     expect(openIntercomNewConversation(onUnavailable)).toBe(false);
     expect(showNewMessage).not.toHaveBeenCalled();
   });
 
+  it("doesn't open an anonymously booted Messenger", () => {
+    installStub().booted = true;
+    expect(openIntercomNewConversation(vi.fn())).toBe(false);
+    expect(showNewMessage).not.toHaveBeenCalled();
+  });
+
   it("falls back when the booted Messenger never appears", () => {
     installStub().booted = true;
+    identify();
     const onUnavailable = vi.fn();
     expect(openIntercomNewConversation(onUnavailable)).toBe(true);
     expect(showNewMessage).toHaveBeenCalled();
@@ -116,6 +143,7 @@ describe("openIntercomNewConversation", () => {
 
   it("doesn't fall back once the Messenger appears", () => {
     installStub().booted = true;
+    identify();
     const onUnavailable = vi.fn();
     openIntercomNewConversation(onUnavailable);
     const [shown] = vi.mocked(onShow).mock.calls[0] as [() => void];

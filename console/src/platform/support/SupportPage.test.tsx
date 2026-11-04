@@ -26,6 +26,7 @@ import {
   SUPPORT_CHAT_URL,
   SUPPORT_PLANS_URL,
 } from "~/externalUrls";
+import { resetMessengerStateForTests, useIntercom } from "~/hooks/useIntercom";
 import { incidentIOQueryKeys } from "~/queries/incident-io";
 import { renderComponent } from "~/test/utils";
 
@@ -91,6 +92,15 @@ const buildStatusResponse = (incidents: Incident[] = []) =>
 
 const TICKETS_URL = "*/api/organization/support/tickets";
 
+/**
+ * The support page with the Messenger booted for the signed-in user, as the
+ * app's initializer does.
+ */
+const SupportPageWithIntercom = () => {
+  useIntercom();
+  return <SupportPage />;
+};
+
 /** Shows the current path, to check where the page navigated. */
 const CurrentPath = () => (
   <span data-testid="current-path">{useLocation().pathname}</span>
@@ -129,11 +139,12 @@ describe("SupportPage", () => {
 
   afterEach(() => {
     setIntercom("missing");
+    resetMessengerStateForTests();
     vi.clearAllMocks();
   });
 
   it("shows the organization and its ID", async () => {
-    await renderComponent(<SupportPage />);
+    await renderComponent(<SupportPageWithIntercom />);
 
     expect(
       await screen.findByRole("heading", { name: "Help and support" }),
@@ -145,7 +156,7 @@ describe("SupportPage", () => {
   });
 
   it("links to the general ticket portal, Help Center, Slack, and support plans", async () => {
-    await renderComponent(<SupportPage />);
+    await renderComponent(<SupportPageWithIntercom />);
 
     expect(
       await screen.findByRole("link", { name: "View tickets" }),
@@ -167,7 +178,7 @@ describe("SupportPage", () => {
   it("opens the Messenger for tickets and outages once Intercom has booted", async () => {
     setIntercom("booted");
     const user = userEvent.setup();
-    await renderComponent(<SupportPage />);
+    await renderComponent(<SupportPageWithIntercom />);
 
     await waitFor(() =>
       expect(screen.getByTestId("support-outage-hint")).toHaveAttribute(
@@ -188,7 +199,7 @@ describe("SupportPage", () => {
 
   it("shows the unread reply count from the Messenger", async () => {
     setIntercom("booted");
-    await renderComponent(<SupportPage />);
+    await renderComponent(<SupportPageWithIntercom />);
 
     expect(await screen.findByTestId("support-unread-count")).toHaveTextContent(
       "2 new replies",
@@ -200,7 +211,7 @@ describe("SupportPage", () => {
     ["Intercom never loads", "missing" as const],
   ])("falls back to email when %s", async (_, state) => {
     setIntercom(state);
-    await renderComponent(<SupportPage />);
+    await renderComponent(<SupportPageWithIntercom />);
 
     expect(await screen.findByTestId("support-outage-hint")).toHaveAttribute(
       "aria-label",
@@ -220,7 +231,7 @@ describe("SupportPage", () => {
     server.use(intercomJwtHandler(500));
     setIntercom("booted");
     const user = userEvent.setup();
-    await renderComponent(<SupportPage />);
+    await renderComponent(<SupportPageWithIntercom />);
 
     const outage = await screen.findByRole("link", {
       name: "Report a production outage",
@@ -230,8 +241,25 @@ describe("SupportPage", () => {
     expect(showNewMessage).not.toHaveBeenCalled();
   });
 
-  it("shows live status from incident.io", async () => {
+  it("does not use a Messenger booted anonymously", async () => {
+    // e.g. impersonation, which never boots the Messenger with a JWT.
+    setIntercom("booted");
+    const user = userEvent.setup();
     await renderComponent(<SupportPage />);
+
+    const outage = await screen.findByRole("link", {
+      name: "Report a production outage",
+    });
+    await user.click(outage);
+    expect(showNewMessage).not.toHaveBeenCalled();
+    expect(screen.getByTestId("support-outage-hint")).toHaveAttribute(
+      "aria-label",
+      "Chat is unavailable, so these open an email to support.",
+    );
+  });
+
+  it("shows live status from incident.io", async () => {
+    await renderComponent(<SupportPageWithIntercom />);
 
     expect(
       await screen.findByTestId("support-status-banner"),
@@ -253,7 +281,7 @@ describe("SupportPage", () => {
         },
       ]),
     );
-    await renderComponent(<SupportPage />);
+    await renderComponent(<SupportPageWithIntercom />);
 
     const banner = await screen.findByTestId("support-status-banner");
     expect(banner).toHaveTextContent(/Ongoing incident/);
@@ -264,7 +292,7 @@ describe("SupportPage", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    await renderComponent(<SupportPage />, { queryClient });
+    await renderComponent(<SupportPageWithIntercom />, { queryClient });
     expect(
       await screen.findByTestId("support-status-banner"),
     ).toHaveTextContent(/All systems operational/);
@@ -284,7 +312,7 @@ describe("SupportPage", () => {
   it("opens the Messenger if it boots after the page rendered", async () => {
     setIntercom("stub");
     const user = userEvent.setup();
-    await renderComponent(<SupportPage />);
+    await renderComponent(<SupportPageWithIntercom />);
     const openTicket = await screen.findByRole("link", {
       name: "Open a ticket",
     });
@@ -304,7 +332,7 @@ describe("SupportPage", () => {
         return HttpResponse.json({}, { status: 500 });
       }),
     );
-    await renderComponent(<SupportPage />);
+    await renderComponent(<SupportPageWithIntercom />);
 
     await waitFor(() => expect(statusRequested).toBe(true));
     await waitFor(() =>
@@ -330,7 +358,7 @@ describe("SupportPage", () => {
           }),
         ]),
       );
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       expect(
         await screen.findByRole("button", { name: "Replica keeps restarting" }),
@@ -361,7 +389,7 @@ describe("SupportPage", () => {
         }),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       expect(
         await screen.findByRole("button", { name: "Replica keeps restarting" }),
@@ -387,7 +415,7 @@ describe("SupportPage", () => {
           );
         }),
       );
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       expect(
         await screen.findByRole("button", { name: "Replica keeps restarting" }),
@@ -402,7 +430,7 @@ describe("SupportPage", () => {
       const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false } },
       });
-      await renderComponent(<SupportPage />, { queryClient });
+      await renderComponent(<SupportPageWithIntercom />, { queryClient });
       expect(
         await screen.findByRole("button", { name: "Replica keeps restarting" }),
       ).toBeVisible();
@@ -423,7 +451,7 @@ describe("SupportPage", () => {
     it("opens a ticket from anywhere in its row", async () => {
       server.use(ticketsHandler([buildTicket()]));
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       await user.click(await screen.findByText("#4821 · opened by you"));
 
@@ -432,7 +460,7 @@ describe("SupportPage", () => {
 
     it("shows an empty state", async () => {
       server.use(ticketsHandler([]));
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       expect(await screen.findByTestId("support-tickets-empty")).toBeVisible();
     });
@@ -460,7 +488,7 @@ describe("SupportPage", () => {
       const user = userEvent.setup();
       await renderComponent(
         <>
-          <SupportPage />
+          <SupportPageWithIntercom />
           <CurrentPath />
         </>,
       );
@@ -501,7 +529,7 @@ describe("SupportPage", () => {
           }),
         ),
       );
-      await renderComponent(<SupportPage />, {
+      await renderComponent(<SupportPageWithIntercom />, {
         initialRouterEntries: ["/support/tickets/42"],
       });
 
@@ -513,7 +541,7 @@ describe("SupportPage", () => {
     it("sends unknown support paths to the support page", async () => {
       await renderComponent(
         <>
-          <SupportPage />
+          <SupportPageWithIntercom />
           <CurrentPath />
         </>,
         { initialRouterEntries: ["/support/nope"] },
@@ -549,7 +577,7 @@ describe("SupportPage", () => {
     it("keeps the Messenger and email links while the form is off", async () => {
       delete mockFlags["support-ticket-form-cns-201"];
       server.use(ticketsHandler([]));
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
       expect(
@@ -558,7 +586,7 @@ describe("SupportPage", () => {
     });
 
     it("keeps the Messenger and email links until the endpoints answer", async () => {
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       expect(
         await screen.findByRole("link", { name: "Open a ticket" }),
@@ -577,7 +605,7 @@ describe("SupportPage", () => {
         }),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
@@ -621,7 +649,7 @@ describe("SupportPage", () => {
         createHandler(() => {}),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
@@ -657,7 +685,7 @@ describe("SupportPage", () => {
         }),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
@@ -687,7 +715,7 @@ describe("SupportPage", () => {
         createHandler(() => {}, 502),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
@@ -715,7 +743,7 @@ describe("SupportPage", () => {
         createHandler(() => {}, 409),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
@@ -738,7 +766,7 @@ describe("SupportPage", () => {
       setIntercom("stub");
       server.use(ticketsHandler([]));
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
@@ -757,7 +785,7 @@ describe("SupportPage", () => {
 
     it("opens the form from its URL", async () => {
       server.use(ticketsHandler([]));
-      await renderComponent(<SupportPage />, {
+      await renderComponent(<SupportPageWithIntercom />, {
         initialRouterEntries: ["/support/new"],
       });
 
@@ -769,7 +797,7 @@ describe("SupportPage", () => {
     it("sends the form's URL to the support page when the form is unavailable", async () => {
       await renderComponent(
         <>
-          <SupportPage />
+          <SupportPageWithIntercom />
           <CurrentPath />
         </>,
         { initialRouterEntries: ["/support/new"] },
@@ -795,7 +823,7 @@ describe("SupportPage", () => {
         }),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPage />);
+      await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));

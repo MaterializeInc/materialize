@@ -97,10 +97,17 @@ const UsageRoutesWrapper = () => {
 const SupportPageWrapper = () => {
   return (
     <AppConfigSwitch
-      cloudConfigElement={
-        <BaseLayout>
-          <SupportPage />
-        </BaseLayout>
+      // Impersonation sends every global API request as a GET, so opening a
+      // ticket would fetch the list and look like it worked. Tickets belong
+      // to the signed-in user anyway.
+      cloudConfigElement={({ runtimeConfig }) =>
+        runtimeConfig.isImpersonating ? (
+          <RedirectToHome />
+        ) : (
+          <BaseLayout>
+            <SupportPage />
+          </BaseLayout>
+        )
       }
       selfManagedConfigElement={<RedirectToHome />}
     />

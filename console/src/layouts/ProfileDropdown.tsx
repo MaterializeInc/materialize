@@ -480,9 +480,11 @@ const CommunityMenuItems = () => {
   const { track } = useSegment();
   const flags = useFlags();
   const appConfig = useAppConfig();
-  // The in-console support page is Cloud only.
+  // The in-console support page is Cloud only, and not for impersonation.
   const isSupportPageEnabled =
-    appConfig.mode === "cloud" && flags["support-page-cns-147"];
+    appConfig.mode === "cloud" &&
+    !appConfig.isImpersonating &&
+    flags["support-page-cns-147"];
 
   return (
     <VStack spacing={0} width="100%">

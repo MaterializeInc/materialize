@@ -46,9 +46,10 @@ import {
 } from "~/externalUrls";
 import { useFlags } from "~/hooks/useFlags";
 import {
+  isIntercomIdentifiedWith,
   openIntercomMessenger,
   openIntercomNewConversation,
-  useHasIntercomJwt,
+  useCurrentIntercomJwt,
   useIntercomUnreadCount,
   useIsIntercomIdentified,
 } from "~/hooks/useIntercom";
@@ -85,17 +86,18 @@ type OpenMessenger = (onUnavailable: () => void) => boolean;
 
 /**
  * Returns click handlers that open the Intercom Messenger instead of
- * following the link when the Messenger is booted for the signed-in user.
+ * following the link when the Messenger is booted with the signed-in user's
+ * JWT.
  * Otherwise the link's href (email or the Help Center) is the fallback,
- * including when the Messenger reports booted but never appears. `open`
- * checks that the Messenger has booted at click time, so a late boot is
- * picked up without waiting for the next readiness check.
+ * including when the Messenger reports booted but never appears. This checks
+ * at click time, so a late boot is picked up without waiting for the next
+ * readiness check.
  *
  * A Messenger that never appears is only noticed seconds after the click, too
  * late to open a new tab without the popup blocker stepping in, so a new-tab
  * fallback is offered as a link in a toast instead.
  */
-const usePreferIntercom = (hasJwt: boolean) => {
+const usePreferIntercom = (jwt: string | undefined) => {
   const toast = useToast({ status: "error", duration: 10_000 });
   return (open: OpenMessenger) => (event: React.MouseEvent<HTMLElement>) => {
     const link = event.currentTarget;
@@ -118,7 +120,9 @@ const usePreferIntercom = (hasJwt: boolean) => {
         ),
       });
     };
-    if (hasJwt && open(followLink)) event.preventDefault();
+    if (isIntercomIdentifiedWith(jwt) && open(followLink)) {
+      event.preventDefault();
+    }
   };
 };
 
@@ -273,9 +277,9 @@ const SupportPage = () => {
   const organizationId = useMaybeCurrentOrganizationId()?.data;
   const { organization } = useCurrentOrganization();
   const isIntercomIdentified = useIsIntercomIdentified();
-  const hasIntercomJwt = useHasIntercomJwt();
+  const intercomJwt = useCurrentIntercomJwt();
   const unreadCount = useIntercomUnreadCount();
-  const preferIntercom = usePreferIntercom(hasIntercomJwt);
+  const preferIntercom = usePreferIntercom(intercomJwt);
   const ticketsQuery = useSupportTickets();
   // The ticket endpoints aren't deployed or configured everywhere yet. Until
   // they answer, "Open a ticket" uses the Messenger and the tickets card

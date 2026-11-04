@@ -16,10 +16,32 @@ import {
   showNewMessage,
   update,
 } from "@intercom/messenger-js-sdk";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { useIntercomJwt } from "~/api/auth";
 const APP_ID = "r8661p0d";
+
+/**
+ * The JWT the Messenger was last booted with, or null after an anonymous
+ * boot. The widget reports `booted` for an anonymous boot too, so this is
+ * what says whether it knows who the user is.
+ */
+let identifiedJwt: string | null = null;
+const identityListeners = new Set<() => void>();
+
+function setIdentifiedJwt(jwt: string | null) {
+  identifiedJwt = jwt;
+  identityListeners.forEach((listener) => listener());
+}
+
+function subscribeToIdentity(listener: () => void) {
+  identityListeners.add(listener);
+  return () => {
+    identityListeners.delete(listener);
+  };
+}
+
+const getIdentifiedJwt = () => identifiedJwt;
 
 export function useIntercomAnonymous() {
   useEffect(() => {
@@ -27,6 +49,7 @@ export function useIntercomAnonymous() {
       app_id: APP_ID,
     };
     Intercom(anonymousConfig);
+    setIdentifiedJwt(null);
     watchMessengerVisibility();
   }, []);
 }
@@ -38,6 +61,7 @@ export function useIntercom() {
   useEffect(() => {
     if (jwt) {
       Intercom({ app_id: APP_ID, intercom_user_jwt: jwt });
+      setIdentifiedJwt(jwt);
       watchMessengerVisibility();
     }
   }, [jwt]);
@@ -65,10 +89,19 @@ export function isIntercomBooted() {
   return typeof intercom === "function" && intercom.booted === true;
 }
 
-/** Whether the console has an Intercom JWT for the signed-in user. */
-export function useHasIntercomJwt() {
+/**
+ * Whether the Messenger has booted with this JWT, i.e. for the signed-in
+ * user rather than anonymously or for someone else. For click handlers, which
+ * should check at click time.
+ */
+export function isIntercomIdentifiedWith(jwt: string | undefined) {
+  return Boolean(jwt) && jwt === identifiedJwt && isIntercomBooted();
+}
+
+/** The signed-in user's Intercom JWT, if the console has one. */
+export function useCurrentIntercomJwt() {
   const { intercomJwt } = useIntercomJwt();
-  return Boolean(intercomJwt?.jwt);
+  return intercomJwt?.jwt;
 }
 
 /**
@@ -80,10 +113,12 @@ export function useHasIntercomJwt() {
  * checks every second at first, then keeps checking every
  * `INTERCOM_BOOT_SLOW_CHECK_INTERVAL_MS` in case it boots late (slow network,
  * cookies allowed after a prompt). Callers acting on a click should also
- * check `isIntercomBooted()` at that moment rather than rely on this value.
+ * check `isIntercomIdentifiedWith()` at that moment rather than rely on this
+ * value.
  */
 export function useIsIntercomIdentified() {
-  const hasJwt = useHasIntercomJwt();
+  const jwt = useCurrentIntercomJwt();
+  const bootedJwt = useSyncExternalStore(subscribeToIdentity, getIdentifiedJwt);
   const [isBooted, setIsBooted] = useState(isIntercomBooted);
 
   useEffect(() => {
@@ -107,7 +142,7 @@ export function useIsIntercomIdentified() {
     return () => window.clearTimeout(timeout);
   }, [isBooted]);
 
-  return hasJwt && isBooted;
+  return Boolean(jwt) && bootedJwt === jwt && isBooted;
 }
 
 export const INTERCOM_BOOT_FAST_CHECK_INTERVAL_MS = 1_000;
@@ -143,10 +178,10 @@ function watchMessengerVisibility() {
 /**
  * Asks the Messenger to open, and calls `onUnavailable` if it doesn't appear
  * within `INTERCOM_OPEN_TIMEOUT_MS`. Returns false when the Messenger hasn't
- * booted, so callers can fall back right away.
+ * booted for a signed-in user, so callers can fall back right away.
  */
 function openMessenger(open: () => void, onUnavailable?: () => void) {
-  if (!isIntercomBooted()) return false;
+  if (identifiedJwt === null || !isIntercomBooted()) return false;
   watchMessengerVisibility();
   const requestedAt = Date.now();
   open();
@@ -174,11 +209,12 @@ export function openIntercomMessenger(onUnavailable?: () => void) {
   return openMessenger(show, onUnavailable);
 }
 
-/** Resets the Messenger visibility tracking. For tests only. */
-export function resetMessengerVisibilityForTests() {
+/** Resets the Messenger visibility and identity tracking. For tests only. */
+export function resetMessengerStateForTests() {
   messengerState.isWatching = false;
   messengerState.isShown = false;
   messengerState.shownAt = 0;
+  setIdentifiedJwt(null);
 }
 
 /**

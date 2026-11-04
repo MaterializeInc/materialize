@@ -14,6 +14,7 @@ import React from "react";
 
 import server from "~/api/mocks/server";
 import { useFlags } from "~/hooks/useFlags";
+import { resetMessengerStateForTests, useIntercom } from "~/hooks/useIntercom";
 import { renderComponent } from "~/test/utils";
 
 import { SupportNavItem } from "./NavMenu";
@@ -42,6 +43,12 @@ const bootIntercom = () => {
   (window as unknown as { Intercom?: unknown }).Intercom = intercom;
 };
 
+/** The nav item with the Messenger booted for the user, as the app does. */
+const SupportNavItemWithIntercom = () => {
+  useIntercom();
+  return <SupportNavItem />;
+};
+
 describe("SupportNavItem", () => {
   beforeEach(() => {
     server.use(
@@ -53,12 +60,13 @@ describe("SupportNavItem", () => {
 
   afterEach(() => {
     delete (window as unknown as { Intercom?: unknown }).Intercom;
+    resetMessengerStateForTests();
     vi.resetAllMocks();
   });
 
   it("is hidden when the flag is off", async () => {
     setFlag(false);
-    await renderComponent(<SupportNavItem />);
+    await renderComponent(<SupportNavItemWithIntercom />);
 
     expect(screen.queryByText("Help and support")).toBeNull();
   });
@@ -69,7 +77,7 @@ describe("SupportNavItem", () => {
       callback(0),
     );
     bootIntercom();
-    await renderComponent(<SupportNavItem />);
+    await renderComponent(<SupportNavItemWithIntercom />);
 
     expect(
       await screen.findByRole("link", { name: /Help and support/ }),
@@ -83,7 +91,7 @@ describe("SupportNavItem", () => {
       callback(1),
     );
     bootIntercom();
-    await renderComponent(<SupportNavItem />);
+    await renderComponent(<SupportNavItemWithIntercom />);
 
     expect(await screen.findByTestId("nav-indicator")).toHaveAttribute(
       "aria-label",
@@ -96,7 +104,7 @@ describe("SupportNavItem", () => {
     vi.mocked(onUnreadCountChange).mockImplementation((callback) =>
       callback(3),
     );
-    await renderComponent(<SupportNavItem />);
+    await renderComponent(<SupportNavItemWithIntercom />);
 
     expect(
       await screen.findByRole("link", { name: /Help and support/ }),

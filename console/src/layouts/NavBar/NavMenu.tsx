@@ -269,8 +269,14 @@ export const SupportNavItem = ({
 
   return (
     <AppConfigSwitch
-      cloudConfigElement={
-        <CloudSupportNavItem isCollapsed={isCollapsed} closeMenu={closeMenu} />
+      // The support page isn't available while impersonating.
+      cloudConfigElement={({ runtimeConfig }) =>
+        runtimeConfig.isImpersonating ? null : (
+          <CloudSupportNavItem
+            isCollapsed={isCollapsed}
+            closeMenu={closeMenu}
+          />
+        )
       }
     />
   );

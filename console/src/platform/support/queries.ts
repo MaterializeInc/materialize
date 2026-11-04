@@ -22,12 +22,27 @@ import {
   listSupportTickets,
 } from "~/api/cloudGlobalApi";
 import { OpenApiFetchError } from "~/api/OpenApiFetchError";
+import { useAuthUser } from "~/external-library-wrappers/frontegg";
+
+/**
+ * Tickets belong to the signed-in user, and the query cache outlives a sign
+ * out, so the keys include who's signed in and to which organization.
+ */
+type TicketOwner = { userId: string; organizationId: string };
 
 export const supportTicketQueryKeys = {
   all: () => buildGlobalQueryKey("support-tickets"),
-  list: () => [...supportTicketQueryKeys.all(), "list"] as const,
-  detail: (ticketId: string) =>
-    [...supportTicketQueryKeys.all(), "detail", ticketId] as const,
+  owner: (owner: TicketOwner) =>
+    [...supportTicketQueryKeys.all(), owner] as const,
+  list: (owner: TicketOwner) =>
+    [...supportTicketQueryKeys.owner(owner), "list"] as const,
+  detail: (owner: TicketOwner, ticketId: string) =>
+    [...supportTicketQueryKeys.owner(owner), "detail", ticketId] as const,
+};
+
+const useTicketOwner = (): TicketOwner => {
+  const user = useAuthUser();
+  return { userId: user.id, organizationId: user.tenantId };
 };
 
 /**
@@ -59,8 +74,9 @@ const MAX_EMPTY_PAGES = 5;
  * skipped here, so each page has tickets to show, unless it's the last one.
  */
 export function useSupportTickets() {
+  const owner = useTicketOwner();
   return useInfiniteQuery({
-    queryKey: supportTicketQueryKeys.list(),
+    queryKey: supportTicketQueryKeys.list(owner),
     queryFn: async ({ pageParam, signal }) => {
       let { data } = await listSupportTickets(
         { cursor: pageParam },
@@ -86,8 +102,9 @@ export function useSupportTickets() {
 }
 
 export function useSupportTicket(ticketId: string | null) {
+  const owner = useTicketOwner();
   return useQuery({
-    queryKey: supportTicketQueryKeys.detail(ticketId ?? ""),
+    queryKey: supportTicketQueryKeys.detail(owner, ticketId ?? ""),
     queryFn: async ({ signal }) => {
       const { data } = await getSupportTicket(ticketId ?? "", { signal });
       return data;
@@ -99,6 +116,7 @@ export function useSupportTicket(ticketId: string | null) {
 
 export function useCreateSupportTicket() {
   const queryClient = useQueryClient();
+  const owner = useTicketOwner();
   return useMutation({
     mutationFn: async (ticket: CreateSupportTicketRequest) => {
       const { data } = await createSupportTicket(ticket);
@@ -106,7 +124,7 @@ export function useCreateSupportTicket() {
     },
     onSuccess: () =>
       queryClient.invalidateQueries({
-        queryKey: supportTicketQueryKeys.list(),
+        queryKey: supportTicketQueryKeys.list(owner),
       }),
   });
 }
