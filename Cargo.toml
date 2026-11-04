@@ -288,8 +288,8 @@ annotate-snippets = "0.12.15"
 anyhow = "1.0.102"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
-arrow = { version = "58", default-features = false }
-arrow-ipc = "58"
+arrow = { version = "58.4.1", default-features = false }
+arrow-ipc = "58.4.1"
 askama = { version = "0.16.1", default-features = false, features = ["config", "derive", "serde_json", "std"] }
 assert_cmd = "2.2.2"
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
@@ -453,7 +453,7 @@ opentelemetry_sdk = { version = "0.33.0", features = ["experimental_trace_batch_
 ordered-float = { version = "5.1.0", features = ["serde"] }
 os_info = "3.11.0"
 owo-colors = "4.3.0"
-parquet = { version = "58", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
+parquet = { version = "58.4.1", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
 paste = "1.0.15"
 pem = "4.0.0"
 phf = { version = "0.14.0", features = ["uncased"] }
@@ -485,7 +485,7 @@ proxy-header = "0.1.2"
 qcell = "0.5"
 quote = "1.0.45"
 rand = "0.10.3"
-rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
+rand-8 = { package = "rand", version = "0.8.6", features = ["small_rng"] }
 rayon = "1.12.0"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
