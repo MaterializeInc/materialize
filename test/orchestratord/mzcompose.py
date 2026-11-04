@@ -81,6 +81,10 @@ SERVICES = [
 
 KIND_CLUSTER_NAME = "kind"
 
+# Each version recreates kind. Limit each of the two CI shards to ten versions
+# to leave room for setup and cleanup within the one-hour job timeout.
+DOCUMENTATION_DEFAULTS_VERSION_COUNT = 20
+
 
 def run_mz_debug() -> None:
     # TODO: Hangs a lot in CI
@@ -450,6 +454,22 @@ def recreate_kind_cluster() -> None:
             MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
         ]
     )
+
+    # TODO: Remove when https://github.com/kubernetes-sigs/kind/issues/3436 is fixed.
+    for node in spawn.capture(
+        ["kind", "get", "nodes", "--name", KIND_CLUSTER_NAME]
+    ).split():
+        spawn.runv(
+            [
+                "docker",
+                "exec",
+                node,
+                "sh",
+                "-c",
+                "mkdir -p /run/userns-sysfs && "
+                "mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /run/userns-sysfs",
+            ]
+        )
 
     retry(install_metrics_server, 20)
 
@@ -2520,7 +2540,14 @@ def workflow_documentation_defaults(
         type=str,
         help="Custom version tag to use",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=int(os.getenv("BUILDKITE_BUILD_NUMBER", "0")),
+        help="Version sampling seed, shared by all shards (default: build number or 0)",
+    )
     args = parser.parse_args()
+    print(f"--- Version selection seed: {args.seed}")
 
     c.up(Service("mz-debug", idle=True))
     c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
@@ -2530,20 +2557,31 @@ def workflow_documentation_defaults(
     # Following https://materialize.com/docs/installation/install-on-local-kind/
     # orchestratord test can't run against future versions, so ignore those
     # Pre-v26 versions don't have balancerd/console images on Docker Hub
-    versions = buildkite.shard_list(
-        list(
-            reversed(
-                [
-                    version
-                    for version in get_self_managed_versions()
-                    if version < current_version
-                    and version >= MzVersion.parse_mz("v26.0.0")
-                ]
-                + [current_version]
-            )
-        ),
-        lambda version: str(version),
+    versions = list(
+        reversed(
+            [
+                version
+                for version in get_self_managed_versions()
+                if version < current_version
+                and version >= MzVersion.parse_mz("v26.0.0")
+            ]
+            + [current_version]
+        )
     )
+    if len(versions) > DOCUMENTATION_DEFAULTS_VERSION_COUNT:
+        # Always cover the current build and newest and oldest eligible releases.
+        versions = [
+            versions[0],
+            versions[1],
+            *sorted(
+                random.Random(args.seed).sample(
+                    versions[2:-1], k=DOCUMENTATION_DEFAULTS_VERSION_COUNT - 3
+                ),
+                reverse=True,
+            ),
+            versions[-1],
+        ]
+    versions = buildkite.shard_list(versions, lambda version: str(version))
     for version in versions:
         print(f"--- Running with defaults against {version}")
         dir = "my-local-mz"

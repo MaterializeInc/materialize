@@ -642,6 +642,7 @@ steps:
           run: azure
     agents:
       queue: linux-aarch64-small
+    skip: "https://linear.app/materializeinc/issue/SS-552"
 
   - id: http-auth
     label: HTTP auth
