@@ -432,6 +432,72 @@ where
 }
 
 impl CatalogState {
+    pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entry_by_id.values()
+    }
+
+    pub fn user_connections(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_connection() && entry.id().is_user())
+    }
+
+    pub fn user_tables(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_table() && entry.id().is_user())
+    }
+
+    pub fn user_sources(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_source() && entry.id().is_user())
+    }
+
+    pub fn user_sinks(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_sink() && entry.id().is_user())
+    }
+
+    pub fn user_materialized_views(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_materialized_view() && entry.id().is_user())
+    }
+
+    pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_secret() && entry.id().is_user())
+    }
+
+    pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
+        self.clusters_by_id.values()
+    }
+
+    pub fn user_clusters(&self) -> impl Iterator<Item = &Cluster> {
+        self.clusters().filter(|cluster| cluster.id.is_user())
+    }
+
+    pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
+        self.user_clusters()
+            .flat_map(|cluster| cluster.user_replicas())
+    }
+
+    pub fn databases(&self) -> impl Iterator<Item = &Database> {
+        self.database_by_id.values()
+    }
+
+    pub fn user_roles(&self) -> impl Iterator<Item = &Role> {
+        self.roles_by_id.values().filter(|role| role.is_user())
+    }
+
+    pub fn user_network_policies(&self) -> impl Iterator<Item = &NetworkPolicy> {
+        self.network_policies_by_id
+            .iter()
+            .filter(|(id, _)| id.is_user())
+            .map(|(_, policy)| policy)
+    }
+
+    pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
+        &self.cluster_replica_sizes
+    }
+
     /// Returns an empty [`CatalogState`] that can be used in tests.
     // TODO: Ideally we'd mark this as `#[cfg(test)]`, but that doesn't work with the way
     // tests are structured in this repository.
