@@ -180,6 +180,39 @@ controller's sample to an unverified process. Readiness can briefly become unkno
 while existing SQL sessions and committed processes continue running.
 
 
+## Promote a compatible deployment
+
+Native prototype deployments can serve SQL, DDL and table writes before promotion.
+Both builds must understand the same complete committed-plan encoding. This does
+not establish compatibility between arbitrary releases.
+
+Promotion uses the candidate adapter's internal HTTP port, not controllerd's port.
+For the default adapter `a1`:
+
+```sh
+candidate_controller=http://127.0.0.1:6883
+candidate_http=$(curl -fsS "$candidate_controller/api/adapters" |
+  jq -r '.[] | select(.id == "a1") | .endpoints["http-internal"][0]')
+curl -fsS "http://$candidate_http/api/leader/status"
+```
+
+Wait for `ReadyToPromote`. SQL readiness alone does not establish upgrade
+readiness. The candidate must also satisfy the configured catch-up and replica
+stability requirements. Do not skip catch-up when verifying an upgrade.
+
+```sh
+curl -fsS -X POST "http://$candidate_http/api/leader/promote"
+curl -fsS "$candidate_controller/api/inventory" |
+  jq '{generation, active_generation}'
+curl -fsS "$candidate_controller/api/adapters"
+```
+
+The POST acknowledges the request, not completed promotion. Wait until inventory
+reports the candidate as active and its adapter is SQL-ready again. Promotion
+restarts the candidate adapter, so reconnect its SQL sessions. It must preserve
+warmed replicas and leave the older admitted deployment writable. Retirement is
+a separate operation.
+
 ## Retire one deployment
 
 Inventory distinguishes this controller's `generation` from the catalog's
