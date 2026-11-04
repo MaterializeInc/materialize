@@ -45,6 +45,10 @@
           "enabled": true,
           "allowed_roles": "NormalAndInternal"
         },
+        "mcp": {
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
+        },
         "console_config": {
           "enabled": true,
           "allowed_roles": "NormalAndInternal"
@@ -81,6 +85,10 @@
           "allowed_roles": "NormalAndInternal"
         },
         "mcp_developer": {
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
+        },
+        "mcp": {
           "enabled": true,
           "allowed_roles": "NormalAndInternal"
         },
