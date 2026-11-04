@@ -7986,6 +7986,7 @@ dependencies = [
  "azure_storage_blob",
  "base64 0.23.1",
  "bytes",
+ "crc32c",
  "deadpool-postgres",
  "differential-dataflow",
  "fail",

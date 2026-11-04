@@ -337,6 +337,7 @@ compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"
 console-subscriber = "0.5.0"
 core_affinity = "0.8.3"
+crc32c = "0.6.8"
 crc32fast = "1.5.0"
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 crossbeam = "0.8.4"
