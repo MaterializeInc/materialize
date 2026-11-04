@@ -32,7 +32,8 @@ describe("buildDroppedObjectLifetimesQuery", () => {
     for (const statement of [
       "CREATE INDEX dropped_idx IN CLUSTER quickstart ON materialize.public.t (a)",
       "CREATE MATERIALIZED VIEW materialize.public.dropped_mv IN CLUSTER quickstart AS SELECT a FROM materialize.public.t",
-      "CREATE INDEX kept_idx IN CLUSTER quickstart ON materialize.public.t (a)",
+      "CREATE TABLE materialize.public.kept_t (a int)",
+      "CREATE INDEX kept_idx IN CLUSTER quickstart ON materialize.public.kept_t (a)",
       "CREATE TABLE materialize.public.dropped_t (a int)",
     ]) {
       await client.query(statement);
@@ -40,10 +41,13 @@ describe("buildDroppedObjectLifetimesQuery", () => {
     const { rows: objects } = await client.query(
       "SELECT id, name FROM mz_objects WHERE name IN ('dropped_idx', 'dropped_mv')",
     );
+    // `DROP INDEX` fails while a newer index or a materialized view on the same
+    // table reads from the index, so readers go first. That's also why the kept
+    // index is on its own table.
     for (const statement of [
-      "DROP INDEX materialize.public.before_start_idx",
-      "DROP INDEX materialize.public.dropped_idx",
       "DROP MATERIALIZED VIEW materialize.public.dropped_mv",
+      "DROP INDEX materialize.public.dropped_idx",
+      "DROP INDEX materialize.public.before_start_idx",
       "DROP TABLE materialize.public.dropped_t",
     ]) {
       await client.query(statement);
