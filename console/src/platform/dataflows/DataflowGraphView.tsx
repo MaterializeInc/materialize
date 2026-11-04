@@ -342,11 +342,11 @@ export const DataflowGraphView = ({
         type: n.kind,
         position: { x: pos.x, y: pos.y },
         parentId: parentOf.get(n.id),
-        // Match the Top/Bottom handles so bezier control points meet the
+        // Match the Left/Right handles so bezier control points meet the
         // node edges. Without this the edge curves toward the default
         // Bottom/Top and appears detached across region boundaries.
-        targetPosition: Position.Top,
-        sourcePosition: Position.Bottom,
+        targetPosition: Position.Left,
+        sourcePosition: Position.Right,
         // Set as explicit node fields, not just CSS style: the MiniMap and
         // culled (onlyRenderVisibleElements) off-screen nodes both need a
         // known size without waiting for DOM measurement.

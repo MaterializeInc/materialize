@@ -83,8 +83,8 @@ const CardShell = ({
       <Box px={2} py={1} flex="1" minWidth={0}>
         {children}
       </Box>
-      <Handle type="target" position={Position.Top} />
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="target" position={Position.Left} />
+      <Handle type="source" position={Position.Right} />
     </Box>
   );
 };
@@ -147,6 +147,7 @@ const NavigateLink = ({
     textStyle={fontSize ? undefined : "text-ui-med"}
     fontSize={fontSize}
     minWidth={0}
+    noOfLines={1}
     onClick={
       onClick &&
       ((e: React.MouseEvent) => {
@@ -297,8 +298,8 @@ export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
           onClick={solePeer ? () => data.onJumpToPeer?.(solePeer) : undefined}
         />
       )}
-      <Handle type="target" position={Position.Top} />
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="target" position={Position.Left} />
+      <Handle type="source" position={Position.Right} />
     </Box>
   );
 };

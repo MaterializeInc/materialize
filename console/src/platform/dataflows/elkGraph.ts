@@ -24,8 +24,12 @@ export const NODE_DIMENSIONS: Record<
   VisibleNode["kind"],
   { width: number; height: number }
 > = {
-  operator: { width: 240, height: 96 },
-  region: { width: 260, height: 120 },
+  // Sized to the card's content: a two-line label, one stat line and the
+  // card padding. Layers stack left to right, so width sets the layer pitch
+  // and height the density within a layer, and a laptop canvas is wider than
+  // tall.
+  operator: { width: 200, height: 72 },
+  region: { width: 220, height: 80 },
   // Wide enough for a port label plus the arrow and peer count its link
   // carries when it leads somewhere (see PortNode).
   port: { width: 112, height: 24 },
@@ -33,7 +37,7 @@ export const NODE_DIMENSIONS: Record<
 
 const LAYOUT_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
-  "elk.direction": "DOWN",
+  "elk.direction": "RIGHT",
   "elk.padding": "[top=48,left=16,bottom=16,right=16]",
   "elk.spacing.nodeNode": "24",
   "elk.layered.spacing.nodeNodeBetweenLayers": "48",
@@ -48,7 +52,7 @@ const LAYOUT_OPTIONS: Record<string, string> = {
 // LirGroupNode renders.
 const GROUP_LAYOUT_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
-  "elk.direction": "DOWN",
+  "elk.direction": "RIGHT",
   "elk.padding": "[top=24,left=8,bottom=8,right=8]",
   "elk.spacing.nodeNode": "24",
   "elk.layered.spacing.nodeNodeBetweenLayers": "48",
@@ -60,7 +64,7 @@ const GROUP_LAYOUT_OPTIONS: Record<string, string> = {
 // INCLUDE_CHILDREN from the root, letting cross-boundary edges relocate.
 const REGION_LAYOUT_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
-  "elk.direction": "DOWN",
+  "elk.direction": "RIGHT",
   "elk.padding": "[top=32,left=12,bottom=12,right=12]",
   "elk.spacing.nodeNode": "24",
   "elk.layered.spacing.nodeNodeBetweenLayers": "48",

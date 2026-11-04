@@ -25,8 +25,8 @@ const BASE_POSITION = {
   sourceY: 0,
   targetX: 100,
   targetY: 100,
-  sourcePosition: Position.Bottom,
-  targetPosition: Position.Top,
+  sourcePosition: Position.Right,
+  targetPosition: Position.Left,
 };
 
 // EdgeLabelRenderer portals into `.react-flow__edgelabel-renderer` inside the

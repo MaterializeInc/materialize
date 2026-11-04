@@ -207,3 +207,24 @@ describe("toElkGraph with an expanded region", () => {
     expect(container!.layoutOptions).toBeDefined();
   });
 });
+
+describe("toElkGraph direction", () => {
+  it("lays the root, LIR groups and expanded regions out left to right", () => {
+    const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
+    const visible = deriveVisibleGraph(s, s.root);
+    const grouping = groupByLir(visible.nodes);
+    const elk = toElkGraph(visible, grouping);
+    const group = elk.children!.find((c) => c.id === grouping.groups[0].id)!;
+    const region = toElkGraph({
+      nodes: [makeVisibleNode(nodeIdOf([5, 1]), "region", { expanded: true })],
+      edges: [],
+    }).children![0];
+    for (const options of [
+      elk.layoutOptions,
+      group.layoutOptions,
+      region.layoutOptions,
+    ]) {
+      expect(options!["elk.direction"]).toBe("RIGHT");
+    }
+  });
+});
