@@ -20,6 +20,7 @@ import {
   Position,
   ReactFlow,
   useReactFlow,
+  useStore,
 } from "@xyflow/react";
 import React from "react";
 
@@ -47,6 +48,11 @@ import {
 } from "./nodes";
 import { hexToRgba, nodeFillColor } from "./nodeStyle";
 import { useElkLayout } from "./useElkLayout";
+import {
+  revealCenter,
+  shouldRefit,
+  type ViewportFitState,
+} from "./viewportFit";
 
 const edgeTypes = { channel: ChannelEdge };
 const nodeTypes = {
@@ -103,7 +109,56 @@ export interface DataflowGraphViewProps {
   // caller's deriveVisibleGraph) and the layout cache key.
   expandedScopes: Set<NodeId>;
   onToggleExpand: (id: NodeId) => void;
+  // Pixels of the canvas's right edge covered by an overlay such as the
+  // details panel. When positive, selecting a node that is not fully inside
+  // the uncovered area pans it into view.
+  occludedRight?: number;
 }
+
+// Pans (at constant zoom) to bring a newly selected node out from under an
+// overlay. Keyed on the selection alone so that a data refresh, a layout
+// change or the user panning away never moves the viewport again.
+const SelectionReveal = ({
+  selectedId,
+  occludedRight,
+}: {
+  selectedId?: string;
+  occludedRight: number;
+}) => {
+  const reactFlow = useReactFlow();
+  const width = useStore((s) => s.width);
+  const height = useStore((s) => s.height);
+  // Read through a ref so the effect depends on the selection only.
+  const latest = React.useRef({ reactFlow, width, height, occludedRight });
+  React.useEffect(() => {
+    latest.current = { reactFlow, width, height, occludedRight };
+  });
+  React.useEffect(() => {
+    const current = latest.current;
+    if (!selectedId || current.occludedRight <= 0) return;
+    // An edge id (or a node whose layout has not landed) has no internal node.
+    const internal = current.reactFlow.getInternalNode(selectedId);
+    if (!internal) return;
+    const viewport = current.reactFlow.getViewport();
+    const center = revealCenter(
+      {
+        x: internal.internals.positionAbsolute.x,
+        y: internal.internals.positionAbsolute.y,
+        width: internal.measured.width ?? internal.width ?? 0,
+        height: internal.measured.height ?? internal.height ?? 0,
+      },
+      viewport,
+      { width: current.width, height: current.height },
+      current.occludedRight,
+    );
+    if (!center) return;
+    void current.reactFlow.setCenter(center.x, center.y, {
+      zoom: viewport.zoom,
+      duration: 200,
+    });
+  }, [selectedId]);
+  return null;
+};
 
 // Fitting needs React Flow's context, which only exists below <ReactFlow>,
 // while the requests to fit arrive as a prop on this component. This bridges
@@ -132,28 +187,6 @@ const FitHelper = ({
   }, [reactFlow, fitRef]);
   return null;
 };
-
-interface ViewportFitState {
-  scope: NodeId;
-  // Sorted ids of the nodes laid out, so equal sets compare equal.
-  nodeSet: string;
-  expansion: string;
-}
-
-// Whether a newly landed layout deserves a fit. A new scope always does: elk
-// lays each scope out independently, starting near its own origin, so the
-// viewport left over from the previous scope is sized for a different graph.
-// Within a scope, a changed node set does too (hiding unused paths can drop
-// most of the graph, leaving the rest off-screen at the old zoom), except
-// when the change comes from expanding or collapsing a region, which has its
-// own targeted fit. A refresh that keeps the node set never refits, so
-// panning away deliberately is not fought.
-export const shouldRefit = (
-  prev: ViewportFitState,
-  next: ViewportFitState,
-): boolean =>
-  prev.scope !== next.scope ||
-  (prev.nodeSet !== next.nodeSet && prev.expansion === next.expansion);
 
 // Fitting needs React Flow's context, which only exists below <ReactFlow>,
 // while the requests to fit arrive as a prop on this component. This renders
@@ -209,6 +242,7 @@ export const DataflowGraphView = ({
   onLirGroupClick,
   expandedScopes,
   onToggleExpand,
+  occludedRight = 0,
 }: DataflowGraphViewProps) => {
   const { colors, shadows } = useTheme<MaterializeTheme>();
 
@@ -554,6 +588,10 @@ export const DataflowGraphView = ({
           }
         />
         <FitHelper fitRef={fitRef} />
+        <SelectionReveal
+          selectedId={selectedId}
+          occludedRight={occludedRight}
+        />
         <ViewportGuard
           fit={fitState}
           hasNodes={visible.nodes.length > 0}

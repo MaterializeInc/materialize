@@ -148,6 +148,9 @@ vi.mock("@xyflow/react", () => ({
     <>{children}</>
   ),
   getBezierPath: () => ["", 0, 0],
+  // Only read by the selection reveal, which is inert without an overlay.
+  useStore: (select: (s: { width: number; height: number }) => unknown) =>
+    select({ width: 1000, height: 600 }),
   useReactFlow: () => ({
     getInternalNode: () => undefined,
     setCenter: () => {},

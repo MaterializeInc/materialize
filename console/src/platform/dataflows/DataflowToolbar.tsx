@@ -17,8 +17,8 @@ import {
   SliderThumb,
   SliderTrack,
   Switch,
-  Tooltip,
   Text,
+  Tooltip,
 } from "@chakra-ui/react";
 import React from "react";
 
