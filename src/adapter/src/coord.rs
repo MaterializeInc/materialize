@@ -365,6 +365,15 @@ pub enum Message {
         controller: ControllerReadiness,
     },
     PurifiedStatementReady(PurifiedStatementReady),
+    SourceStatementReady {
+        pending: ddl::PendingSourceStatement,
+        response: mz_sql::pure::SourcePreparationResponse,
+        otel_ctx: OpenTelemetryContext,
+    },
+    DdlCommandsReady {
+        pending: ddl::PendingDdlCommit,
+        otel_ctx: OpenTelemetryContext,
+    },
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
     DeferredPlanReady {
@@ -546,6 +555,8 @@ impl Message {
                 controller: ControllerReadiness::Internal,
             } => "controller_ready(internal)",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
+            Message::SourceStatementReady { .. } => "source_statement_ready",
+            Message::DdlCommandsReady { .. } => "ddl_commands_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::DeferredPlanReady { .. } => "deferred_plan_ready",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
@@ -1311,6 +1322,22 @@ pub struct PendingTxn {
     action: EndTransactionAction,
 }
 
+impl PendingTxn {
+    fn finish(self) {
+        let PendingTxn {
+            mut ctx,
+            response,
+            action,
+        } = self;
+        let changed = ctx.session_mut().vars_mut().end_transaction(action);
+        let response = response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+        ctx.retire(response);
+    }
+}
+
 #[derive(Debug)]
 /// The response we'll send for a [`PendingTxn`].
 pub enum PendingTxnResponse {
@@ -1415,17 +1442,7 @@ impl PendingReadTxn {
     /// Alert the client that the read has been linearized.
     #[instrument(level = "debug")]
     pub fn finish(self) {
-        let PendingTxn {
-            mut ctx,
-            response,
-            action,
-        } = self.txn;
-        let changed = ctx.session_mut().vars_mut().end_transaction(action);
-        let response = response.map(|mut r| {
-            r.extend_params(changed);
-            ExecuteResponse::from(r)
-        });
-        ctx.retire(response);
+        self.txn.finish();
     }
 }
 
