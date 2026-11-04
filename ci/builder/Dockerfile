@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:26-trixie-slim AS node
+FROM node:26-trixie-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS node
 
 # Node 25 dropped corepack from the distribution, but the console pins its
 # package manager through `packageManager` in console/package.json and CI drives
@@ -18,7 +18,7 @@ RUN npm install -g corepack
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM debian:13-slim AS ci-builder-min
+FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -432,7 +432,7 @@ RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
 # Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
-FROM debian:13-slim AS ci-builder-console
+FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS ci-builder-console
 
 ARG ARCH_GCC
 ARG ARCH_GO

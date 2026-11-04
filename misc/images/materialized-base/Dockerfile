@@ -18,7 +18,7 @@ MZFROM openssh-static AS openssh-static
 # We retain apt and install more packages in this image for development.
 # Pinned by rolling tag + multi-arch index digest, matching debian-base, so
 # dependabot refreshes the digest for security fixes.
-FROM debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 
 ARG CI_SANITIZER=none
 

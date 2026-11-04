@@ -193,6 +193,10 @@ updates:
     - /ci/builder
     - /test
     - /test/playwright
+    - /test/azurite
+    - /test/mc
+    - /test/minio
+    - /test/postgres
   schedule:
     interval: weekly
     day: sunday
