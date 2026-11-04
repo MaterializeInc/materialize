@@ -132,33 +132,55 @@ const FitHelper = ({
   return null;
 };
 
-// elk lays each scope out independently, starting near its own origin, so the
-// viewport left over from the previous scope is sized for a different graph:
-// it can show the new scope at a fraction of the canvas, or miss it entirely.
-// Once a new scope's layout lands, fit to it. Checked once per scope (skipping
-// the initial one, which React Flow's own `fitView` prop already covers), not
-// on every render, so panning away deliberately after landing doesn't get
-// fought. A pending targeted fit (a search or port jump into this scope) wins.
+interface ViewportFitState {
+  scope: NodeId;
+  // Sorted ids of the nodes laid out, so equal sets compare equal.
+  nodeSet: string;
+  expansion: string;
+}
+
+// Whether a newly landed layout deserves a fit. A new scope always does: elk
+// lays each scope out independently, starting near its own origin, so the
+// viewport left over from the previous scope is sized for a different graph.
+// Within a scope, a changed node set does too (hiding unused paths can drop
+// most of the graph, leaving the rest off-screen at the old zoom), except
+// when the change comes from expanding or collapsing a region, which has its
+// own targeted fit. A refresh that keeps the node set never refits, so
+// panning away deliberately is not fought.
+export const shouldRefit = (
+  prev: ViewportFitState,
+  next: ViewportFitState,
+): boolean =>
+  prev.scope !== next.scope ||
+  (prev.nodeSet !== next.nodeSet && prev.expansion === next.expansion);
+
+// Fitting needs React Flow's context, which only exists below <ReactFlow>,
+// while the requests to fit arrive as a prop on this component. This renders
+// nothing and checks shouldRefit once per landed layout (skipping the initial
+// one, which React Flow's own `fitView` prop already covers). A pending
+// targeted fit (a search or port jump into this scope) wins.
 const ViewportGuard = ({
-  focusedScope,
+  fit,
   hasNodes,
   positions,
   targetedFitPending,
 }: {
-  focusedScope: NodeId;
+  fit: ViewportFitState;
   hasNodes: boolean;
   positions: Positions | null;
   targetedFitPending: boolean;
 }) => {
   const reactFlow = useReactFlow();
-  const checkedScopeRef = React.useRef<NodeId | null>(focusedScope);
+  const lastRef = React.useRef<ViewportFitState>(fit);
   React.useEffect(() => {
+    // The state is only recorded once positions for it have landed, so a
+    // change that arrives while elk is still laying out is fit afterwards.
     if (!positions || !hasNodes) return;
-    if (checkedScopeRef.current === focusedScope) return;
-    checkedScopeRef.current = focusedScope;
-    if (targetedFitPending) return;
+    const prev = lastRef.current;
+    lastRef.current = fit;
+    if (!shouldRefit(prev, fit) || targetedFitPending) return;
     void reactFlow.fitView({ padding: 0.3, duration: 300 });
-  }, [focusedScope, hasNodes, positions, targetedFitPending, reactFlow]);
+  }, [fit, hasNodes, positions, targetedFitPending, reactFlow]);
   return null;
 };
 
@@ -228,6 +250,17 @@ export const DataflowGraphView = ({
       ? [...decorations.hiddenEdgeIds].sort().join(",")
       : ""
   }|${[...expandedScopes].sort().join(",")}`;
+  const fitState = React.useMemo(
+    () => ({
+      scope: focusedScope,
+      nodeSet: visible.nodes
+        .map((n) => n.id)
+        .sort()
+        .join(","),
+      expansion: [...expandedScopes].sort().join(","),
+    }),
+    [focusedScope, visible.nodes, expandedScopes],
+  );
   const { positions, layouting, error, retry } = useElkLayout(
     visible,
     layoutKey,
@@ -522,7 +555,7 @@ export const DataflowGraphView = ({
         />
         <FitHelper fitRef={fitRef} />
         <ViewportGuard
-          focusedScope={focusedScope}
+          fit={fitState}
           hasNodes={visible.nodes.length > 0}
           positions={positions}
           targetedFitPending={(fitOnIds?.length ?? 0) > 0}
