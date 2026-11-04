@@ -517,12 +517,17 @@ const TicketSent = ({
           <Flex
             boxSize="10"
             borderRadius="full"
-            bg={colors.background.secondary}
+            bg={colors.background.tertiary}
             align="center"
             justify="center"
-            color={colors.accent.green}
           >
-            <CheckmarkIcon aria-hidden />
+            {/* Chakra icons take their color as a prop. The SVG's own
+                width and height read as theme sizes, so set the size too. */}
+            <CheckmarkIcon
+              aria-hidden
+              color={colors.accent.green}
+              boxSize="5"
+            />
           </Flex>
           <Text as="h3" textStyle="heading-md">
             {ticket.number
