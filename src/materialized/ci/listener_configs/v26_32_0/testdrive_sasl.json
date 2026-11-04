@@ -55,6 +55,9 @@
         "mcp_developer": {
           "enabled": false
         },
+        "mcp": {
+          "enabled": false
+        },
         "console_config": {
           "enabled": true,
           "allowed_roles": "NormalAndInternal"
@@ -90,6 +93,9 @@
           "enabled": false
         },
         "mcp_developer": {
+          "enabled": false
+        },
+        "mcp": {
           "enabled": false
         },
         "console_config": {

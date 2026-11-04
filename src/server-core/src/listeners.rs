@@ -324,7 +324,9 @@ impl From<v0_147_0::HttpListenerConfig> for HttpListenerConfig {
                 profiling: group(legacy.routes.profiling),
                 mcp_agent: group(legacy.routes.mcp_agent),
                 mcp_developer: group(legacy.routes.mcp_developer),
-                mcp: RouteGroup::Disabled,
+                // The legacy schema has no `/api/mcp` bool. The unified route
+                // serves what either old MCP route served, so it follows them.
+                mcp: group(legacy.routes.mcp_agent || legacy.routes.mcp_developer),
                 console_config: group(legacy.routes.console_config),
             },
         }
@@ -381,6 +383,40 @@ mod tests {
             RouteGroup::Enabled(AllowedRoles::NormalAndInternal)
         );
         assert_eq!(routes.webhook, RouteGroup::Disabled);
+    }
+
+    #[mz_ore::test]
+    fn legacy_migration_enables_mcp_when_either_old_mcp_route_is_on() {
+        let listener = |mcp_agent, mcp_developer| v0_147_0::HttpListenerConfig {
+            base: BaseListenerConfig {
+                addr: "0.0.0.0:6876".parse().expect("addr"),
+                authenticator_kind: AuthenticatorKind::None,
+                allowed_roles: AllowedRoles::Normal,
+                enable_tls: false,
+            },
+            routes: v0_147_0::HttpRoutes {
+                base: true,
+                webhook: false,
+                internal: false,
+                metrics: false,
+                profiling: false,
+                mcp_agent,
+                mcp_developer,
+                console_config: false,
+            },
+        };
+        for (mcp_agent, mcp_developer, expected) in [
+            (false, false, RouteGroup::Disabled),
+            (true, false, RouteGroup::Enabled(AllowedRoles::Normal)),
+            (false, true, RouteGroup::Enabled(AllowedRoles::Normal)),
+            (true, true, RouteGroup::Enabled(AllowedRoles::Normal)),
+        ] {
+            let migrated: HttpListenerConfig = listener(mcp_agent, mcp_developer).into();
+            assert_eq!(
+                migrated.routes.mcp, expected,
+                "mcp_agent={mcp_agent}, mcp_developer={mcp_developer}"
+            );
+        }
     }
 
     #[mz_ore::test]
