@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 // components don't touch anything else from the package.
 vi.mock("@xyflow/react", () => ({
   Handle: () => null,
-  Position: { Top: "top", Bottom: "bottom" },
+  Position: { Left: "left", Right: "right" },
 }));
 
 import { renderComponent } from "~/test/utils";
@@ -169,30 +169,28 @@ describe("RegionNode toggle", () => {
     expect(body).toHaveStyle({ pointerEvents: "none" });
   });
 
-  // The two controls have to stay distinguishable: expanding shows the
-  // region's children here, navigating replaces the view with them.
-  it("separates expanding from navigating, both collapsed and expanded", async () => {
+  // The chevron is the region's only control: the label and body select it
+  // like any node, so the click must reach the node.
+  it("expands from the chevron only and lets label clicks select", async () => {
     for (const expanded of [false, true]) {
       const onToggleExpand = vi.fn();
-      const onNavigate = vi.fn();
       const onNodeClick = vi.fn();
       const { unmount } = await renderComponent(
         <div onClick={onNodeClick}>
           <RegionNode
-            {...nodeProps(regionData({ expanded, onToggleExpand, onNavigate }))}
+            {...nodeProps(regionData({ expanded, onToggleExpand }))}
           />
         </div>,
       );
 
-      fireEvent.click(screen.getByTestId("region-enter"));
-      expect(onNavigate).toHaveBeenCalledWith("n1");
+      expect(screen.queryByTestId("region-enter")).toBeNull();
+      fireEvent.click(screen.getByText("Reduce"));
+      expect(onNodeClick).toHaveBeenCalledTimes(1);
       expect(onToggleExpand).not.toHaveBeenCalled();
-      // Navigating is not also selecting: the click stops at the link.
-      expect(onNodeClick).not.toHaveBeenCalled();
 
       fireEvent.click(screen.getByTestId("region-toggle"));
       expect(onToggleExpand).toHaveBeenCalledWith("n1");
-      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(onNodeClick).toHaveBeenCalledTimes(1);
       unmount();
     }
   });

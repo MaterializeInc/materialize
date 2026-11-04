@@ -67,10 +67,11 @@ export interface DataflowGraphViewProps {
   // needs it, to decorate). Computing it again here would repeat the same
   // work every render.
   visible: VisibleGraph;
-  // The scope whose direct children this view renders. A region's label
-  // navigates to a new view rooted there; its chevron gutter expands it in
-  // place instead.
+  // The scope whose direct children this view renders. A region's chevron
+  // gutter expands it in place, while rooting a view on it is done from
+  // outside the canvas.
   focusedScope: NodeId;
+  // Not read by the canvas: no node on it navigates into a scope.
   onNavigate: (scope: NodeId) => void;
   cacheKey: string;
   decorations?: GraphDecorations;
@@ -194,7 +195,6 @@ const isOutlineOnCanvas = (node: Node): boolean =>
 export const DataflowGraphView = ({
   visible: rawVisible,
   focusedScope,
-  onNavigate,
   cacheKey,
   decorations,
   selectedId,
@@ -378,7 +378,6 @@ export const DataflowGraphView = ({
           activeMatch: n.id === activeMatchId,
           expanded: n.kind === "region" && (n.expanded ?? false),
           onToggleExpand,
-          onNavigate,
           onJumpToPeer,
         },
       };
@@ -395,7 +394,6 @@ export const DataflowGraphView = ({
     activeMatchId,
     colors,
     onToggleExpand,
-    onNavigate,
     onJumpToPeer,
   ]);
 
@@ -496,7 +494,7 @@ export const DataflowGraphView = ({
         // several nodes in a row to inspect them.
         zoomOnDoubleClick={false}
         // Both default to 0, so any tremor during a click suppresses it.
-        // The chevron gutter and the label links are small enough targets
+        // The chevron gutter and the port links are small enough targets
         // that a shaky click would otherwise silently do nothing, while
         // still leaving a drag free to pan the canvas.
         paneClickDistance={4}

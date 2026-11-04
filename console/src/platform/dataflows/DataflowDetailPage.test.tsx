@@ -34,6 +34,27 @@ import { nodeIdOf } from "./dataflowGraph";
 // above regular imports) can close over it.
 const fitViewSpy = vi.hoisted(() => vi.fn());
 
+// Region nodes no longer navigate on click, so drilling into a scope is not
+// reachable through the flat renderer's node data. The wrapper below captures
+// the page's onNavigate so the stand-in "region-enter" control can call it,
+// standing in for the detail panel's focus action.
+const navigateRef = vi.hoisted(() => ({
+  current: null as null | ((scope: string) => void),
+}));
+
+vi.mock("./DataflowGraphView", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./DataflowGraphView")>();
+  return {
+    ...actual,
+    DataflowGraphView: (
+      props: React.ComponentProps<typeof actual.DataflowGraphView>,
+    ) => {
+      navigateRef.current = props.onNavigate;
+      return <actual.DataflowGraphView {...props} />;
+    },
+  };
+});
+
 // jsdom lacks ResizeObserver/DOMMatrixReadOnly, so replace @xyflow/react with a
 // flat renderer that preserves the decision under test (whether the canvas and
 // its nodes exist). This mirrors src/test/mockReactFlow.tsx but also stubs
@@ -53,7 +74,6 @@ vi.mock("@xyflow/react", () => ({
         node?: { label: string; peers?: { label: string }[] };
         label?: string;
         onToggleExpand?: (id: string) => void;
-        onNavigate?: (id: string) => void;
         onJumpToPeer?: (peer: unknown) => void;
       };
     }[];
@@ -72,9 +92,10 @@ vi.mock("@xyflow/react", () => ({
           >
             {/* Mirrors the two controls RegionNode and PortNode render
                 (nodes.tsx): the chevron gutter that expands a region in
-                place, and the label link that navigates. The flat renderer
-                above never instantiates the real node components, so the
-                callbacks have to be reached through node data. */}
+                place, plus a stand-in for the navigation the detail panel
+                offers. The flat renderer above never instantiates the real
+                node components, so the callbacks have to be reached through
+                node data. */}
             {n.type === "region" && node && (
               <>
                 <button
@@ -90,7 +111,7 @@ vi.mock("@xyflow/react", () => ({
                   data-testid="region-enter"
                   onClick={(e) => {
                     e.stopPropagation();
-                    n.data.onNavigate?.(n.id);
+                    navigateRef.current?.(n.id);
                   }}
                 />
               </>

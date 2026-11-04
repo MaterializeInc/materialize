@@ -207,11 +207,9 @@ export type FlowNodeData = {
   expanded: boolean;
   // The canvas has exactly two secondary actions, and each is reached by its
   // own visible control rather than by a gesture (see nodes.tsx): the
-  // chevron gutter expands a region here, a link-styled label navigates
+  // chevron gutter expands a region here, a link-styled port label navigates
   // somewhere else. Both are undefined on nodes that can't do them.
   onToggleExpand?: (id: string) => void;
-  // Makes this region the view root. Regions only.
-  onNavigate?: (id: string) => void;
   // Jumps to a port's peer on the far side of a scope boundary. Ports only,
   // and only where the peer is unambiguous: with several peers the port's
   // link selects instead, so the detail panel can offer the choice.

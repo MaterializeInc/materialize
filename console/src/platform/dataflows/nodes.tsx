@@ -122,9 +122,8 @@ const ExpandGutter = ({ data }: { data: FlowNodeData }) => {
   );
 };
 
-// A link goes somewhere else, matching a file tree: the chevron opens the
-// folder in place, the name opens the folder. Rendered as a button rather
-// than an anchor because there is no URL to follow and because an anchor is
+// A port's link goes somewhere else. Rendered as a button rather than an
+// anchor because there is no URL to follow and because an anchor is
 // natively draggable, which would fight dragging the canvas to pan.
 const NavigateLink = ({
   label,
@@ -183,19 +182,19 @@ export const OperatorNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
 );
 
 // A region is a collapsed subtree by default. The chevron gutter expands it
-// in place (children rendered nested inside); the label navigates into it,
-// making it the view root. When expanded it becomes an outlined container
+// in place (children rendered nested inside) and is its only control: the
+// label and body select it like any other node, and focusing on it as the
+// view root is offered by the detail panel. When expanded it becomes an
+// outlined container
 // with a transparent body so inner nodes and edges receive clicks, the same
 // click-through contract LirGroupNode documents, which is also why the
 // expanded header cannot use a full-height gutter.
 export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const label = (
-    <NavigateLink
-      label={data.node.label}
-      testId="region-enter"
-      onClick={() => data.onNavigate?.(data.node.id)}
-    />
+    <Text textStyle="text-ui-med" minWidth={0} noOfLines={1}>
+      {data.node.label}
+    </Text>
   );
   if (data.expanded) {
     return (
