@@ -37,9 +37,9 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_ore::now::EpochMillis;
-use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
@@ -54,9 +54,10 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
+use mz_timely_util::frontier_queue::{FrontierObserver, FrontierQueue, WatchedFrontier};
+use mz_timely_util::probe::Handle as MzProbeHandle;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
-use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
@@ -286,6 +287,16 @@ pub struct ComputeState {
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
 
+    /// Whether maintenance reports only collections in `frontier_events` and
+    /// `frontier_rechecks`, see
+    /// [`mz_compute_types::dyncfgs::COMPUTE_EVENT_DRIVEN_FRONTIER_REPORTING`].
+    pub event_driven_frontier_reporting: bool,
+    /// Frontier changes that probes and sinks announced since the last maintenance.
+    frontier_events: Rc<FrontierEvents>,
+    /// Collections to report on the next maintenance although none of their frontiers changed,
+    /// because their reported frontiers or their read-only state changed.
+    frontier_rechecks: BTreeSet<GlobalId>,
+
     /// The [`mz_ore::now::SYSTEM_TIME`] at which the replica was started.
     ///
     /// Used to compute `replica_expiration`.
@@ -351,6 +362,9 @@ impl ComputeState {
             peek_passed_over: false,
             suspended_collections: Default::default(),
             server_maintenance_interval: Duration::ZERO,
+            event_driven_frontier_reporting: false,
+            frontier_events: Default::default(),
+            frontier_rechecks: Default::default(),
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
         }
@@ -374,14 +388,104 @@ impl ComputeState {
         &mut self,
         input_id: GlobalId,
         collection_ids: impl Iterator<Item = GlobalId>,
-    ) -> probe::Handle<Timestamp> {
-        let probe = probe::Handle::default();
+    ) -> MzProbeHandle<Timestamp> {
+        let probe = MzProbeHandle::default();
         for id in collection_ids {
             if let Some(collection) = self.collections.get_mut(&id) {
                 collection.input_probes.insert(input_id, probe.clone());
+                // The input holds back the input frontier until its probe reports progress.
+                collection
+                    .observed
+                    .inputs
+                    .insert(input_id, Antichain::from_elem(Timestamp::MIN));
+                probe.observe(frontier_observer(
+                    &self.frontier_events,
+                    id,
+                    FrontierSource::Input(input_id),
+                ));
             }
         }
         probe
+    }
+
+    /// Takes the write frontier of collection `id` from `probe`.
+    ///
+    /// `probe` must already observe a stream, whose frontier must not pass the collection's write
+    /// frontier. The stream of the arrangement whose trace an index exports is such a stream.
+    pub fn observe_write_frontier(&mut self, id: GlobalId, probe: &MzProbeHandle<Timestamp>) {
+        let Some(collection) = self.collections.get_mut(&id) else {
+            return;
+        };
+        collection.observed.has_write_source = true;
+        probe.observe(frontier_observer(
+            &self.frontier_events,
+            id,
+            FrontierSource::Write,
+        ));
+        // The probe may have progressed before this call. It observes a stream already, so its
+        // frontier is empty only if the stream is complete.
+        probe.with_frontier(|frontier| {
+            self.frontier_events
+                .push((id, FrontierSource::Write), frontier)
+        });
+    }
+
+    /// Takes the write frontier of sink `id` from `frontier`, which the sink maintains.
+    pub fn observe_sink_write_frontier(
+        &mut self,
+        id: GlobalId,
+        frontier: Rc<WatchedFrontier<Timestamp>>,
+    ) {
+        let Some(collection) = self.collections.get_mut(&id) else {
+            return;
+        };
+        collection.observed.has_write_source = true;
+        frontier.set_observer(frontier_observer(
+            &self.frontier_events,
+            id,
+            FrontierSource::Write,
+        ));
+        collection.sink_write_frontier = Some(frontier);
+    }
+
+    /// Takes the compute frontier of collection `id` from `probe`.
+    ///
+    /// The caller attaches `probe` to a stream after calling this method.
+    pub fn observe_compute_frontier(&mut self, id: GlobalId, probe: MzProbeHandle<Timestamp>) {
+        let Some(collection) = self.collections.get_mut(&id) else {
+            return;
+        };
+        collection.observed.compute = Some(Antichain::from_elem(Timestamp::MIN));
+        probe.observe(frontier_observer(
+            &self.frontier_events,
+            id,
+            FrontierSource::Compute,
+        ));
+        collection.compute_probe = Some(probe);
+    }
+
+    /// Returns the wall-clock time until the replica expires, if it has an expiration.
+    ///
+    /// [`ActiveComputeState::check_expiration`] panics once this has passed.
+    pub fn time_until_expiration(&self) -> Option<Duration> {
+        let expiration = u64::from(*self.replica_expiration.as_option()?);
+        let now = mz_ore::now::SYSTEM_TIME();
+        // Expiration requires the time to pass the expiration, so wake a millisecond after it.
+        Some(Duration::from_millis(
+            expiration.saturating_sub(now).saturating_add(1),
+        ))
+    }
+
+    /// Reports every collection's frontiers on the next maintenance, even without announced
+    /// changes.
+    pub fn recheck_all_frontiers(&mut self) {
+        self.frontier_rechecks
+            .extend(self.collections.keys().copied());
+    }
+
+    /// Whether event-driven maintenance has frontiers to report.
+    pub fn frontier_reports_pending(&self) -> bool {
+        !self.frontier_events.is_empty() || !self.frontier_rechecks.is_empty()
     }
 
     /// Apply the current `worker_config` to the compute state.
@@ -591,6 +695,7 @@ impl ComputeState {
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
+        self.event_driven_frontier_reporting = COMPUTE_EVENT_DRIVEN_FRONTIER_REPORTING.get(config);
 
         let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
         match overflowing_behavior.parse() {
@@ -876,6 +981,7 @@ impl<'a> ActiveComputeState<'a> {
                 .insert(id, Rc::clone(&suspension_token));
         }
 
+        let export_ids: Vec<_> = dataflow.export_ids().collect();
         crate::render::build_compute_dataflow(
             self.timely_worker,
             self.compute_state,
@@ -884,6 +990,16 @@ impl<'a> ActiveComputeState<'a> {
             until,
             dataflow_expiration,
         );
+
+        for id in export_ids {
+            if let Some(collection) = self.compute_state.collections.get(&id) {
+                soft_assert_or_log!(
+                    collection.is_subscribe_or_copy || collection.observed.has_write_source,
+                    "rendering installed no write frontier source for {id}",
+                );
+            }
+            self.compute_state.frontier_rechecks.insert(id);
+        }
     }
 
     fn handle_schedule(&mut self, id: GlobalId) {
@@ -969,6 +1085,8 @@ impl<'a> ActiveComputeState<'a> {
 
         if let Some(collection) = self.compute_state.collections.get_mut(&id) {
             collection.allow_writes();
+            // The output frontier of a read-only collection ignores its write frontier.
+            self.compute_state.frontier_rechecks.insert(id);
         } else {
             soft_panic_or_log!("allow writes for unknown collection {id}");
         }
@@ -984,6 +1102,13 @@ impl<'a> ActiveComputeState<'a> {
 
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
+        // Reconciliation can recreate a collection under the same ID. Its new dataflow need not
+        // have the inputs of the old one, so a queued change of an old input would hold back the
+        // new collection's input frontier forever.
+        self.compute_state
+            .frontier_events
+            .retain(|(event_id, _)| *event_id != id);
+        self.compute_state.frontier_rechecks.remove(&id);
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
@@ -1034,7 +1159,7 @@ impl<'a> ActiveComputeState<'a> {
 
         let dataflow_index = Rc::new(dataflow_index);
         let mut log_index_ids = config.index_logs;
-        for (log, trace) in traces {
+        for (log, (trace, probe)) in traces {
             // Install trace as maintained index.
             let id = log_index_ids
                 .remove(&log)
@@ -1068,6 +1193,8 @@ impl<'a> ActiveComputeState<'a> {
                     "existing collection for newly initialized logging export",
                 );
             }
+            self.compute_state.observe_write_frontier(id, &probe);
+            self.compute_state.frontier_rechecks.insert(id);
         }
 
         // Sanity check.
@@ -1079,94 +1206,61 @@ impl<'a> ActiveComputeState<'a> {
         self.compute_state.compute_logger = Some(logger);
     }
 
-    /// Send progress information to the controller.
-    pub fn report_frontiers(&mut self) {
-        let mut responses = Vec::new();
-
-        // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
-        let mut new_frontier = Antichain::new();
-
-        for (&id, collection) in self.compute_state.collections.iter_mut() {
-            // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
-            // collections (database-issues#4701).
-            if collection.is_subscribe_or_copy {
+    /// Performs trace maintenance and sends progress information to the controller.
+    ///
+    /// With event-driven frontier reporting, this visits only collections with announced frontier
+    /// changes or pending rechecks. Otherwise, it visits every collection.
+    pub fn maintain_frontiers(&mut self) {
+        // Apply announced changes even when not reporting from them, so the observed frontiers
+        // are current when event-driven reporting is switched on.
+        let events = self.compute_state.frontier_events.drain();
+        let rechecks = std::mem::take(&mut self.compute_state.frontier_rechecks);
+        let mut changed = rechecks;
+        let mut written = Vec::new();
+        for ((id, source), frontier) in events {
+            let Some(collection) = self.compute_state.collections.get_mut(&id) else {
                 continue;
-            }
-
-            let reported = collection.reported_frontiers();
-
-            // Collect the write frontier and check for progress.
-            new_frontier.clear();
-            if let Some(traces) = self.compute_state.traces.get_mut(&id) {
-                assert!(
-                    collection.sink_write_frontier.is_none(),
-                    "collection {id} has multiple frontiers"
-                );
-                traces.oks_mut().read_upper(&mut new_frontier);
-            } else if let Some(frontier) = &collection.sink_write_frontier {
-                new_frontier.clone_from(&frontier.borrow());
-            } else {
-                error!(id = ?id, "collection without write frontier");
-                continue;
-            }
-            let new_write_frontier = reported
-                .write_frontier
-                .allows_reporting(&new_frontier)
-                .then(|| new_frontier.clone());
-
-            // Collect the output frontier and check for progress.
-            //
-            // By default, the output frontier equals the write frontier (which is still stored in
-            // `new_frontier`). If the collection provides a compute frontier, we construct the
-            // output frontier by taking the meet of write and compute frontier, to avoid:
-            //  * reporting progress through times we have not yet written
-            //  * reporting progress through times we have not yet fully processed, for
-            //    collections that jump their write frontiers into the future
-            //
-            // As a special case, in read-only mode we don't take the write frontier into account.
-            // The dataflow doesn't have the ability to push it forward, so it can't be used as a
-            // measure of dataflow progress.
-            if let Some(probe) = &collection.compute_probe {
-                if *collection.read_only_rx.borrow() {
-                    new_frontier.clear();
-                }
-                probe.with_frontier(|frontier| new_frontier.extend(frontier.iter().copied()));
-            }
-            let new_output_frontier = reported
-                .output_frontier
-                .allows_reporting(&new_frontier)
-                .then(|| new_frontier.clone());
-
-            // Collect the input frontier and check for progress.
-            new_frontier.clear();
-            for probe in collection.input_probes.values() {
-                probe.with_frontier(|frontier| new_frontier.extend(frontier.iter().copied()));
-            }
-            let new_input_frontier = reported
-                .input_frontier
-                .allows_reporting(&new_frontier)
-                .then(|| new_frontier.clone());
-
-            if let Some(frontier) = &new_write_frontier {
-                collection
-                    .set_reported_write_frontier(ReportedFrontier::Reported(frontier.clone()));
-            }
-            if let Some(frontier) = &new_input_frontier {
-                collection
-                    .set_reported_input_frontier(ReportedFrontier::Reported(frontier.clone()));
-            }
-            if let Some(frontier) = &new_output_frontier {
-                collection
-                    .set_reported_output_frontier(ReportedFrontier::Reported(frontier.clone()));
-            }
-
-            let response = FrontiersResponse {
-                write_frontier: new_write_frontier,
-                input_frontier: new_input_frontier,
-                output_frontier: new_output_frontier,
             };
-            if response.has_updates() {
-                responses.push((id, response));
+            let observed = &mut collection.observed;
+            match source {
+                FrontierSource::Write => {
+                    observed.write = frontier;
+                    written.push(id);
+                }
+                FrontierSource::Compute => observed.compute = Some(frontier),
+                FrontierSource::Input(input_id) => {
+                    observed.inputs.insert(input_id, frontier);
+                }
+            }
+            changed.insert(id);
+        }
+
+        let mut responses = Vec::new();
+        if self.compute_state.event_driven_frontier_reporting {
+            self.compute_state.traces.maintenance_for(&written);
+            for id in changed {
+                let Some(collection) = self.compute_state.collections.get_mut(&id) else {
+                    continue;
+                };
+                if mz_ore::assert::soft_assertions_enabled() {
+                    check_observed_write_frontier(id, collection, &mut self.compute_state.traces);
+                }
+                if let Some(response) = observed_frontier_update(collection) {
+                    responses.push((id, response));
+                }
+            }
+        } else {
+            self.compute_state.traces.maintenance();
+            // Maintain a single allocation for `new_frontier` to avoid allocating on every
+            // iteration.
+            let mut new_frontier = Antichain::new();
+            let traces = &mut self.compute_state.traces;
+            for (&id, collection) in self.compute_state.collections.iter_mut() {
+                if let Some(response) =
+                    polled_frontier_update(id, collection, traces, &mut new_frontier)
+                {
+                    responses.push((id, response));
+                }
             }
         }
 
@@ -2075,14 +2169,16 @@ pub struct CollectionState {
     /// Frontier of sink writes.
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
-    pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
+    pub sink_write_frontier: Option<Rc<WatchedFrontier<Timestamp>>>,
     /// Frontier probes for every input to the collection.
-    pub input_probes: BTreeMap<GlobalId, probe::Handle<Timestamp>>,
+    pub input_probes: BTreeMap<GlobalId, MzProbeHandle<Timestamp>>,
     /// A probe reporting the frontier of times through which all collection outputs have been
     /// computed (but not necessarily written).
     ///
     /// `None` for collections with compute frontiers equal to their write frontiers.
-    pub compute_probe: Option<probe::Handle<Timestamp>>,
+    pub compute_probe: Option<MzProbeHandle<Timestamp>>,
+    /// The frontiers that probes and sinks announced for this collection.
+    observed: ObservedFrontiers,
     /// Logging state maintained for this collection.
     logging: Option<CollectionLogging>,
     /// Metrics tracked for this collection.
@@ -2123,6 +2219,7 @@ impl CollectionState {
             sink_write_frontier: None,
             input_probes: Default::default(),
             compute_probe: None,
+            observed: Default::default(),
             logging: None,
             metrics,
             read_only_tx,
@@ -2198,6 +2295,208 @@ impl CollectionState {
             "allowing writes for dataflow",
         );
         let _ = self.read_only_tx.send(false);
+    }
+}
+
+/// The source of an announced frontier change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum FrontierSource {
+    /// The collection's write frontier.
+    Write,
+    /// The frontier through which the collection's outputs have been computed.
+    Compute,
+    /// The frontier of the collection's input with the given ID.
+    Input(GlobalId),
+}
+
+type FrontierEvents = FrontierQueue<(GlobalId, FrontierSource), Timestamp>;
+
+/// Returns an observer announcing changes of `source` of collection `id` in `events`.
+fn frontier_observer(
+    events: &Rc<FrontierEvents>,
+    id: GlobalId,
+    source: FrontierSource,
+) -> FrontierObserver<Timestamp> {
+    let events = Rc::clone(events);
+    Rc::new(move |frontier| events.push((id, source), frontier))
+}
+
+/// The latest frontiers announced for a collection, see [`FrontierSource`].
+#[derive(Debug)]
+struct ObservedFrontiers {
+    write: Antichain<Timestamp>,
+    /// `Some` iff the collection has a compute probe.
+    compute: Option<Antichain<Timestamp>>,
+    inputs: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    /// Whether rendering installed a source for `write`.
+    has_write_source: bool,
+}
+
+impl Default for ObservedFrontiers {
+    fn default() -> Self {
+        Self {
+            write: Antichain::from_elem(Timestamp::MIN),
+            compute: None,
+            inputs: BTreeMap::new(),
+            has_write_source: false,
+        }
+    }
+}
+
+/// Collects the progress of `collection`'s observed frontiers not yet reported to the controller,
+/// and records it as reported.
+fn observed_frontier_update(collection: &mut CollectionState) -> Option<FrontiersResponse> {
+    // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
+    // collections (database-issues#4701).
+    if collection.is_subscribe_or_copy {
+        return None;
+    }
+    let observed = &collection.observed;
+    let reported = collection.reported_frontiers();
+
+    let write_frontier = observed.write.clone();
+
+    // The output frontier is the meet of write and compute frontier, or only the compute frontier
+    // in read-only mode. `polled_frontier_update` explains why.
+    let mut output_frontier = write_frontier.clone();
+    if let Some(compute) = &observed.compute {
+        if *collection.read_only_rx.borrow() {
+            output_frontier.clear();
+        }
+        output_frontier.extend(compute.iter().copied());
+    }
+
+    let mut input_frontier = Antichain::new();
+    for frontier in observed.inputs.values() {
+        input_frontier.extend(frontier.iter().copied());
+    }
+
+    let response = FrontiersResponse {
+        write_frontier: reported
+            .write_frontier
+            .allows_reporting(&write_frontier)
+            .then_some(write_frontier),
+        input_frontier: reported
+            .input_frontier
+            .allows_reporting(&input_frontier)
+            .then_some(input_frontier),
+        output_frontier: reported
+            .output_frontier
+            .allows_reporting(&output_frontier)
+            .then_some(output_frontier),
+    };
+    record_frontier_update(collection, &response);
+    response.has_updates().then_some(response)
+}
+
+/// Checks that the observed write frontier of an index does not pass its trace's upper.
+///
+/// Probes observe the arrangement stream, whose frontier follows the trace upper. Reporting past
+/// the upper would let the controller rely on times the trace has not sealed.
+fn check_observed_write_frontier(
+    id: GlobalId,
+    collection: &CollectionState,
+    traces: &mut TraceManager,
+) {
+    if let Some(trace) = traces.get_mut(&id) {
+        let mut upper = Antichain::new();
+        trace.oks_mut().read_upper(&mut upper);
+        soft_assert_or_log!(
+            PartialOrder::less_equal(&collection.observed.write, &upper),
+            "observed write frontier {:?} of {id} passes its trace upper {:?}",
+            collection.observed.write,
+            upper,
+        );
+    }
+}
+
+/// Collects the progress of `collection`'s frontiers not yet reported to the controller by reading
+/// them from their sources, and records it as reported.
+fn polled_frontier_update(
+    id: GlobalId,
+    collection: &mut CollectionState,
+    traces: &mut TraceManager,
+    new_frontier: &mut Antichain<Timestamp>,
+) -> Option<FrontiersResponse> {
+    // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
+    // collections (database-issues#4701).
+    if collection.is_subscribe_or_copy {
+        return None;
+    }
+
+    let reported = collection.reported_frontiers();
+
+    // Collect the write frontier and check for progress.
+    new_frontier.clear();
+    if let Some(traces) = traces.get_mut(&id) {
+        assert!(
+            collection.sink_write_frontier.is_none(),
+            "collection {id} has multiple frontiers"
+        );
+        traces.oks_mut().read_upper(new_frontier);
+    } else if let Some(frontier) = &collection.sink_write_frontier {
+        new_frontier.clone_from(&frontier.borrow());
+    } else {
+        error!(id = ?id, "collection without write frontier");
+        return None;
+    }
+    let new_write_frontier = reported
+        .write_frontier
+        .allows_reporting(new_frontier)
+        .then(|| new_frontier.clone());
+
+    // Collect the output frontier and check for progress.
+    //
+    // By default, the output frontier equals the write frontier (which is still stored in
+    // `new_frontier`). If the collection provides a compute frontier, we construct the
+    // output frontier by taking the meet of write and compute frontier, to avoid:
+    //  * reporting progress through times we have not yet written
+    //  * reporting progress through times we have not yet fully processed, for
+    //    collections that jump their write frontiers into the future
+    //
+    // As a special case, in read-only mode we don't take the write frontier into account.
+    // The dataflow doesn't have the ability to push it forward, so it can't be used as a
+    // measure of dataflow progress.
+    if let Some(probe) = &collection.compute_probe {
+        if *collection.read_only_rx.borrow() {
+            new_frontier.clear();
+        }
+        probe.with_frontier(|frontier| new_frontier.extend(frontier.iter().copied()));
+    }
+    let new_output_frontier = reported
+        .output_frontier
+        .allows_reporting(new_frontier)
+        .then(|| new_frontier.clone());
+
+    // Collect the input frontier and check for progress.
+    new_frontier.clear();
+    for probe in collection.input_probes.values() {
+        probe.with_frontier(|frontier| new_frontier.extend(frontier.iter().copied()));
+    }
+    let new_input_frontier = reported
+        .input_frontier
+        .allows_reporting(new_frontier)
+        .then(|| new_frontier.clone());
+
+    let response = FrontiersResponse {
+        write_frontier: new_write_frontier,
+        input_frontier: new_input_frontier,
+        output_frontier: new_output_frontier,
+    };
+    record_frontier_update(collection, &response);
+    response.has_updates().then_some(response)
+}
+
+/// Records the frontiers in `response` as reported.
+fn record_frontier_update(collection: &mut CollectionState, response: &FrontiersResponse) {
+    if let Some(frontier) = &response.write_frontier {
+        collection.set_reported_write_frontier(ReportedFrontier::Reported(frontier.clone()));
+    }
+    if let Some(frontier) = &response.input_frontier {
+        collection.set_reported_input_frontier(ReportedFrontier::Reported(frontier.clone()));
+    }
+    if let Some(frontier) = &response.output_frontier {
+        collection.set_reported_output_frontier(ReportedFrontier::Reported(frontier.clone()));
     }
 }
 

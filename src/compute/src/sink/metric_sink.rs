@@ -36,6 +36,7 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{ColumnName, Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_timely_util::frontier_queue::WatchedFrontier;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use prometheus::core::{Collector, Desc};
 use prometheus::proto::{
@@ -121,7 +122,7 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // The frontier this worker reports to the controller. Every worker reports, not just the
         // active one: the controller meets the per-worker frontiers, so a worker that never
         // advanced would pin the input's since forever.
-        let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
+        let sink_frontier = Rc::new(WatchedFrontier::new(Antichain::from_elem(Timestamp::MIN)));
         let shared_frontier = Rc::clone(&sink_frontier);
 
         let operator_info = op.operator_info();
@@ -161,7 +162,7 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
                 // observed the frontier. An early return added on the active-worker path between
                 // here and `st.integrate` would advertise progress the sink has not folded,
                 // downgrading the input's since ahead of the data actually consumed.
-                shared_frontier.borrow_mut().clone_from(&frontier);
+                shared_frontier.set(frontier.borrow());
 
                 // `registration` is `Some` only on the active worker. Scoped so the borrow ends
                 // before the fold.
@@ -222,8 +223,7 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // Report frontier updates to the `ComputeState`. A metric sink writes to the metrics
         // registry rather than to a collection, so its "write" frontier is the input frontier it
         // has folded through.
-        let collection = compute_state.expect_collection_mut(sink_id);
-        collection.sink_write_frontier = Some(sink_frontier);
+        compute_state.observe_sink_write_frontier(sink_id, sink_frontier);
 
         // The guard is returned as the sink token, not kept in the operator closure. This operator
         // has no outputs, so timely drops its closure the moment both input frontiers close (e.g. a

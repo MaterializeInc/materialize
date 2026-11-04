@@ -10,7 +10,6 @@
 //! Reclocking compatibility code until the whole ingestion pipeline is transformed to native
 //! timestamps
 
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -33,6 +32,7 @@ use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{SourceData, SourceTimestamp};
+use mz_timely_util::frontier_queue::WatchedFrontier;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::Timestamp;
 use timely::progress::frontier::Antichain;
@@ -47,7 +47,7 @@ pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattic
     read_only_rx: watch::Receiver<bool>,
     pending_batch: Vec<(FromTime, IntoTime, Diff)>,
     // Reports `self`'s write frontier.
-    shared_write_frontier: Rc<RefCell<Antichain<IntoTime>>>,
+    shared_write_frontier: Rc<WatchedFrontier<IntoTime>>,
 }
 
 impl<FromTime: Timestamp, IntoTime: Timestamp + Sync> PersistHandle<FromTime, IntoTime>
@@ -60,7 +60,7 @@ where
         read_only_rx: watch::Receiver<bool>,
         remap_metadata: CollectionMetadata,
         as_of: Antichain<IntoTime>,
-        shared_write_frontier: Rc<RefCell<Antichain<IntoTime>>>,
+        shared_write_frontier: Rc<WatchedFrontier<IntoTime>>,
         // additional information to improve logging
         id: GlobalId,
         operator: &str,
@@ -317,7 +317,7 @@ where
             .await
         {
             Ok(result) => {
-                *self.shared_write_frontier.borrow_mut() = new_upper;
+                self.shared_write_frontier.set(new_upper.borrow());
                 return result;
             }
             Err(invalid_use) => panic!("compare_and_append failed: {invalid_use}"),

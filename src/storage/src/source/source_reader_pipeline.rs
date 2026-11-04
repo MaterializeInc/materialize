@@ -23,7 +23,6 @@
 #![allow(missing_docs)]
 #![allow(clippy::needless_borrow)]
 
-use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -46,6 +45,7 @@ use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp}
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::capture::PusherCapture;
+use mz_timely_util::frontier_queue::WatchedFrontier;
 use mz_timely_util::operator::ConcatenateFlatten;
 use mz_timely_util::reclock::reclock;
 use timely::PartialOrder;
@@ -112,7 +112,7 @@ pub struct RawSourceCreationConfig {
     /// Collection of `SourceStatistics` for source and exports to share updates.
     pub statistics: BTreeMap<GlobalId, SourceStatistics>,
     /// Enables reporting the remap operator's write frontier.
-    pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
+    pub shared_remap_upper: Rc<WatchedFrontier<mz_repr::Timestamp>>,
     /// Configuration parameters, possibly from LaunchDarkly
     pub config: StorageConfiguration,
     /// The ID of this source remap/progress collection.
@@ -476,7 +476,7 @@ where
         if !active_worker {
             // This worker is not writing, so make sure it's "taken out" of the
             // calculation by advancing to the empty frontier.
-            shared_remap_upper.borrow_mut().clear();
+            shared_remap_upper.clear();
             return;
         }
 

@@ -326,6 +326,15 @@
       "dyncfg": true
     },
     {
+      "name": "compute_event_driven_frontier_reporting",
+      "typeName": "boolean",
+      "default": "on",
+      "description": "Whether the compute server reports only frontiers that probes and sinks announced as changed, instead of reading every collection's frontiers on each maintenance.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "compute_flat_map_fuel",
       "typeName": "unsigned integer",
       "default": "1000000",
@@ -490,7 +499,7 @@
     {
       "name": "compute_server_maintenance_interval",
       "typeName": "duration",
-      "default": "10 ms",
+      "default": "0 s",
       "description": "The interval at which the compute server performs maintenance tasks. Zero enables maintenance on every iteration.",
       "scope": "replica",
       "userVisible": false,
@@ -4084,6 +4093,15 @@
       "default": "off",
       "description": "Whether or not to enforce that external connection addresses are global (not private or local) when resolving them",
       "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_event_driven_frontier_reporting",
+      "typeName": "boolean",
+      "default": "on",
+      "description": "Whether the storage server reports only frontiers that operators announced as changed, instead of reading every object's frontier on each maintenance.",
+      "scope": "replica",
       "userVisible": false,
       "dyncfg": true
     },

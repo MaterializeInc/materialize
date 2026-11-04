@@ -71,7 +71,6 @@
 //!
 //! [1]: https://github.com/confluentinc/librdkafka/blob/master/INTRODUCTION.md#message-reliability
 
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -129,6 +128,7 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use mz_timely_util::frontier_queue::WatchedFrontier;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Header, OwnedHeaders, ToBytes};
@@ -191,10 +191,10 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
             }
         };
 
-        let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
-        storage_state
-            .sink_write_frontiers
-            .insert(sink_id, Rc::clone(&write_frontier));
+        let write_frontier = Rc::new(WatchedFrontier::new(Antichain::from_elem(
+            Timestamp::minimum(),
+        )));
+        storage_state.insert_sink_write_frontier(sink_id, Rc::clone(&write_frontier));
 
         let (encoded, encode_status, encode_token) = encode_collection(
             format!("kafka-{sink_id}-{}-encode", self.format.get_format_name()),
@@ -693,7 +693,7 @@ fn sink_collection<'scope>(
     write_handle: impl Future<
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
-    write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+    write_frontier: Rc<WatchedFrontier<Timestamp>>,
 ) -> (
     StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
@@ -714,7 +714,7 @@ fn sink_collection<'scope>(
     let (button, errors) = builder.build_fallible(move |_caps| {
         Box::pin(async move {
             if !is_active_worker {
-                write_frontier.borrow_mut().clear();
+                write_frontier.clear();
                 return Ok(());
             }
 
@@ -765,7 +765,7 @@ fn sink_collection<'scope>(
             // directly to make sure this doesn't compile if someone attempts to make this operator
             // generic over partial orders in the future.
             let Some(mut upper) = resume_upper.clone().into_option() else {
-                write_frontier.borrow_mut().clear();
+                write_frontier.clear();
                 return Ok(());
             };
 
@@ -873,7 +873,7 @@ fn sink_collection<'scope>(
                                 }
                             }
                         }
-                        write_frontier.borrow_mut().clone_from(&progress);
+                        write_frontier.set(progress.borrow());
                         match progress.into_option() {
                             Some(new_upper) => upper = new_upper,
                             None => break,

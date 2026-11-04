@@ -115,7 +115,6 @@
 //! collections, allowing it to keep its correction buffer up-to-date.
 
 use std::any::Any;
-use std::cell::RefCell;
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -142,13 +141,14 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::builder_async::{Event, OperatorBuilder};
+use mz_timely_util::frontier_queue::WatchedFrontier;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{Capability, CapabilitySet, probe};
+use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::watch;
@@ -178,14 +178,12 @@ impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMet
         // Attach probes reporting the compute frontier.
         // The `apply_refresh` operator can round up frontiers, making it impossible to accurately
         // track the progress of the computation, so we need to attach probes before it.
-        let probe = probe::Handle::default();
+        let probe = Handle::default();
+        compute_state.observe_compute_frontier(sink_id, probe.clone());
         ok_collection = ok_collection
-            .probe_with(&probe)
             .inner
-            .probe_notify_with(vec![output_probe.clone()])
+            .probe_notify_with(vec![probe, output_probe.clone()])
             .as_collection();
-        let collection_state = compute_state.expect_collection_mut(sink_id);
-        collection_state.compute_probe = Some(probe);
 
         // If a `RefreshSchedule` was specified, round up timestamps.
         if let Some(refresh_schedule) = &sink.refresh_schedule {
@@ -199,7 +197,10 @@ impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMet
             )
         }
 
-        let read_only_rx = collection_state.read_only_rx.clone();
+        let read_only_rx = compute_state
+            .expect_collection_mut(sink_id)
+            .read_only_rx
+            .clone();
 
         let token = persist_sink(
             sink_id,
@@ -234,7 +235,7 @@ pub(super) type DescsStream<'s> = StreamVec<'s, Timestamp, BatchDescription>;
 pub(super) type BatchesStream<'s> = StreamVec<'s, Timestamp, (BatchDescription, ProtoBatch)>;
 
 /// Type of the shared sink write frontier.
-pub(super) type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
+pub(super) type SharedSinkFrontier = Rc<WatchedFrontier<Timestamp>>;
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
 pub(super) fn persist_sink<'s>(
@@ -299,8 +300,7 @@ where
     let append_token = append::render(sink_id, persist_api, descs, batches);
 
     // Report sink frontier updates to the `ComputeState`.
-    let collection = compute_state.expect_collection_mut(sink_id);
-    collection.sink_write_frontier = Some(sink_frontier);
+    compute_state.observe_sink_write_frontier(sink_id, sink_frontier);
 
     Rc::new((persist_token, mint_token, write_token, append_token))
 }
@@ -519,7 +519,7 @@ mod mint {
         // Determine the active worker for the mint operator.
         let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
 
-        let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
+        let sink_frontier = Rc::new(WatchedFrontier::new(Antichain::from_elem(Timestamp::MIN)));
         let shared_frontier = Rc::clone(&sink_frontier);
 
         let name = operator_name(sink_id, "mint");
@@ -546,7 +546,7 @@ mod mint {
             // Non-active workers just pass the `desired` and `persist` data through.
             if worker_id != active_worker_id {
                 drop(desc_cap);
-                shared_frontier.borrow_mut().clear();
+                shared_frontier.clear();
 
                 loop {
                     tokio::select! {
@@ -594,7 +594,7 @@ mod mint {
                 while !frontier.is_empty() {
                     writer.wait_for_upper_past(&frontier).await;
                     frontier = writer.upper().clone();
-                    shared_frontier.borrow_mut().clone_from(&frontier);
+                    shared_frontier.set(frontier.borrow());
                     yield frontier.clone();
                 }
             });

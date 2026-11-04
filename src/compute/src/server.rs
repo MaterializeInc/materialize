@@ -53,6 +53,11 @@ use crate::compute_state::{
 };
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 
+/// How often event-driven maintenance updates metrics that no frontier change triggers.
+///
+/// Metrics are scraped every 60 s. Updating twice per scrape interval means no scrape sees a value
+/// older than 30 s.
+const METRICS_UPDATE_INTERVAL: Duration = Duration::from_secs(30);
 /// Caller-provided configuration for compute.
 #[derive(Clone, Debug)]
 pub struct ComputeInstanceContext {
@@ -501,8 +506,16 @@ impl StorageGuest {
             .parameters
             .statistics_collection_interval;
 
-        let next_maintenance =
-            (self.last_maintenance + maintenance_interval).checked_duration_since(Instant::now());
+        let next_maintenance = if self.storage_state.event_driven_frontier_reporting {
+            // Only pending frontier reports make maintenance due. A due maintenance bounds the
+            // park even if its deadline passed, since nothing else would end the park for it.
+            self.storage_state.frontier_reports_pending().then(|| {
+                (self.last_maintenance + maintenance_interval)
+                    .saturating_duration_since(Instant::now())
+            })
+        } else {
+            (self.last_maintenance + maintenance_interval).checked_duration_since(Instant::now())
+        };
         let next_stats = stats_interval.saturating_sub(self.last_stats_time.elapsed());
         match next_maintenance {
             Some(maintenance) => Some(maintenance.min(next_stats)),
@@ -688,6 +701,8 @@ impl<'w> Worker<'w> {
 
         // The last time we did periodic maintenance.
         let mut last_maintenance = Instant::now();
+        // When event-driven maintenance next updates metrics, see `METRICS_UPDATE_INTERVAL`.
+        let mut next_metrics_update = Instant::now();
 
         // Commence normal operation.
         loop {
@@ -696,28 +711,39 @@ impl<'w> Worker<'w> {
                 .compute_state
                 .as_ref()
                 .map_or(Duration::ZERO, |state| state.server_maintenance_interval);
+            let event_driven = self
+                .compute_state
+                .as_ref()
+                .is_some_and(|state| state.event_driven_frontier_reporting);
 
             let now = Instant::now();
-            // Determine if we need to perform maintenance, which is true if `maintenance_interval`
-            // time has passed since the last maintenance.
-            let sleep_duration;
-            if now >= last_maintenance + maintenance_interval {
-                last_maintenance = now;
-                sleep_duration = None;
-
-                // Report frontier information back the coordinator.
-                if let Some(mut compute_state) = self.activate_compute() {
-                    compute_state.compute_state.traces.maintenance();
-                    compute_state.report_frontiers();
-                    compute_state.report_metrics();
-                    compute_state.check_expiration();
-                }
-
-                self.metrics.record_shared_row_metrics();
+            let sleep_duration = if event_driven {
+                self.event_driven_maintenance(
+                    now,
+                    maintenance_interval,
+                    &mut last_maintenance,
+                    &mut next_metrics_update,
+                )
             } else {
-                // We didn't perform maintenance, sleep until the next maintenance interval.
-                let next_maintenance = last_maintenance + maintenance_interval;
-                sleep_duration = Some(next_maintenance.saturating_duration_since(now))
+                // Determine if we need to perform maintenance, which is true if
+                // `maintenance_interval` time has passed since the last maintenance.
+                if now >= last_maintenance + maintenance_interval {
+                    last_maintenance = now;
+
+                    // Report frontier information back the coordinator.
+                    if let Some(mut compute_state) = self.activate_compute() {
+                        compute_state.maintain_frontiers();
+                        compute_state.report_metrics();
+                        compute_state.check_expiration();
+                    }
+
+                    self.metrics.record_shared_row_metrics();
+                    None
+                } else {
+                    // We didn't perform maintenance, sleep until the next maintenance interval.
+                    let next_maintenance = last_maintenance + maintenance_interval;
+                    Some(next_maintenance.saturating_duration_since(now))
+                }
             };
 
             // Do not sleep while a peek waits for its turn. Only the sweep below gives it one,
@@ -753,6 +779,62 @@ impl<'w> Worker<'w> {
                 compute_state.process_copy_tos();
             }
         }
+    }
+
+    /// Performs the maintenance that is due at `now` under event-driven frontier reporting, and
+    /// returns how long the worker may park, or `None` if only new work should wake it.
+    ///
+    /// Frontiers change only while timely runs operators or the worker handles commands, and
+    /// both end the park. So a worker with no announced frontier changes has no frontiers to
+    /// report and parks until the next wall-clock duty.
+    fn event_driven_maintenance(
+        &mut self,
+        now: Instant,
+        maintenance_interval: Duration,
+        last_maintenance: &mut Instant,
+        next_metrics_update: &mut Instant,
+    ) -> Option<Duration> {
+        let mut sleep = None;
+        let mut wake_at = |deadline: Instant| {
+            let duration = deadline.saturating_duration_since(now);
+            sleep = Some(sleep.map_or(duration, |sleep: Duration| sleep.min(duration)));
+        };
+
+        let reports_pending = self
+            .compute_state
+            .as_ref()
+            .is_some_and(|state| state.frontier_reports_pending());
+        if reports_pending {
+            // The interval bounds how often frontiers are reported, batching the changes of
+            // busy workers.
+            let next_maintenance = *last_maintenance + maintenance_interval;
+            if now >= next_maintenance {
+                *last_maintenance = now;
+                if let Some(mut compute_state) = self.activate_compute() {
+                    compute_state.maintain_frontiers();
+                }
+            } else {
+                wake_at(next_maintenance);
+            }
+        }
+
+        if now >= *next_metrics_update {
+            *next_metrics_update = now + METRICS_UPDATE_INTERVAL;
+            if let Some(compute_state) = self.activate_compute() {
+                compute_state.report_metrics();
+            }
+            self.metrics.record_shared_row_metrics();
+        }
+        wake_at(*next_metrics_update);
+
+        if let Some(compute_state) = self.activate_compute() {
+            compute_state.check_expiration();
+            if let Some(remaining) = compute_state.compute_state.time_until_expiration() {
+                wake_at(now + remaining);
+            }
+        }
+
+        sleep
     }
 
     fn handle_pending_commands(&mut self) -> Result<(), NonceChange> {
@@ -903,7 +985,9 @@ impl<'w> Worker<'w> {
         if conn.reconcile_buf.is_none() {
             let maintenance_interval = worker.storage_state.server_maintenance_interval;
             let now = Instant::now();
-            if now >= guest.last_maintenance + maintenance_interval {
+            let reports_due = !worker.storage_state.event_driven_frontier_reporting
+                || worker.storage_state.frontier_reports_pending();
+            if reports_due && now >= guest.last_maintenance + maintenance_interval {
                 guest.last_maintenance = now;
                 worker.report_frontier_progress(&conn.response_tx);
             }
@@ -1283,6 +1367,9 @@ impl<'w> Worker<'w> {
                     compute_state.traces.set(*id, padded);
                 }
             }
+
+            // Reconciliation reset the reported frontiers without changing the observed ones.
+            compute_state.recheck_all_frontiers();
         } else {
             todo_commands.clone_from(&new_commands);
         }

@@ -33,6 +33,7 @@ use ::timely::dataflow::operators::{Capability, CapabilityTrait, InputCapability
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
 use ::timely::{Container, ContainerBuilder};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::Batcher;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_expr::{MirScalarExpr, permutation_for_arrangement};
@@ -40,6 +41,7 @@ use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::consolidate_pact;
+use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 
 use crate::logging::compute::Logger as ComputeLogger;
 use crate::typedefs::RowRowAgent;
@@ -292,6 +294,23 @@ struct LogCollection {
     trace: RowRowAgent<Timestamp, Diff>,
     /// Token that should be dropped to drop this collection.
     token: Rc<dyn Any>,
+    /// Probe reporting the frontier of the arrangement that maintains `trace`.
+    probe: MzProbeHandle<Timestamp>,
+}
+
+impl LogCollection {
+    fn new<'scope>(
+        arranged: Arranged<'scope, RowRowAgent<Timestamp, Diff>>,
+        token: Rc<dyn Any>,
+    ) -> Self {
+        let probe = MzProbeHandle::default();
+        arranged.stream.probe_notify_with(vec![probe.clone()]);
+        Self {
+            trace: arranged.trace,
+            token,
+            probe,
+        }
+    }
 }
 
 /// A single-purpose function to consolidate and pack updates for log collection.

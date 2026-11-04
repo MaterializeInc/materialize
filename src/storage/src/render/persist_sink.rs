@@ -1270,7 +1270,7 @@ fn append_batches<'scope>(
     if !active_worker {
         // This worker is not writing, so make sure it's "taken out" of the
         // calculation by advancing to the empty frontier.
-        current_upper.borrow_mut().clear();
+        current_upper.clear();
     }
 
     let source_statistics = storage_state
@@ -1348,7 +1348,7 @@ fn append_batches<'scope>(
         // VERY IMPORTANT: Only the active write worker must change the
         // shared upper. All other workers have already cleared this
         // upper above.
-        current_upper.borrow_mut().clone_from(write.upper());
+        current_upper.set(write.upper().borrow());
         upper_cap_set.downgrade(current_upper.borrow().iter());
         source_statistics.initialize_snapshot_committed(write.upper());
 
@@ -1670,7 +1670,7 @@ fn append_batches<'scope>(
                             .error_retractions
                             .inc_by(batch_metrics.error_retractions);
 
-                        current_upper.borrow_mut().clone_from(&batch_upper);
+                        current_upper.set(batch_upper.borrow());
                         upper_cap_set.downgrade(current_upper.borrow().iter());
                     }
                     Err(mismatch) => {

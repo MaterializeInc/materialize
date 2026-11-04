@@ -97,11 +97,14 @@ use mz_storage_types::AlterCompatible;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
+use mz_storage_types::dyncfgs::{
+    STORAGE_EVENT_DRIVEN_FRONTIER_REPORTING, STORAGE_SERVER_MAINTENANCE_INTERVAL,
+};
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::frontier_queue::{FrontierQueue, WatchedFrontier};
 use mz_txn_wal::operator::TxnsContext;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp as _;
@@ -290,6 +293,9 @@ impl StorageState {
             ),
             tracing_handle,
             server_maintenance_interval: Duration::ZERO,
+            event_driven_frontier_reporting: false,
+            frontier_events: Default::default(),
+            frontier_recheck_all: false,
         };
 
         storage_state
@@ -304,7 +310,7 @@ pub struct StorageState {
     /// frontier even as other instances are created and dropped. Ideally, the Storage
     /// module would eventually provide one source of truth on this rather than multiple,
     /// and we should aim for that but are not there yet.
-    pub source_uppers: BTreeMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
+    pub source_uppers: BTreeMap<GlobalId, Rc<WatchedFrontier<mz_repr::Timestamp>>>,
     /// Handles to created sources, keyed by ID
     /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`
     /// to prevent usage of custom shutdown tokens that are tricky to get right.
@@ -339,7 +345,7 @@ pub struct StorageState {
     pub sink_tokens: BTreeMap<GlobalId, Vec<PressOnDropButton>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
-    pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    pub sink_write_frontiers: BTreeMap<GlobalId, Rc<WatchedFrontier<Timestamp>>>,
     /// Collection ids that have been dropped but not yet reported as dropped
     pub dropped_ids: Vec<GlobalId>,
 
@@ -401,9 +407,63 @@ pub struct StorageState {
     /// Interval at which to perform server maintenance tasks. Set to a zero interval to
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
+
+    /// Whether maintenance reports only frontiers in `frontier_events`, see
+    /// [`STORAGE_EVENT_DRIVEN_FRONTIER_REPORTING`].
+    pub event_driven_frontier_reporting: bool,
+    /// Changes of `source_uppers` and `sink_write_frontiers` since the last maintenance.
+    frontier_events: Rc<FrontierQueue<GlobalId, Timestamp>>,
+    /// Whether the next maintenance must read every frontier, because `reported_frontiers`
+    /// gained or reset entries whose frontiers announced no change since.
+    frontier_recheck_all: bool,
+}
+
+/// Records `observed_frontier` as the reported frontier of `id`, and stages it in `new_uppers`, if
+/// it advances the reported frontier.
+fn advance_reported_frontier(
+    reported_frontiers: &mut BTreeMap<GlobalId, Antichain<Timestamp>>,
+    new_uppers: &mut Vec<(GlobalId, Antichain<Timestamp>)>,
+    id: GlobalId,
+    observed_frontier: &Antichain<Timestamp>,
+) {
+    let Some(reported_frontier) = reported_frontiers.get_mut(&id) else {
+        // Frontier reporting has not yet been started for this object.
+        // Potentially because this timely worker has not yet seen the
+        // `CreateSources` command. Starting it sets `frontier_recheck_all`.
+        return;
+    };
+
+    // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
+    // This is protection against `frontier` lagging behind what we have conditionally reported.
+    if PartialOrder::less_than(reported_frontier, observed_frontier) {
+        new_uppers.push((id, observed_frontier.clone()));
+        reported_frontier.clone_from(observed_frontier);
+    }
 }
 
 impl StorageState {
+    /// Announces changes of `frontier`, the shared upper or write frontier of `id`, to
+    /// maintenance.
+    pub fn watch_frontier(&self, id: GlobalId, frontier: &WatchedFrontier<Timestamp>) {
+        let events = Rc::clone(&self.frontier_events);
+        frontier.set_observer(Rc::new(move |frontier| events.push(id, frontier)));
+    }
+
+    /// Installs `frontier` as the shared write frontier of sink `id`.
+    pub fn insert_sink_write_frontier(
+        &mut self,
+        id: GlobalId,
+        frontier: Rc<WatchedFrontier<Timestamp>>,
+    ) {
+        self.watch_frontier(id, &frontier);
+        self.sink_write_frontiers.insert(id, frontier);
+    }
+
+    /// Whether event-driven maintenance has frontiers to report.
+    pub fn frontier_reports_pending(&self) -> bool {
+        self.frontier_recheck_all || !self.frontier_events.is_empty()
+    }
+
     /// Return an error handler that triggers a suspend and restart of the corresponding storage
     /// dataflow.
     pub fn error_handler(&self, context: &'static str, id: GlobalId) -> ErrorHandler {
@@ -491,9 +551,14 @@ impl<'w> Worker<'w> {
 
             let now = std::time::Instant::now();
             // Determine if we need to perform maintenance, which is true if `maintenance_interval`
-            // time has passed since the last maintenance.
+            // time has passed since the last maintenance. With event-driven frontier reporting,
+            // maintenance is only needed while frontier reports are pending.
             let sleep_duration;
-            if now >= last_maintenance + maintenance_interval {
+            if self.storage_state.event_driven_frontier_reporting
+                && !self.storage_state.frontier_reports_pending()
+            {
+                sleep_duration = None;
+            } else if now >= last_maintenance + maintenance_interval {
                 last_maintenance = now;
                 sleep_duration = None;
 
@@ -768,13 +833,15 @@ impl<'w> Worker<'w> {
                         .source_uppers
                         .entry(id.clone())
                         .or_insert_with(|| {
-                            Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())))
+                            Rc::new(WatchedFrontier::new(Antichain::from_elem(
+                                Timestamp::minimum(),
+                            )))
                         });
+                    let source_upper = Rc::clone(source_upper);
+                    self.storage_state.watch_frontier(id, &source_upper);
 
-                    let mut source_upper = source_upper.borrow_mut();
-                    if !source_upper.is_empty() {
-                        source_upper.clear();
-                        source_upper.insert(mz_repr::Timestamp::minimum());
+                    if !source_upper.borrow().is_empty() {
+                        source_upper.set(Antichain::from_elem(Timestamp::minimum()).borrow());
                     }
                 }
 
@@ -837,11 +904,12 @@ impl<'w> Worker<'w> {
                         .storage_state
                         .sink_write_frontiers
                         .entry(sink_id.clone())
-                        .or_insert_with(|| Rc::new(RefCell::new(Antichain::new())));
+                        .or_insert_with(|| Rc::new(WatchedFrontier::new(Antichain::new())));
+                    let sink_write_frontier = Rc::clone(sink_write_frontier);
+                    self.storage_state
+                        .watch_frontier(sink_id, &sink_write_frontier);
 
-                    let mut sink_write_frontier = sink_write_frontier.borrow_mut();
-                    sink_write_frontier.clear();
-                    sink_write_frontier.insert(mz_repr::Timestamp::minimum());
+                    sink_write_frontier.set(Antichain::from_elem(Timestamp::minimum()).borrow());
                 }
                 self.storage_state
                     .aggregated_statistics
@@ -893,6 +961,9 @@ impl<'w> Worker<'w> {
                 self.storage_state.server_maintenance_interval =
                     STORAGE_SERVER_MAINTENANCE_INTERVAL
                         .get(self.storage_state.storage_configuration.config_set());
+                self.storage_state.event_driven_frontier_reporting =
+                    STORAGE_EVENT_DRIVEN_FRONTIER_REPORTING
+                        .get(self.storage_state.storage_configuration.config_set());
 
                 // Apply storage's upsert spill flag to both stash flavors'
                 // mechanisms: the storage chunk spill gate (chunked flavor)
@@ -938,27 +1009,21 @@ impl<'w> Worker<'w> {
     pub fn report_frontier_progress(&mut self, response_tx: &ResponseSender) {
         let mut new_uppers = Vec::new();
 
-        // Check if any observed frontier should advance the reported frontiers.
-        for (id, frontier) in self
-            .storage_state
-            .source_uppers
-            .iter()
-            .chain(self.storage_state.sink_write_frontiers.iter())
-        {
-            let Some(reported_frontier) = self.storage_state.reported_frontiers.get_mut(id) else {
-                // Frontier reporting has not yet been started for this object.
-                // Potentially because this timely worker has not yet seen the
-                // `CreateSources` command.
-                continue;
-            };
-
-            let observed_frontier = frontier.borrow();
-
-            // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
-            // This is protection against `frontier` lagging behind what we have conditionally reported.
-            if PartialOrder::less_than(reported_frontier, &observed_frontier) {
-                new_uppers.push((*id, observed_frontier.clone()));
-                reported_frontier.clone_from(&observed_frontier);
+        let events = self.storage_state.frontier_events.drain();
+        let recheck_all = std::mem::take(&mut self.storage_state.frontier_recheck_all);
+        let reported = &mut self.storage_state.reported_frontiers;
+        if self.storage_state.event_driven_frontier_reporting && !recheck_all {
+            for (id, frontier) in &events {
+                advance_reported_frontier(reported, &mut new_uppers, *id, frontier);
+            }
+        } else {
+            for (id, frontier) in self
+                .storage_state
+                .source_uppers
+                .iter()
+                .chain(self.storage_state.sink_write_frontiers.iter())
+            {
+                advance_reported_frontier(reported, &mut new_uppers, *id, &frontier.borrow());
             }
         }
 
@@ -1348,6 +1413,7 @@ impl<'w> Worker<'w> {
         for (_, frontier) in &mut self.storage_state.reported_frontiers {
             *frontier = Antichain::from_elem(<_>::minimum());
         }
+        self.storage_state.frontier_recheck_all = true;
 
         // Reset the initial status reported flag when a new client connects
         self.storage_state.initial_status_reported = false;
@@ -1418,6 +1484,7 @@ impl StorageState {
                         .entry(id)
                         .or_insert_with(|| Antichain::from_elem(mz_repr::Timestamp::minimum()));
                 }
+                self.frontier_recheck_all = true;
 
                 // This needs to be done by one worker, which will broadcasts a
                 // `CreateIngestionDataflow` command to all workers based on the response that
@@ -1459,6 +1526,7 @@ impl StorageState {
                         export.id,
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
+                    self.frontier_recheck_all = true;
                 }
 
                 // This needs to be broadcast by one worker and go through the internal command

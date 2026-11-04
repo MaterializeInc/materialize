@@ -22,6 +22,7 @@ use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::probe::Handle as MzProbeHandle;
 use mz_timely_util::scope_label::ScopeExt;
 use prometheus::IntCounter;
 use timely::ContainerBuilder;
@@ -118,8 +119,8 @@ struct LoggingContext<'a> {
 }
 
 pub(crate) struct LoggingTraces {
-    /// Exported traces, by log variant.
-    pub traces: BTreeMap<LogVariant, TraceBundle>,
+    /// Exported traces and probes reporting their frontiers, by log variant.
+    pub traces: BTreeMap<LogVariant, (TraceBundle, MzProbeHandle<Timestamp>)>,
     /// The index of the dataflow that exports the traces.
     pub dataflow_index: usize,
     /// The compute logger.
@@ -127,7 +128,9 @@ pub(crate) struct LoggingTraces {
 }
 
 impl LoggingContext<'_> {
-    fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
+    fn construct_dataflow(
+        &mut self,
+    ) -> BTreeMap<LogVariant, (TraceBundle, MzProbeHandle<Timestamp>)> {
         let step_logger = self.step_logger();
         self.worker.dataflow_core(
             "Dataflow: logging",
@@ -213,7 +216,7 @@ impl LoggingContext<'_> {
                     .map(|(log, collection)| {
                         let bundle = TraceBundle::new(collection.trace, errs.clone())
                             .with_drop(collection.token);
-                        (log, bundle)
+                        (log, (bundle, collection.probe))
                     })
                     .collect();
                 traces

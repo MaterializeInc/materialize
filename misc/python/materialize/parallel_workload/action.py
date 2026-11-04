@@ -3226,6 +3226,12 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_correction_v2_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["compute_event_driven_frontier_reporting"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["storage_event_driven_frontier_reporting"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_chunk_compress_min_depth"] = [
             "0",  # compress every spilled body
