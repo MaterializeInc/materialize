@@ -16,11 +16,13 @@ mod iceberg;
 mod kafka;
 
 /// Formats the error reported when a sink's input has been compacted past the
-/// upper the sink last committed, so the sink can never resume.
+/// upper the sink last committed, so the sink can never resume. `remedy` tells
+/// the user how to recover, which differs by sink type.
 fn overcompacted_error(
     name: &str,
     as_of: &Antichain<Timestamp>,
     resume_upper: &Antichain<Timestamp>,
+    remedy: &str,
 ) -> String {
     let fmt = |f: &Antichain<Timestamp>| match f.as_option() {
         Some(t) => t.to_string(),
@@ -36,7 +38,7 @@ fn overcompacted_error(
     };
     format!(
         "sink {name} cannot resume: input compacted to {}, past last committed upper {}{gap}; \
-         data in that range is unrecoverable, recreate the sink",
+         data in that range is unrecoverable, {remedy}",
         fmt(as_of),
         fmt(resume_upper),
     )

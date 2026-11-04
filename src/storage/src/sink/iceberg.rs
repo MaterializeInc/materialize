@@ -1313,7 +1313,14 @@ fn mint_batch_descriptions<'scope>(
                 PartialOrder::less_than(&resume_upper, &as_of);
 
             if overcompacted {
-                let err = super::overcompacted_error(&name_for_error, &as_of, &resume_upper);
+                // The resume upper is read from the table's snapshots regardless of which
+                // sink wrote them, so recreating the sink against the same table fails again.
+                let err = super::overcompacted_error(
+                    &name_for_error,
+                    &as_of,
+                    &resume_upper,
+                    "drop the Iceberg table and recreate the sink",
+                );
                 // This would normally be an assertion but because it can happen after a
                 // Materialize backup/restore we log an error so that it appears on Sentry but
                 // leaves the rest of the objects in the cluster unaffected.
