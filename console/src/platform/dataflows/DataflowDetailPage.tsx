@@ -11,6 +11,7 @@ import {
   Box,
   Button,
   HStack,
+  IconButton,
   Spinner,
   Text,
   useTheme,
@@ -32,6 +33,7 @@ import { useDataflowList } from "~/api/materialize/dataflow/useDataflowList";
 import { isInsufficientPrivilegeError } from "~/api/materialize/executeSql";
 import ErrorBox from "~/components/ErrorBox";
 import LabeledSelect from "~/components/LabeledSelect";
+import { MaximizeIcon, MinimizeIcon } from "~/icons";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { replicaSearch } from "~/platform/clusters/ClusterPage/tabLinks";
 import { useSelectedReplica } from "~/platform/clusters/ClusterPage/useSelectedReplica";
@@ -648,6 +650,28 @@ const DataflowDetailPage = () => {
     },
     [allMatches, activeMatchIndex, navigateAndFit],
   );
+  // The visualizer root itself goes fullscreen, which hides the app nav,
+  // cluster header and tabs. State mirrors the document rather than the
+  // button, since Escape and browser chrome can exit fullscreen too.
+  const fullscreenRootRef = React.useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
+  React.useEffect(() => {
+    const sync = () =>
+      setIsFullscreen(
+        document.fullscreenElement !== null &&
+          document.fullscreenElement === fullscreenRootRef.current,
+      );
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void fullscreenRootRef.current?.requestFullscreen();
+    }
+  };
+
   // Digest of the sorted node ids: identical structure across a stats-only
   // refresh yields the same key, so layout and collapse state are preserved.
   // Memoized since sorting and hashing every node id is real work on a
@@ -693,7 +717,19 @@ const DataflowDetailPage = () => {
     // the graph (e.g. the breadcrumb trail) pushes the whole page taller
     // than the viewport instead of the graph area shrinking to absorb it.
     <MainContentContainer width="100%" minH={0}>
-      <VStack width="100%" height="100%" alignItems="stretch">
+      <VStack
+        ref={fullscreenRootRef}
+        width="100%"
+        height="100%"
+        alignItems="stretch"
+        // The browser's fullscreen backdrop is black and the element is
+        // transparent by default, so the page background has to be set
+        // explicitly, along with some inset the app layout otherwise supplies.
+        {...(isFullscreen && {
+          background: "background.primary",
+          p: 4,
+        })}
+      >
         {/* One wrapping row: the graph canvas is the point of this page, so
             every row above it costs usable height. */}
         <HStack
@@ -748,6 +784,27 @@ const DataflowDetailPage = () => {
                 Last fetched {data.fetchedAt.toLocaleTimeString()}
               </Text>
             </HStack>
+          )}
+          {/* Hidden where the Fullscreen API is unavailable or blocked (an
+              iframe without allow=fullscreen, some mobile browsers). */}
+          {document.fullscreenEnabled && (
+            <IconButton
+              aria-label={
+                isFullscreen ? "Exit full screen" : "Enter full screen"
+              }
+              title={isFullscreen ? "Exit full screen" : "Enter full screen"}
+              size="sm"
+              variant="outline"
+              marginLeft="auto"
+              icon={
+                isFullscreen ? (
+                  <MinimizeIcon boxSize="4" />
+                ) : (
+                  <MaximizeIcon boxSize="4" />
+                )
+              }
+              onClick={toggleFullscreen}
+            />
           )}
         </HStack>
         {permissionError ? (

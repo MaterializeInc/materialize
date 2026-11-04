@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
@@ -981,6 +981,93 @@ describe("DataflowDetailPage", () => {
     expect(screen.getByText("Members")).toBeInTheDocument();
     expect(screen.getByText("Records")).toBeInTheDocument();
     expect(screen.getByText("Memory")).toBeInTheDocument();
+  });
+
+  describe("full screen", () => {
+    const renderDataflow8 = () =>
+      renderComponent(
+        <Routes>
+          <Route
+            path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+            element={<DataflowDetailPage />}
+          />
+        </Routes>,
+        { initialRouterEntries: ["/clusters/u5/test_cluster/dataflows/8"] },
+      );
+
+    // jsdom implements none of the Fullscreen API.
+    const setFullscreenEnabled = (value: boolean) =>
+      Object.defineProperty(document, "fullscreenEnabled", {
+        configurable: true,
+        value,
+      });
+    afterEach(() => {
+      Reflect.deleteProperty(document, "fullscreenEnabled");
+      Reflect.deleteProperty(document, "fullscreenElement");
+      Reflect.deleteProperty(document, "exitFullscreen");
+      Reflect.deleteProperty(HTMLElement.prototype, "requestFullscreen");
+    });
+
+    it("hides the toggle when the Fullscreen API is unavailable", async () => {
+      setFullscreenEnabled(false);
+      await renderDataflow8();
+      await screen.findByTestId("react-flow");
+      expect(
+        screen.queryByRole("button", { name: "Enter full screen" }),
+      ).toBeNull();
+    });
+
+    it("requests fullscreen on the visualizer root and syncs on fullscreenchange", async () => {
+      setFullscreenEnabled(true);
+      const requestFullscreen = vi.fn().mockResolvedValue(undefined);
+      const exitFullscreen = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+        configurable: true,
+        value: requestFullscreen,
+      });
+      Object.defineProperty(document, "exitFullscreen", {
+        configurable: true,
+        value: exitFullscreen,
+      });
+      await renderDataflow8();
+      await screen.findByTestId("react-flow");
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Enter full screen" }),
+      );
+      expect(requestFullscreen).toHaveBeenCalledTimes(1);
+      const root = requestFullscreen.mock.contexts[0] as HTMLElement;
+      // The root, not just the canvas: the header row has to stay reachable.
+      expect(root).toContainElement(screen.getByTestId("react-flow"));
+      expect(root).toContainElement(
+        screen.getByRole("button", { name: "Enter full screen" }),
+      );
+
+      // The browser, not the click, decides when fullscreen starts.
+      Object.defineProperty(document, "fullscreenElement", {
+        configurable: true,
+        value: root,
+      });
+      act(() => {
+        document.dispatchEvent(new Event("fullscreenchange"));
+      });
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Exit full screen" }),
+      );
+      expect(exitFullscreen).toHaveBeenCalledTimes(1);
+
+      // Escape exits without the button: state follows the document.
+      Object.defineProperty(document, "fullscreenElement", {
+        configurable: true,
+        value: null,
+      });
+      act(() => {
+        document.dispatchEvent(new Event("fullscreenchange"));
+      });
+      expect(
+        await screen.findByRole("button", { name: "Enter full screen" }),
+      ).toBeVisible();
+    });
   });
 
   describe("breadcrumbs", () => {
