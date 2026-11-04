@@ -48,6 +48,7 @@ import {
 import ShellRoutes from "~/platform/shell/ShellRoutes";
 import { ShellWebsocketProvider } from "~/platform/shell/ShellWebsocketProvider";
 import SourceRoutes from "~/platform/sources/SourceRoutes";
+import { WorksheetRoute } from "~/platform/worksheets/Worksheet";
 import { SentryRoutes } from "~/sentry";
 import { regionIdToSlug, useRegionSlugToId } from "~/store/cloudRegions";
 import {
@@ -274,6 +275,7 @@ const EnvironmentRoutes = () => {
             </BaseLayout>
           }
         />
+        <Route path="worksheet" element={<WorksheetRoute />} />
         <Route path="objects">
           <Route
             index

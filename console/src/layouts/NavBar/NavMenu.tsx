@@ -76,6 +76,11 @@ const getNavItems = ({
       label: "SQL Shell",
     },
     {
+      href: `/regions/${regionSlug}/worksheet`,
+      icon: <ShellIcon />,
+      label: "Worksheet",
+    },
+    {
       icon: <DataIcon />,
       label: "Data",
       href: `/regions/${regionSlug}/objects`,
