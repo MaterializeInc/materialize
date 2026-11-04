@@ -12,10 +12,10 @@
 //! to actually run the dataflow.
 //!
 //! [`CatalogInstantiationContext`] is the [`InstantiationContext`] for
-//! `PinnedDataflow::instantiate`, supplying the export descriptors
-//! not recorded in the pinned plan. We look this information up in the
-//! catalog items; each lookup reproduces what we would have built in the
-//! first place.
+//! `PinnedDataflow::instantiate`, supplying the export descriptors not
+//! recorded in the pinned plan and the current shape of each import. We look
+//! this information up in the catalog items; each lookup reproduces what we
+//! would have built in the first place.
 
 use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::plan::pinned::{
@@ -23,7 +23,7 @@ use mz_compute_types::plan::pinned::{
 };
 use mz_expr::MirRelationExpr;
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::{GlobalId, ReprRelationType};
+use mz_repr::{GlobalId, RelationVersionSelector, ReprRelationType, SqlRelationType};
 
 use crate::catalog::CatalogState;
 use crate::optimize::metric_sink::shape_metric_sink_source;
@@ -39,6 +39,21 @@ pub struct CatalogInstantiationContext<'a> {
 }
 
 impl InstantiationContext for CatalogInstantiationContext<'_> {
+    fn collection_type(&self, id: GlobalId) -> Option<SqlRelationType> {
+        let entry = self.catalog.try_get_entry_by_global_id(&id)?;
+        // Tables and materialized views are imported at the version `id`
+        // names, as `DataflowBuilder::import_into_dataflow` does.
+        let typ = match entry.item() {
+            CatalogItem::Table(table) => table.desc_for(&id).into_typ(),
+            CatalogItem::MaterializedView(mv) => mv.desc_for(&id).into_typ(),
+            other => other
+                .relation_desc(RelationVersionSelector::Latest)?
+                .typ()
+                .clone(),
+        };
+        Some(typ)
+    }
+
     fn index(&self, id: GlobalId) -> Option<IndexInfo> {
         let index = self.catalog.try_get_entry_by_global_id(&id)?.index()?;
         let on_desc = self.catalog.try_get_desc_by_global_id(&index.on)?;
@@ -99,7 +114,7 @@ mod tests {
     use std::time::Duration;
 
     use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
-    use mz_compute_types::plan::pinned::PinnedDataflow;
+    use mz_compute_types::plan::pinned::{InstantiateError, PinnedDataflow};
     use mz_compute_types::plan::scalar::LirScalarExpr;
     use mz_controller_types::ClusterId;
     use mz_expr::MfpPlan;
@@ -115,7 +130,7 @@ mod tests {
     use mz_sql::session::vars::VarInput;
 
     use super::CatalogInstantiationContext;
-    use crate::catalog::{Catalog, LocalExpressionCache, Op};
+    use crate::catalog::{Catalog, DropObjectInfo, LocalExpressionCache, Op};
     use crate::optimize::dataflows::ComputeInstanceSnapshot;
     use crate::optimize::{self, LirDataflowDescription, Optimize, OptimizerConfig};
 
@@ -155,8 +170,9 @@ mod tests {
     fn optimize_materialized_view(
         catalog: &Arc<Catalog>,
         mv: &MaterializedView,
+        indexes: BTreeSet<GlobalId>,
     ) -> LirDataflowDescription {
-        let (compute, config, metrics) = optimizer_parts(catalog);
+        let (compute, config, metrics) = optimizer_parts(catalog, indexes);
         let mut optimizer = optimize::materialized_view::Optimizer::new(
             Arc::<Catalog>::clone(catalog),
             compute,
@@ -237,15 +253,36 @@ mod tests {
     }
 
     /// TEST FIXTURE
+    /// Drops the item [`create_item`] created under `id`. The catalog does not
+    /// check for dependents, so this leaves any plan reading it dangling.
+    async fn drop_item(catalog: &mut Catalog, id: u64) {
+        let commit_ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                commit_ts,
+                None,
+                vec![Op::DropObjects(vec![DropObjectInfo::Item(
+                    CatalogItemId::User(id),
+                )])],
+            )
+            .await
+            .expect("transact succeeds");
+    }
+
+    /// TEST FIXTURE
     fn cluster() -> ClusterId {
         ClusterId::user(1).expect("valid cluster id")
     }
 
+    /// TEST FIXTURE
+    /// The optimizer's inputs, with `indexes` the indexes the cluster has.
     fn optimizer_parts(
         catalog: &Catalog,
+        indexes: BTreeSet<GlobalId>,
     ) -> (ComputeInstanceSnapshot, OptimizerConfig, OptimizerMetrics) {
         (
-            ComputeInstanceSnapshot::new_from_parts(cluster(), BTreeSet::new()),
+            ComputeInstanceSnapshot::new_from_parts(cluster(), indexes),
             OptimizerConfig::from(catalog.system_config()),
             OptimizerMetrics::register_into(&MetricsRegistry::new(), Duration::MAX),
         )
@@ -268,7 +305,7 @@ mod tests {
             };
             let catalog = Arc::new(catalog);
 
-            let (compute, config, metrics) = optimizer_parts(&catalog);
+            let (compute, config, metrics) = optimizer_parts(&catalog, BTreeSet::new());
             let mut optimizer = optimize::index::Optimizer::new(
                 Arc::<Catalog>::clone(&catalog),
                 compute,
@@ -311,7 +348,7 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv);
+            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
 
             assert_round_trips(&catalog, df_desc);
         })
@@ -340,7 +377,7 @@ mod tests {
             };
             assert!(mv.refresh_schedule.is_some(), "the item carries a schedule");
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv);
+            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
 
             assert_eq!(df_desc.refresh_schedule, mv.refresh_schedule);
             assert_eq!(
@@ -372,7 +409,7 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv);
+            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
             let (_, lower_bounds, upper_bounds) = source_operators(&df_desc).clone().into_parts();
             assert_eq!(
                 (lower_bounds.len(), upper_bounds.len()),
@@ -432,7 +469,7 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
-            let df_desc = optimize_materialized_view(&catalog, &mv);
+            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
             let (_, lower_bounds, upper_bounds) = source_operators(&df_desc).clone().into_parts();
             assert_eq!(
                 (lower_bounds.len(), upper_bounds.len()),
@@ -476,7 +513,7 @@ mod tests {
             };
             let catalog = Arc::new(catalog);
 
-            let (compute, config, metrics) = optimizer_parts(&catalog);
+            let (compute, config, metrics) = optimizer_parts(&catalog, BTreeSet::new());
             let mut optimizer = optimize::metric_sink::Optimizer::new(
                 Arc::<Catalog>::clone(&catalog),
                 compute,
@@ -499,6 +536,129 @@ mod tests {
             let (df_desc, _) = global_lir_plan.unapply();
 
             assert_round_trips(&catalog, df_desc);
+        })
+        .await
+    }
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn dropped_index_import_is_detected() {
+        Catalog::with_debug(|mut catalog| async move {
+            create_item(
+                &mut catalog,
+                1,
+                "events",
+                "CREATE TABLE \"materialize\".\"public\".\"events\" (\"a\" int)",
+            )
+            .await;
+            let index_gid = GlobalId::User(2);
+            create_item(
+                &mut catalog,
+                2,
+                "i",
+                "CREATE INDEX \"i\" IN CLUSTER \"quickstart\" \
+                 ON \"materialize\".\"public\".\"events\" (\"a\")",
+            )
+            .await;
+            let CatalogItem::MaterializedView(mv) = create_item(
+                &mut catalog,
+                3,
+                "mv",
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+                 IN CLUSTER \"quickstart\" \
+                 AS SELECT \"a\" FROM \"materialize\".\"public\".\"events\"",
+            )
+            .await
+            else {
+                panic!("expected a materialized view");
+            };
+            let catalog = Arc::new(catalog);
+            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::from([index_gid]));
+            assert!(
+                df_desc.index_imports.contains_key(&index_gid),
+                "the plan reads the index"
+            );
+            let pinned = assert_round_trips(&catalog, df_desc);
+
+            let mut catalog = Arc::try_unwrap(catalog).expect("the optimizer released the catalog");
+            drop_item(&mut catalog, 2).await;
+            let ctx = CatalogInstantiationContext {
+                catalog: catalog.state(),
+                transient_ids: &TransientIdGen::new(),
+            };
+            assert_eq!(
+                pinned.instantiate(&ctx, "mv".to_string()),
+                Err(InstantiateError::MissingCatalogItem {
+                    id: index_gid,
+                    kind: "index"
+                })
+            );
+        })
+        .await
+    }
+
+    /// A collection recreated under the same id with another type stands in
+    /// for a builtin whose schema migrated.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn retyped_source_import_is_detected() {
+        Catalog::with_debug(|mut catalog| async move {
+            let table_gid = GlobalId::User(1);
+            create_item(
+                &mut catalog,
+                1,
+                "events",
+                "CREATE TABLE \"materialize\".\"public\".\"events\" (\"a\" int)",
+            )
+            .await;
+            let CatalogItem::MaterializedView(mv) = create_item(
+                &mut catalog,
+                2,
+                "mv",
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+                 IN CLUSTER \"quickstart\" \
+                 AS SELECT \"a\" FROM \"materialize\".\"public\".\"events\"",
+            )
+            .await
+            else {
+                panic!("expected a materialized view");
+            };
+            let catalog = Arc::new(catalog);
+            let df_desc = optimize_materialized_view(&catalog, &mv, BTreeSet::new());
+            assert!(
+                df_desc.source_imports.contains_key(&table_gid),
+                "the plan reads the table"
+            );
+            let pinned = assert_round_trips(&catalog, df_desc);
+
+            let mut catalog = Arc::try_unwrap(catalog).expect("the optimizer released the catalog");
+            drop_item(&mut catalog, 1).await;
+            let ctx = CatalogInstantiationContext {
+                catalog: catalog.state(),
+                transient_ids: &TransientIdGen::new(),
+            };
+            assert_eq!(
+                pinned.clone().instantiate(&ctx, "mv".to_string()),
+                Err(InstantiateError::MissingCatalogItem {
+                    id: table_gid,
+                    kind: "collection"
+                })
+            );
+
+            create_item(
+                &mut catalog,
+                1,
+                "events",
+                "CREATE TABLE \"materialize\".\"public\".\"events\" (\"a\" text)",
+            )
+            .await;
+            let ctx = CatalogInstantiationContext {
+                catalog: catalog.state(),
+                transient_ids: &TransientIdGen::new(),
+            };
+            assert!(matches!(
+                pinned.instantiate(&ctx, "mv".to_string()),
+                Err(InstantiateError::ImportDrift { id, .. }) if id == table_gid
+            ));
         })
         .await
     }

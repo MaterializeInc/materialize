@@ -335,7 +335,10 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
 /// facts looked up by export id, and fresh transient ids. Each lookup returns
 /// `None` when no item of that kind exists.
 pub trait InstantiationContext {
-    /// The index exported under `id`.
+    /// The relation type of the storage collection `id`, as the optimizer
+    /// imports it.
+    fn collection_type(&self, id: GlobalId) -> Option<SqlRelationType>;
+    /// The index under `id`.
     fn index(&self, id: GlobalId) -> Option<IndexInfo>;
     /// The materialized view whose sink is exported under `id`.
     fn materialized_view(&self, id: GlobalId) -> Option<MaterializedViewInfo>;
@@ -385,10 +388,17 @@ pub struct MetricSinkInfo {
 pub enum InstantiateError {
     /// The catalog no longer has an item of the expected kind under this id.
     MissingCatalogItem {
-        /// The export's id.
+        /// The import's or export's id.
         id: GlobalId,
         /// The kind of item the plan was compiled for.
         kind: &'static str,
+    },
+    /// The catalog item and the pinned plan disagree about the import.
+    ImportDrift {
+        /// The import's id.
+        id: GlobalId,
+        /// What disagrees.
+        detail: String,
     },
     /// The catalog item and the pinned plan disagree about the export.
     ExportDrift {
@@ -404,6 +414,9 @@ impl fmt::Display for InstantiateError {
         match self {
             InstantiateError::MissingCatalogItem { id, kind } => {
                 write!(f, "no {kind} catalog item for export {id}")
+            }
+            InstantiateError::ImportDrift { id, detail } => {
+                write!(f, "import {id} drifted from its pinned plan: {detail}")
             }
             InstantiateError::ExportDrift { id, detail } => {
                 write!(f, "export {id} drifted from its pinned plan: {detail}")
@@ -425,8 +438,12 @@ impl PinnedDataflow {
     /// The result equals the description that was pinned, up to transient
     /// build ids, which are reallocated from `ctx`.
     ///
-    /// Fails if a catalog item an export was compiled for is gone, or if the
-    /// catalog disagrees with the plan about what the export is.
+    /// Fails if a catalog item an import or export was compiled for is gone,
+    /// or if the catalog disagrees with the plan about what it is. Only the
+    /// first problem found is reported.
+    // TODO(mgree): the import and export checks are independent, so
+    // collecting every problem into a list instead of returning at the first
+    // one would be easy.
     pub fn instantiate(
         self,
         ctx: &dyn InstantiationContext,
@@ -457,50 +474,82 @@ impl PinnedDataflow {
             replace_global_ids(&mut object.plan, &rename);
         }
 
-        let source_imports = source_imports
-            .into_iter()
-            .map(|(id, import)| {
-                let PinnedSourceImport {
-                    operators,
+        // An import's id resolving is not evidence that the plan's assumptions
+        // about it hold: a builtin collection keeps its id across a schema
+        // migration, and an index can be dropped and another created on the
+        // same object. So each import is checked against what the catalog
+        // says now.
+        let mut rebuilt_source_imports = BTreeMap::new();
+        for (id, import) in source_imports {
+            let PinnedSourceImport {
+                operators,
+                typ,
+                monotonic,
+                with_snapshot,
+            } = import;
+            let catalog_typ =
+                ctx.collection_type(id)
+                    .ok_or(InstantiateError::MissingCatalogItem {
+                        id,
+                        kind: "collection",
+                    })?;
+            if catalog_typ != typ {
+                return Err(InstantiateError::ImportDrift {
+                    id,
+                    detail: format!("pinned type {typ:?}, catalog says {catalog_typ:?}"),
+                });
+            }
+            let import = SourceImport {
+                desc: SourceInstanceDesc {
+                    arguments: SourceInstanceArguments { operators },
+                    storage_metadata: (),
                     typ,
-                    monotonic,
-                    with_snapshot,
-                } = import;
-                let import = SourceImport {
-                    desc: SourceInstanceDesc {
-                        arguments: SourceInstanceArguments { operators },
-                        storage_metadata: (),
-                        typ,
-                    },
-                    monotonic,
-                    with_snapshot,
-                    upper: Antichain::new(),
-                };
-                (id, import)
-            })
-            .collect();
+                },
+                monotonic,
+                with_snapshot,
+                upper: Antichain::new(),
+            };
+            rebuilt_source_imports.insert(id, import);
+        }
 
-        let index_imports = index_imports
-            .into_iter()
-            .map(|(id, import)| {
-                let PinnedIndexImport {
-                    desc: IndexDesc { on_id, key },
-                    typ,
-                    monotonic,
-                    with_snapshot,
-                } = import;
-                let import = IndexImport {
-                    desc: IndexDesc {
-                        on_id,
-                        key: key.iter().map(MirScalarExpr::from).collect(),
-                    },
-                    typ,
-                    monotonic,
-                    with_snapshot,
-                };
-                (id, import)
-            })
-            .collect();
+        let mut rebuilt_index_imports = BTreeMap::new();
+        for (id, import) in index_imports {
+            let PinnedIndexImport {
+                desc: IndexDesc { on_id, key },
+                typ,
+                monotonic,
+                with_snapshot,
+            } = import;
+            let info = ctx
+                .index(id)
+                .ok_or(InstantiateError::MissingCatalogItem { id, kind: "index" })?;
+            let key: Vec<MirScalarExpr> = key.iter().map(MirScalarExpr::from).collect();
+            if info.on != on_id {
+                return Err(InstantiateError::ImportDrift {
+                    id,
+                    detail: format!("pinned on {on_id}, catalog says {}", info.on),
+                });
+            }
+            if info.keys != key {
+                return Err(InstantiateError::ImportDrift {
+                    id,
+                    detail: format!("pinned key {key:?}, catalog says {:?}", info.keys),
+                });
+            }
+            if info.typ != typ {
+                return Err(InstantiateError::ImportDrift {
+                    id,
+                    detail: format!("pinned type {typ:?}, catalog says {:?}", info.typ),
+                });
+            }
+            let import = IndexImport {
+                desc: IndexDesc { on_id, key },
+                typ,
+                monotonic,
+                with_snapshot,
+            };
+            rebuilt_index_imports.insert(id, import);
+        }
 
         let is_built = |id: GlobalId| objects_to_build.iter().any(|object| object.id == id);
 
@@ -638,8 +687,8 @@ impl PinnedDataflow {
         }
 
         Ok(DataflowDescription {
-            source_imports,
-            index_imports,
+            source_imports: rebuilt_source_imports,
+            index_imports: rebuilt_index_imports,
             objects_to_build,
             index_exports: rebuilt_index_exports,
             sink_exports: rebuilt_sink_exports,
@@ -821,19 +870,37 @@ mod tests {
         }
     }
 
+    /// What the catalog says about `IMPORTED_INDEX` when it matches the
+    /// fixtures.
+    fn imported_index_info() -> IndexInfo {
+        IndexInfo {
+            on: ON,
+            keys: key(),
+            typ: repr_typ(),
+        }
+    }
+
     /// Transient ids are handed out from `next_transient` upward. The
     /// fixtures number their builds from 1, so a context starting at 1
     /// reproduces them.
     struct Ctx {
-        index: Option<IndexInfo>,
+        collections: BTreeMap<GlobalId, SqlRelationType>,
+        indexes: BTreeMap<GlobalId, IndexInfo>,
         mv: Option<MaterializedViewInfo>,
         next_transient: Cell<u64>,
     }
 
     impl Ctx {
+        /// A context whose catalog matches the imports of `imports_only()`
+        /// and holds the given exported index and materialized view.
         fn new(index: Option<IndexInfo>, mv: Option<MaterializedViewInfo>) -> Self {
+            let mut indexes = BTreeMap::from([(IMPORTED_INDEX, imported_index_info())]);
+            if let Some(index) = index {
+                indexes.insert(INDEX, index);
+            }
             Ctx {
-                index,
+                collections: BTreeMap::from([(SOURCE, sql_typ())]),
+                indexes,
                 mv,
                 next_transient: Cell::new(1),
             }
@@ -841,8 +908,11 @@ mod tests {
     }
 
     impl InstantiationContext for Ctx {
-        fn index(&self, _id: GlobalId) -> Option<IndexInfo> {
-            self.index.clone()
+        fn collection_type(&self, id: GlobalId) -> Option<SqlRelationType> {
+            self.collections.get(&id).cloned()
+        }
+        fn index(&self, id: GlobalId) -> Option<IndexInfo> {
+            self.indexes.get(&id).cloned()
         }
         fn materialized_view(&self, _id: GlobalId) -> Option<MaterializedViewInfo> {
             self.mv.clone()
@@ -1103,5 +1173,77 @@ mod tests {
                 kind: "index"
             })
         );
+    }
+
+    #[mz_ore::test]
+    fn missing_source_import_is_detected() {
+        let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+        let mut ctx = Ctx::new(None, Some(mv_info()));
+        ctx.collections.remove(&SOURCE);
+        assert_eq!(
+            pinned.instantiate(&ctx, "test".to_string()),
+            Err(InstantiateError::MissingCatalogItem {
+                id: SOURCE,
+                kind: "collection"
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn missing_index_import_is_detected() {
+        let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+        let mut ctx = Ctx::new(None, Some(mv_info()));
+        ctx.indexes.remove(&IMPORTED_INDEX);
+        assert_eq!(
+            pinned.instantiate(&ctx, "test".to_string()),
+            Err(InstantiateError::MissingCatalogItem {
+                id: IMPORTED_INDEX,
+                kind: "index"
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn source_import_type_drift_is_detected() {
+        let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+        let mut ctx = Ctx::new(None, Some(mv_info()));
+        ctx.collections.insert(
+            SOURCE,
+            SqlRelationType::new(vec![SqlScalarType::String.nullable(true)]),
+        );
+        assert!(matches!(
+            pinned.instantiate(&ctx, "test".to_string()),
+            Err(InstantiateError::ImportDrift { id: SOURCE, .. })
+        ));
+    }
+
+    #[mz_ore::test]
+    fn index_import_drift_is_detected() {
+        let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+        let altered = [
+            IndexInfo {
+                on: SOURCE,
+                ..imported_index_info()
+            },
+            IndexInfo {
+                keys: vec![MirScalarExpr::column(0).call_is_null()],
+                ..imported_index_info()
+            },
+            IndexInfo {
+                typ: ReprRelationType::new(vec![ReprScalarType::String.nullable(true)]),
+                ..imported_index_info()
+            },
+        ];
+        for info in altered {
+            let mut ctx = Ctx::new(None, Some(mv_info()));
+            ctx.indexes.insert(IMPORTED_INDEX, info);
+            assert!(matches!(
+                pinned.clone().instantiate(&ctx, "test".to_string()),
+                Err(InstantiateError::ImportDrift {
+                    id: IMPORTED_INDEX,
+                    ..
+                })
+            ));
+        }
     }
 }
