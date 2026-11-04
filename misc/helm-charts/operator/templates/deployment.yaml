@@ -249,6 +249,7 @@ spec:
         - '--balancerd-default-resources={{ toJson .Values.balancerd.defaultResources }}'
         {{- end }}
         - "--balancerd-readiness-probe-path={{ .Values.balancerd.readinessProbePath }}"
+        - "--balancerd-termination-grace-period-seconds={{ .Values.balancerd.terminationGracePeriodSeconds }}"
         {{- if .Values.console.nodeSelector }}
         {{- range $key, $value := .Values.console.nodeSelector }}
         - "--console-node-selector={{ $key }}={{ $value }}"
