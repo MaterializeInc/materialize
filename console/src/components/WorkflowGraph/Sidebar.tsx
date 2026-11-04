@@ -24,8 +24,9 @@ import {
 import React from "react";
 import { Link, LinkProps } from "react-router-dom";
 
+import { formatFullyQualifiedObjectName } from "~/api/materialize";
 import { LagInfo } from "~/api/materialize/cluster/materializationLag";
-import { WorkflowGraphNode } from "~/api/materialize/workflowGraphNodes";
+import { WorkflowGraphCanvasNode } from "~/api/materialize/workflowGraphNodes";
 import { ConnectorStatusPill } from "~/components/StatusPill";
 import {
   formatLagInfoDetailed,
@@ -46,12 +47,14 @@ import { nodeIcon } from "./icons";
 export type OnNodeClick = (nodeId: string) => void;
 
 export interface WorkflowGraphSidebarProps {
-  nodeMap: Map<string, WorkflowGraphNode>;
-  selectedNode?: WorkflowGraphNode;
-  upstreamNodes: WorkflowGraphNode[];
-  downstreamNodes: WorkflowGraphNode[];
+  nodeMap: Map<string, WorkflowGraphCanvasNode>;
+  selectedNode?: WorkflowGraphCanvasNode;
+  upstreamNodes: WorkflowGraphCanvasNode[];
+  downstreamNodes: WorkflowGraphCanvasNode[];
   onNodeClick: OnNodeClick;
   lagInfo: LagInfo | undefined;
+  /** The node details query failed, so statuses and creation times are missing. */
+  isDetailsError?: boolean;
 }
 
 export const SIDEBAR_WIDTH = 340;
@@ -59,7 +62,7 @@ export const SIDEBAR_WIDTH = 340;
 const ClusterSidebarItem = ({
   selectedNode,
 }: {
-  selectedNode: WorkflowGraphNode;
+  selectedNode: WorkflowGraphCanvasNode;
 }) => {
   const regionSlug = useRegionSlug();
   const { getClusterById } = useAllClusters();
@@ -95,6 +98,7 @@ const WorkflowGraphSidebar = ({
   downstreamNodes,
   onNodeClick,
   lagInfo,
+  isDetailsError,
 }: WorkflowGraphSidebarProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const sourcePath = useBuildSourcePath();
@@ -128,6 +132,16 @@ const WorkflowGraphSidebar = ({
             )}
           </SidebarHeaderContainer>
           <SidebarSection title="Details">
+            {isDetailsError && (
+              <SidebarItem>
+                <Text
+                  textStyle="text-small"
+                  color={colors.foreground.secondary}
+                >
+                  An error occurred loading status details.
+                </Text>
+              </SidebarItem>
+            )}
             {selectedNode.sourceStatus && (
               <SidebarItem>
                 <SidebarItemLabel>Status</SidebarItemLabel>
@@ -135,7 +149,7 @@ const WorkflowGraphSidebar = ({
                   connector={{
                     status: selectedNode.sourceStatus,
                     snapshotCommitted: selectedNode.sourceSnapshotCommitted,
-                    type: selectedNode.sourceType,
+                    type: selectedNode.sourceType ?? "",
                   }}
                 />
               </SidebarItem>
@@ -146,7 +160,7 @@ const WorkflowGraphSidebar = ({
                 <ConnectorStatusPill
                   connector={{
                     status: selectedNode.sinkStatus,
-                    type: selectedNode.sourceType,
+                    type: selectedNode.sourceType ?? "",
                   }}
                 />
               </SidebarItem>
@@ -190,12 +204,17 @@ const WorkflowGraphSidebar = ({
                 </SidebarItemValue>
               </SidebarItem>
             )}
-            <SidebarItem>
-              <SidebarItemLabel>Created</SidebarItemLabel>
-              <SidebarItemValue>
-                {formatDate(new Date(selectedNode.createdAt), "MMM d, yyyy z")}
-              </SidebarItemValue>
-            </SidebarItem>
+            {selectedNode.createdAt && (
+              <SidebarItem>
+                <SidebarItemLabel>Created</SidebarItemLabel>
+                <SidebarItemValue>
+                  {formatDate(
+                    new Date(selectedNode.createdAt),
+                    "MMM d, yyyy z",
+                  )}
+                </SidebarItemValue>
+              </SidebarItem>
+            )}
           </SidebarSection>
           {lagInfo && (
             <SidebarSection title="Data Freshness">
@@ -373,13 +392,13 @@ export const SidebarButton = ({ children, ...props }: BoxProps & LinkProps) => {
 };
 
 export interface RelatedNodeProps {
-  node: WorkflowGraphNode;
+  node: WorkflowGraphCanvasNode;
   onNodeClick: OnNodeClick;
 }
 
 export const RelatedNode = ({ node, onNodeClick }: RelatedNodeProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const fullyQualifiedName = `${node.databaseName}.${node.schemaName}.${node.name}`;
+  const fullyQualifiedName = formatFullyQualifiedObjectName(node);
 
   return (
     <chakra.button onClick={() => onNodeClick(node.id)} width="100%">

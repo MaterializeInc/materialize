@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useSuspenseQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQuery,
+  useSuspenseQuery,
+} from "@tanstack/react-query";
 
 import {
   buildQueryKeyPart,
@@ -50,6 +54,24 @@ export function useWorkflowGraph(params: WorkflowGraphParams) {
         requestOptions: { signal },
       });
     },
+  });
+}
+
+/** Node details (statuses, connection, creation time) without suspending. */
+export function useWorkflowGraphNodeDetails(params: WorkflowGraphNodesParams) {
+  return useQuery({
+    queryKey: workflowGraphQueryKeys.nodes(params),
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchWorkflowGraphNodes({
+        queryKey,
+        params: { objectIds: queryKeyParams.objectIds },
+        requestOptions: { signal },
+      });
+    },
+    // A live graph's node set changes without navigating, which changes the
+    // key. The nodes still in it keep their details until the new set's load.
+    placeholderData: keepPreviousData,
   });
 }
 
