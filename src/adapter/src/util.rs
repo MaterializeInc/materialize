@@ -193,6 +193,14 @@ impl CompletedClientTransmitter {
         }
     }
 
+    /// Rejects a transaction that definitively did not commit and rolls back its variables.
+    pub(crate) fn fail(mut self, error: AdapterError) {
+        self.response = Err(error);
+        self.action = EndTransactionAction::Rollback;
+        let (ctx, result) = self.finalize();
+        ctx.retire(result);
+    }
+
     /// Returns the execute context to be finalized, and the result to send it.
     pub fn finalize(mut self) -> (ExecuteContext, Result<ExecuteResponse, AdapterError>) {
         let changed = self

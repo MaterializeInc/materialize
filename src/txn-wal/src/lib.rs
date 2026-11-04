@@ -233,6 +233,9 @@ pub mod txn_read;
 pub mod txn_write;
 pub mod txns;
 
+#[cfg(test)]
+mod retirement_tests;
+
 mod proto {
     use bytes::Bytes;
     use mz_persist_client::batch::ProtoBatch;
@@ -319,7 +322,9 @@ impl TxnsCodec for TxnsCodecDefault {
     }
 }
 
-/// Helper for common logging for compare_and_append-ing a small amount of data.
+/// Helper for common logging for compare-and-appending a small amount of data.
+/// Returns the actual upper on conflict, including closure. WAL callers must
+/// reject closure, while data appliers can accept completed retirement.
 #[instrument(level = "debug", fields(shard=%txns_or_data_write.shard_id(), ts=?new_upper))]
 pub(crate) async fn small_caa<S, F, K, V, T, D>(
     name: F,
@@ -327,7 +332,7 @@ pub(crate) async fn small_caa<S, F, K, V, T, D>(
     updates: &[((&K, &V), &T, D)],
     upper: T,
     new_upper: T,
-) -> Result<(), T>
+) -> Result<(), Antichain<T>>
 where
     S: AsRef<str>,
     F: Fn() -> S,
@@ -369,9 +374,6 @@ where
             Ok(())
         }
         Err(UpperMismatch { current, .. }) => {
-            let current = current
-                .into_option()
-                .expect("txns shard should not be closed");
             debug!(
                 "CaA {} [{:?},{:?}) mismatch actual={:?}",
                 name().as_ref(),
@@ -384,15 +386,16 @@ where
     }
 }
 
-/// Ensures that the upper of the shard is past init_ts by writing an empty
-/// batch, retrying as necessary.
-///
+/// Ensures that the upper is past init_ts by writing an empty batch, retrying
+/// as necessary. Returns the observed upper, which may be closed. WAL callers
+/// must reject closure, while data appliers can accept completed retirement.
 /// This method is idempotent.
 pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     name: F,
     txns_or_data_write: &mut WriteHandle<K, V, T, D>,
     init_ts: T,
-) where
+) -> Antichain<T>
+where
     S: AsRef<str>,
     F: Fn() -> S,
     K: Debug + Codec,
@@ -404,11 +407,11 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     let empty: &[((&K, &V), &T, D)] = &[];
     let Some(mut upper) = txns_or_data_write.shared_upper().into_option() else {
         // Shard is closed, which means the upper must be past init_ts.
-        return;
+        return Antichain::new();
     };
     loop {
         if init_ts < upper {
-            return;
+            return Antichain::from_elem(upper);
         }
         let res = small_caa(
             || name.as_ref(),
@@ -419,8 +422,11 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
         )
         .await;
         match res {
-            Ok(()) => return,
+            Ok(()) => return Antichain::from_elem(init_ts.step_forward()),
             Err(current) => {
+                let Some(current) = current.into_option() else {
+                    return Antichain::new();
+                };
                 upper = current;
             }
         }
@@ -451,16 +457,9 @@ async fn apply_caa<K, V, T, D>(
         .map(|batch| ProtoIdBatch::parse(batch))
         .map(|batch| data_write.batch_from_transmittable_batch(batch))
         .collect::<Vec<_>>();
-    let Some(mut upper) = data_write.shared_upper().into_option() else {
-        // Shard is closed, which means the upper must be past init_ts.
-        // Mark the batches as consumed, so we don't get warnings in the logs.
-        for batch in batches {
-            batch.into_hollow_batch();
-        }
-        return;
-    };
+    let mut upper = data_write.shared_upper();
     loop {
-        if commit_ts < upper {
+        if !upper.less_equal(&commit_ts) {
             debug!(
                 "CaA data {:.9} apply t={:?} already done",
                 data_write.shard_id().to_string(),
@@ -492,7 +491,7 @@ async fn apply_caa<K, V, T, D>(
         let res = data_write
             .compare_and_append_batch(
                 batches.as_mut_slice(),
-                Antichain::from_elem(upper.clone()),
+                upper.clone(),
                 Antichain::from_elem(commit_ts.step_forward()),
                 true,
             )
@@ -510,7 +509,8 @@ async fn apply_caa<K, V, T, D>(
                 return;
             }
             Err(UpperMismatch { current, .. }) => {
-                let current = current.into_option().expect("data should not be closed");
+                // Closure is also completed application: finalization must apply
+                // all committed batches first. The next turn consumes our copies.
                 debug!(
                     "CaA data {:.9} apply t={:?} [{:?},{:?}) mismatch actual={:?}",
                     data_write.shard_id().to_string(),
@@ -566,7 +566,7 @@ mod tests {
 
     use crate::operator::DataSubscribe;
     use crate::txn_cache::TxnsCache;
-    use crate::txn_write::{Txn, TxnApply};
+    use crate::txn_write::{CommitError, Txn, TxnApply};
     use crate::txns::{Tidy, TxnsHandle};
 
     use super::*;
@@ -620,7 +620,7 @@ mod tests {
             &mut self,
             handle: &mut TxnsHandle<K, V, T, D, C>,
             commit_ts: T,
-        ) -> Result<TxnApply<T>, T>
+        ) -> Result<TxnApply<T>, CommitError<T>>
         where
             C: TxnsCodec,
         {
@@ -854,7 +854,9 @@ mod tests {
                     }
                     return;
                 }
-                Err(new_current) => current = new_current,
+                Err(new_current) => {
+                    current = new_current.into_option().expect("data shard is open")
+                }
             }
         }
     }

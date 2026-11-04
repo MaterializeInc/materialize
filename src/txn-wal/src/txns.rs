@@ -360,6 +360,9 @@ where
                         break;
                     }
                     Err(new_txns_upper) => {
+                        let new_txns_upper = new_txns_upper
+                            .into_option()
+                            .expect("txns shard should not be closed");
                         self.metrics.register.retry_count.inc();
                         txns_upper = new_txns_upper;
                         continue;
@@ -479,6 +482,9 @@ where
                         break;
                     }
                     Err(new_txns_upper) => {
+                        let new_txns_upper = new_txns_upper
+                            .into_option()
+                            .expect("txns shard should not be closed");
                         self.metrics.forget.retry_count.inc();
                         txns_upper = new_txns_upper;
                         continue;
@@ -577,6 +583,9 @@ where
                         break registered;
                     }
                     Err(new_txns_upper) => {
+                        let new_txns_upper = new_txns_upper
+                            .into_option()
+                            .expect("txns shard should not be closed");
                         self.metrics.forget_all.retry_count.inc();
                         txns_upper = new_txns_upper;
                         continue;
@@ -633,7 +642,9 @@ where
                     for (unapplied, unapplied_ts) in unapplied {
                         match unapplied {
                             Unapplied::RegisterForget => {
-                                let () = crate::empty_caa(
+                                // Forget applies preceding writes before a finalizer may close
+                                // the data shard. A peer may already have finished this work.
+                                let _upper = crate::empty_caa(
                                     || {
                                         format!(
                                             "data {:.9} register/forget fill",
@@ -702,7 +713,15 @@ where
         // We just constructed this txn, so it couldn't have committed any
         // batches, and thus there's nothing to apply. We're free to throw it
         // away.
-        let apply = txn.commit_at(self, tidy_ts.clone()).await?;
+        let apply = txn
+            .commit_at(self, tidy_ts.clone())
+            .await
+            .map_err(|error| match error {
+                crate::txn_write::CommitError::UpperMismatch(upper) => upper,
+                error @ crate::txn_write::CommitError::ShardNotRegistered(_) => {
+                    panic!("empty transaction rejected: {error}")
+                }
+            })?;
         assert!(apply.is_empty());
 
         debug!("tidy at {:?} success", tidy_ts);
@@ -1484,7 +1503,15 @@ mod tests {
             let mut txn = self.txns.begin_test();
             txn.tidy(std::mem::take(&mut self.tidy));
             txn.write(&data_id, self.key(), (), 1).await;
-            let apply = txn.commit_at(&mut self.txns, self.ts).await?;
+            let apply =
+                txn.commit_at(&mut self.txns, self.ts)
+                    .await
+                    .map_err(|error| match error {
+                        crate::txn_write::CommitError::UpperMismatch(upper) => upper,
+                        error @ crate::txn_write::CommitError::ShardNotRegistered(_) => {
+                            panic!("registered shard rejected: {error}")
+                        }
+                    })?;
             debug!(
                 "log {:.9} {} at {}",
                 data_id.to_string(),
@@ -1506,7 +1533,16 @@ mod tests {
             );
             // First write an empty txn to ensure that the shard isn't
             // registered at this ts by someone else.
-            self.txns.begin().commit_at(&mut self.txns, self.ts).await?;
+            self.txns
+                .begin()
+                .commit_at(&mut self.txns, self.ts)
+                .await
+                .map_err(|error| match error {
+                    crate::txn_write::CommitError::UpperMismatch(upper) => upper,
+                    error @ crate::txn_write::CommitError::ShardNotRegistered(_) => {
+                        panic!("empty transaction rejected: {error}")
+                    }
+                })?;
 
             let mut write = writer(&self.txns.datas.client, data_id).await;
             let mut current = write.shared_upper().into_option().unwrap();
@@ -1530,7 +1566,9 @@ mod tests {
                         self.log.record((data_id, key, self.ts, 1));
                         return Ok(());
                     }
-                    Err(new_current) => current = new_current,
+                    Err(new_current) => {
+                        current = new_current.into_option().expect("data shard is open")
+                    }
                 }
             }
         }

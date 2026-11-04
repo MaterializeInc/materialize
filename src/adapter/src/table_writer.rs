@@ -50,6 +50,8 @@ pub(crate) struct TableRegistration {
 /// restores its bookkeeping and the caller must retry at a fresh timestamp.
 pub(crate) trait TableWriteHandle: Debug + Send + Sync {
     /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
+    /// `IdentifierMissing(id)` definitively rejects the entire append without
+    /// committing any updates. The ID belongs to a nonempty entry in `commands`.
     fn append(
         &self,
         write_ts: Timestamp,
@@ -552,19 +554,21 @@ impl TxnsTableWorker {
         );
 
         let mut txn = self.txns.begin();
+        let mut targets = BTreeMap::new();
         for (id, updates) in updates {
             let Some(data_id) = self.write_handles.get(&id) else {
                 // HACK: When creating a table we get an append that includes it
                 // before it's been registered. When this happens there are no
                 // updates, so it's ~fine to ignore it.
-                assert!(
-                    updates.iter().all(|u| u.is_empty()),
-                    "{}: {:?}",
-                    id,
-                    updates
-                );
+                if updates.iter().any(|update| !update.is_empty()) {
+                    let _ = tx.send(Err(StorageError::IdentifierMissing(id)));
+                    return;
+                }
                 continue;
             };
+            if updates.iter().any(|update| !update.is_empty()) {
+                targets.entry(*data_id).or_insert(id);
+            }
             for update in updates {
                 match update {
                     TableData::Rows(updates) => {
@@ -600,7 +604,13 @@ impl TxnsTableWorker {
 
                 Ok(())
             }
-            Err(current) => {
+            Err(mz_txn_wal::txn_write::CommitError::ShardNotRegistered(shard)) => {
+                self.tidy.merge(txn.take_tidy());
+                let id = targets[&shard];
+                self.write_handles.retain(|_, data_id| *data_id != shard);
+                Err(StorageError::IdentifierMissing(id))
+            }
+            Err(mz_txn_wal::txn_write::CommitError::UpperMismatch(current)) => {
                 self.tidy.merge(txn.take_tidy());
                 debug!(
                     "unable to commit txn at {:?} current={:?}",
@@ -673,6 +683,13 @@ mod tests {
     use mz_repr::{Diff, Row};
 
     async fn persist_client() -> PersistClient {
+        persist_clients()
+            .open(mz_persist_types::PersistLocation::new_in_mem())
+            .await
+            .expect("can open in-memory Persist")
+    }
+
+    fn persist_clients() -> mz_persist_client::cache::PersistClientCache {
         let mut config = mz_persist_client::cfg::PersistConfig::new_for_tests();
         config.configs = Arc::new(mz_txn_wal::all_dyncfgs((*config.configs).clone()));
         mz_persist_client::cache::PersistClientCache::new(
@@ -680,9 +697,6 @@ mod tests {
             &MetricsRegistry::new(),
             |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
         )
-        .open(mz_persist_types::PersistLocation::new_in_mem())
-        .await
-        .expect("can open in-memory Persist")
     }
 
     #[mz_ore::test(tokio::test)]
@@ -767,6 +781,121 @@ mod tests {
             .await
             .expect("can read writes from both actors");
         assert_eq!(rows.iter().map(|(_, _, diff)| diff).sum::<i64>(), 3);
+        reader.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn forgotten_target_rejects_entire_append_without_stopping_worker() {
+        let location = mz_persist_types::PersistLocation::new_in_mem();
+        let mut clients = persist_clients();
+        let persist = clients
+            .open(location.clone())
+            .await
+            .expect("can open first Persist client");
+        clients.clear_state_cache();
+        let peer_persist = clients
+            .open(location)
+            .await
+            .expect("can open independent Persist client");
+        let txns = ShardId::new();
+        let retired = ShardId::new();
+        let live = ShardId::new();
+        let retired_id = GlobalId::User(1);
+        let live_id = GlobalId::User(2);
+        let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
+        let first = open(persist.clone(), txns, Arc::clone(&metrics), false).await;
+        let peer = open(peer_persist, txns, metrics, false).await;
+        for (worker, ts) in [(&first, 10u64), (&peer, 11)] {
+            worker
+                .register(
+                    ts.into(),
+                    [(retired_id, retired), (live_id, live)]
+                        .into_iter()
+                        .map(|(id, data_shard)| TableRegistration {
+                            id,
+                            data_shard,
+                            relation_desc: RelationDesc::empty(),
+                        })
+                        .collect(),
+                )
+                .await
+                .expect("worker responds")
+                .expect("table operation succeeds");
+        }
+        first
+            .forget(12.into(), BTreeSet::from([retired]))
+            .await
+            .expect("worker responds")
+            .expect("table operation succeeds");
+        let mut closed = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                retired,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("can open retired shard");
+        closed.advance_upper(&Antichain::new()).await;
+        closed.expire().await;
+
+        let update = || vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])];
+        // The peer still has a local route. Durable membership must reject both
+        // writes atomically, rather than partially appending to the live table.
+        let result = peer
+            .append(
+                13.into(),
+                14.into(),
+                vec![(live_id, update()), (retired_id, update())],
+            )
+            .await
+            .expect("worker returns definitive rejection");
+        assert!(matches!(result, Err(StorageError::IdentifierMissing(id)) if id == retired_id));
+        assert_eq!(
+            persist
+                .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                    txns,
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .expect("can read WAL upper"),
+            Antichain::from_elem(13.into())
+        );
+
+        peer.append(13.into(), 14.into(), vec![(live_id, update())])
+            .await
+            .expect("worker responds")
+            .expect("table operation succeeds");
+        // After rejection the local route is gone as well. This must also be a
+        // definitive error, without poisoning the worker for subsequent writes.
+        let result = peer
+            .append(14.into(), 15.into(), vec![(retired_id, update())])
+            .await
+            .expect("worker rejects missing local route");
+        assert!(matches!(result, Err(StorageError::IdentifierMissing(id)) if id == retired_id));
+        peer.append(14.into(), 15.into(), vec![(live_id, update())])
+            .await
+            .expect("worker responds")
+            .expect("table operation succeeds");
+        let mut reader = persist
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+                live,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("can open live shard reader");
+        let rows = reader
+            .snapshot_and_fetch(Antichain::from_elem(14.into()))
+            .await
+            .expect("live snapshot remains readable");
+        assert_eq!(rows.iter().map(|(_, _, diff)| diff).sum::<i64>(), 2);
+        assert!(
+            rows.iter()
+                .all(|((data, ()), _, _)| data == &SourceData(Ok(Row::default())))
+        );
         reader.expire().await;
     }
 

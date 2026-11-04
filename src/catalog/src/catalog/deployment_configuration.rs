@@ -225,11 +225,12 @@ impl Catalog {
                     Ok(apply) => infrastructure
                         .tidy
                         .merge(apply.apply(&mut infrastructure.txns).await),
-                    Err(upper) => {
+                    Err(mz_txn_wal::txn_write::CommitError::UpperMismatch(upper)) => {
                         infrastructure.tidy.merge(txn.take_tidy());
                         lower_bound = upper;
                         continue;
                     }
+                    Err(error) => return Err(anyhow::anyhow!(error).into()),
                 }
                 oracle.apply_write(fence).await;
                 infrastructure.completed_at = fence;
@@ -304,10 +305,11 @@ impl Catalog {
                         infrastructure.completed_at = timestamp;
                         return Ok(());
                     }
-                    Err(upper) => {
+                    Err(mz_txn_wal::txn_write::CommitError::UpperMismatch(upper)) => {
                         infrastructure.tidy.merge(txn.take_tidy());
                         lower_bound = upper;
                     }
+                    Err(error) => return Err(anyhow::anyhow!(error).into()),
                 }
                 // Discard this transaction. Diffs must never be replayed at a
                 // later timestamp without a new fence and fresh snapshots.

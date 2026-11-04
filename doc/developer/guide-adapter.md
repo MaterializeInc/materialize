@@ -481,6 +481,15 @@ transactions, through the writer's fenced path. Install that path only after
 bootstrap registration completes. Missing or lost completion keeps finalization
 restricted. Other actors may use the same tables and WAL.
 
+A peer can finish that retirement while an old data-shard application is in
+flight. Discovering a closed data upper during its CAS is completed application,
+just as when closure is cached on entry. This does not permit a closed WAL or a
+new write to a forgotten table. Missing membership rejects the whole transaction.
+Group commits retain each transaction's contributions until success. Reject
+transactions touching a missing target atomically, including their writes to
+surviving tables. Rebuild the batch from unaffected transactions and builtin
+diffs, preserving their completion notifications.
+
 Txn-WAL mutations use this protocol. Ordinary writes allocate T from the shared
 oracle, while OCC writes supply a target chosen by the session task:
 

@@ -798,7 +798,8 @@ where
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
         txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
     ) -> Self {
-        let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
+        let upper = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
+        assert!(!upper.is_empty(), "txns shard should not be closed");
         let mut ret = Self::from_read(txns_read, None).await;
         let _ = ret.update_gt(&init_ts).await;
         ret

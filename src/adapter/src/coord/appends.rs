@@ -233,10 +233,9 @@ pub(crate) enum TableWriteCmd {
 ///
 /// The `GlobalId`s reach the table write worker unvalidated, so a submitter
 /// must resolve them against the current catalog on the coordinator loop and
-/// send with no await in between. Channel order then keeps the append ahead of
-/// local detachment for the same table. A non-empty append for a table whose write
-/// handle is already gone trips an assert in the table worker and takes
-/// the process down.
+/// send with no await in between. Channel order keeps the append ahead of local
+/// detachment. A peer can still retire the target, which rejects the whole write
+/// with `TargetChanged`.
 pub(crate) struct TimestampedWriteRequest {
     pub(crate) appends: Vec<(GlobalId, Vec<TableData>)>,
     pub(crate) target_timestamp: Timestamp,
@@ -244,14 +243,53 @@ pub(crate) struct TimestampedWriteRequest {
     pub(crate) span: Span,
 }
 
+/// A transaction resolved to physical table IDs, retaining its completion owner.
+/// Keep contributions separate until commit so a retired target rejects only
+/// its transactions, including their writes to other tables.
+enum StagedWriteTxn {
+    Session {
+        appends: Vec<(GlobalId, Vec<TableData>)>,
+        /// SQL diagnostics name catalog items, not physical table versions.
+        item_ids: BTreeMap<GlobalId, CatalogItemId>,
+        response: CompletedClientTransmitter,
+        statement_logging_id: Option<StatementLoggingId>,
+    },
+    Internal {
+        appends: Vec<(GlobalId, Vec<TableData>)>,
+        result: InternalWriteResponder,
+    },
+    System {
+        appends: Vec<(GlobalId, Vec<TableData>)>,
+        notify: oneshot::Sender<()>,
+    },
+}
+
+impl StagedWriteTxn {
+    fn appends(&self) -> &[(GlobalId, Vec<TableData>)] {
+        match self {
+            Self::Session { appends, .. }
+            | Self::Internal { appends, .. }
+            | Self::System { appends, .. } => appends,
+        }
+    }
+
+    fn reject(self, id: GlobalId) {
+        match self {
+            Self::Session {
+                response, item_ids, ..
+            } => response.fail(AdapterError::ConcurrentDependencyMutation {
+                dependency_id: item_ids[&id].to_string(),
+            }),
+            Self::Internal { result, .. } => result.send(WriteResult::TargetChanged),
+            Self::System { .. } => panic!("builtin table {id} unexpectedly retired"),
+        }
+    }
+}
+
 /// A group commit staged on the coordinator loop for the [`GroupCommitter`].
 pub(crate) struct GroupCommitRequest {
-    /// Appends resolved to their latest [`GlobalId`]. Empty for a keepalive.
-    appends: Vec<(GlobalId, Vec<TableData>)>,
-    responses: Vec<CompletedClientTransmitter>,
-    statement_logging_ids: Vec<StatementLoggingId>,
-    notifies: Vec<oneshot::Sender<()>>,
-    internal_results: Vec<InternalWriteResponder>,
+    /// Empty for a keepalive. Table IDs are resolved on the coordinator loop.
+    txns: Vec<StagedWriteTxn>,
     /// In-progress permits held until the commit is applied.
     permits: Vec<GroupCommitPermit>,
     contains_internal_system_write: bool,
@@ -260,23 +298,9 @@ pub(crate) struct GroupCommitRequest {
 
 impl GroupCommitRequest {
     fn merge(&mut self, other: GroupCommitRequest) {
-        let GroupCommitRequest {
-            appends,
-            responses,
-            statement_logging_ids,
-            notifies,
-            internal_results,
-            permits,
-            contains_internal_system_write,
-            span: _,
-        } = other;
-        self.appends.extend(appends);
-        self.responses.extend(responses);
-        self.statement_logging_ids.extend(statement_logging_ids);
-        self.notifies.extend(notifies);
-        self.internal_results.extend(internal_results);
-        self.permits.extend(permits);
-        self.contains_internal_system_write |= contains_internal_system_write;
+        self.txns.extend(other.txns);
+        self.permits.extend(other.permits);
+        self.contains_internal_system_write |= other.contains_internal_system_write;
     }
 }
 
@@ -305,6 +329,8 @@ enum TxnsWriteAttempt {
     /// Another writer moved the upper past the attempted timestamp. The
     /// write did not land.
     UpperConflict { next_eligible_timestamp: Timestamp },
+    /// A target disappeared before the transaction committed. No writes landed.
+    TargetMissing(GlobalId),
     /// The table write worker is gone, so the outcome is unknown.
     WorkerGone,
 }
@@ -394,6 +420,7 @@ impl GroupCommitter {
                                 }
                             })
                             .await
+                            .expect("WAL membership operations cannot reject a write target")
                         else {
                             return;
                         };
@@ -411,6 +438,7 @@ impl GroupCommitter {
                                 self.table_write_handle.forget(ts, shards.clone())
                             })
                             .await
+                            .expect("WAL membership operations cannot reject a write target")
                         else {
                             return;
                         };
@@ -493,6 +521,10 @@ impl GroupCommitter {
                 });
                 return ControlFlow::Continue(());
             }
+            TxnsWriteAttempt::TargetMissing(_) => {
+                result.send(WriteResult::TargetChanged);
+                return ControlFlow::Continue(());
+            }
             TxnsWriteAttempt::WorkerGone => {
                 warn!("table write worker gone with a timestamped write outstanding");
                 return ControlFlow::Break(());
@@ -517,12 +549,13 @@ impl GroupCommitter {
     /// Writes at a fresh oracle timestamp, retrying an upper conflict at a new
     /// timestamp, and applies a successful write to the oracle.
     ///
-    /// Returns `None` when the table write worker shuts down.
+    /// Returns `Ok(None)` when the table write worker shuts down. A missing
+    /// target rejects the whole write and is not retried.
     async fn write_to_txns<F>(
         &self,
         op_duration_metric: Option<&prometheus::Histogram>,
         mut op: impl FnMut(Timestamp, Timestamp) -> F,
-    ) -> Option<WriteTimestamp>
+    ) -> Result<Option<WriteTimestamp>, GlobalId>
     where
         F: Future<Output = Result<Result<(), StorageError>, oneshot::error::RecvError>>,
     {
@@ -546,7 +579,7 @@ impl GroupCommitter {
                 })
                 .await
             {
-                TxnsWriteAttempt::Applied => return Some(write_ts),
+                TxnsWriteAttempt::Applied => return Ok(Some(write_ts)),
                 TxnsWriteAttempt::UpperConflict { .. } => {
                     warn!(
                         write_ts = %write_ts.timestamp,
@@ -555,10 +588,11 @@ impl GroupCommitter {
                     );
                     continue;
                 }
+                TxnsWriteAttempt::TargetMissing(id) => return Err(id),
                 TxnsWriteAttempt::WorkerGone => {
                     // The outcome is indeterminate. Stop before processing more writes.
                     warn!("table write worker gone (process shutting down), winding down");
-                    return None;
+                    return Ok(None);
                 }
             }
         }
@@ -620,6 +654,9 @@ impl GroupCommitter {
                 return TxnsWriteAttempt::UpperConflict {
                     next_eligible_timestamp,
                 };
+            }
+            Ok(Err(StorageError::IdentifierMissing(id))) => {
+                return TxnsWriteAttempt::TargetMissing(id);
             }
             Ok(Err(other)) => {
                 Err::<(), _>(other).unwrap_or_terminate("cannot fail to write to txns shard");
@@ -701,27 +738,93 @@ impl GroupCommitter {
         }
 
         let GroupCommitRequest {
-            appends,
-            responses,
-            statement_logging_ids,
-            notifies,
-            internal_results,
+            mut txns,
             permits,
             contains_internal_system_write: _,
             span: _,
         } = request;
 
         let append_metric = self.metrics.append_table_duration_seconds.clone();
-        let Some(write_ts) = self
-            .write_to_txns(Some(&append_metric), |ts, advance_to| {
-                self.table_write_handle
-                    .append(ts, advance_to, appends.clone())
-            })
-            .await
-        else {
-            // Dropping the batch retires its clients through `ExecuteContext`.
-            return ControlFlow::Break(());
+        let (write_ts, appends) = loop {
+            // Consolidate once per rejection round, not per upper-conflict retry.
+            // Retain the
+            // original contributions until the WAL definitively accepts them.
+            let mut by_table: BTreeMap<GlobalId, Vec<TableData>> = BTreeMap::new();
+            for txn in &txns {
+                for (id, data) in txn.appends() {
+                    by_table
+                        .entry(*id)
+                        .or_default()
+                        .extend(data.iter().cloned());
+                }
+            }
+            let appends: Vec<_> = by_table
+                .into_iter()
+                .map(|(id, data)| {
+                    let mut rows = Vec::new();
+                    let mut batches = Vec::new();
+                    for data in data {
+                        match data {
+                            TableData::Rows(updates) => rows.extend(updates),
+                            TableData::Batches(_) => batches.push(data),
+                        }
+                    }
+                    differential_dataflow::consolidation::consolidate(&mut rows);
+                    batches.push(TableData::Rows(rows));
+                    (id, batches)
+                })
+                .collect();
+            match self
+                .write_to_txns(Some(&append_metric), |ts, advance_to| {
+                    self.table_write_handle
+                        .append(ts, advance_to, appends.clone())
+                })
+                .await
+            {
+                Ok(Some(write_ts)) => break (write_ts, appends),
+                Ok(None) => return ControlFlow::Break(()),
+                Err(id) => {
+                    info!(target_global_id = %id, "rejecting writes to an unavailable table");
+                    // No writes landed. Reject every transaction touching this
+                    // target, not just its dropped-table rows. Rebuild from the
+                    // survivors so unrelated clients and builtin diffs proceed.
+                    let before = txns.len();
+                    txns = txns
+                        .into_iter()
+                        .filter_map(|txn| {
+                            if txn.appends().iter().any(|(target, _)| *target == id) {
+                                txn.reject(id);
+                                None
+                            } else {
+                                Some(txn)
+                            }
+                        })
+                        .collect();
+                    assert!(
+                        txns.len() < before,
+                        "rejected target {id} must belong to the batch"
+                    );
+                }
+            }
         };
+        let mut responses = Vec::new();
+        let mut statement_logging_ids = Vec::new();
+        let mut internal_results = Vec::new();
+        let mut notifies = Vec::new();
+        for txn in txns {
+            match txn {
+                StagedWriteTxn::Session {
+                    response,
+                    statement_logging_id,
+                    ..
+                } => {
+                    responses.push(response);
+                    statement_logging_ids.extend(statement_logging_id);
+                }
+                StagedWriteTxn::Internal { result, .. } => internal_results.push(result),
+                StagedWriteTxn::System { notify, .. } => notifies.push(notify),
+            }
+        }
         let timestamp = write_ts.timestamp;
 
         let modified_tables: Vec<_> = appends
@@ -827,11 +930,7 @@ impl Coordinator {
             .iter()
             .any(|write| write.is_internal_system());
 
-        let mut appends: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>> = BTreeMap::new();
-        let mut responses = Vec::with_capacity(pending_writes.len());
-        let mut statement_logging_ids = Vec::new();
-        let mut notifies = Vec::new();
-        let mut internal_results = Vec::new();
+        let mut txns = Vec::with_capacity(pending_writes.len());
 
         for pending_write in pending_writes {
             match pending_write {
@@ -865,21 +964,26 @@ impl Coordinator {
                         continue;
                     }
 
-                    for (id, table_data) in writes {
-                        // If the table that some write was targeting has been deleted while the
-                        // write was waiting, then the write will be ignored and we respond to the
-                        // client that the write was successful. This is only possible if the write
-                        // and the delete were concurrent. Therefore, we are free to order the
-                        // write before the delete without violating any consistency guarantees.
-                        if self.catalog().try_get_entry(&id).is_some() {
-                            appends.entry(id).or_default().extend(table_data);
-                        }
-                    }
-                    if let Some(id) = ctx.extra().contents() {
-                        statement_logging_ids.push(id);
-                    }
-
-                    responses.push(CompletedClientTransmitter::new(ctx, response, action));
+                    // DROP and this queued write are concurrent, so omitting
+                    // dropped-table rows can serialize the write before DROP.
+                    let mut item_ids = BTreeMap::new();
+                    let appends = writes
+                        .into_iter()
+                        .filter_map(|(id, data)| {
+                            self.catalog().try_get_entry(&id).map(|entry| {
+                                let global_id = entry.latest_global_id();
+                                item_ids.insert(global_id, id);
+                                (global_id, data.into_vec())
+                            })
+                        })
+                        .collect();
+                    let statement_logging_id = ctx.extra().contents();
+                    txns.push(StagedWriteTxn::Session {
+                        appends,
+                        item_ids,
+                        response: CompletedClientTransmitter::new(ctx, response, action),
+                        statement_logging_id,
+                    });
                 }
                 PendingWriteTxn::User {
                     span: _,
@@ -905,59 +1009,31 @@ impl Coordinator {
                         target.item_id,
                         writes.keys().collect::<Vec<_>>(),
                     );
-                    appends
-                        .entry(target.item_id)
-                        .or_default()
-                        .extend(writes.into_values().flatten());
-                    internal_results.push(result);
+                    txns.push(StagedWriteTxn::Internal {
+                        appends: vec![(target.global_id, writes.into_values().flatten().collect())],
+                        result,
+                    });
                 }
                 PendingWriteTxn::System { updates, source } => {
-                    for update in updates {
-                        appends.entry(update.id).or_default().push(update.data);
-                    }
-                    // Once the write completes we notify any waiters.
-                    match source {
-                        BuiltinTableUpdateSource::Internal(tx)
-                        | BuiltinTableUpdateSource::Background(tx) => notifies.push(tx),
-                    }
+                    let appends = updates
+                        .into_iter()
+                        .map(|update| {
+                            (
+                                self.catalog().get_entry(&update.id).latest_global_id(),
+                                vec![update.data],
+                            )
+                        })
+                        .collect();
+                    let (BuiltinTableUpdateSource::Internal(notify)
+                    | BuiltinTableUpdateSource::Background(notify)) = source;
+                    txns.push(StagedWriteTxn::System { appends, notify });
                 }
             }
         }
-
-        // Consolidate all Rows for a given table. We do not consolidate the
-        // staged batches, that's up to whoever staged them.
-        let mut all_appends = Vec::with_capacity(appends.len());
-        for (item_id, table_data) in appends.into_iter() {
-            let mut all_rows = Vec::new();
-            let mut all_data = Vec::new();
-            for data in table_data {
-                match data {
-                    TableData::Rows(rows) => all_rows.extend(rows),
-                    TableData::Batches(_) => all_data.push(data),
-                }
-            }
-            differential_dataflow::consolidation::consolidate(&mut all_rows);
-            all_data.push(TableData::Rows(all_rows));
-
-            // TODO(parkmycar): Use SmallVec throughout.
-            all_appends.push((item_id, all_data));
-        }
-
-        let appends: Vec<_> = all_appends
-            .into_iter()
-            .map(|(id, updates)| {
-                let gid = self.catalog().get_entry(&id).latest_global_id();
-                (gid, updates)
-            })
-            .collect();
 
         // Always enqueue keepalives so registered tables remain readable at the oracle read ts.
         let request = GroupCommitRequest {
-            appends,
-            responses,
-            statement_logging_ids,
-            notifies,
-            internal_results,
+            txns,
             permits: permit.into_iter().collect(),
             contains_internal_system_write,
             span: Span::current(),
@@ -1502,6 +1578,8 @@ mod tests {
     struct ConflictingTableWriteHandle {
         conflicts: usize,
         conflict_upper: Option<Timestamp>,
+        missing_target: Option<GlobalId>,
+        appends: Mutex<Vec<Vec<(GlobalId, Vec<TableData>)>>>,
         calls: AtomicUsize,
         write_timestamps: Mutex<Vec<Timestamp>>,
     }
@@ -1511,6 +1589,8 @@ mod tests {
             Self {
                 conflicts,
                 conflict_upper: None,
+                missing_target: None,
+                appends: Mutex::new(Vec::new()),
                 calls: AtomicUsize::new(0),
                 write_timestamps: Mutex::new(Vec::new()),
             }
@@ -1523,7 +1603,9 @@ mod tests {
                 .expect("lock poisoned")
                 .push(write_ts);
             let (tx, rx) = oneshot::channel();
-            let result = if call < self.conflicts {
+            let result = if let Some(id) = self.missing_target.filter(|_| call == 0) {
+                Err(StorageError::IdentifierMissing(id))
+            } else if call < self.conflicts {
                 Err(StorageError::InvalidUppers(vec![
                     mz_storage_types::controller::InvalidUpper {
                         id: GlobalId::User(1),
@@ -1546,8 +1628,9 @@ mod tests {
             &self,
             write_ts: Timestamp,
             _advance_to: Timestamp,
-            _commands: Vec<(GlobalId, Vec<TableData>)>,
+            commands: Vec<(GlobalId, Vec<TableData>)>,
         ) -> oneshot::Receiver<Result<(), StorageError>> {
+            self.appends.lock().expect("lock poisoned").push(commands);
             self.respond(write_ts)
         }
 
@@ -1572,6 +1655,181 @@ mod tests {
         ) -> oneshot::Receiver<Result<(), StorageError>> {
             self.respond(forget_ts)
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn retired_group_target_preserves_builtin_updates() {
+        use crate::coord::PendingTxnResponse;
+
+        Catalog::with_debug(|catalog| async move {
+            let initial_upper = catalog.current_upper().await;
+            let oracle = Arc::new(MemTimestampOracle::starting_at(initial_upper));
+            let handle = Arc::new(ConflictingTableWriteHandle {
+                missing_target: Some(GlobalId::User(1)),
+                ..ConflictingTableWriteHandle::new(0)
+            });
+            let (_tx, rx) = mpsc::unbounded_channel();
+            let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::unbounded_channel();
+            let mut committer = GroupCommitter {
+                rx,
+                oracle: Arc::<MemTimestampOracle>::clone(&oracle),
+                table_write_handle: Arc::<ConflictingTableWriteHandle>::clone(&handle),
+                catalog_upper: catalog.upper_handle(),
+                internal_cmd_tx,
+                now: SYSTEM_TIME.clone(),
+                timestamp_oracle_now: SYSTEM_TIME.clone(),
+                metrics: Metrics::register_into(&MetricsRegistry::new()),
+                max_attempts: ConfigValHandle::disconnected(2),
+            };
+            let (user1, result1) = oneshot::channel();
+            let (user2, result2) = oneshot::channel();
+            let (notify, completion) = oneshot::channel();
+            let (session_tx, session_rx) = oneshot::channel();
+            let mut session = Session::dummy();
+            let original_application_name = session.vars().application_name().to_owned();
+            session
+                .vars_mut()
+                .set(
+                    catalog.system_config(),
+                    "application_name",
+                    mz_sql::session::vars::VarInput::Flat("rejected-transaction"),
+                    false,
+                )
+                .expect("can set transactional session variable");
+            let ctx = ExecuteContext::from_parts(
+                crate::util::ClientTransmitter::new(session_tx, committer.internal_cmd_tx.clone()),
+                committer.internal_cmd_tx.clone(),
+                session,
+                crate::coord::ExecuteContextGuard::new(None, committer.internal_cmd_tx.clone()),
+            );
+            let row = mz_repr::Row::default();
+            let update = || vec![TableData::Rows(vec![(row.clone(), mz_repr::Diff::ONE)])];
+            let request = GroupCommitRequest {
+                txns: vec![
+                    StagedWriteTxn::Session {
+                        appends: vec![(GlobalId::User(1), update()), (GlobalId::User(2), update())],
+                        item_ids: BTreeMap::from([
+                            (GlobalId::User(1), CatalogItemId::User(101)),
+                            (GlobalId::User(2), CatalogItemId::User(102)),
+                        ]),
+                        response: CompletedClientTransmitter::new(ctx,
+                            Ok(PendingTxnResponse::Committed { params: BTreeMap::new() }),
+                            EndTransactionAction::Commit),
+                        statement_logging_id: None,
+                    },
+                    StagedWriteTxn::Internal {
+                        appends: vec![(GlobalId::User(1), update())],
+                        result: InternalWriteResponder::new(user1),
+                    },
+                    StagedWriteTxn::Internal {
+                        appends: vec![(GlobalId::User(2), update())],
+                        result: InternalWriteResponder::new(user2),
+                    },
+                    StagedWriteTxn::System {
+                        appends: vec![(GlobalId::System(1), update())], notify,
+                    },
+                ],
+                permits: Vec::new(), contains_internal_system_write: true, span: Span::none(),
+            };
+            assert!(matches!(
+                committer.commit(request).await,
+                ControlFlow::Continue(None)
+            ));
+            assert!(matches!(result1.await.expect("affected frontend receives rejection"), WriteResult::TargetChanged));
+            let response = session_rx.await.expect("SQL client receives rejection");
+            assert!(matches!(
+                response.result,
+                Err(AdapterError::ConcurrentDependencyMutation { dependency_id }) if dependency_id == "u101"
+            ));
+            assert_eq!(
+                response.session.vars().application_name(),
+                original_application_name
+            );
+            completion.await.expect("builtin update completed");
+            let Message::GroupCommitApplied {
+                responses,
+                internal_results,
+                write_ts,
+                ..
+            } = internal_cmd_rx.recv().await.expect("committer reports surviving writes")
+            else {
+                panic!("expected applied builtin write")
+            };
+            assert!(responses.is_empty());
+            assert_eq!(internal_results.len(), 1);
+            for result in internal_results {
+                result.send(WriteResult::Success { timestamp: write_ts });
+            }
+            assert!(matches!(result2.await.expect("unrelated frontend receives success"), WriteResult::Success { timestamp } if timestamp == write_ts));
+            assert_eq!(oracle.apply_writes.load(Ordering::SeqCst), 1);
+            assert_eq!(oracle.read_ts().await, write_ts);
+            {
+            let appends = handle.appends.lock().expect("lock poisoned");
+            assert_eq!(appends.len(), 2);
+            assert_eq!(appends[0].len(), 3);
+            assert_eq!(appends[1].len(), 2);
+            assert_eq!(appends[1][0].0, GlobalId::System(1));
+            let TableData::Rows(rows) = &appends[1][0].1[0] else {
+                panic!("expected builtin rows")
+            };
+            assert_eq!(rows, &vec![(row.clone(), mz_repr::Diff::ONE)]);
+            assert_eq!(appends[1][1].0, GlobalId::User(2));
+            let TableData::Rows(rows) = &appends[1][1].1[0] else { panic!("expected live user rows") };
+            // The rejected multi-table transaction also wrote this table. Its
+            // contribution must not be included in the surviving client's write.
+            assert_eq!(rows, &vec![(row, mz_repr::Diff::ONE)]);
+            }
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn retired_timestamped_target_does_not_complete_oracle_time() {
+        Catalog::with_debug(|catalog| async move {
+            let initial_upper = catalog.current_upper().await;
+            let oracle = Arc::new(MemTimestampOracle::starting_at(initial_upper));
+            let handle = Arc::new(ConflictingTableWriteHandle {
+                missing_target: Some(GlobalId::User(1)),
+                ..ConflictingTableWriteHandle::new(0)
+            });
+            let (_tx, rx) = mpsc::unbounded_channel();
+            let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::unbounded_channel();
+            let committer = GroupCommitter {
+                rx,
+                oracle: Arc::<MemTimestampOracle>::clone(&oracle),
+                table_write_handle: Arc::<ConflictingTableWriteHandle>::clone(&handle),
+                catalog_upper: catalog.upper_handle(),
+                internal_cmd_tx,
+                now: SYSTEM_TIME.clone(),
+                timestamp_oracle_now: SYSTEM_TIME.clone(),
+                metrics: Metrics::register_into(&MetricsRegistry::new()),
+                max_attempts: ConfigValHandle::disconnected(2),
+            };
+            let (tx, result) = oneshot::channel();
+            assert!(
+                committer
+                    .commit_timestamped(TimestampedWriteRequest {
+                        appends: vec![(GlobalId::User(1), Vec::new())],
+                        target_timestamp: initial_upper.step_forward(),
+                        result: InternalWriteResponder::new(tx),
+                        span: Span::none(),
+                    })
+                    .await
+                    .is_continue()
+            );
+            assert!(matches!(
+                result.await.expect("OCC caller receives rejection"),
+                WriteResult::TargetChanged
+            ));
+            assert_eq!(handle.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(oracle.apply_writes.load(Ordering::SeqCst), 0);
+            assert!(internal_cmd_rx.try_recv().is_err());
+            catalog.expire().await;
+        })
+        .await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -1764,6 +2022,7 @@ mod tests {
                     handle.append(ts, advance_to, Vec::new())
                 })
                 .await
+                .expect("targets stay registered in this test")
                 .expect("worker stays alive in this test");
 
             let attempts = handle
@@ -1827,6 +2086,7 @@ mod tests {
                     handle.append(ts, advance_to, Vec::new())
                 })
                 .await
+                .expect("targets stay registered in this test")
                 .expect("zero limit permits one successful attempt");
 
             let attempts = handle

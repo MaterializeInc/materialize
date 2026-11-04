@@ -59,6 +59,26 @@ impl<K, V, T, D> Default for TxnWrite<K, V, T, D> {
     }
 }
 
+/// A definitive rejection of a transaction before any of its writes commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitError<T> {
+    /// The timestamp is no longer available. Retry at or beyond this upper.
+    UpperMismatch(T),
+    /// A target shard is not registered in the WAL, possibly because it was forgotten.
+    ShardNotRegistered(ShardId),
+}
+
+impl<T: Debug> std::fmt::Display for CommitError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UpperMismatch(upper) => write!(f, "transaction upper advanced to {upper:?}"),
+            Self::ShardNotRegistered(shard) => write!(f, "shard {shard} is not registered"),
+        }
+    }
+}
+
+impl<T: Debug> std::error::Error for CommitError<T> {}
+
 /// An in-progress transaction.
 #[derive(Debug)]
 pub struct Txn<K, V, T, D> {
@@ -105,8 +125,9 @@ where
     /// Commit this transaction at `commit_ts`.
     ///
     /// This either atomically commits all staged writes or, if that's no longer
-    /// possible at the requested timestamp, returns an error with the least
-    /// commit-able timestamp.
+    /// possible at the requested timestamp, returns the least commit-able timestamp.
+    /// An unregistered or forgotten target rejects the entire transaction without
+    /// committing any writes. The caller must not retry that payload unchanged.
     ///
     /// On success a token is returned representing apply work expected to be
     /// promptly performed by the caller. At this point, the txn is durable and
@@ -114,13 +135,12 @@ where
     /// block until this apply work finishes. In the event of a crash, neither
     /// correctness nor liveness require this followup be done.
     ///
-    /// Panics if any involved data shards were not registered before commit ts.
     #[instrument(level = "debug", fields(ts = ?commit_ts))]
     pub async fn commit_at<C>(
         &mut self,
         handle: &mut TxnsHandle<K, V, T, D, C>,
         commit_ts: T,
-    ) -> Result<TxnApply<T>, T>
+    ) -> Result<TxnApply<T>, CommitError<T>>
     where
         C: TxnsCodec,
     {
@@ -144,18 +164,16 @@ where
                         "commit_at {:?} mismatch current={:?}",
                         commit_ts, txns_upper
                     );
-                    return Err(txns_upper);
+                    return Err(CommitError::UpperMismatch(txns_upper));
                 }
                 // Validate that the involved data shards are all registered.
                 for (data_id, _) in self.writes.iter() {
-                    assert!(
-                        handle
-                            .txns_cache
-                            .registered_at_progress(data_id, &txns_upper),
-                        "{} should be registered to commit at {:?}",
-                        data_id,
-                        txns_upper,
-                    );
+                    if !handle
+                        .txns_cache
+                        .registered_at_progress(data_id, &txns_upper)
+                    {
+                        return Err(CommitError::ShardNotRegistered(*data_id));
+                    }
                 }
                 debug!(
                     "commit_at {:?}: [{:?}, {:?}) begin",
@@ -312,6 +330,9 @@ where
                         });
                     }
                     Err(new_txns_upper) => {
+                        let new_txns_upper = new_txns_upper
+                            .into_option()
+                            .expect("txns shard should not be closed");
                         handle.metrics.commit.retry_count.inc();
                         assert!(txns_upper < new_txns_upper);
                         txns_upper = new_txns_upper;
@@ -399,7 +420,6 @@ mod tests {
 
     use futures::StreamExt;
     use futures::stream::FuturesUnordered;
-    use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
 
     use crate::tests::writer;
@@ -432,7 +452,10 @@ mod tests {
         // earliest committable time. Failed txn can commit on retry.
         let mut txn = txns.begin();
         txn.write(&d0, "2".into(), (), 1).await;
-        assert_eq!(txn.commit_at(&mut txns, 4).await, Err(6));
+        assert_eq!(
+            txn.commit_at(&mut txns, 4).await,
+            Err(CommitError::UpperMismatch(6))
+        );
         txn.commit_at(&mut txns, 6).await.unwrap();
         txns.apply_le(&6).await;
 
@@ -569,7 +592,8 @@ mod tests {
                     let () = tokio::time::sleep(Duration::from_millis(jitter_ms)).await;
                     match txn.commit_at(&mut txns, commit_ts).await {
                         Ok(apply) => break apply,
-                        Err(new_commit_ts) => commit_ts = new_commit_ts,
+                        Err(CommitError::UpperMismatch(ts)) => commit_ts = ts,
+                        Err(error) => panic!("registered shard rejected: {error}"),
                     }
                 };
                 debug!("{} committed at {}", idx, commit_ts);
@@ -592,7 +616,8 @@ mod tests {
                             assert!(apply.is_empty());
                             return commit_ts;
                         }
-                        Err(new_tidy_ts) => tidy_ts = new_tidy_ts,
+                        Err(CommitError::UpperMismatch(ts)) => tidy_ts = ts,
+                        Err(error) => panic!("empty transaction rejected: {error}"),
                     }
                 }
             };
@@ -655,34 +680,22 @@ mod tests {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
 
-        // This panics because the commit ts is before the register ts.
-        let commit = mz_ore::task::spawn(|| "", {
-            let (txns_id, client) = (txns.txns_id(), client.clone());
-            async move {
-                let mut txns = TxnsHandle::expect_open_id(client, txns_id).await;
-                let mut txn = txns.begin();
-                txn.write(&ShardId::new(), "foo".into(), (), 1).await;
-                txn.commit_at(&mut txns, 1).await
-            }
-        })
-        .into_tokio_handle();
-        assert_err!(commit.await);
+        let unregistered = ShardId::new();
+        let mut txn = txns.begin();
+        txn.write(&unregistered, "foo".into(), (), 1).await;
+        assert_eq!(
+            txn.commit_at(&mut txns, 1).await,
+            Err(CommitError::ShardNotRegistered(unregistered))
+        );
 
         let d0 = txns.expect_register(2).await;
         txns.forget(3, [d0]).await.unwrap();
-
-        // This panics because the commit ts is after the forget ts.
-        let commit = mz_ore::task::spawn(|| "", {
-            let (txns_id, client) = (txns.txns_id(), client.clone());
-            async move {
-                let mut txns = TxnsHandle::expect_open_id(client, txns_id).await;
-                let mut txn = txns.begin();
-                txn.write(&d0, "foo".into(), (), 1).await;
-                txn.commit_at(&mut txns, 4).await
-            }
-        })
-        .into_tokio_handle();
-        assert_err!(commit.await);
+        let mut txn = txns.begin();
+        txn.write(&d0, "foo".into(), (), 1).await;
+        assert_eq!(
+            txn.commit_at(&mut txns, 4).await,
+            Err(CommitError::ShardNotRegistered(d0))
+        );
     }
 
     #[mz_ore::test(tokio::test)]
@@ -809,7 +822,7 @@ mod tests {
         other.write(&d1, "42".into(), (), 1).await;
         other.commit_at(&mut txns, 3).await.unwrap();
         let upper = txn.commit_at(&mut txns, 3).await.unwrap_err();
-        assert_eq!(upper, 4);
+        assert_eq!(upper, CommitError::UpperMismatch(4));
 
         // Add more writes to `txn` and try again.
         txn.write(&d0, "1".into(), (), 1).await;

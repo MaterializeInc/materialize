@@ -23,19 +23,18 @@ Observed raw trace records fell from a peak of 92,369 to 40,397.
 This is not a general health or performance pass. Sampled write/read maxima were
 240.89s and 20.53s, with about six CPU cores consumed. The earlier unchanged
 seeded workload panicked during txn-WAL data-shard application. The passing
-repeat does not resolve that race. Promotion, authority transitions, sink
-handover and multi-day behavior were not demonstrated.
+repeat did not resolve that race. The scoped repair now tolerates redundant
+application after data-shard retirement and rejects new writes to forgotten
+tables without crashing. Group commit retains transaction identity so rejection
+does not partially commit an affected transaction or fail unrelated clients.
+The original four-adapter workload has not been rerun with this repair.
+Promotion, authority transitions, sink handover and multi-day behavior were not
+demonstrated.
 
 ## Next concrete action
 
 Choose the next scoped repair, rather than resuming the full M3 walkthrough:
 
-- **Txn-WAL closure race:** a data-shard register/forget apply operation panicked
-  when CAS discovered a closed upper. Cached closure on entry is already accepted.
-  Saved metadata identifies all five closed WAL participants as dropped temporary
-  tables with catalog retirement and committed Forget. Reproduce delayed apply
-  with independent Persist caches. Separately, stale new writes encounter a
-  membership assertion after Forget rather than a recoverable rejection.
 - **Post-admission index planning:** an index created after both builds join
   works on its creating build but stalls the other build waiting for a selection.
   Adapters must incorporate peer-created maintained objects into own-build
@@ -44,9 +43,10 @@ Choose the next scoped repair, rather than resuming the full M3 walkthrough:
 - **Long stalls:** trace the write/read outliers before attributing remaining
   CPU or latency to catalog replay. Frontier progress alone does not explain them.
 
-Evidence, source boundaries and proposed regression shapes for the first two are
+Evidence, source boundaries and regression coverage are
 in the existing [follow-up inventory](20260903_decoupled_coordination_followups.md).
-Neither repair is implemented or newly authorized by this verification task.
+The index-planning and latency repairs remain separate work. Retirement-repair
+verification is recorded in `~/.local/share/aj/m3-evidence/txn-retirement/repair.md`.
 
 ## Replacement and evidence
 
@@ -55,7 +55,8 @@ The preserved replacement is `run-1793731479`. Its PostgreSQL container
 `aj-authority-replacement-run-1793731479` and all runtime processes are stopped.
 State, blobs and exact artifact binaries are retained. The original environment,
 its database and obsolete binaries were discarded with Aljoscha's authorization,
-not migrated. Cleanup reclaimed about 27 GiB. About 47 GiB remains free.
+not migrated. Cleanup reclaimed about 27 GiB. Obsolete incremental build caches
+were also removed during retirement-repair verification.
 
 Set `MZDEV_POSTGRES` and `MZDEV_BLOB` from the `url` and `blob` fields in
 `run-1793731479/database.json`. Use `launch.json` for HTTP addresses. Start the saved container before using
@@ -106,6 +107,10 @@ failed on the unpublished `pubsubd` image after Rust compilation. Registry
 visibility and upstream merge-skew failures remain unresolved. The prior Persist
 `state_inspect_serde_json` object-key-order failure was not repaired or masked.
 Current work has targeted verification, not a new broad-CI pass. The PR stays draft.
+The full adapter unit suite also fails
+`hydration_times_filters_catalog_protection_before_backpressure`: its expectation
+that the hydration index imports raw catalog predates the authority projection.
+The failure reproduced twice. This repair leaves that separate test unchanged.
 
 Keep heavy work bounded and low-concurrency on this 18 GiB VM. Scratch is optional.
 The attempted worker `c9ee5c87-decoupled-coordination` timed out waiting for SSH

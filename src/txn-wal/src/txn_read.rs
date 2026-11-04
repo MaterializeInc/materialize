@@ -130,6 +130,11 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
                     break;
                 }
                 Err(new_data_upper) => {
+                    let Some(new_data_upper) = new_data_upper.into_option() else {
+                        // A peer completed and closed this data shard while we
+                        // were advancing it. All reads are already unblocked.
+                        return;
+                    };
                     data_upper = new_data_upper;
                     continue;
                 }

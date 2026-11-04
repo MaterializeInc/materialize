@@ -142,8 +142,8 @@ writes after temporary-table creation and deletion. The stack reaches
 `small_caa` through `empty_caa` in `TxnsHandle::apply_le`'s register/forget branch.
 This is a data-shard operation despite the panic text saying the txn shard closed.
 
-`empty_caa` and `apply_caa` already accept a closed data shard when the cached
-upper shows closure on entry. Their CAS mismatch paths instead panic on closure.
+`empty_caa` and `apply_caa` accepted a closed data shard when the cached
+upper showed closure on entry. Their CAS mismatch paths instead panicked on closure.
 Independent clients can discover closure at different points. Lawful retirement
 can finish while a peer still has an application attempt in flight. Forget
 completes preceding application, not every peer's outstanding attempt.
@@ -155,27 +155,41 @@ remain open. Two temporary shards reached terminal metadata about 110 ms before
 the first panic. This supports the lawful-retirement race, but the logs do not
 identify the exact failing shard or reconstruct the in-flight CAS ordering.
 
-Stale new writes are a separate error-handling gap. `Txn::commit_at` refreshes
+Stale new writes require separate handling. `Txn::commit_at` refreshes
 membership and protects its check with the WAL CAS, so completed Forget prevents
-a new commit. However, absent membership asserts rather than returning a
-recoverable error. Ordinary group-commit retries retain their payload and do not
-freshly validate each target table. Between catalog DROP and Forget, membership
+a new commit. Its previous membership assertion could crash a lagging writer.
+Between catalog DROP and Forget, membership
 can still permit a staged write. That alone does not establish a consistency
-violation for a write concurrent with DROP. Address rejection separately from
-tolerating redundant application after closure.
+violation for a write concurrent with DROP.
 
-Use separate Persist caches to test delayed application after definitive Forget
-and physical closure. Verify subsequent writes and snapshot/listen progress for
-a surviving shard, while writes to the forgotten shard remain rejected. Preserve
-WAL-closure errors, membership checks and retirement acknowledgement gates. Do
-not replace this with an all-shard cleanup sweep.
+The scoped repair accepts closed data uppers during redundant application and
+returns a typed membership error for new writes. The table worker propagates
+rejection, and group commit retains transaction contributions until success.
+Only transactions touching the rejected target fail, including all their writes
+to other tables. Unrelated user transactions and builtin diffs remain pending.
+WAL closure remains invalid, including during initialization. Catalog retirement
+and Forget acknowledgement gates are unchanged.
+
+`src/txn-wal/src/retirement_tests.rs` uses separate Persist caches to discover
+closure during CAS, checks exact surviving contents and listen progress, and
+rejects cross-shard transactions containing a forgotten target. Both data-apply
+regressions fail with the original closure assertions. Adapter boundary tests
+cover missing routes, atomic rejection, continued writes, SQL variable rollback,
+selective group-commit recovery and builtin notifications. The original
+four-adapter runtime reproduction remains to be rerun.
+
+Retaining transaction contributions adds a row-data copy during consolidation.
+Rejected uploaded batches also remain for Persist GC, as with upper-conflict
+transactions dropped by their callers. These are separate performance and
+reclamation follow-ups, not reasons to weaken atomic rejection or retirement
+authorization.
 
 Evidence: `authority-projection/replacement/run-1793731130/initial-g{0,1}.log`
 under the evidence root. The failure occurred during INSERT after the first
 measurement succeeded. It is separate from authority projection publication.
 The read-only investigation is in `txn-retirement/verified-summary.json`, with
 catalog/WAL history, per-shard states and reproducible decoder scripts alongside.
-No runtime fix or new concurrency regression has been implemented.
+Repair checks and remaining failures are recorded in `txn-retirement/repair.md`.
 
 ### Startup history pruning
 

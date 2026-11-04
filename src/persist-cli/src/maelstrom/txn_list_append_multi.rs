@@ -156,12 +156,13 @@ impl Transactor {
                         self.tidy.merge(tidy);
                         break;
                     }
-                    Err(current) => {
+                    Err(mz_txn_wal::txn_write::CommitError::UpperMismatch(current)) => {
                         write_ts = current;
                         // Have to redo our reads, but that's taken care of at
                         // the top of the loop.
                         continue;
                     }
+                    Err(error) => panic!("registered shard rejected: {error}"),
                 }
             }
         }
