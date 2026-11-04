@@ -121,7 +121,7 @@ impl Catalog {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let build = Self::expression_build_version(self.config().build_info).to_string();
+        let build = self.state().written_plan_namespace();
         let revisions: Vec<_> = ids
             .iter()
             .filter_map(|id| {
@@ -201,11 +201,6 @@ impl Catalog {
         storage: &mut Box<dyn DurableCatalogState>,
     ) -> Result<InitializeStateResult, AdapterError> {
         Ok(CoreCatalog::initialize_state(config, storage).await?)
-    }
-    pub(crate) fn expression_build_version(
-        build_info: &mz_build_info::BuildInfo,
-    ) -> semver::Version {
-        CoreCatalog::expression_build_version(build_info)
     }
     pub(crate) async fn writer_projection(
         &self,

@@ -37,7 +37,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-/// Identifies the build that owns written plans, including distinct development builds.
+/// Identifies an exact build for cache isolation and deployment admission.
 pub fn expression_build_version(build_info: &mz_build_info::BuildInfo) -> Version {
     if build_info.is_dev() {
         build_info
@@ -165,10 +165,17 @@ impl DurableCacheCodec for ExpressionCodec {
     }
 }
 
+/// The native prototype assumes identical committed-plan encodings across its
+/// demonstration builds. Replace this assumption with pinned-plan version support.
+/// This namespace is never a deployment build identity.
+pub(crate) const PROTOTYPE_SHARED_PLAN_NAMESPACE: &str = "prototype-shared-plans-v1";
+
 /// Configuration needed to initialize an [`ExpressionCache`].
 #[derive(Debug, Clone)]
 pub struct ExpressionCacheConfig {
     pub build_version: Version,
+    /// Namespace for immutable committed plans, separate from best-effort caches.
+    pub written_plan_namespace: String,
     pub persist: PersistClient,
     pub shard_id: ShardId,
     /// Every `GlobalId` that may have entries, mapped to the latest version of the item it
@@ -184,6 +191,7 @@ pub struct ExpressionCacheConfig {
 /// A durable cache of optimized expressions.
 pub struct ExpressionCache {
     build_version: Version,
+    written_plan_namespace: String,
     durable_cache: DurableCache<ExpressionCodec>,
 }
 
@@ -215,6 +223,7 @@ impl ExpressionCache {
     pub async fn open(
         ExpressionCacheConfig {
             build_version,
+            written_plan_namespace,
             persist,
             shard_id,
             current_items,
@@ -230,6 +239,7 @@ impl ExpressionCache {
         let durable_cache = DurableCache::new(&persist, shard_id, "expressions").await;
         let mut cache = Self {
             build_version,
+            written_plan_namespace,
             durable_cache,
         };
 
@@ -387,7 +397,7 @@ impl ExpressionCache {
         let mut entries = BTreeMap::new();
         for (id, revision, plan) in plans {
             let key = CacheKey {
-                build_version: self.build_version.to_string(),
+                build_version: self.written_plan_namespace.clone(),
                 id,
                 expr_type: ExpressionType::Written { revision },
             };
@@ -435,7 +445,7 @@ impl ExpressionCache {
             .into_iter()
             .filter_map(|(id, revision)| {
                 let key = CacheKey {
-                    build_version: self.build_version.to_string(),
+                    build_version: self.written_plan_namespace.clone(),
                     id,
                     expr_type: ExpressionType::Written { revision },
                 };
@@ -577,8 +587,22 @@ impl ExpressionCacheHandle {
         persist: &PersistClient,
         shard_id: ShardId,
     ) -> Self {
+        let namespace = build_version.to_string();
+        Self::open_plan_store_in_namespace(build_version, namespace, persist, shard_id).await
+    }
+
+    /// Opens immutable plans under an explicitly authorized namespace. Ordinary
+    /// local/global expression caches still belong to the exact build. Sharing a
+    /// namespace asserts compatible encodings, not deployment admission.
+    pub async fn open_plan_store_in_namespace(
+        build_version: Version,
+        written_plan_namespace: String,
+        persist: &PersistClient,
+        shard_id: ShardId,
+    ) -> Self {
         Self::spawn(ExpressionCache {
             build_version,
+            written_plan_namespace,
             durable_cache: DurableCache::new(persist, shard_id, "expressions").await,
         })
     }
@@ -774,6 +798,7 @@ mod tests {
         // another build's entries and revisions not yet selected by the catalog.
         let (cache, _, _) = ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
             build_version: build.clone(),
+            written_plan_namespace: build.to_string(),
             persist: persist.clone(),
             shard_id: shard,
             current_items: BTreeMap::new(),
@@ -799,6 +824,93 @@ mod tests {
                 .await
                 .expect("foreign build retained"),
             BTreeMap::from([((id, first), changed)])
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn prototype_shared_written_plans() {
+        let persist = PersistClient::new_for_tests().await;
+        let shard = ShardId::new();
+        let old_build = Version::new(0, 1, 0);
+        let new_build = Version::new(0, 2, 0);
+        let namespace = PROTOTYPE_SHARED_PLAN_NAMESPACE.to_owned();
+        let old = ExpressionCacheHandle::open_plan_store_in_namespace(
+            old_build.clone(),
+            namespace.clone(),
+            &persist,
+            shard,
+        )
+        .await;
+        let new = ExpressionCacheHandle::open_plan_store_in_namespace(
+            new_build.clone(),
+            namespace.clone(),
+            &persist,
+            shard,
+        )
+        .await;
+        let id = GlobalId::User(1);
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let plan = gen_global_expressions();
+        let mut changed = plan.clone();
+        changed.physical_plan.debug_name = "new writer".into();
+        old.write_plans(vec![(id, first, plan.clone())])
+            .await
+            .expect("old writes");
+        assert_eq!(
+            new.read_plans(vec![(id, first)])
+                .await
+                .expect("new follows"),
+            BTreeMap::from([((id, first), plan.clone())])
+        );
+        new.write_plans(vec![(id, second, changed.clone())])
+            .await
+            .expect("new writes");
+        assert_eq!(
+            old.read_plans(vec![(id, second)])
+                .await
+                .expect("old follows"),
+            BTreeMap::from([((id, second), changed.clone())])
+        );
+        assert!(matches!(
+            new.write_plans(vec![(id, first, changed.clone())]).await,
+            Err(PlanStoreError::RevisionConflict { .. })
+        ));
+
+        // Sharing does not expose bytes to exact-build readers. Nor does ordinary
+        // cache reconciliation remove shared immutable entries.
+        let (exact, _, globals) =
+            ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
+                build_version: new_build.clone(),
+                written_plan_namespace: new_build.to_string(),
+                persist: persist.clone(),
+                shard_id: shard,
+                current_items: BTreeMap::new(),
+                remove_prior_versions: true,
+                compact_shard: false,
+                dyncfgs: mz_persist_client::cfg::all_dyncfgs(ConfigSet::default()),
+            })
+            .await;
+        assert!(globals.is_empty());
+        assert!(
+            exact
+                .read_plans(vec![(id, first), (id, second)])
+                .await
+                .expect("exact namespace")
+                .is_empty()
+        );
+        drop(old);
+        drop(new);
+        let restarted = ExpressionCacheHandle::open_plan_store_in_namespace(
+            old_build, namespace, &persist, shard,
+        )
+        .await;
+        assert_eq!(
+            restarted
+                .read_plans(vec![(id, first), (id, second)])
+                .await
+                .expect("restart"),
+            BTreeMap::from([((id, first), plan), ((id, second), changed)])
         );
     }
 
@@ -857,6 +969,7 @@ mod tests {
                      remove_prior_versions: bool| {
             ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                 build_version: build_version.clone(),
+                written_plan_namespace: build_version.to_string(),
                 persist: persist.clone(),
                 shard_id,
                 current_items: current_items.clone(),

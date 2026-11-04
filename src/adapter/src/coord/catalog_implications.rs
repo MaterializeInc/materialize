@@ -102,9 +102,7 @@ impl Coordinator {
             matches!(&update.kind, ParsedStateUpdateKind::SystemConfiguration { durable }
                 if durable.name.eq_ignore_ascii_case(DISABLED_METRIC_SINKS.name()))
         });
-        let build =
-            crate::catalog::Catalog::expression_build_version(self.catalog().config().build_info)
-                .to_string();
+        let build = self.catalog().state().written_plan_namespace();
         let CatalogImplications {
             items: catalog_implications,
             clusters: cluster_commands,
@@ -1505,9 +1503,7 @@ impl Coordinator {
     }
 
     async fn try_install_pending_compute_collections(&mut self) -> Result<(), AdapterError> {
-        let build =
-            crate::catalog::Catalog::expression_build_version(self.catalog().config().build_info)
-                .to_string();
+        let build = self.catalog().state().written_plan_namespace();
         let revisions = self
             .pending_compute_installations
             .iter()

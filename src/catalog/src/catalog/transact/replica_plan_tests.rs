@@ -1006,7 +1006,7 @@ async fn exercise_dry_run_contention() {
     let id = GlobalId::Transient(1_000_010);
     let op = select(
         id,
-        &Catalog::expression_build_version(catalog.config().build_info).to_string(),
+        &catalog.state().written_plan_namespace(),
         None,
         Uuid::new_v4(),
         Some(ReplicaPlanOwner {
@@ -1402,7 +1402,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn replica_plan_scope_survives_reopen_and_drop_is_build_local() {
+async fn replica_plan_scope_survives_reopen_and_drop_is_namespace_local() {
     for drop_cluster in [false, true] {
         let (mut catalog, persist, organization) = protected_catalog().await;
         let cluster = catalog
@@ -1440,8 +1440,7 @@ async fn replica_plan_scope_survives_reopen_and_drop_is_build_local() {
             name: owner.name.clone(),
         };
         let other_imports = other_cluster.log_indexes.values().copied().collect();
-        let build =
-            Catalog::expression_build_version(catalog.state().config().build_info).to_string();
+        let build = catalog.state().written_plan_namespace();
         let foreign_build = format!("{build}-other");
         let id = GlobalId::Transient(1_000_000);
         let other_id = GlobalId::Transient(1_000_001);
@@ -1483,7 +1482,7 @@ async fn replica_plan_scope_survives_reopen_and_drop_is_build_local() {
                 ],
             )
             .await
-            .expect("log-only observers may share names across replicas and builds");
+            .expect("log-only observers may share names across replicas and namespaces");
 
         let bootstrap = crate::catalog::test_bootstrap_args();
         let follower =

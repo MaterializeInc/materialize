@@ -102,7 +102,7 @@ async fn exercise_liveness() {
     let config = &fixture.config;
     let cluster = config.cluster_id;
     let replica = config.replica_id;
-    let build = config.reconstruction.plan_build.clone();
+    let build = fixture.writer.state().written_plan_namespace();
     // Open a native follower snapshot so bootstrap effects, including log indexes,
     // are absorbed exactly as they are by the production follower.
     let storage = TestCatalogStateBuilder::new(fixture.persist.clone())

@@ -307,8 +307,19 @@ pub(crate) async fn run(
     let shard = opened
         .expression_cache_shard
         .context("catalog has no expression shard")?;
-    let store = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
-    let build = build.to_string();
+    // Admission above uses the real deployment build. Only plan selection and
+    // decoding use the native prototype's shared namespace.
+    let namespace = catalog
+        .state()
+        .written_plan_namespace_for_build(&build.to_string());
+    let store = ExpressionCacheHandle::open_plan_store_in_namespace(
+        build,
+        namespace.clone(),
+        &persist,
+        shard,
+    )
+    .await;
+    let build = namespace;
     let mut effects = ReplicaEffects::default();
     absorb_updates(&mut effects, &catalog, config.cluster_id, &build, initial);
     if owner.compute.is_some() {

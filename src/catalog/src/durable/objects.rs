@@ -2703,6 +2703,9 @@ mod test {
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct WrittenPlan {
     pub id: GlobalId,
+    /// Committed-plan namespace. Native prototype deployments share the encoding
+    /// under an explicit compatibility assumption, not a per-build selection.
+    /// Deployment admission always checks the real build separately.
     pub build_version: String,
     pub revision: Uuid,
     pub replica_owner: Option<ReplicaPlanOwner>,

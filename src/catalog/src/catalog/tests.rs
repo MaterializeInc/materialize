@@ -40,6 +40,115 @@ use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{Catalog, DebugAwsContext, Op};
 
 #[mz_ore::test(tokio::test)]
+async fn prototype_native_plan_namespace_preserves_admission() {
+    use crate::durable::TestCatalogStateBuilder;
+    use mz_ore::now::SYSTEM_TIME;
+
+    for enabled in [false, true] {
+        let persist = PersistClient::new_for_tests().await;
+        let builder =
+            TestCatalogStateBuilder::new(persist.clone()).with_default_deploy_generation();
+        let bootstrap = test_bootstrap_args();
+        let storage = builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("fresh catalog");
+        let defaults =
+            BTreeMap::from([("enable_catalog_read_protection".into(), enabled.to_string())]);
+        let catalog = Catalog::open_debug_catalog_inner(
+            persist.clone(),
+            storage,
+            SYSTEM_TIME.clone(),
+            None,
+            &mz_build_info::DUMMY_BUILD_INFO,
+            defaults,
+            &bootstrap,
+            Some(false),
+            None,
+        )
+        .await
+        .expect("initialization");
+        let expected = if enabled {
+            crate::expr_cache::PROTOTYPE_SHARED_PLAN_NAMESPACE.to_owned()
+        } else {
+            Catalog::expression_build_version(&mz_build_info::DUMMY_BUILD_INFO).to_string()
+        };
+        assert_eq!(catalog.state().written_plan_namespace(), expected);
+        drop(catalog);
+
+        if !enabled {
+            continue;
+        }
+        // Joining uses the existing native-mode latch, not startup defaults.
+        let storage = builder
+            .clone()
+            .unwrap_build()
+            .await
+            .join()
+            .await
+            .expect("join");
+        let catalog = Catalog::open_debug_catalog_inner(
+            persist,
+            storage,
+            SYSTEM_TIME.clone(),
+            None,
+            &mz_build_info::DUMMY_BUILD_INFO,
+            BTreeMap::from([(
+                "enable_catalog_read_protection".into(),
+                (!enabled).to_string(),
+            )]),
+            &bootstrap,
+            Some(false),
+            None,
+        )
+        .await
+        .expect("reconstruct without initialization");
+        assert_eq!(catalog.state().written_plan_namespace(), expected);
+        assert_eq!(
+            catalog
+                .state()
+                .written_plan_namespace_for_build("other-build"),
+            expected
+        );
+
+        // Prewarming accepts the real build identity, but scopes metadata writes
+        // to the selected namespace. A namespace is never valid admission input.
+        let real_build =
+            Catalog::expression_build_version(&mz_build_info::DUMMY_BUILD_INFO).to_string();
+        assert!(
+            builder
+                .clone()
+                .with_deploy_generation(1)
+                .unwrap_build()
+                .await
+                .join_prewarming(crate::expr_cache::PROTOTYPE_SHARED_PLAN_NAMESPACE)
+                .await
+                .is_err()
+        );
+        let mut pending = builder
+            .with_deploy_generation(1)
+            .unwrap_build()
+            .await
+            .join_prewarming(&real_build)
+            .await
+            .expect("admit actual build");
+        pending.sync_to_current_updates().await.expect("refresh");
+        let mut tx = pending.transaction().await.expect("prewarming transaction");
+        let namespace = catalog.state().written_plan_namespace();
+        tx.set_written_plan(GlobalId::User(100_000), &namespace, Some(Uuid::new_v4()))
+            .expect("prepare selection");
+        let _ = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts)
+            .await
+            .expect("shared namespace remains permitted metadata");
+    }
+}
+
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
 async fn upper_advance_allows_queued_refresh_after_conflict() {
     use std::sync::Arc;
@@ -2305,7 +2414,7 @@ async fn test_multi_subscriber_catalog() {
     let initial_updates = opened.initial_updates;
     let initial = crate::memory::implications::CatalogImplications::from_updates(
         initial_updates,
-        &Catalog::expression_build_version(writer_catalog.config().build_info).to_string(),
+        &writer_catalog.state().written_plan_namespace(),
     );
     assert_eq!(
         initial.clusters.keys().copied().collect::<BTreeSet<_>>(),
@@ -2429,7 +2538,7 @@ async fn test_multi_subscriber_catalog() {
         .await
         .expect("drain committed rename prefix");
     assert!(before_transaction.transient_revision_is_current());
-    let build = Catalog::expression_build_version(writer_catalog.config().build_info).to_string();
+    let build = writer_catalog.state().written_plan_namespace();
     let mut previous_name = "pending_replica";
     for name in ["first_peer_rename", "second_peer_rename"] {
         let updates = writer_catalog_peer

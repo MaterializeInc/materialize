@@ -112,28 +112,28 @@ or another policy owner during this milestone.
 
 ## Separate correctness investigations
 
-### Own-build plans for peer-created indexes
+### Shared plans for peer-created indexes
 
 A fresh two-version deployment reproduced a post-admission gap: an index created
-through generation 0 serves queries there, while generation 1 reports the index
-as a pending plan and its query stalls. Both deployments had finished bootstrap.
-An index created before generation 1 joins works on both versions.
+through generation 0 serves queries there, while generation 1 waits for its own
+build's selection. An index created before generation 1 joins works because
+bootstrap prepares the missing selection. Evidence:
+`~/.local/share/aj/m3-evidence/authority-projection/replacement/`, runs
+`run-1793730433` and `run-1793730854`.
 
-Originating DDL writes its own build's selection through
-`Catalog::prepare_item_plan`. Bootstrap prepares missing own-build selections,
-but the native branch of `apply_catalog_implications` does not compile an index
-added by a peer after admission. Replicas correctly wait for their configured
-build's selection. Adapter planning needs to incorporate these committed changes,
-not rely on bootstrap or make replicas reuse another build's plan.
+The agreed M3 scope assumes both prototype builds understand the same complete
+committed-plan encoding. Native deployments share selections without a separate
+opt-in, per-build replanning or new coordination protocol. Real-build admission,
+object versions, dependencies and read protection remain binding. Upstream
+pinned-plan format/version support will replace the compatibility assumption.
+This does not claim compatibility between arbitrary releases or migrate old
+exact-build selections.
 
-The regression should admit both builds first, then create an index and require
-bounded reads and valid selections in both namespaces without restarting. Keep
-catalog validation and existing selection protection. This is not a request for
-controller-owned planning or another coordination protocol.
-
-Evidence: `~/.local/share/aj/m3-evidence/authority-projection/replacement/`, runs
-`run-1793730433` and `run-1793730854`. Both show generation 1 pending `u4` while
-generation 0 serves the indexed count.
+The live regression is `test/controllerd/shared-plans.py`. The default-debug
+witness passed with both builds admitted before table/index creation in either
+direction. Both served indexed reads and table writes, retaining their SQL
+sessions and every process identity. Evidence and limitations:
+`~/.local/share/aj/m3-evidence/shared-plans/verification.md`, run `1793800485`.
 
 ### Data-shard closure during txn-WAL application
 

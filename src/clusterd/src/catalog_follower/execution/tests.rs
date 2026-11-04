@@ -390,6 +390,9 @@ impl Fixture {
         let persist = clients.open(location.clone()).await.unwrap();
         let mut writer = debug_catalog(&persist, Some(ShardId::new())).await;
         assert!(writer.state().catalog_read_protection_enabled());
+        // Native execution publishes frontier observations even in a fixture
+        // with no adapters. Initialize their storage through the normal path.
+        writer.initialize_storage_metadata().await.unwrap();
         // Keep normal asynchronous lease downgrades, with a fixture-sized clock
         // interval rather than waiting for the production 15-minute lease.
         transact(
@@ -519,8 +522,10 @@ impl Fixture {
             .reconstruction
             .plan_build_version(config.build_info)
             .unwrap();
-        let store = ExpressionCacheHandle::open_plan_store(
-            build.clone(),
+        let namespace = writer.state().written_plan_namespace();
+        let store = ExpressionCacheHandle::open_plan_store_in_namespace(
+            build,
+            namespace.clone(),
             &persist,
             opened
                 .expression_cache_shard
@@ -563,7 +568,7 @@ impl Fixture {
                 create_index,
                 Op::SetWrittenPlan {
                     id: index,
-                    build_version: build.to_string(),
+                    build_version: namespace,
                     expected_revision: None,
                     revision: Some(revision),
                     imports: BTreeSet::from([source]),

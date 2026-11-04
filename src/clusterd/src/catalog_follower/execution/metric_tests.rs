@@ -59,7 +59,7 @@ async fn written_metric_survives_disconnect_and_export_replacement() {
 
 async fn run_metric_replacement() {
     let mut fixture = Box::pin(Fixture::new((1, 15_000), 20_000, false)).await;
-    let build = fixture.config.reconstruction.plan_build.clone();
+    let build = fixture.writer.state().written_plan_namespace();
     let owner = ReplicaPlanOwner {
         replica_id: fixture.config.replica_id,
         deployment_generation: fixture.writer.state().deployment_generation(),

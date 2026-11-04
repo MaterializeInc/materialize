@@ -3123,7 +3123,26 @@ impl CatalogState {
         &self.maintained_read_requirements
     }
 
-    /// The selected immutable plan revision for this object and build.
+    /// The namespace for maintained plans, not a deployment identity. The
+    /// prototype assumes both builds understand the full current encoding,
+    /// including MIR. Replace this assertion with upstream pinned-plan format
+    /// compatibility once available. Best-effort expression caches remain local
+    /// to the exact build, and admission always uses the real build identity.
+    pub fn written_plan_namespace_for_build(&self, build: &str) -> String {
+        if self.catalog_read_protection_enabled() {
+            crate::expr_cache::PROTOTYPE_SHARED_PLAN_NAMESPACE.to_owned()
+        } else {
+            build.to_owned()
+        }
+    }
+
+    pub fn written_plan_namespace(&self) -> String {
+        self.written_plan_namespace_for_build(
+            &crate::expr_cache::expression_build_version(self.config().build_info).to_string(),
+        )
+    }
+
+    /// The selected immutable plan revision for this object and namespace.
     pub fn written_plan(&self, id: GlobalId, build_version: &str) -> Option<uuid::Uuid> {
         self.written_plans
             .get(&(id, build_version.to_owned()))

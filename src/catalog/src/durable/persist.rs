@@ -1449,13 +1449,13 @@ impl UnopenedPersistCatalogState {
         let prewarming_plan_build = match purpose {
             OpenPurpose::Prewarm(build) | OpenPurpose::JoinAdmitted(build) => {
                 let version = build.parse::<semver::Version>().map_err(|_| {
-                    DurableCatalogError::NotWritable("invalid prewarming plan namespace".into())
+                    DurableCatalogError::NotWritable("invalid prewarming build identity".into())
                 })?;
                 if version.cmp_precedence(&self.catalog_content_version)
                     != std::cmp::Ordering::Equal
                 {
                     return Err(DurableCatalogError::NotWritable(
-                        "prewarming plan namespace does not match writer version".into(),
+                        "prewarming build identity does not match writer version".into(),
                     )
                     .into());
                 }
@@ -1463,11 +1463,24 @@ impl UnopenedPersistCatalogState {
             }
             _ => None,
         };
-        // Replica prewarming retains its private metadata namespace. An admitted
-        // SQL adapter is an ordinary shared writer, but still joins without
+        // Replica prewarming retains its deployment-scoped metadata authority.
+        // An admitted SQL adapter is an ordinary shared writer, but joins without
         // initialization or migrations.
         let prewarming_plan_build = if matches!(purpose, OpenPurpose::Prewarm(_)) {
-            prewarming_plan_build
+            // Real-build admission above is independent of plan decoding. Scope
+            // native prewarming writes to the same shared namespace as readers.
+            prewarming_plan_build.map(|build| {
+                if self
+                    .update_applier
+                    .configs
+                    .get(READ_PROTECTION_CONFIG)
+                    .is_some_and(|value| *value != 0)
+                {
+                    crate::expr_cache::PROTOTYPE_SHARED_PLAN_NAMESPACE.to_owned()
+                } else {
+                    build
+                }
+            })
         } else {
             None
         };

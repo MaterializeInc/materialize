@@ -79,7 +79,7 @@ User objects, clusters, declared configuration and explicit adapter and replica
 declarations live once in the shared catalog. There is no private durable SQL
 catalog per deployment. M2 needs one deployment-owned adapter realization. Named
 adapter declarations, SQL management and multiple serving adapters belong to M3.
-Written plans retain their [build ownership](#written-plans).
+Written plans retain their [encoding compatibility requirements](#written-plans).
 
 `ReplicaId` identifies a logical replica, not a deployment-local process. Shared
 declarations and deliberate carryover preserve that ID across deployments,
@@ -678,14 +678,25 @@ required for M3.
 ### Written plans
 
 The writer that commits a maintained object also writes its optimized plan and
-notices, per build. Lifecycle components install what is written and do not plan.
-EXPLAIN and `mz_notices` read and hold that written state. DDL that removes
-something a written plan imports rewrites the affected plans of the writer's own
-build in the same transaction without reinstalling the running dataflows. Other
-builds rewrite theirs when they observe the change, and a plan whose import is
-gone is not installable until then. No build writes another's plans. A new index
-does not change existing plans. A new generation's adapters write plans for their
-version before that generation's components install.
+notices. Lifecycle components install what is written and do not plan. EXPLAIN
+and `mz_notices` read and hold that written state. DDL that removes something a
+selected plan imports rewrites the affected selections in the same transaction
+without reinstalling running dataflows. A plan whose import is gone is not
+installable. A new index does not change existing plans.
+
+The M3 native prototype assumes both demonstration builds understand the same
+complete plan encoding, including MIR, LIR and notices. Committed selections use
+one shared namespace, so either build's post-admission DDL is executable by both
+without per-build replanning. Ordinary expression caches remain exact-build.
+There is no separate opt-in or compatibility setting. Demonstrations use fresh
+environments, with no migration of existing exact-build selections.
+
+This is not arbitrary-release compatibility. Deployment admission still checks
+the real build, catalog schema and Persist policy. Selection conflicts, object
+versions, dependency validation, import protection and replica ownership remain
+binding. Replace this temporary encoding assertion with upstream pinned-plan
+format/version compatibility when its durable publication and consumption are
+available.
 
 Selecting or rewriting a plan admits its import protection in the same catalog
 transaction. Protection follows the selected plans and their required frontiers

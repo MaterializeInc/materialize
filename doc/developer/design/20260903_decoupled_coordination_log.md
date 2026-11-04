@@ -2,118 +2,60 @@
 
 ## Current outcome
 
-The durable deployment-authority projection is implemented in `89086bb252`.
-All authority consumers use it. Retained metric indexes no longer import raw
-catalog history for authority, while other catalog facts remain unchanged.
-Structural, behavior, selected-plan and catalog SQL checks pass.
+Native M3 deployments now share committed plans under the explicit assumption
+that both prototype builds understand the same full encoding. There is no new
+compatibility flag or durable setting. Real-build admission, object/dependency
+validation, read protection and deployment fencing remain intact.
 
-Aljoscha rejected migration and requested a fresh representative replacement.
-That retention/reconstruction witness passed independent review: two prototype
-versions, four adapters, eight replicas, one relay and 30 minutes of concurrent
-writes with interleaved view DDL. Metrics retention remained 30 days, protection
-publication one minute and reader leases 15 minutes.
+The default-debug two-version demonstration passed: both adapters joined before
+either created its indexed table. Each version read and wrote both tables through
+the same SQL sessions. All process identities and replica restart counts remained
+unchanged. Selected plans use the shared namespace. This proves propagation, not
+arbitrary-release compatibility or a latency improvement.
 
-Raw physical since advanced from `1793731492539` to `1793733145652`, while
-authority since stayed at `1793731492539`. Historical timestamp
-`1793731622877` was rejected for raw catalog but still returned identical
-nonempty authority, hydration and arrangement results on all four adapters,
-including after a cold restart. User data survived by count and ID-sum checks.
-Observed raw trace records fell from a peak of 92,369 to 40,397.
+Earlier work decoupled retained introspection from raw catalog history through
+the durable authority projection, with compaction and cold-restart evidence. The
+scoped txn-WAL repair tolerates redundant application after lawful table retirement
+and rejects new writes to forgotten targets without partial or collateral commits.
+The original four-adapter workload has not been rerun with that repair.
 
-This is not a general health or performance pass. Sampled write/read maxima were
-240.89s and 20.53s, with about six CPU cores consumed. The earlier unchanged
-seeded workload panicked during txn-WAL data-shard application. The passing
-repeat did not resolve that race. The scoped repair now tolerates redundant
-application after data-shard retirement and rejects new writes to forgotten
-tables without crashing. Group commit retains transaction identity so rejection
-does not partially commit an affected transaction or fail unrelated clients.
-The original four-adapter workload has not been rerun with this repair.
-Promotion, authority transitions, sink handover and multi-day behavior were not
-demonstrated.
+## Next concrete action and remaining work
 
-## Next concrete action
-
-Choose the next scoped repair, rather than resuming the full M3 walkthrough:
-
-- **Post-admission index planning:** an index created after both builds join
-  works on its creating build but stalls the other build waiting for a selection.
-  Adapters must incorporate peer-created maintained objects into own-build
-  planning. The successful retention witness uses the old setup's order: seeded
-  index before candidate admission.
-- **Long stalls:** trace the write/read outliers before attributing remaining
-  CPU or latency to catalog replay. Frontier progress alone does not explain them.
-
-Evidence, source boundaries and regression coverage are
-in the existing [follow-up inventory](20260903_decoupled_coordination_followups.md).
-The index-planning and latency repairs remain separate work. Retirement-repair
-verification is recorded in `~/.local/share/aj/m3-evidence/txn-retirement/repair.md`.
-
-## Replacement and evidence
-
-Private evidence root: `~/.local/share/aj/m3-evidence/authority-projection/replacement/`.
-The preserved replacement is `run-1793731479`. Its PostgreSQL container
-`aj-authority-replacement-run-1793731479` and all runtime processes are stopped.
-State, blobs and exact artifact binaries are retained. The original environment,
-its database and obsolete binaries were discarded with Aljoscha's authorization,
-not migrated. Cleanup reclaimed about 27 GiB. Obsolete incremental build caches
-were also removed during retirement-repair verification.
-
-Set `MZDEV_POSTGRES` and `MZDEV_BLOB` from the `url` and `blob` fields in
-`run-1793731479/database.json`. Use `launch.json` for HTTP addresses. Start the saved container before using
-`bin/controllerd --controller-data-directory <run>/state
---controller-binaries-directory <artifacts>` with the saved environment variables.
-Generation 0 provisions pubsub. Generation 1 must use that relay via `--pubsub-url`.
-Both versioned artifact sets are in `artifacts/` under the evidence root. Do not use the old
-default directory or old artifact paths, which were removed.
-
-Essential evidence within the replacement run:
-
-- `verified-summary.json`: measured results and limitations.
-- `samples.json` and `*-mz_catalog_raw-state.json`: committed and physical progress.
-- `historical-{before,after}.json`: full expected rows and matching observations.
-- `historical-after-compaction-live.json`, `raw-historical-read*.json`: retained
-  metrics remain readable when raw catalog rejects the same timestamp.
-- `{initial,after-restart}-native-plan-imports.json`: exact-build selected inputs.
-- `measurement-stopped-processes.json`: all 15 measured processes stopped before
-  restart. `result.json` records final cleanup, including the launcher fallback.
-- `effective-policy-settings.json`, `usage.jsonl`: unchanged policies and resource
-  measurements. `obsolete-environment-cleanup.json` is in the parent directory.
-
-Keep failed evidence too: runs `1793730433` and `1793730854` reproduce the missing
-index plan. Run `1793731130` records the data-shard panic. The initial negative-read
-probe guessed the error wording incorrectly. SQLSTATE 22000 and the contradictory
-timestamp constraints confirm the expected rejection. The local launcher can
-also hit psutil pidfd `EINVAL` while stopping processes. Owned-process fallback
-cleanup is recorded, not evidence of graceful shutdown.
-
-## Remaining M3 boundaries and blockers
-
-M3 still follows the [prompt](20260903_decoupled_coordination_prompt.md) and
-[design](20260903_decoupled_coordination.md): compatible versions serve SQL, DDL
-and writes before and after promotion. Retirement remains explicit. Preserve
-warmed replicas, surviving deployments, shared pubsub and one authorized execution
-per external sink. The [upgrade walkthrough](../controllerd.md) remains unverified.
-These are prototype version variants, not released-version compatibility evidence.
-
-Keep readiness reads off the coordinator, with their selected snapshot cut and
-reader lifetime intact. Temporary-item cleanup still needs failure-preserving
-session publication and Items-before-session retirement cleanup. Bootstrap
-planning-revision contention still needs its scoped retry boundary. The standalone
-CollectionReader lifetime issue and other architectural opportunities remain in
-the follow-up inventory and prior handoff history. M2 stays closed within scope.
+The next M3 walkthrough is promotion followed by explicit retirement, preserving
+warmed replicas, surviving deployments and one authorized execution per external
+sink. That walkthrough, authority transitions and sink handover remain unverified.
+Do not treat the shared-plan demonstration as completing M3. Long write/read stalls
+remain a separate investigation. Other scoped opportunities are in the
+[follow-up inventory](20260903_decoupled_coordination_followups.md).
 
 Broad CI is not green. [Build141419](https://buildkite.com/materialize/test/builds/141419)
 failed on the unpublished `pubsubd` image after Rust compilation. Registry
 visibility and upstream merge-skew failures remain unresolved. The prior Persist
 `state_inspect_serde_json` object-key-order failure was not repaired or masked.
-Current work has targeted verification, not a new broad-CI pass. The PR stays draft.
-The full adapter unit suite also fails
-`hydration_times_filters_catalog_protection_before_backpressure`: its expectation
-that the hydration index imports raw catalog predates the authority projection.
-The failure reproduced twice. This repair leaves that separate test unchanged.
+The full adapter suite's stale
+`hydration_times_filters_catalog_protection_before_backpressure` expectation still
+requires separate correction after the authority projection. Current targeted
+checks pass, not broad CI. The PR stays draft.
 
-Keep heavy work bounded and low-concurrency on this 18 GiB VM. Scratch is optional.
-The attempted worker `c9ee5c87-decoupled-coordination` timed out waiting for SSH
-with a six-hour expiry and no returned instance ID. Inventory it after
-reauthentication before launching another worker. Prior evidence remains in the
-[archive](20260903_decoupled_coordination_log_archive.md), not as added scope.
+## Essential evidence and local state
+
+- Shared plans: `~/.local/share/aj/m3-evidence/shared-plans/verification.md`.
+  Passing run: `run-1793800485`. Exact debug artifacts, source patches, setup
+  script, test output, before/after process identities and check logs are retained.
+  Reusable SQL regression: `test/controllerd/shared-plans.py`.
+- Authority projection: `~/.local/share/aj/m3-evidence/authority-projection/replacement/`,
+  `run-1793731479/verified-summary.json`. Failed runs and exact artifacts remain
+  beside it. The original environment was discarded, not migrated.
+- Txn-WAL retirement: `~/.local/share/aj/m3-evidence/txn-retirement/repair.md`.
+- Earlier details and worker history: the
+  [archive](20260903_decoupled_coordination_log_archive.md).
+
+All demonstration processes and databases are stopped. Each saved run's
+`database.json` and `launch.json` identify its private metadata, blobs and ports.
+Its artifact directory supplies the exact binaries. Generation 1 shares generation
+0's pubsub endpoint. Do not mix artifact sets or convert the saved exact-build
+plan environment to the new shared namespace.
+
+Keep heavy work low-concurrency on this 18 GiB VM. Scratch is optional. Stale
+incremental compiler caches were pruned, without deleting saved evidence or
+binaries.

@@ -881,8 +881,7 @@ impl Coordinator {
             )
             .await?;
         let candidate = Arc::new(candidate);
-        let build =
-            catalog::Catalog::expression_build_version(candidate.config().build_info).to_string();
+        let build = candidate.written_plan_namespace();
         let mut revisions: BTreeMap<_, _> = candidate
             .written_plans()
             .iter()

@@ -299,8 +299,13 @@ impl Catalog {
                 }
                 if result.expr_cache_handle.is_none() {
                     result.expr_cache_handle = Some(
-                        ExpressionCacheHandle::open_plan_store(build, &persist, expression_shard)
-                            .await,
+                        ExpressionCacheHandle::open_plan_store_in_namespace(
+                            build,
+                            result.state.written_plan_namespace(),
+                            &persist,
+                            expression_shard,
+                        )
+                        .await,
                     );
                 }
                 return Ok((
@@ -684,6 +689,19 @@ impl Catalog {
         // none, so sync explicitly here.
         state.system_config().sync_dyncfgs();
 
+        // Latch the mode at environment birth. Changing startup defaults must not
+        // adopt existing collections whose required history may already be gone.
+        let protection_key = "catalog_read_protection_enabled".to_string();
+        state.catalog_read_protection_enabled = match txn.get_config(protection_key.clone()) {
+            Some(value) => value != 0,
+            None => {
+                let enabled = get_migration_version(txn).is_none()
+                    && state.system_config().enable_catalog_read_protection();
+                txn.set_config(protection_key, Some(u64::from(enabled)))?;
+                enabled
+            }
+        };
+
         let expr_cache_start = Instant::now();
         info!("startup: coordinator init: catalog open: expr cache open beginning");
         // We wait until after the `pre_item_updates` to open the cache so we can get accurate
@@ -716,6 +734,7 @@ impl Catalog {
             let build_version = Self::expression_build_version(config.build_info);
             let expr_cache_config = ExpressionCacheConfig {
                 build_version,
+                written_plan_namespace: state.written_plan_namespace(),
                 shard_id: txn
                     .get_expression_cache_shard()
                     .expect("expression cache shard should exist for opened catalogs"),
@@ -749,26 +768,14 @@ impl Catalog {
 
         let last_seen_version = get_migration_version(txn);
 
-        // Latch the mode at environment birth. Changing startup defaults must not
-        // adopt existing collections whose required history may already be gone.
-        let protection_key = "catalog_read_protection_enabled".to_string();
-        state.catalog_read_protection_enabled = match txn.get_config(protection_key.clone()) {
-            Some(value) => value != 0,
-            None => {
-                let enabled = last_seen_version.is_none()
-                    && state.system_config().enable_catalog_read_protection();
-                txn.set_config(protection_key, Some(u64::from(enabled)))?;
-                enabled
-            }
-        };
-
         if deploy_generation.is_some()
             && state.catalog_read_protection_enabled()
             && expr_cache_handle.is_none()
         {
             expr_cache_handle = Some(
-                ExpressionCacheHandle::open_plan_store(
+                ExpressionCacheHandle::open_plan_store_in_namespace(
                     Self::expression_build_version(config.build_info),
+                    state.written_plan_namespace(),
                     &config.persist_client,
                     txn.get_expression_cache_shard()
                         .expect("opened catalog has an expression shard"),

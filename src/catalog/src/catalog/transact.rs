@@ -159,8 +159,8 @@ pub enum Op {
         id: mz_repr::AdapterId,
         name: String,
     },
-    /// Select immutable bytes written by this build. The expected selection and imports
-    /// are checked in the same transaction as the accompanying DDL.
+    /// Select immutable bytes in the catalog's committed-plan namespace. The
+    /// expected selection and imports are checked alongside the accompanying DDL.
     SetWrittenPlan {
         id: GlobalId,
         build_version: String,
@@ -2578,7 +2578,7 @@ impl Catalog {
                     )
                     .into());
                 }
-                let build = Self::expression_build_version(state.config().build_info).to_string();
+                let build = state.written_plan_namespace();
                 let plans: Vec<_> = tx
                     .get_written_plans()
                     .filter(|plan| {
@@ -3092,8 +3092,7 @@ impl Catalog {
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
 
-                    let build =
-                        Self::expression_build_version(state.config().build_info).to_string();
+                    let build = state.written_plan_namespace();
                     for id in entry.global_ids() {
                         if tx.get_written_plan(id, &build).is_some() {
                             tx.set_written_plan(id, &build, None)?;
@@ -3288,8 +3287,7 @@ impl Catalog {
                     )?;
                 }
                 if !replicas.is_empty() {
-                    let build =
-                        Self::expression_build_version(state.config().build_info).to_string();
+                    let build = state.written_plan_namespace();
                     let observer_plans: Vec<_> = tx
                         .get_written_plans()
                         .filter(|plan| {

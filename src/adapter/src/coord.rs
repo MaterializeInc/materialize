@@ -2747,10 +2747,7 @@ impl Coordinator {
                 .await
             {
                 Ok(mut result) => {
-                    let build = crate::catalog::Catalog::expression_build_version(
-                        self.catalog().config().build_info,
-                    )
-                    .to_string();
+                    let build = self.catalog().state().written_plan_namespace();
                     for update in &result.catalog_updates {
                         if let ParsedStateUpdateKind::WrittenPlan(plan) = &update.kind
                             && update.diff == StateDiff::Addition
@@ -3048,8 +3045,7 @@ impl Coordinator {
         let mut candidates = cached_global_exprs;
         let mut written_ids = BTreeSet::new();
         if protected_plans {
-            let build =
-                Catalog::expression_build_version(self.catalog().config().build_info).to_string();
+            let build = self.catalog().state().written_plan_namespace();
             let revisions: Vec<_> = self
                 .catalog()
                 .state()

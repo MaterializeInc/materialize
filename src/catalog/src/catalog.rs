@@ -1946,8 +1946,7 @@ impl Catalog {
         let store = self.expr_cache_handle.as_ref().ok_or_else(|| {
             CatalogError::internal("write maintained plan", "expression store is not open")
         })?;
-        let build_version =
-            Self::expression_build_version(self.state.config().build_info).to_string();
+        let build_version = self.state.written_plan_namespace();
         let mut entries = Vec::with_capacity(plans.len());
         let mut selections = Vec::with_capacity(plans.len());
         for (id, mut plan) in plans {
@@ -1976,7 +1975,7 @@ impl Catalog {
         Ok(selections)
     }
 
-    /// Reads specified immutable revisions for this build. Missing entries are omitted.
+    /// Reads specified immutable revisions in the committed-plan namespace. Missing entries are omitted.
     pub async fn read_written_plans(
         &self,
         revisions: Vec<(GlobalId, Uuid)>,
@@ -1993,13 +1992,13 @@ impl Catalog {
             .collect())
     }
 
-    /// Reads this snapshot's selected plan for this build, independently of installation.
+    /// Reads this snapshot's selected plan, independently of installation.
     /// A missing selection or immutable entry is not a request to replan.
     pub async fn selected_plan(
         &self,
         id: GlobalId,
     ) -> Result<Option<GlobalExpressions>, CatalogError> {
-        let build = Self::expression_build_version(self.state.config().build_info).to_string();
+        let build = self.state.written_plan_namespace();
         let Some(revision) = self.state.written_plan(id, &build) else {
             return Ok(None);
         };

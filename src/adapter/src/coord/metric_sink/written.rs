@@ -130,7 +130,7 @@ async fn prepare_selections(
             return Ok(Vec::new());
         }
     }
-    let build = Catalog::expression_build_version(candidate.config().build_info).to_string();
+    let build = candidate.written_plan_namespace();
     let deployment_generation = candidate.deployment_generation();
     let enabled = ENABLE_METRIC_SINK.enabled(candidate.system_config());
     let denylist_changed = candidate.system_config().disabled_metric_sinks()
