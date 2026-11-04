@@ -22,6 +22,8 @@
 
 mode cockroach
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (
   a STRING COLLATE fr PRIMARY KEY
@@ -41,6 +43,8 @@ SELECT a FROM t WHERE a = (b'Am\xc3\xa9lie' COLLATE fr)
 ----
 Amélie
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DELETE FROM t
 
