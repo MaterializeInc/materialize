@@ -5842,21 +5842,21 @@ fn plan_is_expr<'a>(
     construct: &IsExprConstruct<Aug>,
     not: bool,
 ) -> Result<HirScalarExpr, PlanError> {
-    let expr_hir = plan_expr(ecx, expr)?;
-
     let mut result = match construct {
         IsExprConstruct::Null => {
             // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is
             // at odds with our type coercion rules, which treat `NULL` literals
             // and unconstrained parameters identically. Providing a type hint
             // of string means we wind up supporting both.
-            expr_hir.type_as_any(ecx)?.call_is_null()
+            plan_expr(ecx, expr)?.type_as_any(ecx)?.call_is_null()
         }
-        IsExprConstruct::Unknown => expr_hir.type_as(ecx, &SqlScalarType::Bool)?.call_is_null(),
-        IsExprConstruct::True => expr_hir
+        IsExprConstruct::Unknown => plan_expr(ecx, expr)?
+            .type_as(ecx, &SqlScalarType::Bool)?
+            .call_is_null(),
+        IsExprConstruct::True => plan_expr(ecx, expr)?
             .type_as(ecx, &SqlScalarType::Bool)?
             .call_unary(UnaryFunc::IsTrue(expr_func::IsTrue)),
-        IsExprConstruct::False => expr_hir
+        IsExprConstruct::False => plan_expr(ecx, expr)?
             .type_as(ecx, &SqlScalarType::Bool)?
             .call_unary(UnaryFunc::IsFalse(expr_func::IsFalse)),
         IsExprConstruct::DistinctFrom(expr2) => {
@@ -5873,25 +5873,54 @@ fn plan_is_expr<'a>(
             let ne_ast = expr.clone().not_equals(expr2.as_ref().clone());
             let ne_hir = plan_expr(ecx, &ne_ast)?.type_as_any(ecx)?;
 
-            let expr1_hir = expr_hir.type_as_any(ecx)?;
-            let expr2_hir = plan_expr(ecx, expr2)?.type_as_any(ecx)?;
-
-            let term1 = HirScalarExpr::variadic_or(vec![
-                ne_hir,
-                expr1_hir.clone().call_is_null(),
-                expr2_hir.clone().call_is_null(),
-            ]);
-            let term2 = HirScalarExpr::variadic_or(vec![
-                expr1_hir.call_is_null().not(),
-                expr2_hir.call_is_null().not(),
-            ]);
-            term1.and(term2)
+            // The operands are planned after `ne_hir`, which types any parameters among them.
+            // (Planned before it, a parameter would get both the text type and the type
+            // `ne_hir` needs, and planning would fail.)
+            //
+            // A literal other than NULL is never NULL, so its IS NULL term is false and `term2` is
+            // true. Leaving them out keeps two copies of the other operand instead of three, a
+            // factor that nested comparisons multiply.
+            let literal1 = is_non_null_literal(expr);
+            let literal2 = is_non_null_literal(expr2);
+            if literal1 || literal2 {
+                let mut terms = vec![ne_hir];
+                if !literal1 {
+                    terms.push(plan_expr(ecx, expr)?.type_as_any(ecx)?.call_is_null());
+                }
+                if !literal2 {
+                    terms.push(plan_expr(ecx, expr2)?.type_as_any(ecx)?.call_is_null());
+                }
+                HirScalarExpr::variadic_or(terms)
+            } else {
+                let expr1_hir = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+                let expr2_hir = plan_expr(ecx, expr2)?.type_as_any(ecx)?;
+                let term1 = HirScalarExpr::variadic_or(vec![
+                    ne_hir,
+                    expr1_hir.clone().call_is_null(),
+                    expr2_hir.clone().call_is_null(),
+                ]);
+                let term2 = HirScalarExpr::variadic_or(vec![
+                    expr1_hir.call_is_null().not(),
+                    expr2_hir.call_is_null().not(),
+                ]);
+                term1.and(term2)
+            }
         }
     };
     if not {
         result = result.not();
     }
     Ok(result)
+}
+
+/// Reports whether `expr` is a literal other than `NULL`, possibly parenthesized.
+fn is_non_null_literal(expr: &Expr<Aug>) -> bool {
+    match expr {
+        Expr::Value(Value::Null) => false,
+        Expr::Value(_) => true,
+        Expr::Nested(expr) => is_non_null_literal(expr),
+        _ => false,
+    }
 }
 
 fn plan_case<'a>(
