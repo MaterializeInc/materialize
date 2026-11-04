@@ -64,7 +64,8 @@ const structureWithLir: DataflowStructure = {
   channels: [],
   lirSpans: [joinSpan],
   nodes: new Map([
-    ["root", node("root", { children: ["op1"], lir: [joinSpan] })],
+    ["root", node("root", { address: [1], children: ["op1"] })],
+    ["op1", node("op1", { address: [1, 1], parent: "root", lir: [joinSpan] })],
   ]),
 };
 
@@ -128,7 +129,7 @@ describe("LirPanel", () => {
     );
     const row = screen.getByText("LIR 1: Join");
     await userEvent.hover(row);
-    expect(onHighlight).toHaveBeenCalledWith(new Set(["root"]));
+    expect(onHighlight).toHaveBeenCalledWith(new Set(["op1"]));
     await userEvent.unhover(row);
     expect(onHighlight).toHaveBeenCalledWith(null);
   });
@@ -151,20 +152,18 @@ describe("LirPanel", () => {
   it("marks the selected span", async () => {
     await renderComponent(
       <LirPanel
-        structure={structureWithEmptySpan}
+        structure={structureWithLir}
         collapsed={false}
         onToggleCollapsed={noop}
         onHighlight={noop}
         onSelect={noop}
-        selectedKey="u1/2"
+        selectedKey="u1/1"
       />,
     );
-    expect(
-      screen.getByRole("button", { name: "LIR 2: Constant" }),
-    ).toHaveAttribute("aria-current", "true");
-    expect(
-      screen.getByRole("button", { name: "LIR 1: Join" }),
-    ).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "LIR 1: Join" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
   });
 
   it("shows only the expand toggle when collapsed", async () => {
@@ -183,22 +182,28 @@ describe("LirPanel", () => {
     ).toBeVisible();
   });
 
-  it("lists a span with no member operators, without highlighting anything on hover", async () => {
+  it("lists a span with no operators as plain text, not a link", async () => {
     const onHighlight = vi.fn();
+    const onSelect = vi.fn();
     await renderComponent(
       <LirPanel
         structure={structureWithEmptySpan}
         collapsed={false}
         onToggleCollapsed={noop}
         onHighlight={onHighlight}
-        onSelect={noop}
+        onSelect={onSelect}
       />,
     );
     const row = screen.getByText("LIR 2: Constant");
     expect(row).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "LIR 2: Constant" }),
+    ).toBeNull();
     // Highlighting an empty member set would dim every node on the canvas.
     await userEvent.hover(row);
-    expect(onHighlight).not.toHaveBeenCalledWith(new Set());
+    await userEvent.click(row);
+    expect(onHighlight).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("rows are buttons reachable by keyboard, and focus highlights like hover", async () => {
@@ -220,7 +225,7 @@ describe("LirPanel", () => {
     await userEvent.tab();
     await userEvent.tab();
     expect(row).toHaveFocus();
-    expect(onHighlight).toHaveBeenLastCalledWith(new Set(["root"]));
+    expect(onHighlight).toHaveBeenLastCalledWith(new Set(["op1"]));
 
     await userEvent.keyboard("{Enter}");
     expect(onSelect).toHaveBeenCalledWith("u1", "1");

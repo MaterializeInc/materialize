@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, Button, HStack, Text, useTheme } from "@chakra-ui/react";
+import { Box, Button, HStack, Text, Tooltip, useTheme } from "@chakra-ui/react";
 import React from "react";
 
+import TextLink from "~/components/TextLink";
 import { ChevronLeftIcon, ChevronRightIcon } from "~/icons";
 import { MaterializeTheme } from "~/theme";
 
@@ -23,50 +24,75 @@ import {
 
 interface LirRowProps {
   node: LirTreeNode;
+  structure: DataflowStructure;
   selectedKey?: string;
   onHighlight: (ids: ReadonlySet<string> | null) => void;
   onSelect: (exportId: string, lirId: string) => void;
 }
 
-const LirRow = ({ node, selectedKey, onHighlight, onSelect }: LirRowProps) => {
+const LirRow = ({
+  node,
+  structure,
+  selectedKey,
+  onHighlight,
+  onSelect,
+}: LirRowProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  // An empty member set would dim the whole canvas, which reads as "no
-  // match" rather than "this span has no operators".
-  const highlight = () =>
-    onHighlight(node.memberIds.length > 0 ? new Set(node.memberIds) : null);
+  const label = `LIR ${node.info.lirId}: ${node.info.operator}`;
+  const selected = node.key === selectedKey;
+  // The dataflow root is never drawn on the canvas, so a span covering only
+  // it has nothing to show either. Spans that only refer to an input or a
+  // let binding (Read, Stream, Arranged) build no operators of their own.
+  const hasOperators = node.memberIds.some(
+    (id) => (structure.nodes.get(id)?.address.length ?? 0) > 1,
+  );
+  const rowProps = {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    fontSize: "xs",
+    pl: node.info.nesting * 3,
+    py: "1px",
+  } as const;
+  const highlight = () => onHighlight(new Set(node.memberIds));
   const clearHighlight = () => onHighlight(null);
   return (
     <>
-      {/* A button so keyboard users can reach the row. Focus mirrors hover,
-          and the reset styles keep the look of the plain text row. */}
-      <Text
-        as="button"
-        type="button"
-        display="block"
-        width="100%"
-        textAlign="left"
-        fontSize="xs"
-        pl={node.info.nesting * 3}
-        cursor="pointer"
-        aria-current={node.key === selectedKey || undefined}
-        fontWeight={node.key === selectedKey ? "600" : undefined}
-        background={
-          node.key === selectedKey ? colors.background.secondary : undefined
-        }
-        _hover={{ background: colors.background.secondary }}
-        _focusVisible={{ background: colors.background.secondary }}
-        onMouseEnter={highlight}
-        onMouseLeave={clearHighlight}
-        onFocus={highlight}
-        onBlur={clearHighlight}
-        onClick={() => onSelect(node.info.exportId, node.info.lirId)}
-      >
-        LIR {node.info.lirId}: {node.info.operator}
-      </Text>
+      {hasOperators ? (
+        // A link, since a click moves the canvas to the span's operators.
+        // Focus mirrors hover for keyboard users.
+        <TextLink
+          as="button"
+          type="button"
+          {...rowProps}
+          aria-current={selected || undefined}
+          fontWeight={selected ? "600" : undefined}
+          background={selected ? colors.background.secondary : undefined}
+          _focusVisible={{ background: colors.background.secondary }}
+          onMouseEnter={highlight}
+          onMouseLeave={clearHighlight}
+          onFocus={highlight}
+          onBlur={clearHighlight}
+          onClick={() => onSelect(node.info.exportId, node.info.lirId)}
+        >
+          {label}
+        </TextLink>
+      ) : (
+        <Tooltip
+          label="No operators of its own in this dataflow"
+          placement="right"
+          openDelay={300}
+        >
+          <Text {...rowProps} color={colors.foreground.secondary}>
+            {label}
+          </Text>
+        </Tooltip>
+      )}
       {node.children.map((child) => (
         <LirRow
           key={child.key}
           node={child}
+          structure={structure}
           selectedKey={selectedKey}
           onHighlight={onHighlight}
           onSelect={onSelect}
@@ -143,6 +169,7 @@ export const LirPanel = ({
             <LirRow
               key={root.key}
               node={root}
+              structure={structure}
               selectedKey={selectedKey}
               onHighlight={onHighlight}
               onSelect={onSelect}
