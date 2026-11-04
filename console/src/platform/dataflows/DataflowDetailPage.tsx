@@ -12,6 +12,7 @@ import {
   Button,
   HStack,
   IconButton,
+  Portal,
   Spinner,
   Text,
   useTheme,
@@ -72,6 +73,18 @@ import {
 } from "./NodeDetailPanel";
 import { hashString, heatColorFor } from "./nodeStyle";
 import { UsagePrivilegeAlert } from "./UsagePrivilegeAlert";
+
+// The app layout's content column is a flex item with a z-index, which makes
+// it a stacking context below the app nav, so nothing inside it can be drawn
+// over the nav at any z-index. Portaling out of it remounts the children on
+// every toggle, which costs one relayout.
+const MaybePortal = ({
+  enabled,
+  children,
+}: {
+  enabled: boolean;
+  children: React.ReactNode;
+}) => (enabled ? <Portal>{children}</Portal> : <>{children}</>);
 
 const DataflowDetailPage = () => {
   const { colorMode } = useTheme<MaterializeTheme>();
@@ -665,7 +678,8 @@ const DataflowDetailPage = () => {
   // Maximizing pins the visualizer root over the whole window, hiding the
   // app nav, cluster header and tabs. NOTE: the browser Fullscreen API would
   // hide Chakra tooltips, because they portal into document.body, which is
-  // outside a fullscreen element.
+  // outside a fullscreen element. The root also has to leave the app layout
+  // through a portal (see MaybePortal).
   const [isMaximized, setIsMaximized] = React.useState(false);
   React.useEffect(() => {
     if (!isMaximized) return;
@@ -721,237 +735,244 @@ const DataflowDetailPage = () => {
     // the graph (e.g. the breadcrumb trail) pushes the whole page taller
     // than the viewport instead of the graph area shrinking to absorb it.
     <MainContentContainer width="100%" minH={0}>
-      <VStack
-        width="100%"
-        height="100%"
-        alignItems="stretch"
-        // Below the "tooltip" and "popover" z-index tokens, so tooltips and
-        // menus still render above the maximized page. The element is
-        // transparent by default, so it needs the page background and the
-        // inset the app layout otherwise supplies.
-        {...(isMaximized && {
-          position: "fixed",
-          inset: 0,
-          zIndex: "overlay",
-          background: "background.primary",
-          p: 4,
-        })}
-      >
-        {/* One wrapping row: the graph canvas is the point of this page, so
-            every row above it costs usable height. */}
-        <HStack
-          flexShrink={0}
-          alignItems="flex-end"
-          flexWrap="wrap"
-          spacing={3}
-          rowGap={2}
+      <MaybePortal enabled={isMaximized}>
+        <VStack
+          width="100%"
+          height="100%"
+          alignItems="stretch"
+          // Below the "tooltip" and "popover" z-index tokens, so tooltips and
+          // menus still render above the maximized page. The element is
+          // transparent by default, so it needs the page background and the
+          // inset the app layout otherwise supplies.
+          {...(isMaximized && {
+            position: "fixed",
+            inset: 0,
+            zIndex: "overlay",
+            background: "background.primary",
+            p: 4,
+          })}
         >
-          <LabeledSelect
-            label="Replica"
-            value={replicaName ?? ""}
-            onChange={(e) => onReplicaChange(e.target.value)}
+          {/* One wrapping row: the graph canvas is the point of this page, so
+            every row above it costs usable height. */}
+          <HStack
             flexShrink={0}
-            width="auto"
+            alignItems="flex-end"
+            flexWrap="wrap"
+            spacing={3}
+            rowGap={2}
           >
-            {cluster.replicas.map((r) => (
-              <option key={r.name} value={r.name}>
-                {r.name}
-              </option>
-            ))}
-          </LabeledSelect>
-          <LabeledSelect
-            label="Dataflow"
-            value={dataflowId ?? ""}
-            onChange={(e) =>
-              navigate(
-                `${absoluteClusterPath(regionSlug, cluster)}/dataflows/${e.target.value}${replicaSearch(replicaName)}`,
-              )
-            }
-            flex="1"
-            minWidth="240px"
-          >
-            {dataflowId && !dataflowList?.some((d) => d.id === dataflowId) && (
-              // The list query hasn't resolved yet (or this dataflow just
-              // disappeared from it); keep the select populated with
-              // something so it isn't blank while data is in flight.
-              <option value={dataflowId}>Loading…</option>
-            )}
-            {(dataflowList ?? []).map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-              </option>
-            ))}
-          </LabeledSelect>
-          {data && (
-            <HStack flexShrink={0} height="10" spacing={2}>
-              <Button size="sm" onClick={refetch} isDisabled={loading}>
-                Refresh
-              </Button>
-              <Text fontSize="sm" color="foreground.secondary">
-                Last fetched {data.fetchedAt.toLocaleTimeString()}
-              </Text>
-            </HStack>
-          )}
-          <IconButton
-            aria-label={isMaximized ? "Exit full screen" : "Enter full screen"}
-            title={isMaximized ? "Exit full screen" : "Enter full screen"}
-            size="sm"
-            variant="outline"
-            marginLeft="auto"
-            icon={
-              isMaximized ? (
-                <MinimizeIcon boxSize="4" />
-              ) : (
-                <MaximizeIcon boxSize="4" />
-              )
-            }
-            onClick={() => setIsMaximized((prev) => !prev)}
-          />
-        </HStack>
-        {permissionError ? (
-          <UsagePrivilegeAlert action="visualize this dataflow" />
-        ) : error ? (
-          <VStack alignItems="flex-start" spacing={2}>
-            <ErrorBox message="There was an error visualizing your dataflow" />
-            <Button size="sm" onClick={refetch}>
-              Retry
-            </Button>
-          </VStack>
-        ) : !data || !focusedScope ? (
-          <Spinner />
-        ) : data.structure.nodes.size <= 1 ? (
-          <Text>
-            This dataflow no longer exists on this replica.{" "}
-            <Link
-              to={`${absoluteClusterPath(regionSlug, cluster)}/dataflows${replicaSearch(replicaName)}`}
-            >
-              Back to dataflows
-            </Link>
-          </Text>
-        ) : (
-          <VStack flex="1" minH={0} alignItems="stretch" spacing={2}>
-            <HStack
+            <LabeledSelect
+              label="Replica"
+              value={replicaName ?? ""}
+              onChange={(e) => onReplicaChange(e.target.value)}
               flexShrink={0}
-              flexWrap="wrap"
-              alignItems="center"
-              spacing={3}
-              rowGap={2}
+              width="auto"
             >
-              {/* At the root the Dataflow select above already names the
+              {cluster.replicas.map((r) => (
+                <option key={r.name} value={r.name}>
+                  {r.name}
+                </option>
+              ))}
+            </LabeledSelect>
+            <LabeledSelect
+              label="Dataflow"
+              value={dataflowId ?? ""}
+              onChange={(e) =>
+                navigate(
+                  `${absoluteClusterPath(regionSlug, cluster)}/dataflows/${e.target.value}${replicaSearch(replicaName)}`,
+                )
+              }
+              flex="1"
+              minWidth="240px"
+            >
+              {dataflowId &&
+                !dataflowList?.some((d) => d.id === dataflowId) && (
+                  // The list query hasn't resolved yet (or this dataflow just
+                  // disappeared from it); keep the select populated with
+                  // something so it isn't blank while data is in flight.
+                  <option value={dataflowId}>Loading…</option>
+                )}
+              {(dataflowList ?? []).map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </LabeledSelect>
+            {data && (
+              <HStack flexShrink={0} height="10" spacing={2}>
+                <Button size="sm" onClick={refetch} isDisabled={loading}>
+                  Refresh
+                </Button>
+                <Text fontSize="sm" color="foreground.secondary">
+                  Last fetched {data.fetchedAt.toLocaleTimeString()}
+                </Text>
+              </HStack>
+            )}
+            <IconButton
+              aria-label={
+                isMaximized ? "Exit full screen" : "Enter full screen"
+              }
+              title={isMaximized ? "Exit full screen" : "Enter full screen"}
+              size="sm"
+              variant="outline"
+              marginLeft="auto"
+              icon={
+                isMaximized ? (
+                  <MinimizeIcon boxSize="4" />
+                ) : (
+                  <MaximizeIcon boxSize="4" />
+                )
+              }
+              onClick={() => setIsMaximized((prev) => !prev)}
+            />
+          </HStack>
+          {permissionError ? (
+            <UsagePrivilegeAlert action="visualize this dataflow" />
+          ) : error ? (
+            <VStack alignItems="flex-start" spacing={2}>
+              <ErrorBox message="There was an error visualizing your dataflow" />
+              <Button size="sm" onClick={refetch}>
+                Retry
+              </Button>
+            </VStack>
+          ) : !data || !focusedScope ? (
+            <Spinner />
+          ) : data.structure.nodes.size <= 1 ? (
+            <Text>
+              This dataflow no longer exists on this replica.{" "}
+              <Link
+                to={`${absoluteClusterPath(regionSlug, cluster)}/dataflows${replicaSearch(replicaName)}`}
+              >
+                Back to dataflows
+              </Link>
+            </Text>
+          ) : (
+            <VStack flex="1" minH={0} alignItems="stretch" spacing={2}>
+              <HStack
+                flexShrink={0}
+                flexWrap="wrap"
+                alignItems="center"
+                spacing={3}
+                rowGap={2}
+              >
+                {/* At the root the Dataflow select above already names the
                   dataflow, so a trail would only repeat it. Drilled in, the
                   root crumb is the way back out. */}
-              {focusedScope !== data.structure.root && (
-                <DataflowBreadcrumbs
-                  structure={data.structure}
-                  focusedScope={focusedScope}
-                  onNavigate={setFocusedScope}
-                />
-              )}
-              <DataflowToolbar
-                filters={filters}
-                onFiltersChange={setFilters}
-                matchCount={allMatches.length}
-                matchIndex={activeMatchIndex}
-                onJump={onJump}
-                workerCount={data.workerCount}
-                regionExpanded={expandedScopes.size > 0}
-              />
-              {filters.heatmap !== "off" && (
-                <HStack spacing={1} flexShrink={0}>
-                  <Text fontSize="xs" color="foreground.secondary">
-                    low
-                  </Text>
-                  <Box
-                    width="80px"
-                    height="10px"
-                    borderRadius="sm"
-                    background={`linear-gradient(to right, ${[0, 0.25, 0.5, 0.75, 1].map(heatColor).join(", ")})`}
-                  />
-                  <Text fontSize="xs" color="foreground.secondary">
-                    high
-                  </Text>
-                </HStack>
-              )}
-            </HStack>
-            <HStack flex="1" minH={0} alignItems="stretch" spacing={0}>
-              <LirPanel
-                structure={data.structure}
-                collapsed={lirPanelCollapsed}
-                onToggleCollapsed={() => setLirPanelCollapsed((prev) => !prev)}
-                onHighlight={setLirHighlight}
-                onSelect={onLirSelect}
-              />
-              {/* The details panel floats over this wrapper's right edge
-                  rather than sitting beside the graph, so opening it never
-                  shrinks the canvas. */}
-              <Box flex="1" minW={0} position="relative" display="flex">
-                <DataflowGraphView
-                  // Non-null: this branch only renders once data and
-                  // focusedScope are both set, which is exactly when
-                  // visibleGraph is computed above.
-                  visible={visibleGraph!}
-                  focusedScope={focusedScope}
-                  onNavigate={setFocusedScope}
-                  cacheKey={structureKey ?? ""}
-                  decorations={decorations}
-                  showLirGroups={filters.showLirGroups}
-                  fitOnIds={pendingFitIds}
-                  onFit={() => setPendingFitIds(null)}
-                  selectedId={
-                    selection?.kind === "node"
-                      ? selection.node.id
-                      : selection?.kind === "edge"
-                        ? selection.edge.id
-                        : undefined
-                  }
-                  activeMatchId={
-                    allMatches.length > 0
-                      ? nodeIdOf(allMatches[activeMatchIndex].address)
-                      : undefined
-                  }
-                  onNodeClick={(node, connectedEdges) =>
-                    setSelection({
-                      kind: "node",
-                      node,
-                      connectedEdges:
-                        node.kind === "port" ? connectedEdges : undefined,
-                    })
-                  }
-                  onEdgeClick={(edge) => setSelection({ kind: "edge", edge })}
-                  onPaneClick={() => setSelection(null)}
-                  onJumpToPeer={onJumpToPeer}
-                  onLirGroupClick={onLirGroupClick}
-                  expandedScopes={expandedScopes}
-                  onToggleExpand={onToggleExpand}
-                  occludedRight={
-                    !selection
-                      ? 0
-                      : detailPanelCollapsed
-                        ? COLLAPSED_STRIP_WIDTH_PX
-                        : DETAIL_PANEL_WIDTH_PX
-                  }
-                />
-                {selection && (
-                  <NodeDetailPanel
-                    selection={selection}
-                    collapsed={detailPanelCollapsed}
-                    onToggleCollapsed={() =>
-                      setCollapsedForSelect(
-                        detailPanelCollapsed ? null : selectParam,
-                      )
-                    }
-                    onFocusRegion={setFocusedScope}
-                    onJumpTo={onJumpToPeer}
-                    onSelectLir={onSelectLir}
-                    onSelectNode={onSelectNode}
-                    workerCount={data.workerCount}
+                {focusedScope !== data.structure.root && (
+                  <DataflowBreadcrumbs
+                    structure={data.structure}
+                    focusedScope={focusedScope}
+                    onNavigate={setFocusedScope}
                   />
                 )}
-              </Box>
-            </HStack>
-          </VStack>
-        )}
-      </VStack>
+                <DataflowToolbar
+                  filters={filters}
+                  onFiltersChange={setFilters}
+                  matchCount={allMatches.length}
+                  matchIndex={activeMatchIndex}
+                  onJump={onJump}
+                  workerCount={data.workerCount}
+                  regionExpanded={expandedScopes.size > 0}
+                />
+                {filters.heatmap !== "off" && (
+                  <HStack spacing={1} flexShrink={0}>
+                    <Text fontSize="xs" color="foreground.secondary">
+                      low
+                    </Text>
+                    <Box
+                      width="80px"
+                      height="10px"
+                      borderRadius="sm"
+                      background={`linear-gradient(to right, ${[0, 0.25, 0.5, 0.75, 1].map(heatColor).join(", ")})`}
+                    />
+                    <Text fontSize="xs" color="foreground.secondary">
+                      high
+                    </Text>
+                  </HStack>
+                )}
+              </HStack>
+              <HStack flex="1" minH={0} alignItems="stretch" spacing={0}>
+                <LirPanel
+                  structure={data.structure}
+                  collapsed={lirPanelCollapsed}
+                  onToggleCollapsed={() =>
+                    setLirPanelCollapsed((prev) => !prev)
+                  }
+                  onHighlight={setLirHighlight}
+                  onSelect={onLirSelect}
+                />
+                {/* The details panel floats over this wrapper's right edge
+                  rather than sitting beside the graph, so opening it never
+                  shrinks the canvas. */}
+                <Box flex="1" minW={0} position="relative" display="flex">
+                  <DataflowGraphView
+                    // Non-null: this branch only renders once data and
+                    // focusedScope are both set, which is exactly when
+                    // visibleGraph is computed above.
+                    visible={visibleGraph!}
+                    focusedScope={focusedScope}
+                    onNavigate={setFocusedScope}
+                    cacheKey={structureKey ?? ""}
+                    decorations={decorations}
+                    showLirGroups={filters.showLirGroups}
+                    fitOnIds={pendingFitIds}
+                    onFit={() => setPendingFitIds(null)}
+                    selectedId={
+                      selection?.kind === "node"
+                        ? selection.node.id
+                        : selection?.kind === "edge"
+                          ? selection.edge.id
+                          : undefined
+                    }
+                    activeMatchId={
+                      allMatches.length > 0
+                        ? nodeIdOf(allMatches[activeMatchIndex].address)
+                        : undefined
+                    }
+                    onNodeClick={(node, connectedEdges) =>
+                      setSelection({
+                        kind: "node",
+                        node,
+                        connectedEdges:
+                          node.kind === "port" ? connectedEdges : undefined,
+                      })
+                    }
+                    onEdgeClick={(edge) => setSelection({ kind: "edge", edge })}
+                    onPaneClick={() => setSelection(null)}
+                    onJumpToPeer={onJumpToPeer}
+                    onLirGroupClick={onLirGroupClick}
+                    expandedScopes={expandedScopes}
+                    onToggleExpand={onToggleExpand}
+                    occludedRight={
+                      !selection
+                        ? 0
+                        : detailPanelCollapsed
+                          ? COLLAPSED_STRIP_WIDTH_PX
+                          : DETAIL_PANEL_WIDTH_PX
+                    }
+                  />
+                  {selection && (
+                    <NodeDetailPanel
+                      selection={selection}
+                      collapsed={detailPanelCollapsed}
+                      onToggleCollapsed={() =>
+                        setCollapsedForSelect(
+                          detailPanelCollapsed ? null : selectParam,
+                        )
+                      }
+                      onFocusRegion={setFocusedScope}
+                      onJumpTo={onJumpToPeer}
+                      onSelectLir={onSelectLir}
+                      onSelectNode={onSelectNode}
+                      workerCount={data.workerCount}
+                    />
+                  )}
+                </Box>
+              </HStack>
+            </VStack>
+          )}
+        </VStack>
+      </MaybePortal>
     </MainContentContainer>
   );
 };
