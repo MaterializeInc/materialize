@@ -34,7 +34,6 @@ import {
   type LirGroupNode as LirGroupNodeData,
   type NodeId,
   type PortPeer,
-  rerouteHiddenNodes,
   type VisibleEdge,
   type VisibleGraph,
   type VisibleNode,
@@ -85,7 +84,7 @@ export interface DataflowGraphViewProps {
   activeMatchId?: string;
   // Edges connected to the clicked node, with endpoint labels resolved, so a
   // clicked port can show what flows through it without the caller
-  // recomputing the (already decorated, rerouted) visible graph.
+  // recomputing the (already filtered) visible graph.
   onNodeClick?: (node: VisibleNode, connectedEdges: SelectedEdge[]) => void;
   onEdgeClick?: (edge: SelectedEdge) => void;
   onPaneClick?: () => void;
@@ -100,7 +99,7 @@ export interface DataflowGraphViewProps {
   fitOnIds?: string[] | null;
   onFit?: () => void;
   // Toggled from the toolbar; grouping is computed here (from the same
-  // post-hideUnused, post-reroute node list elk actually lays out) rather than
+  // post-hideUnused node list elk actually lays out) rather than
   // by the caller, so a hidden node can never end up as a group's only
   // member.
   showLirGroups?: boolean;
@@ -247,18 +246,15 @@ export const DataflowGraphView = ({
   const { colors, shadows } = useTheme<MaterializeTheme>();
 
   const visible = React.useMemo(() => {
-    // Hidden nodes get spliced out with connectivity preserved (a hidden unused
-    // run still shows a pass-through edge). Hidden edges (independently
-    // zero-message) are a plain removal: nothing to reroute since both
-    // endpoints stay visible.
-    const rerouted = decorations?.hiddenNodeIds
-      ? rerouteHiddenNodes(rawVisible, decorations.hiddenNodeIds)
-      : rawVisible;
+    // A node is hidden only when every edge touching it is hidden too (see
+    // computeDecorations), so plain removal never leaves a dangling edge and
+    // never cuts a path that carried data.
+    const hiddenNodeIds = decorations?.hiddenNodeIds;
     const hiddenEdgeIds = decorations?.hiddenEdgeIds;
-    if (!hiddenEdgeIds?.size) return rerouted;
+    if (!hiddenNodeIds?.size && !hiddenEdgeIds?.size) return rawVisible;
     return {
-      nodes: rerouted.nodes,
-      edges: rerouted.edges.filter((e) => !hiddenEdgeIds.has(e.id)),
+      nodes: rawVisible.nodes.filter((n) => !hiddenNodeIds?.has(n.id)),
+      edges: rawVisible.edges.filter((e) => !hiddenEdgeIds?.has(e.id)),
     };
   }, [rawVisible, decorations?.hiddenNodeIds, decorations?.hiddenEdgeIds]);
 
