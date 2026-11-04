@@ -260,10 +260,10 @@ export const clusterQueryKeys = {
         objectIds: [...params.objectIds].sort().join(","),
       }),
     ] as const,
-  replicaUtilization: () =>
+  replicaUtilization: (params: { includeSwap: boolean }) =>
     [
       ...clusterQueryKeys.all(),
-      buildQueryKeyPart("replicaUtilization"),
+      buildQueryKeyPart("replicaUtilization", params),
     ] as const,
   replicaHydration: () =>
     [...clusterQueryKeys.all(), buildQueryKeyPart("replicaHydration")] as const,
@@ -385,11 +385,19 @@ const toUtilizationMap = ({
  * every page, for as long as the session lasts.
  */
 export function useReplicaUtilization() {
+  const includeSwap =
+    useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
   return useQuery({
     refetchInterval: 30_000,
-    queryKey: clusterQueryKeys.replicaUtilization(),
-    queryFn: ({ queryKey, signal }) =>
-      fetchReplicaUtilization({ queryKey, requestOptions: { signal } }),
+    queryKey: clusterQueryKeys.replicaUtilization({ includeSwap }),
+    queryFn: ({ queryKey, signal }) => {
+      const [, params] = queryKey;
+      return fetchReplicaUtilization({
+        params,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
     select: toUtilizationMap,
   });
 }
