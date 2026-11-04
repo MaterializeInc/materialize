@@ -45,7 +45,7 @@ use std::pin::pin;
 use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
@@ -330,7 +330,8 @@ pub(crate) fn render<'scope>(
                 data_cap_sets,
                 rewinds,
             );
-            repl_context.downgrade_data_cap_sets("resume", resume_upper);
+            repl_context.advance_data_upper("resume", resume_upper);
+            repl_context.downgrade_data_cap_sets();
 
             let mut active_tx: Option<(Uuid, NonZeroU64)> = None;
 
@@ -365,7 +366,7 @@ pub(crate) fn render<'scope>(
                             .await);
                         }
                         let new_upper = data_partitions.frontier();
-                        repl_context.downgrade_data_cap_sets("xid_event", new_upper);
+                        repl_context.advance_data_upper("xid_event", new_upper);
                     }
                     // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
                     Some(EventData::GtidEvent(event)) => {
@@ -425,7 +426,7 @@ pub(crate) fn render<'scope>(
                             .await);
                         }
                         let new_upper = data_partitions.frontier();
-                        repl_context.downgrade_data_cap_sets("rows_event", new_upper);
+                        repl_context.advance_data_upper("rows_event", new_upper);
                     }
                     Some(EventData::QueryEvent(event)) => {
                         let (source_id, tx_id) = active_tx
@@ -458,13 +459,21 @@ pub(crate) fn render<'scope>(
                                 .await);
                             }
                             let new_upper = data_partitions.frontier();
-                            repl_context.downgrade_data_cap_sets("query_event", new_upper);
+                            repl_context.advance_data_upper("query_event", new_upper);
                         }
                     }
                     _ => {
                         // TODO: Handle other event types
                         metrics.ignored.inc();
                     }
+                }
+
+                // Timely observes capability changes only when the operator yields, so the sets
+                // are downgraded only before the stream blocks or after a fuel yield. A downgrade
+                // after a fuel yield takes effect at the next yield.
+                let fuel_yielded = repl_context.data_outputs.take_yielded();
+                if fuel_yielded || repl_context.stream.as_mut().peek().now_or_never().is_none() {
+                    repl_context.downgrade_data_cap_sets();
                 }
             }
             // We never expect the replication stream to gracefully end

@@ -12,7 +12,7 @@ use std::pin::Pin;
 
 use mysql_async::BinlogStream;
 use timely::dataflow::operators::CapabilitySet;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use tracing::trace;
 
 use mz_mysql_util::Config;
@@ -35,6 +35,9 @@ pub(super) struct ReplContext<'a> {
     // Owned values:
     pub(super) rewinds: BTreeMap<usize, RewindRequest>,
     pub(super) errored_outputs: BTreeSet<usize>,
+    data_upper: Antichain<GtidPartition>,
+    /// Whether `data_upper` moved since the last downgrade of the data capability sets.
+    data_upper_stale: bool,
 }
 
 impl<'a> ReplContext<'a> {
@@ -58,16 +61,17 @@ impl<'a> ReplContext<'a> {
             data_cap_sets,
             rewinds,
             errored_outputs: BTreeSet::new(),
+            data_upper: Antichain::from_elem(GtidPartition::minimum()),
+            data_upper_stale: false,
         }
     }
 
-    /// Drops the rewind requests that `new_upper` has passed, then advances the frontier of the
-    /// data capability sets to `new_upper` once no rewind request is pending.
-    pub(super) fn downgrade_data_cap_sets(
-        &mut self,
-        reason: &str,
-        new_upper: Antichain<GtidPartition>,
-    ) {
+    /// Records `new_upper` as the data frontier. The data capability sets advance to it at the
+    /// next [`Self::downgrade_data_cap_sets`].
+    pub(super) fn advance_data_upper(&mut self, reason: &str, new_upper: Antichain<GtidPartition>) {
+        if new_upper == self.data_upper {
+            return;
+        }
         let (id, worker_id) = (self.config.id, self.config.worker_id);
 
         trace!(%id, "timely-{worker_id} [{reason}] advancing data frontier to {new_upper:?}");
@@ -81,6 +85,18 @@ impl<'a> ReplContext<'a> {
                 })
                 .sum(),
         );
+        self.data_upper = new_upper;
+        self.data_upper_stale = true;
+    }
+
+    /// Drops the rewind requests that the recorded data frontier has passed, then advances the
+    /// data capability sets to it once no rewind request is pending.
+    pub(super) fn downgrade_data_cap_sets(&mut self) {
+        if !std::mem::take(&mut self.data_upper_stale) {
+            return;
+        }
+        let (id, worker_id) = (self.config.id, self.config.worker_id);
+        let new_upper = &self.data_upper;
 
         self.rewinds.retain(|_, req| {
             // We need to retain the rewind requests whose snapshot_upper
@@ -98,7 +114,7 @@ impl<'a> ReplContext<'a> {
         // every export observes the same frontier.
         if self.rewinds.is_empty() {
             for cap_set in self.data_cap_sets.iter_mut() {
-                cap_set.downgrade(&*new_upper);
+                cap_set.downgrade(new_upper.elements());
             }
         }
     }
