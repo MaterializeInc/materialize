@@ -20,7 +20,7 @@ FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:8b33d821344902366f6ac0fd
 # In production, we use distroless images based on Debian 13.
 # We retain apt and install more packages in this image for development.
 # Pinned by rolling tag + multi-arch index digest, matching debian-base, so
-# dependabot refreshes the digest for security fixes.
+# Renovate refreshes the digest for security fixes.
 FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 ARG CI_SANITIZER=none

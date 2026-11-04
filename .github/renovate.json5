@@ -1,0 +1,416 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file at the root of this repository.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>MaterializeInc/renovate-config"],
+  "constraints": {"rust": "1.98.1"},
+  "vulnerabilityAlerts": {"enabled": true},
+  "enabledManagers": [
+    "cargo",
+    "terraform",
+    "pip_requirements",
+    "pip_setup",
+    "pep621",
+    "dockerfile",
+    "github-actions",
+    "maven",
+    "nuget",
+    "npm",
+    "bundler",
+    "custom.jsonata",
+    "custom.regex"
+  ],
+  "customManagers": [
+    {
+      "customType": "jsonata",
+      "managerFilePatterns": ["/^Cargo\\.lock$/"],
+      "fileFormat": "toml",
+      "matchStrings": [
+        "($direct := package[$not($exists(source))].dependencies; package[source = 'registry+https://github.com/rust-lang/crates.io-index' and $not(name in $direct) and $not((name & ' ' & version) in $direct) and $not((name & ' ' & version & ' (' & source & ')') in $direct)].{'depName': name, 'currentValue': version})"
+      ],
+      "datasourceTemplate": "crate",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/renovate\\.yml$/"],
+      "matchStrings": ["RENOVATE_IMAGE: (?<depName>ghcr.io/renovatebot/renovate):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "ignorePaths": ["**/node_modules/**", "**/bower_components/**", "**/vendor/**", "src/**/fuzz/**", "test/cargo-fuzz/**"],
+  "labels": ["A-dependencies"],
+  "timezone": "Etc/UTC",
+  "schedule": ["* 22-23 * * 0", "* 0-1 * * 1"],
+  "internalChecksFilter": "strict",
+  "prConcurrentLimit": 200,
+  "prHourlyLimit": 0,
+  "automerge": false,
+  "lockFileMaintenance": {"enabled": false},
+  "packageRules": [
+    {
+      "description": "Enable only the dependency update scopes listed below.",
+      "matchPackageNames": ["*"],
+      "enabled": false
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": [".github/workflows/renovate.yml"],
+      "enabled": true,
+      "additionalBranchPrefix": "runner-"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["Cargo.toml"],
+      "enabled": true,
+      "additionalBranchPrefix": "cargo-root-"
+    },
+    {
+      "matchManagers": ["custom.jsonata"],
+      "matchFileNames": ["Cargo.lock"],
+      "enabled": true,
+      "additionalBranchPrefix": "cargo-lock-",
+      "commitMessageTopic": "indirect Rust crate {{depName}}",
+      // Manifest changes select new compatibility ranges. Lockfile-only
+      // updates stay within the current range and let Cargo check parent pins.
+      "allowedVersions": "^{{currentVersion}}",
+      "constraints": {"python": ">=3.11"},
+      "postUpgradeTasks": {
+        "commands": ["python3 ci/renovate/update_cargo_lock.py"],
+        "dataFileTemplate": "[{{#each upgrades}}{\"name\":{{{toJSON packageName}}},\"from\":{{{toJSON currentValue}}},\"to\":{{{toJSON newValue}}} }{{#unless @last}},{{/unless}}{{/each}}]",
+        "executionMode": "branch",
+        "fileFilters": ["Cargo.lock"],
+        "installTools": {"rust": {}, "python": {}}
+      }
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["misc/wasm/**/Cargo.toml"],
+      "enabled": true,
+      "additionalBranchPrefix": "cargo-wasm-"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["misc/materialize-sdk/**/Cargo.toml"],
+      "enabled": true,
+      "additionalBranchPrefix": "cargo-sdk-"
+    },
+    {
+      "matchManagers": ["terraform"],
+      "matchFileNames": [
+        "test/terraform/aws-temporary/*.tf",
+        "test/terraform/aws-upgrade/*.tf",
+        "test/terraform/aws-persistent/*.tf",
+        "test/terraform/gcp-temporary/*.tf",
+        "test/terraform/azure-temporary/*.tf"
+      ],
+      "enabled": true,
+      "additionalBranchPrefix": "terraform-",
+      "groupName": "terraform terraform",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
+      "matchFileNames": ["misc/dbt-materialize/*"],
+      "enabled": true,
+      "additionalBranchPrefix": "dbt-"
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": [
+        "console/Dockerfile*",
+        "console/misc/docker/Dockerfile*",
+        "misc/images/materialized-base/Dockerfile*",
+        "misc/images/debian-base/Dockerfile*",
+        "misc/images/openssh-static/Dockerfile*",
+        "misc/images/tini-static/Dockerfile*",
+        "misc/images/distroless-prod-base/Dockerfile*",
+        "misc/dbt-materialize/Dockerfile*",
+        "ci/builder/Dockerfile*",
+        "test/**/Dockerfile*",
+        "test/playwright/Dockerfile*"
+      ],
+      "enabled": true,
+      "additionalBranchPrefix": "docker-"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchFileNames": [".github/workflows/*.yml", ".github/workflows/*.yaml", ".github/actions/**/action.yml", ".github/actions/**/action.yaml"],
+      "enabled": true,
+      "additionalBranchPrefix": "github-actions-"
+    },
+    {
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
+      "matchFileNames": ["ci/builder/*", "test/adbc/*", "test/terraform/azure-temporary/*"],
+      "enabled": true,
+      "additionalBranchPrefix": "python-tools-"
+    },
+    {
+      "matchManagers": ["maven"],
+      "matchFileNames": ["test/lang/java/**/pom.xml"],
+      "enabled": true,
+      "additionalBranchPrefix": "java-driver-",
+      "matchPackageNames": ["org.postgresql:postgresql"]
+    },
+    {
+      "matchManagers": ["nuget"],
+      "matchFileNames": ["test/lang/csharp/csharp-npgsql.csproj"],
+      "enabled": true,
+      "additionalBranchPrefix": "csharp-driver-",
+      "matchPackageNames": ["npgsql"]
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["test/lang/js/package.json"],
+      "enabled": true,
+      "additionalBranchPrefix": "js-driver-",
+      "matchPackageNames": ["pg", "@types/pg"]
+    },
+    {
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
+      "matchFileNames": ["test/lang/python/*"],
+      "enabled": true,
+      "additionalBranchPrefix": "python-drivers-"
+    },
+    {
+      "matchManagers": ["bundler"],
+      "matchFileNames": ["test/lang/ruby/Gemfile"],
+      "enabled": true,
+      "additionalBranchPrefix": "ruby-driver-",
+      "matchPackageNames": ["pg"]
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["ci/test/docs-widgets/package.json"],
+      "enabled": true,
+      "additionalBranchPrefix": "docs-widgets-"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["misc/editor/vscode/package.json"],
+      "enabled": true,
+      "additionalBranchPrefix": "vscode-"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/e2e-tests/package.json"],
+      "enabled": true,
+      "additionalBranchPrefix": "console-e2e-"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["test/dataflow-visualizer/package.json"],
+      "enabled": true,
+      "additionalBranchPrefix": "dataflow-visualizer-"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "enabled": true,
+      "additionalBranchPrefix": "console-"
+    },
+    // These rules use the branch prefixes assigned by the scope rules above.
+    {
+      "matchJsonata": ["additionalBranchPrefix in ['dbt-', 'java-driver-', 'csharp-driver-', 'js-driver-', 'python-drivers-', 'ruby-driver-', 'docs-widgets-']"],
+      "schedule": ["* 0-3 * * *"]
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchJsonata": ["enabled"],
+      "rangeStrategy": "update-lockfile"
+    },
+    {
+      "matchJsonata": [
+        "additionalBranchPrefix in ['cargo-wasm-', 'cargo-sdk-', 'dbt-', 'docker-', 'github-actions-', 'python-tools-', 'python-drivers-', 'docs-widgets-', 'vscode-', 'console-e2e-', 'dataflow-visualizer-']"
+      ],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} simple",
+      "groupSlug": "{{additionalBranchPrefix}}simple"
+    },
+    {
+      "matchJsonata": ["additionalBranchPrefix in ['docker-', 'github-actions-']"],
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} simple",
+      "groupSlug": "{{additionalBranchPrefix}}simple"
+    },
+    {
+      "matchManagers": ["cargo", "custom.jsonata"],
+      "matchFileNames": ["Cargo.toml", "Cargo.lock"],
+      "matchPackageNames": ["/^[n-z]/"],
+      "matchJsonata": ["manager = 'jsonata' or updateType in ['minor', 'patch']"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} simple2",
+      "groupSlug": "{{additionalBranchPrefix}}simple2"
+    },
+    {
+      "matchManagers": ["cargo", "custom.jsonata"],
+      "matchFileNames": ["Cargo.toml", "Cargo.lock"],
+      "matchPackageNames": ["/^[a-m]/"],
+      "matchJsonata": ["manager = 'jsonata' or updateType in ['minor', 'patch']"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} simple1",
+      "groupSlug": "{{additionalBranchPrefix}}simple1"
+    },
+    {
+      "matchManagers": ["cargo", "custom.jsonata"],
+      "matchFileNames": ["Cargo.toml", "Cargo.lock"],
+      "matchPackageNames": ["arrow*", "parquet", "iceberg*"],
+      "matchJsonata": ["manager = 'jsonata' or updateType in ['minor', 'patch']"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} arrow",
+      "groupSlug": "{{additionalBranchPrefix}}arrow"
+    },
+    {
+      "matchManagers": ["cargo", "custom.jsonata"],
+      "matchFileNames": ["Cargo.toml", "Cargo.lock"],
+      "matchPackageNames": ["duckdb", "libduckdb-sys"],
+      // DuckDB release bumps also need the URL and checksums in ci/builder/Dockerfile
+      // updated to satisfy bin/lint-versions.
+      "matchJsonata": ["manager = 'jsonata' or updateType in ['minor', 'patch']"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} duckdb",
+      "groupSlug": "{{additionalBranchPrefix}}duckdb"
+    },
+    {
+      "matchManagers": ["cargo", "custom.jsonata"],
+      "matchFileNames": ["Cargo.toml", "Cargo.lock"],
+      "matchPackageNames": ["tracing*", "opentelemetry*", "prost*", "tonic*", "console-subscriber"],
+      "matchJsonata": ["manager = 'jsonata' or updateType in ['minor', 'patch']"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} telemetry-grpc",
+      "groupSlug": "{{additionalBranchPrefix}}telemetry-grpc"
+    },
+    {
+      "matchManagers": ["cargo", "custom.jsonata"],
+      "matchFileNames": ["Cargo.toml", "Cargo.lock"],
+      "matchPackageNames": ["tokio*", "hyper*", "http*", "tower*", "h2", "rustls*"],
+      "matchJsonata": ["manager = 'jsonata' or updateType in ['minor', 'patch']"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} async-stack",
+      "groupSlug": "{{additionalBranchPrefix}}async-stack"
+    },
+    {
+      "matchManagers": ["cargo", "custom.jsonata"],
+      "matchFileNames": ["Cargo.toml", "Cargo.lock"],
+      "matchPackageNames": ["idna_adapter"],
+      // 1.2 switches to ICU4X, adding about 20 crates.
+      "allowedVersions": "<1.2"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["msw", "downshift", "@frontegg/*", "@intercom/*"],
+      "groupName": null
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["!msw", "!downshift", "!@frontegg/*", "!@intercom/*"],
+      "groupName": "console simple",
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["@tanstack/react-query*"],
+      "groupName": "console tanstack-query",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["react", "react-dom", "@types/react", "@types/react-dom"],
+      "groupName": "console react",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["storybook", "@storybook/*"],
+      "groupName": "console storybook",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["@emotion/*"],
+      "groupName": "console emotion",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["@visx/*"],
+      "groupName": "console visx",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["jotai", "jotai-*"],
+      "groupName": "console jotai",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["@tanstack/db", "@tanstack/react-db"],
+      "groupName": "console tanstack-db",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["kysely", "kysely-codegen"],
+      "groupName": "console kysely",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["codemirror", "@codemirror/*", "@codemirror-toolkit/*", "@lezer/*", "style-mod"],
+      "groupName": "console codemirror",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["zod", "@hookform/resolvers", "react-hook-form"],
+      "groupName": "console forms",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["vite", "vitest", "@vitest/*", "@vitejs/*", "@rolldown/*", "vite-plugin-*", "vite-tsconfig-paths", "vite-bundle-analyzer", "jsdom"],
+      "groupName": "console vite",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": [
+        "typescript",
+        "typescript-eslint",
+        "@typescript-eslint/*",
+        "eslint",
+        "@eslint/*",
+        "eslint-plugin-*",
+        "eslint-config-*",
+        "@tanstack/eslint-plugin-query",
+        "globals"
+      ],
+      "groupName": "console typescript-and-eslint",
+      "separateMajorMinor": false
+    },
+    {
+      // Chakra v3 is a rewrite, migrated separately.
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["@chakra-ui/*"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    }
+  ]
+}
