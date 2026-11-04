@@ -14,9 +14,10 @@
 //! rebuilds the prefix before consuming its indexed response, so successful preparation
 //! and preparation errors are accepted only when their inputs still match.
 //!
-//! External mutations are not catalog operations. ROTATE KEYS uses a pinned publication
-//! command instead of retrying its external mutation. Catalog rollback cannot undo
-//! secret writes or changes in external services.
+//! External mutations are not catalog operations. CREATE CONNECTION retains its allocated
+//! ID, generated keys, and successful secret-write completion across retries. ROTATE KEYS
+//! uses a pinned publication command instead of retrying its external mutation. Catalog
+//! rollback cannot undo either secret writes or changes in external services.
 
 pub(crate) mod connection;
 pub(crate) mod source;
@@ -39,6 +40,8 @@ pub enum CatalogCommand {
     Rename(Arc<RenameCommand>),
     CatalogResult(Arc<CatalogResultCommand>),
     Description(Arc<DescriptionCommand>),
+    AlterConnection(Arc<connection::ConnectionStatement>),
+    CreateConnection(Arc<connection::ConnectionStatement>),
     Source(Arc<source_statement::SourceCommand>),
 }
 
@@ -48,6 +51,7 @@ impl CatalogCommand {
             Self::Rename(command) => command.notices(),
             Self::CatalogResult(command) => &command.notices,
             Self::Description(_) => &[],
+            Self::AlterConnection(command) | Self::CreateConnection(command) => command.notices(),
             Self::Source(command) => command.notices(),
         }
     }

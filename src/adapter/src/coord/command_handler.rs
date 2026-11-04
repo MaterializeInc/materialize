@@ -1581,6 +1581,20 @@ impl Coordinator {
             self.sequence_catalog_result_command(ctx, stmt, params);
             return;
         }
+        if matches!(&*stmt, Statement::CreateConnection(_)) {
+            self.sequence_create_connection_command(ctx, stmt, params)
+                .await;
+            return;
+        }
+        if matches!(&*stmt, Statement::AlterConnection(stmt)
+            if !stmt.actions.iter().any(|action|
+                matches!(action, AlterConnectionAction::RotateKeys)))
+        {
+            self.sequence_alter_connection_command(ctx, stmt, params)
+                .await;
+            return;
+        }
+
         if matches!(
             &*stmt,
             Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_)
