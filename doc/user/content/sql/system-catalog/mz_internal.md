@@ -677,6 +677,8 @@ It unions the dataflow-layer dependencies from
 [`mz_materialization_dependencies`](#mz_materialization_dependencies), restricted to
 indexes, materialized views, sinks, sources, and tables, with the source-to-subsource
 and source-to-table edges that stand in for sources whose subsources carry the data.
+When a dataflow still reads from an index that has since been dropped, its edge
+points to the objects that index read from.
 
 <!-- RELATION_SPEC mz_internal.mz_object_graph_edges -->
 | Field           | Type     | Meaning                                                                                |

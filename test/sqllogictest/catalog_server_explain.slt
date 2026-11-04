@@ -1586,78 +1586,115 @@ mz_internal.mz_object_graph_edges_ind:
 mz_internal.mz_object_graph_edges:
   →With
     cte l0 =
-      →Arrange (#0{id})
-        →Fused with Child Map/Filter/Project
-          Project: #1
-          Filter: ((#4{type} = "sink") OR (#4{type} = "index") OR (#4{type} = "table") OR (#4{type} = "source") OR (#4{type} = "materialized-view"))
-            →Arranged mz_catalog.mz_objects
-              Key: (#2{schema_id})
-    cte l1 =
-      →Arranged mz_catalog.mz_sources
-  →Return
-    →Distinct GroupAggregate
       →Union
-        →Delta Join [%0[#0{object_id}] » %1:l0[#0{id}] » %2:l0[#0{id}]] [%1:l0[#0{id}] » %0[#1{dependency_id}] » %2:l0[#0{id}]] [%2:l0[#0{id}] » %0[#0{object_id}] » %1:l0[#0{id}]]
-          →Arrange (#0{object_id}) (#1{dependency_id})
+        →Unarranged Raw Stream
+          →Fused with Parent Map/Filter/Project
+            Project: #1, #0
+            →Arranged mz_internal.mz_compute_dependencies
+        →Delta Join [%0:mz_object_dependencies[#0{object_id}] » %1:mz_sinks[#0{id}] » %2[#0{id}]] [%1:mz_sinks[#0{id}] » %0:mz_object_dependencies[#0{object_id}] » %2[#0{id}]] [%2[#0{id}] » %0:mz_object_dependencies[#1{referenced_object_id}] » %1:mz_sinks[#0{id}]]
+          →Arrange (#1{referenced_object_id})
+            →Arranged mz_internal.mz_object_dependencies
+          →Arranged mz_catalog.mz_sinks
+          →Arrange (#0{id})
             →Union
-              →Unarranged Raw Stream
-                →Fused with Parent Map/Filter/Project
-                  Project: #1, #0
-                  →Arranged mz_internal.mz_compute_dependencies
-              →Delta Join [%0:mz_object_dependencies[#0{object_id}] » %1:mz_sinks[#0{id}] » %2[#0{id}]] [%1:mz_sinks[#0{id}] » %0:mz_object_dependencies[#0{object_id}] » %2[#0{id}]] [%2[#0{id}] » %0:mz_object_dependencies[#1{referenced_object_id}] » %1:mz_sinks[#0{id}]]
-                →Arrange (#1{referenced_object_id})
-                  →Arranged mz_internal.mz_object_dependencies
-                →Arranged mz_catalog.mz_sinks
-                →Arrange (#0{id})
-                  →Union
-                    →Fused with Child Map/Filter/Project
-                      Project: #1
-                        →Arranged mz_catalog.mz_tables
-                          Key: (#2{schema_id})
-                    →Fused with Child Map/Filter/Project
-                      Project: #0
-                        →Arranged mz_catalog.mz_sources
-                          Key: (#0{id})
-                    →Fused with Child Map/Filter/Project
-                      Project: #1
-                        →Arranged mz_catalog.mz_views
-                          Key: (#2{schema_id})
-                    →Fused with Child Map/Filter/Project
-                      Project: #0
-                        →Arranged mz_catalog.mz_materialized_views
-                          Key: (#0{id})
-          →Arranged l0
-          →Arranged l0
-        →Delta Join [%0:mz_object_dependencies[#0{object_id}] » %2:l1[#0{id}] » %1:l1[#0{id}]] [%1:l1[#0{id}] » %0:mz_object_dependencies[#1{referenced_object_id}] » %2:l1[#0{id}]] [%2:l1[#0{id}] » %0:mz_object_dependencies[#0{object_id}] » %1:l1[#0{id}]]
-          path %0:
-            after %2:
-              Project: #0, #1
-              Filter: (#5{type} = "subsource")
-          path %1:
-            after %0:
-              Project: #1, #0
-              Filter: like["u%"](#0{referenced_object_id})
-            after %2:
-              Project: #0, #1
-              Filter: (#5{type} = "subsource")
-          path %2:
-            after %0:
-              Filter: like["u%"](#1{referenced_object_id})
-          →Arrange (#0{object_id}) (#1{referenced_object_id})
+              →Fused with Child Map/Filter/Project
+                Project: #1
+                  →Arranged mz_catalog.mz_tables
+                    Key: (#2{schema_id})
+              →Fused with Child Map/Filter/Project
+                Project: #0
+                  →Arranged mz_catalog.mz_sources
+                    Key: (#0{id})
+              →Fused with Child Map/Filter/Project
+                Project: #1
+                  →Arranged mz_catalog.mz_views
+                    Key: (#2{schema_id})
+              →Fused with Child Map/Filter/Project
+                Project: #0
+                  →Arranged mz_catalog.mz_materialized_views
+                    Key: (#0{id})
+  →Return
+    →With Mutually Recursive
+      cte l1 =
+        →Differential Join %0:l3[#1{dependency_id}] » %1:l0[#0{object_id}]
+          →Arrange (#1{dependency_id})
+            →Stream l3
+          →Arrange (#0{object_id})
+            →Stream l0
+      cte l2 =
+        →Unarranged Raw Stream
+          →Distinct GroupAggregate
             →Fused with Child Map/Filter/Project
-              Filter: like["u%"](#1{referenced_object_id})
-                →Arranged mz_internal.mz_object_dependencies
-                  Key: (#0{object_id})
-          →Arranged l1
-          →Arranged l1
-        →Differential Join %1:l1[#0{id}] » %0:mz_tables[#1{source_id}]
-          →Arrange (#1{source_id})
+              Project: #1
+                →Read l1
+      cte l3 =
+        →Unarranged Raw Stream
+          →Distinct GroupAggregate
+            →Union
+              →Stream l0
+              →Differential Join %0:l1[#1] » %1[#0]
+                →Arrange (#1)
+                  →Stream l1
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Differential Join %1[#0] » %0:l2[#0]
+                        →Arranged l2
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
+                            Project: #1
+                              →Arranged mz_catalog.mz_objects
+                                Key: (#2{schema_id})
+                    →Arranged l2
+    →Return
+      →With
+        cte l4 =
+          →Arrange (#0{id})
             →Fused with Child Map/Filter/Project
-              Project: #1, #8
-              Filter: (#8{source_id}) IS NOT NULL
-                →Arranged mz_catalog.mz_tables
+              Project: #1
+              Filter: ((#4{type} = "sink") OR (#4{type} = "index") OR (#4{type} = "table") OR (#4{type} = "source") OR (#4{type} = "materialized-view"))
+                →Arranged mz_catalog.mz_objects
                   Key: (#2{schema_id})
-          →Arranged l1
+        cte l5 =
+          →Arranged mz_catalog.mz_sources
+      →Return
+        →Distinct GroupAggregate
+          →Union
+            →Delta Join [%0:l3[#0{object_id}] » %1:l4[#0{id}] » %2:l4[#0{id}]] [%1:l4[#0{id}] » %0:l3[#1{dependency_id}] » %2:l4[#0{id}]] [%2:l4[#0{id}] » %0:l3[#0{object_id}] » %1:l4[#0{id}]]
+              →Arrange (#0{object_id}) (#1{dependency_id})
+                →Stream l3
+              →Arranged l4
+              →Arranged l4
+            →Delta Join [%0:mz_object_dependencies[#0{object_id}] » %2:l5[#0{id}] » %1:l5[#0{id}]] [%1:l5[#0{id}] » %0:mz_object_dependencies[#1{referenced_object_id}] » %2:l5[#0{id}]] [%2:l5[#0{id}] » %0:mz_object_dependencies[#0{object_id}] » %1:l5[#0{id}]]
+              path %0:
+                after %2:
+                  Project: #0, #1
+                  Filter: (#5{type} = "subsource")
+              path %1:
+                after %0:
+                  Project: #1, #0
+                  Filter: like["u%"](#0{referenced_object_id})
+                after %2:
+                  Project: #0, #1
+                  Filter: (#5{type} = "subsource")
+              path %2:
+                after %0:
+                  Filter: like["u%"](#1{referenced_object_id})
+              →Arrange (#0{object_id}) (#1{referenced_object_id})
+                →Fused with Child Map/Filter/Project
+                  Filter: like["u%"](#1{referenced_object_id})
+                    →Arranged mz_internal.mz_object_dependencies
+                      Key: (#0{object_id})
+              →Arranged l5
+              →Arranged l5
+            →Differential Join %1:l5[#0{id}] » %0:mz_tables[#1{source_id}]
+              →Arrange (#1{source_id})
+                →Fused with Child Map/Filter/Project
+                  Project: #1, #8
+                  Filter: (#8{source_id}) IS NOT NULL
+                    →Arranged mz_catalog.mz_tables
+                      Key: (#2{schema_id})
+              →Arranged l5
 
 Used Indexes:
   - mz_catalog.mz_sources_ind (*** full scan ***, differential join, delta join lookup)
@@ -6230,7 +6267,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1088 rows)
+            →Constant (1089 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -10784,7 +10821,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1088 rows)
+            →Constant (1089 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3

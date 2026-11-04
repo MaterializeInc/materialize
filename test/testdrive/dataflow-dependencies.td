@@ -254,6 +254,38 @@ mv_bids bids
   WHERE object.name = 'bids_tbl'
 bids_tbl src_tbl
 
+> CREATE TABLE gd_base (r text, a int)
+> CREATE MATERIALIZED VIEW gd_agg AS SELECT r, sum(a) AS s FROM gd_base GROUP BY r
+> CREATE INDEX gd_agg_idx ON gd_agg (r)
+> CREATE MATERIALIZED VIEW gd_top AS SELECT * FROM gd_agg ORDER BY s DESC LIMIT 1
+> CREATE VIEW gd_view AS SELECT r FROM gd_agg
+> CREATE INDEX gd_view_idx ON gd_view (r)
+> CREATE MATERIALIZED VIEW gd_on_view AS SELECT count(*) FROM gd_view
+
+> SELECT object.name, dependency.name
+  FROM mz_internal.mz_object_graph_edges e
+  JOIN mz_objects object ON e.object_id = object.id
+  JOIN mz_objects dependency ON e.dependency_id = dependency.id
+  WHERE object.name IN ('gd_top', 'gd_on_view')
+  ORDER BY object.name, dependency.name
+gd_on_view gd_view_idx
+gd_top     gd_agg_idx
+
+> DROP INDEX gd_agg_idx
+> DROP INDEX gd_view_idx
+
+# gd_view_idx read from gd_agg_idx, so gd_on_view resolves through both dropped
+# indexes.
+> SELECT object.name, dependency.name
+  FROM mz_internal.mz_object_graph_edges e
+  JOIN mz_objects object ON e.object_id = object.id
+  JOIN mz_objects dependency ON e.dependency_id = dependency.id
+  WHERE object.name IN ('gd_top', 'gd_on_view')
+  ORDER BY object.name, dependency.name
+gd_on_view gd_agg
+gd_top     gd_agg
+
+> DROP TABLE gd_base CASCADE
 > DROP SOURCE src_sub CASCADE
 > DROP SOURCE src_tbl CASCADE
 > DROP TABLE base CASCADE

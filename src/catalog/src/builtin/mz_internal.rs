@@ -4173,8 +4173,21 @@ pub static MZ_OBJECT_GRAPH_EDGES: LazyLock<BuiltinView> = LazyLock::new(|| Built
         ),
     ]),
     sql: "
+WITH MUTUALLY RECURSIVE
+  -- A dropped index lives on while dataflows built on it run, and they keep
+  -- naming its id, which mz_objects no longer has. Follow the dropped index's
+  -- own dependencies, possibly through more dropped indexes, to live objects.
+  resolved_dependencies(object_id text, dependency_id text) AS (
+    SELECT object_id, dependency_id
+    FROM mz_internal.mz_materialization_dependencies
+    UNION
+    SELECT rd.object_id, md.dependency_id
+    FROM resolved_dependencies rd
+    JOIN mz_internal.mz_materialization_dependencies md ON md.object_id = rd.dependency_id
+    WHERE rd.dependency_id NOT IN (SELECT id FROM mz_catalog.mz_objects)
+  )
 SELECT md.object_id, md.dependency_id
-FROM mz_internal.mz_materialization_dependencies md
+FROM resolved_dependencies md
 JOIN mz_catalog.mz_objects po ON po.id = md.dependency_id
     AND po.type IN ('index', 'materialized-view', 'sink', 'source', 'table')
 JOIN mz_catalog.mz_objects co ON co.id = md.object_id
