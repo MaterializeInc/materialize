@@ -13,7 +13,20 @@
 # Debian packages for the distroless final image, which has no package manager.
 # Installing them explicitly pulls current security-patched builds.
 # The digest pin is bumped by dependabot, which also busts the layer cache.
+# CA bundle for apt's HTTPS transport, before ca-certificates is installed.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:984d31d4bd6e71bb9469353d93e73c68f7b3c17142b2aec45f2a960489095b22 AS ca-certs
+
 FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS apt-deps
+# Fetch apt indexes and packages over HTTPS only. The build fails if any
+# http:// apt source remains.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do \
+        [ -f "$f" ] || continue; \
+        sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; \
+    done \
+    && ! grep -rqs 'http://' /etc/apt/sources.list /etc/apt/sources.list.d
+
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates eatmydata liblzma5 \
     && rm -rf /var/lib/apt/lists/*
 

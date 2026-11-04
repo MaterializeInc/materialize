@@ -13,7 +13,20 @@
 # server, so CI does not depend on a third-party registry continuing to serve a
 # dead project's images.
 
+# CA bundle for apt's HTTPS transport, before ca-certificates is installed.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:984d31d4bd6e71bb9469353d93e73c68f7b3c17142b2aec45f2a960489095b22 AS ca-certs
+
 FROM golang:1.24.0 AS builder
+# Fetch apt indexes and packages over HTTPS only. The build fails if any
+# http:// apt source remains.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do \
+        [ -f "$f" ] || continue; \
+        sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; \
+    done \
+    && ! grep -rqs 'http://' /etc/apt/sources.list /etc/apt/sources.list.d
+
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git \
     && git clone --depth=1 --branch RELEASE.2025-08-13T08-35-41Z https://github.com/minio/mc.git \

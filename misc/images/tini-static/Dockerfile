@@ -23,11 +23,24 @@
 #   docker cp extract:/output/tini ./tini
 #   docker rm extract
 
+# CA bundle for apt's HTTPS transport, before ca-certificates is installed.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:984d31d4bd6e71bb9469353d93e73c68f7b3c17142b2aec45f2a960489095b22 AS ca-certs
+
 # Pinned by rolling tag + multi-arch index digest, matching materialized-base,
 # so dependabot refreshes the digest for security fixes.
 FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS builder
 
 ARG TINI_VERSION=v0.19.0
+
+# Fetch apt indexes and packages over HTTPS only. The build fails if any
+# http:// apt source remains.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do \
+        [ -f "$f" ] || continue; \
+        sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; \
+    done \
+    && ! grep -rqs 'http://' /etc/apt/sources.list /etc/apt/sources.list.d
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential \
