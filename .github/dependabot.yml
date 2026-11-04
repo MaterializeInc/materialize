@@ -235,14 +235,6 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
-  ignore:
-    # psycopg 3.3.6 rejects the two error responses pgwire sends for a failed
-    # implicit BEGIN, which breaks the parallel workload tests. Remove this
-    # once SQL-840 is fixed.
-    - dependency-name: psycopg
-      versions: [">3.3.3"]
-    - dependency-name: psycopg-binary
-      versions: [">3.3.3"]
   groups:
     simple:
       applies-to: version-updates

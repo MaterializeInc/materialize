@@ -1491,7 +1491,8 @@ where
                 ))
                 .await?;
             }
-            // Only one error can be reported, ignore.
+            // We only roll back after an error was already sent, and a client expects just one
+            // error per failed query.
             Err(_) => {}
         }
         Ok(())
