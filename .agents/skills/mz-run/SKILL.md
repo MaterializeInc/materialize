@@ -103,5 +103,6 @@ For example, `mz_adapter::catalog::apply=trace,warn` would enable trace logging 
 
 ## jemalloc
 
-On Linux, we link against jemalloc by default.
+On Linux, we link against jemalloc by default, wrapped in the allocation tracker (`mz_alloc_track`), which serves heap profiles of Rust and C allocations at `/prof/heap` and `/prof/tracked`.
+jemalloc is built with its `_rjem_` symbol prefix, so it reads `_RJEM_MALLOC_CONF`, not `MALLOC_CONF`.
 Compile with `--no-default-features` to use the system allocator.

@@ -31,7 +31,7 @@ use mz_alloc_track::{self as alloc_track, TrackingAlloc};
 /// startup, sampling inactive until `prof.active` is set.
 #[cfg(target_os = "linux")]
 #[allow(non_upper_case_globals)]
-#[unsafe(export_name = "malloc_conf")]
+#[unsafe(export_name = "_rjem_malloc_conf")]
 pub static malloc_conf: &[u8] = b"prof:true,prof_active:false,lg_prof_sample:19\0";
 
 #[cfg(not(target_os = "linux"))]

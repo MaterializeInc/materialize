@@ -24,9 +24,13 @@ use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use pprof_util::ProfStartTime;
 use tikv_jemalloc_ctl::{epoch, raw, stats};
 
+// The workspace builds jemalloc with its `_rjem_` symbol prefix, so it reads
+// its configuration from the prefixed symbol. Sampling starts inactive: the
+// allocation tracker that wraps jemalloc samples instead, and `prof_active`
+// can still be switched on at runtime.
 #[allow(non_upper_case_globals)]
-#[unsafe(export_name = "malloc_conf")]
-pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
+#[unsafe(export_name = "_rjem_malloc_conf")]
+pub static malloc_conf: &[u8] = b"prof:true,prof_active:false,lg_prof_sample:19\0";
 
 #[derive(Copy, Clone, Debug)]
 pub struct JemallocProfMetadata {
