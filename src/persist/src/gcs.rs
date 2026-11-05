@@ -591,6 +591,127 @@ mod tests {
         Ok(())
     }
 
+    /// Times 128 MiB gets and sets through a single-stream read, [GcsBlob],
+    /// and, when `MZ_PERSIST_BENCH_GCS_HMAC_ID` and
+    /// `MZ_PERSIST_BENCH_GCS_HMAC_SECRET` are set, [S3Blob] against GCS's S3
+    /// API with the HTTP pool. Run in the bucket's region, with
+    /// `--nocapture`, for meaningful numbers.
+    ///
+    /// [S3Blob]: crate::s3::S3Blob
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[ignore]
+    async fn gcs_blob_throughput() -> Result<(), ExternalError> {
+        use std::time::Instant;
+
+        use crate::cfg::BlobKnobs;
+        use crate::s3::{BlobHttpPool, S3Blob, S3BlobConfig};
+
+        const LEN: usize = 128 * 1024 * 1024;
+        const ITERS: usize = 10;
+
+        #[derive(Debug)]
+        struct BenchKnobs;
+        impl BlobKnobs for BenchKnobs {
+            fn operation_timeout(&self) -> Duration {
+                Duration::from_secs(120)
+            }
+            fn operation_attempt_timeout(&self) -> Duration {
+                Duration::from_secs(60)
+            }
+            fn connect_timeout(&self) -> Duration {
+                Duration::from_secs(5)
+            }
+            fn read_timeout(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+            fn is_cc_active(&self) -> bool {
+                false
+            }
+            fn http_pool(&self) -> BlobHttpPool {
+                BlobHttpPool::Gcs
+            }
+        }
+
+        async fn time<F: Future<Output = Result<(), ExternalError>>>(
+            name: &str,
+            mut op: impl FnMut() -> F,
+        ) -> Result<(), ExternalError> {
+            let mut elapsed = Vec::new();
+            for _ in 0..ITERS {
+                let start = Instant::now();
+                op().await?;
+                elapsed.push(start.elapsed());
+            }
+            elapsed.sort();
+            let median = elapsed[ITERS / 2];
+            let mib_s = 128.0 / median.as_secs_f64();
+            println!(
+                "{name:<24} median {median:>10.2?} ({mib_s:>5.0} MiB/s), min {:.2?}, max {:.2?}",
+                elapsed[0],
+                elapsed[ITERS - 1],
+            );
+            Ok(())
+        }
+
+        let config = GcsBlobConfig::new_for_test()
+            .await?
+            .expect("bucket env var must be set");
+        let bucket = config.bucket.clone();
+        let prefix = config.prefix.clone();
+        let gcs = GcsBlob::open(config).await?;
+        let value = Bytes::from(vec![7u8; LEN]);
+
+        time("gcs set", || gcs.set("bench", value.clone())).await?;
+        time("gcs get single stream", || async {
+            let stream = gcs
+                .storage_client
+                .read_object(&gcs.formatted_bucket_path(), gcs.get_path("bench"))
+                .send()
+                .await
+                .map_err(|e| gcs.error("ReadObject", e))?;
+            let (bytes, _) = gcs.read_body(stream, u64::cast_from(LEN)).await?;
+            assert_eq!(bytes.len(), LEN);
+            Ok(())
+        })
+        .await?;
+        time("gcs get", || async {
+            let bytes = gcs.get("bench").await?.expect("bench blob exists");
+            assert_eq!(bytes.len(), LEN);
+            Ok(())
+        })
+        .await?;
+        gcs.delete("bench").await?;
+
+        let (Ok(id), Ok(secret)) = (
+            std::env::var("MZ_PERSIST_BENCH_GCS_HMAC_ID"),
+            std::env::var("MZ_PERSIST_BENCH_GCS_HMAC_SECRET"),
+        ) else {
+            return Ok(());
+        };
+        let config = S3BlobConfig::new(
+            bucket,
+            prefix,
+            None,
+            Some("https://storage.googleapis.com".into()),
+            Some("auto".into()),
+            Some((id, secret)),
+            Box::new(BenchKnobs),
+            S3BlobMetrics::new(&MetricsRegistry::new()),
+        )
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+        let s3 = S3Blob::open(config).await?;
+        time("s3 set", || s3.set("bench", value.clone())).await?;
+        time("s3 get", || async {
+            let bytes = s3.get("bench").await?.expect("bench blob exists");
+            assert_eq!(bytes.len(), LEN);
+            Ok(())
+        })
+        .await?;
+        s3.delete("bench").await?;
+        Ok(())
+    }
+
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     async fn gcs_blob_open_missing_bucket() -> Result<(), ExternalError> {
