@@ -62,6 +62,53 @@ matches the region's environment id and a list of `cluster_name`s, so a rule
 written for one staging environment does not apply to another. Confirm the
 flags each replica saw in the `flags` column of `windows.csv`.
 
+## Setting up the LaunchDarkly rules
+
+`run.py` does not set any flag itself. Without a matching rule, every arm runs
+the staging fallthrough and all arms measure the same configuration. Before a
+run, give each flag below one rule per value. The rule matches the region's
+environment and the clusters of the listed arms.
+
+| Flag | Value | Arms |
+|---|---|---|
+| `enable_column_paged_batcher` | `false` | `columnation` |
+| `enable_column_paged_batcher_spill` | `false` | `columnation`, `chunked`, `chunked_corr` |
+| `enable_compute_correction_v2_spill` | `false` | `columnation`, `chunked`, `pool_lz4_nocorr` |
+| `column_chunk_compress_min_depth` | `255` | `pool_raw` |
+| `column_paged_batcher_budget_fraction` | `0.01` | `pool_lz4_1` |
+| `column_paged_batcher_budget_fraction` | `0.5` | `pool_lz4_b50_rss100` |
+| `column_paged_batcher_pool_rss_target_fraction` | `1.0` | `pool_lz4_rss100`, `pool_lz4_b50_rss100` |
+
+Only the arms of the planned run need rules. An arm `<arm>` uses the clusters
+`idx_<arm>` and `mv_<arm>`, and with `--parallel-trials` also
+`idx_<arm>_t<n>` and `mv_<arm>_t<n>` for trials 2 and up.
+
+Instructions for an agent setting the rules with the LaunchDarkly MCP server:
+
+* Use project `default` and environment `staging`. Never write to `production`.
+* Read the environment key from `SELECT mz_environment_id();` against the
+  target region. `run.py` prints it at start, for example
+  `aws-us-east-1-<uuid>-0`.
+* Call `get-flag` for each flag in the table. Confirm the staging fallthrough
+  matches the `pool_lz4` arm: both spill gates and the paged batcher enabled,
+  compression on. Find the id of the variation with the listed value. If no
+  variation has that value, stop and ask a human, because adding a variation
+  changes the flag in every environment.
+* Call `update-targeting-rules` with one `addRule` instruction per row. The
+  rule has two clauses and serves the row's variation id:
+  * context kind `environment`, attribute `key`, op `in`, the environment key;
+  * context kind `replica`, attribute `cluster_name`, op `in`, the cluster
+    names of the row's arms.
+* When rules for the same arms already exist for another environment, add the
+  environment key to their `environment` clause instead of a second rule.
+* Name the experiment and the author in the rule description and the change
+  comment, so the rules can be found and removed after the run.
+
+After the run, check the `flags` column of `windows.csv`. It lists the
+replica-level overrides of the experiment's flags, so `pool_lz4` rows are empty
+and a `columnation` row that lacks `enable_column_paged_batcher=false` ran
+without its rule.
+
 ## Reproducing the measured configurations
 
 The working set fits in memory at SF30 on `M.1-3xlarge`. This is where the pool
