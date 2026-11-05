@@ -620,17 +620,6 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
             OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
         )",
     },
-    SubscribeSpec {
-        introspection_type: IntrospectionType::ComputeOperatorHydrationStatus,
-        sql: "SUBSCRIBE (
-            SELECT
-                export_id,
-                lir_id,
-                bool_and(hydrated) AS hydrated
-            FROM mz_introspection.mz_compute_operator_hydration_statuses_per_worker
-            GROUP BY export_id, lir_id
-        )",
-    },
     // Per-object arrangement sizes, one row per `(object_id, replica)`,
     // populating `mz_object_arrangement_sizes`.
     //

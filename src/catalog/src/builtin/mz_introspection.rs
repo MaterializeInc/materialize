@@ -357,32 +357,6 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
         }),
     });
 
-pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinLog> =
-    LazyLock::new(|| BuiltinLog {
-        name: "mz_compute_operator_hydration_statuses_per_worker",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::LOG_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
-        variant: LogVariant::Compute(ComputeLog::OperatorHydrationStatus),
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
-            entity_name: "hydration_status_per_worker",
-            description: "Hydration state for each LIR node per worker.",
-            links: &const {
-                [OntologyLink {
-                    name: "hydration_of",
-                    target: "compute_export_per_worker",
-                    properties: LinkProperties::fk_composite(
-                        "export_id",
-                        "export_id",
-                        Cardinality::ManyToOne,
-                        &[("worker_id", "worker_id")],
-                    ),
-                }]
-            },
-            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
-        }),
-    });
-
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_active_peeks_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
