@@ -23,6 +23,8 @@ mz-prof-http = { path = "../prof-http", default-features = false }
 tikv-jemallocator = { workspace = true, optional = true }
 tikv-jemalloc-ctl = { workspace = true, optional = true }
 tikv-jemalloc-sys = { workspace = true, optional = true }
+mimalloc = { workspace = true, optional = true }
+libmimalloc-sys = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -38,6 +40,10 @@ default = []
 # Whether to use jemalloc instead of the system allocator, through the sampling
 # allocation tracker. On Linux with glibc, this also replaces C's `malloc`.
 jemalloc = ["tikv-jemallocator", "dep:libc", "dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys", "mz-prof", "mz-prof-http/jemalloc", "dep:mz-alloc-track", "mz-ore/alloc-track", "mz-prof-http/alloc-track"]
+# Whether to use mimalloc instead of the system allocator, like `jemalloc`.
+# With both enabled, the process name selects the allocator, see the crate
+# documentation.
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys", "dep:libc", "dep:mz-alloc-track", "mz-ore/alloc-track", "mz-prof-http/alloc-track"]
 
 [package.metadata.unused-deps]
 # The only reason we depend on mz-prof-http from this package is so that we can

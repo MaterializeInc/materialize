@@ -19,4 +19,5 @@ custom-labels.workspace = true
 [features]
 default = ["mz-clusterd/default", "mz-environmentd/default"]
 jemalloc = ["mz-clusterd/jemalloc", "mz-environmentd/jemalloc"]
+mimalloc = ["mz-clusterd/mimalloc", "mz-environmentd/mimalloc"]
 tokio-console = ["mz-clusterd/tokio-console", "mz-environmentd/tokio-console"]

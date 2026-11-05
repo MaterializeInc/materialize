@@ -163,6 +163,7 @@ default = ["tokio-console", "mz-alloc-default"]
 # access to the file system.
 dev-web = []
 jemalloc = ["mz-alloc/jemalloc"]
+mimalloc = ["mz-alloc/mimalloc"]
 test = [
     "maplit",
     "opentelemetry_sdk",
