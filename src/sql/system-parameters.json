@@ -4082,7 +4082,7 @@
       "name": "storage_persist_sink_description_lookahead",
       "typeName": "duration",
       "default": "0 s",
-      "description": "Determines how far past the remap upper the source persist sink will commit to a ceiling in order to group data into one batch and one description, and whether the Postgres replication stream is read while a snapshot runs. Zero disables both, leaving every timestamp writing its own batch. Other values below the tick interval are clamped to the tick interval.",
+      "description": "Determines how far past the remap upper the source persist sink will commit to a ceiling in order to group data into one batch and one description, and whether the Postgres and MySQL replication streams are read while a snapshot runs. Zero disables both, leaving every timestamp writing its own batch. Other values below the tick interval are clamped to the tick interval.",
       "scope": "environment",
       "userVisible": false,
       "dyncfg": true
