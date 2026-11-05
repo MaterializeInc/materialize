@@ -269,8 +269,9 @@ impl Coordinator {
             Unchanged => {}
         }
 
-        // Validate new hydration-size references before dispatching to any ALTER
-        // path. Policy-only changes may retain a size that is no longer allowed.
+        // Validate a HYDRATION SIZE that this ALTER introduces before
+        // dispatching, so that every ALTER path checks it. An unchanged
+        // HYDRATION SIZE is not re-validated.
         if let Managed(new_managed) = &new_config.variant {
             if let Some(on_hydration) = new_managed
                 .auto_scaling_strategy

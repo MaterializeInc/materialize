@@ -1229,6 +1229,9 @@ contains:unknown cluster replica size notasize
 ! ALTER CLUSTER cc_burst_convert SET (MANAGED, SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'notasize')))
 contains:unknown cluster replica size notasize
 
+! ALTER CLUSTER cc_burst_validate SET (SIZE = 'scale=1,workers=2', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'free')))
+contains:unknown cluster replica size free
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1,workers=1', 'scale=1,workers=2'
 
