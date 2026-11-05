@@ -1957,6 +1957,23 @@ impl HirRelationExpr {
         }
     }
 
+    /// `self INTERSECT ALL other`: each row appears `min(count_self, count_other)` times,
+    /// provided both inputs have non-negative multiplicities.
+    ///
+    /// The result is planned as `self - threshold(self - other)`, so `self` appears twice in the
+    /// plan, and every output row is a row of `self`.
+    pub fn intersect_all(self, other: Self) -> Self {
+        // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
+        // The optimizer de-duplicates at some point, but it would be good to already
+        // not duplicate here.
+        //
+        // Also note that we do *not* need another threshold() at the end of the method chain
+        // because the right-hand side of the outer union only produces existing records,
+        // i.e., the record counts for differential data flow definitely remain non-negative.
+        let self_clone = self.clone();
+        self.union(self_clone.union(other.negate()).threshold().negate())
+    }
+
     pub fn exists(self) -> HirScalarExpr {
         HirScalarExpr::Exists(Box::new(self), NameMetadata::default())
     }
