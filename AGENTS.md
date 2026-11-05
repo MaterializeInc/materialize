@@ -14,6 +14,10 @@ Use the `mz-run` skill before building, running, formatting, or linting. `bin/fm
 
 Use the `mz-commit` skill before `git commit`, `git push`, or `gh pr create`.
 
+Never mark a PR ready for review, request reviewers, or submit a review on
+someone else's PR. Open drafts and leave pending reviews. The human does the
+rest. See `doc/developer/guide-changes.md#agent-authored-changes`.
+
 Use the `mz-debug-ci` skill before the first `bk` or `gh pr checks` command, or when handed a Buildkite URL.
 
 ## Code navigation
