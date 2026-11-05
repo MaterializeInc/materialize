@@ -45,7 +45,7 @@ use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, Opaque, SinceHandle};
 use crate::error::InvalidUsage;
-use crate::fetch::{BatchFetcher, BatchFetcherConfig};
+use crate::fetch::{BatchFetcher, BatchFetcherConfig, FetchBatchFilter};
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
@@ -661,6 +661,60 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
         D: Monoid + Ord + Codec64 + Send + Sync,
     {
+        self.read_batches_with_filter(
+            shard_id,
+            FetchBatchFilter::Snapshot { as_of },
+            read_schemas,
+            batches,
+            should_fetch_part,
+            memory_budget_bytes,
+        )
+    }
+
+    /// Like [PersistClient::read_batches_consolidated], but yields the updates with times at or
+    /// after `lower` with their times unchanged, so retractions stay distinct from the
+    /// insertions they cancel at other times. Updates are consolidated per `(key, val, time)`.
+    #[allow(clippy::unused_async)]
+    pub async fn read_batches_consolidated_from<K, V, T, D>(
+        &mut self,
+        shard_id: ShardId,
+        lower: Antichain<T>,
+        read_schemas: Schemas<K, V>,
+        batches: Vec<Batch<K, V, T, D>>,
+        should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
+        memory_budget_bytes: usize,
+    ) -> Result<Cursor<K, V, T, D, Vec<Batch<K, V, T, D>>>, Since<T>>
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
+    {
+        self.read_batches_with_filter(
+            shard_id,
+            FetchBatchFilter::Range { lower },
+            read_schemas,
+            batches,
+            should_fetch_part,
+            memory_budget_bytes,
+        )
+    }
+
+    fn read_batches_with_filter<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        filter: FetchBatchFilter<T>,
+        read_schemas: Schemas<K, V>,
+        batches: Vec<Batch<K, V, T, D>>,
+        should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
+        memory_budget_bytes: usize,
+    ) -> Result<Cursor<K, V, T, D, Vec<Batch<K, V, T, D>>>, Since<T>>
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
+    {
         let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
 
         let hollow_batches = batches.iter().map(|b| b.batch.clone()).collect_vec();
@@ -672,7 +726,7 @@ impl PersistClient {
             self.metrics.read.snapshot.clone(),
             Arc::clone(&self.blob),
             shard_id,
-            as_of,
+            filter,
             read_schemas,
             &hollow_batches,
             batches,
@@ -2175,6 +2229,91 @@ mod tests {
             .await
             .expect("invalid persist usage");
         assert!(is_finalized, "shard must still be finalized");
+    }
+
+    /// Writes the two-batch fixture the range-read tests share and reads it from `lower`.
+    async fn range_read(
+        dyncfgs: &ConfigUpdates,
+        lower: u64,
+    ) -> std::collections::BTreeSet<((String, String), u64, i64)> {
+        let mut client = new_test_client(dyncfgs).await;
+        let shard_id = ShardId::new();
+        let schemas = Schemas {
+            id: None,
+            key: Arc::new(StringSchema),
+            val: Arc::new(StringSchema),
+        };
+        let mut batches = Vec::new();
+        for updates in [[("a", 1, 1), ("a", 3, 2)], [("b", 2, -1), ("a", 3, -1)]] {
+            let mut builder = client.batch_builder::<String, String, u64, i64>(
+                shard_id,
+                "range_read_test",
+                schemas.clone(),
+                Antichain::from_elem(0),
+                None,
+            );
+            for (key, ts, diff) in updates {
+                builder
+                    .add(&key.to_owned(), &String::new(), &ts, &diff)
+                    .await
+                    .expect("valid update");
+            }
+            batches.push(
+                builder
+                    .finish(Antichain::from_elem(4))
+                    .await
+                    .expect("valid upper"),
+            );
+        }
+
+        let mut cursor = client
+            .read_batches_consolidated_from(
+                shard_id,
+                Antichain::from_elem(lower),
+                schemas,
+                batches,
+                |_stats| true,
+                1024 * 1024,
+            )
+            .await
+            .expect("range reads never fail on since");
+        let mut out = std::collections::BTreeSet::new();
+        while let Some(updates) = cursor.next().await {
+            for (kv, ts, diff) in updates {
+                assert!(out.insert((kv, ts, diff)), "output is consolidated");
+            }
+        }
+        for batch in cursor.into_lease() {
+            batch.delete().await;
+        }
+        out
+    }
+
+    fn expected(
+        updates: &[(&str, u64, i64)],
+    ) -> std::collections::BTreeSet<((String, String), u64, i64)> {
+        updates
+            .iter()
+            .map(|(k, t, d)| (((*k).to_owned(), String::new()), *t, *d))
+            .collect()
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn read_batches_consolidated_from_keeps_times_and_retractions(dyncfgs: ConfigUpdates) {
+        assert_eq!(
+            range_read(&dyncfgs, u64::MIN).await,
+            expected(&[("a", 1, 1), ("b", 2, -1), ("a", 3, 1)])
+        );
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn read_batches_consolidated_from_drops_times_before_lower(dyncfgs: ConfigUpdates) {
+        assert_eq!(
+            range_read(&dyncfgs, 2).await,
+            expected(&[("b", 2, -1), ("a", 3, 1)])
+        );
     }
 
     proptest! {
