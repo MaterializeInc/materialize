@@ -11,6 +11,7 @@ Run with bin/pyactivate against an existing local controller, for example:
 
 Requires catalog read protection already enabled, a usable compute cluster, and
 Linux pidfds plus permission to inspect/signal the managed adapter processes.
+SQL uses the internal listener as mz_system to inspect catalog shard authority.
 The controller API currently has no restart operation. Only the newly created
 adapter is signaled. No configuration is changed outside this script's sessions.
 Timeouts allow development builds. Polling phases use --timeout deadlines, with
@@ -51,11 +52,11 @@ def request(controller, path, timeout, method="GET", payload=None):
 
 
 def connect(adapter, timeout, cluster):
-    host, port = adapter["endpoints"]["sql-external"][0].rsplit(":", 1)
+    host, port = adapter["endpoints"]["sql-internal"][0].rsplit(":", 1)
     conn = psycopg.connect(
         host=host.strip("[]"),
         port=int(port),
-        user="materialize",
+        user="mz_system",
         dbname="materialize",
         connect_timeout=timeout,
         autocommit=True,
@@ -138,17 +139,17 @@ class Observer:
             SELECT 'raw', object_id, data_shard, read_known,
                    read_frontier::text, write_known, write_frontier::text
             FROM mz_internal.mz_storage_frontier_observations
-            WHERE object_id = ANY(%s)
+            WHERE object_id = ANY(%s::text[])
             UNION ALL
             SELECT 'current', object_id, NULL, read_known,
                    read_frontier::text, write_known, write_frontier::text
             FROM mz_internal.mz_current_storage_frontiers
-            WHERE object_id = ANY(%s)
+            WHERE object_id = ANY(%s::text[])
             UNION ALL
             SELECT 'public', object_id, NULL, true,
                    read_frontier::text, true, write_frontier::text
             FROM mz_internal.mz_frontiers
-            WHERE object_id = ANY(%s)
+            WHERE object_id = ANY(%s::text[])
             """,
             (list(self.shards),) * 3,
         ).fetchall()

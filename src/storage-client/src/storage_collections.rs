@@ -137,6 +137,16 @@ pub trait StorageCollections: Debug + Sync {
     /// capabilities.
     fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers>;
 
+    /// Returns the cached write frontier for this exact object/shard binding.
+    /// Missing, dropped, or metadata-only collections return `None`. This
+    /// observation may lag durable progress. Transactional collections follow
+    /// the shared WAL upper.
+    fn collection_write_frontier(
+        &self,
+        id: GlobalId,
+        shard: ShardId,
+    ) -> Option<Antichain<Timestamp>>;
+
     /// Atomically drains changed governed collections and samples `additional_ids`.
     /// Each entry contains current frontiers and a proposal excluding only the collection's
     /// own writable permission cap. Dependency and execution holds remain included.
@@ -1636,6 +1646,19 @@ impl StorageCollections for StorageCollectionsImpl {
             .collect_vec();
 
         res
+    }
+
+    fn collection_write_frontier(
+        &self,
+        id: GlobalId,
+        shard: ShardId,
+    ) -> Option<Antichain<Timestamp>> {
+        self.collections
+            .lock()
+            .expect("lock poisoned")
+            .get(&id)
+            .filter(|c| c.data_shard == shard && !c.is_dropped() && c.collection_metadata.is_some())
+            .map(|c| c.write_frontier.clone())
     }
 
     fn take_read_protection_frontiers(
@@ -4171,6 +4194,75 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn test_cached_write_frontier() {
+        let (controller, persist) = bound_test_controller().await;
+        let id = GlobalId::User(1);
+        let shard = ShardId::new();
+        assert_eq!(controller.collection_write_frontier(id, shard), None);
+        let metadata = StorageMetadata {
+            collection_metadata: [(id, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(0))].into_iter().collect(),
+            ..Default::default()
+        };
+        controller
+            .create_collections_for_bootstrap(
+                &metadata,
+                None,
+                vec![(
+                    id,
+                    CollectionDescription::for_other(RelationDesc::empty(), None),
+                )],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            controller.collection_write_frontier(id, shard),
+            Some(frontier(0))
+        );
+        assert_eq!(
+            controller.collection_write_frontier(id, ShardId::new()),
+            None
+        );
+        controller.set_read_policies(vec![(id, ReadPolicy::step_back())]);
+        let mut writer = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        let updates: Vec<((SourceData, ()), Timestamp, StorageDiff)> = Vec::new();
+        for upper in [frontier(10), Antichain::new()] {
+            writer
+                .compare_and_append(&updates, writer.upper().clone(), upper.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while controller.collection_write_frontier(id, shard) != Some(upper.clone()) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        // Completion retains a finite implied read capability. The terminal
+        // write observation must remain available until catalog retirement.
+        assert_eq!(
+            controller
+                .collection_frontiers(id)
+                .unwrap()
+                .implied_capability,
+            frontier(9)
+        );
+        controller.drop_collections_unvalidated(&StorageMetadata::default(), vec![id]);
+        assert_eq!(controller.collection_write_frontier(id, shard), None);
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn test_legacy_capabilities_drive_critical_since() {
         let (controller, persist) = test_controller().await;
         let id = GlobalId::User(1);
@@ -5477,6 +5569,7 @@ mod tests {
             .unwrap();
         assert!(recovered.collection_metadata(id).is_err());
         assert!(recovered.active_collection_metadatas().is_empty());
+        assert_eq!(recovered.collection_write_frontier(id, shard), None);
         recovered
             .apply_compaction_bounds(BTreeMap::from([(id, frontier(10))]))
             .unwrap();

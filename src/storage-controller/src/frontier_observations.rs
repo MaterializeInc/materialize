@@ -23,8 +23,8 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadataCertifier;
+use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::StorageDiff;
-use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -111,7 +111,7 @@ impl Observation {
 }
 
 enum Command {
-    Upsert(GlobalId, CollectionMetadata),
+    Upsert(GlobalId, ShardId),
     Remove(GlobalId),
 }
 
@@ -125,12 +125,14 @@ pub(crate) struct StorageFrontierObservations {
 }
 
 impl StorageFrontierObservations {
-    /// `persist` must address both the output binding and registered collections.
+    /// Publishes cached write progress for registered bindings and certified
+    /// catalog read bounds. `persist` must address the output binding.
     pub(crate) fn new(
         persist: PersistClient,
         binding: (GlobalId, ShardId, RelationDesc),
         now: NowFn,
         certifier: Arc<dyn CollectionMetadataCertifier>,
+        collections: Arc<dyn StorageCollections + Send + Sync>,
     ) -> Self {
         let (commands, rx) = mpsc::unbounded_channel();
         let (sample, ticks) = watch::channel(());
@@ -139,7 +141,16 @@ impl StorageFrontierObservations {
         // cancel an in-flight conditional write with an indeterminate outcome.
         drop(mz_ore::task::spawn(
             || "storage-frontier-observations",
-            run(persist, binding, now, certifier, rx, ticks, shutdown_rx),
+            run(
+                persist,
+                binding,
+                now,
+                certifier,
+                collections,
+                rx,
+                ticks,
+                shutdown_rx,
+            ),
         ));
         Self {
             commands,
@@ -148,8 +159,8 @@ impl StorageFrontierObservations {
         }
     }
 
-    pub(crate) fn upsert(&self, id: GlobalId, metadata: CollectionMetadata) {
-        let _ = self.commands.send(Command::Upsert(id, metadata));
+    pub(crate) fn upsert(&self, id: GlobalId, shard: ShardId) {
+        let _ = self.commands.send(Command::Upsert(id, shard));
     }
 
     /// Stops future sampling without retracting any shared observation.
@@ -165,26 +176,25 @@ impl StorageFrontierObservations {
 
 #[derive(Default)]
 struct Inventory {
-    entries: BTreeMap<GlobalId, (CollectionMetadata, Option<Observation>)>,
+    entries: BTreeMap<GlobalId, (ShardId, Option<Observation>)>,
     pending: Samples,
 }
 
 impl Inventory {
     fn command(&mut self, command: Command) {
         let (id, replacement) = match command {
-            Command::Upsert(id, metadata) => (id, Some(metadata)),
+            Command::Upsert(id, shard) => (id, Some(shard)),
             Command::Remove(id) => (id, None),
         };
         if let Some((old, _)) = self.entries.get(&id) {
             if replacement.as_ref() == Some(old) {
                 return;
             }
-            self.pending
-                .remove(&(id.to_string(), old.data_shard.to_string()));
+            self.pending.remove(&(id.to_string(), old.to_string()));
         }
         self.entries.remove(&id);
-        if let Some(metadata) = replacement {
-            self.entries.insert(id, (metadata, None));
+        if let Some(shard) = replacement {
+            self.entries.insert(id, (shard, None));
         }
     }
 
@@ -195,45 +205,30 @@ impl Inventory {
             if self
                 .entries
                 .get(&id)
-                .is_some_and(|(metadata, _)| metadata.data_shard.to_string() == key.1)
+                .is_some_and(|(shard, _)| shard.to_string() == key.1)
             {
                 self.entries.remove(&id);
             }
         }
     }
 
-    async fn sample(&mut self, persist: &PersistClient) {
-        for (id, (metadata, previous)) in &mut self.entries {
-            let sampled = sample(persist, metadata).await;
+    async fn sample(&mut self, collections: &dyn StorageCollections) {
+        for (id, (shard, previous)) in &mut self.entries {
+            let sampled = Observation {
+                // Only catalog certification establishes logical read permission.
+                read: Frontier::Unknown,
+                write: collections
+                    .collection_write_frontier(*id, *shard)
+                    .map_or(Frontier::Unknown, Frontier::observed),
+            };
             let joined = previous.unwrap_or_default().join(sampled);
             if *previous != Some(joined) {
                 self.pending
-                    .insert((id.to_string(), metadata.data_shard.to_string()), joined);
+                    .insert((id.to_string(), shard.to_string()), joined);
                 *previous = Some(joined);
             }
             tokio::task::yield_now().await;
         }
-    }
-}
-
-async fn sample(persist: &PersistClient, metadata: &CollectionMetadata) -> Observation {
-    // TxnsCodecRow uses the same key/value codecs as data shards. The WAL
-    // upper, not the possibly unapplied data upper, bounds transactional writes.
-    let write = persist
-        .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
-            metadata.txns_shard.unwrap_or(metadata.data_shard),
-            diagnostics(),
-        )
-        .await;
-    if let Err(error) = &write {
-        tracing::warn!(?error, shard = %metadata.data_shard, "sampling storage upper");
-    }
-    Observation {
-        // Physical since can lag logical readability, e.g. while ingestion
-        // resumption retains an old remap lease. Catalog certification supplies
-        // the logical bound for this exact binding, not any peer's local holds.
-        read: Frontier::Unknown,
-        write: write.map_or(Frontier::Unknown, Frontier::observed),
     }
 }
 
@@ -533,6 +528,7 @@ async fn run(
     binding: (GlobalId, ShardId, RelationDesc),
     now: NowFn,
     certifier: Arc<dyn CollectionMetadataCertifier>,
+    collections: Arc<dyn StorageCollections + Send + Sync>,
     mut commands: mpsc::UnboundedReceiver<Command>,
     mut ticks: watch::Receiver<()>,
     mut shutdown: oneshot::Receiver<()>,
@@ -569,7 +565,7 @@ async fn run(
                 }
                 tokio::select! {
                     _ = &mut shutdown => return,
-                    () = inventory.sample(&persist) => {},
+                    () = inventory.sample(collections.as_ref()) => {},
                 }
             },
             _ = tokio::time::sleep_until(retry_at),
@@ -619,8 +615,8 @@ async fn run(
 mod tests {
     use super::*;
     use mz_persist_client::critical::{CriticalReaderId, Opaque};
-    use mz_persist_types::PersistLocation;
     use mz_repr::SqlScalarType;
+    use mz_storage_client::controller::{CollectionDescription, DataSource, StorageMetadata};
     use mz_storage_types::controller::TxnsCodecRow;
 
     #[derive(Debug, Default)]
@@ -678,16 +674,52 @@ mod tests {
         (GlobalId::System(1), shard, desc())
     }
 
-    fn metadata(data_shard: ShardId, txns_shard: Option<ShardId>) -> CollectionMetadata {
-        CollectionMetadata {
-            persist_location: PersistLocation {
-                blob_uri: "mem://".parse().unwrap(),
-                consensus_uri: "mem://".parse().unwrap(),
-            },
-            data_shard,
-            relation_desc: RelationDesc::empty(),
-            txns_shard,
+    async fn register(
+        collections: &dyn StorageCollections,
+        id: GlobalId,
+        shard: ShardId,
+        transactional: bool,
+    ) {
+        let mut description = CollectionDescription::for_other(RelationDesc::empty(), None);
+        if transactional {
+            description.data_source = DataSource::Table;
         }
+        collections
+            .create_collections_for_bootstrap(
+                &StorageMetadata {
+                    collection_metadata: [(id, shard)].into_iter().collect(),
+                    compaction_bounds: [(id, Antichain::from_elem(Timestamp::MIN))]
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+                Some(Timestamp::MIN),
+                vec![(id, description)],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn sample_at(
+        collections: &dyn StorageCollections,
+        id: GlobalId,
+        shard: ShardId,
+        upper: u64,
+    ) -> Observation {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while collections.collection_write_frontier(id, shard)
+                != Some(Antichain::from_elem(Timestamp::from(upper)))
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut inventory = Inventory::default();
+        inventory.command(Command::Upsert(id, shard));
+        inventory.sample(collections).await;
+        inventory.pending[&(id.to_string(), shard.to_string())]
     }
 
     fn at(t: u64) -> Frontier {
@@ -776,13 +808,14 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn same_key_race_and_late_sample() {
-        let persist = PersistClient::new_for_tests().await;
+        let (_controller, collections, persist) = crate::tests::test_controller(true, false).await;
         let output_shard = ShardId::new();
         let data_shard = ShardId::new();
         let (mut writer, _lease) = data(&persist, data_shard).await;
-        let metadata = metadata(data_shard, None);
+        let id = GlobalId::User(1);
+        register(collections.as_ref(), id, data_shard, false).await;
         advance(&mut writer, 5).await;
-        let old = sample(&persist, &metadata).await;
+        let old = sample_at(collections.as_ref(), id, data_shard, 5).await;
         assert_eq!(
             old,
             Observation {
@@ -791,7 +824,7 @@ mod tests {
             }
         );
         advance(&mut writer, 10).await;
-        let new = sample(&persist, &metadata).await;
+        let new = sample_at(collections.as_ref(), id, data_shard, 10).await;
         assert_eq!(
             new,
             Observation {
@@ -817,6 +850,10 @@ mod tests {
         publish(&mut right, &newer).await;
         // The delayed sample predates the peer's progress. It must not retract it.
         publish(&mut left, &older).await;
+        assert_eq!(rows(&persist, output_shard).await, newer);
+        drop(left);
+        let mut restarted = Output::open(&persist, binding(output_shard)).await;
+        publish(&mut restarted, &older).await;
         assert_eq!(rows(&persist, output_shard).await, newer);
     }
 
@@ -846,9 +883,15 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn logical_permission_and_transactional_upper_ignore_physical_pins() {
-        let persist = PersistClient::new_for_tests().await;
+        let (_controller, collections, persist) = crate::tests::test_controller(true, false).await;
+        let id = GlobalId::User(1);
         let data_shard = ShardId::new();
-        let wal_shard = ShardId::new();
+        register(collections.as_ref(), id, data_shard, true).await;
+        let wal_shard = collections
+            .collection_metadata(id)
+            .unwrap()
+            .txns_shard
+            .unwrap();
         let (mut writer, lease) = data(&persist, data_shard).await;
         advance(&mut writer, 20).await;
         let mut critical = persist
@@ -870,16 +913,35 @@ mod tests {
             )
             .await
             .unwrap();
+        let peer_table = GlobalId::User(2);
+        let peer_shard = ShardId::new();
+        register(collections.as_ref(), peer_table, peer_shard, true).await;
+        let probe = GlobalId::User(3);
+        let probe_shard = ShardId::new();
+        let (mut probe_writer, _probe_lease) = data(&persist, probe_shard).await;
+        register(collections.as_ref(), probe, probe_shard, false).await;
+        advance(&mut probe_writer, 1).await;
+        // Stats and registration share the background command queue. Wait for
+        // registration before advancing the WAL, rather than racing its watcher.
+        collections
+            .snapshot_stats(probe, Antichain::from_elem(Timestamp::MIN))
+            .await
+            .unwrap();
+        // Both tables follow one WAL even though their physical uppers differ.
         advance(&mut wal, 40).await;
-        let metadata = metadata(data_shard, Some(wal_shard));
-        let id = GlobalId::User(1);
+        assert_eq!(
+            sample_at(collections.as_ref(), peer_table, peer_shard, 40)
+                .await
+                .write,
+            at(40)
+        );
         let key = (id.to_string(), data_shard.to_string());
         let output_shard = ShardId::new();
         let mut output = Output::open(&persist, binding(output_shard)).await;
         let catalog = Arc::new(Catalog::default());
         catalog.mappings.lock().unwrap().insert(id, data_shard);
         output.certifier = Some(Arc::<Catalog>::clone(&catalog));
-        let sampled = sample(&persist, &metadata).await;
+        let sampled = sample_at(collections.as_ref(), id, data_shard, 40).await;
         let samples = BTreeMap::from([(key.clone(), sampled)]);
         assert_eq!(
             sampled,
@@ -911,7 +973,10 @@ mod tests {
             .unwrap();
         advance(&mut wal, 50).await;
         let mut peer = Output::open(&persist, binding(output_shard)).await;
-        let newer = BTreeMap::from([(key.clone(), sample(&persist, &metadata).await)]);
+        let newer = BTreeMap::from([(
+            key.clone(),
+            sample_at(collections.as_ref(), id, data_shard, 50).await,
+        )]);
         publish(&mut peer, &newer).await;
         assert!(!output.append(attempt).await);
         publish(&mut output, &Samples::new()).await;
@@ -1011,61 +1076,36 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn inventory_removal_and_replacement_preserve_shared_rows() {
-        let persist = PersistClient::new_for_tests().await;
+        let (_controller, collections, persist) = crate::tests::test_controller(true, false).await;
         let shard = ShardId::new();
         let mut output = Output::open(&persist, binding(shard)).await;
         let mut inventory = Inventory::default();
         let id = GlobalId::User(1);
-        let old = metadata(ShardId::new(), None);
-        let new = metadata(ShardId::new(), None);
-        inventory.command(Command::Upsert(id, old.clone()));
-        inventory.sample(&persist).await;
+        let old = ShardId::new();
+        let new = ShardId::new();
+        register(collections.as_ref(), id, old, false).await;
+        inventory.command(Command::Upsert(id, old));
+        inventory.sample(collections.as_ref()).await;
         let mut expected = inventory.pending.clone();
         publish(&mut output, &inventory.pending).await;
         inventory.pending.clear();
-        inventory.command(Command::Upsert(id, new.clone()));
-        inventory.sample(&persist).await;
+        inventory.command(Command::Upsert(id, new));
+        inventory.sample(collections.as_ref()).await;
         assert_eq!(inventory.pending.len(), 1);
+        // The cache still describes the old shard. Its frontier must not be
+        // attributed to a replacement, nor mistaken for completion.
+        assert_eq!(
+            inventory.pending[&(id.to_string(), new.to_string())],
+            Observation::default()
+        );
         expected.extend(inventory.pending.clone());
         publish(&mut output, &inventory.pending).await;
         inventory.pending.clear();
         inventory.command(Command::Remove(id));
-        inventory.sample(&persist).await;
+        inventory.sample(collections.as_ref()).await;
         assert!(inventory.pending.is_empty());
         publish(&mut output, &inventory.pending).await;
         assert_eq!(rows(&persist, shard).await, expected);
-    }
-
-    #[mz_ore::test(tokio::test)]
-    async fn transactional_sampling_does_not_infer_logical_permission() {
-        let persist = PersistClient::new_for_tests().await;
-        let incompatible = ShardId::new();
-        let _wrong_codec = persist
-            .open_writer::<(), (), Timestamp, StorageDiff>(
-                incompatible,
-                Arc::new(UnitSchema),
-                Arc::new(UnitSchema),
-                Diagnostics::for_tests(),
-            )
-            .await
-            .unwrap();
-        let shard = ShardId::new();
-        let (mut writer, _lease) = data(&persist, shard).await;
-        advance(&mut writer, 9).await;
-        assert_eq!(
-            sample(&persist, &metadata(incompatible, Some(shard))).await,
-            Observation {
-                read: Frontier::Unknown,
-                write: at(9)
-            },
-        );
-        assert_eq!(
-            sample(&persist, &metadata(shard, Some(incompatible))).await,
-            Observation {
-                read: Frontier::Unknown,
-                write: Frontier::Unknown
-            },
-        );
     }
 
     #[mz_ore::test(tokio::test)]
@@ -1122,7 +1162,7 @@ mod tests {
         assert!(catalog.calls.load(SeqCst) > calls);
         assert_eq!(rows(&persist, shard).await, expected);
         let mut inventory = Inventory::default();
-        inventory.command(Command::Upsert(GlobalId::User(2), metadata(old, None)));
+        inventory.command(Command::Upsert(GlobalId::User(2), old));
         inventory.pending.insert(key(2, old), observation);
         inventory.retire(std::mem::take(&mut cleaner.retired));
         assert!(inventory.entries.is_empty());
@@ -1193,7 +1233,7 @@ mod tests {
         );
         let mut inventory = Inventory::default();
         inventory.pending = pending;
-        inventory.command(Command::Upsert(GlobalId::User(2), metadata(dead, None)));
+        inventory.command(Command::Upsert(GlobalId::User(2), dead));
         inventory.retire(std::mem::take(&mut cleaner.retired));
         publish(&mut cleaner, &inventory.pending).await;
         assert!(cleaner.dirty.is_empty());
@@ -1246,11 +1286,14 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     async fn actor_samples_on_notification_and_stops_on_drop() {
         tokio::time::timeout(Duration::from_secs(30), async {
-            let persist = PersistClient::new_for_tests().await;
+            let (_controller, collections, persist) =
+                crate::tests::test_controller(true, false).await;
             let shard = ShardId::new();
             let data_shard = ShardId::new();
             let (mut writer, _lease) = data(&persist, data_shard).await;
+            register(collections.as_ref(), GlobalId::User(1), data_shard, false).await;
             advance(&mut writer, 9).await;
+            sample_at(collections.as_ref(), GlobalId::User(1), data_shard, 9).await;
             let actor = StorageFrontierObservations::new(
                 persist.clone(),
                 binding(shard),
@@ -1266,8 +1309,9 @@ mod tests {
                     )])),
                     ..Default::default()
                 }),
+                collections,
             );
-            actor.upsert(GlobalId::User(1), metadata(data_shard, None));
+            actor.upsert(GlobalId::User(1), data_shard);
             for _ in 0..100 {
                 actor.sample();
             }

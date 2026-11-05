@@ -727,6 +727,14 @@ impl StorageCollections for EmptyStorage {
         unimplemented!("storage is not used by these compute tests")
     }
 
+    fn collection_write_frontier(
+        &self,
+        _id: GlobalId,
+        _shard: mz_persist_client::ShardId,
+    ) -> Option<Antichain<Timestamp>> {
+        unimplemented!("storage is not used by these compute tests")
+    }
+
     fn take_read_protection_frontiers(
         &self,
         _additional_ids: &BTreeSet<GlobalId>,

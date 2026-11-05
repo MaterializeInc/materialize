@@ -1274,7 +1274,7 @@ impl StorageController for Controller {
                 CollectionState::new(data_source, metadata, extra_state, wallclock_lag_metrics);
 
             if let Some(sampler) = &self.storage_frontier_observations {
-                sampler.upsert(id, collection_state.collection_metadata.clone());
+                sampler.upsert(id, collection_state.collection_metadata.data_shard);
             }
             self.collections.insert(id, collection_state);
         }
@@ -1521,7 +1521,10 @@ impl StorageController for Controller {
         // Great! We have successfully evolved the schema of our Table, now we need to update our
         // in-memory data structures.
         if let Some(sampler) = &self.storage_frontier_observations {
-            sampler.upsert(new_collection, collection_state.collection_metadata.clone());
+            sampler.upsert(
+                new_collection,
+                collection_state.collection_metadata.data_shard,
+            );
         }
         self.collections.insert(new_collection, collection_state);
 
@@ -3191,11 +3194,12 @@ where
                         .as_ref()
                         .expect("native sampler requires catalog certification"),
                 ),
+                Arc::clone(&self.storage_collections),
             );
             // Initial inventory only. Subsequent catalog changes update the
             // sampler at collection creation, schema evolution and removal.
             for (id, collection) in &self.collections {
-                sampler.upsert(*id, collection.collection_metadata.clone());
+                sampler.upsert(*id, collection.collection_metadata.data_shard);
             }
             self.storage_frontier_observations = Some(sampler);
         }
@@ -4373,7 +4377,7 @@ mod tests {
         test_controller(false, false).await
     }
 
-    async fn test_controller(
+    pub(super) async fn test_controller(
         replica_owned: bool,
         read_only: bool,
     ) -> (Controller, Arc<StorageCollectionsImpl>, PersistClient) {
