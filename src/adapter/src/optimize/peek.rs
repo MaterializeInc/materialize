@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::IndexDesc;
+use mz_compute_types::dataflows::{DataflowClass, IndexDesc};
 use mz_compute_types::plan::LirRelationExpr;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
@@ -320,6 +320,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             .and_then(Timestamp::try_step_forward)
         {
             df_desc.until = Antichain::from_elem(until);
+            df_desc.class = DataflowClass::OneShotRead;
         }
 
         // Construct TransformCtx for global optimization.
