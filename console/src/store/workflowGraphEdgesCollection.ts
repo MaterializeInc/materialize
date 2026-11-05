@@ -56,7 +56,7 @@ const WORKFLOW_GRAPH_EDGES_SUBSCRIBE_DISABLED = {
  * Whether the environment has the edges the collection subscribes to, or null
  * while that is unknown. The version is only known while the environment is
  * healthy, so held edges keep this true through a failed health check, which
- * would otherwise drop the SUBSCRIBE and swap the graph to the SQL path.
+ * would otherwise drop the SUBSCRIBE and replace the graph with a spinner.
  */
 export function useWorkflowGraphEdgesAvailable(): boolean | null {
   const meetsVersion = useEnvironmentGate(OBJECT_GRAPH_EDGES_MIN_VERSION);

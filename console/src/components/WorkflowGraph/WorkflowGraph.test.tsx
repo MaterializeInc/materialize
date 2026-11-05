@@ -254,6 +254,23 @@ describe("WorkflowGraph from the edges collection", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows an error when the connection drops before any edges load", async () => {
+    workflowGraphEdgesCollection.reset();
+    workflowGraphEdgesCollection.applySnapshot({
+      data: [],
+      snapshotComplete: false,
+      error: {
+        code: SUBSCRIBE_ERROR_CODE.CONNECTION_CLOSED,
+        message: "Socket closed unexpectedly",
+      },
+    });
+    await renderAt(WITH_EDGES, REVENUE.id);
+
+    expect(
+      await screen.findByText("An error occurred fetching workflow data."),
+    ).toBeVisible();
+  });
+
   it("keeps the graph through a failed health check", async () => {
     server.use(detailsHandler(NODE_IDS, OBJECTS.map(nodeDetails)));
     await renderAt(WITH_EDGES, REVENUE.id);
