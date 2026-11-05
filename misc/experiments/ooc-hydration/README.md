@@ -57,9 +57,50 @@ give `mv_first` at least as many trials as `mv_second`, because each
 second-write trial rehydrates the MVs of the first-write trial in its slot.
 More replicas share more nodes, so check pod placement when comparing arms.
 
+The LaunchDarkly rules live in the `staging` environment only. Each rule
+matches the region's environment id and a list of `cluster_name`s, so a rule
+written for one staging environment does not apply to another. Confirm the
+flags each replica saw in the `flags` column of `windows.csv`.
+
+## Reproducing the measured configurations
+
+The working set fits in memory at SF30 on `M.1-3xlarge`. This is where the pool
+costs time against `columnation`:
+
+```
+run.py ... --size M.1-3xlarge --scale-factor 30 --parallel-trials \
+  --trials idx=2 --phases idx \
+  --arms columnation,pool_lz4,pool_lz4_rss100,pool_lz4_b50_rss100 --outdir sf30-idx
+run.py ... --size M.1-3xlarge --scale-factor 30 --parallel-trials \
+  --trials mv_first=3,mv_second=3 --phases mv_first,mv_second \
+  --arms columnation,chunked,pool_lz4,pool_lz4_nocorr,chunked_corr --outdir sf30-mv
+```
+
+Memory pressure comes from SF150 with the default arms, about 3x to 4x the
+working set on `M.1-3xlarge` and 4x to 6x on `M.1-2xlarge`. Measured from RSS
+plus swap over RAM, the ratio varies by phase.
+
+Trial times for one arm varied by up to 25% within a run, so compare arms from
+the same run only. Before a run, drop every other workload's objects from the
+arm clusters. Leftover indexes from another scale factor hydrate along with the
+measured ones and inflate their times. The region allows 100 materialized
+views, so drop the MVs of earlier runs before starting a new MV run. Keep the
+load generator sources across runs, since a recreated source ingests from scratch.
+
+## Summarizing
+
+```
+python3 misc/experiments/ooc-hydration/summarize.py --mz-bin target/debug/mz \
+  --config <writable mz.toml> <dir> [<dir> ...]
+```
+
+`summarize.py` prints the mean hydration time per phase and arm, the speedup
+against `columnation`, and the mean peak RSS and swap. A speedup below 1 means
+slower than `columnation`.
+
 ## Memory
 
-Read the peaks for each window in `windows.csv` from
+`summarize.py` reads the peaks for each window in `windows.csv` from
 `mz_internal.mz_cluster_replica_metrics_history`, sampled once a minute.
 `memory_bytes` is RSS and `heap_bytes - memory_bytes` is swap; cast to
 `numeric` before subtracting, since both are unsigned. Pool extents are
@@ -71,3 +112,13 @@ Confirm the arm from `mz_column_pool_extent_bytes_written_total`: the
 more extent bytes than `pool_lz4`. `mz_column_pool_evictions_compress_total`
 counts every extent-writing eviction regardless of codec, so it does not tell
 `pool_raw` apart.
+
+## Profiling
+
+Polar Signals profiles the staging replicas. Select a replica by its
+environment's namespace and replica id together, because replica ids repeat
+across environments. Worker threads are named `compute:<n>`, and the pool's
+spill threads run apart from them. Compare an arm with `chunked` over the same
+window. The pool's worker-side cost sits under `ComputeSpill::spill_body`
+(insert, serialize into a slot, budget enforcement) and
+`ComputeSpill::into_body` (read, lz4 decode, copy out).
