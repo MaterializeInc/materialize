@@ -17,6 +17,7 @@
 
 pub mod activator;
 pub mod antichain;
+pub mod arrange_agent;
 pub mod builder_async;
 pub mod capture;
 pub mod column_pager;
