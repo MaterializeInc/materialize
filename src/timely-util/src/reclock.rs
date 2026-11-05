@@ -177,7 +177,7 @@ use std::iter::FromIterator;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolidation};
+use differential_dataflow::{AsCollection, ExchangeData, VecCollection};
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
 use timely::communication::{Pull, Push};
@@ -237,21 +237,14 @@ where
         // frontier. As the input frontier advances, we drop elements out of this priority queue
         // and mint new associations.
         let mut pending_remap: BinaryHeap<Reverse<(IntoTime, FromTime, i64)>> = BinaryHeap::new();
-        // A trace of `remap_input` that accumulates correctly for all times that are beyond
-        // `remap_since` and not beyond `remap_upper`. The updates in `remap_trace` are maintained
-        // in time order. An actual DD trace could be used here at the expense of a more
-        // complicated API to traverse it. This is left for future work if the naive trace
-        // maintenance implemented in this operator becomes problematic.
-        let mut remap_upper = Antichain::from_elem(IntoTime::minimum());
-        let mut remap_since = as_of.clone();
-        let mut remap_trace = VecDeque::new();
+        // The bindings of `remap_input` at times beyond its since and not beyond the input
+        // frontier.
+        let mut remap_trace = RemapTrace::new(as_of.clone());
 
         // A stash of source updates for which we don't know the corresponding binding yet.
         let mut deferred_source_updates: Vec<ChainBatch<_, _, _>> = Vec::new();
         // The frontier of the `events` input
         let mut source_frontier = MutableAntichain::from_elem(FromTime::minimum());
-
-        let mut binding_buffer = Vec::new();
 
         // Accumulation buffer for `remap_input` updates.
         use timely::progress::ChangeBatch;
@@ -294,15 +287,21 @@ where
             }
 
             // STEP 2. Extract bindings not beyond `remap_frontier` and commit them into `remap_trace`.
-            let prev_remap_upper =
-                std::mem::replace(&mut remap_upper, frontiers[0].frontier().to_owned());
-            while let Some(update) = pending_remap.peek_mut() {
-                if !remap_upper.less_equal(&update.0.0) {
-                    let Reverse((into, from, diff)) = PeekMut::pop(update);
-                    remap_trace.push_back((from, into, diff));
-                } else {
-                    break;
-                }
+            let remap_upper = frontiers[0].frontier().to_owned();
+            while let Some(Reverse((into, _, _))) = pending_remap.peek()
+                && !remap_upper.less_equal(into)
+            {
+                // The heap yields the updates of a time together, and all of them are in it
+                // because the remap frontier has passed that time.
+                let into = into.clone();
+                let updates = std::iter::from_fn(|| {
+                    let update = pending_remap.peek_mut()?;
+                    (update.0.0 == into).then(|| {
+                        let Reverse((_, from, diff)) = PeekMut::pop(update);
+                        (from, diff)
+                    })
+                });
+                remap_trace.push(into.clone(), updates);
             }
 
             // STEP 3. Receive new data updates
@@ -330,139 +329,57 @@ where
             stash.sort_unstable_by(|(_, t1, _): &(D, FromTime, R), (_, t2, _)| t1.cmp(t2));
             let mut new_source_updates = ChainBatch::from_iter(stash);
 
-            // STEP 4: Reclock new and deferred updates
-            //         We are now ready to step through the remap bindings in time order and
-            //         perform the following actions:
-            //         4.1. Match `new_source_updates` against the entirety of bindings contained
-            //              in the trace.
-            //         4.2. Match `deferred_source_updates` against the bindings that were just
-            //              added in the trace.
-            //         4.3. Reclock `source_frontier` to calculate the new since frontier of the
-            //              remap trace.
-            //
-            //         The steps above only make sense to perform if there are any times for which
-            //         we can correctly accumulate the remap trace, which is what we check here.
-            if remap_since.iter().all(|t| !remap_upper.less_equal(t)) {
-                let mut cur_binding = MutableAntichain::new();
-
-                let mut remap = remap_trace.iter().peekable();
-                let mut reclocked_source_frontier = remap_upper.clone();
-
-                // We go over all the times for which we might need to output data at. These times
-                // are restrticted to the times at which there exists an update in `remap_trace`
-                // and the minimum timestamp for the case where `remap_trace` is completely empty,
-                // in which case the minimum timestamp maps to the empty `FromTime` frontier and
-                // therefore all data events map to that minimum timestamp.
-                //
-                // The approach taken here will take time proportional to the number of elements in
-                // `remap_trace`. During development an alternative approach was considered where
-                // the updates in `remap_trace` are instead fully materialized into an ordered list
-                // of antichains in which every data update can be binary searched into. The are
-                // two concerns with this alternative approach that led to preferring this one:
-                // 1. Materializing very wide antichains with small differences between them
-                //    needs memory proportial to the number of bindings times the width of the
-                //    antichain.
-                // 2. It locks in the requirement of a totally ordered target timestamp since only
-                //    in that case can one binary search a binding.
-                // The linear scan is expected to be fine due to the run-to-completion nature of
-                // the operator since its cost is amortized among the number of outstanding
-                // updates.
-                let mut min_time = IntoTime::minimum();
-                min_time.advance_by(remap_since.borrow());
-                let mut prev_cur_time = None;
-                let mut interesting_times = std::iter::once(&min_time)
-                    .chain(remap_trace.iter().map(|(_, t, _)| t))
-                    .filter(|&v| {
-                        let prev = prev_cur_time.replace(v);
-                        prev != prev_cur_time
-                    });
-                let mut frontier_reclocked = false;
-                while !(new_source_updates.is_empty()
-                    && deferred_source_updates.is_empty()
-                    && frontier_reclocked)
-                    && let Some(cur_time) = interesting_times.next()
+            // STEP 4: Reclock the source frontier and the new and deferred updates
+            //         This only makes sense if there are any times for which we can correctly
+            //         accumulate the remap trace, which is what we check here.
+            if remap_trace
+                .since()
+                .iter()
+                .all(|t| !remap_upper.less_equal(t))
+            {
+                // 4.1. Reclock `source_frontier`
+                //      If any FromTime in the source frontier could still be reclocked to a
+                //      binding then we must keep our capability to emit data at that binding's
+                //      time and not compact past it. Without such a binding the frontier maps to
+                //      `remap_upper`.
+                let source_frontier = source_frontier.frontier();
+                let reclocked_source_frontier = match remap_trace
+                    .cursor()
+                    .seek(|bound| source_frontier.iter().any(|t| !bound.less_equal(t)))
                 {
-                    // 4.0. Load updates of `cur_time` from the trace into `cur_binding` to
-                    //      construct the `[FromTime]` frontier that `cur_time` maps to.
-                    while let Some((t_from, _, diff)) = remap.next_if(|(_, t, _)| t == cur_time) {
-                        binding_buffer.push((t_from.clone(), *diff));
-                    }
-                    cur_binding.update_iter(binding_buffer.drain(..));
-                    let cur_binding = cur_binding.frontier();
+                    Some((time, _)) => Antichain::from_elem(time.clone()),
+                    None => remap_upper.clone(),
+                };
 
-                    // 4.1. Extract updates from `new_source_updates`
-                    for (data, _, diff) in new_source_updates.extract(cur_binding) {
+                // 4.2. Extract updates from `new_source_updates` and `deferred_source_updates`
+                //      The cursor stops only at bindings that some pending update maps to, and
+                //      each stop extracts every update that maps there.
+                let mut cursor = remap_trace.cursor();
+                while !(new_source_updates.is_empty() && deferred_source_updates.is_empty())
+                    && let Some((cur_time, cur_frontier)) = cursor.seek(|frontier| {
+                        new_source_updates.can_extract(frontier)
+                            || deferred_source_updates
+                                .iter()
+                                .any(|batch| batch.can_extract(frontier))
+                    })
+                {
+                    for (data, _, diff) in new_source_updates.extract(cur_frontier) {
                         session.give((data, cur_time.clone(), diff));
                     }
-
-                    // 4.2. Extract updates from `deferred_source_updates`.
-                    //      The deferred updates contain all updates that were not able to be
-                    //      reclocked with the bindings until `prev_remap_upper`. For this reason
-                    //      we only need to reconsider these updates when we start looking at new
-                    //      bindings, i.e bindings that are beyond `prev_remap_upper`.
-                    if prev_remap_upper.less_equal(cur_time) {
-                        deferred_source_updates.retain_mut(|batch| {
-                            for (data, _, diff) in batch.extract(cur_binding) {
-                                session.give((data, cur_time.clone(), diff));
-                            }
-                            // Retain non-empty batches
-                            !batch.is_empty()
-                        })
-                    }
-
-                    // 4.3. Reclock `source_frontier`
-                    //      If any FromTime in source frontier could possibly be reclocked to this
-                    //      binding then we must maintain our capability to emit data at that time
-                    //      and not compact past it. Since we iterate over this loop in time order
-                    //      and IntoTime is a total order we only need to perform this step once.
-                    //      Once a `cur_time` is inserted into `reclocked_source_frontier` no more
-                    //      changes can be made to the frontier by inserting times later in the
-                    //      loop.
-                    if !frontier_reclocked
-                        && source_frontier
-                            .frontier()
-                            .iter()
-                            .any(|t| !cur_binding.less_equal(t))
-                    {
-                        reclocked_source_frontier.insert(cur_time.clone());
-                        frontier_reclocked = true;
-                    }
+                    deferred_source_updates.retain_mut(|batch| {
+                        for (data, _, diff) in batch.extract(cur_frontier) {
+                            session.give((data, cur_time.clone(), diff));
+                        }
+                        // Retain non-empty batches
+                        !batch.is_empty()
+                    });
                 }
 
                 // STEP 5. Downgrade capability and compact remap trace if our since frontier
                 //         advanced
-                if PartialOrder::less_than(&remap_since, &reclocked_source_frontier) {
+                if PartialOrder::less_than(remap_trace.since(), &reclocked_source_frontier) {
                     capset.downgrade(&reclocked_source_frontier.borrow());
-                    remap_since = reclocked_source_frontier;
-
-                    // The remap trace is stored in time order and T is a total order. The updates
-                    // that can have their time advanced will form a prefix, which we extract here.
-                    let mut advanced = vec![];
-                    while !remap_trace.is_empty() && !remap_since.less_equal(&remap_trace[0].1) {
-                        let (d, mut t, r) = remap_trace.pop_front().unwrap();
-                        t.advance_by(remap_since.borrow());
-                        advanced.push((d, t, r));
-                    }
-                    if !advanced.is_empty() {
-                        // If we have updates whose time was advanced, further peel the prefix of
-                        // updates that sit *at* the time of the since frontier.
-                        while !remap_trace.is_empty() && remap_since.contains(&remap_trace[0].1) {
-                            advanced.push(remap_trace.pop_front().unwrap());
-                        }
-                        consolidation::consolidate_updates(&mut advanced);
-                        advanced.sort_unstable_by(|(_, t1, _): &(_, IntoTime, _), (_, t2, _)| {
-                            t1.cmp(t2)
-                        });
-                        for u in advanced.into_iter().rev() {
-                            remap_trace.push_front(u);
-                        }
-                        // If using less than a quarter of the capacity, shrink the container. To avoid having
-                        // to resize the container on a subsequent push, shrink to 2x the length, which is
-                        // what push would grow it to.
-                        if remap_trace.len() < remap_trace.capacity() / 4 {
-                            remap_trace.shrink_to(remap_trace.len() * 2);
-                        }
-                    }
+                    remap_trace.advance_since(reclocked_source_frontier);
                 }
             }
 
@@ -526,6 +443,13 @@ impl<D, T: Timestamp, R> ChainBatch<D, T, R> {
                 }
             })
         })
+    }
+
+    /// Returns whether [`Self::extract`] would extract any update for `upper`.
+    fn can_extract(&self, upper: AntichainRef<'_, T>) -> bool {
+        self.chains
+            .iter()
+            .any(|chain| chain.front().is_some_and(|(_, t, _)| !upper.less_equal(t)))
     }
 
     fn merge_with(
@@ -605,13 +529,380 @@ impl<D, T: Timestamp, R> FromIterator<(D, T, R)> for ChainBatch<D, T, R> {
     }
 }
 
+/// The bindings of a remap collection at its since and at every later time that has an update.
+///
+/// Reclocking a `FromTime` means finding the first binding that is not less or equal to it.
+/// Bindings only advance with time (see the module docs). The trace stores some bindings whole, as
+/// keyframes, and the updates at the times between them. [`Cursor::seek`] binary searches the
+/// keyframes and applies the updates after the last one the predicate fails for.
+///
+/// This approach strikes a balance between updates and materialized antichains to improve the
+/// performance of reclock while limiting memory usage. This is most often an issue when snapshot
+/// and CDC run concurrently. A snapshotting export holds back the since, resulting in a
+/// trace that gradually accumulates updates over time. CDC events map to the newest bindings.
+/// With only updates stored, finding those means summing across the majority of the trace.
+///
+/// At the other extreme, materializing the frontier at every time requires memory proportional
+/// to the antichain width for each time. This ends up consuming memory for elements that may not
+/// have changed (for example UUIDs of GTID set that are no longer written to). Historically,
+/// this memory intensive approach was dropped.
+struct RemapTrace<FromTime, IntoTime> {
+    /// When non-empty, this equals `keyframes[0].0`. This will differ from keyframes once the
+    /// since is empty, which happens after the remap input closes. Calling `advance_by` with an
+    /// empty frontier doesn't advance time, so keyframes holds a stale value. Steps 4 and 5 in
+    /// reclock rely on empty antichain behavior, so we maintain it rather than deriving or using
+    /// a bool/Option.
+    since: Antichain<IntoTime>,
+    /// In strictly increasing time order. Never empty, and the first is the binding at the since.
+    keyframes: VecDeque<(IntoTime, Antichain<FromTime>)>,
+    /// The updates between keyframes and after the last one, in time order. Updates at a
+    /// keyframe's time are applied to that keyframe and not stored here.
+    updates: VecDeque<(FromTime, IntoTime, i64)>,
+    /// The number of updates pushed since the last keyframe was created, including the ones
+    /// applied to it.
+    run: usize,
+    /// Working space for [`updated`]. It keeps its buffers between uses.
+    scratch: MutableAntichain<FromTime>,
+}
+
+/// Returns the frontier that `frontier` becomes when `updates` are applied to it. `scratch` may
+/// hold anything, and is left holding the result.
+fn updated<T: Timestamp>(
+    scratch: &mut MutableAntichain<T>,
+    frontier: &Antichain<T>,
+    updates: impl IntoIterator<Item = (T, i64)>,
+) -> Antichain<T> {
+    // TODO: A `MutableAntichain` does more work than the trace needs. A sorted vector of
+    // elements, where each update inserts or removes one, could replace it. It does two things
+    // that reclock can assume away, because the module docs require 𝐑(t) to be an antichain.
+    //
+    // * It counts how many times each element was added. The remap collection holds every
+    //   element once.
+    // * It works out the minimal elements again whenever an update touches the frontier, by
+    //   comparing elements with each other. Every element the remap collection holds at a time
+    //   is minimal.
+    //
+    // The `reclock_sparse_gtid_10_uuids` bench measured 3.0 ms at 100,000 bindings this way,
+    // against 0.59 ms with sorted vectors.
+    scratch.clear();
+    scratch.update_iter(
+        frontier
+            .iter()
+            .cloned()
+            .map(|from| (from, 1))
+            .chain(updates),
+    );
+    // The result keeps only the minimal elements. An element that is not minimal would be
+    // dropped here, and lost for good once the element below it is retracted. The counts are
+    // exactly the frontier when no such element exists and none is held twice.
+    let (elements, once) = scratch
+        .updates()
+        .fold((0, true), |(elements, once), (_, count)| {
+            (elements + 1, once && *count == 1)
+        });
+    assert!(
+        once && elements == scratch.frontier().len(),
+        "the remap collection must be an antichain at every time"
+    );
+    scratch.frontier().to_owned()
+}
+
+impl<FromTime, IntoTime> RemapTrace<FromTime, IntoTime>
+where
+    FromTime: Timestamp,
+    IntoTime: Timestamp + Lattice + TotalOrder,
+{
+    /// Returns a trace whose frontier at `since` is empty, until updates arrive at that time.
+    fn new(since: Antichain<IntoTime>) -> Self {
+        let mut time = IntoTime::minimum();
+        time.advance_by(since.borrow());
+        Self {
+            since,
+            keyframes: VecDeque::from([(time, Antichain::new())]),
+            updates: VecDeque::new(),
+            run: 0,
+            scratch: MutableAntichain::new(),
+        }
+    }
+
+    fn since(&self) -> &Antichain<IntoTime> {
+        &self.since
+    }
+
+    /// Applies the updates of time `into`. Every time must be pushed once, with all its updates,
+    /// in time order and not before the since.
+    fn push(&mut self, into: IntoTime, updates: impl IntoIterator<Item = (FromTime, i64)>) {
+        let (key_time, key_frontier) = self
+            .keyframes
+            .back()
+            .expect("the trace holds the binding at the since");
+
+        // The last update, if it lies after the last keyframe.
+        let after_keyframe = self.updates.back().filter(|(_, time, _)| key_time < time);
+
+        // invariant: times arrive in order. Only the since can be pushed at the time of a
+        // keyframe, which stands there before the since has updates of its own.
+        let in_order = match after_keyframe {
+            Some((_, time, _)) => *time < into,
+            None => *key_time <= into,
+        };
+        assert!(in_order, "remap updates out of time order");
+
+        let mut count = 0;
+        let updates = updates.into_iter().inspect(|_| count += 1);
+        if *key_time == into {
+            let (_, key_frontier) = self
+                .keyframes
+                .back_mut()
+                .expect("the trace holds the binding at the since");
+            *key_frontier = updated(&mut self.scratch, key_frontier, updates);
+        } else if self.run >= key_frontier.len() {
+            // A keyframe is a materialized antichain, consuming memory proportional to its width.
+            // This creates a keyframe based on the number of updates that have arrived since
+            // the last keyframe. If most of the elements end up changing, this results in storing
+            // a keyframe for each time. The expectation is that there are many updates being
+            // made, in which case this trades memory for speed.
+            //
+            // A Kafka source doesn't run concurrent snapshot and CDC, so its trace is going to
+            // remain relatively small and this extra space isn't much of a concern. A MySQL source
+            // is more likely to see an increase in memory usage where the GTID set contains many
+            // UUIDs that are all advancing (e.g. multi-master setup, where MZ reads from the
+            // replica).
+            let start = self
+                .updates
+                .partition_point(|(_, time, _)| time <= key_time);
+            let frontier = updated(
+                &mut self.scratch,
+                key_frontier,
+                self.updates
+                    .range(start..)
+                    .map(|(from, _, diff)| (from.clone(), *diff))
+                    .chain(updates),
+            );
+            self.keyframes.push_back((into, frontier));
+            self.run = 0;
+        } else {
+            self.updates
+                .extend(updates.map(|(from, diff)| (from, into.clone(), diff)));
+        }
+        self.run += count;
+    }
+
+    /// Advances the since to `since`, which must not be behind it, and drops the bindings before
+    /// it.
+    fn advance_since(&mut self, since: Antichain<IntoTime>) {
+        // The binding at the since is the last keyframe at or before it, with the updates up to
+        // the since applied.
+        while self
+            .keyframes
+            .get(1)
+            .is_some_and(|(time, _)| !since.less_than(time))
+        {
+            self.keyframes.pop_front();
+        }
+        let (key_time, key_frontier) = self
+            .keyframes
+            .front_mut()
+            .expect("the trace holds the binding at the since");
+        while self
+            .updates
+            .front()
+            .is_some_and(|(_, time, _)| time < key_time)
+        {
+            self.updates.pop_front();
+        }
+        let folded = self
+            .updates
+            .partition_point(|(_, time, _)| !since.less_than(time));
+        if folded > 0 {
+            *key_frontier = updated(
+                &mut self.scratch,
+                key_frontier,
+                self.updates
+                    .drain(..folded)
+                    .map(|(from, _, diff)| (from, diff)),
+            );
+        }
+        key_time.advance_by(since.borrow());
+        shrink(&mut self.keyframes);
+        shrink(&mut self.updates);
+        self.since = since;
+    }
+
+    /// Returns a cursor before the binding at the since.
+    fn cursor(&self) -> Cursor<'_, FromTime, IntoTime> {
+        Cursor {
+            trace: self,
+            keyframe_pos: None,
+            update_pos: 0,
+            frontier: MutableAntichain::new(),
+        }
+    }
+}
+
+/// A position in a [`RemapTrace`] that only moves forward.
+struct Cursor<'a, FromTime, IntoTime> {
+    trace: &'a RemapTrace<FromTime, IntoTime>,
+    /// The index of the last keyframe at or before the cursor. `None` before the since.
+    keyframe_pos: Option<usize>,
+    /// The index of the first update after the cursor.
+    update_pos: usize,
+    /// The frontier at the cursor, when that lies between keyframes. It keeps its buffers as the
+    /// cursor moves.
+    frontier: MutableAntichain<FromTime>,
+}
+
+impl<'a, FromTime, IntoTime> Cursor<'a, FromTime, IntoTime>
+where
+    FromTime: Timestamp,
+    IntoTime: Timestamp + Lattice + TotalOrder,
+{
+    /// Moves to the first binding after the cursor that satisfies `pred`, and returns that
+    /// binding with its time. Returns `None` if there is none.
+    ///
+    /// Once `pred` holds for a binding it must hold for every later binding.
+    fn seek(
+        &mut self,
+        mut pred: impl FnMut(AntichainRef<'_, FromTime>) -> bool,
+    ) -> Option<(&'a IntoTime, AntichainRef<'_, FromTime>)> {
+        let RemapTrace {
+            keyframes, updates, ..
+        } = self.trace;
+
+        // Starting point for the seek.
+        let start_pos = self.keyframe_pos.map_or(0, |keyframe| keyframe + 1);
+
+        // Finds the first keyframe after the cursor's current keyframe position that satisfies
+        // `pred`. If none does, `found_pos` is one past the last keyframe. The binding sought is
+        // either that keyframe or lies between it and the keyframe before it.
+        let found_pos = match keyframes.get(start_pos) {
+            Some((next_time, frontier)) if !pred(frontier.borrow()) => keyframes
+                .partition_point(|(time, frontier)| time <= next_time || !pred(frontier.borrow())),
+            _ => start_pos,
+        };
+        // Jump to the keyframe before `found_pos` and step forward from there, stopping at
+        // `found_pos`.
+        if let Some(prev_pos) = found_pos.checked_sub(1)
+            && self
+                .keyframe_pos
+                .is_none_or(|keyframe_pos| keyframe_pos < prev_pos)
+        {
+            let (time, _) = &keyframes[prev_pos];
+            self.keyframe_pos = Some(prev_pos);
+            self.update_pos = updates.partition_point(|(_, t, _)| t <= time);
+        }
+        while self.step() {
+            let keyframe = self.keyframe_pos.expect("the cursor stepped");
+            let at_found = keyframe == found_pos && !self.between();
+            if at_found || pred(self.current().1) {
+                return Some(self.current());
+            }
+        }
+        None
+    }
+
+    /// Moves to the next binding. Returns false at the end of the trace.
+    fn step(&mut self) -> bool {
+        let RemapTrace {
+            keyframes, updates, ..
+        } = self.trace;
+        let Some(keyframe_pos) = self.keyframe_pos else {
+            // Every update lies after the first keyframe, which `update_pos` already says.
+            self.keyframe_pos = Some(0);
+            return true;
+        };
+        let next_keyframe_pos = keyframes.get(keyframe_pos + 1);
+        match updates.get(self.update_pos) {
+            Some((_, time, _)) if next_keyframe_pos.is_none_or(|(next, _)| time < next) => {
+                let end = self.update_pos
+                    + updates
+                        .range(self.update_pos..)
+                        .take_while(|(_, t, _)| t == time)
+                        .count();
+                let tick = updates
+                    .range(self.update_pos..end)
+                    .map(|(from, _, diff)| (from.clone(), *diff));
+                if self.between() {
+                    self.frontier.update_iter(tick);
+                } else {
+                    // The cursor leaves its keyframe. Seeding the frontier with the keyframe's
+                    // elements in the same call as the updates works it out once.
+                    let (_, frontier) = &keyframes[keyframe_pos];
+                    let seed = frontier.iter().cloned().map(|from| (from, 1));
+                    self.frontier.clear();
+                    self.frontier.update_iter(seed.chain(tick));
+                }
+                self.update_pos = end;
+                true
+            }
+            _ if next_keyframe_pos.is_some() => {
+                self.keyframe_pos = Some(keyframe_pos + 1);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns whether the cursor has stepped past its keyframe onto a time that only has
+    /// updates. Returns false before the since.
+    ///
+    /// When this is true, the frontier at the cursor is in `self.frontier`. When it is false, the
+    /// cursor sits on the keyframe and the frontier is the keyframe's frontier.
+    fn between(&self) -> bool {
+        let RemapTrace {
+            keyframes, updates, ..
+        } = self.trace;
+        let (Some(keyframe_pos), Some(update_pos)) =
+            (self.keyframe_pos, self.update_pos.checked_sub(1))
+        else {
+            return false;
+        };
+        // `update_pos` is the position of the last update the cursor consumed. Its time tells
+        // where the cursor is relative to the keyframe.
+        //
+        // * A later time means the cursor consumed that update after it reached the keyframe. It
+        //   has moved past the keyframe.
+        // * An earlier time means the cursor consumed that update on its way to the keyframe, and
+        //   nothing since. It still sits on the keyframe.
+        //
+        // The times cannot be equal. The updates at a keyframe's time are part of the keyframe
+        // and never appear in `updates`.
+        updates[update_pos].1 > keyframes[keyframe_pos].0
+    }
+
+    /// Returns the time and frontier at the cursor, which must not be before the since.
+    fn current(&self) -> (&'a IntoTime, AntichainRef<'_, FromTime>) {
+        let keyframe_pos = self.keyframe_pos.expect("the cursor is past the since");
+        let RemapTrace {
+            keyframes, updates, ..
+        } = self.trace;
+        if self.between() {
+            let (_, time, _) = &updates[self.update_pos - 1];
+            (time, self.frontier.frontier())
+        } else {
+            let (time, frontier) = &keyframes[keyframe_pos];
+            (time, frontier.borrow())
+        }
+    }
+}
+
+/// Shrinks `deque` if it uses less than a quarter of its capacity. It keeps twice the length,
+/// which is what a push would grow it to.
+fn shrink<T>(deque: &mut VecDeque<T>) {
+    if deque.len() < deque.capacity() / 4 {
+        deque.shrink_to(deque.len() * 2);
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use std::collections::BTreeMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::{Receiver, TryRecvError};
 
     use differential_dataflow::consolidation;
     use differential_dataflow::input::{Input, InputSession};
+    use mz_ore::cast::CastFrom;
     use serde::{Deserialize, Serialize};
     use timely::dataflow::operators::capture::{Event, Extract};
     use timely::dataflow::operators::vec::UnorderedInput;
@@ -794,6 +1085,74 @@ mod test {
                 drop(data_cap);
                 step(worker);
                 assert_eq!(reclocked.try_recv(), Ok(Event::Progress(vec![(1000, -1)])));
+            },
+        );
+    }
+
+    /// Reclocks updates against many bindings while the source frontier holds the since at the
+    /// as_of, the way an export does while it snapshots.
+    #[mz_ore::test]
+    fn test_reclock_pinned_since() {
+        harness(
+            Antichain::from_elem(0),
+            |worker, mut bindings, (mut data, data_cap), reclocked| {
+                // The binding at time `t` covers the offsets of partition 0 below `t`.
+                let mut mint = |times: std::ops::RangeInclusive<u64>| {
+                    let upper = times.end() + 1;
+                    for t in times {
+                        let prev = match t {
+                            0 => Antichain::new(),
+                            1 => Antichain::from_elem(Partitioned::minimum()),
+                            t => partitioned_frontier([(0, t - 1)]),
+                        };
+                        let next = match t {
+                            0 => Antichain::from_elem(Partitioned::minimum()),
+                            t => partitioned_frontier([(0, t)]),
+                        };
+                        for time in prev {
+                            bindings.update_at(time, t, Diff::MINUS_ONE);
+                        }
+                        for time in next {
+                            bindings.update_at(time, t, Diff::ONE);
+                        }
+                    }
+                    bindings.advance_to(upper);
+                    bindings.flush();
+                };
+                let reclocked_data = || {
+                    let mut updates: Vec<_> = reclocked
+                        .try_iter()
+                        .flat_map(|event| match event {
+                            Event::Messages(_, updates) => updates,
+                            Event::Progress(_) => vec![],
+                        })
+                        .collect();
+                    updates.sort();
+                    updates
+                };
+
+                mint(0..=1000);
+                // `data_cap` stays at the minimum, which pins the since at the as_of.
+                let offsets = [0, 1, 63, 64, 500, 998, 999, 1000, 5000];
+                data.activate().session(&data_cap).give_iterator(
+                    offsets
+                        .iter()
+                        .map(|o| (*o, Partitioned::new_singleton(0, *o), Diff::ONE)),
+                );
+                step(worker);
+                let expected: Vec<_> = offsets[..7]
+                    .iter()
+                    .map(|o| (*o, o + 1, Diff::ONE))
+                    .collect();
+                assert_eq!(reclocked_data(), expected);
+
+                // The updates beyond the last binding wait for the bindings that cover them.
+                mint(1001..=5001);
+                step(worker);
+                assert_eq!(
+                    reclocked_data(),
+                    vec![(1000, 1001, Diff::ONE), (5000, 5001, Diff::ONE)]
+                );
             },
         );
     }
@@ -1174,6 +1533,189 @@ mod test {
         )];
         assert_eq!(expected, reclock_compact_remap);
         assert_eq!(expected, compact_reclock_remap);
+    }
+
+    /// Returns the updates of a remap collection whose binding at time `i` is the `i`th of
+    /// `frontiers`.
+    fn remap_updates(
+        frontiers: impl IntoIterator<Item = Antichain<FromTime>>,
+    ) -> Vec<(FromTime, IntoTime, i64)> {
+        let mut updates = vec![];
+        let mut prev = Antichain::new();
+        for (time, frontier) in frontiers.into_iter().enumerate() {
+            let time = u64::cast_from(time);
+            let mut batch: Vec<_> = prev.into_iter().map(|t| (t, time, -1)).collect();
+            batch.extend(frontier.iter().cloned().map(|t| (t, time, 1)));
+            consolidation::consolidate_updates(&mut batch);
+            updates.extend(batch);
+            prev = frontier;
+        }
+        updates
+    }
+
+    /// Returns the updates of a remap collection with partitions `0..parts`, all at offset 0 at
+    /// time 0. Each time from 1 to `times` advances partition `time % parts` by one.
+    fn round_robin_remap(parts: usize, times: u64) -> Vec<(FromTime, IntoTime, i64)> {
+        let mut offsets = vec![0; parts];
+        remap_updates((0..=times).map(|time| {
+            if time > 0 {
+                offsets[usize::cast_from(time) % parts] += 1;
+            }
+            partitioned_frontier(
+                offsets
+                    .iter()
+                    .enumerate()
+                    .map(|(pid, offset)| (u64::cast_from(pid), *offset)),
+            )
+        }))
+    }
+
+    /// The pids that [`growing_remap`] draws from are below this.
+    const GROWING_PIDS: usize = 301;
+
+    /// Returns the updates of a remap collection that holds partition 0 at time 0 and gains a
+    /// partition at every fifth time up to `times`. The new pids are scattered, which makes each
+    /// one split a range of the binding. Every other time advances one partition by one.
+    fn growing_remap(times: u64) -> Vec<(FromTime, IntoTime, i64)> {
+        let mut offsets = BTreeMap::from([(0, 0)]);
+        remap_updates((0..=times).map(|time| {
+            if time > 0 && time % 5 == 0 {
+                // 101 is prime, which keeps the pids distinct for the first 100 additions.
+                assert!(time / 5 < 101, "too many partitions");
+                offsets.insert(time / 5 * 37 % 101 * 3, 0);
+            } else if time > 0 {
+                let index = usize::cast_from(time) % offsets.len();
+                let offset = offsets.values_mut().nth(index).expect("index is in range");
+                *offset += 1;
+            }
+            partitioned_frontier(offsets.iter().map(|(pid, offset)| (*pid, *offset)))
+        }))
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn remap_trace_seek_matches_scan() {
+        // With one partition each time has as many updates as its bindings hold elements, so
+        // every binding is a keyframe. 70 partitions leave updates between keyframes.
+        for (parts, times, between) in [(1, 1000, false), (70, 350, true)] {
+            let updates = round_robin_remap(parts, times);
+            let mut trace = RemapTrace::new(Antichain::from_elem(0));
+            push_all(&mut trace, &updates);
+            assert!(trace.keyframes.len() > 2, "{parts} partitions");
+            assert_eq!(!trace.updates.is_empty(), between, "{parts} partitions");
+
+            for since in [0, times / 3, times / 2] {
+                trace.advance_since(Antichain::from_elem(since));
+                assert_seeks_match_scan(&trace, &updates, parts, since);
+            }
+        }
+    }
+
+    /// Compaction moves the since past the last binding when the remap frontier advances without
+    /// new bindings. The bindings pushed after that must build on the binding at the since.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn remap_trace_push_after_compaction() {
+        // 70 partitions leave updates after the last keyframe for compaction to apply to it.
+        for parts in [1, 70] {
+            let mut updates = round_robin_remap(parts, 400);
+            // Leave the times from 201 to 219 without bindings.
+            for (_, into, _) in &mut updates {
+                if *into > 200 {
+                    *into += 19;
+                }
+            }
+            let split = updates.partition_point(|(_, into, _)| *into <= 200);
+            let mut trace = RemapTrace::new(Antichain::from_elem(0));
+            push_all(&mut trace, &updates[..split]);
+            trace.advance_since(Antichain::from_elem(210));
+            push_all(&mut trace, &updates[split..]);
+            assert_seeks_match_scan(&trace, &updates, parts, 210);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn remap_trace_seek_matches_scan_with_growing_partitions() {
+        let updates = growing_remap(350);
+        let mut trace = RemapTrace::new(Antichain::from_elem(0));
+        push_all(&mut trace, &updates);
+        assert!(trace.keyframes.len() > 2);
+        assert!(!trace.updates.is_empty());
+
+        for since in [0, 120, 175] {
+            trace.advance_since(Antichain::from_elem(since));
+            assert_seeks_match_scan(&trace, &updates, GROWING_PIDS, since);
+        }
+    }
+
+    /// Pushes `updates`, which must be in time order, into `trace` one time at a time.
+    fn push_all(trace: &mut RemapTrace<FromTime, IntoTime>, updates: &[(FromTime, IntoTime, i64)]) {
+        for tick in updates.chunk_by(|(_, into1, _), (_, into2, _)| into1 == into2) {
+            let (_, into, _) = tick[0];
+            trace.push(
+                into,
+                tick.iter().map(|(from, _, diff)| (from.clone(), *diff)),
+            );
+        }
+    }
+
+    /// Asserts that seeking `trace`, whose since is `since`, finds the same binding for every
+    /// offset of partitions `0..parts` as scanning the bindings that `updates` accumulate to.
+    fn assert_seeks_match_scan(
+        trace: &RemapTrace<FromTime, IntoTime>,
+        updates: &[(FromTime, IntoTime, i64)],
+        parts: usize,
+        since: IntoTime,
+    ) {
+        // The binding at every time, accumulated from the front.
+        let mut accum = MutableAntichain::new();
+        let mut all_bindings: Vec<(IntoTime, Antichain<FromTime>)> = vec![];
+        for (from, into, diff) in updates {
+            accum.update_iter([(from.clone(), *diff)]);
+            match all_bindings.last_mut() {
+                Some((time, binding)) if time == into => *binding = accum.frontier().to_owned(),
+                _ => all_bindings.push((*into, accum.frontier().to_owned())),
+            }
+        }
+        // The since takes the binding of the last time at or before it.
+        let first = all_bindings.partition_point(|(time, _)| *time <= since) - 1;
+        let mut bindings = all_bindings[first..].to_vec();
+        bindings[0].0 = since;
+
+        for pid in 0..u64::cast_from(parts) {
+            // One cursor serves the queries of a partition. It only moves forward, so it skips the
+            // queries that map to the binding it is already at.
+            let mut cursor = trace.cursor();
+            let mut cursor_time = None;
+            for offset in 0.. {
+                let query = Partitioned::new_singleton(pid, offset);
+                let expected = bindings
+                    .iter()
+                    .find(|(_, binding)| !binding.less_equal(&query))
+                    .map(|(time, _)| *time);
+                let from_fresh = trace
+                    .cursor()
+                    .seek(|binding| !binding.less_equal(&query))
+                    .map(|(time, _)| *time);
+                assert_eq!(
+                    from_fresh, expected,
+                    "fresh cursor, since {since}, {query:?}"
+                );
+                if expected != cursor_time {
+                    cursor_time = cursor
+                        .seek(|binding| !binding.less_equal(&query))
+                        .map(|(time, _)| *time);
+                    assert_eq!(
+                        cursor_time, expected,
+                        "moved cursor, since {since}, {query:?}"
+                    );
+                }
+                if expected.is_none() {
+                    break;
+                }
+            }
+        }
     }
 
     #[mz_ore::test]
