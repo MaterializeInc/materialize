@@ -1,0 +1,26 @@
+[package]
+name = "mz-alloc-track"
+description = "A sampling allocation tracker for the global allocator."
+version = "0.1.0"
+license = "Apache-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Materialize, Inc."]
+
+[lints]
+workspace = true
+
+[dependencies]
+backtrace.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+# The bench compares the tracker against jemalloc's profiler.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tikv-jemalloc-ctl.workspace = true
+tikv-jemallocator.workspace = true
+
+[[bench]]
+name = "alloc_track"
+harness = false
