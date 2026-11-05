@@ -132,6 +132,62 @@ FROM orders AS o;
 EXPLAIN MATERIALIZED VIEW order_tags_sql;
 ```
 
+```nofmt
+                                                    Physical Plan
+----------------------------------------------------------------------------------------------------------------------
+ materialize.public.order_tags_sql:
+   →With
+     cte l0 =
+       →Distinct GroupAggregate
+         →Fused with Child Map/Filter/Project
+           Project: #1
+             →Read materialize.public.orders
+     cte l1 =
+       →Non-incremental GroupAggregate
+         Aggregation: jsonb_agg[order_by=[]](distinct row(coalesce(jsonbable_to_jsonb(lower(#1{value})), json_null)))
+         Key:
+           Project: #0
+         →Table Function jsonb_array_elements_text(#0{tags})
+           →Arranged l0
+     cte l2 =
+       →Union
+         →Unarranged Raw Stream
+           →Arranged l1
+         →Map/Filter/Project
+           Project: #0, #1
+           Map: null
+             →Consolidating Union
+               →Negate Diffs
+                 →Fused with Child Map/Filter/Project
+                   Project: #0
+                     →Arranged l1
+                       Key: (#0)
+               →Unarranged Raw Stream
+                 →Arranged l0
+   →Return
+     →Differential Join %1[#0] » %0:orders[#1]
+       →Arrange (#1)
+         →Read materialize.public.orders
+       →Arrange (#0)
+         →Union
+           →Stream l2
+           →Map/Filter/Project
+             Project: #0, #1
+             Map: null
+               →Consolidating Union
+                 →Negate Diffs
+                   →Fused with Child Map/Filter/Project
+                     Project: #0
+                       →Read l2
+                 →Unarranged Raw Stream
+                   →Arranged l0
+
+ Source materialize.public.orders
+   project=(#0, #1)
+
+ Target cluster: quickstart
+```
+
 The SQL plan is much longer. It unnests the list (`Table Function
 jsonb_array_elements_text`), aggregates it back (`Distinct GroupAggregate` and
 `Non-incremental GroupAggregate`), and joins the result to the original rows

@@ -1,6 +1,7 @@
 ---
 title: "User-defined functions"
 description: "Write custom per-row logic in Materialize with jq programs."
+disable_list: true
 menu:
   main:
     parent: transform-data
@@ -9,6 +10,8 @@ menu:
 ---
 
 {{< warn-if-unreleased "v26.50" >}}
+
+## `jq()`-based user-defined functions
 
 Some per-row logic is awkward or expensive to express in SQL. Sorting,
 filtering, or deduplicating a list stored in a single row is a common example.
