@@ -96,6 +96,12 @@ class ItemColumns(Check):
         numeric_type_mod = (
             2555947 if self.current_version < MzVersion.parse_mz("v26.31.0-dev") else -1
         )
+        # Before v26.50, a table column without a default reported the string NULL.
+        no_default = (
+            "NULL"
+            if self.current_version < MzVersion.parse_mz("v26.50.0-dev")
+            else "<null>"
+        )
         return Testdrive(dedent("""
                 > SELECT r.name, c.position, c.name, c.nullable, c.type, c.default, t.name, c.type_mod
                   FROM mz_columns c
@@ -109,14 +115,14 @@ class ItemColumns(Check):
                 item_columns_initial_mv 1 a false integer <null> int4 -1
                 item_columns_initial_mv 2 b true text <null> text -1
                 item_columns_initial_mv 3 c1 true numeric <null> numeric {numeric_type_mod}
-                item_columns_initial_table 1 a false integer NULL int4 -1
+                item_columns_initial_table 1 a false integer {no_default} int4 -1
                 item_columns_initial_table 2 b true text 'b' text -1
-                item_columns_initial_table 3 c true numeric NULL numeric 2555910
-                item_columns_initial_table 4 d true item_columns_list NULL item_columns_list -1
-                item_columns_initial_table 5 e true item_columns_record NULL item_columns_record -1
-                item_columns_initial_table 6 f true "timestamp without time zone" NULL timestamp 3
-                item_columns_initial_table 7 g true integer[] NULL _int4 -1
-                item_columns_initial_table 8 i true integer NULL int4 -1
+                item_columns_initial_table 3 c true numeric {no_default} numeric 2555910
+                item_columns_initial_table 4 d true item_columns_list {no_default} item_columns_list -1
+                item_columns_initial_table 5 e true item_columns_record {no_default} item_columns_record -1
+                item_columns_initial_table 6 f true "timestamp without time zone" {no_default} timestamp 3
+                item_columns_initial_table 7 g true integer[] {no_default} _int4 -1
+                item_columns_initial_table 8 i true integer {no_default} int4 -1
                 item_columns_initial_view 1 a false integer <null> int4 -1
                 item_columns_initial_view 2 b true text <null> text -1
                 item_columns_initial_view 3 c1 true numeric <null> numeric {numeric_type_mod}
@@ -126,9 +132,9 @@ class ItemColumns(Check):
                 item_columns_initial_view 7 g true integer[] <null> _int4 -1
                 item_columns_middle_mv 1 a true integer <null> int4 -1
                 item_columns_middle_mv 2 b true item_columns_list <null> item_columns_list -1
-                item_columns_middle_table 1 a true integer NULL int4 -1
-                item_columns_middle_table 2 b true item_columns_list NULL item_columns_list -1
-                item_columns_middle_table 3 c true text NULL text -1
+                item_columns_middle_table 1 a true integer {no_default} int4 -1
+                item_columns_middle_table 2 b true item_columns_list {no_default} item_columns_list -1
+                item_columns_middle_table 3 c true text {no_default} text -1
 
                 > SELECT i.name, ic.index_position, ic.on_position, ic.on_expression, ic.nullable
                   FROM mz_index_columns ic
@@ -157,4 +163,4 @@ class ItemColumns(Check):
                 2
                 > SELECT count(*) FROM item_columns_middle_mv
                 2
-                """).format(numeric_type_mod=numeric_type_mod))
+                """).format(numeric_type_mod=numeric_type_mod, no_default=no_default))
