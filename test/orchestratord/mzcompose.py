@@ -5300,6 +5300,10 @@ def setup(c: Composition, args) -> dict[str, Any]:
     definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
         c.compose["services"]["environmentd"]["image"], args.tag
     )
+    # Too slow with 10 min default in upgrade tests.
+    definition["materialize"]["spec"]["environmentdExtraArgs"] = [
+        "--system-parameter-default=with_0dt_caught_up_check_stability_period=60s"
+    ]
     definition["balancer"]["spec"]["balancerdImageRef"] = get_image(
         c.compose["services"]["balancerd"]["image"], args.tag
     )
