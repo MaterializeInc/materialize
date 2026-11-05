@@ -57,7 +57,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::activate::SyncActivator;
 
 use crate::arrange_agent::trace_box::TraceBox;
-use crate::rendezvous::{self, Attachment, Event, Locked, Rendezvous};
+use crate::rendezvous::{self, Attachment, Event, Locked, Rendezvous, adjust};
 
 /// The hold kind of logical compaction.
 const LOGICAL: usize = 0;
@@ -68,6 +68,13 @@ const PHYSICAL: usize = 1;
 pub struct TraceFrontiers<T> {
     /// The spine's logical compaction frontier. Reads at times not beyond it are not accurate.
     logical: Antichain<T>,
+    /// The logical compaction frontier the publishing trace's same-thread agents asked for, before
+    /// the readers' holds were met into it.
+    ///
+    /// Equal to `logical` when nothing holds the trace back. Above it by exactly the amount the
+    /// readers on other threads keep the writer from compacting. A closed trace stops updating
+    /// both.
+    requested_logical: Antichain<T>,
     /// The spine's physical compaction frontier.
     physical: Antichain<T>,
 }
@@ -104,6 +111,7 @@ impl<T: Timestamp + Lattice, B> Shared<T, B> {
         let minimum = Antichain::from_elem(T::minimum());
         Rendezvous::with_meta(TraceFrontiers {
             logical: minimum.clone(),
+            requested_logical: minimum.clone(),
             physical: minimum,
         })
     }
@@ -121,6 +129,18 @@ impl<T: Timestamp + Lattice, B> Shared<T, B> {
     /// The published `(since, upper)`, read together.
     pub fn frontiers(&self) -> (Antichain<T>, Antichain<T>) {
         self.read(|published| (published.meta.logical.clone(), published.upper.clone()))
+    }
+
+    /// The published `since`, and the logical compaction frontier the publishing trace's agents
+    /// asked for before the readers' holds were met into it, read together. The second is at or
+    /// beyond the first, and equal to it when no reader holds this point.
+    pub fn logical_frontiers(&self) -> (Antichain<T>, Antichain<T>) {
+        self.read(|published| {
+            (
+                published.meta.logical.clone(),
+                published.meta.requested_logical.clone(),
+            )
+        })
     }
 
     /// The meet of every logical hold on this point, the publishing trace's agents included.
@@ -225,6 +245,10 @@ pub struct Publication<T, B> {
     /// Further points over the same trace, as the logging dataflow's single shared error
     /// arrangement is published under every log id. They carry their readers' holds only.
     others: Vec<Attached<T, B>>,
+    /// The logical holds of the trace's same-thread agents alone. The home point's logical holds
+    /// count them too, next to the readers', and are what compaction follows. This copy only
+    /// separates out what the agents asked for, which every point reports as `requested_logical`.
+    agents_logical: MutableAntichain<T>,
     chain_scratch: Vec<Span<T, B>>,
     /// The descriptions of the chain last published, which `exert` compares the spine against.
     published_shape: Vec<Description<T>>,
@@ -248,6 +272,9 @@ impl<Tr: TraceReader> TraceBox<Tr> {
         lower: AntichainRef<Tr::Time>,
         upper: AntichainRef<Tr::Time>,
     ) {
+        if let Some(publication) = &mut self.publication {
+            adjust(&mut publication.agents_logical, &lower[..], &upper[..]);
+        }
         self.sync_holds(|locked| locked.adjust(0, LOGICAL, &lower[..], &upper[..]));
     }
 
@@ -297,7 +324,17 @@ impl<Tr: TraceReader> TraceBox<Tr> {
             .map(|attached| &attached.attachment)
             .collect();
         let mut locked = Attachment::lock_all(&attachments);
-        if !change(&mut locked) {
+        let moved = change(&mut locked);
+        // An agent's move that a reader's lower hold keeps from moving the meet still changes what
+        // the agents asked for, so the requested frontier is published before the early return.
+        // Only where this trace has not closed: a closed trace publishes nothing.
+        let requested = publication.agents_logical.frontier();
+        locked.update_open(|frontiers| {
+            if frontiers.requested_logical.borrow() != requested {
+                frontiers.requested_logical = requested.to_owned();
+            }
+        });
+        if !moved {
             return false;
         }
         // The meet runs across every point, since a reader of any of them holds this one trace.
@@ -484,11 +521,14 @@ impl<Tr: TraceReader> TraceBox<Tr> {
         match &mut self.publication {
             Some(publication) => publication.others.push(attached),
             None => {
+                let mut agents_logical = MutableAntichain::new();
+                agents_logical.update_iter(self.logical_compaction.updates().cloned());
                 self.logical_compaction = MutableAntichain::new();
                 self.physical_compaction = MutableAntichain::new();
                 self.publication = Some(Publication {
                     home: attached,
                     others: Vec::new(),
+                    agents_logical,
                     chain_scratch: Vec::new(),
                     published_shape: Vec::new(),
                 });

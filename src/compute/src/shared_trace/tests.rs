@@ -762,6 +762,71 @@ fn reader_at_mints_at_as_of_or_refuses() {
     });
 }
 
+/// A point reports both the frontier its writer's agents asked for and the one the holds let it
+/// apply.
+#[mz_ore::test]
+fn logical_frontiers_report_what_the_holds_withhold() {
+    timely::execute_directly(move |worker| {
+        let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged =
+                collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("gap oks");
+            let writer = arranged.trace.clone();
+            let published = adopt_fresh(&arranged);
+            (writer, published, input)
+        });
+        for t in 0..5 {
+            tick(
+                worker,
+                &mut input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+        }
+
+        // The peer holds at four while the agents ask for eight and then ten, so the writer applies
+        // four and reports what the agents asked for.
+        let held = Antichain::from_elem(Timestamp::from(4_u64));
+        let target = Antichain::from_elem(Timestamp::from(10_u64));
+        let mut peer = published.peer_handle(&held);
+        let first = Antichain::from_elem(Timestamp::from(8_u64));
+        writer.set_logical_compaction(first.borrow());
+        assert_eq!(
+            published.logical_frontiers(),
+            (held.clone(), first),
+            "a request the hold caps must report the hold and the request"
+        );
+        // A further request the hold keeps from moving the applied frontier still moves the
+        // requested one.
+        writer.set_logical_compaction(target.borrow());
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(10_u64),
+            Timestamp::from(11_u64),
+        );
+        assert_eq!(
+            published.logical_frontiers(),
+            (held, target.clone()),
+            "the applied frontier must report the hold and the requested one the controller"
+        );
+
+        // The peer catches up and the gap closes.
+        peer.set_logical_compaction(target.borrow());
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(11_u64),
+            Timestamp::from(12_u64),
+        );
+        assert_eq!(
+            published.logical_frontiers(),
+            (target.clone(), target),
+            "a caught-up importer must leave no gap"
+        );
+    });
+}
+
 /// A consumer forwarding an empty input frontier releases its hold.
 ///
 /// The empty antichain permits compaction everywhere, so a handle that reaches it has released and

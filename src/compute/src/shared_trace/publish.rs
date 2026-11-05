@@ -62,6 +62,12 @@ where
         self.shared.reader()
     }
 
+    /// The `(applied, requested)` logical compaction frontiers of this point, see
+    /// `TraceFrontiers::requested_logical`.
+    pub(crate) fn logical_frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
+        self.shared.logical_frontiers()
+    }
+
     /// A hold on the published arrangement for a runtime that reads it as a peer: logical only, at
     /// the join of `as_of` and the published `since`. See `Shared::reader_at_least`.
     pub(crate) fn peer_handle(
