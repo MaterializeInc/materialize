@@ -7,11 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
+import { millisecondsInMinute } from "date-fns/constants";
 import React from "react";
 
 import { DatabaseObject } from "~/api/materialize/objects";
 import { SUBSCRIBE_ERROR_CODE } from "~/api/materialize/SubscribeManager";
+import { MzDataType } from "~/api/materialize/types";
 import { WorkflowGraphEdgeRow } from "~/api/materialize/workflowGraphEdges";
 import { WorkflowGraphCanvasNode } from "~/api/materialize/workflowGraphNodes";
 import {
@@ -104,24 +106,35 @@ const nodeTitle = (object: DatabaseObject) =>
 const findNode = async (object: DatabaseObject) =>
   (await screen.findAllByTitle(nodeTitle(object)))[0];
 
+interface LagRow {
+  targetObjectId: string;
+  hydrated: boolean;
+  /** An interval, as the SQL API sends it. */
+  lag: string | null;
+}
+
+const hydrated = (targetObjectId: string): LagRow => ({
+  targetObjectId,
+  hydrated: true,
+  lag: null,
+});
+
 const lagHandler = (
   objectIds: string[],
-  hydratedIds: string[] = [],
+  rows: LagRow[] = [],
   waitTimeMs?: number,
 ) =>
   buildSqlQueryHandlerV2(
     {
       queryKey: clusterQueryKeys.materializationLag({ objectIds }),
       results: mapKyselyToTabular({
-        rows: hydratedIds.map((targetObjectId) => ({
-          targetObjectId,
-          hydrated: true,
-          lag: null,
-          isOutdated: false,
-        })),
-        columns: ["targetObjectId", "hydrated", "lag", "isOutdated"].map(
-          (name) => buildColumn({ name }),
-        ),
+        rows: rows.map((row) => ({ ...row, isOutdated: false })),
+        columns: [
+          buildColumn({ name: "targetObjectId" }),
+          buildColumn({ name: "hydrated" }),
+          buildColumn({ name: "lag", type_oid: MzDataType.interval }),
+          buildColumn({ name: "isOutdated" }),
+        ],
       }),
     },
     { waitTimeMs },
@@ -168,6 +181,7 @@ describe("WorkflowGraph from the edges collection", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     allObjectsCollection.reset();
     workflowGraphEdgesCollection.reset();
   });
@@ -204,7 +218,7 @@ describe("WorkflowGraph from the edges collection", () => {
   it("keeps lag up while a new node's lag loads", async () => {
     server.use(
       detailsHandler(NODE_IDS, OBJECTS.map(nodeDetails)),
-      lagHandler(NODE_IDS, [REVENUE.id]),
+      lagHandler(NODE_IDS, [hydrated(REVENUE.id)]),
     );
     await renderAt(WITH_EDGES, REVENUE.id);
     expect(await screen.findByText("Data Freshness")).toBeVisible();
@@ -214,7 +228,7 @@ describe("WorkflowGraph from the edges collection", () => {
     const slow = 60 * 60 * 1000;
     server.use(
       detailsHandler(nextIds, [...OBJECTS, added].map(nodeDetails), slow),
-      lagHandler(nextIds, [REVENUE.id], slow),
+      lagHandler(nextIds, [hydrated(REVENUE.id)], slow),
     );
     allObjectsCollection.applySnapshot({
       data: [...OBJECTS, added],
@@ -230,6 +244,31 @@ describe("WorkflowGraph from the edges collection", () => {
     expect(await findNode(added)).toBeVisible();
     expect(screen.getByText("Data Freshness")).toBeVisible();
     expect(screen.getByText("Created")).toBeVisible();
+  });
+
+  it("shows a node's freshness once it hydrates", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.use(
+      detailsHandler(NODE_IDS, OBJECTS.map(nodeDetails)),
+      lagHandler(NODE_IDS, [
+        hydrated(REVENUE.id),
+        { targetObjectId: TOP.id, hydrated: false, lag: null },
+      ]),
+    );
+    await renderAt(WITH_EDGES, REVENUE.id);
+    expect(await screen.findByText("Not hydrated")).toBeVisible();
+
+    server.use(
+      lagHandler(NODE_IDS, [
+        hydrated(REVENUE.id),
+        { targetObjectId: TOP.id, hydrated: true, lag: "00:00:02" },
+      ]),
+    );
+    // Lag history is sampled once a minute.
+    await act(() => vi.advanceTimersByTimeAsync(millisecondsInMinute));
+
+    expect(await screen.findByText("2s")).toBeVisible();
+    expect(screen.queryByText("Not hydrated")).not.toBeInTheDocument();
   });
 
   it("keeps the graph and selection through a dropped connection", async () => {

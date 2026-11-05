@@ -894,7 +894,14 @@ export type LagMap = Map<string, LagInfo>;
  */
 export function useMaterializationLag(
   params: MaterializationLagParams,
-  options?: { placeholderData?: typeof keepPreviousData },
+  options?: {
+    placeholderData?: typeof keepPreviousData;
+    /**
+     * Refetch on this interval while an object is unhydrated or has no lag
+     * reading yet.
+     */
+    pollUntilFreshnessMs?: number;
+  },
 ) {
   return useQuery({
     queryKey: clusterQueryKeys.materializationLag(params),
@@ -902,6 +909,13 @@ export function useMaterializationLag(
       return fetchMaterializationLag(params, queryKey, { signal });
     },
     placeholderData: options?.placeholderData,
+    refetchInterval: (query) =>
+      options?.pollUntilFreshnessMs !== undefined &&
+      query.state.data?.rows.some(
+        (row) => row.hydrated === false || row.lag === null,
+      )
+        ? options.pollUntilFreshnessMs
+        : false,
     select: (lagData) => {
       const lagMap: LagMap = new Map();
       for (const r of lagData?.rows ?? []) {
