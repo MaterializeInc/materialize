@@ -1,0 +1,526 @@
+{
+  "evidence_root": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers",
+  "build_inputs": {
+    "base_commit": "7deaafe180fbf859694272110c33aad83a887da0",
+    "patch_sha256": "d45a6b55b87932b7dd4854be21a3be10d3c4e79a1a02adf661e43a1a39edffc4",
+    "command": [
+      "bin/controllerd",
+      "--build-only"
+    ],
+    "environment": {
+      "RUSTUP_TOOLCHAIN": "1.98.1",
+      "CARGO_BUILD_JOBS": "2",
+      "RUST_MIN_STACK": "8388608",
+      "CARGO_TARGET_DIR": "/home/ubuntu/materialize/target",
+      "MZ_DEV_CI_BUILDER": "1"
+    },
+    "instrumentation_patch": "misc/benchmarks/native-idle/controller-metrics.patch",
+    "postgres_image_id": "sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4"
+  },
+  "candidate_artifacts": {
+    "controllerd": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/after/artifacts/native/controllerd",
+      "sha256": "86c9f70e484b54d9843f0c516ee76bb89b23c8ef1bf4a764f546bcf2a0dd0bff",
+      "version": "environmentd v26.46.0-dev.0 (7deaafe18)\nOpenSSL 3.3.1 4 Jun 2024\nlibrdkafka v2.12.1\nwritten-plan-build: 26.46.0-dev.0+b0faf767555719b77064bddb2d034ea43fd24102"
+    },
+    "clusterd": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/after/artifacts/native/clusterd",
+      "sha256": "672dda630bf2451f3f6fbf97fa2e1dfa07f5d1a50ed33839e36c115fec909e2a",
+      "version": "clusterd v26.46.0-dev.0 (7deaafe18)"
+    },
+    "pubsubd": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/after/artifacts/native/pubsubd",
+      "sha256": "a5f6f6a391fcbee0fb487d82016995159aaac1cf5f790e403c02e75558c23700",
+      "version": "mz-pubsubd v26.46.0-dev.0 (7deaafe18)"
+    },
+    "adapterd": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/after/artifacts/native/adapterd",
+      "sha256": "db9d957e8c32e77d3516a027c8b17796ae5f0c791befbd555fd0bff5f97bf0e9",
+      "version": "environmentd v26.46.0-dev.0 (7deaafe18)\nOpenSSL 3.3.1 4 Jun 2024\nlibrdkafka v2.12.1\nwritten-plan-build: 26.46.0-dev.0+f252175a84a08a99d197e875d625550d1123ff8b"
+    }
+  },
+  "runs": {
+    "before": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/before/before-1793891643",
+      "measurement_status": "passed",
+      "overall_status": "passed",
+      "error": null,
+      "readiness_seconds": 35.47686171499663,
+      "settings": {
+        "catalog_read_protection_publish_interval": "10 s",
+        "persist_shard_metrics": "both",
+        "log_filter": "info",
+        "enable_metric_sink": "off",
+        "persist_enable_incremental_compaction": "off",
+        "enable_columnar_accumulable_diff": "off",
+        "compute_temporal_bucketing_summary": "2 s",
+        "persist_blob_cache_mem_limit_bytes": "134217728",
+        "persist_pg_consensus_read_committed": "off"
+      },
+      "clusters": [
+        [
+          "s1",
+          "mz_system",
+          "s1",
+          "r1",
+          "scale=1,workers=1"
+        ],
+        [
+          "s2",
+          "mz_catalog_server",
+          "s2",
+          "r1",
+          "scale=1,workers=1"
+        ],
+        [
+          "s3",
+          "mz_probe",
+          "s3",
+          "r1",
+          "scale=1,workers=1"
+        ],
+        [
+          "s4",
+          "mz_support",
+          null,
+          null,
+          null
+        ],
+        [
+          "s5",
+          "mz_analytics",
+          null,
+          null,
+          null
+        ],
+        [
+          "u1",
+          "quickstart",
+          "u1",
+          "r1",
+          "bootstrap"
+        ]
+      ],
+      "analysis_sha256": "1049d6e0f46349a53b47e472014645d2e270037a353539b3b88b60093575e232",
+      "windows": [
+        {
+          "phase": "steady-1",
+          "cpu_sample_seconds": 298.5859891739965,
+          "total_materialize_cores": 1.283884756483361,
+          "total_materialize_pss_end_bytes": 3030678528,
+          "postgres_cores": 0.04631034107880448,
+          "minimum_available_memory_bytes": 14645858304,
+          "consensus_scans_per_second": 228.45835783988704,
+          "consensus_scan_bytes_per_second": 236821.36124533173,
+          "consensus_cas_per_second": 119.38240856837534,
+          "blob_gets_per_second": 14.355400706385373,
+          "blob_sets_per_second": 9.737715846091913,
+          "roles": {
+            "controllerd": {
+              "cores": 0.025386321779428418,
+              "pss_end_bytes": 425430016,
+              "rss_mean_bytes": 409940241.06666666,
+              "rss_end_bytes": 413315072,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 5.054240066112299,
+              "fetch_upper_per_second": 4.994308365723616
+            },
+            "pubsubd": {
+              "cores": 0.026926916504829066,
+              "pss_end_bytes": 39119872,
+              "rss_mean_bytes": 37552756.053333335,
+              "rss_end_bytes": 37806080,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": null,
+              "fetch_upper_per_second": null
+            },
+            "replica-s1-s1": {
+              "cores": 0.06051857975650016,
+              "pss_end_bytes": 342467584,
+              "rss_mean_bytes": 524388816.2133333,
+              "rss_end_bytes": 536219648,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 3.522560987561564,
+              "fetch_upper_per_second": 3.3394410874520313
+            },
+            "replica-s2-s2": {
+              "cores": 0.7065636287343021,
+              "pss_end_bytes": 886734848,
+              "rss_mean_bytes": 1062117621.76,
+              "rss_end_bytes": 1086222336,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 80.61272827131651,
+              "fetch_upper_per_second": 75.67888572989044
+            },
+            "replica-s3-s3": {
+              "cores": 0.08610584867402428,
+              "pss_end_bytes": 360934400,
+              "rss_mean_bytes": 542960462.5066667,
+              "rss_end_bytes": 555388928,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 3.4122414158814296,
+              "fetch_upper_per_second": 3.33900306354056
+            },
+            "replica-u1-u1": {
+              "cores": 0.08704360198513776,
+              "pss_end_bytes": 324567040,
+              "rss_mean_bytes": 515223852.37333333,
+              "rss_end_bytes": 519561216,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 4.517466817170017,
+              "fetch_upper_per_second": 4.390964430248527
+            },
+            "adapterd": {
+              "cores": 0.2913398590491394,
+              "pss_end_bytes": 651424768,
+              "rss_mean_bytes": 617507990.1866666,
+              "rss_end_bytes": 633335808,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 131.33912028184523,
+              "fetch_upper_per_second": 129.69792224116517
+            }
+          }
+        },
+        {
+          "phase": "steady-2",
+          "cpu_sample_seconds": 298.5953818290145,
+          "total_materialize_cores": 1.3092633837982968,
+          "total_materialize_pss_end_bytes": 3146039296,
+          "postgres_cores": 0.047300105291272154,
+          "minimum_available_memory_bytes": 14490738688,
+          "consensus_scans_per_second": 229.57882160121244,
+          "consensus_scan_bytes_per_second": 229029.78058273555,
+          "consensus_cas_per_second": 121.08679388732962,
+          "blob_gets_per_second": 14.282630015190001,
+          "blob_sets_per_second": 9.628675309835717,
+          "roles": {
+            "controllerd": {
+              "cores": 0.025653444313436715,
+              "pss_end_bytes": 434387968,
+              "rss_mean_bytes": 418590556.16,
+              "rss_end_bytes": 420495360,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 5.056803243090526,
+              "fetch_upper_per_second": 5.0101967615873875
+            },
+            "pubsubd": {
+              "cores": 0.027327951122407792,
+              "pss_end_bytes": 39242752,
+              "rss_mean_bytes": 37982344.53333333,
+              "rss_end_bytes": 37797888,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": null,
+              "fetch_upper_per_second": null
+            },
+            "replica-s1-s1": {
+              "cores": 0.06202373220428826,
+              "pss_end_bytes": 355266560,
+              "rss_mean_bytes": 544844540.5866667,
+              "rss_end_bytes": 551268352,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 3.3723122649475856,
+              "fetch_upper_per_second": 3.2890863946379216
+            },
+            "replica-s2-s2": {
+              "cores": 0.7439163949534856,
+              "pss_end_bytes": 950153216,
+              "rss_mean_bytes": 1120725483.52,
+              "rss_end_bytes": 1149067264,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 81.93876853469034,
+              "fetch_upper_per_second": 77.10141152668997
+            },
+            "replica-s3-s3": {
+              "cores": 0.06466945296246251,
+              "pss_end_bytes": 371496960,
+              "rss_mean_bytes": 559002555.7333333,
+              "rss_end_bytes": 561369088,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 3.4593381711983997,
+              "fetch_upper_per_second": 3.319499669571515
+            },
+            "replica-u1-u1": {
+              "cores": 0.09414077280035335,
+              "pss_end_bytes": 356776960,
+              "rss_mean_bytes": 537966073.1733333,
+              "rss_end_bytes": 549818368,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 4.591625412626016,
+              "fetch_upper_per_second": 4.438460242951761
+            },
+            "adapterd": {
+              "cores": 0.29153163544186256,
+              "pss_end_bytes": 638714880,
+              "rss_mean_bytes": 629385570.9866667,
+              "rss_end_bytes": 621228032,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 131.15997397465958,
+              "fetch_upper_per_second": 129.7781159091738
+            }
+          }
+        }
+      ]
+    },
+    "after": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/after/after-1793894562",
+      "measurement_status": "passed",
+      "overall_status": "failed",
+      "error": "CalledProcessError(1, ['/home/ubuntu/materialize/bin/pyactivate', '/home/ubuntu/materialize/test/controllerd/frontiers.py', '--controller', 'http://127.0.0.1:35955'])",
+      "readiness_seconds": 34.49313125500339,
+      "settings": {
+        "catalog_read_protection_publish_interval": "10 s",
+        "persist_shard_metrics": "both",
+        "log_filter": "info",
+        "enable_metric_sink": "off",
+        "persist_enable_incremental_compaction": "off",
+        "enable_columnar_accumulable_diff": "off",
+        "compute_temporal_bucketing_summary": "2 s",
+        "persist_blob_cache_mem_limit_bytes": "134217728",
+        "persist_pg_consensus_read_committed": "off"
+      },
+      "clusters": [
+        [
+          "s1",
+          "mz_system",
+          "s1",
+          "r1",
+          "scale=1,workers=1"
+        ],
+        [
+          "s2",
+          "mz_catalog_server",
+          "s2",
+          "r1",
+          "scale=1,workers=1"
+        ],
+        [
+          "s3",
+          "mz_probe",
+          "s3",
+          "r1",
+          "scale=1,workers=1"
+        ],
+        [
+          "s4",
+          "mz_support",
+          null,
+          null,
+          null
+        ],
+        [
+          "s5",
+          "mz_analytics",
+          null,
+          null,
+          null
+        ],
+        [
+          "u1",
+          "quickstart",
+          "u1",
+          "r1",
+          "bootstrap"
+        ]
+      ],
+      "analysis_sha256": "f32d3d68686577d348cdfa6f788f932f1717341d379a0b32a520d2d76be63273",
+      "windows": [
+        {
+          "phase": "steady-1",
+          "cpu_sample_seconds": 298.58843991401955,
+          "total_materialize_cores": 1.2912087290151577,
+          "total_materialize_pss_end_bytes": 3081731072,
+          "postgres_cores": 0.03809014509495079,
+          "minimum_available_memory_bytes": 14586499072,
+          "consensus_scans_per_second": 122.1965019662193,
+          "consensus_scan_bytes_per_second": 248885.2324862471,
+          "consensus_cas_per_second": 120.71270762644903,
+          "blob_gets_per_second": 14.204005369471195,
+          "blob_sets_per_second": 9.762520093954794,
+          "roles": {
+            "controllerd": {
+              "cores": 0.02568753164793864,
+              "pss_end_bytes": 423031808,
+              "rss_mean_bytes": 413601901.2266667,
+              "rss_end_bytes": 416960512,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 5.06691020343092,
+              "fetch_upper_per_second": 5.010315280002323
+            },
+            "pubsubd": {
+              "cores": 0.027395568302495177,
+              "pss_end_bytes": 39330816,
+              "rss_mean_bytes": 37880845.653333336,
+              "rss_end_bytes": 37847040,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": null,
+              "fetch_upper_per_second": null
+            },
+            "replica-s1-s1": {
+              "cores": 0.058441646317670015,
+              "pss_end_bytes": 359478272,
+              "rss_mean_bytes": 545874903.04,
+              "rss_end_bytes": 548450304,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 3.3894021171036144,
+              "fetch_upper_per_second": 3.3028358547807324
+            },
+            "replica-s2-s2": {
+              "cores": 0.7337524522486146,
+              "pss_end_bytes": 916537344,
+              "rss_mean_bytes": 1096325092.6933334,
+              "rss_end_bytes": 1116090368,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 80.37922005864705,
+              "fetch_upper_per_second": 75.744454542652
+            },
+            "replica-s3-s3": {
+              "cores": 0.08359332332888503,
+              "pss_end_bytes": 368768000,
+              "rss_mean_bytes": 542983563.9466667,
+              "rss_end_bytes": 556892160,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 3.419578426896858,
+              "fetch_upper_per_second": 3.3163584354325906
+            },
+            "replica-u1-u1": {
+              "cores": 0.06711579324963367,
+              "pss_end_bytes": 339965952,
+              "rss_mean_bytes": 522827666.7733333,
+              "rss_end_bytes": 529657856,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 4.501857918377026,
+              "fetch_upper_per_second": 4.418613504205854
+            },
+            "adapterd": {
+              "cores": 0.2952224139199205,
+              "pss_end_bytes": 634618880,
+              "rss_mean_bytes": 615232716.8,
+              "rss_end_bytes": 619581440,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 25.43953324176384,
+              "fetch_upper_per_second": 23.704716904203767
+            }
+          }
+        },
+        {
+          "phase": "steady-2",
+          "cpu_sample_seconds": 298.5895565150131,
+          "total_materialize_cores": 1.2785443819794313,
+          "total_materialize_pss_end_bytes": 3216874496,
+          "postgres_cores": 0.03768481768529046,
+          "minimum_available_memory_bytes": 14494523392,
+          "consensus_scans_per_second": 123.03630997128722,
+          "consensus_scan_bytes_per_second": 235166.2169015657,
+          "consensus_cas_per_second": 121.96343762583268,
+          "blob_gets_per_second": 14.653390125162272,
+          "blob_sets_per_second": 9.668888265394152,
+          "roles": {
+            "controllerd": {
+              "cores": 0.026859613221592197,
+              "pss_end_bytes": 433415168,
+              "rss_mean_bytes": 421290147.84,
+              "rss_end_bytes": 426741760,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 5.051253864592082,
+              "fetch_upper_per_second": 4.994647855562375
+            },
+            "pubsubd": {
+              "cores": 0.027763864539526107,
+              "pss_end_bytes": 39261184,
+              "rss_mean_bytes": 37885269.333333336,
+              "rss_end_bytes": 37724160,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": null,
+              "fetch_upper_per_second": null
+            },
+            "replica-s1-s1": {
+              "cores": 0.08687510810076081,
+              "pss_end_bytes": 377213952,
+              "rss_mean_bytes": 565197264.2133334,
+              "rss_end_bytes": 572571648,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 3.4562036634539814,
+              "fetch_upper_per_second": 3.362972736116109
+            },
+            "replica-s2-s2": {
+              "cores": 0.7202864109186826,
+              "pss_end_bytes": 961258496,
+              "rss_mean_bytes": 1137627764.0533333,
+              "rss_end_bytes": 1140289536,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 80.6590050584501,
+              "fetch_upper_per_second": 76.37716891788595
+            },
+            "replica-s3-s3": {
+              "cores": 0.0646372238374974,
+              "pss_end_bytes": 390256640,
+              "rss_mean_bytes": 558687982.9333333,
+              "rss_end_bytes": 581636096,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 3.3694276810659605,
+              "fetch_upper_per_second": 3.2961792532167005
+            },
+            "replica-u1-u1": {
+              "cores": 0.08506660546489303,
+              "pss_end_bytes": 364929024,
+              "rss_mean_bytes": 542624699.7333333,
+              "rss_end_bytes": 554778624,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 4.531286849621673,
+              "fetch_upper_per_second": 4.448052337321496
+            },
+            "adapterd": {
+              "cores": 0.26705555589647906,
+              "pss_end_bytes": 650540032,
+              "rss_mean_bytes": 625599720.1066667,
+              "rss_end_bytes": 633241600,
+              "cpu_throttled_usec": 0,
+              "consensus_scans_per_second": 25.969132854103425,
+              "fetch_upper_per_second": 24.630723699315016
+            }
+          }
+        }
+      ]
+    }
+  },
+  "verification": {
+    "storage_collections": "storage-collections-tests.log",
+    "storage_controller": "storage-controller-tests.log",
+    "binding_guard": "binding-guard-verification.json",
+    "lifecycle": "lifecycle-typed.log",
+    "clippy": "passed: clippy.log",
+    "fresh_lifecycle_hook": "passed: after/lifecycle-smoke-1793896387/result.json",
+    "cleanup": "passed: cleanup.json",
+    "source_matches_candidate": "All four changed Rust files match candidate-source.patch byte-for-byte"
+  },
+  "limitations": [
+    "One fresh deployment per version, two adjacent five-minute windows after five-minute warmup. Not independent repeats.",
+    "Candidate measurement passed. Its post-window lifecycle hook failed on restricted catalog-view access. Reproduced unchanged, then fixed harness role and explicit array typing. Standalone lifecycle passed on the restarted candidate fixture.",
+    "Production source has no controller profiling routes. Pinned binaries include the identical temporary metrics patch.",
+    "Build filled disk to about 367 MiB free. Inactive incremental compiler scratch was removed during candidate startup, before readiness and five-minute warmup. No throttling measured, at least 13.49 GiB available RAM during measured windows.",
+    "Restart log contains finalization retries for dropped test shards. Physical finalization timing is not verified by this frontier-publication check.",
+    "No green broad CI claim."
+  ],
+  "baseline_artifacts": {
+    "adapterd": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/before/artifacts/native/adapterd",
+      "sha256": "eee20a9044286407a13088055c7b2cf14afa522c413b2792d12b68cbdbd2d193",
+      "version": "environmentd v26.46.0-dev.0 (324726428)\nOpenSSL 3.3.1 4 Jun 2024\nlibrdkafka v2.12.1\nwritten-plan-build: 26.46.0-dev.0+27916e502bd3eab88251dfbb14e8d73a8e82d069"
+    },
+    "clusterd": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/before/artifacts/native/clusterd",
+      "sha256": "936afd8e9b94bc67f25310a8f996c68835a57e5816eec6bf91437eaa741e37c8",
+      "version": "clusterd v26.46.0-dev.0 (324726428)"
+    },
+    "controllerd": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/before/artifacts/native/controllerd",
+      "sha256": "7c1c6693a4a2ef77f302089cda425d9eabf248a8f18b371e24b69de8f124323d",
+      "version": "environmentd v26.46.0-dev.0 (324726428)\nOpenSSL 3.3.1 4 Jun 2024\nlibrdkafka v2.12.1\nwritten-plan-build: 26.46.0-dev.0+f67b2f943548968fd819c90e4cf79f3eb4be10c3"
+    },
+    "pubsubd": {
+      "path": "/home/ubuntu/.local/share/aj/m3-evidence/cached-storage-frontiers/before/artifacts/native/pubsubd",
+      "sha256": "6321d53d6d55a24f11561eddecdf6c36f9b681cda267fb2d9ce7bbcf449a2ffb",
+      "version": "mz-pubsubd v26.46.0-dev.0 (324726428)"
+    }
+  }
+}

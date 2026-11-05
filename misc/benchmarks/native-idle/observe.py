@@ -41,11 +41,18 @@ parser.add_argument("--windows", type=int, default=2)
 parser.add_argument("--profile-seconds", type=int, default=30)
 parser.add_argument("--label", default=None)
 parser.add_argument("--scheduling-diagnostics", action="store_true")
+parser.add_argument(
+    "--frontier-lifecycle",
+    action="store_true",
+    help="run the native frontier lifecycle check after the idle windows",
+)
 parser.add_argument("--system-parameter", action="append", default=[])
 args = parser.parse_args()
 E = Path(args.evidence_dir).resolve()
 if args.warmup < 0 or args.window < 4 or args.windows < 1 or args.profile_seconds < 0:
     parser.error("require warmup >= 0, window >= 4, windows >= 1, profile-seconds >= 0")
+if args.frontier_lifecycle and args.kind != "native":
+    parser.error("--frontier-lifecycle requires native")
 assert not any(
     p.info["name"] in NAMES | {"rustc", "cargo"} for p in psutil.process_iter(["name"])
 ), "no runtime/build interference"
@@ -439,7 +446,7 @@ def interrupted(signum, frame):
 
 for sig in [signal.SIGTERM, signal.SIGINT, signal.SIGALRM]:
     signal.signal(sig, interrupted)
-signal.alarm(2400)
+signal.alarm(2400 + (1800 if args.frontier_lifecycle else 0))
 try:
     docker_attempted = True
     subprocess.run(
@@ -680,6 +687,18 @@ try:
                 assert rows and any(
                     row[3] is not None for row in rows
                 ), "scheduling counter snapshot is empty"
+    if args.frontier_lifecycle:
+        check = ROOT / "test/controllerd/frontiers.py"
+        (RUN / "frontiers.py").write_bytes(check.read_bytes())
+        with (RUN / "frontier-lifecycle.log").open("w") as log:
+            subprocess.run(
+                [str(ROOT / "bin/pyactivate"), str(check), "--controller", control],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=True,
+                timeout=1800,
+            )
+        result["frontier_lifecycle_status"] = "passed"
     result["status"] = "passed"
 except BaseException as error:
     result.update(status="failed", error=repr(error))

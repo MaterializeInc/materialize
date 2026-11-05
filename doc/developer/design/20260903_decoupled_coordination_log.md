@@ -2,25 +2,24 @@
 
 ## Current objective
 
-The fresh idle-resource comparison is complete. Read the
-[report](20260903_decoupled_coordination_idle.md) and its
-[measured evidence](20260903_decoupled_coordination_idle.json).
-Native uses about 2.1× idle CPU and 2.2× PSS versus upstream main. Configuration
-controls preserve the gap. Repeated upper polling drives backend read
-amplification, frontier reductions are the largest named compute hotspot, and
-bounded blob-cache growth explains most of the observed heap growth.
+The cached storage-frontier repair is complete. Native publication now reuses
+`storage_collections` upper tracking instead of polling each collection. Exact
+bindings, catalog read bounds and cooperative monotonic publication are preserved.
+The [report](20260903_decoupled_coordination_cached_frontiers.md) and
+[measurements](20260903_decoupled_coordination_cached_frontiers.json) show about
+106 fewer consensus scans/s, a 46% deployment-wide reduction. Total CPU and RAM
+show no clear improvement in these windows. Debug join/restart/removal checks,
+storage tests and targeted Clippy passed.
 
-No production architectural repair was made. All comparison fixtures are stopped
-and their disposable databases/blobs are removed. Raw evidence and pinned
-binaries remain in `~/.local/share/aj/m3-evidence/native-main-idle/`.
+The broader [idle comparison](20260903_decoupled_coordination_idle.md) remains
+valid for its recorded pre-repair build. All owned runtime processes are stopped.
 
 ## Next concrete action
 
-Agree the next bounded repair with Aljoscha. The smallest measured opportunity
-is deduplicating transaction-WAL upper reads within each storage sampling round.
-The report also identifies frontier reduction work and repeated structural
-reconciliation. Preserve freshness, catalog authorization and replica ownership.
-Do not resume sink handover or change settlement policy without agreement.
+Agree the next bounded task with Aljoscha. Remaining polling is concentrated in
+replica reconciliation and other adapter/controller refreshes. Frontier reductions
+remain the largest named compute hotspot. No further architectural repair is
+underway. Preserve freshness, catalog authorization and replica ownership.
 
 External-sink handover across promotion and explicit retirement remains M3 work.
 It must verify one authorized execution and survivor continuity. Long write/read
@@ -51,6 +50,11 @@ The PR stays draft.
 
 ## Essential evidence and local state
 
+- Cached frontier repair: report above and
+  `~/.local/share/aj/m3-evidence/cached-storage-frontiers/`. Fresh and restarted
+  lifecycle checks passed. The measured candidate's idle windows passed, but its
+  first post-window diagnostic failed on harness privileges. The report preserves
+  that failure, its reproduction and the corrected checks.
 - Idle resources: report above, raw evidence under
   `~/.local/share/aj/m3-evidence/native-main-idle/`, and reusable scripts under
   `misc/benchmarks/native-idle/`. The original upstream cleanup assertion and
@@ -67,9 +71,8 @@ The PR stays draft.
 - Txn-WAL retirement: `~/.local/share/aj/m3-evidence/txn-retirement/repair.md`.
 - Earlier details: [archive](20260903_decoupled_coordination_log_archive.md).
 
-All owned runtime processes are stopped. The temporary controller profiling
-routes are absent from production source. Pinned native measurement binaries retain
-that instrumentation. The unused upstream worktree and compiler scratch were
-removed, leaving about 30 GiB free. The unrelated persist-traffic worktree was
-left untouched. Keep heavy work sequential and low-concurrency. Scratch is
-optional.
+Owned runtimes are stopped and their disposable state is removed. Pinned
+measurement binaries and raw evidence remain. Temporary controller profiling
+routes are absent from production source. Compiler scratch was removed, leaving
+about 16 GiB free. The unrelated persist-traffic worktree is untouched. Keep
+heavy work sequential and low-concurrency.
