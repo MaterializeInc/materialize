@@ -738,9 +738,12 @@ export interface components {
                 /** @description The ticket number customers see in the Messenger and Help Center. */
                 number?: string | null;
                 title: string;
-                /** @description The state label customers see, e.g. "Submitted" or "Resolved". */
+                /**
+                 * @description The state label customers see, e.g. "Submitted" or "Resolved".
+                 *     Support can rename these, so color or group by `stateCategory`.
+                 */
                 state?: string | null;
-                stateCategory?: null | components["schemas"]["SupportTicketStateCategory"];
+                stateCategory?: components["schemas"]["SupportTicketStateCategory"] | null;
                 open: boolean;
                 /** Format: date-time */
                 createdAt: string;
@@ -809,9 +812,12 @@ export interface components {
             /** @description The ticket number customers see in the Messenger and Help Center. */
             number?: string | null;
             title: string;
-            /** @description The state label customers see, e.g. "Submitted" or "Resolved". */
+            /**
+             * @description The state label customers see, e.g. "Submitted" or "Resolved".
+             *     Support can rename these, so color or group by `stateCategory`.
+             */
             state?: string | null;
-            stateCategory?: null | components["schemas"]["SupportTicketStateCategory"];
+            stateCategory?: components["schemas"]["SupportTicketStateCategory"] | null;
             open: boolean;
             /** Format: date-time */
             createdAt: string;
@@ -819,12 +825,6 @@ export interface components {
             updatedAt: string;
         };
         /** @description A ticket with its description and replies. */
-        /**
-         * @description Intercom's category for a ticket's state. Stays the same when support
-         *     renames the label customers see.
-         * @enum {string}
-         */
-        SupportTicketStateCategory: "submitted" | "in_progress" | "waiting_on_customer" | "resolved";
         SupportTicketDetail: {
             ticket: components["schemas"]["SupportTicket"];
             /** @description The description the ticket was opened with. May contain HTML. */
@@ -850,6 +850,12 @@ export interface components {
         };
         /** @enum {string} */
         SupportTicketSeverity: "urgent" | "high" | "normal" | "low";
+        /**
+         * @description Intercom's category for a ticket's state. Stays the same when support
+         *     renames the label customers see.
+         * @enum {string}
+         */
+        SupportTicketStateCategory: "submitted" | "in_progress" | "waiting_on_customer" | "resolved";
     };
     responses: never;
     parameters: never;
