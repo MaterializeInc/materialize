@@ -147,6 +147,7 @@ pub(super) fn construct(
                             shared_state: &mut shared_state.borrow_mut(),
                             output: &mut output_buffers,
                             logging_interval_ms,
+                            worker_id,
                             peers,
                             time,
                         }
@@ -417,10 +418,10 @@ struct DemuxState {
     dataflow_channels: BTreeMap<usize, Vec<ChannelsEvent>>,
     /// Information about the last requested park.
     last_park: Option<Park>,
-    /// Maps channel IDs to boxed slices counting the messages sent to each target worker.
-    messages_sent: BTreeMap<usize, Box<[MessageCount]>>,
-    /// Maps channel IDs to boxed slices counting the messages received from each source worker.
-    messages_received: BTreeMap<usize, Box<[MessageCount]>>,
+    /// Maps channel IDs to the messages sent to each target worker.
+    messages_sent: BTreeMap<usize, PeerMessageCounts>,
+    /// Maps channel IDs to the messages received from each source worker.
+    messages_received: BTreeMap<usize, PeerMessageCounts>,
     /// Stores for scheduled operators the time when they were scheduled.
     schedule_starts: Vec<(usize, Duration)>,
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
@@ -442,6 +443,52 @@ struct MessageCount {
     batches: i64,
     /// The number of records sent across a channel.
     records: Diff,
+}
+
+/// Message counts of one channel in one direction, per peer worker.
+///
+/// Most channels are pipeline channels, on which a worker only talks to itself. These stay
+/// `Local` and need no per-peer allocation, which keeps the state from growing with the
+/// number of workers squared.
+enum PeerMessageCounts {
+    /// Only the local worker has carried messages on the channel.
+    Local(MessageCount),
+    /// Counts indexed by peer worker.
+    Peers(Box<[MessageCount]>),
+}
+
+impl Default for PeerMessageCounts {
+    fn default() -> Self {
+        Self::Local(MessageCount::default())
+    }
+}
+
+impl PeerMessageCounts {
+    /// Records a batch of `records` exchanged with `peer`.
+    fn record(&mut self, peer: usize, local: usize, peers: usize, records: Diff) {
+        if let Self::Local(local_count) = self
+            && peer != local
+        {
+            let mut counts = vec![MessageCount::default(); peers].into_boxed_slice();
+            counts[local] = *local_count;
+            *self = Self::Peers(counts);
+        }
+        let count = match self {
+            Self::Local(count) => count,
+            Self::Peers(counts) => &mut counts[peer],
+        };
+        count.records += records;
+        count.batches += 1;
+    }
+
+    /// Returns `(peer, count)` for every peer that may have a non-zero count.
+    fn iter(&self, local: usize) -> impl Iterator<Item = (usize, &MessageCount)> {
+        let (local, peers) = match self {
+            Self::Local(count) => (Some((local, count)), None),
+            Self::Peers(counts) => (None, Some(counts.iter().enumerate())),
+        };
+        local.into_iter().chain(peers.into_iter().flatten())
+    }
 }
 
 /// Bundled output buffers used by the demux operator.
@@ -510,6 +557,8 @@ struct DemuxHandler<'a, 'b, 'c> {
     output: &'a mut DemuxOutput<'b, 'c>,
     /// The logging interval specifying the time granularity for the updates.
     logging_interval_ms: u128,
+    /// The index of this timely worker.
+    worker_id: usize,
     /// The number of timely workers.
     peers: usize,
     /// The current event time.
@@ -647,37 +696,31 @@ impl DemuxHandler<'_, '_, '_> {
             self.output.addresses.give((datum, ts, Diff::MINUS_ONE));
 
             // Retract messages logged for this channel.
-            if let Some(sent) = self.state.messages_sent.remove(&channel.id) {
-                for (target_worker, count) in sent.iter().enumerate() {
-                    let datum = MessageDatum {
-                        channel: channel.id,
-                        worker: target_worker,
-                    };
-                    self.output
-                        .messages_sent
-                        .give(((datum, ()), ts, Diff::from(-count.records)));
-                    self.output
-                        .batches_sent
-                        .give(((datum, ()), ts, Diff::from(-count.batches)));
-                }
+            let sent = self.state.messages_sent.remove(&channel.id);
+            for (target_worker, count) in sent.iter().flat_map(|c| c.iter(self.worker_id)) {
+                let datum = MessageDatum {
+                    channel: channel.id,
+                    worker: target_worker,
+                };
+                self.output
+                    .messages_sent
+                    .give(((datum, ()), ts, Diff::from(-count.records)));
+                self.output
+                    .batches_sent
+                    .give(((datum, ()), ts, Diff::from(-count.batches)));
             }
-            if let Some(received) = self.state.messages_received.remove(&channel.id) {
-                for (source_worker, count) in received.iter().enumerate() {
-                    let datum = MessageDatum {
-                        channel: channel.id,
-                        worker: source_worker,
-                    };
-                    self.output.messages_received.give((
-                        (datum, ()),
-                        ts,
-                        Diff::from(-count.records),
-                    ));
-                    self.output.batches_received.give((
-                        (datum, ()),
-                        ts,
-                        Diff::from(-count.batches),
-                    ));
-                }
+            let received = self.state.messages_received.remove(&channel.id);
+            for (source_worker, count) in received.iter().flat_map(|c| c.iter(self.worker_id)) {
+                let datum = MessageDatum {
+                    channel: channel.id,
+                    worker: source_worker,
+                };
+                self.output
+                    .messages_received
+                    .give(((datum, ()), ts, Diff::from(-count.records)));
+                self.output
+                    .batches_received
+                    .give(((datum, ()), ts, Diff::from(-count.batches)));
             }
         }
     }
@@ -729,13 +772,11 @@ impl DemuxHandler<'_, '_, '_> {
             self.output.messages_sent.give(((datum, ()), ts, count));
             self.output.batches_sent.give(((datum, ()), ts, Diff::ONE));
 
-            let sent_counts = self
-                .state
+            self.state
                 .messages_sent
                 .entry(event.channel)
-                .or_insert_with(|| vec![Default::default(); self.peers].into_boxed_slice());
-            sent_counts[event.target].records += count;
-            sent_counts[event.target].batches += 1;
+                .or_default()
+                .record(event.target, self.worker_id, self.peers, count);
         } else {
             let datum = MessageDatum {
                 channel: event.channel,
@@ -746,13 +787,11 @@ impl DemuxHandler<'_, '_, '_> {
                 .batches_received
                 .give(((datum, ()), ts, Diff::ONE));
 
-            let received_counts = self
-                .state
+            self.state
                 .messages_received
                 .entry(event.channel)
-                .or_insert_with(|| vec![Default::default(); self.peers].into_boxed_slice());
-            received_counts[event.source].records += count;
-            received_counts[event.source].batches += 1;
+                .or_default()
+                .record(event.source, self.worker_id, self.peers, count);
         }
     }
 
@@ -812,5 +851,50 @@ where
 {
     if vec.len() <= index {
         vec.resize(index + 1, Default::default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counts(c: &PeerMessageCounts, local: usize) -> Vec<(usize, i64, Diff)> {
+        c.iter(local)
+            .filter(|(_, c)| c.batches != 0)
+            .map(|(peer, c)| (peer, c.batches, c.records))
+            .collect()
+    }
+
+    #[mz_ore::test]
+    fn peer_message_counts_stay_local_for_self_traffic() {
+        let mut c = PeerMessageCounts::default();
+        c.record(2, 2, 4, Diff::from(5));
+        c.record(2, 2, 4, Diff::from(3));
+        assert!(matches!(c, PeerMessageCounts::Local(_)));
+        assert_eq!(counts(&c, 2), vec![(2, 2, Diff::from(8))]);
+    }
+
+    #[mz_ore::test]
+    fn peer_message_counts_keep_local_count_when_widening() {
+        let mut c = PeerMessageCounts::default();
+        c.record(1, 1, 4, Diff::from(5));
+        c.record(3, 1, 4, Diff::from(7));
+        c.record(0, 1, 4, Diff::from(2));
+        assert!(matches!(c, PeerMessageCounts::Peers(_)));
+        assert_eq!(
+            counts(&c, 1),
+            vec![
+                (0, 1, Diff::from(2)),
+                (1, 1, Diff::from(5)),
+                (3, 1, Diff::from(7)),
+            ]
+        );
+    }
+
+    #[mz_ore::test]
+    fn peer_message_counts_widen_on_first_remote_message() {
+        let mut c = PeerMessageCounts::default();
+        c.record(0, 3, 4, Diff::from(4));
+        assert_eq!(counts(&c, 3), vec![(0, 1, Diff::from(4))]);
     }
 }
