@@ -20,6 +20,19 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.49.0
+*Released to Materialize Cloud: 2026-11-05* <br>
+*Released to Materialize Self-Managed: 2026-11-06* <br>
+
+### Advisory {#v26.49-advisory}
+
+- **Query plans may change when a SQL Server source table is re-created**: Starting with this release, a table created from a SQL Server source records at most one key, the `PRIMARY KEY` or `UNIQUE` constraint behind its CDC capture instance's index (see [Unique keys](/ingest-data/sql-server/#unique-keys)). Tables created before this release keep the keys they recorded at creation. If a re-created table had other `PRIMARY KEY` or `UNIQUE` constraints, views, indexes, and materialized views that depend on it can get a different plan, for example a `DISTINCT` over the columns of a no longer recorded constraint is kept instead of removed, and may use more memory or CPU as a result. Query results do not change. Before dropping a `PRIMARY KEY` or `UNIQUE` constraint that the capture instance does not use from a table created before this release, re-create the table in Materialize.
+
+  **Upgrade impact**: Before promoting a deployment that re-creates SQL Server source tables, for example through [source versioning](/ingest-data/sql-server/source-versioning/), compare the plans of the objects that depend on them with [`EXPLAIN PLAN`](/sql/explain-plan/). A retained `DISTINCT` can need a larger cluster.
+
+### Improvements {#v26.49-improvements}
+- **SQL Server tables key only on the capture instance's index**: A table created from a SQL Server source now records as its key only the `PRIMARY KEY` or `UNIQUE` constraint backing the index its CDC capture instance uses, which SQL Server does not allow dropping while that capture instance is the table's newest one. Other `UNIQUE` constraints are no longer recorded, so dropping one upstream can no longer cause queries in Materialize to return incorrect results. See [Unique keys](/ingest-data/sql-server/#unique-keys).
+
 ## v26.48.2
 *Released to Materialize Cloud: 2026-10-29 (v26.48.0)* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
