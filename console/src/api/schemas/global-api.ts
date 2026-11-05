@@ -499,11 +499,7 @@ export interface components {
         CreateLicenseKeyResponse: {
             licenseKey: string;
         };
-        /**
-         * @description A new support ticket. Production outages are not accepted here; they go
-         *     through the Messenger's "Report Production Outage" option, which pages
-         *     on-call.
-         */
+        /** @description A new support ticket. */
         CreateSupportTicketRequest: {
             title: string;
             description: string;
@@ -515,6 +511,14 @@ export interface components {
             environmentVersion?: string | null;
             /** @description The cluster or object the ticket is about, if any. */
             affectedObject?: string | null;
+        };
+        /** @description A newly opened ticket. */
+        CreatedSupportTicket: components["schemas"]["SupportTicket"] & {
+            /**
+             * @description Whether opening the ticket paged on-call: true for urgent tickets from
+             *     organizations with an SLA.
+             */
+            pagesOnCall: boolean;
         };
         /** @description A block of credit held by a customer. */
         CreditBlock: {
@@ -845,7 +849,7 @@ export interface components {
             createdAt: string;
         };
         /** @enum {string} */
-        SupportTicketSeverity: "high" | "normal" | "low";
+        SupportTicketSeverity: "urgent" | "high" | "normal" | "low";
     };
     responses: never;
     parameters: never;
@@ -1304,7 +1308,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SupportTicket"];
+                    "application/json": components["schemas"]["CreatedSupportTicket"];
                 };
             };
             /** @description Invalid ticket */

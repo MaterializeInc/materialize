@@ -13,12 +13,11 @@ import {
 } from "~/api/cloudGlobalApi";
 
 /**
- * Severities shown in the form. Urgent is a production outage: it goes
- * through the Messenger's "Report Production Outage" workflow, which pages
- * on-call, rather than the ticket endpoint. The rest are opened by the global
- * API as "Support Request" tickets with a matching Priority.
+ * Severities shown in the form. The global API opens urgent tickets as
+ * Production Outage tickets, which page on-call for organizations with an
+ * SLA, and the rest as "Support Request" tickets with a matching Priority.
  */
-export type TicketSeverity = "urgent" | "high" | "normal" | "low";
+export type TicketSeverity = CreateSupportTicketRequest["severity"];
 
 export const SEVERITY_OPTIONS: {
   value: TicketSeverity;
@@ -72,13 +71,11 @@ export type TicketContext = {
 };
 
 /**
- * The request for a non-urgent ticket. The global API identifies the user
- * from their login and adds the org ID and their email to the description.
+ * The request for a ticket. The global API identifies the user from their
+ * login and adds the org ID and their email to the description.
  */
 export const buildCreateTicketRequest = (
-  values: TicketFormValues & {
-    severity: Exclude<TicketSeverity, "urgent">;
-  },
+  values: TicketFormValues,
   context: TicketContext,
 ): CreateSupportTicketRequest => ({
   title: values.title.trim(),

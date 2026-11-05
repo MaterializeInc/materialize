@@ -37,6 +37,8 @@ export type DailyCostBreakdown =
 export type Marketplace = components["schemas"]["Marketplace"];
 export type IntercomJwtResponse = components["schemas"]["IntercomJwtResponse"];
 export type SupportTicket = components["schemas"]["SupportTicket"];
+export type CreatedSupportTicket =
+  components["schemas"]["CreatedSupportTicket"];
 export type SupportTicketDetail = components["schemas"]["SupportTicketDetail"];
 export type SupportTicketMessage =
   components["schemas"]["SupportTicketMessage"];

@@ -23,7 +23,12 @@ import {
 import { ErrorBoundary } from "@sentry/react";
 import { useAtomValue } from "jotai";
 import React, { Suspense } from "react";
-import { Navigate, useMatch, useNavigate } from "react-router-dom";
+import {
+  Navigate,
+  useMatch,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 
 import {
   useCurrentOrganization,
@@ -72,7 +77,7 @@ import { currentRegionIdAtom } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
-import { NewSupportTicketDrawer, OutageLink } from "./NewSupportTicketDrawer";
+import { NewSupportTicketDrawer } from "./NewSupportTicketDrawer";
 import { isTicketsUnavailableError, useSupportTickets } from "./queries";
 import { SupportTicketModal, SupportTicketsTable } from "./SupportTickets";
 import { SEVERITY_OPTIONS } from "./ticketForm";
@@ -83,6 +88,18 @@ export const OUTAGE_MAILTO = `${SUPPORT_MAILTO}?subject=${encodeURIComponent(
 )}`;
 
 type OpenMessenger = (onUnavailable: () => void) => boolean;
+
+/**
+ * Where outage reports go while the ticket form is off: the Messenger's
+ * outage workflow when Intercom is running, otherwise an email to support.
+ */
+type OutageLink = {
+  href: string;
+  onClick: (event: React.MouseEvent<HTMLElement>) => void;
+};
+
+/** The ticket form, started as an outage report. */
+const NEW_OUTAGE_TICKET_PATH = `${NEW_SUPPORT_TICKET_PATH}?severity=urgent`;
 
 /**
  * Returns click handlers that open the Intercom Messenger instead of
@@ -300,10 +317,9 @@ const SupportPage = () => {
     Boolean(flags["support-ticket-form-cns-201"]) && areTicketsAvailable;
   const outageLink: OutageLink = {
     href: OUTAGE_MAILTO,
+    // Checks for the Messenger at click time, so one that boots late keeps
+    // working.
     onClick: preferIntercom(openIntercomNewConversation),
-    // Matches the outage hint. The click handler still checks at click time,
-    // so a Messenger that boots late keeps working.
-    isChat: isIntercomIdentified,
   };
   // The form and an open ticket have their own URLs, so a reload keeps the
   // user's place and other pages can link straight to them.
@@ -319,9 +335,14 @@ const SupportPage = () => {
   // answer before sending a link to it back to the page.
   const isNewTicketUnavailable =
     isNewTicketRoute && !isTicketFormEnabled && !ticketsQuery.isPending;
-  const outageHint = isIntercomIdentified
-    ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
-    : "Chat is unavailable, so these open an email to support.";
+  const [searchParams] = useSearchParams();
+  const newTicketSeverity =
+    searchParams.get("severity") === "urgent" ? "urgent" : "normal";
+  const outageHint = isTicketFormEnabled
+    ? "Opens an urgent ticket. On plans with an SLA, it pages on-call."
+    : isIntercomIdentified
+      ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
+      : "Chat is unavailable, so these open an email to support.";
 
   if (
     isNewTicketUnavailable ||
@@ -357,17 +378,29 @@ const SupportPage = () => {
               Open a ticket
             </Button>
           )}
-          <Button
-            as="a"
-            href={outageLink.href}
-            onClick={outageLink.onClick}
-            variant="outline"
-            size="sm"
-            color={colors.accent.red}
-            borderColor={colors.border.error}
-          >
-            Report a production outage
-          </Button>
+          {isTicketFormEnabled ? (
+            <Button
+              onClick={() => navigate(NEW_OUTAGE_TICKET_PATH)}
+              variant="outline"
+              size="sm"
+              color={colors.accent.red}
+              borderColor={colors.border.error}
+            >
+              Report a production outage
+            </Button>
+          ) : (
+            <Button
+              as="a"
+              href={outageLink.href}
+              onClick={outageLink.onClick}
+              variant="outline"
+              size="sm"
+              color={colors.accent.red}
+              borderColor={colors.border.error}
+            >
+              Report a production outage
+            </Button>
+          )}
           <Tooltip label={outageHint} lineHeight={1.2} hasArrow>
             <Box
               as="span"
@@ -626,7 +659,10 @@ const SupportPage = () => {
       <NewSupportTicketDrawer
         isOpen={isNewTicketRoute && isTicketFormEnabled}
         onClose={backToSupport}
-        outageLink={outageLink}
+        defaultSeverity={newTicketSeverity}
+        onReportOutage={() =>
+          navigate(NEW_OUTAGE_TICKET_PATH, { replace: true })
+        }
         organizationId={organizationId}
         organizationName={organization?.name}
       />

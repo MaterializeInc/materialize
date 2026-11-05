@@ -689,13 +689,18 @@ describe("SupportPage", () => {
       delete mockFlags["support-ticket-form-cns-201"];
     });
 
-    const createHandler = (onRequest: (body: unknown) => void, status = 201) =>
+    const createHandler = (
+      onRequest: (body: unknown) => void,
+      status = 201,
+      pagesOnCall = false,
+    ) =>
       http.post(TICKETS_URL, async ({ request }) => {
         onRequest(await request.json());
         return status === 201
-          ? HttpResponse.json(buildTicket({ title: "Sink is lagging" }), {
-              status,
-            })
+          ? HttpResponse.json(
+              { ...buildTicket({ title: "Sink is lagging" }), pagesOnCall },
+              { status },
+            )
           : HttpResponse.json({}, { status });
       });
 
@@ -708,6 +713,9 @@ describe("SupportPage", () => {
       expect(
         screen.getByRole("link", { name: "Open a ticket" }),
       ).toHaveAttribute("href", SUPPORT_MAILTO);
+      expect(
+        screen.getByRole("link", { name: "Report a production outage" }),
+      ).toHaveAttribute("href", OUTAGE_MAILTO);
     });
 
     it("validates the form and opens a ticket", async () => {
@@ -757,33 +765,37 @@ describe("SupportPage", () => {
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
     });
 
-    it("closes the confirmation before opening the outage chat", async () => {
-      setIntercom("booted");
+    it("starts an outage report from the confirmation", async () => {
       server.use(
         ticketsHandler([]),
         createHandler(() => {}),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPageWithIntercom />);
+      await renderComponent(
+        <>
+          <SupportPageWithIntercom />
+          <CurrentPath />
+        </>,
+      );
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
-      await fillTicketForm(user, {
-        title: "Sink is lagging",
-        description: "Kafka sink is 10 minutes behind.",
-      });
+      await fillTicketForm(user);
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
       const sent = await screen.findByTestId("support-ticket-sent");
 
       await user.click(
-        within(sent).getByRole("link", { name: "Report a production outage" }),
+        within(sent).getByRole("button", {
+          name: "Report a production outage",
+        }),
       );
 
-      expect(showNewMessage).toHaveBeenCalled();
-      await waitFor(() =>
-        expect(
-          screen.queryByTestId("support-ticket-sent"),
-        ).not.toBeInTheDocument(),
+      expect(
+        await screen.findByRole("radio", { name: /^Urgent/ }),
+      ).toBeChecked();
+      expect(screen.getByRole("textbox", { name: /Subject/ })).toHaveValue("");
+      expect(screen.getByTestId("current-path")).toHaveTextContent(
+        /^\/support\/new$/,
       );
     });
 
@@ -866,25 +878,24 @@ describe("SupportPage", () => {
       ).toBeVisible();
     });
 
-    it("offers email for urgent tickets when chat is unavailable", async () => {
-      setIntercom("stub");
+    it("opens the form on Urgent from the outage button", async () => {
+      setIntercom("booted");
       server.use(ticketsHandler([]));
       const user = userEvent.setup();
       await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
-      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
-      await user.click(await screen.findByRole("radio", { name: /^Urgent/ }));
+      await user.click(
+        screen.getByRole("button", { name: "Report a production outage" }),
+      );
 
       expect(
+        await screen.findByRole("radio", { name: /^Urgent/ }),
+      ).toBeChecked();
+      expect(
         screen.getByTestId("support-ticket-urgent-notice"),
-      ).toHaveTextContent(/with “urgent” in the subject/);
-      expect(
-        screen.getByRole("link", { name: "Email support" }),
-      ).toHaveAttribute("href", OUTAGE_MAILTO);
-      expect(
-        screen.queryByRole("link", { name: "Report in chat" }),
-      ).not.toBeInTheDocument();
+      ).toHaveTextContent(/On plans with an SLA, they page on-call/);
+      expect(showNewMessage).not.toHaveBeenCalled();
     });
 
     it("doesn't reopen a closed form on Back", async () => {
@@ -948,32 +959,55 @@ describe("SupportPage", () => {
       ).not.toBeInTheDocument();
     });
 
-    it("sends urgent tickets to the Messenger's outage workflow", async () => {
-      setIntercom("booted");
+    it("opens urgent tickets and says when on-call was paged", async () => {
       let createdWith: unknown;
       server.use(
         ticketsHandler([]),
-        createHandler((body) => {
-          createdWith = body;
-        }),
+        createHandler(
+          (body) => {
+            createdWith = body;
+          },
+          201,
+          true,
+        ),
       );
       const user = userEvent.setup();
-      await renderComponent(<SupportPageWithIntercom />);
+      await renderComponent(<SupportPageWithIntercom />, {
+        initialRouterEntries: ["/support/new?severity=urgent"],
+      });
 
-      await screen.findByTestId("support-tickets-empty");
-      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
-      await user.click(await screen.findByRole("radio", { name: /^Urgent/ }));
+      await fillTicketForm(user, { title: "Production is down" });
+      await user.click(screen.getByRole("button", { name: "Report outage" }));
 
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(createdWith).toMatchObject({
+        title: "Production is down",
+        severity: "urgent",
+      });
+      expect(sent).toHaveTextContent("On-call has been paged.");
       expect(
-        screen.getByTestId("support-ticket-urgent-notice"),
-      ).toHaveTextContent(/Report Production Outage/);
-      expect(
-        screen.queryByRole("textbox", { name: /Subject/ }),
+        within(sent).queryByRole("button", {
+          name: "Report a production outage",
+        }),
       ).not.toBeInTheDocument();
+    });
 
-      await user.click(screen.getByRole("link", { name: "Report in chat" }));
-      expect(showNewMessage).toHaveBeenCalled();
-      expect(createdWith).toBeUndefined();
+    it("doesn't claim on-call was paged when it wasn't", async () => {
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />, {
+        initialRouterEntries: ["/support/new?severity=urgent"],
+      });
+
+      await fillTicketForm(user, { title: "Production is down" });
+      await user.click(screen.getByRole("button", { name: "Report outage" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(sent).not.toHaveTextContent("On-call has been paged.");
+      expect(sent).toHaveTextContent("Urgent response target");
     });
   });
 });

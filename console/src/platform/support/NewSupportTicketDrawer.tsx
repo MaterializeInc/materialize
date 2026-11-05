@@ -39,8 +39,8 @@ import React from "react";
 import { useForm, UseFormRegisterReturn } from "react-hook-form";
 
 import {
+  CreatedSupportTicket,
   CreateSupportTicketRequest,
-  SupportTicket,
 } from "~/api/cloudGlobalApi";
 import { OpenApiFetchError } from "~/api/OpenApiFetchError";
 import { Alert } from "~/components/Alert";
@@ -64,16 +64,6 @@ import {
   TicketFormValues,
   TicketSeverity,
 } from "./ticketForm";
-
-/**
- * Where urgent tickets go: the Messenger's outage workflow when Intercom is
- * running, otherwise an email to support.
- */
-export type OutageLink = {
-  href: string;
-  onClick: (event: React.MouseEvent<HTMLElement>) => void;
-  isChat: boolean;
-};
 
 /** Context the console knows, attached so the customer doesn't retype it. */
 const useTicketContext = () => {
@@ -184,13 +174,13 @@ type TicketDetails = { label: string; value: React.ReactNode }[];
 const NewTicketForm = ({
   organizationId,
   organizationName,
-  outageLink,
+  defaultSeverity,
   submit,
   onClose,
 }: {
   organizationId?: string;
   organizationName?: string;
-  outageLink: OutageLink;
+  defaultSeverity: TicketSeverity;
   submit: CreateTicketMutation;
   onClose: () => void;
 }) => {
@@ -201,7 +191,7 @@ const NewTicketForm = ({
       mode: "onTouched",
       defaultValues: {
         title: "",
-        severity: "normal",
+        severity: defaultSeverity,
         environmentType: "production",
         description: "",
         includeDetails: true,
@@ -254,16 +244,8 @@ const NewTicketForm = ({
 
   const isUrgent = severity === "urgent";
 
-  const onSubmit = (values: TicketFormValues) => {
-    // Urgent tickets go through the outage workflow instead (see the footer).
-    if (values.severity === "urgent") return;
-    submit.mutate(
-      buildCreateTicketRequest(
-        { ...values, severity: values.severity },
-        context,
-      ),
-    );
-  };
+  const onSubmit = (values: TicketFormValues) =>
+    submit.mutate(buildCreateTicketRequest(values, context));
 
   return (
     <Flex
@@ -285,7 +267,9 @@ const NewTicketForm = ({
                 submit.error instanceof OpenApiFetchError &&
                 submit.error.status === 409
                   ? `Your support account needs to be linked before you can open tickets here. Email ${SUPPORT_EMAIL} and we'll set it up.`
-                  : `Your ticket couldn't be opened. Try again, or email ${SUPPORT_EMAIL}.`
+                  : isUrgent
+                    ? `Your ticket couldn't be opened. Try again, or email ${SUPPORT_EMAIL} with \u201curgent\u201d in the subject.`
+                    : `Your ticket couldn't be opened. Try again, or email ${SUPPORT_EMAIL}.`
               }
             />
           )}
@@ -316,139 +300,125 @@ const NewTicketForm = ({
                 textStyle="text-small"
                 data-testid="support-ticket-urgent-notice"
               >
-                Production down?{" "}
+                Urgent tickets are production outages.{" "}
                 <Text as="span" fontWeight="600" color={colors.accent.red}>
-                  Outage reports page on-call
+                  On plans with an SLA, they page on-call
                 </Text>{" "}
-                right away.{" "}
-                {outageLink.isChat
-                  ? "Continue in chat and choose \u201cReport Production Outage\u201d."
-                  : `Email ${SUPPORT_EMAIL} with \u201curgent\u201d in the subject.`}
+                right away.
               </Box>
             )}
           </Box>
 
-          {!isUrgent && (
-            <>
-              <Box as="fieldset">
-                <FieldLabel>Environment</FieldLabel>
-                <Flex
-                  width="fit-content"
-                  borderWidth="1px"
-                  borderColor={colors.border.secondary}
-                  borderRadius="lg"
-                  overflow="hidden"
-                >
-                  {ENVIRONMENT_OPTIONS.map((option, index) => (
-                    <SegmentOption
-                      key={option.value}
-                      registration={environmentField}
-                      value={option.value}
-                      label={option.label}
-                      isSelected={environmentType === option.value}
-                      isLast={index === ENVIRONMENT_OPTIONS.length - 1}
-                    />
-                  ))}
-                </Flex>
-              </Box>
-
-              <FormControl isRequired isInvalid={!!errors.title}>
-                <FormLabel fontWeight="600">Subject</FormLabel>
-                <Input
-                  {...register("title", {
-                    validate: (value) =>
-                      value.trim().length > 0 || "A subject is required.",
-                    maxLength: {
-                      value: 200,
-                      message: "Keep the subject under 200 characters.",
-                    },
-                  })}
-                  placeholder="e.g. prod_ingest replica keeps restarting"
-                  variant={errors.title ? "error" : "default"}
+          <Box as="fieldset">
+            <FieldLabel>Environment</FieldLabel>
+            <Flex
+              width="fit-content"
+              borderWidth="1px"
+              borderColor={colors.border.secondary}
+              borderRadius="lg"
+              overflow="hidden"
+            >
+              {ENVIRONMENT_OPTIONS.map((option, index) => (
+                <SegmentOption
+                  key={option.value}
+                  registration={environmentField}
+                  value={option.value}
+                  label={option.label}
+                  isSelected={environmentType === option.value}
+                  isLast={index === ENVIRONMENT_OPTIONS.length - 1}
                 />
-                <FormErrorMessage>{errors.title?.message}</FormErrorMessage>
-              </FormControl>
+              ))}
+            </Flex>
+          </Box>
 
-              <FormControl isRequired isInvalid={!!errors.description}>
-                <FormLabel fontWeight="600">What happened?</FormLabel>
-                <Textarea
-                  {...register("description", {
-                    validate: (value) =>
-                      value.trim().length > 0 || "Describe what happened.",
-                    maxLength: {
-                      value: 10000,
-                      message: "Keep the description under 10,000 characters.",
-                    },
-                  })}
-                  rows={4}
-                  resize="vertical"
-                  placeholder="What you expected, what happened instead, and the cluster or object involved."
-                />
-                <FormErrorMessage>
-                  {errors.description?.message}
-                </FormErrorMessage>
-              </FormControl>
+          <FormControl isRequired isInvalid={!!errors.title}>
+            <FormLabel fontWeight="600">Subject</FormLabel>
+            <Input
+              {...register("title", {
+                validate: (value) =>
+                  value.trim().length > 0 || "A subject is required.",
+                maxLength: {
+                  value: 200,
+                  message: "Keep the subject under 200 characters.",
+                },
+              })}
+              placeholder="e.g. prod_ingest replica keeps restarting"
+              variant={errors.title ? "error" : "default"}
+            />
+            <FormErrorMessage>{errors.title?.message}</FormErrorMessage>
+          </FormControl>
 
-              {(alwaysSent.length > 0 || optional.length > 0) && (
-                <Box
-                  as="section"
-                  aria-label="Sent with your ticket"
-                  borderWidth="1px"
-                  borderColor={colors.border.primary}
-                  borderRadius="lg"
-                  bg={colors.background.secondary}
-                >
-                  {optional.length > 0 ? (
-                    <HStack spacing="2.5" px="3" py="2.5">
-                      <Checkbox {...register("includeDetails")} flex="1">
-                        <Text textStyle="text-ui-med" fontWeight="600">
-                          Include environment details
-                        </Text>
-                      </Checkbox>
-                      <Text
-                        textStyle="text-small"
-                        color={colors.foreground.secondary}
-                      >
-                        Saves a round trip
-                      </Text>
-                    </HStack>
-                  ) : (
-                    <Text
-                      textStyle="text-ui-med"
-                      fontWeight="600"
-                      px="3"
-                      py="2.5"
-                    >
-                      Sent with your ticket
+          <FormControl isRequired isInvalid={!!errors.description}>
+            <FormLabel fontWeight="600">What happened?</FormLabel>
+            <Textarea
+              {...register("description", {
+                validate: (value) =>
+                  value.trim().length > 0 || "Describe what happened.",
+                maxLength: {
+                  value: 10000,
+                  message: "Keep the description under 10,000 characters.",
+                },
+              })}
+              rows={4}
+              resize="vertical"
+              placeholder="What you expected, what happened instead, and the cluster or object involved."
+            />
+            <FormErrorMessage>{errors.description?.message}</FormErrorMessage>
+          </FormControl>
+
+          {(alwaysSent.length > 0 || optional.length > 0) && (
+            <Box
+              as="section"
+              aria-label="Sent with your ticket"
+              borderWidth="1px"
+              borderColor={colors.border.primary}
+              borderRadius="lg"
+              bg={colors.background.secondary}
+            >
+              {optional.length > 0 ? (
+                <HStack spacing="2.5" px="3" py="2.5">
+                  <Checkbox {...register("includeDetails")} flex="1">
+                    <Text textStyle="text-ui-med" fontWeight="600">
+                      Include environment details
                     </Text>
-                  )}
-                  <Grid
-                    as="dl"
-                    templateColumns="132px minmax(0, 1fr)"
-                    columnGap="3"
-                    rowGap="1.5"
-                    pl={optional.length > 0 ? "38px" : "3"}
-                    pr="3"
-                    pb="3"
+                  </Checkbox>
+                  <Text
                     textStyle="text-small"
-                    data-testid="support-ticket-context"
+                    color={colors.foreground.secondary}
                   >
-                    {[...alwaysSent, ...(includeDetails ? optional : [])].map(
-                      (detail) => (
-                        <React.Fragment key={detail.label}>
-                          <Text as="dt" color={colors.foreground.secondary}>
-                            {detail.label}
-                          </Text>
-                          <Text as="dd" minWidth="0" overflowWrap="anywhere">
-                            {detail.value}
-                          </Text>
-                        </React.Fragment>
-                      ),
-                    )}
-                  </Grid>
-                </Box>
+                    Saves a round trip
+                  </Text>
+                </HStack>
+              ) : (
+                <Text textStyle="text-ui-med" fontWeight="600" px="3" py="2.5">
+                  Sent with your ticket
+                </Text>
               )}
-            </>
+              <Grid
+                as="dl"
+                templateColumns="132px minmax(0, 1fr)"
+                columnGap="3"
+                rowGap="1.5"
+                pl={optional.length > 0 ? "38px" : "3"}
+                pr="3"
+                pb="3"
+                textStyle="text-small"
+                data-testid="support-ticket-context"
+              >
+                {[...alwaysSent, ...(includeDetails ? optional : [])].map(
+                  (detail) => (
+                    <React.Fragment key={detail.label}>
+                      <Text as="dt" color={colors.foreground.secondary}>
+                        {detail.label}
+                      </Text>
+                      <Text as="dd" minWidth="0" overflowWrap="anywhere">
+                        {detail.value}
+                      </Text>
+                    </React.Fragment>
+                  ),
+                )}
+              </Grid>
+            </Box>
           )}
         </VStack>
       </DrawerBody>
@@ -462,23 +432,9 @@ const NewTicketForm = ({
         <Button variant="secondary" onClick={onClose}>
           Cancel
         </Button>
-        {isUrgent ? (
-          <Button
-            as="a"
-            href={outageLink.href}
-            onClick={(event: React.MouseEvent<HTMLElement>) => {
-              outageLink.onClick(event);
-              onClose();
-            }}
-            variant="primary"
-          >
-            {outageLink.isChat ? "Report in chat" : "Email support"}
-          </Button>
-        ) : (
-          <Button type="submit" variant="primary" isLoading={submit.isPending}>
-            Open ticket
-          </Button>
-        )}
+        <Button type="submit" variant="primary" isLoading={submit.isPending}>
+          {isUrgent ? "Report outage" : "Open ticket"}
+        </Button>
       </DrawerFooter>
     </Flex>
   );
@@ -496,12 +452,12 @@ const ENVIRONMENT_LABELS = Object.fromEntries(
 const TicketSent = ({
   ticket,
   request,
-  outageLink,
+  onReportOutage,
   onClose,
 }: {
-  ticket: SupportTicket;
+  ticket: CreatedSupportTicket;
   request: CreateSupportTicketRequest;
-  outageLink: OutageLink;
+  onReportOutage: () => void;
   onClose: () => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -570,9 +526,11 @@ const TicketSent = ({
           </Text>
           <OrderedList spacing="2" pl="1">
             <ListItem>
-              A support engineer picks it up within the{" "}
-              {severityLabel(request.severity)} response target in your support
-              plan.
+              {ticket.pagesOnCall
+                ? "On-call has been paged."
+                : `A support engineer picks it up within the ${severityLabel(
+                    request.severity,
+                  )} response target in your support plan.`}
             </ListItem>
             <ListItem>Replies arrive by email and in Help Center.</ListItem>
           </OrderedList>
@@ -592,32 +550,27 @@ const TicketSent = ({
           </Button>
         </HStack>
 
-        <Text
-          textStyle="text-small"
-          color={colors.foreground.secondary}
-          pt="4"
-          borderTopWidth="1px"
-          borderColor={colors.border.primary}
-        >
-          Production went down?{" "}
-          <Button
-            as="a"
-            variant="link"
-            href={outageLink.href}
-            onClick={(event: React.MouseEvent<HTMLElement>) => {
-              outageLink.onClick(event);
-              // The drawer traps focus, which would keep keyboard users out
-              // of the Messenger.
-              onClose();
-            }}
-            fontWeight="500"
-            fontSize="inherit"
-            color={colors.accent.red}
+        {request.severity !== "urgent" && (
+          <Text
+            textStyle="text-small"
+            color={colors.foreground.secondary}
+            pt="4"
+            borderTopWidth="1px"
+            borderColor={colors.border.primary}
           >
-            Report a production outage
-          </Button>{" "}
-          to page on-call.
-        </Text>
+            Production went down?{" "}
+            <Button
+              variant="link"
+              onClick={onReportOutage}
+              fontWeight="500"
+              fontSize="inherit"
+              color={colors.accent.red}
+            >
+              Report a production outage
+            </Button>{" "}
+            instead.
+          </Text>
+        )}
       </VStack>
     </DrawerBody>
   );
@@ -626,8 +579,10 @@ const TicketSent = ({
 export interface NewSupportTicketDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Where urgent tickets go instead of the ticket endpoint. */
-  outageLink: OutageLink;
+  /** The severity the form starts on, e.g. urgent for an outage report. */
+  defaultSeverity?: TicketSeverity;
+  /** Starts a new ticket as an outage report. */
+  onReportOutage: () => void;
   organizationId?: string;
   organizationName?: string;
 }
@@ -635,7 +590,8 @@ export interface NewSupportTicketDrawerProps {
 export const NewSupportTicketDrawer = ({
   isOpen,
   onClose,
-  outageLink,
+  defaultSeverity = "normal",
+  onReportOutage,
   organizationId,
   organizationName,
 }: NewSupportTicketDrawerProps) => {
@@ -696,14 +652,19 @@ export const NewSupportTicketDrawer = ({
             <TicketSent
               ticket={sent.ticket}
               request={sent.request}
-              outageLink={outageLink}
+              onReportOutage={() => {
+                submit.reset();
+                onReportOutage();
+              }}
               onClose={onClose}
             />
           ) : (
             <NewTicketForm
+              // Start over when the starting severity changes.
+              key={defaultSeverity}
               organizationId={organizationId}
               organizationName={organizationName}
-              outageLink={outageLink}
+              defaultSeverity={defaultSeverity}
               submit={submit}
               onClose={onClose}
             />
