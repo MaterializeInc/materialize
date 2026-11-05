@@ -1057,6 +1057,10 @@ mod tests {
             unimplemented!()
         }
 
+        fn set_freshness_tree(&self, _id: GlobalId, _tree: Option<FreshnessTree>) {
+            unimplemented!()
+        }
+
         fn visibility_log(
             &self,
             _id: GlobalId,

@@ -31,6 +31,9 @@ pub mod params;
 /// Because sources usually tick once per second and we collect wallclock lag measurements once per
 /// second, the measured lag can be off by up to 1s. To reflect this uncertainty, we report lag
 /// values rounded to seconds. We always round up to avoid underreporting.
+///
+/// With `enable_wallclock_freshness_reporting`, controllers report a tick-aware lag in
+/// milliseconds instead where they can, see `mz_storage_client::freshness::reported_lag`.
 #[derive(Clone)]
 pub struct WallclockLagFn<T>(Arc<dyn Fn(T) -> Duration + Send + Sync>);
 
