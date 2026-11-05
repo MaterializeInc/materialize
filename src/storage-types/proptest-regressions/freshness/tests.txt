@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7cebb7b9c2bdd51ea0e86c7b96d6faf8503ba3ccaec619825a900e512cdd724a # shrinks to tree = Refresh { schedule: RefreshSchedule { everies: [RefreshEvery { interval: 7ms, aligned_to: 4 }], ats: [] }, input: Min([Leaf(Aligned { interval_ms: 1 })]) }, frontier = 1
