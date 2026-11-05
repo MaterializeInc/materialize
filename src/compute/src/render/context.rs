@@ -21,7 +21,6 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::TEMPORAL_BUCKETING_SUMMARY;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
@@ -39,6 +38,7 @@ use mz_timely_util::columnar::chunk::{
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
+use mz_timely_util::temporal::batcher::TemporalBatcher;
 use timely::ContainerBuilder;
 use timely::container::NoopBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -1028,10 +1028,10 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         collections: AvailableCollections,
         input_key: Option<Vec<LirScalarExpr>>,
         input_mfp: MfpPlan<LirScalarExpr>,
-        as_of: Antichain<mz_repr::Timestamp>,
+        _as_of: Antichain<mz_repr::Timestamp>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
-        strategy: ArrangementStrategy,
+        _strategy: ArrangementStrategy,
     ) -> Self
     where
         T: MaybeBucketByTime,
@@ -1054,13 +1054,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             );
         }
 
-        // Track whether we already applied temporal bucketing in this call, to
-        // avoid bucketing the same updates twice.
-        let mut bucketed = false;
-
-        // True iff at least one new arrangement will actually be built below. Bucketing only
-        // pays off when something downstream merges/compacts the future-stamped updates; on a
-        // pure raw collection (no new arrangement) the work is wasted.
+        // True iff at least one new arrangement will actually be built below.
         let will_create_arrangement = collections
             .arranged
             .iter()
@@ -1071,25 +1065,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         if form_raw_collection && self.collection.is_none() {
             let (oks, errs) =
                 self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until);
-            // Apply temporal bucketing when the lowering selected `TemporalBucketing` and
-            // we will build at least one arrangement. This path fires when the collection
-            // must be formed from scratch (e.g., from an arrangement via as_collection_core).
-            let effective_strategy = if will_create_arrangement {
-                strategy
-            } else {
-                ArrangementStrategy::Direct
-            };
-            let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
-                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                    .get(config_set)
-                    .try_into()
-                    .expect("must fit");
-                bucketed = true;
-                // Temporal bucketing is columnar throughout, so no round trip here.
-                T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
-            } else {
-                oks
-            };
             self.collection = Some((oks, errs));
         }
         for (key, _, thinning) in collections.arranged {
@@ -1101,26 +1076,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
-                // Apply temporal bucketing if the collection already existed on
-                // the bundle (e.g., from an upstream temporal Mfp or Get) and we
-                // haven't bucketed yet. This is the common path for temporal-MFP
-                // → ArrangeBy flows.
-                let effective_strategy = if bucketed {
-                    ArrangementStrategy::Direct
-                } else {
-                    strategy
-                };
-                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
-                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                        .get(config_set)
-                        .try_into()
-                        .expect("must fit");
-                    bucketed = true;
-                    // Temporal bucketing is columnar throughout, so no round trip here.
-                    T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
-                } else {
-                    oks
-                };
+                // The ok arrangement's batcher parks future updates itself, see
+                // `arrange_row_row_bucketed`.
                 let batcher = ArrangementBatcher::from_config(config_set);
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone(), batcher);
@@ -1162,7 +1119,10 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
         ColCollection<'scope, T>,
-    ) {
+    )
+    where
+        T: MaybeBucketByTime,
+    {
         // Spelled out rather than `map_fallible`, whose closure cannot return the references
         // a columnar stream is pushed from.
         //
@@ -1226,32 +1186,50 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             (ok_stream, err_stream, passthrough_stream.as_collection())
         };
 
-        let exchange =
-            ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
-        let oks = match batcher {
-            ArrangementBatcher::Chunked => ok_stream.mz_arrange_core::<
-                _,
-                ChunkChunker<(Row, Row), T, Diff, ComputeSpill>,
-                AccountedChunkBatcher<(Row, Row), T, Diff, ComputeSpill>,
-                UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff, ComputeSpill>,
-                RowRowSpine<_, _>,
-            >(exchange, name),
-            ArrangementBatcher::Columnar => ok_stream.mz_arrange_core::<
-                _,
-                batcher::ColumnChunker<_>,
-                Col2ValColBatcher<_, _, _, _>,
-                RowRowColPagedBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(exchange, name),
-            ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<
-                _,
-                batcher::Chunker<_>,
-                Col2ValBatcher<_, _, _, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(exchange, name),
-        };
+        let oks = arrange_row_row_bucketed(ok_stream, name, batcher);
         (oks, err_stream.as_collection(), passthrough)
+    }
+}
+
+/// Arranges the ok stream of an `ArrangeBy` with the batcher of `batcher` wrapped in a
+/// [`TemporalBatcher`], which parks future updates in a bucket chain.
+pub(crate) fn arrange_row_row_bucketed<'scope, T>(
+    stream: Stream<'scope, T, Column<((Row, Row), T, Diff)>>,
+    name: &str,
+    batcher: ArrangementBatcher,
+) -> Arranged<'scope, RowRowAgent<T, Diff>>
+where
+    T: RenderTimestamp,
+{
+    let exchange =
+        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
+    type Wrap<B, Chu, T> = TemporalBatcher<B, Chu, (Row, Row), T, Diff>;
+    match batcher {
+        ArrangementBatcher::Chunked => stream.mz_arrange_core::<
+            _,
+            ChunkChunker<(Row, Row), T, Diff, ComputeSpill>,
+            Wrap<
+                AccountedChunkBatcher<(Row, Row), T, Diff, ComputeSpill>,
+                ChunkChunker<(Row, Row), T, Diff, ComputeSpill>,
+                T,
+            >,
+            UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff, ComputeSpill>,
+            RowRowSpine<_, _>,
+        >(exchange, name),
+        ArrangementBatcher::Columnar => stream.mz_arrange_core::<
+            _,
+            batcher::ColumnChunker<_>,
+            Wrap<Col2ValColBatcher<Row, Row, T, Diff>, batcher::ColumnChunker<_>, T>,
+            RowRowColPagedBuilder<_, _>,
+            RowRowSpine<_, _>,
+        >(exchange, name),
+        ArrangementBatcher::Columnation => stream.mz_arrange_core::<
+            _,
+            batcher::Chunker<_>,
+            Wrap<Col2ValBatcher<Row, Row, T, Diff>, batcher::Chunker<_>, T>,
+            RowRowBuilder<_, _>,
+            RowRowSpine<_, _>,
+        >(exchange, name),
     }
 }
 

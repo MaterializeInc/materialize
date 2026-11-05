@@ -24,7 +24,6 @@ use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
-use mz_compute_types::dyncfgs::TEMPORAL_BUCKETING_SUMMARY;
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::top_k::{
@@ -53,10 +52,11 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
+use crate::typedefs::{
+    BucketedKeyBatcher, BucketedKeyValBatcher, ErrBatcher, ErrBuilder, RowRowSpine, RowSpine,
+};
 use mz_row_spine::{
-    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder,
-    RowValSpine,
+    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBuilder, RowValBuilder, RowValSpine,
 };
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -76,11 +76,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             .clone()
             .expect("The unarranged collection doesn't exist.");
 
-        // Bucket the per-row input stream when lowering chose `TemporalBucketing`.
-        // `TopK` builds its own arrangement(s) inside the variants below, bypassing
-        // `ensure_collections`, so the strategy is plumbed through `LirRelationNode::TopK`
-        // rather than inferred at the arrangement site. `apply_bucketing_strategy`
-        // is a no-op for `Direct`.
+        // The batchers below park future updates themselves, so the bucketing operator is not
+        // applied here. TODO: Remove the `TemporalBucketing` strategy plumbing.
         //
         // Note: `must_consolidate = false` comes from `TopKPlan::create_from`, which requires
         // the MIR `Monotonic` analysis to hold (temporal predicates break it), or from
@@ -99,19 +96,6 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 "TopK with `TemporalBucketing` should not have `must_consolidate = false`",
             );
         }
-        let ok_input = if matches!(
-            temporal_bucketing_strategy,
-            ArrangementStrategy::TemporalBucketing
-        ) {
-            let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                .get(&self.config_set)
-                .try_into()
-                .expect("must fit");
-            T::maybe_apply_temporal_bucketing(ok_input.inner, self.as_of_frontier.clone(), summary)
-        } else {
-            ok_input
-        };
-
         // We create a new region to compartmentalize the topk logic.
         let outer_scope = ok_input.scope();
         let bundle = outer_scope.clone().region_named("TopK", |inner| {
@@ -228,7 +212,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         map_topk_key(ok_input, "MonotonicTopK input", move |datums, _row| {
                             SharedRow::pack(group_key.iter().map(|i| datums[*i]))
                         })
-                        .consolidate_named_if::<KeyBatcher<_, _, _>>(
+                        .consolidate_named_if::<BucketedKeyBatcher<_, _>>(
                             must_consolidate,
                             "Consolidated MonotonicTopK input",
                         );
@@ -288,7 +272,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     let (result, errs) =
                         self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-                    let result = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                    let result = CollectionExt::consolidate_named::<BucketedKeyBatcher<_, _>>(
                         result,
                         "Monotonic TopK final consolidate",
                     );
@@ -412,8 +396,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             collection, order_key, 1u64, offset, limit, arity, validating,
         );
         // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-        let oks =
-            CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(oks, "TopK final consolidate");
+        let oks = CollectionExt::consolidate_named::<BucketedKeyBatcher<_, _>>(
+            oks,
+            "TopK final consolidate",
+        );
         collection = oks;
         if validating {
             err_collection = errs;
@@ -551,7 +537,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         let collection = map_topk_key(collection, "MonotonicTop1 input", move |datums, _row| {
             SharedRow::pack(group_key.iter().map(|i| datums[*i]))
         })
-        .consolidate_named_if::<KeyBatcher<_, _, _>>(
+        .consolidate_named_if::<BucketedKeyBatcher<_, _>>(
             must_consolidate,
             "Consolidated MonotonicTop1 input",
         );
@@ -697,7 +683,7 @@ fn build_topk_negated_stage<'s, T, Bu, Tr>(
     Arranged<'s, TraceAgent<Tr>>,
 )
 where
-    T: MzTimestamp,
+    T: crate::render::RenderTimestamp,
     Bu: Builder<
             Time = T,
             Input: Container + ClearContainer + PushInto<((Row, BatchValOwn<Tr>), T, Diff)>,
@@ -723,7 +709,7 @@ where
         .clone()
         .mz_arrange::<
             ColumnationChunker<_>,
-            RowRowBatcher<_, _>,
+            BucketedKeyValBatcher<Row, Row, _>,
             RowRowBuilder<_, _>,
             RowRowSpine<_, _>,
         >(

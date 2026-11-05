@@ -18,8 +18,12 @@
 use std::collections::BTreeMap;
 
 use mz_ore::cast::CastFrom;
+use timely::order::Product;
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
+
+pub mod batcher;
+pub mod bucket;
 
 /// Timestamp extension for timestamps that can advance by `2^exponent`.
 ///
@@ -30,6 +34,47 @@ pub trait BucketTimestamp: Timestamp {
     /// Advance this timestamp by `2^exponent`. Returns `None` if the
     /// timestamp would overflow.
     fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self>;
+}
+
+impl BucketTimestamp for u64 {
+    fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
+        self.checked_add(1_u64.checked_shl(bits)?)
+    }
+}
+
+/// A timestamp whose updates a [`BucketChain`] can hold, keyed by a totally ordered coordinate.
+///
+/// `lower_of(k) <= t` holds exactly when `k <= key(t)`, so sealing a batcher at
+/// `{lower_of(k)}` releases exactly the updates whose key is less than `k`.
+pub trait BucketTime: Timestamp {
+    /// The coordinate buckets are keyed by.
+    type Key: BucketTimestamp;
+    /// The bucket key of this time.
+    fn key(&self) -> Self::Key;
+    /// The least time whose key is `key`.
+    fn lower_of(key: &Self::Key) -> Self;
+}
+
+impl BucketTime for u64 {
+    type Key = u64;
+    fn key(&self) -> u64 {
+        *self
+    }
+    fn lower_of(key: &u64) -> u64 {
+        *key
+    }
+}
+
+/// Buckets by the outer coordinate. `lower_of` pairs the key with the minimal inner time,
+/// which is at or before every inner time, so the [`BucketTime`] contract holds.
+impl<O: BucketTimestamp, I: Timestamp> BucketTime for Product<O, I> {
+    type Key = O;
+    fn key(&self) -> O {
+        self.outer.clone()
+    }
+    fn lower_of(key: &O) -> Self {
+        Product::new(key.clone(), I::minimum())
+    }
 }
 
 /// A type that can be split into two parts based on a timestamp.
@@ -240,12 +285,6 @@ mod tests {
     impl BucketTimestamp for u8 {
         fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
             self.checked_add(1_u8.checked_shl(bits)?)
-        }
-    }
-
-    impl BucketTimestamp for u64 {
-        fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
-            self.checked_add(1_u64.checked_shl(bits)?)
         }
     }
 

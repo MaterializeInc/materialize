@@ -28,28 +28,22 @@ use mz_expr::Eval;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{
-    AccountedChunkBatcher, ChunkChunker, ComputeSpill, UnchunkBuilder,
-};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::operator::StreamExt;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 
-use crate::extensions::arrange::{ArrangementBatcher, MzArrangeCore};
+use crate::extensions::arrange::ArrangementBatcher;
 use crate::render::RenderTimestamp;
 use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
-use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowRowSpine};
 
 /// Available linear join implementations.
 ///
@@ -667,31 +661,7 @@ fn arrange_keyed_join_input<'s, T>(
 where
     T: Lattice + RenderTimestamp,
 {
-    let exchange =
-        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
-    let arranged = match batcher {
-        ArrangementBatcher::Chunked => keyed.mz_arrange_core::<
-            _,
-            ChunkChunker<(Row, Row), T, Diff, ComputeSpill>,
-            AccountedChunkBatcher<(Row, Row), T, Diff, ComputeSpill>,
-            UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff, ComputeSpill>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage"),
-        ArrangementBatcher::Columnar => keyed.mz_arrange_core::<
-            _,
-            batcher::ColumnChunker<_>,
-            Col2ValColBatcher<_, _, _, _>,
-            RowRowColPagedBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage"),
-        ArrangementBatcher::Columnation => keyed.mz_arrange_core::<
-            _,
-            batcher::Chunker<_>,
-            Col2ValBatcher<_, _, _, _>,
-            RowRowBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage"),
-    };
+    let arranged = crate::render::context::arrange_row_row_bucketed(keyed, "JoinStage", batcher);
     (arranged, errs.as_collection())
 }
 
