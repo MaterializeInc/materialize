@@ -10,6 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
+backtrace.workspace = true
+mz-alloc-track = { path = "../alloc-track" }
 anyhow.workspace = true
 async-stream.workspace = true
 chrono.workspace = true

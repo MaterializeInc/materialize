@@ -673,6 +673,9 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+# SPIKE: timely with a current-operator thread-local.
+# timely 0.31.0 plus TimelyDataflow/timely-dataflow#831.
+timely = { git = "https://github.com/antiguru/timely-dataflow.git", rev = "dee34020a95a43bcba1e3a99fe8d3b912ac5926d" }
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }

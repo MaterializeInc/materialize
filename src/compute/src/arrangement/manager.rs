@@ -57,8 +57,15 @@ impl TraceManager {
 
         let mut antichain = Antichain::new();
         for bundle in self.traces.values_mut() {
-            bundle.oks.read_upper(&mut antichain);
-            bundle.oks.set_physical_compaction(antichain.borrow());
+            // SPIKE: charge merge work to the arrangement operator that owns the trace.
+            {
+                let _current =
+                    timely::scheduling::current::enter(bundle.oks.trace.operator().global_id);
+                bundle.oks.read_upper(&mut antichain);
+                bundle.oks.set_physical_compaction(antichain.borrow());
+            }
+            let _current =
+                timely::scheduling::current::enter(bundle.errs.trace.operator().global_id);
             bundle.errs.read_upper(&mut antichain);
             bundle.errs.set_physical_compaction(antichain.borrow());
         }
@@ -78,7 +85,13 @@ impl TraceManager {
     /// accumulations at times in advance of `frontier`.
     pub fn allow_compaction(&mut self, id: GlobalId, frontier: AntichainRef<Timestamp>) {
         if let Some(bundle) = self.traces.get_mut(&id) {
-            bundle.oks.set_logical_compaction(frontier);
+            {
+                let _current =
+                    timely::scheduling::current::enter(bundle.oks.trace.operator().global_id);
+                bundle.oks.set_logical_compaction(frontier);
+            }
+            let _current =
+                timely::scheduling::current::enter(bundle.errs.trace.operator().global_id);
             bundle.errs.set_logical_compaction(frontier);
         }
     }

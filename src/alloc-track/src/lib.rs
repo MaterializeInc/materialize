@@ -162,6 +162,22 @@ pub fn sample_interval() -> u64 {
     SAMPLE_INTERVAL.load(Ordering::Relaxed)
 }
 
+static TAG_SOURCE: std::sync::OnceLock<fn() -> u64> = std::sync::OnceLock::new();
+
+/// Registers a function that labels each sample with a caller-defined tag,
+/// reported in [`Site::tag`]. Later registrations are ignored.
+///
+/// The function runs inside the allocator on the allocating thread, so it
+/// must not allocate, lock, or touch thread-locals that register
+/// destructors.
+pub fn set_tag_source(f: fn() -> u64) {
+    let _ = TAG_SOURCE.set(f);
+}
+
+fn current_tag() -> u64 {
+    TAG_SOURCE.get().map_or(0, |f| f())
+}
+
 /// Introspection entry points of the underlying allocator, registered by
 /// whoever installs it.
 #[derive(Debug, Clone, Copy)]
@@ -338,7 +354,8 @@ fn sample_slow(t: &ThreadState, ptr: *mut u8, size: usize, space: Space) {
     t.countdown.set(sampler.countdown);
     t.rng.set(sampler.rng);
     if sampled {
-        with_busy(|| registry::record_alloc(ptr.addr(), size, space, interval));
+        let tag = current_tag();
+        with_busy(|| registry::record_alloc(ptr.addr(), size, space, interval, tag));
     }
 }
 
