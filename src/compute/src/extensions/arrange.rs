@@ -8,16 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 use differential_dataflow::batcher::Batcher;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::Trace;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::spine_fueled::{Spine, SpineBatch};
-use differential_dataflow::trace::{Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MERGE_BATCHER};
 use mz_dyncfg::ConfigSet;
@@ -264,7 +263,7 @@ where
         return arranged;
     };
     let operator_id = arranged.trace.operator().global_id;
-    let trace = Rc::downgrade(&arranged.trace.trace_box_unstable());
+    let trace = arranged.trace.observer();
 
     let (mut old_size, mut old_capacity, mut old_allocations) = (0isize, 0isize, 0isize);
 
@@ -298,24 +297,22 @@ where
                     }
                     output.session(&time).give_container(data);
                 });
-                let Some(trace) = trace.upgrade() else {
-                    // Invariant: `batches` holds no entries once the trace is gone. Each entry's
-                    // `Weak` keeps its batch's `ArcInner` allocation reserved, and the `retain` below
-                    // that would drop it is unreachable on this path, so the entries have to go
-                    // here. The upgrade cannot start succeeding again, hence clearing on every
-                    // activation that takes this path also covers batches that arrive on the
-                    // input afterwards.
-                    batches.clear();
-                    return;
-                };
-
-                trace.borrow().trace().map_spans(|span| {
+                let live = trace.map_spans(|span| {
                     if let Some(batch) = &span.inner {
                         batches
                             .entry(Arc::as_ptr(&batch.0))
                             .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
                     }
                 });
+                if !live {
+                    // Invariant: `batches` holds no entries once the trace is gone. Each entry's
+                    // `Weak` keeps its batch's `ArcInner` allocation reserved, and the `retain` below
+                    // that would drop it is unreachable on this path, so the entries have to go
+                    // here. The trace cannot come back, hence clearing on every activation that
+                    // takes this path also covers batches that arrive on the input afterwards.
+                    batches.clear();
+                    return;
+                }
 
                 let (mut size, mut capacity, mut allocations) = (0, 0, 0);
                 batches.retain(|_, (weak, cached)| {
