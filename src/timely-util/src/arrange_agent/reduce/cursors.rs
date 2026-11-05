@@ -16,11 +16,14 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
-//! A verbatim copy of differential's private `mod cursors`, which holds [`CursorTactic`].
+//! A copy of differential's private `mod cursors`, which holds [`CursorTactic`].
+//!
+//! Besides upstream paths, the copy differs only in replaying a key through the local
+//! `ReplayKey`, marked `Not upstream` below.
 //!
 //! NOTE: Differential's master-next branch exports this as
 //! `differential_dataflow::operators::cursor::reduce::CursorTactic`, so this copy goes away with
-//! the master-next port (MaterializeInc/materialize#38805). Upstream paths are the only change.
+//! the master-next port (MaterializeInc/materialize#38805).
 
 use super::*;
 
