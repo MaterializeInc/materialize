@@ -410,6 +410,7 @@ class TestPermissionValidation:
         )
 
         assert "needs to be an owner of schema not_my_schema" in output
+        assert "ALTER SCHEMA not_my_schema OWNER TO materialize;" in output
 
     def test_cluster_owner_permissions_missing(self, project):
         project.run_sql("CREATE ROLE other_role")
@@ -429,6 +430,7 @@ class TestPermissionValidation:
         )
 
         assert "needs to be an owner of cluster not_my_cluster" in output
+        assert "ALTER CLUSTER not_my_cluster OWNER TO materialize;" in output
 
     def test_cluster_owner_hint_quotes_the_name(self, project):
         project.run_sql("CREATE ROLE other_role")
