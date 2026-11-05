@@ -13,7 +13,9 @@
 //! The workspace builds jemalloc with its `_rjem_` symbol prefix and mimalloc
 //! without overriding `malloc`, so these definitions in the executable are
 //! what glibc's dynamic linker binds every `malloc` call to, including those
-//! inside glibc and other shared libraries.
+//! inside glibc and other shared libraries. They also take precedence over a
+//! preloaded library's, which is why the system allocator forwards to the
+//! definitions that follow in lookup order, see [`next`].
 //! The set is the one glibc's manual lists for replacing `malloc`, plus
 //! `reallocarray`, the C23 sized frees, and the `__libc_*` aliases that some
 //! code calls directly. Memory from any of these
@@ -30,15 +32,21 @@ use tikv_jemalloc_sys as je;
 
 use crate::{Allocator, allocator};
 
+mod next;
+
+pub(crate) use next::{NextAlloc, SYSTEM_HOOKS};
+
 /// Evaluates the expression for the selected allocator.
 macro_rules! dispatch {
-    (jemalloc => $je:expr, mimalloc => $mi:expr $(,)?) => {
+    (jemalloc => $je:expr, mimalloc => $mi:expr, system => $sys:expr $(,)?) => {
         match allocator() {
             #[cfg(feature = "jemalloc")]
             Some(Allocator::Jemalloc) => $je,
             #[cfg(feature = "mimalloc")]
             Some(Allocator::Mimalloc) => $mi,
-            _ => unreachable!("an allocator is compiled in"),
+            None => $sys,
+            #[allow(unreachable_patterns)]
+            Some(_) => unreachable!("only compiled-in allocators are selected"),
         }
     };
 }
@@ -55,17 +63,26 @@ fn page_size() -> usize {
 
 #[inline]
 fn track(ptr: *mut c_void, size: usize) -> *mut c_void {
-    if !ptr.is_null() {
+    if !ptr.is_null() && !next::inside() {
         on_alloc(ptr.cast(), size, Space::CHeap);
     }
     ptr
+}
+
+#[inline]
+fn track_free(ptr: *mut c_void, kind: FreeKind) {
+    if !ptr.is_null() && !next::inside() {
+        on_free(ptr.cast(), kind);
+    }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
     // SAFETY: forwarded under the caller's contract.
     track(
-        unsafe { dispatch!(jemalloc => je::malloc(size), mimalloc => mi::mi_malloc(size)) },
+        unsafe {
+            dispatch!(jemalloc => je::malloc(size), mimalloc => mi::mi_malloc(size), system => next::malloc(size))
+        },
         size,
     )
 }
@@ -77,6 +94,7 @@ pub unsafe extern "C" fn calloc(number: usize, size: usize) -> *mut c_void {
         dispatch!(
             jemalloc => je::calloc(number, size),
             mimalloc => mi::mi_calloc(number, size),
+            system => next::calloc(number, size),
         )
     };
     // A successful `calloc` implies the product does not overflow.
@@ -88,14 +106,13 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
     // Ending the old allocation first is required by `on_free`'s contract.
     // If the reallocation fails, the old allocation survives untracked,
     // which loses one sample and nothing else.
-    if !ptr.is_null() {
-        on_free(ptr.cast(), FreeKind::Realloc);
-    }
+    track_free(ptr, FreeKind::Realloc);
     // SAFETY: forwarded under the caller's contract.
     let new = unsafe {
         dispatch!(
             jemalloc => je::realloc(ptr, size),
             mimalloc => mi::mi_realloc(ptr, size),
+            system => next::realloc(ptr, size),
         )
     };
     track(new, size)
@@ -116,11 +133,11 @@ pub unsafe extern "C" fn reallocarray(ptr: *mut c_void, number: usize, size: usi
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free(ptr: *mut c_void) {
-    if !ptr.is_null() {
-        on_free(ptr.cast(), FreeKind::Dealloc);
-    }
+    track_free(ptr, FreeKind::Dealloc);
     // SAFETY: forwarded under the caller's contract.
-    unsafe { dispatch!(jemalloc => je::free(ptr), mimalloc => mi::mi_free(ptr)) }
+    unsafe {
+        dispatch!(jemalloc => je::free(ptr), mimalloc => mi::mi_free(ptr), system => next::free(ptr))
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -146,6 +163,7 @@ pub unsafe extern "C" fn posix_memalign(
         dispatch!(
             jemalloc => je::posix_memalign(out, alignment, size),
             mimalloc => mi::mi_posix_memalign(out, alignment, size),
+            system => next::posix_memalign(out, alignment, size),
         )
     };
     if rc == 0 {
@@ -162,6 +180,7 @@ pub unsafe extern "C" fn aligned_alloc(alignment: usize, size: usize) -> *mut c_
         dispatch!(
             jemalloc => je::aligned_alloc(alignment, size),
             mimalloc => mi::mi_aligned_alloc(alignment, size),
+            system => next::aligned_alloc(alignment, size),
         )
     };
     track(ptr, size)
@@ -214,6 +233,7 @@ pub unsafe extern "C" fn malloc_usable_size(ptr: *mut c_void) -> usize {
         dispatch!(
             jemalloc => je::malloc_usable_size(ptr),
             mimalloc => mi::mi_usable_size(ptr),
+            system => next::malloc_usable_size(ptr),
         )
     }
 }

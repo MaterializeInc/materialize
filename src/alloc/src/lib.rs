@@ -21,7 +21,9 @@
 //! threads, which leaves mimalloc's per-thread pages partly empty: feature
 //! benchmarks measured 130 to 290 MB more memory in the `materialized`
 //! container than with jemalloc. clusterd uses less memory with mimalloc.
-//! The `MZ_ALLOCATOR` environment variable overrides the choice by name.
+//! The `MZ_ALLOCATOR` environment variable overrides the choice by name, and
+//! `MZ_ALLOCATOR=system` selects the system allocator, for example to run
+//! under heaptrack.
 
 #[cfg(all(
     any(feature = "jemalloc", feature = "mimalloc"),
@@ -55,37 +57,22 @@ pub fn allocator() -> Option<Allocator> {
 
 /// The allocator this process delegates to, or `None` if it uses the system
 /// allocator.
-#[cfg(all(not(miri), feature = "jemalloc", not(feature = "mimalloc")))]
+#[cfg(all(not(miri), any(feature = "jemalloc", feature = "mimalloc")))]
 #[inline]
 pub fn allocator() -> Option<Allocator> {
-    Some(Allocator::Jemalloc)
+    selected::get()
 }
 
-/// The allocator this process delegates to, or `None` if it uses the system
-/// allocator.
-#[cfg(all(not(miri), feature = "mimalloc", not(feature = "jemalloc")))]
-#[inline]
-pub fn allocator() -> Option<Allocator> {
-    Some(Allocator::Mimalloc)
-}
-
-/// The allocator this process delegates to, or `None` if it uses the system
-/// allocator.
-#[cfg(all(not(miri), feature = "jemalloc", feature = "mimalloc"))]
-#[inline]
-pub fn allocator() -> Option<Allocator> {
-    Some(selected::get())
-}
-
-#[cfg(all(not(miri), feature = "jemalloc", feature = "mimalloc"))]
+#[cfg(all(not(miri), any(feature = "jemalloc", feature = "mimalloc")))]
 mod selected {
     use std::sync::atomic::{AtomicU8, Ordering};
 
     use crate::Allocator;
 
     const UNDECIDED: u8 = 0;
-    const JEMALLOC: u8 = 1;
-    const MIMALLOC: u8 = 2;
+    const SYSTEM: u8 = 1;
+    const JEMALLOC: u8 = 2;
+    const MIMALLOC: u8 = 3;
 
     static SELECTED: AtomicU8 = AtomicU8::new(UNDECIDED);
 
@@ -93,41 +80,50 @@ mod selected {
     /// allocate, because it runs inside the first allocation. Racing first
     /// calls decide identically.
     #[inline]
-    pub(crate) fn get() -> Allocator {
-        match SELECTED.load(Ordering::Relaxed) {
-            JEMALLOC => Allocator::Jemalloc,
-            MIMALLOC => Allocator::Mimalloc,
-            _ => decide(),
+    pub(crate) fn get() -> Option<Allocator> {
+        let value = match SELECTED.load(Ordering::Relaxed) {
+            UNDECIDED => decide(),
+            value => value,
+        };
+        match value {
+            JEMALLOC => Some(Allocator::Jemalloc),
+            MIMALLOC => Some(Allocator::Mimalloc),
+            _ => None,
         }
     }
 
     #[cold]
-    fn decide() -> Allocator {
-        let allocator = match env_override() {
-            Some(allocator) => allocator,
-            None if uses_jemalloc(process_name()) => Allocator::Jemalloc,
-            None => Allocator::Mimalloc,
-        };
-        let value = match allocator {
-            Allocator::Jemalloc => JEMALLOC,
-            Allocator::Mimalloc => MIMALLOC,
-        };
+    fn decide() -> u8 {
+        let value = env_override().unwrap_or_else(|| {
+            if cfg!(not(feature = "mimalloc")) {
+                JEMALLOC
+            } else if cfg!(not(feature = "jemalloc")) {
+                MIMALLOC
+            } else if uses_jemalloc(process_name()) {
+                JEMALLOC
+            } else {
+                MIMALLOC
+            }
+        });
         SELECTED.store(value, Ordering::Relaxed);
-        allocator
+        value
     }
 
     fn uses_jemalloc(name: &[u8]) -> bool {
         name.starts_with(b"environmentd") || name.starts_with(b"balancerd")
     }
 
-    /// The allocator named by `MZ_ALLOCATOR` (`jemalloc` or `mimalloc`), which
-    /// overrides the choice by process name. Other values are ignored.
+    /// The allocator named by `MZ_ALLOCATOR`, which overrides the default.
+    /// `system` selects the system allocator, which lets tools like heaptrack
+    /// that preload their own `malloc` observe every allocation. `jemalloc`
+    /// and `mimalloc` select that allocator if it is compiled in. Other values
+    /// are ignored.
     ///
     /// NOTE: Child processes inherit the variable, so setting it for an
     /// environmentd that spawns clusterd processes locally selects the same
     /// allocator for them.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    fn env_override() -> Option<Allocator> {
+    fn env_override() -> Option<u8> {
         // SAFETY: glibc's `getenv` scans `environ` without allocating. It is
         // unsound only concurrently with `setenv`, and this runs inside the
         // process's first allocation, before Rust code can call `set_var`.
@@ -137,14 +133,15 @@ mod selected {
         }
         // SAFETY: a non-null `getenv` result is a NUL-terminated string.
         match unsafe { std::ffi::CStr::from_ptr(value) }.to_bytes() {
-            b"jemalloc" => Some(Allocator::Jemalloc),
-            b"mimalloc" => Some(Allocator::Mimalloc),
+            b"system" => Some(SYSTEM),
+            b"jemalloc" if cfg!(feature = "jemalloc") => Some(JEMALLOC),
+            b"mimalloc" if cfg!(feature = "mimalloc") => Some(MIMALLOC),
             _ => None,
         }
     }
 
     #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-    fn env_override() -> Option<Allocator> {
+    fn env_override() -> Option<u8> {
         None
     }
 
@@ -165,6 +162,23 @@ mod selected {
     }
 }
 
+/// The system allocator. With glibc, it calls the `malloc` family that follows
+/// this executable's own definitions in `c_malloc`, so Rust allocations are
+/// reported to the tracker once, as Rust allocations.
+#[cfg(all(
+    not(miri),
+    any(feature = "jemalloc", feature = "mimalloc"),
+    target_os = "linux",
+    target_env = "gnu"
+))]
+use c_malloc::NextAlloc as SystemAlloc;
+#[cfg(all(
+    not(miri),
+    any(feature = "jemalloc", feature = "mimalloc"),
+    not(all(target_os = "linux", target_env = "gnu"))
+))]
+use std::alloc::System as SystemAlloc;
+
 /// Delegates to the allocator [`allocator`] selects.
 #[cfg(all(not(miri), any(feature = "jemalloc", feature = "mimalloc")))]
 #[derive(Debug)]
@@ -178,7 +192,9 @@ macro_rules! delegate {
             Some(Allocator::Jemalloc) => tikv_jemallocator::Jemalloc.$method($($arg),*),
             #[cfg(feature = "mimalloc")]
             Some(Allocator::Mimalloc) => mimalloc::MiMalloc.$method($($arg),*),
-            _ => unreachable!("an allocator is compiled in"),
+            None => SystemAlloc.$method($($arg),*),
+            #[allow(unreachable_patterns)]
+            Some(_) => unreachable!("only compiled-in allocators are selected"),
         }
     };
 }
@@ -241,6 +257,14 @@ pub async fn register_metrics_into(registry: &MetricsRegistry) {
         Some(Allocator::Mimalloc) => {
             mz_alloc_track::register_allocator(mimalloc_hooks::HOOKS);
         }
+        #[cfg(all(
+            any(feature = "jemalloc", feature = "mimalloc"),
+            not(miri),
+            target_os = "linux",
+            target_env = "gnu"
+        ))]
+        None => mz_alloc_track::register_allocator(c_malloc::SYSTEM_HOOKS),
+        #[allow(unreachable_patterns)]
         _ => {}
     }
     let _ = registry;
