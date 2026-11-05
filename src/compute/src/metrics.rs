@@ -46,6 +46,10 @@ pub struct ComputeMetrics {
     arrangement_maintenance_seconds_total: raw::CounterVec,
     arrangement_maintenance_active_info: raw::UIntGaugeVec,
 
+    // MV sink
+    mv_sink_write_wait_seconds_total: raw::CounterVec,
+    mv_sink_write_part_bytes_total: raw::IntCounterVec,
+
     // logging
     logging_records_total: raw::IntCounterVec,
 
@@ -193,6 +197,16 @@ impl ComputeMetrics {
             arrangement_maintenance_active_info: registry.register(with_role(metric!(
                 name: "mz_arrangement_maintenance_active_info",
                 help: "Whether maintenance is currently occuring.",
+                var_labels: ["worker_id"],
+            ), role)),
+            mv_sink_write_wait_seconds_total: registry.register(with_role(metric!(
+                name: "mz_compute_mv_sink_write_wait_seconds_total",
+                help: "The total time MV sink batch writes waited for the write task to accept their parts.",
+                var_labels: ["worker_id"],
+            ), role)),
+            mv_sink_write_part_bytes_total: registry.register(with_role(metric!(
+                name: "mz_compute_mv_sink_write_part_bytes_total",
+                help: "The total size of the parts MV sink batch writes handed to the write task.",
                 var_labels: ["worker_id"],
             ), role)),
             timely_step_duration_seconds: registry.register(with_role(metric!(
@@ -347,6 +361,12 @@ impl ComputeMetrics {
         let timely_step_duration_seconds = self
             .timely_step_duration_seconds
             .with_label_values(&[&worker]);
+        let mv_sink_write_wait_seconds_total = self
+            .mv_sink_write_wait_seconds_total
+            .with_label_values(&[&worker]);
+        let mv_sink_write_part_bytes_total = self
+            .mv_sink_write_part_bytes_total
+            .with_label_values(&[&worker]);
         let persist_peek_seconds = self.persist_peek_seconds.with_label_values(&[&worker]);
         let handle_command_duration_seconds = CommandMetrics::build(|typ| {
             self.handle_command_duration_seconds
@@ -385,6 +405,8 @@ impl ComputeMetrics {
             metrics: self.clone(),
             arrangement_maintenance_seconds_total,
             arrangement_maintenance_active_info,
+            mv_sink_write_wait_seconds_total,
+            mv_sink_write_part_bytes_total,
             timely_step_duration_seconds,
             persist_peek_seconds,
             handle_command_duration_seconds,
@@ -436,6 +458,10 @@ pub struct WorkerMetrics {
     /// to gain a sense that Materialize is stuck on maintenance before the
     /// maintenance completes
     pub(crate) arrangement_maintenance_active_info: UIntGauge,
+    /// The time MV sink batch writes waited for the write task to accept their parts.
+    pub(crate) mv_sink_write_wait_seconds_total: GenericCounter<AtomicF64>,
+    /// The size of the parts MV sink batch writes handed to the write task.
+    pub(crate) mv_sink_write_part_bytes_total: IntCounter,
     /// Histogram of Timely step timings.
     pub(crate) timely_step_duration_seconds: Histogram,
     /// Histogram of persist peek durations.
