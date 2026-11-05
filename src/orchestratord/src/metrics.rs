@@ -34,8 +34,9 @@ pub struct Metrics {
     environment_info: UIntGaugeVec,
     environment_active_generation: UIntGaugeVec,
     /// The series published for each `Materialize` resource, keyed by its
-    /// namespace and name. Dropping an entry removes its series.
-    environments: Mutex<BTreeMap<(String, String), EnvironmentSeries>>,
+    /// namespace and name, or `None` while this replica doesn't hold the
+    /// leadership lease. Dropping an entry removes its series.
+    environments: Mutex<Option<BTreeMap<(String, String), EnvironmentSeries>>>,
     /// The reconciliation metrics of every controller, as defined by
     /// `k8s_controller`: counts and durations of reconciliation passes, and
     /// of the steps within them.
@@ -81,7 +82,7 @@ impl Metrics {
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Environment],
             )),
-            environments: Mutex::new(BTreeMap::new()),
+            environments: Mutex::new(None),
             reconcile: {
                 let reconcile = PrometheusMetrics::new("orchestratord")
                     .expect("valid reconciliation metric definitions");
@@ -94,6 +95,7 @@ impl Metrics {
     /// Records that this replica has taken the leadership lease.
     pub fn leadership_acquired(&self) {
         self.is_leader.set(1);
+        *self.environments.lock().expect("lock poisoned") = Some(BTreeMap::new());
     }
 
     /// Records that this replica no longer holds the leadership lease, and
@@ -105,15 +107,21 @@ impl Metrics {
     /// publishing its last observation forever, so summing across the
     /// replicas would count the same organizations once per past leader, and
     /// each environment would have a series per past leader.
+    ///
+    /// Reconciliations still running when the lease is lost can observe an
+    /// environment after this, since aborting their tasks only takes effect at
+    /// their next await point. Those observations publish nothing until this
+    /// replica acquires the lease again.
     pub fn leadership_lost(&self) {
         self.is_leader.set(0);
         self.environmentd_needs_update.set(0);
-        self.environments.lock().expect("lock poisoned").clear();
+        *self.environments.lock().expect("lock poisoned") = None;
     }
 
     /// Publishes the series describing the environment of the `Materialize`
     /// resource `name` in `namespace`, replacing those published for it
-    /// before.
+    /// before. Does nothing while this replica doesn't hold the leadership
+    /// lease.
     ///
     /// `mz_environment_info` needs the environment's ID, which the operator
     /// assigns on its first reconciliation of a resource that has none, so
@@ -129,6 +137,9 @@ impl Metrics {
     ) {
         let key = (namespace.to_owned(), name.to_owned());
         let mut environments = self.environments.lock().expect("lock poisoned");
+        let Some(environments) = environments.as_mut() else {
+            return;
+        };
         if environment_id.is_nil() {
             environments.remove(&key);
             return;
@@ -180,10 +191,9 @@ impl Metrics {
     /// Removes the series describing the environment of the `Materialize`
     /// resource `name` in `namespace`.
     pub fn forget_environment(&self, namespace: &str, name: &str) {
-        self.environments
-            .lock()
-            .expect("lock poisoned")
-            .remove(&(namespace.to_owned(), name.to_owned()));
+        if let Some(environments) = self.environments.lock().expect("lock poisoned").as_mut() {
+            environments.remove(&(namespace.to_owned(), name.to_owned()));
+        }
     }
 }
 
@@ -361,6 +371,7 @@ mod tests {
     fn environment_series_follow_the_resource() {
         let registry = MetricsRegistry::new();
         let metrics = Metrics::register_into(&registry);
+        metrics.leadership_acquired();
         let id = Uuid::parse_str(ENVIRONMENT_ID).unwrap();
 
         metrics.observe_environment(NAMESPACE, NAME, Uuid::nil(), None);
@@ -410,6 +421,7 @@ mod tests {
     fn environment_id_change_replaces_series() {
         let registry = MetricsRegistry::new();
         let metrics = Metrics::register_into(&registry);
+        metrics.leadership_acquired();
 
         let id = Uuid::parse_str(ENVIRONMENT_ID).unwrap();
         metrics.observe_environment(NAMESPACE, NAME, id, Some(2));
@@ -425,14 +437,32 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn leadership_lost_clears_environment_series() {
+    fn environment_series_only_while_leading() {
         let registry = MetricsRegistry::new();
         let metrics = Metrics::register_into(&registry);
-
         let id = Uuid::parse_str(ENVIRONMENT_ID).unwrap();
+
+        metrics.observe_environment(NAMESPACE, NAME, id, Some(1));
+        assert_eq!(environment_series(&registry), Vec::<String>::new());
+
         metrics.leadership_acquired();
         metrics.observe_environment(NAMESPACE, NAME, id, Some(1));
+        let at_generation_1 = vec![
+            active_generation(ENVIRONMENT_ID, NAMESPACE, 1),
+            info(ENVIRONMENT_ID, NAMESPACE),
+        ];
+        assert_eq!(environment_series(&registry), at_generation_1);
+
         metrics.leadership_lost();
         assert_eq!(environment_series(&registry), Vec::<String>::new());
+
+        // A reconciliation that was still running when the lease was lost.
+        metrics.observe_environment(NAMESPACE, NAME, id, Some(2));
+        metrics.forget_environment(NAMESPACE, NAME);
+        assert_eq!(environment_series(&registry), Vec::<String>::new());
+
+        metrics.leadership_acquired();
+        metrics.observe_environment(NAMESPACE, NAME, id, Some(1));
+        assert_eq!(environment_series(&registry), at_generation_1);
     }
 }
