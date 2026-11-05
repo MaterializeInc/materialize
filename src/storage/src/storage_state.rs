@@ -1013,8 +1013,17 @@ impl<'w> Worker<'w> {
         let recheck_all = std::mem::take(&mut self.storage_state.frontier_recheck_all);
         let reported = &mut self.storage_state.reported_frontiers;
         if self.storage_state.event_driven_frontier_reporting && !recheck_all {
-            for (id, frontier) in &events {
-                advance_reported_frontier(reported, &mut new_uppers, *id, frontier);
+            // Read the current frontier instead of the announced one. A dataflow that was replaced
+            // under the same ID keeps announcing changes of its own, outdated frontier.
+            for id in events.keys() {
+                let frontier = self
+                    .storage_state
+                    .source_uppers
+                    .get(id)
+                    .or_else(|| self.storage_state.sink_write_frontiers.get(id));
+                if let Some(frontier) = frontier {
+                    advance_reported_frontier(reported, &mut new_uppers, *id, &frontier.borrow());
+                }
             }
         } else {
             for (id, frontier) in self

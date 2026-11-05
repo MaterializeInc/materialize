@@ -402,6 +402,7 @@ impl ComputeState {
                     &self.frontier_events,
                     id,
                     FrontierSource::Input(input_id),
+                    &collection.observed,
                 ));
             }
         }
@@ -421,6 +422,7 @@ impl ComputeState {
             &self.frontier_events,
             id,
             FrontierSource::Write,
+            &collection.observed,
         ));
         // The probe may have progressed before this call. It observes a stream already, so its
         // frontier is empty only if the stream is complete.
@@ -444,6 +446,7 @@ impl ComputeState {
             &self.frontier_events,
             id,
             FrontierSource::Write,
+            &collection.observed,
         ));
         collection.sink_write_frontier = Some(frontier);
     }
@@ -460,6 +463,7 @@ impl ComputeState {
             &self.frontier_events,
             id,
             FrontierSource::Compute,
+            &collection.observed,
         ));
         collection.compute_probe = Some(probe);
     }
@@ -2308,14 +2312,25 @@ enum FrontierSource {
 
 type FrontierEvents = FrontierQueue<(GlobalId, FrontierSource), Timestamp>;
 
-/// Returns an observer announcing changes of `source` of collection `id` in `events`.
+/// Returns an observer announcing changes of `source` of collection `id` in `events`, for as long
+/// as `observed` is alive.
 fn frontier_observer(
     events: &Rc<FrontierEvents>,
     id: GlobalId,
     source: FrontierSource,
+    observed: &ObservedFrontiers,
 ) -> FrontierObserver<Timestamp> {
     let events = Rc::clone(events);
-    Rc::new(move |frontier| events.push((id, source), frontier))
+    // Dropping a collection shuts down its dataflow, which completes the dataflow's streams. Their
+    // probes then announce the empty frontier after the collection is gone. Reconciliation can
+    // recreate the collection under the same ID, and the old dataflow's empty frontier would then
+    // claim that the new collection is complete.
+    let alive = Rc::downgrade(&observed.alive);
+    Rc::new(move |frontier| {
+        if alive.strong_count() > 0 {
+            events.push((id, source), frontier);
+        }
+    })
 }
 
 /// The latest frontiers announced for a collection, see [`FrontierSource`].
@@ -2327,6 +2342,8 @@ struct ObservedFrontiers {
     inputs: BTreeMap<GlobalId, Antichain<Timestamp>>,
     /// Whether rendering installed a source for `write`.
     has_write_source: bool,
+    /// Keeps the observers of this collection's frontiers announcing changes.
+    alive: Rc<()>,
 }
 
 impl Default for ObservedFrontiers {
@@ -2336,6 +2353,7 @@ impl Default for ObservedFrontiers {
             compute: None,
             inputs: BTreeMap::new(),
             has_write_source: false,
+            alive: Rc::default(),
         }
     }
 }
