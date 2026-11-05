@@ -30,6 +30,7 @@ import React, {
   ElementRef,
   forwardRef,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -43,7 +44,11 @@ import { MaterializeTheme } from "~/theme";
 import { FocusableElement } from "~/utils/focusableElement";
 
 import { NAVBAR_HEIGHT_PX as SHELL_NAVBAR_HEIGHT_PX } from "./constants";
-import { CommandListEntry, filteredShellHistory } from "./store/history";
+import {
+  CommandListEntry,
+  filterCommandList,
+  filteredShellHistory,
+} from "./store/history";
 
 const HistoryList = ({
   commands,
@@ -147,13 +152,23 @@ const HistoryList = ({
   );
 };
 
+export interface HistorySearchProps {
+  onSelect: (command: string) => void;
+  /** Commands to search, newest first. Defaults to the shell's history. */
+  history?: readonly string[];
+}
+
 export const HistorySearch = forwardRef(
   (
-    { onSelect }: { onSelect: (command: string) => void },
+    { onSelect, history }: HistorySearchProps,
     ref: React.Ref<ElementRef<"input">>,
   ) => {
     const [searchQuery, setSearchQuery] = useState("");
-    const [commands] = useAtom(filteredShellHistory(searchQuery));
+    const [shellCommands] = useAtom(filteredShellHistory(searchQuery));
+    const commands = useMemo(
+      () => (history ? filterCommandList(history, searchQuery) : shellCommands),
+      [history, searchQuery, shellCommands],
+    );
     const [selectedCommandIdx, setSelectedCommandIdx] = useState(0);
     const [isKeyboardSelecting, setIsKeyboardSelecting] = useState(false);
 
@@ -270,11 +285,13 @@ const HistorySearchModal = ({
   onClose,
   onSelect,
   finalFocusRef,
+  history,
 }: {
   isOpen: boolean;
   onClose: () => void;
   onSelect: (command: string) => void;
-  finalFocusRef: React.RefObject<FocusableElement>;
+  finalFocusRef?: React.RefObject<FocusableElement>;
+  history?: readonly string[];
 }) => {
   const searchQueryRef = useRef<ElementRef<"input">>(null);
   return (
@@ -301,7 +318,13 @@ const HistorySearchModal = ({
           }
         >
           {/* Force an unmount of the element to ensure no computation happens when not displayed */}
-          {isOpen && <HistorySearch ref={searchQueryRef} onSelect={onSelect} />}
+          {isOpen && (
+            <HistorySearch
+              ref={searchQueryRef}
+              onSelect={onSelect}
+              history={history}
+            />
+          )}
         </ModalBody>
       </ModalContent>
     </Modal>

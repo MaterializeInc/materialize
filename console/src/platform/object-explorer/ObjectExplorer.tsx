@@ -51,7 +51,20 @@ import {
 
 const OBJECT_EXPLORER_DEBOUNCE_MS = 250;
 
-export const ObjectExplorerNav = (props: StackProps) => {
+export interface ObjectExplorerNavProps extends StackProps {
+  /** Starting width in pixels. */
+  initialWidth?: number;
+  minResizeWidth?: number;
+  /** Called with the final width when a resize drag ends. */
+  onResizeEnd?: (width: number) => void;
+}
+
+export const ObjectExplorerNav = ({
+  initialWidth = 336,
+  minResizeWidth = 336,
+  onResizeEnd,
+  children,
+}: ObjectExplorerNavProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const { colors } = useTheme<MaterializeTheme>();
@@ -80,6 +93,8 @@ export const ObjectExplorerNav = (props: StackProps) => {
     },
     onStop: () => {
       document.body.style.removeProperty("cursor");
+      const width = containerRef.current?.getBoundingClientRect().width;
+      if (width !== undefined) onResizeEnd?.(Math.round(width));
     },
   });
 
@@ -99,23 +114,43 @@ export const ObjectExplorerNav = (props: StackProps) => {
       alignSelf="stretch"
       height="100%"
       flexShrink="0"
-      minWidth="336px"
+      minWidth={`${minResizeWidth}px`}
       maxWidth="600px"
       ref={containerRef}
       spacing="0"
       position="relative"
       px="2"
       py="6"
-      width="336px"
+      width={`${initialWidth}px`}
+      // Contents scroll within the panel rather than stretching the page,
+      // and the panel never outgrows the window even if its parent does.
+      overflow="hidden"
+      maxHeight="100vh"
     >
-      <VStack width="100%" height="100%" spacing="2" alignItems="flex-start">
-        {props.children}
+      <VStack
+        width="100%"
+        height="100%"
+        minHeight="0"
+        spacing="2"
+        alignItems="flex-start"
+      >
+        {children}
       </VStack>
       <chakra.button
-        height="100%"
+        aria-label="Resize"
+        title="Drag to resize"
+        // Pinned to both edges: with only a 100% height it starts below the
+        // panel's top padding and overhangs the page by that much.
+        top="0"
+        bottom="0"
         width="3"
         position="absolute"
         backgroundColor="transparent"
+        borderRightWidth="2px"
+        borderColor="transparent"
+        _hover={{ borderColor: colors.border.secondary }}
+        _active={{ borderColor: colors.accent.purple }}
+        transition="border-color 0.15s"
         zIndex={1}
         right="0"
         ref={handleRef}

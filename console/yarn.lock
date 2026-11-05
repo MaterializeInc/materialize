@@ -3377,6 +3377,24 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@observablehq/plot@npm:0.6.17":
+  version: 0.6.17
+  resolution: "@observablehq/plot@npm:0.6.17"
+  dependencies:
+    d3: "npm:^7.9.0"
+    interval-tree-1d: "npm:^1.0.0"
+    isoformat: "npm:^0.2.0"
+  checksum: 10c0/9ce274b888b3a8d18b539c1162ad9c5f72cff1c61e80b868c7cff92102949a16da674e19d00ffd3b7003bf69816837737b488618d825b80739d01c0f8bfb100b
+  languageName: node
+  linkType: hard
+
+"@observablehq/runtime@npm:6.0.1":
+  version: 6.0.1
+  resolution: "@observablehq/runtime@npm:6.0.1"
+  checksum: 10c0/6fa0694a2a903945d700c241b1c1f0e7e7862e3fe0c93b061a26feefd0f4ccfd1e143619f3da11bb99c0fc26224d15070a42743e414b29f1e59a2fe9c3b72f97
+  languageName: node
+  linkType: hard
+
 "@open-draft/deferred-promise@npm:^2.2.0":
   version: 2.2.0
   resolution: "@open-draft/deferred-promise@npm:2.2.0"
@@ -6740,6 +6758,13 @@ __metadata:
   dependencies:
     require-from-string: "npm:^2.0.2"
   checksum: 10c0/b608addec6bd6e5d1c0cc7b6116002d589c6e666966503aca2aa7b2f61717ecaaeb0ac1a16c1374d61ee757de4f2f24017312a70781f5c4b127ffab54a2f7187
+  languageName: node
+  linkType: hard
+
+"binary-search-bounds@npm:^2.0.0":
+  version: 2.0.5
+  resolution: "binary-search-bounds@npm:2.0.5"
+  checksum: 10c0/d433db5fba086d1585e268c0b0b7ae6ec359df60b9135112d1fd4dcf2f8a8820caab7e2523bbbca0a9cae0725486f67a6663a87b5637f0e58f4201985e6e5b0b
   languageName: node
   linkType: hard
 
@@ -10333,6 +10358,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"interval-tree-1d@npm:^1.0.0":
+  version: 1.0.4
+  resolution: "interval-tree-1d@npm:1.0.4"
+  dependencies:
+    binary-search-bounds: "npm:^2.0.0"
+  checksum: 10c0/914c1a08c6fb99edf5292c47350d18200b61c549b02cb9d6ab4790d099f10c1044fb6df5cfb99cb4086410f412c078b236b747b3420aafd035c3fe5f00893ebf
+  languageName: node
+  linkType: hard
+
 "invariant@npm:^2.2.4":
   version: 2.2.4
   resolution: "invariant@npm:2.2.4"
@@ -10894,6 +10928,13 @@ __metadata:
   version: 3.0.1
   resolution: "isobject@npm:3.0.1"
   checksum: 10c0/03344f5064a82f099a0cd1a8a407f4c0d20b7b8485e8e816c39f249e9416b06c322e8dec5b842b6bb8a06de0af9cb48e7bc1b5352f0fadc2f0abac033db3d4db
+  languageName: node
+  linkType: hard
+
+"isoformat@npm:^0.2.0":
+  version: 0.2.1
+  resolution: "isoformat@npm:0.2.1"
+  checksum: 10c0/ee54060f464ae9e69574e23010e3b0725dd646337ca75ac1234bf9a2b7f4f4618028884ce872ab2cd7beea2739addbfbaed1ebd294225cc7aafb31eb84bf6163
   languageName: node
   linkType: hard
 
@@ -11744,6 +11785,7 @@ __metadata:
     "@chakra-ui/toast": "npm:^7.0.2"
     "@codemirror-toolkit/extensions": "npm:^0.6.3"
     "@codemirror-toolkit/react": "npm:^0.6.0"
+    "@codemirror/autocomplete": "npm:^6.0.0"
     "@codemirror/commands": "npm:^6.11.1"
     "@codemirror/lang-json": "npm:^6.0.2"
     "@codemirror/lang-sql": "npm:^6.10.0"
@@ -11767,6 +11809,8 @@ __metadata:
     "@lezer/highlight": "npm:^1.2.4"
     "@materializeinc/sql-lexer": "npm:^26.44.1"
     "@materializeinc/sql-pretty": "npm:^26.44.1"
+    "@observablehq/plot": "npm:0.6.17"
+    "@observablehq/runtime": "npm:6.0.1"
     "@playwright/test": "npm:^1.63.0"
     "@rehookify/datepicker": "npm:^6.6.8"
     "@rolldown/plugin-babel": "npm:^0.2.4"

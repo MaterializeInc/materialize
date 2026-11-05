@@ -11,9 +11,9 @@ import { PostgreSQL, sql, SQLDialect } from "@codemirror/lang-sql";
 import { getKeywords } from "@materializeinc/sql-lexer";
 
 const mzKeywords = getKeywords();
-const dialect = SQLDialect.define({
+export const mzDialect = SQLDialect.define({
   ...PostgreSQL.spec,
   keywords: mzKeywords.join(" ").toLowerCase(),
 });
 
-export default sql({ dialect });
+export default sql({ dialect: mzDialect });

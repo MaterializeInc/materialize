@@ -42,6 +42,16 @@ export interface TreeNodeProps<T> {
   isExpanded: boolean;
   isSelected: boolean;
   label: string;
+  /**
+   * Replaces the default click behavior (navigate, or toggle when the node
+   * has no `href`). The chevron still toggles.
+   */
+  onSelect?: () => void;
+  onDoubleClick?: () => void;
+  /** Controls shown at the end of the row while it is hovered. */
+  actions?: React.ReactNode;
+  /** Shown on hover over the label. Defaults to the label. */
+  title?: string;
   nodeKey: string;
   setNodeExpanded: SetNodeExpanded;
   textProps?: TextProps;
@@ -85,6 +95,7 @@ export const TreeNode = <T,>(props: TreeNodeProps<T>) => {
         borderRadius="lg"
         background={props.isSelected ? colors.background.accent : undefined}
         spacing="0"
+        role="group"
       >
         <Flex
           as="button"
@@ -113,7 +124,12 @@ export const TreeNode = <T,>(props: TreeNodeProps<T>) => {
           pl="0"
           width="100%"
           to={props.href}
+          onDoubleClick={props.onDoubleClick}
           onClick={() => {
+            if (props.onSelect) {
+              props.onSelect();
+              return;
+            }
             // Clicking an expanded node should select it, but not collapse it
             if (!props.href || props.isSelected) {
               // If the node has no href, it's not selectable, so we can always toggle
@@ -128,12 +144,25 @@ export const TreeNode = <T,>(props: TreeNodeProps<T>) => {
             textStyle="text-small-heavy"
             noOfLines={1}
             {...props.textProps}
-            title={props.label}
+            title={props.title ?? props.label}
           >
             {props.label}
           </Text>
           {props.iconRight}
         </LinkOrButton>
+        {props.actions && (
+          <Flex
+            flexShrink="0"
+            alignItems="center"
+            h="8"
+            pr="1"
+            visibility="hidden"
+            _groupHover={{ visibility: "visible" }}
+            _groupFocusWithin={{ visibility: "visible" }}
+          >
+            {props.actions}
+          </Flex>
+        )}
       </HStack>
       {props.data &&
         props.children &&
