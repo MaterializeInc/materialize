@@ -56,12 +56,23 @@ SELECT * FROM (
         build_step_key,
         shard_index,
         build_number,
-        build.build_id,
+        build_id,
         build_job_id,
         success AS build_step_success
-    FROM build_job
-    INNER JOIN build
-    ON build.build_id = build_job.build_id AND build.branch = 'main' AND is_latest_retry = TRUE
+    -- Keep unused columns out of the rows retained by the window.
+    FROM (
+        SELECT
+            pipeline,
+            build_step_key,
+            shard_index,
+            build_number,
+            build.build_id,
+            build_job_id,
+            success
+        FROM build_job
+        INNER JOIN build
+        ON build.build_id = build_job.build_id AND build.branch = 'main' AND is_latest_retry = TRUE
+    ) recent_jobs
 ) WHERE row_number <= 5
 ;
 
