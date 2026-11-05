@@ -111,10 +111,15 @@ export function useSqlApiRequest(options?: UseSqlApiRequestOptions) {
           setError(DEFAULT_QUERY_ERROR);
         }
       } finally {
-        requestInFlightRef.current = false;
         clearTimeout(timeoutId);
-        setLoading(false);
-        setHasLoadedOnce(true);
+        // A superseded request must leave the state alone: its successor is
+        // already in flight, and clearing loading here would let consumers
+        // read this request's stale results as the successor's.
+        if (requestIdRef.current === requestId) {
+          requestInFlightRef.current = false;
+          setLoading(false);
+          setHasLoadedOnce(true);
+        }
       }
     },
     [environment, timeout],

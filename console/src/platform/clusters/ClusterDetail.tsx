@@ -11,6 +11,7 @@ import { VStack } from "@chakra-ui/react";
 import React from "react";
 import { Navigate, Route, useParams } from "react-router-dom";
 
+import { useFlags } from "~/hooks/useFlags";
 import { useUiPreview } from "~/hooks/useUiPreview";
 import {
   Breadcrumb,
@@ -19,6 +20,10 @@ import {
   Tab,
 } from "~/layouts/BaseLayout";
 import { ClusterDetailParams } from "~/platform/clusters/ClusterRoutes";
+import {
+  DataflowDetailPage,
+  DataflowsPage,
+} from "~/platform/dataflows/lazyPages";
 import { SentryRoutes } from "~/sentry";
 
 import { ClusterDetailBreadcrumbs } from "./ClusterDetailBreadcrumbs";
@@ -54,8 +59,11 @@ const CLASSIC_TABS: Tab[] = [
   { label: "Sinks", href: "../sinks" },
 ];
 
+const DATAFLOWS_TAB: Tab = { label: "Dataflows", href: "../dataflows" };
+
 const ClassicClusterDetailPage = () => {
   const { clusterName } = useParams<ClusterDetailParams>();
+  const flags = useFlags();
 
   // Setting key on the route elements prevents any weird jank when you use the context
   // menu to switch between clusters.
@@ -74,6 +82,18 @@ const ClassicClusterDetailPage = () => {
       <Route path="objects/:objectType" element={<ClassicObjectsRedirect />} />
       {/* The redesigned Workers tab has no classic counterpart. */}
       <Route path={WORKERS_TAB_PATH} element={<Navigate to=".." replace />} />
+      {flags["visualization-features"] && (
+        <>
+          <Route
+            path="dataflows"
+            element={<DataflowsPage key={clusterName} />}
+          />
+          <Route
+            path="dataflows/:dataflowId"
+            element={<DataflowDetailPage key={clusterName} />}
+          />
+        </>
+      )}
     </SentryRoutes>
   );
 };
@@ -81,6 +101,14 @@ const ClassicClusterDetailPage = () => {
 const ClusterDetailPage = () => {
   const { isEnabled } = useUiPreview("clusterDetailsRedesign");
   const { clusterName } = useParams<ClusterDetailParams>();
+  const flags = useFlags();
+  const classicTabs = React.useMemo(
+    () =>
+      flags["visualization-features"]
+        ? [...CLASSIC_TABS, DATAFLOWS_TAB]
+        : CLASSIC_TABS,
+    [flags],
+  );
   const breadcrumbs: Breadcrumb[] = [
     { title: "Clusters", href: "../.." },
     { title: clusterName ?? "", href: ".." },
@@ -98,7 +126,7 @@ const ClusterDetailPage = () => {
           {isEnabled ? (
             <ClusterPageHeader />
           ) : (
-            <PageTabStrip tabData={CLASSIC_TABS} />
+            <PageTabStrip tabData={classicTabs} />
           )}
         </VStack>
       </PageHeader>

@@ -11,9 +11,14 @@ import { HStack, IconButton, Tag } from "@chakra-ui/react";
 import React from "react";
 import { Navigate, Route, useParams, useSearchParams } from "react-router-dom";
 
+import { useFlags } from "~/hooks/useFlags";
 import { SettingsIcon } from "~/icons";
 import { PageHeading, PageTabStrip, Tab } from "~/layouts/BaseLayout";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
+import {
+  DataflowDetailPage,
+  DataflowsPage,
+} from "~/platform/dataflows/lazyPages";
 import { SentryRoutes } from "~/sentry";
 import { useAllClusters } from "~/store/allClusters";
 import { useSubscribeToAllObjectsCollection } from "~/store/allObjectsCollection";
@@ -32,13 +37,17 @@ import { replicaSearch, WORKERS_TAB_PATH } from "./tabLinks";
 import { REPLICA_SEARCH_PARAM } from "./useSelectedReplica";
 
 // The Metrics and Workers tabs share a replica choice, so their links carry it.
-const tabs = (replicaName: string | undefined): Tab[] => [
+const tabs = (
+  replicaName: string | undefined,
+  showDataflows: boolean,
+): Tab[] => [
   { label: "Metrics", href: `..${replicaSearch(replicaName)}`, end: true },
   {
     label: "Workers",
     href: `../${WORKERS_TAB_PATH}${replicaSearch(replicaName)}`,
   },
   { label: "Objects", href: "../objects" },
+  ...(showDataflows ? [{ label: "Dataflows", href: "../dataflows" }] : []),
 ];
 
 // The configuration drawer's open section, in the URL so it survives a reload
@@ -135,6 +144,7 @@ export const ClusterPageHeader = () => {
   assert(clusterName);
   const [, setSection] = useConfigurationSection();
   const [searchParams] = useSearchParams();
+  const flags = useFlags();
   return (
     <>
       <ClusterTitle
@@ -143,7 +153,10 @@ export const ClusterPageHeader = () => {
         onConfigure={() => setSection("overview")}
       />
       <PageTabStrip
-        tabData={tabs(searchParams.get(REPLICA_SEARCH_PARAM) ?? undefined)}
+        tabData={tabs(
+          searchParams.get(REPLICA_SEARCH_PARAM) ?? undefined,
+          flags["visualization-features"],
+        )}
       />
     </>
   );
@@ -155,6 +168,7 @@ const ClusterPage = () => {
   assert(clusterName);
   useSubscribeToAllObjectsCollection();
   const [section, setSection] = useConfigurationSection();
+  const flags = useFlags();
 
   // Keying route elements on the cluster name avoids stale state when the
   // breadcrumb menu switches clusters.
@@ -183,6 +197,18 @@ const ClusterPage = () => {
             />
           }
         />
+        {flags["visualization-features"] && (
+          <>
+            <Route
+              path="dataflows"
+              element={<DataflowsPage key={clusterName} />}
+            />
+            <Route
+              path="dataflows/:dataflowId"
+              element={<DataflowDetailPage key={clusterName} />}
+            />
+          </>
+        )}
         {/* The classic page's tab URLs, kept working for bookmarks and shared links. */}
         {CLUSTER_OBJECT_TYPES.map(({ path }) => (
           <Route

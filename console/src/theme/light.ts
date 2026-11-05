@@ -67,6 +67,18 @@ const base: BasePalette = {
     colors.yellow[300],
     colors.green[300],
   ],
+  dataflow: {
+    lirGroup: colors.gray[500],
+    operator: {
+      join: "#df8b3f",
+      reduce: "#3fabec",
+      arrange: "#06b3b8",
+      map: "#b59f36",
+      io: "#f27a8c",
+      other: "#96a2ae",
+    },
+    connectedEdge: colors.purple[400],
+  },
 };
 
 const components: ComponentOverrides = {

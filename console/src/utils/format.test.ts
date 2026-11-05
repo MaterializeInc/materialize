@@ -12,11 +12,51 @@ import parse from "postgres-interval";
 import {
   formatDurationExact,
   formatDurationForAxis,
+  formatElapsedNs,
   formatInterval,
   formatIntervalShort,
   fromSeconds,
   toSeconds,
 } from "./format";
+
+describe("formatElapsedNs", () => {
+  it("formats zero as a plain 0s", () => {
+    expect(formatElapsedNs(0n)).toEqual("0s");
+  });
+
+  it("shows sub-second durations in milliseconds instead of collapsing to 0s", () => {
+    expect(formatElapsedNs(257_000_000n)).toEqual("257ms");
+  });
+
+  it("distinguishes a sub-millisecond duration from having never run", () => {
+    expect(formatElapsedNs(1_000n)).toEqual("<1ms");
+    expect(formatElapsedNs(499_999n)).toEqual("<1ms");
+    expect(formatElapsedNs(500_000n)).toEqual("1ms");
+  });
+
+  it("shows single-digit-second durations with one decimal place", () => {
+    expect(formatElapsedNs(1_400_000_000n)).toEqual("1.4s");
+    expect(formatElapsedNs(1_600_000_000n)).toEqual("1.6s");
+  });
+
+  it("rounds durations of 10s or more to whole seconds", () => {
+    expect(formatElapsedNs(543_400_000_000n)).toEqual("543s");
+  });
+
+  it("moves to the next unit when rounding reaches its floor", () => {
+    expect(formatElapsedNs(999_400_000n)).toEqual("999ms");
+    expect(formatElapsedNs(999_600_000n)).toEqual("1.0s");
+    expect(formatElapsedNs(9_940_000_000n)).toEqual("9.9s");
+    expect(formatElapsedNs(9_960_000_000n)).toEqual("10s");
+  });
+
+  it("formats a negative duration as its magnitude with a leading minus", () => {
+    expect(formatElapsedNs(-257_000_000n)).toEqual("-257ms");
+    expect(formatElapsedNs(-1_400_000_000n)).toEqual("-1.4s");
+    expect(formatElapsedNs(-9_960_000_000n)).toEqual("-10s");
+    expect(formatElapsedNs(-1_000n)).toEqual("-<1ms");
+  });
+});
 
 describe("formatIntervalShort", () => {
   it("only returns years if present", () => {

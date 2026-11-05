@@ -60,6 +60,30 @@ export const formatBytesShort = (bytes: bigint) => {
   return `${numberFormatter.format(value)} ${unit}`;
 };
 
+/**
+ * Formats a nanosecond duration for display. Rounding straight to whole
+ * seconds collapses every sub-second duration to "0s" and can't
+ * distinguish e.g. 1.4s from 1.6s, which matters for a dataflow operator's
+ * own (as opposed to subtree) elapsed time -- often sub-second even when
+ * its ancestors run for minutes. Only an exact zero reads as "0s": a real
+ * but sub-millisecond duration is distinct information (the operator ran)
+ * and gets "<1ms" rather than rounding away to look idle.
+ */
+export function formatElapsedNs(ns: bigint): string {
+  if (ns < 0n) return `-${formatElapsedNs(-ns)}`;
+  const seconds = Number(ns) / 1e9;
+  if (seconds === 0) return "0s";
+  if (seconds < 0.0005) return "<1ms";
+  // Each tier is chosen from the value as rounded for display, so a value
+  // that rounds up to the next tier's floor (999.6ms, 9.96s) reads in that
+  // tier ("1.0s", "10s") instead of as "1000ms" or "10.0s".
+  const millis = Math.round(seconds * 1000);
+  if (millis < 1000) return `${millis}ms`;
+  const tenths = Math.round(seconds * 10) / 10;
+  if (tenths < 10) return `${tenths.toFixed(1)}s`;
+  return `${Math.round(seconds)}s`;
+}
+
 export function convertBytes(bytes: number, unit: ByteUnit) {
   switch (unit) {
     case "B":
