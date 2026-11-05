@@ -14,6 +14,9 @@ MZFROM console AS console
 # Statically-linked `ssh` client, used by the SSH tunnel feature.
 MZFROM openssh-static AS openssh-static
 
+# CA bundle for apt's HTTPS transport, before ca-certificates is installed.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:8b33d821344902366f6ac0fd2cabf4c39d5b98abe37ebc9eb8c35943f8ede923 AS ca-certs
+
 # In production, we use distroless images based on Debian 13.
 # We retain apt and install more packages in this image for development.
 # Pinned by rolling tag + multi-arch index digest, matching debian-base, so
@@ -24,6 +27,11 @@ ARG CI_SANITIZER=none
 
 ARG BUILD_PROFILE=optimize
 LABEL build.profile=$BUILD_PROFILE
+
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \

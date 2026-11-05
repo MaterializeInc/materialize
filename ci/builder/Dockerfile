@@ -15,6 +15,9 @@ FROM node:26-trixie-slim AS node
 # `/usr/local/lib/node_modules` below still find `corepack/dist/corepack.js`.
 RUN npm install -g corepack
 
+# CA bundle for apt's HTTPS transport, before ca-certificates is installed.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:8b33d821344902366f6ac0fd2cabf4c39d5b98abe37ebc9eb8c35943f8ede923 AS ca-certs
+
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
@@ -44,6 +47,11 @@ ARG XZ_OPT=-T0
 # Please take care with what gets added here. The goal of this initial layer is to be as small as
 # possible since it's used for the `mkpipeline` and `Build` CI jobs, which block __all other__
 # jobs.
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
+
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -175,7 +183,7 @@ COPY apt-llvm.asc .
 
 RUN gpg --dearmor < apt-llvm.asc > /etc/apt/keyrings/apt-llvm.gpg \
     && rm apt-llvm.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] https://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
     && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     clang-22 \
@@ -445,6 +453,11 @@ ENV MZ_DEV_CI_BUILDER=1
 ENV DOCKER_BUILDKIT=1
 
 ARG XZ_OPT=-T0
+
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
