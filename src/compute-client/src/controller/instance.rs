@@ -225,6 +225,9 @@ pub(super) struct Instance {
     ///
     /// Refreshed by maintenance, which also drops all recording state while it is `None`.
     freshness_config: Option<RecorderConfig>,
+    /// The wall-clock time in ms at which the compute controller was created, see
+    /// [`freshness::recording_after_restart`].
+    boot_ms: u64,
 
     /// Sender for updates to collection read holds.
     ///
@@ -361,9 +364,7 @@ impl Instance {
             self.storage_collections
                 .set_freshness_tree(id, state.freshness_tree.clone());
         }
-        let freshness_created_ms = self.freshness_created_ms(id);
-        state.freshness =
-            freshness_created_ms.map(|ms| FreshnessRecording::created(as_of.clone(), ms));
+        state.freshness = self.freshness_recording(id, None, &as_of);
         // If the collection is write-only, clear its read policy to reflect that.
         if write_only {
             state.read_policy = None;
@@ -374,12 +375,19 @@ impl Instance {
         }
 
         // Add per-replica collection state.
+        let mut freshness: BTreeMap<_, _> = self
+            .replicas
+            .keys()
+            .map(|replica_id| {
+                let recording = self.freshness_recording(id, Some(*replica_id), &as_of);
+                (*replica_id, recording)
+            })
+            .collect();
         for replica in self.replicas.values_mut() {
             if target_replica.is_some_and(|id| id != replica.id) {
                 continue;
             }
-            let freshness =
-                freshness_created_ms.map(|ms| FreshnessRecording::created(as_of.clone(), ms));
+            let freshness = freshness.remove(&replica.id).flatten();
             replica.add_collection(
                 id,
                 as_of.clone(),
@@ -389,16 +397,31 @@ impl Instance {
         }
     }
 
-    /// The creation time in ms at which the freshness recording of a collection or replica
-    /// collection installed now starts, `None` if it starts at its first observed frontier or is
-    /// not recorded.
-    fn freshness_created_ms(&self, id: GlobalId) -> Option<u64> {
-        // Collections installed before initialization completes existed before a restart. Under
-        // the `hole` restart policy, their arrivals before the first observed frontier are not
-        // recorded.
-        let start_at_creation =
-            self.freshness_config.is_some() && self.initialized && !id.is_transient();
-        start_at_creation.then(|| (self.now)())
+    /// The freshness recording of collection `id` installed now with `as_of`, globally or on
+    /// `replica_id`, started by the rules of [`FreshnessRecording`]. `None` if it is not recorded.
+    fn freshness_recording(
+        &self,
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        as_of: &Antichain<Timestamp>,
+    ) -> Option<FreshnessRecording> {
+        if self.freshness_config.is_none() || id.is_transient() {
+            return None;
+        }
+        if self.initialized {
+            return Some(FreshnessRecording::created(as_of.clone(), (self.now)()));
+        }
+        // Collections installed before initialization completes existed before a restart.
+        // NOTE: Their seeds are loaded by the histograms' write tasks, which can finish after
+        // bootstrap, so a seeded recording waits for them at its observations.
+        let seeds = self.storage_collections.freshness_seeds();
+        Some(freshness::recording_after_restart(
+            &self.dyncfg,
+            &seeds,
+            id,
+            replica_id,
+            self.boot_ms,
+        ))
     }
 
     fn remove_collection(&mut self, id: GlobalId) {
@@ -480,9 +503,7 @@ impl Instance {
                 break;
             }
 
-            let freshness = self
-                .freshness_created_ms(*collection_id)
-                .map(|ms| FreshnessRecording::created(as_of.clone(), ms));
+            let freshness = self.freshness_recording(*collection_id, Some(id), &as_of);
             replica.add_collection(*collection_id, as_of, input_read_holds, freshness);
         }
 
@@ -998,6 +1019,7 @@ impl Instance {
             wallclock_lag: _,
             wallclock_lag_last_recorded,
             freshness_config,
+            boot_ms,
             read_hold_tx: _,
             replica_tx: _,
             replica_rx: _,
@@ -1034,6 +1056,7 @@ impl Instance {
             "copy_tos": copy_tos,
             "wallclock_lag_last_recorded": wallclock_lag_last_recorded,
             "freshness_config": freshness_config,
+            "boot_ms": boot_ms,
         }))
     }
 
@@ -1054,6 +1077,7 @@ impl Instance {
         arranged_logs: Vec<ArrangedLog>,
         metrics: InstanceMetrics,
         now: NowFn,
+        boot_ms: u64,
         wallclock_lag: WallclockLagFn<Timestamp>,
         dyncfg: Arc<ConfigSet>,
         command_rx: mpsc::UnboundedReceiver<Command>,
@@ -1112,6 +1136,7 @@ impl Instance {
             wallclock_lag,
             wallclock_lag_last_recorded: now_dt,
             freshness_config,
+            boot_ms,
             read_hold_tx,
             replica_tx,
             replica_rx,

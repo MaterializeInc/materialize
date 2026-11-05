@@ -1747,6 +1747,142 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         ), f"settled replica episodes overlap pre-restart history: {replica_settled}"
 
 
+def workflow_wallclock_freshness_restart_policy(c: Composition) -> None:
+    """Freshness histogram periods across an environmentd restart.
+
+    Under `charge`, recordings resume at the last emitted period end, so the
+    periods across the restart are contiguous and each holds exactly one
+    minute of one-millisecond arrivals. Under `hole`, they resume at the
+    controller's start, and the arrivals during the outage are missing from
+    some period. The outage is longer than a period, so it always crosses a
+    period end. Storage-owned objects record only `end_to_end`.
+    """
+    names = ["freshness_tbl", "freshness_lg", "freshness_lg_tbl", "freshness_idx"]
+    name_list = ", ".join(f"'{name}'" for name in names)
+
+    def periods() -> dict[tuple[str, str, str | None], list[tuple[str, str, int]]]:
+        """The `(start, end, arrivals)` of every period after the partial first
+        one, per object, measure, and replica."""
+        rows = c.sql_query(f"""
+            WITH h AS (
+                SELECT object_id, measure, NULL::text AS replica_id,
+                       period_start, period_end, count
+                FROM mz_internal.mz_wallclock_global_freshness_histogram
+                UNION ALL
+                SELECT object_id, measure, replica_id,
+                       period_start, period_end, count
+                FROM mz_internal.mz_wallclock_replica_freshness_histogram
+            )
+            SELECT o.name, h.measure, h.replica_id,
+                   h.period_start::text, h.period_end::text, sum(h.count)::bigint
+            FROM h
+            JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+            JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+            WHERE o.name IN ({name_list})
+            GROUP BY o.name, h.measure, h.replica_id, h.period_start, h.period_end
+            ORDER BY o.name, h.measure, h.replica_id, h.period_start""")
+        result: dict[tuple[str, str, str | None], list[tuple[str, str, int]]] = {}
+        for name, measure, replica_id, start, end, arrivals in rows:
+            result.setdefault((name, measure, replica_id), []).append(
+                (start, end, int(arrivals))
+            )
+        # The first period of an object starts at its creation and is partial.
+        return {key: value[1:] for key, value in result.items()}
+
+    def wait_covered_until(at_least: str) -> None:
+        """Waits until the global and the replica histograms of every object
+        are covered until `at_least`."""
+        deadline = time.time() + 600
+        rows: list = []
+        while time.time() < deadline:
+            rows = c.sql_query(f"""
+                SELECT o.name, p.replica_id IS NULL, p.covered_until >= '{at_least}'::timestamptz
+                FROM mz_internal.mz_wallclock_freshness_progress AS p
+                JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = p.object_id
+                JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+                WHERE o.name IN ({name_list})""")
+            covered = {(name, is_global) for name, is_global, done in rows if done}
+            # Only the index runs on a replica.
+            expected = {(name, True) for name in names} | {("freshness_idx", False)}
+            if covered >= expected:
+                return
+            time.sleep(1)
+        raise UIError(f"freshness not covered until {at_least}: {rows}")
+
+    for policy in ["charge", "hole"]:
+        c.down(destroy_volumes=True)
+        with c.override(
+            Materialized(
+                additional_system_parameter_defaults={
+                    "enable_wallclock_freshness_recording": "true",
+                    "wallclock_freshness_period_interval": "1min",
+                    "wallclock_freshness_virtual_arrival_interval": "1ms",
+                    "wallclock_freshness_restart_policy": policy,
+                },
+                sanity_restart=False,
+            )
+        ):
+            c.up("materialized")
+            c.sql(dedent("""\
+                CREATE CLUSTER freshness_storage SIZE 'scale=1,workers=1';
+                CREATE CLUSTER freshness_compute SIZE 'scale=1,workers=1';
+                CREATE TABLE freshness_tbl (a int);
+                CREATE SOURCE freshness_lg
+                    IN CLUSTER freshness_storage
+                    FROM LOAD GENERATOR COUNTER (TICK INTERVAL '100ms')
+                    WITH (TIMESTAMP INTERVAL '1s');
+                CREATE TABLE freshness_lg_tbl FROM SOURCE freshness_lg;
+                CREATE INDEX freshness_idx
+                    IN CLUSTER freshness_compute ON freshness_lg_tbl (counter);
+                """))
+            # Two closed periods: the partial first one and a full one, so every
+            # recording has emitted a period end before the restart.
+            created = c.sql_query("SELECT now()::text")[0][0]
+            wait_covered_until(
+                c.sql_query(
+                    f"SELECT (date_trunc('minute', '{created}'::timestamptz) + INTERVAL '2 minutes')::text"
+                )[0][0]
+            )
+
+            c.kill("materialized")
+            time.sleep(70)
+            c.up("materialized")
+
+            # The period that contains the restart and the next one closed.
+            restarted = c.sql_query("SELECT now()::text")[0][0]
+            wait_covered_until(
+                c.sql_query(
+                    f"SELECT (date_trunc('minute', '{restarted}'::timestamptz) + INTERVAL '2 minutes')::text"
+                )[0][0]
+            )
+
+            recorded = periods()
+            expected_keys = {(name, "end_to_end") for name in names} | {
+                ("freshness_idx", "local")
+            }
+            assert {
+                (name, measure)
+                for name, measure, replica_id in recorded
+                if replica_id is None
+            } == expected_keys, f"{policy}: {recorded}"
+
+            def complete(value: list[tuple[str, str, int]]) -> bool:
+                contiguous = all(
+                    prev[1] == cur[0] for prev, cur in zip(value, value[1:])
+                )
+                return contiguous and all(
+                    arrivals == 60_000 for _, _, arrivals in value
+                )
+
+            incomplete = {
+                key: value for key, value in recorded.items() if not complete(value)
+            }
+            if policy == "charge":
+                assert not incomplete, f"charge: incomplete periods {incomplete}"
+            else:
+                assert incomplete, f"hole: no missing arrivals in {recorded}"
+
+
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":
