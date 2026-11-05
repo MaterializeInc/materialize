@@ -3112,7 +3112,7 @@ where
             .collection_frontiers(id)
             .map(|frontiers| frontiers.implied_capability)
             .unwrap_or_else(|_| Antichain::from_elem(Timestamp::MIN));
-        Some(FreshnessRecording::created(since, (self.now)()))
+        Some(FreshnessRecording::created(since, (self.now)()).end_to_end_only())
     }
 
     /// Ends the freshness recording of a collection that is dropped and returns the
@@ -3159,10 +3159,16 @@ where
             return Vec::new();
         };
         let now_ms = (self.now)();
+        // Read by the compute controller, as the input of indexes and materialized views.
+        if let Some(log) = self.storage_collections.visibility_log(id) {
+            log.record(&tree, frontier, now_ms, &config);
+        }
         let rows = collection
             .freshness
-            .get_or_insert_with(|| FreshnessRecording::at_first_observation(now_ms))
-            .observe(&tree, frontier, now_ms, &config);
+            .get_or_insert_with(|| {
+                FreshnessRecording::at_first_observation(now_ms).end_to_end_only()
+            })
+            .observe(&tree, &tree, frontier, now_ms, &[], &config);
         if rows.is_empty() {
             return Vec::new();
         }
@@ -3904,8 +3910,9 @@ where
             }
 
             // Ingestions and exports report their write frontiers to `update_write_frontier`,
-            // which records their freshness. The other collections, among them tables and
-            // webhooks, advance their frontiers without a report to this controller.
+            // which records their freshness. The other collections, among them tables,
+            // webhooks, and the catalog collection, advance their frontiers without a report to
+            // this controller.
             if matches!(collection.extra_state, CollectionStateExtra::None) {
                 unreported_frontiers.push((id, frontiers.write_frontier));
             }
@@ -4359,7 +4366,7 @@ fn swap_updates(
 #[cfg(test)]
 mod tests {
     use mz_repr::Timestamp;
-    use mz_storage_client::freshness::FreshnessRecording;
+    use mz_storage_client::freshness::{FreshnessRecording, Measure};
     use mz_storage_types::freshness::histogram::BucketScheme;
     use mz_storage_types::freshness::recorder::RecorderConfig;
     use mz_storage_types::freshness::{ResolvedTree, Ticker};
@@ -4378,8 +4385,10 @@ mod tests {
         // The arrivals recorded through 60 s, which start after the returned start.
         let start = |since: Antichain<Timestamp>, created_ms: u64| {
             let mut recording = FreshnessRecording::created(since, created_ms);
-            let rows = recording.observe(&tree, &since_frontier(60_001), 61_000, &config);
-            60_000 - rows.iter().map(|r| r.count).sum::<u64>()
+            let rows =
+                recording.observe(&tree, &tree, &since_frontier(60_001), 61_000, &[], &config);
+            let end_to_end = rows.iter().filter(|(m, _)| *m == Measure::EndToEnd);
+            60_000 - end_to_end.map(|(_, r)| r.count).sum::<u64>()
         };
         assert_eq!(start(since(0), 3000), 3000, "new shard");
         assert_eq!(start(Antichain::new(), 3000), 3000, "empty since");

@@ -115,6 +115,11 @@ impl Shown {
     pub fn last(&self) -> Option<u64> {
         self.entries.last().map(|(r, _)| *r)
     }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 impl FreshnessRecorder {
@@ -125,6 +130,11 @@ impl FreshnessRecorder {
             book: PeriodBook::new(start_ms),
             shown: Shown::default(),
         }
+    }
+
+    /// The last arrival recorded so far, or the start.
+    pub fn high_water_ms(&self) -> u64 {
+        self.book.high_water_ms()
     }
 
     /// Records a write frontier observed at `now_ms` and returns the rows of periods that closed.
