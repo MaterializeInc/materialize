@@ -67,6 +67,11 @@ impl DataflowErrorSer {
             .into_rust()
             .expect("DataflowErrorSer: failed to convert proto to DataflowError")
     }
+
+    /// The length of the serialized bytes.
+    pub fn byte_len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl From<DataflowError> for DataflowErrorSer {

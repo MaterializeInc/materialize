@@ -22,15 +22,25 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
 use mz_repr::{Datum, IntoRowIterator, ReprScalarType, Row, RowIterator, RowRef};
 
+use differential_dataflow::trace::TraceReader;
+use mz_repr::{Diff, Timestamp};
+
 use crate::arrangement::manager::TraceBundle;
+use crate::compute_state::description_iterator::DescriptionRange;
+use crate::compute_state::description_iterator::tests::{
+    ArcOrdValBatch, batches, frontier, row, ts, update,
+};
+use crate::compute_state::error_scan::tests::{ErrorUpdates, error, error_batch, holding};
 use crate::compute_state::index_peek_tests::{
     cancelling_errors, index_peek, ok_row, rows_answer, trace_bundle, trivial_finishing,
     wide_ok_rows,
 };
+use crate::compute_state::peek_scan::entry_byte_len;
 use crate::compute_state::peek_scan::{PeekScan, StashBounds};
 use crate::compute_state::peek_stash::tests::{CountedBlob, stashed_rows};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 use crate::server::ComputeRuntimeRole;
+use crate::typedefs::ErrSpine;
 
 use super::*;
 
@@ -1064,4 +1074,173 @@ async fn a_shrink_that_finds_every_permit_held_lands_as_walks_finish() {
     assert_eq!(permits.available_permits(), 0);
     drop(third);
     assert_eq!(permits.available_permits(), 1);
+}
+
+/// One batch an offloaded description scan hands to its sink.
+type HandOut = DescriptionUpdates;
+
+/// The batches a description scan offload has handed to its sink, in the order it handed them.
+type SinkLog = Arc<Mutex<Vec<HandOut>>>;
+
+/// A sink that logs every hand-out into `log` and accepts it.
+fn logging_sink(
+    log: &SinkLog,
+) -> impl FnMut(HandOut) -> BoxFuture<'static, Result<(), String>> + Send + 'static {
+    let log = Arc::clone(log);
+    move |batch| {
+        log.lock().expect("lock poisoned").push(batch);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// A description scan over `keys` at time 1 and an error trace holding `errs`, that cuts after
+/// two updates.
+fn description_scan_over(
+    keys: &[u8],
+    errs: ErrorUpdates,
+) -> DescriptionScan<ArcOrdValBatch, <ErrSpine<Timestamp, Diff> as TraceReader>::Batch> {
+    let updates: Vec<_> = keys.iter().map(|key| update(*key, 1, 1)).collect();
+    let oks = batches(&updates, &[ts(5)]);
+    let map_filter_project = MapFilterProject::new(1)
+        .into_plan()
+        .expect("valid plan")
+        .into_nontemporal()
+        .expect("non-temporal plan");
+    let range = DescriptionRange::Later {
+        lower: frontier(0),
+        upper: frontier(5),
+    };
+    // Every key in these tests packs to the same size.
+    let cut_bytes = 2 * (entry_byte_len(&row(1)) + size_of::<Timestamp>() + size_of::<Diff>());
+    DescriptionScan::new(
+        oks,
+        vec![error_batch(errs)],
+        map_filter_project,
+        range,
+        cut_bytes,
+    )
+}
+
+/// Runs the runtime until an offloaded description scan reports its outcome.
+async fn description_outcome(result: oneshot::Receiver<Result<(), String>>) -> Result<(), String> {
+    tokio::time::timeout(DRIVE_BOUND, result)
+        .await
+        .expect("the scan finishes")
+        .expect("the scan reports an outcome")
+}
+
+/// An offloaded description scan hands every cut and its tail to the sink, and releases its
+/// permit before it reports the outcome.
+#[mz_ore::test(tokio::test)]
+async fn an_offloaded_description_scan_hands_every_cut_to_its_sink() {
+    let keys: Vec<u8> = (1..8).collect();
+    let permits = Arc::new(PeekPermits::new(1));
+    let log = SinkLog::default();
+    let (result, _handle) = offload_description_scan(
+        description_scan_over(&keys, Vec::new()),
+        logging_sink(&log),
+        Arc::clone(&permits),
+        offload_config(1),
+        std::thread::current(),
+    );
+
+    assert_eq!(description_outcome(result).await, Ok(()));
+    assert_eq!(
+        permits.available_permits(),
+        1,
+        "a finished scan gives back its permit"
+    );
+
+    let hand_outs = log.lock().expect("lock poisoned").clone();
+    let sizes: Vec<usize> = hand_outs.iter().map(|batch| batch.rows.len()).collect();
+    assert_eq!(sizes, [3, 3, 1], "every cut and the tail reach the sink");
+    let mut all: Vec<_> = hand_outs.into_iter().flat_map(|batch| batch.rows).collect();
+    all.sort();
+    let expected: Vec<_> = keys
+        .iter()
+        .map(|key| (row(*key), ts(1), Diff::ONE))
+        .collect();
+    assert_eq!(all, expected);
+}
+
+/// Error updates reach the sink in the hand-outs, and the scan continues past them.
+#[mz_ore::test(tokio::test)]
+async fn an_offloaded_description_scan_hands_its_errors_to_the_sink() {
+    let err = error(0);
+    let keys: Vec<u8> = (1..8).collect();
+    let log = SinkLog::default();
+    let (result, _handle) = offload_description_scan(
+        description_scan_over(&keys, holding(&err)),
+        logging_sink(&log),
+        Arc::new(PeekPermits::new(1)),
+        offload_config(1),
+        std::thread::current(),
+    );
+
+    assert_eq!(description_outcome(result).await, Ok(()));
+    let hand_outs = log.lock().expect("lock poisoned").clone();
+    let errors: Vec<_> = hand_outs.iter().map(|batch| batch.errors.clone()).collect();
+    assert_eq!(
+        errors.concat(),
+        vec![(err, ts(0), Diff::ONE)],
+        "the error updates reach the sink"
+    );
+    let rows: usize = hand_outs.iter().map(|batch| batch.rows.len()).sum();
+    assert_eq!(rows, keys.len(), "the error does not stop the scan");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn a_sink_error_ends_the_offloaded_description_scan() {
+    let calls = Arc::new(Mutex::new(0_usize));
+    let sink = {
+        let calls = Arc::clone(&calls);
+        move |_batch: HandOut| -> BoxFuture<'static, Result<(), String>> {
+            *calls.lock().expect("lock poisoned") += 1;
+            Box::pin(async { Err("the sink is full".to_string()) })
+        }
+    };
+    let keys: Vec<u8> = (1..8).collect();
+    let (result, _handle) = offload_description_scan(
+        description_scan_over(&keys, Vec::new()),
+        sink,
+        Arc::new(PeekPermits::new(1)),
+        offload_config(1),
+        std::thread::current(),
+    );
+
+    assert_eq!(
+        description_outcome(result).await,
+        Err("the sink is full".to_string())
+    );
+    assert_eq!(
+        *calls.lock().expect("lock poisoned"),
+        1,
+        "the walk stops at the first rejected hand-out"
+    );
+}
+
+/// A description scan whose receiver is dropped while it queues for a permit never runs.
+#[mz_ore::test(tokio::test)]
+async fn a_description_scan_cancelled_while_queued_never_reaches_its_sink() {
+    let permits = Arc::new(PeekPermits::new(1));
+    permits.resize(1.0);
+    let held = permits.try_acquire().expect("a permit is free");
+    let log = SinkLog::default();
+    let (result, handle) = offload_description_scan(
+        description_scan_over(&[1, 2, 3], Vec::new()),
+        logging_sink(&log),
+        Arc::clone(&permits),
+        offload_config(1),
+        std::thread::current(),
+    );
+
+    drop(result);
+    wait_until(
+        || handle.is_finished(),
+        "the cancelled scan leaving the queue",
+    )
+    .await;
+    drop(held);
+    assert_eq!(permits.available_permits(), 1);
+    assert!(log.lock().expect("lock poisoned").is_empty());
 }

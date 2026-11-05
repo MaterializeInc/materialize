@@ -8,27 +8,35 @@
 
 use std::time::{Duration, Instant};
 
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::consolidation::consolidate;
+use differential_dataflow::trace::cursor::{CursorList, cursor_list};
+use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::response::PeekError;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::order::PartialOrder;
 use tracing::error;
 
 use crate::arrangement::manager::PaddedTrace;
+use crate::compute_state::description_iterator::DescriptionRange;
+use crate::compute_state::description_scan::error_update_byte_len;
 use crate::compute_state::{PeekRowIterationTracker, peek_result_iterator};
+use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::ErrAgent;
 
 /// The error trace of an index, as
 /// [`TraceBundle::errs_mut`](crate::arrangement::manager::TraceBundle::errs_mut) hands it out.
 pub(super) type ErrsHandle = PaddedTrace<ErrAgent<Timestamp, Diff>>;
 
+/// The batch type of an index's error trace.
+pub(super) type ErrsBatch = <ErrsHandle as TraceReader>::Batch;
+
 /// A walk over an index peek's error trace, suspendable between cursor positions.
 ///
 /// Holds nothing of the ok trace or of the rows a peek returns. A peek reaches those only once
 /// this walk reports [`ErrorScanStep::Finished`] with an `Ok`.
-pub(super) struct ErrorScan {
-    cursor: peek_result_iterator::TraceCursor<ErrsHandle>,
-    storage: peek_result_iterator::TraceStorage<ErrsHandle>,
+pub(super) struct ErrorScan<B: Navigable = ErrsBatch> {
+    cursor: CursorList<B::Cursor>,
+    storage: Vec<B>,
     /// The limit spans this walk and the ok scan after it, so the count accrued here is handed
     /// on with [`ErrorScanStep::Finished`].
     row_iteration_tracker: PeekRowIterationTracker,
@@ -66,6 +74,33 @@ impl ErrorScan {
         cursor: peek_result_iterator::TraceCursor<ErrsHandle>,
         storage: peek_result_iterator::TraceStorage<ErrsHandle>,
     ) -> Self {
+        Self {
+            cursor,
+            storage,
+            row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
+            scan_time: Duration::ZERO,
+        }
+    }
+}
+
+impl<B> ErrorScan<B>
+where
+    B: BatchReader<Time = Timestamp> + Navigable,
+    for<'a> B::Cursor: Cursor<
+            Key<'a> = &'a DataflowErrorSer,
+            Time = Timestamp,
+            TimeGat<'a>: PartialOrder<Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
+{
+    /// Opens a walk over held `batches`, which must include every held batch that overlaps the
+    /// range it walks.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the batched subscribe sink is not wired up")
+    )]
+    pub(super) fn from_batches(batches: Vec<B>) -> Self {
+        let (cursor, storage) = cursor_list(batches);
         Self {
             cursor,
             storage,
@@ -143,6 +178,54 @@ impl ErrorScan {
 
         self.scan_time += step_start.elapsed();
         outcome
+    }
+
+    /// Advances a walk over the error updates `range` emits until the cursor is exhausted, `fuel`
+    /// runs out, or the updates it appended exhaust `room`, and appends the updates it visits to
+    /// `updates`. Decrements `fuel` by the number of cursor positions visited and `room` by the
+    /// bytes appended, see [`error_update_byte_len`], and returns whether the walk reached its end.
+    ///
+    /// The walk visits each error once, so the updates it appends over all its steps are
+    /// consolidated per `(time, error)`, retractions included. It ignores the row-iteration limit.
+    pub(super) fn step_description(
+        &mut self,
+        range: &DescriptionRange,
+        fuel: &mut usize,
+        room: &mut usize,
+        updates: &mut Vec<(DataflowErrorSer, Timestamp, Diff)>,
+    ) -> bool {
+        let step_start = Instant::now();
+        let mut times = Vec::new();
+        let finished = loop {
+            if !self.cursor.key_valid(&self.storage) {
+                break true;
+            }
+            if *fuel == 0 || *room == 0 {
+                break false;
+            }
+            *fuel -= 1;
+
+            times.clear();
+            self.cursor.map_times(&self.storage, |time, diff| {
+                if let Some(time) = range.place(<B::Cursor as Cursor>::owned_time(time)) {
+                    times.push((time, *diff));
+                }
+            });
+            consolidate(&mut times);
+            if !times.is_empty() {
+                let error = self.cursor.key(&self.storage);
+                let bytes = error_update_byte_len(error).saturating_mul(times.len());
+                *room = room.saturating_sub(bytes);
+                updates.extend(
+                    times
+                        .drain(..)
+                        .map(|(time, diff)| (error.clone(), time, diff)),
+                );
+            }
+            self.cursor.step_key(&self.storage);
+        };
+        self.scan_time += step_start.elapsed();
+        finished
     }
 }
 
