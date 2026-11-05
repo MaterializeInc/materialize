@@ -539,7 +539,7 @@ impl StateVersions {
 
     /// Fetches live diffs for a shard. This is a thin wrapper around [Consensus::scan] with the
     /// right retry policy and instrumentation.
-    async fn fetch_live_diffs(
+    pub(crate) async fn fetch_live_diffs(
         &self,
         shard_id: &ShardId,
         from: SeqNo,

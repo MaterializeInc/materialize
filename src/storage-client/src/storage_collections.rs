@@ -3254,7 +3254,7 @@ async fn finalize_shards_task(
                                 .await;
                             if let Err(e) = downgrade {
                                 warn!("tried to finalize a shard with an advancing epoch: {e:?}");
-                                return Ok(());
+                                return Ok(true);
                             }
                             // Not available now, so finalization is broken.
                             // since_handle.expire().await;
@@ -3262,6 +3262,13 @@ async fn finalize_shards_task(
 
                         persist_client
                             .finalize_shard::<SourceData, (), Timestamp, StorageDiff>(
+                                shard_id,
+                                Diagnostics::from_purpose("finalizing shards"),
+                            )
+                            .await?;
+                        // `Ok` doesn't mean GC finished, so ask persist.
+                        persist_client
+                            .is_finalized::<SourceData, (), Timestamp, StorageDiff>(
                                 shard_id,
                                 Diagnostics::from_purpose("finalizing shards"),
                             )
@@ -3275,9 +3282,13 @@ async fn finalize_shards_task(
                             warn!("error during finalization of shard {shard_id}: {e:?}");
                             None
                         }
-                        Ok(()) => {
+                        Ok(true) => {
                             debug!(%shard_id, "finalize success!");
                             Some(shard_id)
+                        }
+                        Ok(false) => {
+                            debug!(%shard_id, "finalize unfinished, retrying later");
+                            None
                         }
                     }
                 }
