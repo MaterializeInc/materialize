@@ -3590,9 +3590,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/eslint-plugin-query@npm:^5.105.1":
-  version: 5.105.1
-  resolution: "@tanstack/eslint-plugin-query@npm:5.105.1"
+"@tanstack/eslint-plugin-query@npm:^5.105.2":
+  version: 5.105.2
+  resolution: "@tanstack/eslint-plugin-query@npm:5.105.2"
   dependencies:
     "@typescript-eslint/utils": "npm:^8.71.0"
   peerDependencies:
@@ -3601,7 +3601,7 @@ __metadata:
   peerDependenciesMeta:
     typescript:
       optional: true
-  checksum: 10c0/9e1201c9763e3bb92f19d1af879f7c6afa75743756a4d709bd983ed008bb9bd2a9953b5cd84a03f27d98f93a37ccbc779d814c42565d93c99799e552e405021c
+  checksum: 10c0/364e9de30d959a1c2bdf392abbbdb7805d00e69cd28b9c34080f75640f3c54795bf5b427623311d3c633d923c5af62c442956f79f3acbb9b2716b56826d0d565
   languageName: node
   linkType: hard
 
@@ -10674,7 +10674,7 @@ __metadata:
     "@stripe/stripe-js": "npm:^10.2.0"
     "@svgr/babel-plugin-transform-svg-component": "npm:^8.0.0"
     "@tanstack/db": "npm:0.15.2"
-    "@tanstack/eslint-plugin-query": "npm:^5.105.1"
+    "@tanstack/eslint-plugin-query": "npm:^5.105.2"
     "@tanstack/react-db": "npm:0.5.12"
     "@tanstack/react-query": "npm:^5.105.1"
     "@tanstack/react-query-devtools": "npm:^5.105.1"
