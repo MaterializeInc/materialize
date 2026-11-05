@@ -820,7 +820,12 @@ impl PersistClient {
 
     /// Check if the given shard is in a finalized state; ie. it can no longer be
     /// read, any data that was written to it is no longer accessible, and we've
-    /// discarded references to that data from state.
+    /// discarded references to that data from state, and GC has deleted it from
+    /// blob. Retry [Self::finalize_shard] until this is true.
+    ///
+    /// With `persist_gc_remove_finalized_rollups` on, this also waits for GC to
+    /// remove rollups written before the shard was finalized, so turning the
+    /// flag on can make a shard that was finalized not finalized again.
     pub async fn is_finalized<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -835,7 +840,7 @@ impl PersistClient {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
-        Ok(machine.is_finalized())
+        Ok(machine.is_finalized() && machine.fetch_finalized_gc_step().await.1.is_none())
     }
 
     /// If a shard is guaranteed to never be used again, finalize it to delete
@@ -848,12 +853,15 @@ impl PersistClient {
     ///
     /// Once `finalize_shard` has been called, the result of future operations on
     /// the shard are not defined. They may return errors or succeed as a noop.
+    ///
+    /// This waits for GC to finish, unless GC stops making progress. Returns
+    /// whether the shard is now [Self::is_finalized].
     #[instrument(level = "debug", fields(shard = %shard_id))]
     pub async fn finalize_shard<K, V, T, D>(
         &self,
         shard_id: ShardId,
         diagnostics: Diagnostics,
-    ) -> Result<(), InvalidUsage<T>>
+    ) -> Result<bool, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -868,8 +876,11 @@ impl PersistClient {
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let () = maintenance.perform(&machine, &gc).await;
+        // On a retry after a crash, or after a commit that lost its response,
+        // nothing above asks for GC.
+        let gc_done = machine.finish_finalized_gc(&gc).await;
 
-        Ok(())
+        Ok(machine.is_finalized() && gc_done)
     }
 
     /// Upgrade the state to the latest version. This should only be called once we will no longer

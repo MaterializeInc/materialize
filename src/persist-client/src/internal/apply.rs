@@ -234,6 +234,18 @@ where
             })
     }
 
+    pub(crate) fn finalized_gc_step(
+        &self,
+        earliest_live: SeqNo,
+    ) -> Option<crate::internal::state::FinalizedGcStep> {
+        let max_versions = GC_MAX_VERSIONS.get(&self.cfg);
+        let remove_finalized_rollups = GC_REMOVE_FINALIZED_ROLLUPS.get(&self.cfg);
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                state.finalized_gc_step(earliest_live, max_versions, remove_finalized_rollups)
+            })
+    }
+
     /// Whether the shard is a tombstone, which has no readers or writers.
     pub(crate) fn is_tombstone(&self) -> bool {
         self.state
