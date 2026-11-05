@@ -45,13 +45,12 @@ use std::pin::pin;
 use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
-use mz_timely_util::containers::stack::FueledBuilder;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
@@ -76,7 +75,7 @@ use mz_timely_util::builder_async::{
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
 use crate::source::RawSourceCreationConfig;
-use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{SharedFuel, SignaledFuture, SourceMessage, StackedCollection};
 
 use super::{
     DefiniteError, ReplicationError, RewindRequest, SourceOutputInfo, TransientError,
@@ -107,7 +106,7 @@ pub(crate) fn render<'scope>(
     rewind_stream: StreamVec<'scope, GtidPartition, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
-    StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
+    Vec<StackedCollection<'scope, GtidPartition, Result<SourceMessage, DataflowError>>>,
     StreamVec<'scope, GtidPartition, ReplicationError>,
     PressOnDropButton,
 ) {
@@ -115,15 +114,23 @@ pub(crate) fn render<'scope>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
-    let (mut data_output, data_stream) = builder.new_output::<FueledBuilder<_>>();
+    // One data output port per source export, in output index order. All ports advance in
+    // lockstep. Every export observes the same frontier.
+    let export_count = config.source_exports.len();
+    let mut data_outputs = Vec::with_capacity(export_count);
+    let mut data_streams = Vec::with_capacity(export_count);
+    for _ in 0..export_count {
+        let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        data_outputs.push(output);
+        data_streams.push(stream);
+    }
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut rewind_input = builder.new_input_for(
-        rewind_stream,
-        Exchange::new(move |_| repl_reader_id),
-        &data_output,
-    );
+    // The operator collects every rewind request before it downgrades any data port. The rewind
+    // input therefore needs no connection to the data ports.
+    let mut rewind_input =
+        builder.new_disconnected_input(rewind_stream, Exchange::new(move |_| repl_reader_id));
 
     let output_indexes = source_outputs
         .iter()
@@ -136,7 +143,9 @@ pub(crate) fn render<'scope>(
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, definite_error_cap_set]: &mut [_; 2] = caps.try_into().unwrap();
+            let (data_cap_sets, caps) = caps.split_at_mut(export_count);
+            let [definite_error_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
+            let mut data_outputs = SharedFuel::new(data_outputs);
 
             // Only run the replication reader on the worker responsible for it.
             if !config.responsible_for(REPL_READER) {
@@ -176,8 +185,8 @@ pub(crate) fn render<'scope>(
                         return_definite_error(
                             err,
                             &output_indexes,
-                            &data_output,
-                            data_cap_set,
+                            &mut data_outputs,
+                            data_cap_sets,
                             &definite_error_handle,
                             definite_error_cap_set,
                         )
@@ -243,20 +252,19 @@ pub(crate) fn render<'scope>(
                 return Ok(return_definite_error(
                     err,
                     &output_indexes,
-                    &data_output,
-                    data_cap_set,
+                    &mut data_outputs,
+                    data_cap_sets,
                     &definite_error_handle,
                     definite_error_cap_set,
                 )
                 .await);
             };
 
-            data_cap_set.downgrade(&*resume_upper);
             trace!(%id, "timely-{worker_id} replication reader started at {:?}", resume_upper);
 
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next().await {
-                if let AsyncEvent::Data(caps, data) = event {
+                if let AsyncEvent::Data(_, data) = event {
                     for req in data {
                         // Check that the replication stream will be resumed from the snapshot point or before.
                         if !PartialOrder::less_equal(&resume_upper, &req.snapshot_upper) {
@@ -267,8 +275,8 @@ pub(crate) fn render<'scope>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &data_output,
-                                data_cap_set,
+                                &mut data_outputs,
+                                data_cap_sets,
                                 &definite_error_handle,
                                 definite_error_cap_set,
                             )
@@ -276,7 +284,7 @@ pub(crate) fn render<'scope>(
                         };
                         // If the snapshot point is the same as the resume point then we don't need to rewind
                         if resume_upper != req.snapshot_upper {
-                            rewinds.insert(req.output_index.clone(), (caps.clone(), req));
+                            rewinds.insert(req.output_index, req);
                         }
                     }
                 }
@@ -294,8 +302,8 @@ pub(crate) fn render<'scope>(
                         return Ok(return_definite_error(
                             err,
                             &output_indexes,
-                            &data_output,
-                            data_cap_set,
+                            &mut data_outputs,
+                            data_cap_sets,
                             &definite_error_handle,
                             definite_error_cap_set,
                         )
@@ -309,7 +317,8 @@ pub(crate) fn render<'scope>(
             // capabilities.
             let mut data_partitions =
                 partitions::GtidReplicationPartitions::from(resume_upper.clone());
-            let mut progress_partitions = partitions::GtidReplicationPartitions::from(resume_upper);
+            let mut progress_partitions =
+                partitions::GtidReplicationPartitions::from(resume_upper.clone());
 
             let mut repl_context = context::ReplContext::new(
                 &config,
@@ -317,10 +326,12 @@ pub(crate) fn render<'scope>(
                 stream.as_mut(),
                 &table_info,
                 &metrics,
-                &mut data_output,
-                data_cap_set,
+                &mut data_outputs,
+                data_cap_sets,
                 rewinds,
             );
+            repl_context.advance_data_upper("resume", resume_upper);
+            repl_context.downgrade_data_cap_sets();
 
             let mut active_tx: Option<(Uuid, NonZeroU64)> = None;
 
@@ -347,15 +358,15 @@ pub(crate) fn render<'scope>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &data_output,
-                                data_cap_set,
+                                &mut data_outputs,
+                                data_cap_sets,
                                 &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
                         }
                         let new_upper = data_partitions.frontier();
-                        repl_context.downgrade_data_cap_set("xid_event", new_upper);
+                        repl_context.advance_data_upper("xid_event", new_upper);
                     }
                     // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
                     Some(EventData::GtidEvent(event)) => {
@@ -375,8 +386,8 @@ pub(crate) fn render<'scope>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &data_output,
-                                data_cap_set,
+                                &mut data_outputs,
+                                data_cap_sets,
                                 &definite_error_handle,
                                 definite_error_cap_set,
                             )
@@ -407,15 +418,15 @@ pub(crate) fn render<'scope>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &data_output,
-                                data_cap_set,
+                                &mut data_outputs,
+                                data_cap_sets,
                                 &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
                         }
                         let new_upper = data_partitions.frontier();
-                        repl_context.downgrade_data_cap_set("rows_event", new_upper);
+                        repl_context.advance_data_upper("rows_event", new_upper);
                     }
                     Some(EventData::QueryEvent(event)) => {
                         let (source_id, tx_id) = active_tx
@@ -440,21 +451,29 @@ pub(crate) fn render<'scope>(
                                 return Ok(return_definite_error(
                                     err,
                                     &output_indexes,
-                                    &data_output,
-                                    data_cap_set,
+                                    &mut data_outputs,
+                                    data_cap_sets,
                                     &definite_error_handle,
                                     definite_error_cap_set,
                                 )
                                 .await);
                             }
                             let new_upper = data_partitions.frontier();
-                            repl_context.downgrade_data_cap_set("query_event", new_upper);
+                            repl_context.advance_data_upper("query_event", new_upper);
                         }
                     }
                     _ => {
                         // TODO: Handle other event types
                         metrics.ignored.inc();
                     }
+                }
+
+                // Timely observes capability changes only when the operator yields, so the sets
+                // are downgraded only before the stream blocks or after a fuel yield. A downgrade
+                // after a fuel yield takes effect at the next yield.
+                let fuel_yielded = repl_context.data_outputs.take_yielded();
+                if fuel_yielded || repl_context.stream.as_mut().peek().now_or_never().is_none() {
+                    repl_context.downgrade_data_cap_sets();
                 }
             }
             // We never expect the replication stream to gracefully end
@@ -466,7 +485,12 @@ pub(crate) fn render<'scope>(
 
     let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
-    (data_stream.as_collection(), errors, button.press_on_drop())
+    let data_collections = data_streams
+        .into_iter()
+        .map(|stream| stream.as_collection())
+        .collect();
+
+    (data_collections, errors, button.press_on_drop())
 }
 
 /// Produces the replication stream from the MySQL server. This will return all transactions
