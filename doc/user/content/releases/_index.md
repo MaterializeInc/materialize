@@ -20,11 +20,13 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
-## v26.49.0
-*Released to Materialize Cloud: 2026-11-05* <br>
+## v26.49.1
+*Released to Materialize Cloud: 2026-11-05 (v26.49.0)* <br>
 *Released to Materialize Self-Managed: 2026-11-06* <br>
 
 ### Improvements {#v26.49-improvements}
+- **Investigate hydration on the cluster details page**: The Console's [redesigned cluster details page](#v26.47-cluster-details-page) gains a **Hydration** tab that charts each replica's hydrations over the last 24 hours, 7 days, or 30 days with their duration, peak memory, disk, and heap use and the objects that took longest, shows which objects a hydrating replica is working on, and calls out a replica that keeps restarting without finishing, such as one running out of memory.
+- **Freshness page on Self-Managed**: The Console's [Freshness page](#v26.48-freshness-page), which tracks p90, p99, p99.9, and maximum freshness across your environment's objects, is now available on Materialize Self-Managed.
 - **Manage auto-scaling policies in the Console**: The Console's Alter cluster form can now set, change, or remove a managed cluster's [auto-scaling policy](/clusters/autoscaling/), including its hydration size and linger duration, and the opt-in [redesigned cluster details page](#v26.47-cluster-details-page) gains a configuration drawer that shows a cluster's settings, replicas, and auto-scaling policy.
 - **Higher throughput for queries at high concurrency**: In benchmarks of strict serializable single-row indexed queries over 256 connections, skipping unneeded cleanup at commit, completing already-ready reads without an extra queueing step, and lower per-query tracing overhead together raised throughput by 63-67%, smaller per-query allocations raised it by a further 26-30% over that build, and prepared queries over 512 connections reached 47% higher throughput in a single benchmark run by no longer registering a timeout timer when network I/O completes immediately.
 - **`DROP INDEX` no longer orphans the objects reading from an index**: `DROP INDEX`, with or without `CASCADE`, now fails with an error that names the dependent objects when a materialized view or another index reads from the index, instead of leaving those readers running on an orphaned dataflow, so drop the readers first and drop indexes on the same relation newest first; Terraform configurations that replace such an index need `lifecycle { replace_triggered_by = [...] }` on the materialized view that reads it.
@@ -44,6 +46,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - **mz-docs**: The skill now finds pages through the live documentation's `llms.txt` index and fetches them from materialize.com instead of bundling a copy of the docs, so it reads the current documentation and needs network access to materialize.com.
 
 ### Bug Fixes {#v26.49-bug-fixes}
+- Fixed the Console's clusters list showing a dash in the Disk column for every replica in Self-Managed deployments that use swap, which now shows swap use as a share of the replica's heap limit.
 - Fixed `CASE` expressions with many or deeply nested arms overflowing the stack when creating a view, using excessive memory, or taking time exponential in the nesting depth when the branches contain subqueries; creating one large machine-generated materialized view now raises memory use by 1.2 GiB instead of 3.8 GiB.
 - Fixed saving the Console's Alter cluster form during a graceful resize or while a burst replica was running, which could cancel the resize even when only renaming the cluster, or keep the extra replicas of the resize or the burst replica.
 - Fixed `SELECT DISTINCT` and `GROUP BY` returning duplicate rows on a view or materialized view column computed from a keyed column by a cast that rounds or truncates sub-microsecond `time`, `timestamp`, or `timestamptz` values.
