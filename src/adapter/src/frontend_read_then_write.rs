@@ -127,10 +127,13 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::Eval;
 use mz_expr::row::RowCollection;
-use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{
+    CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    RowSetFinishing,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
-use mz_repr::optimize::OverrideFrom;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::catalog::CatalogError;
 use mz_sql::plan::{self, MutationKind, QueryWhen};
@@ -139,6 +142,7 @@ use mz_sql::session::vars::IsolationLevel;
 use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
+use mz_transform::analysis::SubMultiset;
 use prometheus::Histogram;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -648,6 +652,112 @@ pub(crate) fn contains_mz_now(plan: &plan::ReadThenWritePlan) -> bool {
         || plan.returning.iter().any(|e| e.contains_temporal())
 }
 
+/// Values of the `selection` label of `mz_delete_rows_selection_total`.
+const DELETE_ROWS_SELECTION_ROWS: &str = "rows";
+const DELETE_ROWS_SELECTION_INTERSECTION: &str = "intersection";
+
+/// Bounds the catalog walk of [`delete_rows_contained`], in nesting depth and
+/// in collections analyzed. Exhausting either reports "not proven".
+const DELETE_ROWS_MAX_DEPTH: usize = 32;
+const DELETE_ROWS_MAX_COLLECTIONS: usize = 1024;
+
+/// Whether the rows of a `DELETE ... ROWS` are proven to be a sub-multiset of
+/// its table at every timestamp. `false` means "not proven".
+///
+/// `catalog` must be the snapshot the plan was built against.
+fn delete_rows_contained(catalog: &Catalog, delete_rows: &plan::DeleteRows) -> bool {
+    let config = optimize::OptimizerConfig::from(catalog.system_config());
+    let features = config.features.clone();
+    // An error here also fails the intersection, which reports it.
+    let rows = match optimize::view::Optimizer::new(config, None).optimize(delete_rows.rows.clone())
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::debug!(%err, "cannot optimize DELETE ... ROWS rows");
+            return false;
+        }
+    };
+    let mut prover = ContainmentProver {
+        catalog,
+        target: delete_rows.table,
+        features,
+        known: BTreeMap::new(),
+        budget: DELETE_ROWS_MAX_COLLECTIONS,
+    };
+    prover.proves(&rows, 0)
+}
+
+/// Proves containment in `target` across the catalog, by seeding
+/// [`SubMultiset`] with the collections an expression reads that are
+/// themselves proven contained.
+struct ContainmentProver<'a> {
+    catalog: &'a Catalog,
+    target: GlobalId,
+    features: OptimizerFeatures,
+    /// Memoized answers of [`Self::is_contained`].
+    known: BTreeMap<GlobalId, bool>,
+    /// Collections still allowed to be analyzed.
+    budget: usize,
+}
+
+impl ContainmentProver<'_> {
+    fn proves(&mut self, expr: &MirRelationExpr, depth: usize) -> bool {
+        let known = expr
+            .depends_on()
+            .into_iter()
+            .filter(|id| self.is_contained(*id, depth))
+            .collect();
+        SubMultiset::new(self.target, known).holds(expr, &self.features)
+    }
+
+    /// Whether the contents of collection `id` at every timestamp are a
+    /// sub-multiset of the target's contents at that timestamp.
+    fn is_contained(&mut self, id: GlobalId, depth: usize) -> bool {
+        if id == self.target {
+            return true;
+        }
+        if let Some(known) = self.known.get(&id) {
+            return *known;
+        }
+        let contained = if depth >= DELETE_ROWS_MAX_DEPTH || self.budget == 0 {
+            false
+        } else {
+            self.budget -= 1;
+            match self.definition(id) {
+                Some(expr) => self.proves(&expr, depth + 1),
+                None => false,
+            }
+        };
+        self.known.insert(id, contained);
+        contained
+    }
+
+    /// The expression collection `id` equals at every timestamp, if there is
+    /// one.
+    ///
+    /// A view is its definition. A materialized view stores its definition at
+    /// every timestamp below its write frontier, unless a refresh schedule lets
+    /// the stored contents lag the definition. A replaced materialized view
+    /// stores an earlier definition at earlier timestamps, so it qualifies
+    /// only while it has a single version. Every other collection, including
+    /// tables other than the target, has no definition in terms of the target.
+    fn definition(&self, id: GlobalId) -> Option<Arc<OptimizedMirRelationExpr>> {
+        let entry = self.catalog.try_get_entry_by_global_id(&id)?;
+        match entry.item() {
+            CatalogItem::View(view) => Some(Arc::clone(&view.locally_optimized_expr)),
+            CatalogItem::MaterializedView(mv)
+                if mv.refresh_schedule.is_none()
+                    && mv.replacement_target.is_none()
+                    && mv.collections.len() == 1
+                    && mv.global_id_writes() == id =>
+            {
+                Some(Arc::clone(&mv.locally_optimized_expr))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// The timeline whose oracle governs a read-then-write with the given read-side
 /// [`TimelineContext`].
 ///
@@ -793,6 +903,38 @@ impl PeekClient {
         // in a state where these panic.
         if !session.transaction().allows_writes() {
             return Err(AdapterError::ReadOnlyTransaction);
+        }
+
+        if let Some(delete_rows) = plan.delete_rows.take() {
+            let target_global_id = catalog.get_entry(&plan.id).latest_global_id();
+            let rows_contained = delete_rows.table == target_global_id
+                && delete_rows_contained(catalog, &delete_rows);
+            tracing::debug!(
+                table = %delete_rows.table,
+                rows_contained,
+                "DELETE ... ROWS selection"
+            );
+            // Writing `q` in place of `t INTERSECT ALL q` relies on the OCC loop's
+            // invariants. A write at `T` waits for the selection's frontier to reach
+            // `T`, so the collections `q` reads are complete through `T - 1`, where
+            // the proof makes `q` a sub-multiset of `t`. The timestamped write then
+            // commits to the txns shard, which every table write shares, at exactly
+            // `T` or not at all, so `t` still holds its `T - 1` contents when the
+            // retractions apply, whether or not the selection reads `t` itself. The
+            // blind exit writes at a timestamp it does not choose, and a proven `q`
+            // never takes it with rows, because it reads `t` directly or through
+            // collections that follow `t`, whose frontier does not close.
+            let label = if rows_contained {
+                plan.selection = delete_rows.rows;
+                DELETE_ROWS_SELECTION_ROWS
+            } else {
+                DELETE_ROWS_SELECTION_INTERSECTION
+            };
+            self.coordinator_client()
+                .metrics()
+                .delete_rows_selection
+                .with_label_values(&[label])
+                .inc();
         }
 
         let validation_result = validate_read_then_write(
@@ -1209,6 +1351,7 @@ impl PeekClient {
             assignments,
             kind,
             returning: _,
+            delete_rows: _,
         } = plan;
 
         let expr = selection.clone().lower(catalog.system_config(), None)?;

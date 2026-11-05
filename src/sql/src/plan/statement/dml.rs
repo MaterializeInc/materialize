@@ -165,9 +165,17 @@ pub fn plan_read_then_write(
         mut selection,
         finishing,
         assignments,
+        mut delete_rows,
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
+    if let Some(delete_rows) = &mut delete_rows {
+        delete_rows.rows.bind_parameters_and_simplify_offset(
+            scx,
+            QueryLifetime::OneShot,
+            params,
+        )?;
+    }
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
@@ -182,6 +190,7 @@ pub fn plan_read_then_write(
         assignments: assignments_outer,
         kind,
         returning: Vec::new(),
+        delete_rows,
     }))
 }
 

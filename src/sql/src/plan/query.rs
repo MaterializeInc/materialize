@@ -740,6 +740,8 @@ pub struct ReadThenWritePlan {
     /// Map from column index to SET expression. Empty for DELETE statements.
     pub assignments: BTreeMap<usize, HirScalarExpr>,
     pub finishing: RowSetFinishing,
+    /// See [`crate::plan::ReadThenWritePlan::delete_rows`].
+    pub delete_rows: Option<crate::plan::DeleteRows>,
 }
 
 pub fn plan_delete_query(
@@ -827,6 +829,7 @@ pub fn plan_mutation_query_inner(
     let desc = item.relation_desc().expect("table has desc");
     let relation_type = qcx.relation_type(&get);
 
+    let mut delete_rows = None;
     if let Some(rows) = rows {
         if !using.is_empty() || selection.is_some() || alias.is_some() {
             sql_bail!("DELETE ... ROWS cannot be combined with USING, WHERE, or a table alias");
@@ -857,6 +860,17 @@ pub fn plan_mutation_query_inner(
             );
         }
         let rows = cast_to_table_columns(&qcx, ccx, &desc, &ordering, &target_types, rows)?;
+        let HirRelationExpr::Get {
+            id: Id::Global(table),
+            ..
+        } = &get
+        else {
+            unreachable!("a resolved table is a global get, got {get:?}");
+        };
+        delete_rows = Some(crate::plan::DeleteRows {
+            table: *table,
+            rows: rows.clone(),
+        });
         // `get` is the left input, so every row the selection retracts is a row of the
         // table, at most as often as the table holds it.
         get = get.intersect_all(rows);
@@ -921,6 +935,7 @@ pub fn plan_mutation_query_inner(
         selection: get,
         finishing,
         assignments: sets,
+        delete_rows,
     })
 }
 

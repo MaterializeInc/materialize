@@ -827,6 +827,7 @@ fn plan_mutation(
         assignments: BTreeMap::new(),
         kind,
         returning: Vec::new(),
+        delete_rows: None,
     })
 }
 
