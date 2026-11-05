@@ -18,7 +18,9 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, LirDataflowDescription};
+use mz_compute_types::dataflows::{
+    BuildDesc, DataflowClass, DataflowDescription, LirDataflowDescription,
+};
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
@@ -1422,7 +1424,7 @@ impl Instance {
     #[mz_ore::instrument(level = "debug")]
     pub fn create_dataflow(
         &mut self,
-        dataflow: LirDataflowDescription,
+        mut dataflow: LirDataflowDescription,
         import_read_holds: Vec<ReadHold>,
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState>,
         target_replica: Option<ReplicaId>,
@@ -1445,6 +1447,23 @@ impl Instance {
         }
         if as_of.is_empty() && dataflow.copy_to_ids().next().is_some() {
             return Err(EmptyAsOfForCopyTo);
+        }
+        // A replica with a second runtime renders a one-shot read there. That runtime publishes
+        // nothing, so no dataflow on the other runtime can import what it renders, and its exports
+        // must be transient. The class describes peek dataflows, which read one time and drive no
+        // sink: a subscribe never stops, and a copy-to writes outside the replica. A dataflow that
+        // does not fit renders as maintained work, which any runtime layout serves.
+        let fits = dataflow.class_fits_shape();
+        mz_ore::soft_assert_or_log!(
+            fits,
+            "dataflow {} has class {:?} but not its shape: exports={} until={:?}",
+            dataflow.debug_name,
+            dataflow.class,
+            dataflow.display_export_ids(),
+            dataflow.until.elements(),
+        );
+        if !fits {
+            dataflow.class = DataflowClass::Maintained;
         }
 
         // Collect all dependencies of the dataflow, and read holds on them at the `as_of`.
@@ -1611,6 +1630,7 @@ impl Instance {
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             time_dependence: dataflow.time_dependence,
+            class: dataflow.class,
         };
 
         if augmented_dataflow.is_transient() {
