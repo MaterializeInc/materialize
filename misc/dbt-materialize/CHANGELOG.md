@@ -2,10 +2,9 @@
 
 ## Unreleased
 
-* Fail fast with a clear error when the profile points at PostgreSQL or
-  another database that is not Materialize. The server rejected the
-  adapter's session parameters at startup, so dbt retried the connection and
-  then reported only `unrecognized configuration parameter
+* Fail fast with a clear error when the profile points at PostgreSQL. The
+  server rejected the adapter's session parameters at startup, so dbt retried
+  the connection and then reported only `unrecognized configuration parameter
   "auto_route_catalog_queries"`.
 
 ## 1.9.12 - 2026-11-03

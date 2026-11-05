@@ -98,9 +98,7 @@ def open_with_connect_error(monkeypatch, message):
         raise psycopg2.OperationalError(message)
 
     monkeypatch.setattr(psycopg2, "connect", failing_connect)
-    monkeypatch.setattr(
-        "dbt.adapters.base.connections.sleep", lambda _: None, raising=False
-    )
+    monkeypatch.setattr("dbt.adapters.base.connections.sleep", lambda _: None)
     credentials = MaterializeCredentials(
         host="localhost",
         port=5432,
@@ -116,11 +114,17 @@ def open_with_connect_error(monkeypatch, message):
     return str(exc_info.value), calls
 
 
-def test_postgres_rejecting_session_parameters_fails_fast(monkeypatch):
-    message, calls = open_with_connect_error(
-        monkeypatch,
+@pytest.mark.parametrize(
+    "server_message",
+    [
         'FATAL:  unrecognized configuration parameter "auto_route_catalog_queries"',
-    )
+        "FATAL:  unbekannter Konfigurationsparameter »auto_route_catalog_queries«",
+    ],
+)
+def test_postgres_rejecting_session_parameters_fails_fast(monkeypatch, server_message):
+    # libpq reports one line per attempted address.
+    line = f'connection to server at "localhost" (::1), port 5432 failed: {server_message}\n'
+    message, calls = open_with_connect_error(monkeypatch, line * 2)
 
     assert NOT_MATERIALIZE_ERROR in message
     assert "auto_route_catalog_queries" in message

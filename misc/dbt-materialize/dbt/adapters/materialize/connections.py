@@ -62,12 +62,11 @@ NOT_MATERIALIZE_ERROR = (
 
 def _rejects_default_session_parameter(exc: psycopg2.OperationalError) -> bool:
     # PostgreSQL refuses the connection when the startup packet sets a
-    # parameter it does not know, so a non-Materialize server fails here,
-    # before the `mz_version` check in `open` can run.
-    return any(
-        f'unrecognized configuration parameter "{name}"' in str(exc)
-        for name in DEFAULT_SESSION_PARAMETERS
-    )
+    # parameter it does not know, so it fails here, before the `mz_version`
+    # check in `open` can run. Match on the name alone because the rest of the
+    # message is localized. Materialize only sends a notice for unknown
+    # startup parameters, so this cannot fire against it.
+    return any(name in str(exc) for name in DEFAULT_SESSION_PARAMETERS)
 
 
 def _escape_option_value(v: object) -> str:
@@ -185,7 +184,7 @@ class MaterializeConnectionManager(PostgresConnectionManager):
                     # Not an OperationalError, so `retry_connection` fails
                     # right away instead of retrying a permanent error.
                     raise dbt_common.exceptions.DbtRuntimeError(
-                        f"{exc}\n{NOT_MATERIALIZE_ERROR}"
+                        f"{str(exc).rstrip()}\n{NOT_MATERIALIZE_ERROR}"
                     ) from exc
                 raise
 
