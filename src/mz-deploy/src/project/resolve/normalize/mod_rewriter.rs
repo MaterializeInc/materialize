@@ -43,23 +43,43 @@ use mz_sql_parser::ast::{
     Ident, Raw, Statement, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName,
 };
 
+use crate::project::error::LoadError;
+
+/// Build an [`Ident`] from `name + suffix`, mapping an over-length result to a
+/// [`LoadError`] so the overflow reports as a compile error rather than a panic.
+fn suffixed_ident(name: &str, suffix: &str) -> Result<Ident, LoadError> {
+    let suffixed = format!("{}{}", name, suffix);
+    Ident::new(&suffixed).map_err(|_| LoadError::SuffixedIdentifierTooLong {
+        name: suffixed,
+        limit: Ident::MAX_LENGTH,
+    })
+}
+
 /// Append `suffix` to the database name if it matches `database_name`.
-fn rewrite_database_name(node: &mut UnresolvedDatabaseName, database_name: &str, suffix: &str) {
+fn rewrite_database_name(
+    node: &mut UnresolvedDatabaseName,
+    database_name: &str,
+    suffix: &str,
+) -> Result<(), LoadError> {
     if node.0.as_str() == database_name {
-        node.0 =
-            Ident::new(format!("{}{}", database_name, suffix)).expect("valid database identifier");
+        node.0 = suffixed_ident(database_name, suffix)?;
     }
+    Ok(())
 }
 
 /// Append `suffix` to the schema part (last ident) if it matches `schema_name`.
-fn rewrite_schema_name(node: &mut UnresolvedSchemaName, schema_name: &str, suffix: &str) {
+fn rewrite_schema_name(
+    node: &mut UnresolvedSchemaName,
+    schema_name: &str,
+    suffix: &str,
+) -> Result<(), LoadError> {
     if let Some(last) = node.0.last() {
         if last.as_str() == schema_name {
             let idx = node.0.len() - 1;
-            node.0[idx] =
-                Ident::new(format!("{}{}", schema_name, suffix)).expect("valid schema identifier");
+            node.0[idx] = suffixed_ident(schema_name, suffix)?;
         }
     }
+    Ok(())
 }
 
 /// Visitor that rewrites database name identifiers by appending a suffix.
@@ -70,21 +90,32 @@ fn rewrite_schema_name(node: &mut UnresolvedSchemaName, schema_name: &str, suffi
 struct DatabaseNameRewriter<'a> {
     database_name: &'a str,
     suffix: &'a str,
+    error: Option<LoadError>,
+}
+
+impl<'a> DatabaseNameRewriter<'a> {
+    fn rewrite(&mut self, node: &mut UnresolvedDatabaseName) {
+        if self.error.is_none() {
+            if let Err(e) = rewrite_database_name(node, self.database_name, self.suffix) {
+                self.error = Some(e);
+            }
+        }
+    }
 }
 
 impl<'a> VisitMut<'_, Raw> for DatabaseNameRewriter<'a> {
     fn visit_database_name_mut(&mut self, node: &mut UnresolvedDatabaseName) {
-        rewrite_database_name(node, self.database_name, self.suffix);
+        self.rewrite(node);
     }
 
     fn visit_object_name_mut(&mut self, node: &mut UnresolvedObjectName) {
         if let UnresolvedObjectName::Database(db_name) = node {
-            rewrite_database_name(db_name, self.database_name, self.suffix);
+            self.rewrite(db_name);
         }
     }
 
     fn visit_unresolved_database_name_mut(&mut self, node: &mut UnresolvedDatabaseName) {
-        rewrite_database_name(node, self.database_name, self.suffix);
+        self.rewrite(node);
     }
 }
 
@@ -96,21 +127,32 @@ impl<'a> VisitMut<'_, Raw> for DatabaseNameRewriter<'a> {
 struct SchemaNameRewriter<'a> {
     schema_name: &'a str,
     suffix: &'a str,
+    error: Option<LoadError>,
+}
+
+impl<'a> SchemaNameRewriter<'a> {
+    fn rewrite(&mut self, node: &mut UnresolvedSchemaName) {
+        if self.error.is_none() {
+            if let Err(e) = rewrite_schema_name(node, self.schema_name, self.suffix) {
+                self.error = Some(e);
+            }
+        }
+    }
 }
 
 impl<'a> VisitMut<'_, Raw> for SchemaNameRewriter<'a> {
     fn visit_object_name_mut(&mut self, node: &mut UnresolvedObjectName) {
         if let UnresolvedObjectName::Schema(schema_name) = node {
-            rewrite_schema_name(schema_name, self.schema_name, self.suffix);
+            self.rewrite(schema_name);
         }
     }
 
     fn visit_schema_name_mut(&mut self, node: &mut UnresolvedSchemaName) {
-        rewrite_schema_name(node, self.schema_name, self.suffix);
+        self.rewrite(node);
     }
 
     fn visit_unresolved_schema_name_mut(&mut self, node: &mut UnresolvedSchemaName) {
-        rewrite_schema_name(node, self.schema_name, self.suffix);
+        self.rewrite(node);
     }
 }
 
@@ -129,14 +171,19 @@ pub(crate) fn rewrite_database_names(
     statements: &mut [Statement<Raw>],
     database_name: &str,
     suffix: &str,
-) {
+) -> Result<(), LoadError> {
     let mut rewriter = DatabaseNameRewriter {
         database_name,
         suffix,
+        error: None,
     };
     for stmt in statements {
         visit_mut::visit_statement_mut(&mut rewriter, stmt);
+        if let Some(e) = rewriter.error.take() {
+            return Err(e);
+        }
     }
+    Ok(())
 }
 
 /// Rewrite schema names in parsed mod statements by appending a suffix.
@@ -154,14 +201,19 @@ pub(crate) fn rewrite_schema_names(
     statements: &mut [Statement<Raw>],
     schema_name: &str,
     suffix: &str,
-) {
+) -> Result<(), LoadError> {
     let mut rewriter = SchemaNameRewriter {
         schema_name,
         suffix,
+        error: None,
     };
     for stmt in statements {
         visit_mut::visit_statement_mut(&mut rewriter, stmt);
+        if let Some(e) = rewriter.error.take() {
+            return Err(e);
+        }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -177,13 +229,13 @@ mod tests {
 
     fn rewrite_db(sql: &str, db_name: &str, suffix: &str) -> String {
         let mut stmts = vec![parse_one(sql)];
-        rewrite_database_names(&mut stmts, db_name, suffix);
+        rewrite_database_names(&mut stmts, db_name, suffix).expect("valid suffixed name");
         format!("{}", stmts[0])
     }
 
     fn rewrite_schema(sql: &str, schema_name: &str, suffix: &str) -> String {
         let mut stmts = vec![parse_one(sql)];
-        rewrite_schema_names(&mut stmts, schema_name, suffix);
+        rewrite_schema_names(&mut stmts, schema_name, suffix).expect("valid suffixed name");
         format!("{}", stmts[0])
     }
 
@@ -291,5 +343,25 @@ mod tests {
             !result.contains("_staging"),
             "non-matching schema should be untouched: {result}"
         );
+    }
+
+    #[mz_ore::test]
+    fn test_database_suffix_overflow_errors() {
+        let long_db = "a".repeat(250);
+        let mut stmts = vec![parse_one(&format!("COMMENT ON DATABASE {long_db} IS 'x'"))];
+        let err = rewrite_database_names(&mut stmts, &long_db, "_staging")
+            .expect_err("over-length suffixed database name must error, not panic");
+        assert!(err.to_string().contains("too long"), "got: {err}");
+    }
+
+    #[mz_ore::test]
+    fn test_schema_suffix_overflow_errors() {
+        let long_schema = "a".repeat(250);
+        let mut stmts = vec![parse_one(&format!(
+            "COMMENT ON SCHEMA app.{long_schema} IS 'x'"
+        ))];
+        let err = rewrite_schema_names(&mut stmts, &long_schema, "_staging")
+            .expect_err("over-length suffixed schema name must error, not panic");
+        assert!(err.to_string().contains("too long"), "got: {err}");
     }
 }

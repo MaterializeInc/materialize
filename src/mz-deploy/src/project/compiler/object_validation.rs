@@ -55,7 +55,7 @@ use references::{
 };
 use schema_constraints::validate_no_storage_and_computation_in_schema;
 
-use super::super::ast::Statement;
+use super::super::ast::{DatabaseIdent, Statement};
 use crate::project::SchemaQualifier;
 use crate::project::error::{ValidationError, ValidationErrorKind, ValidationErrors};
 use crate::project::ir::compiled::{Database, DatabaseObject, FullyQualifiedName, Project, Schema};
@@ -364,8 +364,15 @@ fn validate_single_variant(
         }
     };
 
-    // Get identifier from original statement before normalization
-    let main_ident = stmt.ident();
+    // Fully qualify the object's own identifier from the file's FQN. Supporting
+    // statements are normalized to fully qualified names below, so an
+    // unqualified main name (the idiomatic style) must still carry its database
+    // and schema for reference matching to detect a wrong-schema target.
+    let main_ident = DatabaseIdent {
+        database: Some(Ident::new_unchecked(fqn.database())),
+        schema: Some(Ident::new_unchecked(fqn.schema())),
+        object: Ident::new_unchecked(fqn.object()),
+    };
 
     // Validate the original statement identifier against FQN
     validate_ident(&stmt, &fqn, main_offset, &mut errors);

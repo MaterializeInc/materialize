@@ -17,6 +17,33 @@ use crate::project::error::{ValidationError, ValidationErrorKind};
 use crate::project::ir::compiled::FullyQualifiedName;
 use mz_sql_parser::ast::*;
 
+/// Interpret a referenced object name as a [`DatabaseIdent`], recording an
+/// `InvalidIdentifier` error and returning `None` if it has too many
+/// qualification levels to be a valid object reference.
+fn reference_ident(
+    name: &UnresolvedItemName,
+    fqn: &FullyQualifiedName,
+    sql: &str,
+    offset: usize,
+    errors: &mut Vec<ValidationError>,
+) -> Option<DatabaseIdent> {
+    match DatabaseIdent::try_from(name.clone()) {
+        Ok(ident) => Some(ident),
+        Err(reason) => {
+            errors.push(ValidationError::with_file_sql_and_offset(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: name.to_string(),
+                    reason,
+                },
+                fqn.path.clone(),
+                sql.to_string(),
+                offset,
+            ));
+            None
+        }
+    }
+}
+
 /// Validates that all CREATE INDEX statements reference the main object.
 ///
 /// Ensures that every index defined in the file is created on the object
@@ -44,9 +71,12 @@ pub(super) fn validate_index_references(
     errors: &mut Vec<ValidationError>,
 ) {
     for (i, index) in indexes.iter().enumerate() {
-        let on: DatabaseIdent = index.on_name.name().clone().into();
+        let index_sql = format!("{};", index);
+        let Some(on) = reference_ident(index.on_name.name(), fqn, &index_sql, offsets[i], errors)
+        else {
+            continue;
+        };
         if !on.matches(main_ident) {
-            let index_sql = format!("{};", index);
             errors.push(ValidationError::with_file_sql_and_offset(
                 ValidationErrorKind::IndexReferenceMismatch {
                     referenced: on.object.to_string(),
@@ -124,7 +154,11 @@ pub(super) fn validate_grant_references(
                     for obj in names {
                         match obj {
                             UnresolvedObjectName::Item(item_name) => {
-                                let grant_target: DatabaseIdent = item_name.clone().into();
+                                let Some(grant_target) =
+                                    reference_ident(item_name, fqn, &grant_sql, offset, errors)
+                                else {
+                                    continue;
+                                };
                                 if !grant_target.matches(main_ident) {
                                     errors.push(ValidationError::with_file_sql_and_offset(
                                         ValidationErrorKind::GrantReferenceMismatch {
@@ -239,7 +273,11 @@ fn validate_comment_target(
     offset: usize,
     errors: &mut Vec<ValidationError>,
 ) {
-    let comment_target: DatabaseIdent = comment_name.name().clone().into();
+    let Some(comment_target) =
+        reference_ident(comment_name.name(), fqn, comment_sql, offset, errors)
+    else {
+        return;
+    };
 
     // Check that the comment references the main object
     if !comment_target.matches(main_ident) {
@@ -327,7 +365,11 @@ pub(super) fn validate_comment_references(
 
         // Handle column comments specially (they reference the parent table)
         if let CommentObjectType::Column { name } = &comment.object {
-            let column_parent: DatabaseIdent = name.relation.name().clone().into();
+            let Some(column_parent) =
+                reference_ident(name.relation.name(), fqn, &comment_sql, offset, errors)
+            else {
+                continue;
+            };
             if !column_parent.matches(main_ident) {
                 errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::ColumnCommentReferenceMismatch {
