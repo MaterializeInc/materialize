@@ -33,6 +33,7 @@ pub mod panic;
 pub mod pool_config;
 pub mod probe;
 pub mod reclock;
+pub mod rendezvous;
 pub mod replay;
 pub mod scope_label;
 pub mod temporal;
