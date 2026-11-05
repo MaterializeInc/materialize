@@ -33,14 +33,14 @@ kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==25.1.1
 # NOTE matplotlib 3.10.9 is required for Python 3.10 compatibility
-matplotlib==3.10.9; python_version < "3.11"
+matplotlib==3.10.9; python_version < "3.11"  # renovate: ignore
 matplotlib==3.11.2; python_version >= "3.11"
 matplotlib-stubs==0.3.11
 # Keep on 3.4.2 for Python 3.10 compatibility
 networkx==3.7
 networkx-stubs==0.0.1
 # NOTE numpy 2.2.6 is required for Python 3.10 compatibility
-numpy==2.2.6; python_version < "3.11"
+numpy==2.2.6; python_version < "3.11"  # renovate: ignore
 numpy==2.5.4; python_version >= "3.11"
 pandas==3.1.0
 pandas-stubs==3.1.0.261029
@@ -63,7 +63,7 @@ requests==2.34.2
 ruamel.yaml==0.19.1
 ruff==0.17.3
 # NOTE scipy 1.15 is required for Python 3.10 compatibility
-scipy==1.15.3; python_version < "3.11"
+scipy==1.15.3; python_version < "3.11"  # renovate: ignore
 scipy==1.18.1; python_version >= "3.11"
 scipy-stubs==1.18.1.1
 semver==3.1.0
@@ -83,7 +83,7 @@ typing-extensions==4.16.0
 xxhash==4.0.2
 yamllint==1.38.0
 # NOTE confluent-kafka only has wheels for a few python versions
-confluent-kafka==2.6.1; python_version < "3.13"
+confluent-kafka==2.6.1; python_version < "3.13"  # renovate: ignore
 confluent-kafka[schema-registry]==2.16.1; python_version >= "3.13"
 fastavro==1.13.1
 websocket-client==1.9.2

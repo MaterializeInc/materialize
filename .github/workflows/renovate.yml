@@ -10,27 +10,15 @@
 name: Renovate
 
 on:
-  schedule:
-    - cron: '17 * * * *'
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Resolve updates without creating branches, PRs, or issues
-        type: boolean
-        default: true
   pull_request:
     paths:
       - .github/renovate.json5
       - .github/workflows/renovate.yml
-      - ci/renovate/**
 
 permissions: {}
 
-concurrency:
-  group: renovate-${{ github.event_name == 'pull_request' && github.ref || 'updates' }}
-  cancel-in-progress: false
-
 env:
+  # renovate: datasource=docker depName=ghcr.io/renovatebot/renovate
   RENOVATE_IMAGE: ghcr.io/renovatebot/renovate:44.209.0@sha256:3609f05e0513fddd410666053c1a849397b57df40d68ec37fd747c7703222407
 
 jobs:
@@ -49,33 +37,3 @@ jobs:
           docker run --rm --volume "$PWD:/workspace:ro" --workdir /workspace \
             --entrypoint renovate-config-validator "$RENOVATE_IMAGE" \
             --strict --no-global .github/renovate.json5
-          docker run --rm --volume "$PWD:/workspace:ro" --workdir /workspace \
-            --entrypoint renovate-config-validator "$RENOVATE_IMAGE" \
-            --strict ci/renovate/config.json
-
-  renovate:
-    name: Update dependencies
-    needs: validate
-    if: github.repository == 'MaterializeInc/materialize' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 50
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Run Renovate
-        env:
-          RENOVATE_TOKEN: ${{ secrets.GH_TOKEN }}
-          RENOVATE_REPOSITORIES: ${{ github.repository }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-        run: |
-          if [[ "$DRY_RUN" == true ]]; then
-            export RENOVATE_DRY_RUN=full
-          fi
-          docker run --rm \
-            --env RENOVATE_TOKEN --env RENOVATE_REPOSITORIES --env RENOVATE_DRY_RUN \
-            --env RENOVATE_CONFIG_FILE=/config.json \
-            --volume "$PWD/ci/renovate/config.json:/config.json:ro" \
-            "$RENOVATE_IMAGE"
