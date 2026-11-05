@@ -13,6 +13,7 @@ use mz_compute_types::dyncfgs::{
     ENABLE_INDEX_PEEK_OFFLOAD, INDEX_PEEK_ACTIVATION_BUDGET, INDEX_PEEK_INLINE_BUDGET,
 };
 use mz_dyncfg::ConfigUpdates;
+use mz_ore::cast::CastLossy;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{IntoRowIterator, RowIterator, RowRef};
 use mz_secrets::InMemorySecretsController;

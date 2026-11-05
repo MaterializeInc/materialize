@@ -941,6 +941,24 @@
       "dyncfg": true
     },
     {
+      "name": "enable_compute_interactive_dataflows",
+      "typeName": "boolean",
+      "default": "on",
+      "description": "Whether replicas with an interactive compute runtime render peek dataflows on it.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_interactive_runtime",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether to launch compute replicas with a second, interactive compute timely runtime.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "enable_compute_logical_backpressure",
       "typeName": "boolean",
       "default": "off",
