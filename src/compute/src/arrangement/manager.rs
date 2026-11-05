@@ -20,6 +20,7 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{Span, TraceReader};
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_timely_util::arrange_agent::TraceAgent;
+use mz_timely_util::shared_trace::SharedReader;
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;
@@ -27,7 +28,8 @@ use timely::progress::Timestamp as _;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::metrics::WorkerMetrics;
-use crate::typedefs::{ErrAgent, RowRowAgent};
+use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
+use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
@@ -57,7 +59,13 @@ impl TraceManager {
         self.metrics.arrangement_maintenance_active_info.set(1);
 
         let mut antichain = Antichain::new();
-        for bundle in self.traces.values_mut() {
+        // A peer bundle holds nothing physically, and its physical hold joins with the upper, so
+        // for it this would only take the publication point's lock four times for no change.
+        for bundle in self
+            .traces
+            .values_mut()
+            .filter(|bundle| bundle.local().is_some())
+        {
             bundle.oks.read_upper(&mut antichain);
             bundle.oks.set_physical_compaction(antichain.borrow());
             bundle.errs.read_upper(&mut antichain);
@@ -241,33 +249,176 @@ where
     }
 }
 
+/// The trace of an index, either maintained by this runtime or published by the process's other
+/// compute runtime.
+///
+/// The two variants share their batch type, so cursors over either are the same and dispatch costs
+/// one branch per trace call, not per record.
+pub enum IndexTrace<Tr: TraceReader<Time = Timestamp>> {
+    /// A trace this runtime maintains.
+    Local(PaddedTrace<TraceAgent<Tr>>),
+    /// A trace the other runtime publishes. Its logical compaction is this runtime's hold on the
+    /// publication, padded as the local variant is.
+    Shared(PaddedTrace<SharedReader<Timestamp, Tr::Batch>>),
+}
+
+/// The `oks` trace of an index.
+pub type OksTrace = IndexTrace<RowRowSpine<Timestamp, Diff>>;
+/// The `errs` trace of an index.
+pub type ErrsTrace = IndexTrace<ErrSpine<Timestamp, Diff>>;
+
+impl<Tr: TraceReader<Time = Timestamp>> Clone for IndexTrace<Tr> {
+    fn clone(&self) -> Self {
+        match self {
+            IndexTrace::Local(trace) => IndexTrace::Local(trace.clone()),
+            IndexTrace::Shared(trace) => IndexTrace::Shared(trace.clone()),
+        }
+    }
+}
+
+impl<Tr: TraceReader<Time = Timestamp>> TraceReader for IndexTrace<Tr> {
+    type Time = Timestamp;
+    type Batch = Tr::Batch;
+
+    fn spans_through(
+        &mut self,
+        upper: AntichainRef<Timestamp>,
+    ) -> Option<Vec<Span<Timestamp, Self::Batch>>> {
+        match self {
+            IndexTrace::Local(trace) => trace.spans_through(upper),
+            IndexTrace::Shared(trace) => trace.spans_through(upper),
+        }
+    }
+
+    fn batches_through(&mut self, upper: AntichainRef<Timestamp>) -> Option<Vec<Self::Batch>> {
+        match self {
+            IndexTrace::Local(trace) => trace.batches_through(upper),
+            IndexTrace::Shared(trace) => trace.batches_through(upper),
+        }
+    }
+
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
+        match self {
+            IndexTrace::Local(trace) => trace.set_logical_compaction(frontier),
+            IndexTrace::Shared(trace) => trace.set_logical_compaction(frontier),
+        }
+    }
+
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Timestamp> {
+        match self {
+            IndexTrace::Local(trace) => trace.get_logical_compaction(),
+            IndexTrace::Shared(trace) => trace.get_logical_compaction(),
+        }
+    }
+
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Timestamp>) {
+        match self {
+            IndexTrace::Local(trace) => trace.set_physical_compaction(frontier),
+            IndexTrace::Shared(trace) => trace.set_physical_compaction(frontier),
+        }
+    }
+
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Timestamp> {
+        match self {
+            IndexTrace::Local(trace) => trace.get_physical_compaction(),
+            IndexTrace::Shared(trace) => trace.get_physical_compaction(),
+        }
+    }
+
+    fn map_spans<F: FnMut(&Span<Timestamp, Self::Batch>)>(&self, f: F) {
+        match self {
+            IndexTrace::Local(trace) => trace.map_spans(f),
+            IndexTrace::Shared(trace) => trace.map_spans(f),
+        }
+    }
+}
+
+impl<Tr: TraceReader<Time = Timestamp> + 'static> IndexTrace<Tr> {
+    /// Imports the trace into `scope`, restricted to `[since, until)`.
+    ///
+    /// A local import comes with the button that shuts its operator down. A shared import reads
+    /// through a reader minted for it, never through this handle: the import holds the publisher
+    /// physically at the boundary it was seeded with, which this handle, a logical hold only, does
+    /// not.
+    pub fn import_frontier_core<'scope>(
+        &mut self,
+        scope: Scope<'scope, Timestamp>,
+        name: &str,
+        since: Antichain<Timestamp>,
+        until: Antichain<Timestamp>,
+    ) -> (
+        Arranged<'scope, TraceFrontier<Self>>,
+        Option<ShutdownButton<CapabilitySet<Timestamp>>>,
+    ) {
+        match self {
+            IndexTrace::Local(trace) => {
+                let (arranged, button) =
+                    trace.import_frontier_core(scope, name, since.clone(), until.clone());
+                // The import's trace is a clone of this agent. Its replacement is another, wrapped
+                // in this enum.
+                let trace = IndexTrace::Local(PaddedTrace::from(trace.unpadded().clone()));
+                let arranged = Arranged {
+                    stream: arranged.stream,
+                    trace: TraceFrontier::make_from(trace, since.borrow(), until.borrow()),
+                };
+                (arranged, Some(button))
+            }
+            IndexTrace::Shared(handle) => {
+                let reader = handle.unpadded().fresh_reader();
+                let arranged =
+                    reader.import_frontier_core(scope, name, since.clone(), until.clone());
+                let trace = IndexTrace::Shared(PaddedTrace::from(reader));
+                let arranged = Arranged {
+                    stream: arranged.stream,
+                    trace: TraceFrontier::make_from(trace, since.borrow(), until.borrow()),
+                };
+                (arranged, None)
+            }
+        }
+    }
+}
+
 /// Bundles together traces for the successful computations (`oks`), the
 /// failed computations (`errs`), additional tokens that should share
 /// the lifetime of the bundled traces (`to_drop`).
 #[derive(Clone)]
 pub struct TraceBundle {
-    oks: PaddedTrace<RowRowAgent<Timestamp, Diff>>,
-    errs: PaddedTrace<ErrAgent<Timestamp, Diff>>,
+    oks: OksTrace,
+    errs: ErrsTrace,
     to_drop: Option<Rc<dyn Any>>,
 }
 
 impl TraceBundle {
-    /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
+    /// Constructs a new trace bundle out of an `oks` trace and `errs` trace this runtime maintains.
     pub fn new<O, E>(oks: O, errs: E) -> TraceBundle
     where
         O: Into<PaddedTrace<RowRowAgent<Timestamp, Diff>>>,
         E: Into<PaddedTrace<ErrAgent<Timestamp, Diff>>>,
     {
         TraceBundle {
-            oks: oks.into(),
-            errs: errs.into(),
+            oks: OksTrace::Local(oks.into()),
+            errs: ErrsTrace::Local(errs.into()),
+            to_drop: None,
+        }
+    }
+
+    /// Constructs a trace bundle over traces the process's other compute runtime publishes.
+    pub fn shared(oks: SharedOksHandle, errs: SharedErrsHandle) -> TraceBundle {
+        TraceBundle {
+            oks: OksTrace::Shared(oks.into()),
+            errs: ErrsTrace::Shared(errs.into()),
             to_drop: None,
         }
     }
 
     /// The traces this runtime maintains, if it maintains them.
     pub fn local(&self) -> Option<(&RowRowAgent<Timestamp, Diff>, &ErrAgent<Timestamp, Diff>)> {
-        Some((self.oks.unpadded(), self.errs.unpadded()))
+        match (&self.oks, &self.errs) {
+            (OksTrace::Local(oks), ErrsTrace::Local(errs)) => {
+                Some((oks.unpadded(), errs.unpadded()))
+            }
+            _ => None,
+        }
     }
 
     /// Adds tokens to be dropped when the trace bundle is dropped.
@@ -282,12 +433,12 @@ impl TraceBundle {
     }
 
     /// Returns a mutable reference to the `oks` trace.
-    pub fn oks_mut(&mut self) -> &mut PaddedTrace<RowRowAgent<Timestamp, Diff>> {
+    pub fn oks_mut(&mut self) -> &mut OksTrace {
         &mut self.oks
     }
 
     /// Returns a mutable reference to the `errs` trace.
-    pub fn errs_mut(&mut self) -> &mut PaddedTrace<ErrAgent<Timestamp, Diff>> {
+    pub fn errs_mut(&mut self) -> &mut ErrsTrace {
         &mut self.errs
     }
 
@@ -296,12 +447,7 @@ impl TraceBundle {
     /// A reader of both, such as a peek that must rule out errors before it returns rows, cannot
     /// take them one at a time, because each of [`TraceBundle::oks_mut`] and
     /// [`TraceBundle::errs_mut`] borrows the whole bundle.
-    pub fn oks_errs_mut(
-        &mut self,
-    ) -> (
-        &mut PaddedTrace<RowRowAgent<Timestamp, Diff>>,
-        &mut PaddedTrace<ErrAgent<Timestamp, Diff>>,
-    ) {
+    pub fn oks_errs_mut(&mut self) -> (&mut OksTrace, &mut ErrsTrace) {
         (&mut self.oks, &mut self.errs)
     }
 
@@ -324,10 +470,21 @@ impl TraceBundle {
     /// Note that the padded bundle represents a different TVC than the original one, it is unsound
     /// to use it to "uncompact" an existing TVC. The only valid use of the padded bundle is to
     /// initializa a new TVC.
+    ///
+    /// A bundle over traces the other runtime publishes is padded here too, because the other
+    /// runtime pads only its own handles and the padding never reaches the publication.
     pub fn into_padded(self) -> Self {
+        let oks = match self.oks {
+            OksTrace::Local(oks) => OksTrace::Local(oks.into_padded()),
+            OksTrace::Shared(oks) => OksTrace::Shared(oks.into_padded()),
+        };
+        let errs = match self.errs {
+            ErrsTrace::Local(errs) => ErrsTrace::Local(errs.into_padded()),
+            ErrsTrace::Shared(errs) => ErrsTrace::Shared(errs.into_padded()),
+        };
         Self {
-            oks: self.oks.into_padded(),
-            errs: self.errs.into_padded(),
+            oks,
+            errs,
             to_drop: self.to_drop,
         }
     }
