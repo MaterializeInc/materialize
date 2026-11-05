@@ -135,6 +135,27 @@ SELECT 1 FROM mz_internal.mz_recent_activity_log WHERE 1 = 0
 db error: ERROR: permission denied for VIEW "mz_internal.mz_recent_activity_log"
 DETAIL: The 'agent' role needs SELECT privileges on VIEW "mz_internal.mz_recent_activity_log"
 
+# The raw reachability log carries timely pointstamp count deltas in its diff,
+# which can accumulate negative, so direct queries are limited to the system
+# user. The views over it aggregate with an accumulable reduce and stay public.
+simple conn=agent,user=agent
+SELECT 1 FROM mz_introspection.mz_dataflow_operator_reachability_raw WHERE 1 = 0
+----
+db error: ERROR: permission denied for SOURCE "mz_introspection.mz_dataflow_operator_reachability_raw"
+DETAIL: The 'agent' role needs SELECT privileges on SOURCE "mz_introspection.mz_dataflow_operator_reachability_raw"
+
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_introspection.mz_dataflow_operator_reachability_per_worker
+----
+t
+COMPLETE 1
+
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_introspection.mz_dataflow_operator_reachability
+----
+t
+COMPLETE 1
+
 # =============================================================================
 # Test: mz_catalog tables that SHOULD be blocked but currently have PUBLIC_SELECT
 # These tests document the current (problematic) behavior.
