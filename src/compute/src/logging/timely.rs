@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use columnar::{Columnar, Index};
 use columnation::{Columnation, CopyRegion};
+use differential_dataflow::consolidation::consolidate_updates;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
@@ -26,10 +27,10 @@ use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::operators::{InputCapability, Operator};
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
     TimelyEvent,
@@ -120,18 +121,17 @@ pub(super) fn construct(
                 let mut schedules_duration = schedules_duration_out.activate();
                 let mut schedules_histogram = schedules_histogram_out.activate();
 
+                // The earliest capability among this activation's input batches. It can give all
+                // pending updates, because it is no later than the capability of the batch each
+                // update came from.
+                let mut pending_cap: Option<InputCapability<Timestamp>> = None;
+
                 input.for_each(|cap, data| {
                     let mut output_buffers = DemuxOutput {
                         operates: operates.session_with_builder(&cap),
                         channels: channels.session_with_builder(&cap),
                         addresses: addresses.session_with_builder(&cap),
                         parks: parks.session_with_builder(&cap),
-                        messages_sent: messages_sent.session_with_builder(&cap),
-                        messages_received: messages_received.session_with_builder(&cap),
-                        schedules_duration: schedules_duration.session_with_builder(&cap),
-                        schedules_histogram: schedules_histogram.session_with_builder(&cap),
-                        batches_sent: batches_sent.session_with_builder(&cap),
-                        batches_received: batches_received.session_with_builder(&cap),
                     };
 
                     for (time, event) in data.drain(..) {
@@ -152,7 +152,34 @@ pub(super) fn construct(
                         }
                         .handle(event);
                     }
+
+                    drop(output_buffers);
+                    if pending_cap.as_ref().map_or(true, |c| cap.time() < c.time()) {
+                        pending_cap = Some(cap);
+                    }
                 });
+
+                if let Some(cap) = pending_cap {
+                    let pending = &mut demux_state.pending;
+                    pending
+                        .messages_sent
+                        .flush(messages_sent.session_with_builder(&cap));
+                    pending
+                        .messages_received
+                        .flush(messages_received.session_with_builder(&cap));
+                    pending
+                        .batches_sent
+                        .flush(batches_sent.session_with_builder(&cap));
+                    pending
+                        .batches_received
+                        .flush(batches_received.session_with_builder(&cap));
+                    pending
+                        .schedules_duration
+                        .flush(schedules_duration.session_with_builder(&cap));
+                    pending
+                        .schedules_histogram
+                        .flush(schedules_histogram.session_with_builder(&cap));
+                }
             }
         });
 
@@ -426,6 +453,64 @@ struct DemuxState {
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
     /// bucket.
     schedules_data: BTreeMap<usize, Vec<(isize, Diff)>>,
+    /// Updates of the per-event logs, summed until the end of the current activation.
+    pending: PendingUpdates,
+}
+
+/// Sums of updates to the logs that receive one update per message or schedule event.
+///
+/// These events are frequent, and the downstream consolidation would sum their updates per
+/// `(data, time)` anyway. Summing them in the demux before giving them to the outputs reduces
+/// the work of the downstream batchers without changing the logged collections.
+#[derive(Default)]
+struct PendingUpdates {
+    messages_sent: UpdateSums<MessageDatum>,
+    messages_received: UpdateSums<MessageDatum>,
+    batches_sent: UpdateSums<MessageDatum>,
+    batches_received: UpdateSums<MessageDatum>,
+    schedules_duration: UpdateSums<usize>,
+    schedules_histogram: UpdateSums<ScheduleHistogramDatum>,
+}
+
+/// Updates buffered in a vector and consolidated in amortized batches.
+struct UpdateSums<D> {
+    updates: Vec<(D, Timestamp, Diff)>,
+    /// The length at which `add` consolidates `updates`.
+    consolidate_at: usize,
+}
+
+impl<D> Default for UpdateSums<D> {
+    fn default() -> Self {
+        Self {
+            updates: Vec::new(),
+            consolidate_at: Self::MIN_CONSOLIDATE_AT,
+        }
+    }
+}
+
+impl<D> UpdateSums<D> {
+    const MIN_CONSOLIDATE_AT: usize = 1024;
+}
+
+impl<D: Ord + 'static> UpdateSums<D> {
+    fn add(&mut self, data: D, time: Timestamp, diff: Diff) {
+        self.updates.push((data, time, diff));
+        if self.updates.len() >= self.consolidate_at {
+            consolidate_updates(&mut self.updates);
+            // Waiting until the length doubles means at least half of each consolidation's input
+            // is new updates, which amortizes its cost over them.
+            self.consolidate_at = std::cmp::max(Self::MIN_CONSOLIDATE_AT, 2 * self.updates.len());
+        }
+    }
+
+    /// Gives the consolidated updates to `session` and clears them, keeping the allocation.
+    fn flush(&mut self, mut session: OutputSessionVec<'_, '_, Update<(D, ())>>) {
+        consolidate_updates(&mut self.updates);
+        for (data, time, diff) in self.updates.drain(..) {
+            session.give(((data, ()), time, diff));
+        }
+        self.consolidate_at = Self::MIN_CONSOLIDATE_AT;
+    }
 }
 
 struct Park {
@@ -454,12 +539,6 @@ struct DemuxOutput<'a, 'b> {
     channels: OutputSessionColumnar<'a, 'b, Update<(ChannelDatum, ())>>,
     addresses: OutputSessionVec<'a, 'b, Update<(usize, Vec<usize>)>>,
     parks: OutputSessionVec<'a, 'b, Update<(ParkDatum, ())>>,
-    batches_sent: OutputSessionVec<'a, 'b, Update<(MessageDatum, ())>>,
-    batches_received: OutputSessionVec<'a, 'b, Update<(MessageDatum, ())>>,
-    messages_sent: OutputSessionVec<'a, 'b, Update<(MessageDatum, ())>>,
-    messages_received: OutputSessionVec<'a, 'b, Update<(MessageDatum, ())>>,
-    schedules_duration: OutputSessionVec<'a, 'b, Update<(usize, ())>>,
-    schedules_histogram: OutputSessionVec<'a, 'b, Update<(ScheduleHistogramDatum, ())>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
@@ -595,18 +674,17 @@ impl DemuxHandler<'_, '_, '_> {
                 .enumerate()
                 .filter(|(_, (count, _))| *count != 0)
             {
-                self.output
+                self.state
+                    .pending
                     .schedules_duration
-                    .give(((event.id, ()), ts, Diff::from(-elapsed_ns)));
+                    .add(event.id, ts, Diff::from(-elapsed_ns));
 
                 let datum = ScheduleHistogramDatum {
                     operator: event.id,
                     duration_pow: 1 << bucket,
                 };
                 let diff = Diff::cast_from(-count);
-                self.output
-                    .schedules_histogram
-                    .give(((datum, ()), ts, diff));
+                self.state.pending.schedules_histogram.add(datum, ts, diff);
             }
         }
 
@@ -653,12 +731,13 @@ impl DemuxHandler<'_, '_, '_> {
                         channel: channel.id,
                         worker: target_worker,
                     };
-                    self.output
+                    let pending = &mut self.state.pending;
+                    pending
                         .messages_sent
-                        .give(((datum, ()), ts, Diff::from(-count.records)));
-                    self.output
+                        .add(datum, ts, Diff::from(-count.records));
+                    pending
                         .batches_sent
-                        .give(((datum, ()), ts, Diff::from(-count.batches)));
+                        .add(datum, ts, Diff::from(-count.batches));
                 }
             }
             if let Some(received) = self.state.messages_received.remove(&channel.id) {
@@ -667,16 +746,13 @@ impl DemuxHandler<'_, '_, '_> {
                         channel: channel.id,
                         worker: source_worker,
                     };
-                    self.output.messages_received.give((
-                        (datum, ()),
-                        ts,
-                        Diff::from(-count.records),
-                    ));
-                    self.output.batches_received.give((
-                        (datum, ()),
-                        ts,
-                        Diff::from(-count.batches),
-                    ));
+                    let pending = &mut self.state.pending;
+                    pending
+                        .messages_received
+                        .add(datum, ts, Diff::from(-count.records));
+                    pending
+                        .batches_received
+                        .add(datum, ts, Diff::from(-count.batches));
                 }
             }
         }
@@ -726,8 +802,8 @@ impl DemuxHandler<'_, '_, '_> {
                 channel: event.channel,
                 worker: event.target,
             };
-            self.output.messages_sent.give(((datum, ()), ts, count));
-            self.output.batches_sent.give(((datum, ()), ts, Diff::ONE));
+            self.state.pending.messages_sent.add(datum, ts, count);
+            self.state.pending.batches_sent.add(datum, ts, Diff::ONE);
 
             let sent_counts = self
                 .state
@@ -741,10 +817,11 @@ impl DemuxHandler<'_, '_, '_> {
                 channel: event.channel,
                 worker: event.source,
             };
-            self.output.messages_received.give(((datum, ()), ts, count));
-            self.output
+            self.state.pending.messages_received.add(datum, ts, count);
+            self.state
+                .pending
                 .batches_received
-                .give(((datum, ()), ts, Diff::ONE));
+                .add(datum, ts, Diff::ONE);
 
             let received_counts = self
                 .state
@@ -778,18 +855,19 @@ impl DemuxHandler<'_, '_, '_> {
                 let elapsed_pow = u64::try_from(elapsed_ns.next_power_of_two()).expect("must fit");
 
                 let ts = self.ts();
-                let datum = event.id;
-                self.output
+                self.state
+                    .pending
                     .schedules_duration
-                    .give(((datum, ()), ts, elapsed_diff));
+                    .add(event.id, ts, elapsed_diff);
 
                 let datum = ScheduleHistogramDatum {
                     operator: event.id,
                     duration_pow: elapsed_pow,
                 };
-                self.output
+                self.state
+                    .pending
                     .schedules_histogram
-                    .give(((datum, ()), ts, Diff::ONE));
+                    .add(datum, ts, Diff::ONE);
 
                 // Record count and elapsed time for later retraction.
                 let index = usize::cast_from(elapsed_pow.trailing_zeros());
