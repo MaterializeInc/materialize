@@ -20,7 +20,7 @@ FROM golang:1.24.0@sha256:3f7444391c51a11a039bf0359ee81cc64e663c17d787ad0e637a4d
 # Fetch apt sources over HTTPS only.
 COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
-    && for f in /etc/apt/sources.list.d/*; do sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git \
