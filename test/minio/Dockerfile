@@ -7,13 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM golang:1.24.0 as builder
+# The golang image ships git, so the build needs no apt.
+FROM golang:1.27.3-trixie@sha256:d9fa6e7ba43678ee1e5d1617007db9a134612032a74e2d86b44a9f582f1564cc AS builder
 COPY no_fsync.patch /
-RUN apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git patch \
-    && git clone --depth=1 --branch RELEASE.2025-10-15T17-29-55Z https://github.com/minio/minio.git \
+RUN git clone --depth=1 --branch RELEASE.2025-10-15T17-29-55Z https://github.com/minio/minio.git \
     && cd minio \
-    && patch -p1 < /no_fsync.patch \
+    && git apply /no_fsync.patch \
     && go build -o /out/minio .
 
 MZFROM debian-base

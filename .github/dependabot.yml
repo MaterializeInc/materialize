@@ -186,13 +186,15 @@ updates:
     - /console/misc/docker
     - /misc/images/materialized-base
     - /misc/images/debian-base
-    - /misc/images/openssh-static
-    - /misc/images/tini-static
     - /misc/images/distroless-prod-base
     - /misc/dbt-materialize
     - /ci/builder
     - /test
     - /test/playwright
+    - /test/azurite
+    - /test/mc
+    - /test/minio
+    - /test/postgres
   schedule:
     interval: weekly
     day: sunday

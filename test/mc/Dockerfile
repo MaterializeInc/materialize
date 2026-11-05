@@ -13,10 +13,9 @@
 # server, so CI does not depend on a third-party registry continuing to serve a
 # dead project's images.
 
-FROM golang:1.24.0 AS builder
-RUN apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git \
-    && git clone --depth=1 --branch RELEASE.2025-08-13T08-35-41Z https://github.com/minio/mc.git \
+# The golang image ships git, so the build needs no apt.
+FROM golang:1.27.3-trixie@sha256:d9fa6e7ba43678ee1e5d1617007db9a134612032a74e2d86b44a9f582f1564cc AS builder
+RUN git clone --depth=1 --branch RELEASE.2025-08-13T08-35-41Z https://github.com/minio/mc.git \
     && cd mc \
     && CGO_ENABLED=0 go build -trimpath -o /out/mc .
 # Upstream's Makefile stamps a release version through ldflags; this build does
