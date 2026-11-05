@@ -765,6 +765,31 @@ describe("SupportPage", () => {
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
     });
 
+    it("shows a new ticket in the list before the search catches up", async () => {
+      let listRequests = 0;
+      server.use(
+        // The search doesn't include the new ticket yet.
+        http.get(TICKETS_URL, () => {
+          listRequests++;
+          return HttpResponse.json({ data: [], nextCursor: null });
+        }),
+        createHandler(() => {}),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      await user.click(await screen.findByRole("button", { name: "Done" }));
+
+      expect(
+        await screen.findByRole("button", { name: "Sink is lagging" }),
+      ).toBeVisible();
+      expect(listRequests).toBe(1);
+    });
+
     it("starts an outage report from the confirmation", async () => {
       server.use(
         ticketsHandler([]),

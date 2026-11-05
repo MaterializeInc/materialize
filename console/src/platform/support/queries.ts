@@ -166,9 +166,23 @@ export function useCreateSupportTicket() {
       const { data } = await createSupportTicket(ticket);
       return data;
     },
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: supportTicketQueryKeys.list(owner),
-      }),
+    onSuccess: ({ pagesOnCall: _, ...ticket }) => {
+      const { queryKey } = supportTicketsQueryOptions(owner);
+      // Intercom's ticket search takes a few seconds to include a new ticket,
+      // so a refetch now would come back without it. Add it to the loaded
+      // list instead, and refetch the next time the list is used.
+      queryClient.setQueryData(queryKey, (list) => {
+        if (!list) return list;
+        const [first, ...rest] = list.pages;
+        if (!first || first.data.some(({ id }) => id === ticket.id)) {
+          return list;
+        }
+        return {
+          ...list,
+          pages: [{ ...first, data: [ticket, ...first.data] }, ...rest],
+        };
+      });
+      return queryClient.invalidateQueries({ queryKey, refetchType: "none" });
+    },
   });
 }
