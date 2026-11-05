@@ -17,26 +17,25 @@
 //!
 //! ### Channel ordering requirements
 //!
-//! Each operator splits state across a Timely thread (which observes inputs and frontiers) and a
-//! Tokio task (which owns persist I/O state). They communicate via `mpsc` command channels, which
-//! preserve send order on a single sender. Each operator instance constructs its own
-//! `(tx, rx)` pair inside `render` and never clones the sender, so there is exactly one producer
-//! per channel — sends are totally ordered. Different worker instances of the same operator
-//! never share a channel, so cross-worker ordering is not a concern. The correctness of the
-//! operators relies on a few ordering invariants between the messages sent within a single Timely
-//! activation:
+//! Each operator splits state across a Timely thread (which observes inputs and frontiers and does
+//! the CPU work) and a Tokio task (which owns persist I/O state). They communicate via `mpsc`
+//! command channels, which preserve send order on a single sender. Each operator instance
+//! constructs its own `(tx, rx)` pair inside `render` and never clones the sender, so there is
+//! exactly one producer per channel, and its sends are totally ordered. Different worker instances
+//! of the same operator never share a channel, so cross-worker ordering is not a concern. The
+//! correctness of the operators relies on a few ordering invariants between the messages sent
+//! within a single Timely activation:
 //!
 //!  * **`mint`**: the `persist_watch` Tokio task is the sole producer of persist-frontier updates
 //!    and emits them in monotonically increasing order, terminated by the empty frontier. The
 //!    Timely closure drains the receiver each activation; processing in receive order is therefore
 //!    sufficient. No cross-channel ordering is needed because `mint` only has the one channel.
 //!
-//!  * **`write`**: per-activation, the Timely closure first appends all observed input data into
-//!    a single `WriteCommand::Batch` and only then sends a `WriteCommand::WriteBatch` (issued from
-//!    `maybe_start_batch` after frontier checks). The Tokio task processes commands FIFO, so a
-//!    `WriteBatch` is guaranteed to see every `Batch` from the same activation already applied to
-//!    the corrections buffer. Reversing this order would let the task write a batch that is
-//!    missing updates the Timely closure already observed.
+//!  * **`write`**: the Timely closure owns the correction buffers and builds the parts of a
+//!    batch itself, so the Tokio task only hands parts to persist. A batch write is a `Start`,
+//!    its `Part`s, and a `Finish`, and the closure sends the next `Start` only after the task
+//!    answered the previous `Finish`. The task therefore never interleaves the parts of two
+//!    batches.
 //!
 //!  * **`append`**: per-activation, the Timely closure forwards messages in the order
 //!    `Description` → `Batch` → `BatchesFrontier`. The first two carry the data the task needs
@@ -76,7 +75,7 @@ use tracing::trace;
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
-use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
+use crate::sink::correction::{Correction, CorrectionLogging};
 use crate::sink::materialized_view::{
     BatchDescription, BatchesStream, DescsStream, DesiredStreams, OkErr, PersistApi,
     PersistStreams, SharedSinkFrontier, advance, operator_name, persist_source,
@@ -133,6 +132,7 @@ pub(super) fn persist_sink<'s>(
         descs.clone(),
         read_only_rx,
         Rc::clone(&compute_state.worker_config),
+        &compute_state.metrics,
     );
 
     append::render(sink_id, persist_api, descs, batches);
@@ -500,62 +500,34 @@ mod mint {
 mod write {
     use super::*;
 
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Wake, Waker};
+    use std::time::Instant;
+
+    use mz_ore::cast::CastFrom;
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_persist_types::part::{Part, PartBuilder};
+    use mz_repr::RelationDesc;
     use mz_timely_util::activator::ArcActivator;
+    use prometheus::IntCounter;
+    use prometheus::core::{AtomicF64, GenericCounter};
+    use timely::scheduling::SyncActivator;
 
-    /// Commands sent from the Timely operator to the Tokio write task.
+    use crate::metrics::WorkerMetrics;
+
+    /// Commands sent from the Timely operator to the Tokio write task. A batch write is a `Start`
+    /// followed by its parts and a `Finish`.
     enum WriteCommand {
-        /// A coalesced batch of work gathered during a single operator activation.
-        ///
-        /// The Timely closure accumulates all updates observed across the four data inputs plus
-        /// any frontier advancement and forced-consolidation flag, and sends a single
-        /// `WriteCommand::Batch` per activation. This keeps the channel overhead independent of
-        /// the number of Timely chunks processed per activation.
-        Batch(BatchUpdates),
-        /// Write a batch with the given description. The task drains corrections and writes
-        /// them to persist.
-        WriteBatch(BatchDescription),
+        /// Start writing the batch with the given description.
+        Start(BatchDescription),
+        /// Add a part of updates to the current batch.
+        Part(Part),
+        /// All parts of the current batch have been sent.
+        Finish,
     }
 
-    /// The payload of a coalesced [`WriteCommand::Batch`].
-    struct BatchUpdates {
-        /// Positive contributions from the `desired` ok input.
-        desired_ok: Vec<(Row, Timestamp, Diff)>,
-        /// Positive contributions from the `desired` err input.
-        desired_err: Vec<(DataflowErrorSer, Timestamp, Diff)>,
-        /// Negative contributions from the `persist` ok input.
-        persist_ok: Vec<(Row, Timestamp, Diff)>,
-        /// Negative contributions from the `persist` err input.
-        persist_err: Vec<(DataflowErrorSer, Timestamp, Diff)>,
-        /// The new persist frontier, if it advanced this activation.
-        persist_frontier: Option<Antichain<Timestamp>>,
-        /// Whether a consolidation of the corrections buffer should be forced.
-        force_consolidation: bool,
-    }
-
-    impl BatchUpdates {
-        fn new() -> Self {
-            Self {
-                desired_ok: Vec::new(),
-                desired_err: Vec::new(),
-                persist_ok: Vec::new(),
-                persist_err: Vec::new(),
-                persist_frontier: None,
-                force_consolidation: false,
-            }
-        }
-
-        /// Returns true if there is no work in this batch.
-        fn is_empty(&self) -> bool {
-            self.desired_ok.is_empty()
-                && self.desired_err.is_empty()
-                && self.persist_ok.is_empty()
-                && self.persist_err.is_empty()
-                && self.persist_frontier.is_none()
-                && !self.force_consolidation
-        }
-    }
-
-    /// The correction buffers owned by the Tokio write task.
+    /// The correction buffers owned by the `write` operator.
     type Corrections = OkErr<Correction<Row>, Correction<DataflowErrorSer>>;
 
     /// A response from the Tokio write task back to the Timely operator.
@@ -563,6 +535,15 @@ mod write {
         /// The written batches, empty if this worker has none to deliver for the interval.
         batches: Vec<ProtoBatch>,
     }
+
+    /// The size at which the operator cuts the updates of a batch into a part for the write task.
+    ///
+    /// Persist concatenates parts up to its blob target size before uploading them, so this only
+    /// bounds the updates waiting between the operator and the write task, at
+    /// [`PARTS_IN_FLIGHT`] parts per worker.
+    const PART_BYTES: usize = 4 << 20;
+    /// How many parts the operator hands to the write task before blocking on it.
+    const PARTS_IN_FLIGHT: usize = 2;
 
     /// Render the `write` operator.
     ///
@@ -582,6 +563,7 @@ mod write {
         descs: DescsStream<'s>,
         mut read_only_rx: watch::Receiver<bool>,
         worker_config: Rc<ConfigSet>,
+        compute_metrics: &WorkerMetrics,
     ) -> BatchesStream<'s> {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
@@ -590,24 +572,17 @@ mod write {
         let mut builder = OperatorBuilderRc::new(name, scope.clone());
         let info = builder.operator_info();
 
-        // Set up correction buffer logging. CorrectionLogger is not Send (uses timely
-        // loggers), so the Tokio task uses ChannelLogging to send events back to the
-        // Timely thread for application by the CorrectionLogger.
-        let mut channel_logging = None;
-        let mut correction_logger = None;
+        let mut logging = None;
         if let (Some(compute_logger), Some(differential_logger)) = (
             scope.worker().logger_for("materialize/compute"),
             scope.worker().logger_for("differential/arrange"),
         ) {
             let operator_info = builder.operator_info();
-            let (tx, rx) = mpsc::unbounded_channel();
-            channel_logging = Some(ChannelLogging::new(tx));
-            correction_logger = Some(CorrectionLogger::new(
+            logging = Some(CorrectionLogging::new(
                 compute_logger,
                 differential_logger.into(),
                 operator_info.global_id,
                 operator_info.address.to_vec(),
-                rx,
             ));
         }
 
@@ -631,82 +606,76 @@ mod write {
         // Obtain SinkMetrics synchronously from the persist client cache, rather than through
         // a WriteHandle, to avoid async I/O on the Timely thread.
         let sink_metrics = persist_api.persist_clients.metrics().sink.clone();
-
-        // Construct corrections on the Timely thread (reads ConfigSet), then move to the
-        // Tokio task. The ChannelLogging sends events back to the Timely thread.
         let worker_metrics = sink_metrics.for_worker(worker_id);
-        let mut corrections: Corrections = OkErr::new(
+        let corrections: Corrections = OkErr::new(
             Correction::new(
                 sink_metrics.clone(),
                 worker_metrics.clone(),
-                channel_logging.clone(),
+                logging.clone(),
                 &worker_config,
             ),
-            Correction::new(
-                sink_metrics.clone(),
-                worker_metrics,
-                channel_logging,
-                &worker_config,
-            ),
+            Correction::new(sink_metrics, worker_metrics, logging, &worker_config),
         );
 
-        // Read `MV_SINK_ADVANCE_PERSIST_FRONTIERS` exactly once and reuse the captured value for
-        // both the Tokio-side `corrections.since` initialization below and the Timely-side
-        // `persist_frontiers` initialization in `State::new`. Re-reading the dyncfg per init site
-        // would let the value flip between reads and produce the very inconsistency this fix
-        // addresses: `persist_frontiers = as_of` (gate open) with `corrections.since = MIN`
-        // (snapshot updates not advanced) reproduces the original `UpdateNotBeyondLower` panic.
         let advance_persist_frontiers_at_startup =
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
-
+        let key_schema = Rc::new(persist_api.collection.relation_desc.clone());
+        let write_metrics = WriteMetrics {
+            wait_seconds: compute_metrics.mv_sink_write_wait_seconds_total.clone(),
+            part_bytes: compute_metrics.mv_sink_write_part_bytes_total.clone(),
+        };
         let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
 
-        // Mirror the persist-frontier initialization performed by `State::new` below. With the
-        // flag enabled, `State` advances its Timely-side `persist_frontiers` to `as_of`, opening
-        // the `maybe_start_batch` write gate (`desc.lower <= persist_frontiers.frontier()`)
-        // immediately for the first description minted with `lower = as_of`. The corrections
-        // buffer lives on the Tokio task and only learns of frontier advancements through
-        // `WriteCommand::Batch { persist_frontier, .. }`, which the Timely closure populates only
-        // when an input frontier actually moves. On startup, the input frontiers begin at
-        // `Timestamp::MIN`, so no `Batch` carries `persist_frontier` until the persist input
-        // catches up — yet a `WriteBatch(desc)` with `desc.lower = as_of` can already be sent.
-        // Snapshot-replay updates inserted in the meantime stay at their original timestamps
-        // (`Correction::insert` rounds to `max(t, since)` and `since == MIN`), and slip into the
-        // batch, tripping persist's `UpdateNotBeyondLower` invariant. Advancing
-        // `corrections.since` here keeps the Tokio side in lockstep with the Timely side, the
-        // same invariant `materialized_view::write::State::new` upholds via
-        // `apply_persist_frontier_advancement`.
-        if advance_persist_frontiers_at_startup {
-            corrections.ok.advance_since(as_of.clone());
-            corrections.err.advance_since(as_of.clone());
-        }
-
-        // Channels for commands and responses.
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<WriteCommand>();
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<WriteCommand>(PARTS_IN_FLIGHT);
+        // Batch writes take turns on the one sender, see `Write`.
+        let cmd_tx = Rc::new(cmd_tx);
         let (resp_tx, mut resp_rx) = mpsc::unbounded_channel::<WriteResponse>();
 
-        // Spawn Tokio task that owns the batch-writing context and corrections buffer.
+        // Spawn the Tokio task that hands the operator's parts to persist.
         let (activator, activation_ack) = ArcActivator::new(scope, &info);
-        let write_task_handle = {
-            mz_ore::task::spawn(
-                || operator_name(sink_id, "write::batch_writer"),
-                async move {
-                    let batch_writer = BatchWriter::new(&persist_api, shared_batch_max_bytes).await;
-
-                    while let Some(cmd) = cmd_rx.recv().await {
-                        corrections =
-                            apply_command(sink_id, corrections, &batch_writer, cmd, &resp_tx).await;
-                        // Activate the operator to drain logging events and process batch responses.
-                        // ArcActivator suppresses redundant activations, so this is cheap.
-                        activator.activate();
+        let write_task_handle = mz_ore::task::spawn(
+            || operator_name(sink_id, "write::batch_writer"),
+            async move {
+                let batch_writer = BatchWriter::new(&persist_api, shared_batch_max_bytes).await;
+                let mut desc = None;
+                let mut write = None;
+                while let Some(cmd) = cmd_rx.recv().await {
+                    match cmd {
+                        WriteCommand::Start(d) => desc = Some(d),
+                        WriteCommand::Part(part) => {
+                            let desc = desc.as_ref().expect("`Part` follows `Start`");
+                            // Start the write only once there are updates, since
+                            // `maybe_start_batch` requests a write for every ready interval,
+                            // including idle ones. A worker that never joins a shared batch
+                            // cannot be the last holder responsible for delivering it.
+                            let write =
+                                write.get_or_insert_with(|| batch_writer.shared.start_parts(desc));
+                            write.push_part(part).await;
+                        }
+                        WriteCommand::Finish => {
+                            desc = None;
+                            let batches = match write.take() {
+                                Some(write) => write.finish().await,
+                                None => Vec::new(),
+                            };
+                            batch_writer.respond(&resp_tx, batches).await;
+                            // Activate the operator to emit the batches. ArcActivator suppresses
+                            // redundant activations, so this is cheap.
+                            activator.activate();
+                        }
                     }
-                },
-            )
-            .abort_on_drop()
-        };
+                }
+            },
+        )
+        .abort_on_drop();
+
+        // Wakes the operator when the write task takes a part, so a pending batch write resumes.
+        let waker = Waker::from(Arc::new(ActivateOnWake(
+            scope.worker().sync_activator_for(info.address.to_vec()),
+        )));
 
         // In read-only mode, wake the operator when writes are allowed so the forced
-        // consolidation stops re-arming and the `WriteBatch` path takes over promptly. Without
+        // consolidation stops re-arming and the batch-write path takes over promptly. Without
         // this the operator only learns of the transition on its next input activation, which an
         // idle sink may not get for a while.
         let read_only_watch_handle = (*read_only_rx.borrow()).then(|| {
@@ -722,6 +691,10 @@ mod write {
             .abort_on_drop()
         });
 
+        // A sync operator, not the async bridge. The bridge queues input updates verbatim until its
+        // future polls them. This operator consolidates them into the corrections as they arrive.
+        // It only needs async to yield while the write task holds the parts it can take, which
+        // `write_batch` covers.
         builder.build(move |capabilities| {
             // We will use the data capabilities from the `descs` input to produce output, so no
             // need to hold onto the initial capabilities.
@@ -731,18 +704,11 @@ mod write {
             let mut state = State::new(
                 sink_id,
                 worker_id,
+                corrections,
                 as_of,
                 advance_persist_frontiers_at_startup,
                 read_only,
             );
-
-            // Whether a batch write is currently in flight in the Tokio task.
-            let mut batch_in_flight: Option<(BatchDescription, Capability<Timestamp>)> = None;
-
-            // CorrectionLogger lives on the Timely thread and drains events from
-            // the channel each activation. On drop, it drains remaining events and
-            // retracts all logged state.
-            let mut correction_logger = correction_logger;
 
             move |frontiers| {
                 // Keep task handles alive so they are aborted when the operator is dropped.
@@ -752,28 +718,13 @@ mod write {
                 // Acknowledge activation so the Tokio task can activate us again.
                 activation_ack.ack();
 
-                // Drain logging events from the Tokio task's ChannelLogging.
-                if let Some(logger) = &mut correction_logger {
-                    logger.apply_events();
-                }
-                // Coalesce all work from this activation into a single command. This keeps
-                // per-chunk channel overhead low, which matters for hydration when many small
-                // Timely chunks arrive in a single activation sweep.
-                let mut batch = BatchUpdates::new();
-                desired_ok_input.for_each(|_cap, data| {
-                    batch.desired_ok.append(data);
-                });
-                desired_err_input.for_each(|_cap, data| {
-                    batch.desired_err.append(data);
-                });
-                persist_ok_input.for_each(|_cap, data| {
-                    batch.persist_ok.append(data);
-                });
-                persist_err_input.for_each(|_cap, data| {
-                    batch.persist_err.append(data);
-                });
+                // `write_batch` is async because `cmd_tx` is bounded, so a send can wait for the
+                // write task. While the channel is full, the future is pending and the operator
+                // returns, so other Timely operators on this worker run. The write task taking a
+                // command wakes `waker`, which activates the operator to poll the future again.
+                let mut cx = Context::from_waker(&waker);
+                state.poll_write(&mut cx);
 
-                // Accept batch descriptions.
                 descs_input.for_each(|cap, data| {
                     let cap = cap.retain(0);
                     for desc in data.drain(..) {
@@ -781,47 +732,60 @@ mod write {
                     }
                 });
 
-                // Track frontiers. Include the new persist frontier in the coalesced batch for
-                // `advance_since`.
-                state.advance_desired_ok_frontier(frontiers[0].frontier());
-                state.advance_desired_err_frontier(frontiers[1].frontier());
-                if state.advance_persist_ok_frontier(frontiers[2].frontier())
-                    | state.advance_persist_err_frontier(frontiers[3].frontier())
-                {
-                    batch.persist_frontier = Some(state.persist_frontiers.frontier().to_owned());
+                // NOTE: While a batch write holds the corrections, the data inputs stay unread
+                // and their frontiers unobserved. Timely holds the updates until the write returns
+                // the corrections. The frontiers are read afresh then, so no batch starts before
+                // its updates are in the corrections. A batch starts only once `desired` passed
+                // its `upper`. The updates that wait meanwhile arrived during the write, and are
+                // not the snapshot.
+                if let Some(corrections) = state.write.corrections_mut() {
+                    // `desired` updates enter the corrections as positive contributions and
+                    // `persist` updates as negative ones, so the buffers hold `desired - persist`,
+                    // the updates that bring the shard in line with `desired`.
+                    //
+                    // NOTE: Inserting on this worker keeps it busy until the buffers absorb the
+                    // updates, which holds back the operators feeding it. Under memory pressure,
+                    // this limits the input to the rate at which the buffers page out. Handing the
+                    // updates to another thread lets them pile up unbounded in front of the
+                    // buffers.
+                    desired_ok_input.for_each(|_cap, data| corrections.ok.insert(data));
+                    desired_err_input.for_each(|_cap, data| corrections.err.insert(data));
+                    persist_ok_input.for_each(|_cap, data| corrections.ok.insert_negated(data));
+                    persist_err_input.for_each(|_cap, data| corrections.err.insert_negated(data));
+
+                    state.advance_desired_frontiers(
+                        frontiers[0].frontier(),
+                        frontiers[1].frontier(),
+                    );
+                    state.advance_persist_frontiers(
+                        frontiers[2].frontier(),
+                        frontiers[3].frontier(),
+                    );
+                    state.maybe_force_consolidation();
                 }
+
                 // Track read-only mode so the forced consolidation stops re-arming once writes
-                // are allowed and the `WriteBatch` path takes over driving consolidation.
+                // are allowed and the batch-write path takes over driving consolidation.
                 if state.read_only && read_only_rx.has_changed().unwrap_or(false) {
                     if !*read_only_rx.borrow_and_update() {
                         state.set_read_only(false);
                     }
                 }
 
-                if state.should_force_consolidation() {
-                    batch.force_consolidation = true;
-                }
-
-                if !batch.is_empty() {
-                    cmd_tx
-                        .send(WriteCommand::Batch(batch))
-                        .expect("write task unexpectedly gone");
-                }
-
-                // Try to receive batch results from the Tokio task.
                 loop {
                     match resp_rx.try_recv() {
                         Ok(resp) => {
-                            if let Some((desc, cap)) = batch_in_flight.take() {
-                                if resp.batches.is_empty() {
-                                    state.trace("skipping empty batch");
-                                } else {
-                                    state.trace(format!("wrote {} batches", resp.batches.len()));
-                                    let mut out = batches_output.activate();
-                                    let mut session = out.session(&cap);
-                                    for batch in resp.batches {
-                                        session.give((desc.clone(), batch));
-                                    }
+                            let (desc, cap) = state
+                                .complete_write()
+                                .expect("the write task only answers a finished batch write");
+                            if resp.batches.is_empty() {
+                                state.trace("skipping empty batch");
+                            } else {
+                                state.trace(format!("wrote {} batches", resp.batches.len()));
+                                let mut out = batches_output.activate();
+                                let mut session = out.session(&cap);
+                                for batch in resp.batches {
+                                    session.give((desc.clone(), batch));
                                 }
                             }
                         }
@@ -832,24 +796,94 @@ mod write {
                     }
                 }
 
-                // If no batch in flight, try to write a new batch.
-                if batch_in_flight.is_none() {
-                    if let Some((desc, cap)) = state.maybe_start_batch(&cmd_tx) {
-                        batch_in_flight = Some((desc, cap));
-                    }
-                }
+                state.maybe_start_batch(&mut cx, |corrections, desc| {
+                    Box::pin(write_batch(
+                        corrections,
+                        desc.clone(),
+                        Rc::clone(&key_schema),
+                        PART_BYTES,
+                        Rc::clone(&cmd_tx),
+                        write_metrics.clone(),
+                    ))
+                });
             }
         });
 
         batches_output_stream
     }
 
-    /// How many updates the batch read-back hands over per chunk.
-    const READ_BACK_CHUNK: usize = 1024;
-    /// How many chunks may sit between the blocking read-back and the async task feeding the
-    /// batch builder. Together with [`READ_BACK_CHUNK`] this bounds the handoff to a few thousand
-    /// buffered updates.
-    const READ_BACK_CHUNKS_IN_FLIGHT: usize = 4;
+    /// Counters a batch write reports to.
+    #[derive(Clone)]
+    struct WriteMetrics {
+        wait_seconds: GenericCounter<AtomicF64>,
+        part_bytes: IntCounter,
+    }
+
+    /// Activates an operator when woken.
+    struct ActivateOnWake(SyncActivator);
+
+    impl Wake for ActivateOnWake {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            // The worker may have shut down by the time the write task wakes us.
+            let _ = self.0.activate();
+        }
+    }
+
+    /// Writes the corrections before `desc.upper` as one batch and returns them.
+    ///
+    /// Sends the write task a `Start`, the updates cut into parts of `part_bytes`, and a
+    /// `Finish`. The future is pending while `cmd_tx` is full, and the write task receiving a
+    /// command wakes it.
+    async fn write_batch(
+        mut corrections: Corrections,
+        desc: BatchDescription,
+        key_schema: Rc<RelationDesc>,
+        part_bytes: usize,
+        cmd_tx: Rc<mpsc::Sender<WriteCommand>>,
+        metrics: WriteMetrics,
+    ) -> Corrections {
+        let send = async |cmd| {
+            let start = Instant::now();
+            cmd_tx
+                .send(cmd)
+                .await
+                .expect("write task unexpectedly gone");
+            metrics.wait_seconds.inc_by(start.elapsed().as_secs_f64());
+        };
+
+        let upper = &desc.upper;
+        corrections.ok.consolidate_before(upper);
+        corrections.err.consolidate_before(upper);
+
+        send(WriteCommand::Start(desc.clone())).await;
+        let oks = corrections
+            .ok
+            .consolidated_updates_before(upper)
+            .map(|(d, t, r)| (SourceData(Ok(d)), t, r));
+        let errs = corrections
+            .err
+            .consolidated_updates_before(upper)
+            .map(|(d, t, r)| (SourceData(Err(d.deserialize())), t, r));
+        let mut part = PartBuilder::new(&*key_schema, &UnitSchema);
+        for (data, t, r) in oks.chain(errs) {
+            part.push(&data, &(), t, r.into_inner());
+            if part.goodbytes() >= part_bytes {
+                metrics.part_bytes.inc_by(u64::cast_from(part.goodbytes()));
+                let full = part.finish_and_replace(&*key_schema, &UnitSchema);
+                send(WriteCommand::Part(full)).await;
+            }
+        }
+        if part.len() > 0 {
+            metrics.part_bytes.inc_by(u64::cast_from(part.goodbytes()));
+            send(WriteCommand::Part(part.finish())).await;
+        }
+        send(WriteCommand::Finish).await;
+        corrections
+    }
 
     /// The batch-writing context owned by the Tokio write task.
     ///
@@ -868,173 +902,63 @@ mod write {
             let shared = SharedBatchWriter::new(persist_api, &writer, shared_batch_max_bytes).await;
             Self { writer, shared }
         }
-    }
 
-    /// Apply a single command to the task state, returning the correction buffers.
-    ///
-    /// `desired` updates enter `corrections` as positive contributions and `persist` updates as
-    /// negative contributions, so the buffer contains `desired - persist`, i.e. the updates that
-    /// need to be written to bring the shard in line with `desired`.
-    ///
-    /// Correction maintenance is CPU-bound and unbounded in duration: an insert can merge chains
-    /// spanning the whole buffer and a consolidation sorts it, neither with an await point in
-    /// between. Running that inline occupies a Tokio worker thread for the entire time, which
-    /// stops it from polling every other task scheduled on it. It therefore runs on a blocking
-    /// thread, which the OS can preempt. The buffers move into the blocking closure and back out
-    /// again because this task owns them exclusively.
-    async fn apply_command(
-        sink_id: GlobalId,
-        mut corrections: Corrections,
-        batch_writer: &BatchWriter,
-        cmd: WriteCommand,
-        resp_tx: &mpsc::UnboundedSender<WriteResponse>,
-    ) -> Corrections {
-        match cmd {
-            WriteCommand::Batch(batch) => apply_batch(sink_id, corrections, batch).await,
-            WriteCommand::WriteBatch(desc) => {
-                // Reading the updates back clones a row per update and, with the pager enabled,
-                // pages chunks back in, so it stalls the same way the consolidation does and runs
-                // on the same blocking thread: the closure keeps the buffers, consolidates, and
-                // streams the consolidated updates back in chunks that this task feeds to the
-                // persist batch builder.
-                //
-                // Not `block_in_place`: that parks a worker's core on a blocking-pool thread for
-                // the whole write, while the batch's part uploads are spawned tasks that need a
-                // live core. With one write per sink and worker, enough concurrent sinks exhaust
-                // the pool's thread cap and the runtime deadlocks. `spawn_blocking` queues
-                // instead of stranding a core, and this task stays cancellable at every chunk
-                // boundary.
-                let upper = desc.upper.clone();
-                let (updates_tx, mut updates_rx) = mpsc::channel(READ_BACK_CHUNKS_IN_FLIGHT);
-                let read_back =
-                    mz_ore::task::spawn_blocking(
-                        || operator_name(sink_id, "write::consolidate"),
-                        move || {
-                            corrections.ok.consolidate_before(&upper);
-                            corrections.err.consolidate_before(&upper);
-
-                            let oks = corrections
-                                .ok
-                                .consolidated_updates_before(&upper)
-                                .map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
-                            let errs = corrections.err.consolidated_updates_before(&upper).map(
-                                |(d, t, r)| {
-                                    ((SourceData(Err(d.deserialize())), ()), t, r.into_inner())
-                                },
-                            );
-
-                            let mut updates = oks.chain(errs).peekable();
-                            while updates.peek().is_some() {
-                                let mut chunk = Vec::with_capacity(READ_BACK_CHUNK);
-                                chunk.extend(updates.by_ref().take(READ_BACK_CHUNK));
-                                // A closed channel means the write task is gone, so the batch it
-                                // asked for is moot and there is no point in pulling the rest of
-                                // the buffer.
-                                if updates_tx.blocking_send(chunk).is_err() {
-                                    break;
-                                }
-                            }
-
-                            // The iterators borrow the correction buffers, so they must end before
-                            // the buffers move back out.
-                            drop(updates);
-                            corrections
-                        },
-                    );
-
-                let batches = write_batches(&batch_writer.shared, &desc, &mut updates_rx).await;
-                let corrections = read_back.await;
-
-                if let Err(err) = resp_tx.send(WriteResponse { batches }) {
-                    for proto_batch in err.0.batches {
-                        let batch = batch_writer
-                            .writer
-                            .batch_from_transmittable_batch(proto_batch);
-                        batch.delete().await;
-                    }
+        /// Sends the written `batches` to the operator, deleting them if it is gone.
+        async fn respond(
+            &self,
+            resp_tx: &mpsc::UnboundedSender<WriteResponse>,
+            batches: Vec<ProtoBatch>,
+        ) {
+            if let Err(err) = resp_tx.send(WriteResponse { batches }) {
+                for proto_batch in err.0.batches {
+                    let batch = self.writer.batch_from_transmittable_batch(proto_batch);
+                    batch.delete().await;
                 }
-
-                corrections
             }
         }
     }
 
-    /// Write the updates for `desc` through `writer`, returning the batches this worker delivers.
-    async fn write_batches(
-        writer: &SharedBatchWriter,
-        desc: &BatchDescription,
-        updates_rx: &mut mpsc::Receiver<Vec<((SourceData, ()), Timestamp, StorageDiff)>>,
-    ) -> Vec<ProtoBatch> {
-        // Start the write only once there are updates, since `maybe_start_batch` requests a write
-        // for every ready interval, including idle ones. A worker that never joins a shared batch
-        // cannot be the last holder responsible for delivering it.
-        let mut write = None;
-        while let Some(chunk) = updates_rx.recv().await {
-            let write = write.get_or_insert_with(|| writer.start(desc));
-            for (kv, t, d) in &chunk {
-                write.push(kv, *t, *d).await;
+    /// A batch write in progress, which returns the corrections once the write task has taken all
+    /// of its parts.
+    type BatchWriteFuture = Pin<Box<dyn Future<Output = Corrections>>>;
+
+    /// A batch write whose parts the write task has taken.
+    struct WrittenBatch {
+        corrections: Corrections,
+        desc: BatchDescription,
+        /// The capability to emit the batch's response with.
+        cap: Capability<Timestamp>,
+    }
+
+    /// The batch write of the `write` operator.
+    enum Write {
+        /// No batch write is in flight.
+        Idle(Corrections),
+        /// A batch write holds the corrections while it waits for the write task to take its
+        /// parts.
+        Pending(Pin<Box<dyn Future<Output = WrittenBatch>>>),
+        /// The batch write returned the corrections and waits for the write task's response.
+        AwaitingResponse(WrittenBatch),
+    }
+
+    impl Write {
+        /// Returns the corrections, unless a pending batch write holds them.
+        fn corrections_mut(&mut self) -> Option<&mut Corrections> {
+            match self {
+                Write::Idle(corrections)
+                | Write::AwaitingResponse(WrittenBatch { corrections, .. }) => Some(corrections),
+                Write::Pending(_) => None,
             }
         }
-        match write {
-            Some(write) => write.finish().await,
-            None => Vec::new(),
+
+        /// Moves the state out, leaving a pending write that never completes in its place.
+        fn take(&mut self) -> Self {
+            // `pending()` is zero-sized, so boxing it does not allocate.
+            std::mem::replace(self, Write::Pending(Box::pin(std::future::pending())))
         }
     }
 
-    /// Apply a coalesced batch of updates to the correction buffers, on a blocking thread.
-    ///
-    /// See [`apply_command`] for why this work must not run on a Tokio worker thread.
-    async fn apply_batch(
-        sink_id: GlobalId,
-        mut corrections: Corrections,
-        mut batch: BatchUpdates,
-    ) -> Corrections {
-        mz_ore::task::spawn_blocking(
-            || operator_name(sink_id, "write::apply_batch"),
-            move || {
-                // Stands in for the page-in storm this code produces when the process is under
-                // memory pressure: the buffer's chunks come back one blocking read at a time, from
-                // inside the sorts and merges below, where no await point can be placed. The
-                // failpoint's `sleep` action blocks its thread the same way, so it has to sit on
-                // the same side of the `spawn_blocking` boundary as the work it stands for.
-                //
-                // NOTE: activate it with the `FAILPOINTS` env var on the clusterd process, e.g.
-                // `FAILPOINTS=mv_sink_correction=sleep(30000)`. The `failpoints` session variable
-                // only reaches environmentd, never a cluster.
-                fail::fail_point!("mv_sink_correction");
-
-                // Apply the same logical sequence of operations that the per-chunk commands
-                // used to: positive desired inserts, negated persist inserts, then optional
-                // frontier advancement and forced consolidation.
-                if !batch.desired_ok.is_empty() {
-                    corrections.ok.insert(&mut batch.desired_ok);
-                }
-                if !batch.desired_err.is_empty() {
-                    corrections.err.insert(&mut batch.desired_err);
-                }
-                if !batch.persist_ok.is_empty() {
-                    corrections.ok.insert_negated(&mut batch.persist_ok);
-                }
-                if !batch.persist_err.is_empty() {
-                    corrections.err.insert_negated(&mut batch.persist_err);
-                }
-                if let Some(frontier) = batch.persist_frontier {
-                    // We will only emit times at or after the `persist` frontier, so now is a good
-                    // time to advance the times of stashed updates.
-                    corrections.ok.advance_since(frontier.clone());
-                    corrections.err.advance_since(frontier);
-                }
-                if batch.force_consolidation {
-                    corrections.ok.consolidate_at_since();
-                    corrections.err.consolidate_at_since();
-                }
-                corrections
-            },
-        )
-        .await
-    }
-
-    /// State maintained by the `write` operator on the Timely thread.
+    /// State maintained by the `write` operator.
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
@@ -1057,18 +981,20 @@ mod write {
         /// Normally we force a consolidation whenever we write a batch, but there are periods
         /// (like read-only mode) when that doesn't happen, and we need to manually force
         /// consolidation instead. In read-only mode this is re-armed after each firing so it
-        /// keeps sweeping forward as the frontiers advance (see `should_force_consolidation`).
+        /// keeps sweeping forward as the frontiers advance (see `maybe_force_consolidation`).
         force_consolidation_after: Option<Antichain<Timestamp>>,
-        /// Whether the sink is in read-only mode. While read-only the `write` operator mints no
-        /// batches, so the `WriteBatch` path never sweeps `consolidate_before(upper)` forward;
-        /// the forced consolidation stands in for it and is re-armed as long as this holds.
+        /// Whether the sink is in read-only mode. While read-only, the forced consolidation
+        /// re-arms after each firing (see `maybe_force_consolidation`).
         read_only: bool,
+        /// The corrections, and the batch write that holds them, if any.
+        write: Write,
     }
 
     impl State {
         fn new(
             sink_id: GlobalId,
             worker_id: usize,
+            corrections: Corrections,
             as_of: Antichain<Timestamp>,
             advance_persist_frontiers_at_startup: bool,
             read_only: bool,
@@ -1085,6 +1011,7 @@ mod write {
                 batch_description: None,
                 force_consolidation_after,
                 read_only,
+                write: Write::Idle(corrections),
             };
 
             // Immediately advance the persist frontier tracking to the `as_of`.
@@ -1095,14 +1022,11 @@ mod write {
             // no other writers) would be never if we didn't advance the observed persist frontier
             // to the `as_of`.
             //
-            // The `must_use` bool returned by the advance helpers signals that a corresponding
-            // `corrections.advance_since` must be queued to the Tokio task. We drop it here
-            // because the Tokio-side `corrections.since` is initialized to the same `as_of` in
-            // `write::render` before the task is spawned (using the same captured flag value),
-            // keeping both sides in lockstep without an additional channel send.
+            // NOTE: This also advances the since of the corrections to the `as_of`. Without that,
+            // snapshot updates stay at times below the `as_of`, and the first batch, with
+            // `lower = as_of`, trips persist's `UpdateNotBeyondLower`.
             if advance_persist_frontiers_at_startup {
-                let _ = state.advance_persist_ok_frontier(as_of.borrow());
-                let _ = state.advance_persist_err_frontier(as_of.borrow());
+                state.advance_persist_frontiers(as_of.borrow(), as_of.borrow());
             }
 
             state
@@ -1120,54 +1044,58 @@ mod write {
             );
         }
 
-        fn advance_desired_ok_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
-            if advance(&mut self.desired_frontiers.ok, frontier) {
+        fn advance_desired_frontiers(
+            &mut self,
+            ok: AntichainRef<Timestamp>,
+            err: AntichainRef<Timestamp>,
+        ) {
+            if advance(&mut self.desired_frontiers.ok, ok) {
                 self.trace("advanced `desired` ok frontier");
             }
-        }
-
-        fn advance_desired_err_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
-            if advance(&mut self.desired_frontiers.err, frontier) {
+            if advance(&mut self.desired_frontiers.err, err) {
                 self.trace("advanced `desired` err frontier");
             }
         }
 
-        /// Returns true if the persist frontier advanced.
+        /// Advances the `persist` frontiers, and the since of the corrections to them.
         ///
-        /// The caller must propagate a `true` return value into the next `WriteCommand::Batch`'s
-        /// `persist_frontier` field so the Tokio task advances `corrections.since` accordingly.
-        /// Dropping the bool leaves the Tokio-side `since` lagging behind `persist_frontiers`,
-        /// which can let updates with timestamps below `desc.lower` slip into a written batch.
-        #[must_use = "advance_persist_ok_frontier's return value gates a `corrections.advance_since` send to the Tokio task"]
-        fn advance_persist_ok_frontier(&mut self, frontier: AntichainRef<Timestamp>) -> bool {
-            if advance(&mut self.persist_frontiers.ok, frontier) {
+        /// Does nothing while a batch write holds the corrections.
+        fn advance_persist_frontiers(
+            &mut self,
+            ok: AntichainRef<Timestamp>,
+            err: AntichainRef<Timestamp>,
+        ) {
+            let Some(corrections) = self.write.corrections_mut() else {
+                return;
+            };
+            let ok_advanced = advance(&mut self.persist_frontiers.ok, ok);
+            let err_advanced = advance(&mut self.persist_frontiers.err, err);
+            // The since is the `persist` frontier, and a batch starts only once its `lower` is at
+            // or before that frontier. Rounding update times up to the since therefore lifts
+            // every update to at least the `lower` of the next batch to start, as persist
+            // requires.
+            if ok_advanced || err_advanced {
+                let since = self.persist_frontiers.frontier().to_owned();
+                corrections.ok.advance_since(since.clone());
+                corrections.err.advance_since(since);
+            }
+            if ok_advanced {
                 self.trace("advanced `persist` ok frontier");
-                true
-            } else {
-                false
             }
-        }
-
-        /// Returns true if the persist frontier advanced.
-        ///
-        /// The caller must propagate a `true` return value into the next `WriteCommand::Batch`'s
-        /// `persist_frontier` field so the Tokio task advances `corrections.since` accordingly.
-        /// Dropping the bool leaves the Tokio-side `since` lagging behind `persist_frontiers`,
-        /// which can let updates with timestamps below `desc.lower` slip into a written batch.
-        #[must_use = "advance_persist_err_frontier's return value gates a `corrections.advance_since` send to the Tokio task"]
-        fn advance_persist_err_frontier(&mut self, frontier: AntichainRef<Timestamp>) -> bool {
-            if advance(&mut self.persist_frontiers.err, frontier) {
+            if err_advanced {
                 self.trace("advanced `persist` err frontier");
-                true
-            } else {
-                false
             }
         }
 
-        /// Check if a forced consolidation should be triggered.
-        fn should_force_consolidation(&mut self) -> bool {
+        /// Consolidate the corrections if a forced consolidation is due.
+        ///
+        /// Does nothing while a batch write holds the corrections.
+        fn maybe_force_consolidation(&mut self) {
             let Some(request) = &self.force_consolidation_after else {
-                return false;
+                return;
+            };
+            let Some(corrections) = self.write.corrections_mut() else {
+                return;
             };
 
             let desired_frontier = self.desired_frontiers.frontier();
@@ -1175,28 +1103,26 @@ mod write {
             if PartialOrder::less_than(request, desired_frontier)
                 && PartialOrder::less_than(request, persist_frontier)
             {
-                self.trace("requesting correction consolidation");
-                // In read-only mode the sink mints no batches, so the `WriteBatch` path never
-                // sweeps `consolidate_before(upper)` forward and a single forced consolidation
-                // only covers the band below the `since` at the moment it fires, leaving the
-                // forward region uncancelled for the whole read-only window (CLU-131). Re-arm at
-                // the current persist frontier so the forced consolidation keeps sweeping forward
-                // as `desired`/`persist` advance, mirroring the read-write path. Once writes are
-                // allowed, the `WriteBatch` path takes over and we disarm.
+                // In read-only mode the sink mints no batches, so no batch write sweeps
+                // `consolidate_before(upper)` forward. A single forced consolidation only covers
+                // the band below the `since` at the moment it fires. That leaves the forward
+                // region uncancelled for the whole read-only window (CLU-131). Re-arming at the
+                // current persist frontier keeps the forced consolidation sweeping forward as
+                // `desired` and `persist` advance. Once writes are allowed, batch writes take
+                // over and the request disarms.
                 self.force_consolidation_after = if self.read_only {
                     Some(persist_frontier.to_owned())
                 } else {
                     None
                 };
-                true
-            } else {
-                false
+                corrections.ok.consolidate_at_since();
+                corrections.err.consolidate_at_since();
+                self.trace("forced correction consolidation");
             }
         }
 
-        /// Update read-only mode. While read-only the forced consolidation re-arms itself; once
-        /// writes are allowed the still-armed request fires one final time and then disarms, after
-        /// which the `WriteBatch` path drives consolidation.
+        /// Update read-only mode. Once writes are allowed, a still-armed forced consolidation
+        /// fires one final time and then disarms.
         fn set_read_only(&mut self, read_only: bool) {
             self.read_only = read_only;
         }
@@ -1219,129 +1145,82 @@ mod write {
             self.trace("set batch description");
         }
 
-        /// Check if a batch can be written and send a write command to the Tokio task if so.
+        /// Polls the batch write, if one is pending.
+        fn poll_write(&mut self, cx: &mut Context<'_>) {
+            if let Write::Pending(future) = &mut self.write {
+                if let Poll::Ready(written) = future.as_mut().poll(cx) {
+                    self.write = Write::AwaitingResponse(written);
+                }
+            }
+        }
+
+        /// Starts a batch write for the current batch description if no batch write is in flight
+        /// and a batch can be written for the description.
+        ///
+        /// `write_batch` returns the future that writes the corrections for the description.
         fn maybe_start_batch(
             &mut self,
-            cmd_tx: &mpsc::UnboundedSender<WriteCommand>,
-        ) -> Option<(BatchDescription, Capability<Timestamp>)> {
-            let (desc, _cap) = self.batch_description.as_ref()?;
+            cx: &mut Context<'_>,
+            write_batch: impl FnOnce(Corrections, &BatchDescription) -> BatchWriteFuture,
+        ) {
+            let corrections = match self.write.take() {
+                Write::Idle(corrections) => corrections,
+                in_flight => {
+                    self.write = in_flight;
+                    return;
+                }
+            };
 
             // We can write a new batch if we have seen all `persist` updates before `lower` and
             // all `desired` updates before `upper`.
-            let persist_ready =
-                PartialOrder::less_equal(&desc.lower, self.persist_frontiers.frontier());
-            let desired_ready =
-                PartialOrder::less_equal(&desc.upper, self.desired_frontiers.frontier());
-            if !persist_ready || !desired_ready {
-                return None;
-            }
+            let persist_frontier = self.persist_frontiers.frontier();
+            let desired_frontier = self.desired_frontiers.frontier();
+            let ready = self.batch_description.take_if(|(desc, _cap)| {
+                PartialOrder::less_equal(&desc.lower, persist_frontier)
+                    && PartialOrder::less_equal(&desc.upper, desired_frontier)
+            });
+            let Some((desc, cap)) = ready else {
+                self.write = Write::Idle(corrections);
+                return;
+            };
 
-            self.trace("write batch description");
-            let (desc, cap) = self.batch_description.take()?;
-            cmd_tx
-                .send(WriteCommand::WriteBatch(desc.clone()))
-                .expect("write task unexpectedly gone");
-            Some((desc, cap))
+            self.trace(format!("write batch description: {desc:?}"));
+            let future = write_batch(corrections, &desc);
+            self.write = Write::Pending(Box::pin(async move {
+                let corrections = future.await;
+                WrittenBatch {
+                    corrections,
+                    desc,
+                    cap,
+                }
+            }));
+            self.poll_write(cx);
+        }
+
+        /// Completes the batch write the write task answered, returning the description and
+        /// capability of its batch.
+        ///
+        /// Returns `None` unless a batch write awaits a response.
+        fn complete_write(&mut self) -> Option<(BatchDescription, Capability<Timestamp>)> {
+            match self.write.take() {
+                Write::AwaitingResponse(WrittenBatch {
+                    corrections,
+                    desc,
+                    cap,
+                }) => {
+                    self.write = Write::Idle(corrections);
+                    Some((desc, cap))
+                }
+                other => {
+                    self.write = other;
+                    None
+                }
+            }
         }
     }
 
     #[cfg(test)]
-    mod tests {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use std::time::{Duration, Instant};
-
-        use mz_ore::metrics::MetricsRegistry;
-        use mz_persist_client::cfg::PersistConfig;
-        use mz_persist_client::metrics::Metrics;
-
-        use super::*;
-
-        /// One stall per worker thread would leave scheduling to chance, so oversubscribe: with
-        /// more stalls than workers every worker is guaranteed to pick one up.
-        const WORKER_THREADS: usize = 2;
-        const STALLS: usize = WORKER_THREADS * 2;
-        /// How long a stalled `apply_batch` blocks its thread.
-        const STALL: Duration = Duration::from_millis(1_000);
-        /// The largest tick gap the canary may observe. Generous enough to absorb scheduling noise
-        /// on a loaded CI host, while far below the `STALL` an inline correction pass produces.
-        const MAX_GAP: Duration = Duration::from_millis(500);
-        const TICK: Duration = Duration::from_millis(10);
-
-        fn corrections() -> Corrections {
-            let registry = MetricsRegistry::new();
-            let metrics = Metrics::new(&PersistConfig::new_for_tests(), &registry);
-            let sink_metrics = metrics.sink.clone();
-            let worker_metrics = sink_metrics.for_worker(0);
-            let config = mz_dyncfgs::all_dyncfgs();
-            OkErr::new(
-                Correction::new(sink_metrics.clone(), worker_metrics.clone(), None, &config),
-                Correction::new(sink_metrics, worker_metrics, None, &config),
-            )
-        }
-
-        /// Tick every [`TICK`], recording the largest gap between consecutive ticks in millis.
-        ///
-        /// A gap only opens up if no worker thread was available to poll this task.
-        async fn canary(max_gap_millis: Arc<AtomicU64>) {
-            let mut last = Instant::now();
-            loop {
-                tokio::time::sleep(TICK).await;
-                let now = Instant::now();
-                let gap = u64::try_from(now.duration_since(last).as_millis()).unwrap_or(u64::MAX);
-                max_gap_millis.fetch_max(gap, Ordering::Relaxed);
-                last = now;
-            }
-        }
-
-        /// Correction maintenance must not occupy a Tokio worker thread.
-        ///
-        /// Run inline, a pass over a large buffer pins a worker for its whole duration. Under
-        /// memory pressure it is blocked in the kernel paging chunks back in rather than
-        /// computing, which is why yielding cannot fix it.
-        ///
-        /// Stalls every worker thread inside `apply_batch` and asserts an unrelated task keeps
-        /// getting polled throughout.
-        #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
-        #[cfg_attr(miri, ignore)] // depends on real thread scheduling
-        async fn correction_work_does_not_stall_the_runtime() {
-            let max_gap_millis = Arc::new(AtomicU64::new(0));
-            let _canary = mz_ore::task::spawn(|| "canary", canary(Arc::clone(&max_gap_millis)))
-                .abort_on_drop();
-
-            // Let the canary settle, then discard the gaps observed while it did.
-            tokio::time::sleep(TICK * 5).await;
-            max_gap_millis.store(0, Ordering::Relaxed);
-
-            let action = format!("sleep({})", STALL.as_millis());
-            fail::cfg("mv_sink_correction", &action).expect("valid failpoint action");
-
-            let stalls: Vec<_> = (0..STALLS)
-                .map(|i| {
-                    // A forced consolidation is the operation that hurt: it sweeps the whole
-                    // buffer, so its cost is unbounded by the size of the incoming batch.
-                    let batch = BatchUpdates {
-                        force_consolidation: true,
-                        ..BatchUpdates::new()
-                    };
-                    let sink_id = GlobalId::User(u64::cast_from(i));
-                    mz_ore::task::spawn(|| "stall", apply_batch(sink_id, corrections(), batch))
-                })
-                .collect();
-            for stall in stalls {
-                let _ = stall.await;
-            }
-
-            fail::remove("mv_sink_correction");
-
-            let max_gap = Duration::from_millis(max_gap_millis.load(Ordering::Relaxed));
-            assert!(
-                max_gap < MAX_GAP,
-                "runtime went unpolled for {max_gap:?}, so correction work is occupying a \
-                 worker thread",
-            );
-        }
-    }
+    mod tests;
 }
 
 /// Implementation of the `append` operator.

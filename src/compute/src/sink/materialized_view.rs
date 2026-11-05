@@ -158,7 +158,7 @@ use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
-use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
+use crate::sink::correction::{Correction, CorrectionLogging};
 use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
 use crate::sink::shared_batch::SharedBatchWriter;
@@ -803,21 +803,17 @@ mod write {
         let name = operator_name(sink_id, "write");
         let mut op = OperatorBuilder::new(name, scope.clone());
 
-        let mut channel_logging = None;
-        let mut correction_logger = None;
+        let mut logging = None;
         if let (Some(compute_logger), Some(differential_logger)) = (
             scope.worker().logger_for("materialize/compute"),
             scope.worker().logger_for("differential/arrange"),
         ) {
             let operator_info = op.operator_info();
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            channel_logging = Some(ChannelLogging::new(tx));
-            correction_logger = Some(CorrectionLogger::new(
+            logging = Some(CorrectionLogging::new(
                 compute_logger,
                 differential_logger.into(),
                 operator_info.global_id,
                 operator_info.address.to_vec(),
-                rx,
             ));
         }
 
@@ -860,19 +856,12 @@ mod write {
                 worker_id,
                 shared_batch_writer,
                 sink_metrics,
-                channel_logging,
+                logging,
                 as_of,
                 read_only,
                 &worker_config,
             );
-            let mut correction_logger = correction_logger;
-
             loop {
-                // Drain correction logging events from the channel.
-                if let Some(logger) = &mut correction_logger {
-                    logger.apply_events();
-                }
-
                 // Read from the inputs, extract `desired` updates as positive contributions to
                 // `correction` and `persist` updates as negative contributions. If either the
                 // `desired` or `persist` frontier advances, or if we receive a new batch description,
@@ -1003,7 +992,7 @@ mod write {
             worker_id: usize,
             shared_batch_writer: SharedBatchWriter,
             metrics: SinkMetrics,
-            logging: Option<ChannelLogging>,
+            logging: Option<CorrectionLogging>,
             as_of: Antichain<Timestamp>,
             read_only: bool,
             worker_config: &ConfigSet,

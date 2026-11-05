@@ -26,7 +26,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, Schemas};
 use mz_persist_types::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::part::PartBuilder;
+use mz_persist_types::part::{Part, PartBuilder};
 use mz_repr::{RelationDesc, Timestamp};
 use mz_storage_operators::persist::{SharedBatchBuilder, SharedBatches};
 use mz_storage_types::StorageDiff;
@@ -67,8 +67,24 @@ impl SharedBatchWriter {
         }
     }
 
-    /// Starts this worker's write for `desc`.
+    /// Starts this worker's write for `desc`, which takes updates one at a time.
     pub(super) fn start(&self, desc: &BatchDescription) -> SharedBatchWrite<'_> {
+        SharedBatchWrite {
+            staged: PartBuilder::new(&*self.schemas.key, &*self.schemas.val),
+            write: self.start_write(desc),
+        }
+    }
+
+    /// Starts this worker's write for `desc`, which takes updates in parts.
+    pub(super) fn start_parts(&self, desc: &BatchDescription) -> SharedPartWrite<'_> {
+        SharedPartWrite {
+            staged: Vec::new(),
+            staged_bytes: 0,
+            write: self.start_write(desc),
+        }
+    }
+
+    fn start_write(&self, desc: &BatchDescription) -> Write<'_> {
         // Read per interval, so a threshold change applies without re-rendering the sink. Workers may
         // disagree on an interval: each either contributes to the shared batch or writes its own,
         // and the append operator appends all of them together. With a threshold of zero, a
@@ -85,11 +101,10 @@ impl SharedBatchWriter {
                 desc.upper.clone(),
             )
         });
-        SharedBatchWrite {
+        Write {
             writer: self,
             desc: desc.clone(),
             max_bytes,
-            staged: PartBuilder::new(&*self.schemas.key, &*self.schemas.val),
             own: None,
             shared,
         }
@@ -109,52 +124,34 @@ impl SharedBatchWriter {
     }
 }
 
-/// One worker's write for one interval, which contributes to the shared batch until the worker's
-/// updates reach the size threshold and writes the worker's own batch after. With sharing disabled,
-/// all updates go to the worker's own batch.
-///
-/// The caller must [`finish`](Self::finish) it, also when it pushed nothing (see
-/// [`SharedBatchBuilder::finish`]).
-pub(super) struct SharedBatchWrite<'a> {
+/// The state [`SharedBatchWrite`] and [`SharedPartWrite`] share. Each stages its updates for the
+/// shared batch in its own form.
+struct Write<'a> {
     writer: &'a SharedBatchWriter,
     desc: BatchDescription,
     max_bytes: usize,
-    /// Updates not yet handed to either batch. Empty once `own` exists, and always empty without
-    /// `shared`.
-    staged: PartBuilder<SourceData, RelationDesc, (), UnitSchema>,
     /// Created on the first update that does not go to the shared batch, so a worker without
     /// updates writes no batch.
     own: Option<BatchBuilder<SourceData, (), Timestamp, StorageDiff>>,
     shared: Option<SharedBatchBuilder>,
 }
 
-impl SharedBatchWrite<'_> {
-    /// Adds an update.
-    pub(super) async fn push(&mut self, (k, v): &(SourceData, ()), t: Timestamp, d: StorageDiff) {
-        if self.own.is_none() {
-            if self.shared.is_some() {
-                self.staged.push(k, v, t, d);
-                if self.staged.goodbytes() < self.max_bytes {
-                    return;
-                }
-                let writer = self.writer;
-                let staged = self
-                    .staged
-                    .finish_and_replace(&*writer.schemas.key, &*writer.schemas.val);
-                let mut own = writer.own_builder(&self.desc);
-                own.add_part(staged).await.expect("valid usage");
-                self.own = Some(own);
-                return;
-            }
-            self.own = Some(self.writer.own_builder(&self.desc));
+impl Write<'_> {
+    /// Creates the worker's own batch, starting with the `staged` parts.
+    async fn start_own(
+        &mut self,
+        staged: impl IntoIterator<Item = Part>,
+    ) -> &mut BatchBuilder<SourceData, (), Timestamp, StorageDiff> {
+        let mut own = self.writer.own_builder(&self.desc);
+        for part in staged {
+            own.add_part(part).await.expect("valid usage");
         }
-        let own = self.own.as_mut().expect("created above");
-        own.add(k, v, &t, &d).await.expect("valid usage");
+        self.own.insert(own)
     }
 
-    /// Hands over the staged updates and returns the batches this worker delivers: its own batch
-    /// if it has one, and the shared batch if it is the last worker to finish.
-    pub(super) async fn finish(self) -> Vec<ProtoBatch> {
+    /// Hands the `staged` parts to the shared batch and returns the batches this worker delivers:
+    /// its own batch if it has one, and the shared batch if it is the last worker to finish.
+    async fn finish(self, staged: impl IntoIterator<Item = Part>) -> Vec<ProtoBatch> {
         let own = match self.own {
             Some(own) => Some(
                 own.finish(self.desc.upper.clone())
@@ -165,7 +162,9 @@ impl SharedBatchWrite<'_> {
         };
         let shared = match self.shared {
             Some(shared) => {
-                shared.push(self.staged.finish()).await;
+                for part in staged {
+                    shared.push(part).await;
+                }
                 shared.finish().await
             }
             None => None,
@@ -174,6 +173,90 @@ impl SharedBatchWrite<'_> {
             .chain(shared)
             .map(|batch| batch.into_transmittable_batch())
             .collect()
+    }
+}
+
+/// One worker's write for one interval, taking updates one at a time. It contributes to the shared
+/// batch until the worker's updates reach the size threshold and writes the worker's own batch
+/// after. With sharing disabled, all updates go to the worker's own batch.
+///
+/// The caller must [`finish`](Self::finish) it, also when it pushed nothing (see
+/// [`SharedBatchBuilder::finish`]).
+pub(super) struct SharedBatchWrite<'a> {
+    /// Updates not yet handed to either batch. Empty once `own` exists, and always empty without
+    /// `shared`.
+    staged: PartBuilder<SourceData, RelationDesc, (), UnitSchema>,
+    write: Write<'a>,
+}
+
+impl SharedBatchWrite<'_> {
+    /// Adds an update.
+    pub(super) async fn push(&mut self, (k, v): &(SourceData, ()), t: Timestamp, d: StorageDiff) {
+        let write = &mut self.write;
+        let own = match &mut write.own {
+            Some(own) => own,
+            None if write.shared.is_some() => {
+                self.staged.push(k, v, t, d);
+                if self.staged.goodbytes() < write.max_bytes {
+                    return;
+                }
+                let schemas = &write.writer.schemas;
+                let staged = self.staged.finish_and_replace(&*schemas.key, &*schemas.val);
+                write.start_own([staged]).await;
+                return;
+            }
+            None => write.start_own([]).await,
+        };
+        own.add(k, v, &t, &d).await.expect("valid usage");
+    }
+
+    /// Hands over the staged updates and returns the batches this worker delivers: its own batch
+    /// if it has one, and the shared batch if it is the last worker to finish.
+    pub(super) async fn finish(self) -> Vec<ProtoBatch> {
+        self.write.finish([self.staged.finish()]).await
+    }
+}
+
+/// One worker's write for one interval, taking updates in parts. It holds the parts back for the
+/// shared batch while their total size stays below the size threshold. The part that would reach
+/// the threshold starts the worker's own batch, which takes the held-back parts and every later
+/// one. With sharing disabled, all parts go to the worker's own batch.
+///
+/// The caller must [`finish`](Self::finish) it, also when it pushed nothing (see
+/// [`SharedBatchBuilder::finish`]).
+pub(super) struct SharedPartWrite<'a> {
+    /// Parts not yet handed to either batch. Empty once `own` exists, and always empty without
+    /// `shared`.
+    staged: Vec<Part>,
+    /// The goodbytes of `staged`.
+    staged_bytes: usize,
+    write: Write<'a>,
+}
+
+impl SharedPartWrite<'_> {
+    /// Adds a part of updates.
+    pub(super) async fn push_part(&mut self, part: Part) {
+        let write = &mut self.write;
+        let own = match &mut write.own {
+            Some(own) => own,
+            None => {
+                let staged_bytes = self.staged_bytes.saturating_add(part.goodbytes());
+                if write.shared.is_some() && staged_bytes < write.max_bytes {
+                    self.staged_bytes = staged_bytes;
+                    self.staged.push(part);
+                    return;
+                }
+                self.staged_bytes = 0;
+                write.start_own(self.staged.drain(..)).await
+            }
+        };
+        own.add_part(part).await.expect("valid usage");
+    }
+
+    /// Hands over the staged parts and returns the batches this worker delivers: its own batch if
+    /// it has one, and the shared batch if it is the last worker to finish.
+    pub(super) async fn finish(self) -> Vec<ProtoBatch> {
+        self.write.finish(self.staged).await
     }
 }
 
@@ -214,6 +297,15 @@ mod tests {
 
     fn update(i: i64) -> (SourceData, ()) {
         (SourceData(Ok(Row::pack_slice(&[Datum::Int64(i)]))), ())
+    }
+
+    fn part(updates: &[i64]) -> Part {
+        let mut builder = PartBuilder::new(&desc(), &UnitSchema);
+        for i in updates {
+            let (k, v) = update(*i);
+            builder.push(&k, &v, Timestamp::from(0), 1_i64);
+        }
+        builder.finish()
     }
 
     async fn update_counts(
@@ -288,7 +380,7 @@ mod tests {
         let writer = writer(&client, &shared_batches, shard_id, 0);
         let mut write = writer.start(&desc);
         assert!(
-            write.shared.is_none(),
+            write.write.shared.is_none(),
             "a zero threshold joins no shared batch"
         );
         write.push(&update(0), Timestamp::from(0), 1).await;
@@ -296,6 +388,47 @@ mod tests {
             update_counts(&client, shard_id, write.finish().await).await,
             vec![1],
             "a zero threshold writes one own batch"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_shared_batch_write_parts() {
+        let client = PersistClient::new_for_tests().await;
+        let shared_batches = SharedBatches::new();
+        let shard_id = ShardId::new();
+        let desc = BatchDescription::new(
+            Antichain::from_elem(Timestamp::from(0)),
+            Antichain::from_elem(Timestamp::from(1)),
+            0,
+        );
+        // Room for two of the parts below, but not three.
+        let max_bytes = 3 * part(&[0]).goodbytes() - 1;
+        let small = writer(&client, &shared_batches, shard_id, max_bytes);
+        let large = writer(&client, &shared_batches, shard_id, max_bytes);
+
+        let mut small_write = small.start_parts(&desc);
+        let mut large_write = large.start_parts(&desc);
+        small_write.push_part(part(&[0])).await;
+        small_write.push_part(part(&[1])).await;
+        large_write.push_part(part(&[2])).await;
+        large_write.push_part(part(&[3])).await;
+        // The third part reaches the threshold and moves the held-back ones to the worker's own
+        // batch.
+        large_write.push_part(part(&[4])).await;
+        assert!(
+            large_write.staged.is_empty(),
+            "the worker's own batch takes the held-back parts"
+        );
+        large_write.push_part(part(&[5])).await;
+
+        assert!(
+            small_write.finish().await.is_empty(),
+            "a worker whose parts stay below the threshold shares them"
+        );
+        assert_eq!(
+            update_counts(&client, shard_id, large_write.finish().await).await,
+            vec![4, 2],
+            "the last worker delivers its own batch and the shared batch"
         );
     }
 }
