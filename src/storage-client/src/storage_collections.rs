@@ -2110,14 +2110,20 @@ impl StorageCollections for StorageCollectionsImpl {
         };
 
         for violation in dependency_violations {
-            // An ingestion export whose upper is at or below its remap since
-            // re-snapshots on its next render, which can only duplicate
-            // updates it has already written. One whose snapshot has not
-            // completed has written none, because the persist sink commits
-            // only an empty batch up to the snapshot's as_of before the
-            // snapshot lands. Sinks are not exempt: they advance their shards
-            // with empty appends alone, so an empty shard says nothing about
-            // them.
+            // For an ingestion export, this violation means the remap's read
+            // frontier has caught up to or passed the export's upper. The
+            // export will snapshot again on its next render, and the concern
+            // is that it duplicates updates it already wrote.
+            //
+            // That can't happen when the export's shard is still empty, and we
+            // skip the check in that case. A newly added export stays empty
+            // until its snapshot finishes, because the persist sink commits an
+            // empty batch up to the snapshot's as_of before any snapshot data
+            // arrives.
+            //
+            // Sinks don't get this exemption. A sink's shard only ever receives
+            // empty appends, and an empty shard says nothing about what the
+            // sink has already emitted.
             if let Some(metadata) = &violation.ingestion_export
                 && shard_has_no_updates(persist_client, violation.id, metadata).await
             {
