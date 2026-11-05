@@ -81,17 +81,6 @@ impl<T> LgAllocRegion<T> {
             self.stash.clear()
         }
     }
-    /// Copies an iterator of items into the region.
-    #[inline]
-    pub fn copy_iter<I>(&mut self, items: I) -> &mut [T]
-    where
-        I: Iterator<Item = T> + std::iter::ExactSizeIterator,
-    {
-        self.reserve(items.len());
-        let initial_len = self.local.len();
-        self.local.extend(items);
-        &mut self.local[initial_len..]
-    }
     /// Copies a slice of cloneable items into the region.
     #[inline]
     pub fn copy_slice(&mut self, items: &[T]) -> &mut [T]
@@ -101,7 +90,13 @@ impl<T> LgAllocRegion<T> {
         self.reserve(items.len());
         let initial_len = self.local.len();
         self.local.extend_from_slice(items);
-        &mut self.local[initial_len..]
+        // NOTE: Indexing `self.local` mutably creates a `&mut [T]` over the whole allocation,
+        // which invalidates the pointers that falsified values hold into earlier items (UB under
+        // Stacked Borrows). Form the tail from a raw pointer instead.
+        // SAFETY: `extend_from_slice` initialized `items.len()` elements at `initial_len`.
+        unsafe {
+            std::slice::from_raw_parts_mut(self.local.as_mut_ptr().add(initial_len), items.len())
+        }
     }
 
     /// Ensures that there is space in `self.local` to copy at least `count` items.
@@ -322,14 +317,12 @@ impl<T> Region<T> {
         }
     }
 
-    /// Extend the underlying region from the iterator.
-    ///
-    /// Care must be taken to not re-allocate the inner vector representation.
+    /// Returns a raw pointer to the start of the allocation, without creating a reference to its
+    /// contents.
     #[inline]
-    pub fn extend<I: IntoIterator<Item = T> + ExactSizeIterator>(&mut self, iter: I) {
-        assert!(self.capacity() - self.len() >= iter.len());
-        // SAFETY: We just asserted that we have sufficient capacity.
-        unsafe { self.as_mut_vec().extend(iter) };
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        // SAFETY: `Vec::as_mut_ptr` does not reallocate.
+        unsafe { self.as_mut_vec() }.as_mut_ptr()
     }
 
     /// Obtain a mutable reference to the inner vector representation.
@@ -441,5 +434,21 @@ impl<T> Drop for MMapRegion<T> {
     fn drop(&mut self) {
         // Similar to dropping Region: Drop the allocation, don't drop the `inner` vector.
         lgalloc::deallocate(self.handle.take().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LgAllocRegion;
+
+    #[mz_ore::test]
+    fn copy_slice_keeps_earlier_items_valid() {
+        let mut region = LgAllocRegion::<u8>::with_capacity(8);
+        let first: *const [u8] = region.copy_slice(b"abc");
+        let second: *const [u8] = region.copy_slice(b"def");
+        // SAFETY: The region holds both items at stable locations until it is cleared or dropped.
+        let (first, second) = unsafe { (&*first, &*second) };
+        assert_eq!(first, b"abc");
+        assert_eq!(second, b"def");
     }
 }

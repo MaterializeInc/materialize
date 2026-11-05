@@ -1117,9 +1117,13 @@ pub mod monoids {
         type Item = Top1Monoid;
 
         unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
-            let row = unsafe { self.row_region.copy(&item.row) };
+            // Should the second copy panic, the falsified `row` must not be dropped.
+            let row = std::mem::ManuallyDrop::new(unsafe { self.row_region.copy(&item.row) });
             let order_key = unsafe { self.order_key_region.copy(&item.order_key) };
-            Self::Item { row, order_key }
+            Self::Item {
+                row: std::mem::ManuallyDrop::into_inner(row),
+                order_key,
+            }
         }
 
         fn clear(&mut self) {
