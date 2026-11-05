@@ -708,7 +708,7 @@ impl Controller {
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
             config.persist_location.clone(),
-            config.persist_clients,
+            Arc::clone(&config.persist_clients),
             config.now.clone(),
             wallclock_lag_fn.clone(),
             Arc::clone(&txns_metrics),
@@ -728,6 +728,7 @@ impl Controller {
             read_only,
             &config.metrics_registry,
             config.persist_location,
+            config.persist_clients,
             controller_metrics,
             config.now.clone(),
             wallclock_lag_fn,

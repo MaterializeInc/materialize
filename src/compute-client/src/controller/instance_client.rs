@@ -22,6 +22,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::read_holds::{self, ReadHold};
@@ -152,6 +153,7 @@ impl InstanceClient {
         build_info: &'static BuildInfo,
         storage: StorageCollections,
         peek_stash_persist_location: PersistLocation,
+        persist_clients: Arc<PersistClientCache>,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState)>,
         metrics: InstanceMetrics,
         now: NowFn,
@@ -180,6 +182,7 @@ impl InstanceClient {
                 build_info,
                 storage,
                 peek_stash_persist_location,
+                persist_clients,
                 arranged_logs,
                 metrics,
                 now,
