@@ -131,6 +131,16 @@ pub(super) async fn handle_query_event(
             if ctx.table_info.contains_key(&table) {
                 trace!(%id, "timely-{worker_id} DDL change detected \
                        for {table:?}");
+                // The schema check below opens a connection to MySQL and waits on it. Timely
+                // only notices capability changes while we're waiting. That makes this a good
+                // spot to publish the progress we've recorded so far.
+                //
+                // It's safe because that progress only covers events we've already finished.
+                // The QUERY event's GTID isn't recorded until after we return. Any errors we send
+                // below go out at this GTID, and we still retain those capabilities.
+                // Rewinds aren't a worry either. Rows events send rewinds before they return,
+                // and none are left waiting by the time we get here.
+                ctx.downgrade_data_cap_sets();
                 let info = &ctx.table_info[&table];
                 let mut conn = ctx
                     .connection_config
