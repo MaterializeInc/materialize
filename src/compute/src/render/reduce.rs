@@ -53,6 +53,7 @@ use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
+use crate::render::inline_region::{InlineRegion, InlineRegionScope};
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::typedefs::{
@@ -82,7 +83,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     where
         T: crate::render::MaybeBucketByTime,
     {
-        input.scope().region_named("Reduce", |inner| {
+        input.scope().inline_named("Reduce", |inner| {
             let KeyValPlan {
                 mut key_plan,
                 mut val_plan,
@@ -865,8 +866,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let outer_scope = input.scope();
         let arranged_output = outer_scope
             .clone()
-            .region_named("ReduceHierarchical", |inner| {
-                let input = input.enter(inner);
+            .inline_named("ReduceHierarchical", |inner| {
+                let input = input.enter_inline(inner);
 
                 // The first mod to apply to the hash.
                 let first_mod = buckets.get(0).copied().unwrap_or(1);
@@ -911,7 +912,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
                     let (oks, errs) = self.build_bucketed_stage(&aggr_funcs, input, validating);
                     if let Some(errs) = errs {
-                        err_output = Some(errs.leave_region(outer_scope));
+                        err_output = Some(errs.leave_inline(outer_scope));
                     }
                     stage = oks
                 }
@@ -1009,7 +1010,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             },
                         )
                         .as_collection(|_, v| v.clone())
-                        .leave_region(outer_scope);
+                        .leave_inline(outer_scope);
                     if let Some(e) = err_output.take() {
                         err_output = Some(e.concat(errs));
                     } else {
@@ -1051,7 +1052,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             }
                         },
                     )
-                    .leave_region(outer_scope)
+                    .leave_inline(outer_scope)
             });
         (
             arranged_output,

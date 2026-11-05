@@ -174,6 +174,7 @@ use crate::render::columnar::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
+use crate::render::inline_region::{InlineRegion, InlineRegionScope};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
@@ -182,6 +183,7 @@ pub(crate) mod columnar;
 pub mod context;
 pub(crate) mod errors;
 mod flat_map;
+mod inline_region;
 mod join;
 mod reduce;
 pub mod sinks;
@@ -248,17 +250,17 @@ pub fn build_compute_dataflow(
         let scope = scope.with_label();
 
         // The scope.clone() occurs to allow import in the region.
-        // We build a region here to establish a pattern of a scope inside the dataflow,
-        // so that other similar uses (e.g. with iterative scopes) do not require weird
-        // alternate type signatures.
+        // NOTE: The regions named here render inline (see `inline_region`) and add no timely
+        // subgraph, except for `BuildRegion`. Index imports `enter` it from the dataflow scope,
+        // which needs a real child scope.
         let mut imported_sources = Vec::new();
         let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
         let output_probe = MzProbeHandle::default();
 
-        scope.clone().region_named(&input_name, |region| {
+        scope.clone().inline_named(&input_name, |region| {
             // Import declared sources into the rendering context.
             for (source_id, import) in dataflow.source_imports.iter() {
-                region.region_named(&format!("Source({:?})", source_id), |inner| {
+                region.inline_named(&format!("Source({:?})", source_id), |inner| {
                     let mut read_schema = None;
                     let mut mfp = import.desc.arguments.operators.clone().map(|mut ops| {
                         // If enabled, we read from Persist with a `RelationDesc` that
@@ -352,12 +354,12 @@ pub fn build_compute_dataflow(
                     let (oks, errs) = (
                         ok_stream
                             .as_collection()
-                            .leave_region(region)
-                            .leave_region(scope),
+                            .leave_inline(region)
+                            .leave_inline(scope),
                         err_stream
                             .as_collection()
-                            .leave_region(region)
-                            .leave_region(scope),
+                            .leave_inline(region)
+                            .leave_inline(scope),
                     );
 
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
@@ -413,7 +415,7 @@ pub fn build_compute_dataflow(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let bundle = context.scope.clone().region_named(
+                    let bundle = context.scope.clone().inline_named(
                         &format!("BuildingObject({:?})", object.id),
                         |region| {
                             let depends = object.plan.depends();
@@ -513,7 +515,7 @@ pub fn build_compute_dataflow(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let bundle = context.scope.clone().region_named(
+                    let bundle = context.scope.clone().inline_named(
                         &format!("BuildingObject({:?})", object.id),
                         |region| {
                             let depends = object.plan.depends();
@@ -979,7 +981,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let bundle =
                     self.scope
                         .clone()
-                        .region_named(&format!("Binding({:?})", id), |region| {
+                        .inline_named(&format!("Binding({:?})", id), |region| {
                             let depends = value.depends();
                             let last = let_iter.peek().is_none();
                             let binding = BindingInfo::Let { id, last };
@@ -1174,7 +1176,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 let bundle =
                     self.scope
                         .clone()
-                        .region_named(&format!("Binding({:?})", id), |region| {
+                        .inline_named(&format!("Binding({:?})", id), |region| {
                             let depends = value.depends();
                             let last = let_iter.peek().is_none();
                             let binding = BindingInfo::Let { id, last };
@@ -1187,7 +1189,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             }
         }
 
-        self.scope.clone().region_named("Main Body", |region| {
+        self.scope.clone().inline_named("Main Body", |region| {
             let depends = plan.body.depends();
             self.enter_region(region, Some(&depends))
                 .render_letfree_plan(object_id, plan.body, BindingInfo::Body { in_let })
