@@ -12,13 +12,14 @@
 use std::fmt;
 
 use bytesize::ByteSize;
+use mz_compute_types::errors::DataflowErrorSer;
 use mz_expr::EvalError;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
-use mz_repr::{GlobalId, RelationDesc, Timestamp, UpdateCollection};
+use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp, UpdateCollection};
 use mz_storage_types::errors::DataflowError;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -127,6 +128,18 @@ pub enum ComputeResponse {
     ///
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     CopyToResponse(GlobalId, CopyToResponse),
+
+    /// `BatchedSubscribeResponse` reports the output of a batched subscribe, one description at a
+    /// time.
+    ///
+    /// Each part of a replica reports every description in order, so the k-th [`Batch`] of
+    /// every part covers the same description. A [`Batch`] with an empty upper or a
+    /// [`DroppedAt`] ends the part's output, and the part must not send further responses for
+    /// that subscribe.
+    ///
+    /// [`Batch`]: BatchedSubscribeResponse::Batch
+    /// [`DroppedAt`]: BatchedSubscribeResponse::DroppedAt
+    BatchedSubscribeResponse(GlobalId, Box<BatchedSubscribeResponse>),
 
     /// `Status` reports status updates from replicas to the controller.
     ///
@@ -388,6 +401,85 @@ impl SubscribeBatch {
     }
 }
 
+/// Responses that report the output of a batched subscribe.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum BatchedSubscribeResponse {
+    /// The output for one description.
+    Batch(BatchedSubscribeBatch),
+    /// The subscribe was dropped, leaving output from `frontier` onward unspecified.
+    DroppedAt {
+        /// The upper of the last description reported.
+        frontier: Antichain<Timestamp>,
+        /// Shares of descriptions that were not reported, so that the receiver can delete their
+        /// stashed batches.
+        orphans: Vec<Share>,
+    },
+}
+
+/// The output of a batched subscribe for the description `[lower, upper)`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BatchedSubscribeBatch {
+    /// The lower frontier of the description.
+    pub lower: Antichain<Timestamp>,
+    /// The upper frontier of the description. An empty upper completes the subscribe.
+    pub upper: Antichain<Timestamp>,
+    /// The row updates and error updates of the description, in no particular order across
+    /// shares.
+    pub shares: Vec<Share>,
+    /// A failure that is not part of the subscribe's output, such as a failed stash write. It has
+    /// no time and cannot be retracted.
+    ///
+    /// A batch with a fatal error still carries its shares, so that the receiver can delete their
+    /// stashed batches.
+    pub fatal: Option<String>,
+}
+
+/// One part's row updates and error updates of a batched subscribe for one description.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Share {
+    /// Updates carried in the response.
+    Inline {
+        /// The row updates.
+        rows: UpdateCollection,
+        /// The error updates, consolidated per `(time, error)`.
+        errors: Vec<(DataflowErrorSer, Timestamp, Diff)>,
+    },
+    /// Updates written to persist batches in the stash, error updates as `SourceData(Err)`.
+    Stashed {
+        /// The batches holding the updates.
+        batches: StashedShare,
+        /// An upper bound on the times of the error updates in the batches: the greatest time of
+        /// an error update written to them, or `None` if none was written. Updates written
+        /// separately can cancel when the batches are read, so the batches may hold no error
+        /// update at this time.
+        last_error_time: Option<Timestamp>,
+    },
+}
+
+impl Share {
+    /// Returns the size of the row and error bytes carried in the response.
+    pub fn inline_byte_len(&self) -> usize {
+        match self {
+            Self::Inline { rows, errors } => errors
+                .iter()
+                .map(|(error, _, _)| error.byte_len())
+                .fold(rows.byte_len(), usize::saturating_add),
+            Self::Stashed { .. } => 0,
+        }
+    }
+}
+
+/// Updates of a [`Share`] that were written to persist batches in the stash.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StashedShare {
+    /// The stash shard the batches were written to.
+    pub shard_id: ShardId,
+    /// The batches holding the updates.
+    pub batches: Vec<ProtoBatch>,
+    /// The sum of the encoded sizes of `batches`.
+    pub encoded_size_bytes: usize,
+}
+
 /// Status updates replicas can report to the controller.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StatusResponse {
@@ -404,5 +496,52 @@ mod tests {
     #[mz_ore::test]
     fn test_compute_response_size() {
         assert_eq!(std::mem::size_of::<ComputeResponse>(), 112);
+    }
+
+    #[mz_ore::test]
+    fn batched_subscribe_responses_round_trip() {
+        use mz_repr::{Datum, Row};
+
+        let row = Row::pack_slice(&[Datum::Int64(7)]);
+        let error = DataflowErrorSer::from(EvalError::DivisionByZero);
+        let inline = Share::Inline {
+            rows: std::iter::once((&*row, &Timestamp::from(3), Diff::ONE)).collect(),
+            errors: vec![(error, Timestamp::from(4), Diff::MINUS_ONE)],
+        };
+        let stashed = Share::Stashed {
+            batches: StashedShare {
+                shard_id: ShardId::new(),
+                batches: vec![ProtoBatch::default()],
+                encoded_size_bytes: 42,
+            },
+            last_error_time: Some(Timestamp::from(4)),
+        };
+        let responses = [
+            BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+                lower: Antichain::from_elem(Timestamp::from(1)),
+                upper: Antichain::from_elem(Timestamp::from(5)),
+                shares: vec![inline.clone(), stashed.clone()],
+                fatal: None,
+            }),
+            BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+                lower: Antichain::from_elem(Timestamp::from(5)),
+                upper: Antichain::new(),
+                shares: vec![],
+                fatal: Some("stash write failed".into()),
+            }),
+            BatchedSubscribeResponse::DroppedAt {
+                frontier: Antichain::from_elem(Timestamp::from(5)),
+                orphans: vec![stashed, inline],
+            },
+        ];
+
+        let options = bincode::DefaultOptions::new();
+        for response in responses {
+            let response =
+                ComputeResponse::BatchedSubscribeResponse(GlobalId::User(1), Box::new(response));
+            let bytes = bincode::Options::serialize(options, &response).unwrap();
+            let decoded: ComputeResponse = bincode::Options::deserialize(options, &bytes).unwrap();
+            assert_eq!(decoded, response);
+        }
     }
 }

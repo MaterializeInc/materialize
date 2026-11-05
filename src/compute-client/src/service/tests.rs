@@ -7,12 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Tests of how a peek's responses from several replicas are merged.
+//! Tests of how the responses of a peek or a batched subscribe from several parts are merged.
 
 use super::*;
 use std::num::NonZeroUsize;
 
-use mz_repr::Row;
+use mz_compute_types::errors::DataflowErrorSer;
+use mz_expr::EvalError;
+use mz_repr::{Datum, Diff, Row, UpdateCollection};
+
+use crate::protocol::response::{
+    BatchedSubscribeBatch, BatchedSubscribeResponse, Share, StashedShare,
+};
 
 #[mz_ore::test]
 fn pending_peek_response_precedence() {
@@ -71,5 +77,420 @@ fn peek_max_size_wins_over_row_iteration_limit_in_every_order() {
         }
 
         assert_eq!(pending.response, expected, "{permutation:?}");
+    }
+}
+
+fn frontier(time: u64) -> Antichain<Timestamp> {
+    Antichain::from_elem(Timestamp::from(time))
+}
+
+fn inline_share(value: i64) -> Share {
+    let row = Row::pack_slice(&[Datum::Int64(value)]);
+    Share::Inline {
+        rows: std::iter::once((&*row, &Timestamp::MIN, Diff::ONE)).collect(),
+        errors: Vec::new(),
+    }
+}
+
+/// An inline share holding only the error update `(error, time, diff)`.
+fn error_share(error: &str, time: u64, diff: i64) -> Share {
+    Share::Inline {
+        rows: UpdateCollection::default(),
+        errors: vec![(
+            DataflowErrorSer::from(EvalError::Internal(error.into())),
+            Timestamp::from(time),
+            Diff::from(diff),
+        )],
+    }
+}
+
+fn stashed_share(last_error_time: Option<u64>) -> Share {
+    Share::Stashed {
+        batches: StashedShare {
+            shard_id: mz_persist_types::ShardId::new(),
+            batches: Vec::new(),
+            encoded_size_bytes: 0,
+        },
+        last_error_time: last_error_time.map(Timestamp::from),
+    }
+}
+
+fn batch(
+    lower: Antichain<Timestamp>,
+    upper: Antichain<Timestamp>,
+    shares: Vec<Share>,
+) -> BatchedSubscribeResponse {
+    BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+        lower,
+        upper,
+        shares,
+        fatal: None,
+    })
+}
+
+fn dropped_at(lower: u64, orphans: Vec<Share>) -> BatchedSubscribeResponse {
+    BatchedSubscribeResponse::DroppedAt {
+        frontier: frontier(lower),
+        orphans,
+    }
+}
+
+fn partitioned_state(parts: usize) -> PartitionedComputeState {
+    <(ComputeCommand, ComputeResponse) as Partitionable<_, _>>::new(parts)
+}
+
+/// Feeds `response` from `part` through `state` and unwraps the batched subscribe response it
+/// emits, if any.
+fn absorb(
+    state: &mut PartitionedComputeState,
+    part: usize,
+    response: BatchedSubscribeResponse,
+) -> Option<BatchedSubscribeResponse> {
+    let id = GlobalId::User(1);
+    let response = ComputeResponse::BatchedSubscribeResponse(id, Box::new(response));
+    match state.absorb_response(part, response)? {
+        Ok(ComputeResponse::BatchedSubscribeResponse(emitted_id, response)) => {
+            assert_eq!(emitted_id, id);
+            Some(*response)
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+}
+
+#[mz_ore::test]
+fn a_description_is_emitted_once_every_part_reported_it() {
+    let mut state = partitioned_state(2);
+    let d0 = || (frontier(0), frontier(5));
+    let d1 = || (frontier(5), frontier(10));
+
+    assert_eq!(
+        absorb(&mut state, 0, batch(d0().0, d0().1, vec![inline_share(1)])),
+        None
+    );
+    assert_eq!(
+        absorb(&mut state, 0, batch(d1().0, d1().1, vec![inline_share(2)])),
+        None
+    );
+    assert_eq!(
+        absorb(&mut state, 1, batch(d0().0, d0().1, vec![inline_share(3)])),
+        Some(batch(
+            d0().0,
+            d0().1,
+            vec![inline_share(1), inline_share(3)]
+        )),
+    );
+    assert_eq!(
+        absorb(&mut state, 1, batch(d1().0, d1().1, vec![inline_share(4)])),
+        Some(batch(
+            d1().0,
+            d1().1,
+            vec![inline_share(2), inline_share(4)]
+        )),
+    );
+}
+
+#[mz_ore::test]
+fn descriptions_are_emitted_in_order() {
+    let mut state = partitioned_state(2);
+    let bounds = [(0, 5), (5, 10), (10, 15)];
+
+    for (lower, upper) in bounds {
+        let response = batch(frontier(lower), frontier(upper), vec![inline_share(0)]);
+        assert_eq!(absorb(&mut state, 0, response), None);
+    }
+    let mut emitted = Vec::new();
+    for (lower, upper) in bounds {
+        let response = batch(frontier(lower), frontier(upper), vec![inline_share(1)]);
+        match absorb(&mut state, 1, response) {
+            Some(BatchedSubscribeResponse::Batch(batch)) => {
+                assert_eq!(batch.shares, vec![inline_share(0), inline_share(1)]);
+                emitted.push((batch.lower, batch.upper));
+            }
+            other => panic!("expected a batch, got {other:?}"),
+        }
+    }
+
+    let expected: Vec<_> = bounds
+        .into_iter()
+        .map(|(lower, upper)| (frontier(lower), frontier(upper)))
+        .collect();
+    assert_eq!(emitted, expected);
+}
+
+#[mz_ore::test]
+fn disagreeing_descriptions_fail_the_batch() {
+    let mut state = partitioned_state(2);
+
+    let first = batch(frontier(0), frontier(5), vec![inline_share(1)]);
+    assert_eq!(absorb(&mut state, 0, first), None);
+    let disagreeing = batch(frontier(0), frontier(7), vec![inline_share(2)]);
+    assert_eq!(
+        absorb(&mut state, 1, disagreeing),
+        Some(BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+            lower: frontier(0),
+            upper: frontier(5),
+            shares: vec![inline_share(1), inline_share(2)],
+            fatal: Some("replica processes disagree on batch descriptions".into()),
+        })),
+    );
+}
+
+#[mz_ore::test]
+fn completion_is_emitted_once_after_every_part_ended() {
+    let mut state = partitioned_state(2);
+    let completion = || batch(frontier(10), Antichain::new(), vec![]);
+
+    assert_eq!(absorb(&mut state, 0, completion()), None);
+    assert!(!state.pending_batched_subscribes.is_empty());
+    assert_eq!(absorb(&mut state, 1, completion()), Some(completion()));
+    assert!(
+        state.pending_batched_subscribes.is_empty(),
+        "a completed subscribe leaves no state behind"
+    );
+}
+
+#[mz_ore::test]
+fn dropped_at_carries_the_shares_of_incomplete_descriptions() {
+    let mut state = partitioned_state(2);
+
+    // Part 0 reports two descriptions, part 1 only the first, so only the first is emitted.
+    let d0 = |share| batch(frontier(0), frontier(5), vec![inline_share(share)]);
+    assert_eq!(absorb(&mut state, 0, d0(1)), None);
+    let d1 = batch(frontier(5), frontier(10), vec![inline_share(2)]);
+    assert_eq!(absorb(&mut state, 0, d1), None);
+    assert_eq!(
+        absorb(&mut state, 1, d0(3)),
+        Some(batch(
+            frontier(0),
+            frontier(5),
+            vec![inline_share(1), inline_share(3)]
+        )),
+    );
+
+    // Part 1 forwards an orphan of its own, as a lower merge would.
+    assert_eq!(
+        absorb(&mut state, 1, dropped_at(5, vec![inline_share(4)])),
+        None
+    );
+    assert_eq!(
+        absorb(&mut state, 0, dropped_at(10, vec![])),
+        Some(dropped_at(5, vec![inline_share(2), inline_share(4)])),
+    );
+    assert!(
+        state.pending_batched_subscribes.is_empty(),
+        "a dropped subscribe leaves no state behind"
+    );
+}
+
+/// Collects every share in `responses`, emitted or orphaned.
+fn all_shares(responses: impl IntoIterator<Item = Option<BatchedSubscribeResponse>>) -> Vec<Share> {
+    responses
+        .into_iter()
+        .flatten()
+        .flat_map(|response| match response {
+            BatchedSubscribeResponse::Batch(batch) => batch.shares,
+            BatchedSubscribeResponse::DroppedAt { orphans, .. } => orphans,
+        })
+        .collect()
+}
+
+#[mz_ore::test]
+fn mixed_ends_after_a_disagreement_emit_or_orphan_every_share() {
+    let mut state = partitioned_state(2);
+
+    let first = absorb(
+        &mut state,
+        0,
+        batch(frontier(0), Antichain::new(), vec![inline_share(1)]),
+    );
+    assert_eq!(first, None);
+    let second = absorb(
+        &mut state,
+        1,
+        batch(frontier(0), frontier(5), vec![inline_share(2)]),
+    );
+    match &second {
+        Some(BatchedSubscribeResponse::Batch(batch)) => assert_eq!(
+            batch.fatal.as_deref(),
+            Some("replica processes disagree on batch descriptions"),
+        ),
+        other => panic!("expected a failed batch, got {other:?}"),
+    }
+    let third = absorb(
+        &mut state,
+        1,
+        batch(frontier(5), Antichain::new(), vec![inline_share(3)]),
+    );
+    assert_eq!(third, Some(dropped_at(5, vec![inline_share(3)])));
+
+    assert_eq!(
+        all_shares([first, second, third]),
+        vec![inline_share(1), inline_share(2), inline_share(3)],
+    );
+    assert!(state.pending_batched_subscribes.is_empty());
+}
+
+#[mz_ore::test]
+fn a_drop_and_a_completion_orphan_the_completed_shares() {
+    let completion = || batch(frontier(0), Antichain::new(), vec![inline_share(1)]);
+    let drop = || dropped_at(0, vec![]);
+
+    let mut state = partitioned_state(2);
+    assert_eq!(absorb(&mut state, 0, completion()), None);
+    assert_eq!(
+        absorb(&mut state, 1, drop()),
+        Some(dropped_at(0, vec![inline_share(1)])),
+    );
+    assert!(state.pending_batched_subscribes.is_empty());
+
+    let mut state = partitioned_state(2);
+    assert_eq!(absorb(&mut state, 1, drop()), None);
+    assert_eq!(
+        absorb(&mut state, 0, completion()),
+        Some(dropped_at(0, vec![inline_share(1)])),
+    );
+    assert!(state.pending_batched_subscribes.is_empty());
+}
+
+#[mz_ore::test]
+fn late_responses_orphan_their_shares() {
+    let completion = || batch(frontier(0), Antichain::new(), vec![]);
+    let late = || batch(frontier(0), frontier(5), vec![inline_share(1)]);
+
+    // While the other part is still running.
+    let mut state = partitioned_state(2);
+    assert_eq!(absorb(&mut state, 0, completion()), None);
+    assert_eq!(
+        absorb(&mut state, 0, late()),
+        Some(dropped_at(0, vec![inline_share(1)])),
+    );
+
+    // After the subscribe finished.
+    assert_eq!(absorb(&mut state, 1, completion()), Some(completion()));
+    assert!(state.pending_batched_subscribes.is_empty());
+    assert_eq!(
+        absorb(&mut state, 1, late()),
+        Some(dropped_at(0, vec![inline_share(1)])),
+    );
+    assert!(
+        state.pending_batched_subscribes.is_empty(),
+        "a late response does not re-initialize tracking"
+    );
+}
+
+#[mz_ore::test]
+fn held_inline_bytes_past_the_limit_fail_the_batch() {
+    // Rows pack small integers compactly, so the shares used below all have the same length.
+    let share_len = inline_share(1).inline_byte_len();
+    assert!((1..=3).all(|value| inline_share(value).inline_byte_len() == share_len));
+    let d0 = |share| batch(frontier(0), frontier(5), vec![inline_share(share)]);
+    let d1 = |share| batch(frontier(5), frontier(10), vec![inline_share(share)]);
+
+    // Holding exactly the limit does not fail the batch.
+    let max_result_size = u64::cast_from(2 * share_len);
+    let mut pending = PendingBatchedSubscribe::new(2);
+    assert_eq!(pending.absorb(0, d0(1), max_result_size), None);
+    assert_eq!(
+        pending.absorb(1, d0(2), max_result_size),
+        Some(batch(
+            frontier(0),
+            frontier(5),
+            vec![inline_share(1), inline_share(2)]
+        )),
+    );
+
+    // Holding a description beyond the one emitted passes the limit.
+    let max_result_size = u64::cast_from(share_len);
+    let mut pending = PendingBatchedSubscribe::new(2);
+    assert_eq!(pending.absorb(0, d0(1), max_result_size), None);
+    assert_eq!(pending.absorb(0, d1(2), max_result_size), None);
+    let error = format!(
+        "total result exceeds max size of {}",
+        ByteSize::b(max_result_size)
+    );
+    assert_eq!(
+        pending.absorb(1, d0(3), max_result_size),
+        Some(BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+            lower: frontier(0),
+            upper: frontier(5),
+            shares: vec![inline_share(1), inline_share(3)],
+            fatal: Some(error),
+        })),
+    );
+    assert_eq!(
+        pending.inline_bytes, share_len,
+        "emitting releases the bytes"
+    );
+}
+
+/// The merge carries error updates in the shares like rows, without reading them, and counts
+/// inline error bytes against the limit.
+#[mz_ore::test]
+fn error_updates_travel_in_the_merged_shares() {
+    let mut state = partitioned_state(2);
+    let shares_0 = vec![error_share("a", 3, 1), stashed_share(Some(4))];
+    let shares_1 = vec![error_share("a", 4, -1), stashed_share(None)];
+    assert_eq!(
+        absorb(
+            &mut state,
+            0,
+            batch(frontier(0), frontier(5), shares_0.clone())
+        ),
+        None
+    );
+    let merged = absorb(
+        &mut state,
+        1,
+        batch(frontier(0), frontier(5), shares_1.clone()),
+    );
+    let expected: Vec<_> = shares_0.into_iter().chain(shares_1).collect();
+    assert_eq!(merged, Some(batch(frontier(0), frontier(5), expected)));
+
+    let error_len = error_share("a", 3, 1).inline_byte_len();
+    assert!(error_len > 0, "inline error updates have a size");
+    let mut pending = PendingBatchedSubscribe::new(2);
+    let max_result_size = u64::cast_from(error_len);
+    let d0 = |share| batch(frontier(0), frontier(5), vec![share]);
+    let d1 = |share| batch(frontier(5), frontier(10), vec![share]);
+    assert_eq!(
+        pending.absorb(0, d0(error_share("a", 3, 1)), max_result_size),
+        None
+    );
+    assert_eq!(
+        pending.absorb(0, d1(error_share("a", 6, 1)), max_result_size),
+        None
+    );
+    match pending.absorb(1, d0(error_share("b", 3, 1)), max_result_size) {
+        Some(BatchedSubscribeResponse::Batch(batch)) => assert!(
+            batch.fatal.is_some(),
+            "held error bytes count against the limit"
+        ),
+        other => panic!("expected a batch, got {other:?}"),
+    }
+}
+
+/// A part's fatal error reaches the merged batch together with the shares of every part, so
+/// that the receiver can delete their stashed batches.
+#[mz_ore::test]
+fn a_fatal_error_is_merged_with_every_parts_shares() {
+    let mut state = partitioned_state(2);
+    let failed = BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+        lower: frontier(0),
+        upper: frontier(5),
+        shares: vec![stashed_share(None)],
+        fatal: Some("stash write failed".into()),
+    });
+    assert_eq!(absorb(&mut state, 0, failed), None);
+    let healthy = batch(
+        frontier(0),
+        frontier(5),
+        vec![stashed_share(Some(2)), error_share("a", 2, 1)],
+    );
+    match absorb(&mut state, 1, healthy) {
+        Some(BatchedSubscribeResponse::Batch(batch)) => {
+            assert_eq!(batch.fatal.as_deref(), Some("stash write failed"));
+            assert_eq!(batch.shares.len(), 3, "{:?}", batch.shares);
+        }
+        other => panic!("expected a batch, got {other:?}"),
     }
 }

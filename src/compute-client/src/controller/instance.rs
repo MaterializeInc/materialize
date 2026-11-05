@@ -2097,6 +2097,9 @@ impl Instance {
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id);
             }
+            ComputeResponse::BatchedSubscribeResponse(id, _response) => {
+                tracing::warn!(%id, %replica_id, "dropping unexpected batched subscribe response");
+            }
             ComputeResponse::Status(response) => {
                 self.handle_status_response(response, replica_id);
             }
