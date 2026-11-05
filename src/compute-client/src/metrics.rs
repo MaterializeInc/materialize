@@ -65,6 +65,9 @@ pub struct ComputeControllerMetrics {
     peeks_total: IntCounterVec,
     peek_duration_seconds: HistogramVec,
 
+    // batched subscribes
+    batched_subscribe_batches_total: IntCounterVec,
+
     // replica connections
     connected_replica_count: UIntGaugeVec,
     replica_connects_total: IntCounterVec,
@@ -174,6 +177,11 @@ impl ComputeControllerMetrics {
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Compute],
+            )),
+            batched_subscribe_batches_total: metrics_registry.register(metric!(
+                name: "mz_compute_batched_subscribe_batches_total",
+                help: "The total number of batched subscribe batches the controller received, by the outcome of their cutover: `accepted` batches extended the output, `trimmed` batches extended it after dropping updates already reported, and `dropped` batches were discarded.",
+                var_labels: ["instance_id", "replica_id", "outcome"],
             )),
             connected_replica_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_connected_replica_count",
@@ -313,6 +321,12 @@ impl InstanceMetrics {
                 .responses_total
                 .get_delete_on_drop_metric(labels)
         });
+        let batched_subscribe_batches_total = BatchedSubscribeBatchMetrics::build(|outcome| {
+            let labels = extended_labels(outcome);
+            self.metrics
+                .batched_subscribe_batches_total
+                .get_delete_on_drop_metric(labels)
+        });
 
         let command_message_bytes_total = self
             .metrics
@@ -354,6 +368,7 @@ impl InstanceMetrics {
                 hydration_queue_size,
                 replica_connects_total,
                 replica_connect_wait_time_seconds_total,
+                batched_subscribe_batches_total,
             }),
         }
     }
@@ -415,6 +430,32 @@ pub struct ReplicaMetricsInner {
     replica_connects_total: IntCounter,
     /// Counter tracking the total time spent waiting for (re-)connects.
     replica_connect_wait_time_seconds_total: Counter,
+    /// Counters tracking the batched subscribe batches received, by cutover outcome.
+    pub batched_subscribe_batches_total: BatchedSubscribeBatchMetrics,
+}
+
+/// Metrics keyed by the cutover outcome of a batched subscribe batch.
+#[derive(Debug)]
+pub struct BatchedSubscribeBatchMetrics {
+    /// Batches that extended the output without a trim.
+    pub accepted: IntCounter,
+    /// Batches that extended the output after a trim.
+    pub trimmed: IntCounter,
+    /// Batches that were discarded.
+    pub dropped: IntCounter,
+}
+
+impl BatchedSubscribeBatchMetrics {
+    fn build<F>(build_metric: F) -> Self
+    where
+        F: Fn(&str) -> IntCounter,
+    {
+        Self {
+            accepted: build_metric("accepted"),
+            trimmed: build_metric("trimmed"),
+            dropped: build_metric("dropped"),
+        }
+    }
 }
 
 impl ReplicaMetrics {

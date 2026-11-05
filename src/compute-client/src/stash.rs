@@ -65,6 +65,15 @@ impl OwnedStash {
     }
 }
 
+impl std::fmt::Debug for OwnedStash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnedStash")
+            .field("batches", &self.batches.len())
+            .field("encoded_size_bytes", &self.encoded_size_bytes())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Drop for OwnedStash {
     fn drop(&mut self) {
         // Deleting is async and drop must not block, so the deletes run on the runtime captured
