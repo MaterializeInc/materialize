@@ -7,8 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Copy only the CA bundle: the `ca-certificates` package depends on the
-# `openssl` CLI.
+# The CA bundle comes from this pinned image, so certificate updates arrive
+# only through Dependabot's digest bumps of it. Only the bundle is copied, since
+# the `ca-certificates` package depends on the `openssl` CLI.
 FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:8b33d821344902366f6ac0fd2cabf4c39d5b98abe37ebc9eb8c35943f8ede923 AS ca-certs
 
 FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
