@@ -458,7 +458,9 @@ updates:
         - "@tanstack/react-query*"
     # msw, downshift, and @frontegg/* tighten types in minor releases that
     # existing code relies on, and @intercom/* is on 0.0.x, where any release
-    # can break. Each comes as its own PR rather than breaking the whole group.
+    # can break. @chakra-ui/react 2.10 stopped installing the @chakra-ui/*
+    # subpackages that console/src imports directly. Each comes as its own PR
+    # rather than breaking the whole group.
     simple:
       applies-to: version-updates
       update-types:
@@ -471,3 +473,4 @@ updates:
         - "downshift"
         - "@frontegg/*"
         - "@intercom/*"
+        - "@chakra-ui/*"
