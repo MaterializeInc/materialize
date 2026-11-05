@@ -85,6 +85,9 @@ pub enum FreshnessTree {
 /// Resolves the current ticker of an ingestion.
 pub trait TickerLookup {
     fn ingestion_ticker(&self, id: GlobalId) -> Option<Ticker>;
+    /// A value that changes whenever `ingestion_ticker` may return a different ticker for some
+    /// ingestion. A tree resolved under an unchanged generation stays valid.
+    fn generation(&self) -> u64;
 }
 
 impl FreshnessTree {
