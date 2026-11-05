@@ -82,8 +82,10 @@ class TestRefreshIntervalConfig:
 
     @pytest.mark.parametrize("raw", ["every 1 day", 5, ["every"]])
     def test_not_a_dict(self, raw):
-        with pytest.raises(RefreshIntervalConfigError):
+        with pytest.raises(RefreshIntervalConfigError) as exc_info:
             MaterializeRefreshIntervalConfig.parse(raw)
+
+        assert "is not of type 'object'" in exc_info.value.msg
 
 
 class TestPartitionByConfig:
