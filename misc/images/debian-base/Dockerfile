@@ -7,11 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# `ca-certificates` depends on the `openssl` CLI, so install it in a separate
-# stage and copy only the bundle into the final image.
-FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS ca-certs
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Copy only the CA bundle: the `ca-certificates` package depends on the
+# `openssl` CLI.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:8b33d821344902366f6ac0fd2cabf4c39d5b98abe37ebc9eb8c35943f8ede923 AS ca-certs
 
 FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 
@@ -26,10 +24,13 @@ ARG BUILD_PROFILE=optimize
 
 LABEL build.profile=$BUILD_PROFILE
 
-RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends eatmydata \
-    && rm -rf /var/lib/apt/lists/*
-
 # Rust binaries using the workspace reqwest verify TLS against the system trust
 # store and fail to build an HTTP client if it is missing, even when they never
-# make a TLS connection.
+# make a TLS connection. apt needs it too, since it fetches over HTTPS only.
+# Descendant images inherit both.
 COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && for f in /etc/apt/sources.list.d/*; do sed 's|http://|https://|g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
+
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends eatmydata \
+    && rm -rf /var/lib/apt/lists/*

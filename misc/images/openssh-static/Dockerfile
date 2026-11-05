@@ -20,14 +20,13 @@
 # completing NIST CMVP validation).
 #
 # Usage:
-#   docker build -t openssh-static .
-#   docker create --name extract openssh-static
+#   bin/mzimage acquire openssh-static
+#   docker create --name extract "$(bin/mzimage spec openssh-static)"
 #   docker cp extract:/output/ssh ./ssh
 #   docker rm extract
 
-# Pinned by rolling tag + multi-arch index digest, matching materialized-base,
-# so dependabot refreshes the digest for security fixes.
-FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS builder
+# debian-base fetches apt sources over HTTPS.
+MZFROM debian-base AS builder
 
 ARG AWS_LC_VERSION=v1.54.0
 # OpenSSH >= 10.0 is required: it natively stubs BN_set_flags() for AWS-LC,

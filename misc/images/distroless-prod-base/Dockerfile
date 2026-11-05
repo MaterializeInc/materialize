@@ -12,8 +12,8 @@
 
 # Debian packages for the distroless final image, which has no package manager.
 # Installing them explicitly pulls current security-patched builds.
-# The digest pin is bumped by dependabot, which also busts the layer cache.
-FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS apt-deps
+# debian-base fetches apt sources over HTTPS.
+MZFROM debian-base AS apt-deps
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates eatmydata liblzma5 \
     && rm -rf /var/lib/apt/lists/*
 
