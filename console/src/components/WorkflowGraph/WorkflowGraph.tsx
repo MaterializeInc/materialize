@@ -269,8 +269,13 @@ const WorkflowGraphView = ({
 
   const { data, isLoading: isLagmapLoading } = useMaterializationLag(
     { objectIds: objectsWithLag },
-    // For the same reason as `useWorkflowGraphNodeDetails`.
-    { placeholderData: drawBeforeLag ? keepPreviousData : undefined },
+    {
+      // For the same reason as `useWorkflowGraphNodeDetails`.
+      placeholderData: drawBeforeLag ? keepPreviousData : undefined,
+      // Lag otherwise loads once per node set, and a node created while the
+      // graph is open is drawn before it hydrates.
+      pollUntilFreshnessMs: 10_000,
+    },
   );
 
   const { lagMap } = data ?? {};
