@@ -643,20 +643,24 @@ impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> ColumnChunk<D, T, R, G
                 (Cow::Owned(lower), Cow::Owned(upper))
             }
             ColumnChunk::Spilled(body, _) => {
-                let (lower, upper) = body.time_bounds.get_or_init(|| {
-                    body.handle.with_typed(|typed| match typed {
-                        Some(typed) => {
-                            let (lower, upper) = Self::time_bounds(&pooled::<D, T, R>(typed).body);
-                            (lower, upper.into())
-                        }
-                        // Leaving the typed form fills the bounds, so this
-                        // is reached only by bodies spilled some other way.
-                        None => {
-                            let (lower, upper) = Self::time_bounds(&read_words(&body.handle));
-                            (lower, upper.into())
-                        }
-                    })
-                });
+                // Eviction serializes the body under the chunk's state lock
+                // and fills the bounds cell from there, so the lock order is
+                // state lock, then cell. Taking the state lock from inside
+                // the cell's initializer deadlocks against an evictor.
+                if body.time_bounds.get().is_none() {
+                    let filled = body.handle.with_typed(|typed| {
+                        typed
+                            .map(|typed| pooled::<D, T, R>(typed).bounds())
+                            .is_some()
+                    });
+                    // Leaving the typed form fills the bounds, so this is
+                    // reached only by bodies spilled some other way.
+                    if !filled {
+                        let (lower, upper) = Self::time_bounds(&read_words(&body.handle));
+                        let _ = body.time_bounds.set((lower, upper.into()));
+                    }
+                }
+                let (lower, upper) = body.time_bounds.get().expect("time bounds filled above");
                 (Cow::Borrowed(lower), Cow::Borrowed(&upper[..]))
             }
         }
@@ -3143,6 +3147,32 @@ mod tests {
         };
         assert_eq!(&words, words2, "byte-identical round trip");
         assert_eq!(collect_column(&reread), data);
+    }
+
+    /// Reads every chunk's time bounds while spill threads evict it. The
+    /// spill threads fill the bounds under the chunk's state lock, so a
+    /// reader that takes the locks in the other order hangs this test.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // reserves a full-size pool
+    fn time_bounds_race_spill_thread_eviction() {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let pool = Pool::new().expect("pool reservation");
+            pool.set_budget(0);
+            pool.set_spill_threads(4);
+            let data: Vec<Tuple> = (0..2048u64).map(|k| ((k, k), k % 7, 1)).collect();
+            for _ in 0..2000 {
+                let chunk = force_spill(ColumnChunk::from_body(build_column(&data)), &pool);
+                let (lower, upper) = chunk.chunk_time_bounds();
+                assert_eq!(lower.elements(), &[0]);
+                assert_eq!(&upper[..], &[6]);
+            }
+            pool.set_spill_threads(0);
+            done_tx.send(()).expect("receiver alive");
+        });
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(120))
+            .expect("time bounds reads deadlocked against spill-thread eviction");
     }
 
     #[mz_ore::test]
