@@ -16,14 +16,14 @@ use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::cursor::BatchCursor;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
-use mz_repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, Row};
 use mz_row_spine::{DatumSeq, RowRowBuilder};
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::typedefs::{ErrBatcher, RowRowAgent, RowRowEnter, RowRowSpine};
+use crate::typedefs::{ErrBatcher, ImportedRowRowEnter, RowRowAgent, RowRowSpine};
 
 /// Thresholds a dataflow-local ok arrangement, keeping rows with a positive count.
 ///
@@ -51,7 +51,7 @@ fn threshold_local<'scope, T: RenderTimestamp>(
 
 /// Like [`threshold_local`] but over an imported trace's ok arrangement.
 fn threshold_trace<'scope, T: RenderTimestamp>(
-    arrangement: Arranged<'scope, RowRowEnter<Timestamp, Diff, T>>,
+    arrangement: Arranged<'scope, ImportedRowRowEnter<T>>,
     name: &str,
 ) -> Arranged<'scope, RowRowAgent<T, Diff>> {
     let logic = move |_key: DatumSeq<'_>, s: &[(DatumSeq<'_>, Diff)], t: &mut Vec<(Row, Diff)>| {
