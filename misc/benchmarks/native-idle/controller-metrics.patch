@@ -1,0 +1,43 @@
+diff --git a/src/environmentd/src/controllerd/http.rs b/src/environmentd/src/controllerd/http.rs
+index 2455d16639..9d4227fba8 100644
+--- a/src/environmentd/src/controllerd/http.rs
++++ b/src/environmentd/src/controllerd/http.rs
+@@ -87,8 +87,18 @@ fn pretty_json(status: StatusCode, value: Value) -> Response {
+ pub(super) async fn serve(
+     listener: tokio::net::TcpListener,
+     sender: mpsc::Sender<Command>,
++    registry: mz_ore::metrics::MetricsRegistry,
+ ) -> std::io::Result<()> {
+-    axum::serve(listener, router(sender)).await
++    let app = router(sender)
++        .route(
++            "/metrics",
++            get(move |headers| {
++                let registry = registry.clone();
++                async move { mz_http_util::handle_prometheus(&registry, headers).await }
++            }),
++        )
++        .nest("/prof/", mz_prof_http::router(&crate::BUILD_INFO));
++    axum::serve(listener, app).await
+ }
+
+ fn router(sender: mpsc::Sender<Command>) -> Router {
+diff --git a/src/environmentd/src/controllerd/runtime.rs b/src/environmentd/src/controllerd/runtime.rs
+index f28ad5f02a..7d10fd34d5 100644
+--- a/src/environmentd/src/controllerd/runtime.rs
++++ b/src/environmentd/src/controllerd/runtime.rs
+@@ -86,9 +86,11 @@ pub async fn run(
+         .unwrap_or_else(|| Box::pin(futures::stream::pending()));
+     let (sender, mut commands) = tokio::sync::mpsc::channel::<Command>(32);
+     tracing::info!(address = %listener.local_addr()?, "controller HTTP listening without authentication");
+-    let mut server =
+-        mz_ore::task::spawn(|| "controller-http", super::http::serve(listener, sender))
+-            .abort_on_drop();
++    let mut server = mz_ore::task::spawn(
++        || "controller-http",
++        super::http::serve(listener, sender, config.metrics_registry.clone()),
++    )
++    .abort_on_drop();
+     let mut observations = Observations::new()?;
+     let mut interval = tokio::time::interval(Duration::from_secs(1));
+     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

@@ -1,0 +1,2 @@
+# Extra offline-reduction dependency. Other Python packages come from bin/pyactivate.
+prometheus-client==0.25.0

@@ -1,71 +1,75 @@
 # Decoupled coordination: current handoff
 
-## Current outcome
+## Current objective
 
-The default-debug two-version lifecycle demonstration passed. Both versions
-served SQL, DDL and table writes before and after promotion. Promotion restarted
-only the candidate adapter, preserving the old SQL session and warmed replica
-execution. Relay provisioning transferred without replacing the relay.
+The fresh idle-resource comparison is complete. Read the
+[report](20260903_decoupled_coordination_idle.md) and its
+[measured evidence](20260903_decoupled_coordination_idle.json).
+Native uses about 2.1× idle CPU and 2.2× PSS versus upstream main. Configuration
+controls preserve the gap. Repeated upper polling drives backend read
+amplification, frontier reductions are the largest named compute hotspot, and
+bounded blob-cache growth explains most of the observed heap growth.
 
-Explicit HTTP retirement rejected old-generation writes and removed that
-generation's processes and read grants. Surviving process identities, a held read
-snapshot and its durable grant remained intact. The newer version continued SQL,
-DDL and table writes, and the retired controller could not rejoin.
+No production architectural repair was made. All comparison fixtures are stopped
+and their disposable databases/blobs are removed. Raw evidence and pinned
+binaries remain in `~/.local/share/aj/m3-evidence/native-main-idle/`.
 
-Both builds use the same implementation and understand the same committed-plan
-encoding. No runtime change was needed for this walkthrough. This proves the
-prototype lifecycle, not arbitrary-release compatibility or a latency improvement.
+## Next concrete action
 
-Earlier work decoupled retained introspection from raw catalog history through
-the durable authority projection, with compaction and cold-restart evidence. The
-scoped txn-WAL repair tolerates redundant application after lawful table retirement
-and rejects new writes to forgotten targets without partial or collateral commits.
-The original four-adapter workload has not been rerun with that repair.
+Agree the next bounded repair with Aljoscha. The smallest measured opportunity
+is deduplicating transaction-WAL upper reads within each storage sampling round.
+The report also identifies frontier reduction work and repeated structural
+reconciliation. Preserve freshness, catalog authorization and replica ownership.
+Do not resume sink handover or change settlement policy without agreement.
 
-## Next concrete action and remaining work
-
-The next scoped M3 work is an external-sink handover walkthrough across promotion
-and explicit retirement, checking one authorized execution and survivor continuity.
-Sink handover remains unverified. Do not treat the SQL lifecycle demonstration as
-completing M3. Long write/read stalls remain a separate investigation. Other scoped
-opportunities are in the
+External-sink handover across promotion and explicit retirement remains M3 work.
+It must verify one authorized execution and survivor continuity. Long write/read
+stalls remain separate. Other opportunities are in the
 [follow-up inventory](20260903_decoupled_coordination_followups.md).
 
-Broad CI is not green. [Build141419](https://buildkite.com/materialize/test/builds/141419)
-failed on the unpublished `pubsubd` image after Rust compilation. Registry
-visibility and upstream merge-skew failures remain unresolved. The prior Persist
-`state_inspect_serde_json` object-key-order failure was not repaired or masked.
-The full adapter suite's stale
-`hydration_times_filters_catalog_protection_before_backpressure` expectation still
-requires separate correction after the authority projection. Current targeted
-checks pass, not broad CI. The PR stays draft.
+## Verified outcomes and remaining limits
+
+The debug two-version prototype lifecycle passed: SQL, DDL and table writes
+before/after promotion, surviving old SQL sessions and warmed replicas, and
+explicit retirement fencing/cleanup without losing the survivor's held snapshot.
+Both builds used the same implementation and plan encoding. This is not proof of
+arbitrary-release compatibility or completion of M3.
+
+The durable authority projection decoupled retained introspection from raw
+catalog history, with compaction and restart evidence. The scoped txn-WAL repair
+handles lawful concurrent table retirement without partial or collateral writes.
+The original four-adapter workload has not been rerun with that repair.
+
+Last broad CI evidence remains non-green:
+[Build141419](https://buildkite.com/materialize/test/builds/141419) failed on the
+unpublished `pubsubd` image after Rust compilation. Registry visibility and
+upstream merge-skew failures remain unresolved in this handoff. The prior
+Persist `state_inspect_serde_json` object-key-order failure and the adapter
+suite's stale `hydration_times_filters_catalog_protection_before_backpressure`
+expectation were not repaired here. This experiment does not establish green CI.
+The PR stays draft.
 
 ## Essential evidence and local state
 
+- Idle resources: report above, raw evidence under
+  `~/.local/share/aj/m3-evidence/native-main-idle/`, and reusable scripts under
+  `misc/benchmarks/native-idle/`. The original upstream cleanup assertion and
+  invalid early scheduling probes remain recorded. Corrected diagnostic fixtures
+  and native/matched-main cleanup passed.
 - Lifecycle: `~/.local/share/aj/m3-evidence/lifecycle/verification.md` and
-  `verified-summary.json`. Passing run: `run-1793821876`, with the exact witness,
-  authority and protection snapshots, process/dataflow identities and logs.
-  Generation-specific retirement cleanup passed. Final whole-environment cleanup
-  required the witness's owned-process fallback, which remains a verification
-  limitation. Existing launcher tests pass.
-- Shared plans: `~/.local/share/aj/m3-evidence/shared-plans/verification.md`.
-  Passing run: `run-1793800485`. Exact debug artifacts, source patches, setup
-  script, test output, before/after process identities and check logs are retained.
-  Reusable SQL regression: `test/controllerd/shared-plans.py`.
-- Authority projection: `~/.local/share/aj/m3-evidence/authority-projection/replacement/`,
-  `run-1793731479/verified-summary.json`. Failed runs and exact artifacts remain
-  beside it. The original environment was discarded, not migrated.
+  `verified-summary.json`, passing `run-1793821876`. Final whole-environment stop
+  needed the witness's owned-process fallback. Generation retirement passed.
+- Shared plans: `~/.local/share/aj/m3-evidence/shared-plans/verification.md`,
+  passing `run-1793800485`. SQL regression: `test/controllerd/shared-plans.py`.
+- Authority projection:
+  `~/.local/share/aj/m3-evidence/authority-projection/replacement/`,
+  `run-1793731479/verified-summary.json`. The old environment was discarded.
 - Txn-WAL retirement: `~/.local/share/aj/m3-evidence/txn-retirement/repair.md`.
-- Earlier details and worker history: the
-  [archive](20260903_decoupled_coordination_log_archive.md).
+- Earlier details: [archive](20260903_decoupled_coordination_log_archive.md).
 
-All demonstration processes and databases are stopped. Each saved run's
-`database.json` and `launch.json` identify its private metadata, blobs and ports.
-Its artifact directory supplies the exact binaries. The lifecycle run reuses the
-shared-plan artifacts and transfers relay provisioning to generation 1 before
-retiring generation 0, preserving the endpoint. Do not mix artifact sets or convert
-the saved exact-build plan environment to the new shared namespace.
-
-Keep heavy work low-concurrency on this 18 GiB VM. Scratch is optional. Stale
-incremental compiler caches were pruned, without deleting saved evidence or
-binaries.
+All owned runtime processes are stopped. The temporary controller profiling
+routes are absent from production source. Pinned native measurement binaries retain
+that instrumentation. The unused upstream worktree and compiler scratch were
+removed, leaving about 30 GiB free. The unrelated persist-traffic worktree was
+left untouched. Keep heavy work sequential and low-concurrency. Scratch is
+optional.
