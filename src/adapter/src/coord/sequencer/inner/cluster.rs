@@ -1690,7 +1690,14 @@ impl Coordinator {
                 AlterOptionParameter::Reset | AlterOptionParameter::Unchanged => {
                     coord_bail!("Missing SIZE for empty cluster")
                 }
-                AlterOptionParameter::Set(_) => {} // Was set within the calling function.
+                AlterOptionParameter::Set(size) => {
+                    let role_id = Some(session.role_metadata().current_role);
+                    self.catalog.ensure_valid_replica_size(
+                        &self.catalog().get_role_allowed_cluster_sizes(&role_id),
+                        size,
+                        false,
+                    )?;
+                }
             }
         } else if sizes.len() == 1 {
             let size = sizes.into_iter().next().expect("must exist");

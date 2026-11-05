@@ -1620,14 +1620,43 @@ ALTER SYSTEM RESET enable_unified_cluster
 
 # ----- Direct-path invariants on scheduled clusters -----
 
-# Converting a nonempty unmanaged cluster to ON REFRESH adopts its replica
-# rather than failing replication-factor validation, and the controller then
-# normalizes the factor to 0.
+# An empty cluster introduces a size when converted, even if ON REFRESH leaves
+# it without replicas until a refresh window opens.
+> CREATE CLUSTER cc_empty_conv REPLICAS ()
 > CREATE CLUSTER cc_conv (REPLICAS (r1 (SIZE 'scale=1,workers=1')))
+
+! ALTER CLUSTER cc_empty_conv SET (MANAGED, SIZE = 'notasize')
+contains:unknown cluster replica size notasize
+
+! ALTER CLUSTER cc_empty_conv SET (MANAGED, SIZE = 'free')
+contains:unknown cluster replica size free
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1,workers=2'
+
+! ALTER CLUSTER cc_empty_conv SET (MANAGED, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH)
+contains:unknown cluster replica size scale=1,workers=1
+
+> SELECT managed FROM mz_clusters WHERE name = 'cc_empty_conv'
+false
+
+> ALTER CLUSTER cc_empty_conv SET (MANAGED, SIZE = 'scale=1,workers=2', SCHEDULE = ON REFRESH)
+
+> SELECT managed, size FROM mz_clusters WHERE name = 'cc_empty_conv'
+true scale=1,workers=2
+
+> DROP CLUSTER cc_empty_conv
+
+# Converting a nonempty unmanaged cluster to ON REFRESH adopts its replica
+# and its accepted size, even after the allow-list shrinks. The controller
+# normalizes the replication factor to 0.
 > ALTER CLUSTER cc_conv SET (MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_conv'
-0
+> SELECT size, replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_conv'
+scale=1,workers=1 0
 > DROP CLUSTER cc_conv
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET allowed_cluster_replica_sizes
 
 # An availability-zone change on a scheduled cluster is validated like on every
 # other path, not written unchecked into the realized config.
