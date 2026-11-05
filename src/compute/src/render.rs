@@ -152,7 +152,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
 use timely::dataflow::operators::vec::Filter;
 use timely::dataflow::operators::vec::ToStream;
-use timely::dataflow::operators::{Capability, Operator, Probe, probe};
+use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
 use timely::progress::timestamp::Refines;
@@ -347,7 +347,7 @@ pub fn build_compute_dataflow(
                     // Attach a probe reporting the input frontier.
                     let input_probe =
                         compute_state.input_probe_for(*source_id, dataflow.export_ids());
-                    ok_stream = ok_stream.probe_with(&input_probe);
+                    ok_stream = ok_stream.probe_notify_with(vec![input_probe]);
 
                     let (oks, errs) = (
                         ok_stream
@@ -662,7 +662,7 @@ where
         outer: Scope<'outer, mz_repr::Timestamp>,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        input_probe: probe::Handle<mz_repr::Timestamp>,
+        input_probe: MzProbeHandle<mz_repr::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc<LirScalarExpr>,
         typ: &ReprRelationType,
@@ -684,7 +684,7 @@ where
                 self.until.clone(),
             );
 
-            oks.stream = oks.stream.probe_with(&input_probe);
+            oks.stream = oks.stream.probe_notify_with(vec![input_probe]);
 
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 outer,
@@ -806,6 +806,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 }
 
                 oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
+                compute_state.observe_write_frontier(idx_id, output_probe);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -822,6 +823,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
                 compute_state.traces.set(idx_id, trace);
+                compute_state.observe_shared_write_frontier(idx_id, gid);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -908,6 +910,7 @@ where
                 }
 
                 oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
+                compute_state.observe_write_frontier(idx_id, output_probe);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -924,6 +927,7 @@ where
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
                 compute_state.traces.set(idx_id, trace);
+                compute_state.observe_shared_write_frontier(idx_id, gid);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());

@@ -442,10 +442,20 @@ pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether the compute server reports only frontiers that probes and sinks announced as changed,
+/// instead of reading every collection's frontiers on each maintenance.
+pub const COMPUTE_EVENT_DRIVEN_FRONTIER_REPORTING: Config<bool> = Config::new(
+    "compute_event_driven_frontier_reporting",
+    true,
+    "Whether the compute server reports only frontiers that probes and sinks announced as changed, \
+    instead of reading every collection's frontiers on each maintenance.",
+    ParameterScope::Replica,
+);
+
 /// The interval at which the compute server performs maintenance tasks.
 pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "compute_server_maintenance_interval",
-    Duration::from_millis(10),
+    Duration::ZERO,
     "The interval at which the compute server performs maintenance tasks. Zero enables maintenance on every iteration.",
     ParameterScope::Replica,
 );
@@ -855,6 +865,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
+        .add(&COMPUTE_EVENT_DRIVEN_FRONTIER_REPORTING)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
         .add(&HYDRATION_CONCURRENCY)

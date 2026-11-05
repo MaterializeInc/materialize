@@ -87,7 +87,7 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::future::Future;
 use std::time::Instant;
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc};
 
 use anyhow::{Context, anyhow};
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
@@ -147,6 +147,7 @@ use mz_storage_types::sinks::{
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
+use mz_timely_util::frontier_queue::WatchedFrontier;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
@@ -2677,6 +2678,8 @@ mod tests {
     }
 
     mod with_ready_batches {
+        use std::cell::RefCell;
+
         use differential_dataflow::trace::Batch;
         use differential_dataflow::trace::implementations::Vector;
 
@@ -2910,7 +2913,7 @@ fn commit_to_iceberg<'scope>(
     batch_input: StreamVec<'scope, Timestamp, BoundedDataFile>,
     batch_desc_input: StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     table_ready_stream: StreamVec<'scope, Timestamp, Infallible>,
-    write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+    write_frontier: Rc<WatchedFrontier<Timestamp>>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     write_handle: impl Future<
@@ -2937,7 +2940,7 @@ fn commit_to_iceberg<'scope>(
     let (button, errors) = builder.build_fallible(move |_caps| {
         Box::pin(async move {
             if !is_active_worker {
-                write_frontier.borrow_mut().clear();
+                write_frontier.clear();
                 return Ok(());
             }
 
@@ -3164,7 +3167,7 @@ fn commit_to_iceberg<'scope>(
                             }
                         }
                     }
-                    write_frontier.borrow_mut().clone_from(&frontier);
+                    write_frontier.set(frontier.borrow());
                 }
             }
 
@@ -3223,10 +3226,10 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             }
         };
 
-        let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
-        storage_state
-            .sink_write_frontiers
-            .insert(sink_id, Rc::clone(&write_frontier));
+        let write_frontier = Rc::new(WatchedFrontier::new(Antichain::from_elem(
+            Timestamp::minimum(),
+        )));
+        storage_state.insert_sink_write_frontier(sink_id, Rc::clone(&write_frontier));
 
         let (arrow_schema_with_ids, iceberg_schema) =
             match (|| -> Result<(ArrowSchema, Arc<Schema>), anyhow::Error> {

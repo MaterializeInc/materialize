@@ -57,12 +57,37 @@ impl TraceManager {
 
         let mut antichain = Antichain::new();
         for bundle in self.traces.values_mut() {
-            bundle.oks.read_upper(&mut antichain);
-            bundle.oks.set_physical_compaction(antichain.borrow());
-            bundle.errs.read_upper(&mut antichain);
-            bundle.errs.set_physical_compaction(antichain.borrow());
+            Self::maintain_bundle(bundle, &mut antichain);
         }
 
+        self.record_maintenance(start);
+    }
+
+    /// Like [`TraceManager::maintenance`], restricted to the traces of `ids`.
+    ///
+    /// Callers pass the traces whose upper may have advanced since their last maintenance.
+    pub fn maintenance_for<'a>(&mut self, ids: impl IntoIterator<Item = &'a GlobalId>) {
+        let start = Instant::now();
+        self.metrics.arrangement_maintenance_active_info.set(1);
+
+        let mut antichain = Antichain::new();
+        for id in ids {
+            if let Some(bundle) = self.traces.get_mut(id) {
+                Self::maintain_bundle(bundle, &mut antichain);
+            }
+        }
+
+        self.record_maintenance(start);
+    }
+
+    fn maintain_bundle(bundle: &mut TraceBundle, antichain: &mut Antichain<Timestamp>) {
+        bundle.oks.read_upper(antichain);
+        bundle.oks.set_physical_compaction(antichain.borrow());
+        bundle.errs.read_upper(antichain);
+        bundle.errs.set_physical_compaction(antichain.borrow());
+    }
+
+    fn record_maintenance(&self, start: Instant) {
         let duration = start.elapsed().as_secs_f64();
         self.metrics
             .arrangement_maintenance_seconds_total

@@ -359,6 +359,12 @@ def get_variable_system_parameters(
             "enable_compute_correction_v2_spill", "true", ["true", "false"]
         ),
         VariableSystemParameter(
+            "compute_event_driven_frontier_reporting", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "storage_event_driven_frontier_reporting", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
             # 1 MiB, an in-between value
             "1048576",

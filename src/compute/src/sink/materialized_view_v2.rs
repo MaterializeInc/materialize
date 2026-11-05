@@ -47,7 +47,6 @@
 //!    set and miss writes.
 
 use std::any::Any;
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -62,6 +61,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
+use mz_timely_util::frontier_queue::WatchedFrontier;
 use timely::PartialOrder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::OutputBuilder;
@@ -138,8 +138,7 @@ pub(super) fn persist_sink<'s>(
     append::render(sink_id, persist_api, descs, batches);
 
     // Report sink frontier updates to the `ComputeState`.
-    let collection = compute_state.expect_collection_mut(sink_id);
-    collection.sink_write_frontier = Some(sink_frontier);
+    compute_state.observe_sink_write_frontier(sink_id, sink_frontier);
 
     Rc::new(persist_token)
 }
@@ -171,7 +170,7 @@ mod mint {
         // Determine the active worker for the mint operator.
         let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
 
-        let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
+        let sink_frontier = Rc::new(WatchedFrontier::new(Antichain::from_elem(Timestamp::MIN)));
         let shared_frontier = Rc::clone(&sink_frontier);
 
         let name = operator_name(sink_id, "mint");
@@ -281,7 +280,7 @@ mod mint {
                 Some(CapabilitySet::from_elem(desc_cap))
             } else {
                 drop(desc_cap);
-                shared_frontier.borrow_mut().clear();
+                shared_frontier.clear();
                 None
             };
 
@@ -427,7 +426,7 @@ mod mint {
         ///
         /// The task sends the empty frontier as its final message before exiting. Once
         /// received, we drop the receiver.
-        fn drain_persist_rx(&mut self, shared_frontier: &RefCell<Antichain<Timestamp>>) {
+        fn drain_persist_rx(&mut self, shared_frontier: &WatchedFrontier<Timestamp>) {
             let Some(mut rx) = self.persist_rx.take() else {
                 return;
             };
@@ -450,7 +449,7 @@ mod mint {
                 }
             }
             if let Some(frontier) = latest {
-                shared_frontier.borrow_mut().clone_from(&frontier);
+                shared_frontier.set(frontier.borrow());
                 self.advance_persist_frontier(frontier.borrow());
             }
             if !closed {

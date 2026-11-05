@@ -516,6 +516,16 @@ pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether the storage server reports only frontiers that operators announced as changed, instead
+/// of reading every object's frontier on each maintenance.
+pub const STORAGE_EVENT_DRIVEN_FRONTIER_REPORTING: Config<bool> = Config::new(
+    "storage_event_driven_frontier_reporting",
+    true,
+    "Whether the storage server reports only frontiers that operators announced as changed, \
+    instead of reading every object's frontier on each maintenance.",
+    ParameterScope::Replica,
+);
+
 /// If set, iteratively search the progress topic for a progress record with increasing lookback.
 pub const SINK_PROGRESS_SEARCH: Config<bool> = Config::new(
     "storage_sink_progress_search",
@@ -633,6 +643,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
+        .add(&STORAGE_EVENT_DRIVEN_FRONTIER_REPORTING)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)

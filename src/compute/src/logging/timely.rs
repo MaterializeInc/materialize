@@ -382,7 +382,7 @@ pub(super) fn construct(
                 // Extract types to make rustfmt happy.
                 type Batcher<K, V, T, R> = Col2ValBatcher<K, V, T, R>;
                 type Builder<T, R> = RowRowBuilder<T, R>;
-                let trace = collection
+                let arranged = collection
                     .mz_arrange_core::<
                         _,
                         batcher::Chunker<_>,
@@ -394,12 +394,8 @@ pub(super) fn construct(
                             columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, Diff>,
                         ),
                         &format!("Arrange {variant:?}"),
-                    )
-                    .trace;
-                let collection = LogCollection {
-                    trace,
-                    token: Rc::clone(&token),
-                };
+                    );
+                let collection = LogCollection::new(arranged, Rc::clone(&token));
                 collections.insert(variant, collection);
             }
         }

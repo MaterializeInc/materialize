@@ -195,7 +195,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::rc::Rc;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -219,6 +218,7 @@ mod tests {
     use mz_storage_types::controller::CollectionMetadata;
     use mz_storage_types::sources::kafka::{self, RangeBound as RB};
     use mz_storage_types::sources::{MzOffset, SourceData};
+    use mz_timely_util::frontier_queue::WatchedFrontier;
     use mz_timely_util::order::Partitioned;
     use timely::progress::Timestamp as _;
     use tokio::sync::watch;
@@ -270,7 +270,9 @@ mod tests {
             txns_shard: None,
         };
 
-        let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
+        let write_frontier = Rc::new(WatchedFrontier::new(Antichain::from_elem(
+            Timestamp::minimum(),
+        )));
 
         // Always in read-write mode for tests.
         let (_read_only_tx, read_only_rx) = watch::channel(false);

@@ -192,19 +192,15 @@ pub(super) fn construct(
                 let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
                     columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>,
                 );
-                let trace = collection
+                let arranged = collection
                     .mz_arrange_core::<
                         _,
                         batcher::Chunker<_>,
                         Col2ValBatcher<_, _, _, _>,
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,
-                    >(exchange, &format!("Arrange {variant:?}"))
-                    .trace;
-                let collection = LogCollection {
-                    trace,
-                    token: Rc::clone(&token),
-                };
+                    >(exchange, &format!("Arrange {variant:?}"));
+                let collection = LogCollection::new(arranged, Rc::clone(&token));
                 collections.insert(variant, collection);
             }
         }
