@@ -80,7 +80,7 @@ const SCHEMA_OBJECT_TYPE_FILTERS = [
  * `FROM SOURCE`, which is ingested on its source's cluster and does report lag.
  *
  * TODO: Reach those tables through their source rather than through
- * `cluster_id`. Cluster Overview has the same gap.
+ * `cluster_id`, as Cluster Overview does with `useClusterSourceExportIds`.
  *
  * Selecting nothing means every type, so there is no "All" option to pick.
  */
