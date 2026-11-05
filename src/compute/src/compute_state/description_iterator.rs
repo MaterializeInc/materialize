@@ -23,12 +23,8 @@ use crate::compute_state::peek_result_iterator::evaluate_position;
 use crate::render::errors::DataflowErrorSer;
 
 /// The times a [`DescriptionIterator`] emits, and the time it emits each one at.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the batched subscribe sink is not wired up")
-)]
 #[derive(Clone, Debug)]
-pub(super) enum DescriptionRange {
+pub(crate) enum DescriptionRange {
     /// The first description of a scan rendered at `as_of`. Emits every update with a time
     /// before `upper`, at that time advanced to `as_of`, rows and errors alike.
     First {
@@ -44,6 +40,22 @@ pub(super) enum DescriptionRange {
 }
 
 impl DescriptionRange {
+    /// Returns the batches in `held` that hold updates the range emits.
+    ///
+    /// A `First` range emits updates from before its as-of, so it selects every held batch
+    /// before its upper.
+    pub(crate) fn select_batches<B>(&self, held: &[B]) -> Vec<B>
+    where
+        B: BatchReader<Time = Timestamp> + Clone,
+    {
+        match self {
+            DescriptionRange::First { upper, .. } => {
+                select_batches(held, &Antichain::from_elem(Timestamp::MIN), upper)
+            }
+            DescriptionRange::Later { lower, upper } => select_batches(held, lower, upper),
+        }
+    }
+
     /// Returns the time an update at `time` is emitted at, or `None` if the range excludes it.
     pub(super) fn place(&self, mut time: Timestamp) -> Option<Timestamp> {
         match self {
@@ -93,10 +105,6 @@ pub(super) struct DescriptionIterator<B: Navigable> {
     times: Vec<(Timestamp, Diff)>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the batched subscribe sink is not wired up")
-)]
 impl<B> DescriptionIterator<B>
 where
     B: BatchReader<Time = Timestamp> + Navigable,
@@ -216,10 +224,6 @@ where
 }
 
 /// Returns the batches in `held` whose description overlaps `[lower, upper)`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the batched subscribe sink is not wired up")
-)]
 pub(super) fn select_batches<B>(
     held: &[B],
     lower: &Antichain<Timestamp>,

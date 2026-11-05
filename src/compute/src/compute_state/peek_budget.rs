@@ -75,7 +75,7 @@ enum ActivationBudget {
 /// applies the controller's snapshot, and an empty snapshot leaves the defaults in place until the
 /// first `UpdateConfiguration`. An eagerly armed budget would carry the code defaults rather than
 /// the controller's values, and it would go to every peek in a reconnecting controller's backlog.
-pub(super) struct InlineBudget {
+pub(crate) struct InlineBudget {
     config: InlineBudgetConfig,
     /// The fuel of the activation under way, or `None` while no peek has asked for a slice since
     /// the activation began.
@@ -84,7 +84,7 @@ pub(super) struct InlineBudget {
 
 impl InlineBudget {
     /// A budget reading `config`, whose first grant arms the first activation.
-    pub(super) fn new(config: &ConfigSet) -> Self {
+    pub(crate) fn new(config: &ConfigSet) -> Self {
         Self {
             config: InlineBudgetConfig::new(config),
             activation: None,
@@ -92,7 +92,7 @@ impl InlineBudget {
     }
 
     /// Begins an activation, discarding what the previous one left. Nothing else refills the fuel.
-    pub(super) fn start_activation(&mut self) {
+    pub(crate) fn start_activation(&mut self) {
         self.activation = None;
     }
 
@@ -103,7 +103,7 @@ impl InlineBudget {
     ///
     /// A caller granted `None` must pass the peek over. Stepping with no fuel suspends the scan
     /// without walking anything, offloading a peek that never had its inline turn.
-    pub(super) fn grant(&mut self) -> Option<usize> {
+    pub(crate) fn grant(&mut self) -> Option<usize> {
         let Self { config, activation } = self;
         match activation.get_or_insert_with(|| config.arm()) {
             ActivationBudget::Unbounded => Some(usize::MAX),
@@ -116,7 +116,7 @@ impl InlineBudget {
 
     /// Charges the activation for the positions a slice walked. An unarmed budget has nothing to
     /// charge, since a slice is only ever walked out of fuel this granted.
-    pub(super) fn charge(&mut self, spent: usize) {
+    pub(crate) fn charge(&mut self, spent: usize) {
         match &mut self.activation {
             Some(ActivationBudget::Bounded { remaining, .. }) => {
                 *remaining = remaining.saturating_sub(spent)

@@ -1540,9 +1540,14 @@ impl Instance {
         }
 
         // Initialize tracking of subscribes.
-        for subscribe_id in dataflow.subscribe_ids() {
-            self.subscribes
-                .insert(subscribe_id, ActiveSubscribe::default());
+        //
+        // `subscribes` tracks streams of `SubscribeResponse`s, which batched subscribes do not
+        // produce, so it holds only unbatched ones.
+        for (subscribe_id, sink) in &dataflow.sink_exports {
+            if let ComputeSinkConnection::Subscribe(_) = sink.connection {
+                self.subscribes
+                    .insert(*subscribe_id, ActiveSubscribe::default());
+            }
         }
 
         // Initialize tracking of copy tos.
@@ -1596,6 +1601,9 @@ impl Instance {
                     ComputeSinkConnection::MaterializedView(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
+                ComputeSinkConnection::BatchedSubscribe(conn) => {
+                    ComputeSinkConnection::BatchedSubscribe(conn)
+                }
                 ComputeSinkConnection::CopyToS3Oneshot(conn) => {
                     ComputeSinkConnection::CopyToS3Oneshot(conn)
                 }

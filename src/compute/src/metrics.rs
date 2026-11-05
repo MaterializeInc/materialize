@@ -93,6 +93,7 @@ pub struct ComputeMetrics {
 
     // subscribes
     subscribe_snapshots_skipped_total: IntCounter,
+    batched_subscribe_share_bytes_total: raw::IntCounterVec,
 
     // metric sinks
     metric_sink_registration_retries_total: IntCounter,
@@ -290,6 +291,11 @@ impl ComputeMetrics {
                 name: "mz_index_peek_stashed_total",
                 help: "The number of index peek walks that answered with a handle to the peek response stash, always a subset of the `offloaded` substrate of `mz_index_peek_walks_total`.",
             ), role)),
+            batched_subscribe_share_bytes_total: registry.register(with_role(metric!(
+                name: "mz_compute_batched_subscribe_share_bytes_total",
+                help: "The bytes of the shares batched subscribes reported, by the tier they travelled in: `inline` counts the row bytes carried in the response, `stashed` the encoded bytes of the stash batches.",
+                var_labels: ["tier"],
+            ), role)),
             index_peek_permit_queue_depth: registry.register(with_role(metric!(
                 name: "mz_index_peek_permit_queue_depth",
                 help: "The number of offloaded index peek walks waiting for a permit to run.",
@@ -367,6 +373,12 @@ impl ComputeMetrics {
             .index_peek_walks_total
             .with_label_values(&["offloaded"]);
         let index_peek_stashed_total = self.index_peek_stashed_total.clone();
+        let batched_subscribe_share_bytes_inline = self
+            .batched_subscribe_share_bytes_total
+            .with_label_values(&["inline"]);
+        let batched_subscribe_share_bytes_stashed = self
+            .batched_subscribe_share_bytes_total
+            .with_label_values(&["stashed"]);
         let index_peek_permit_queue_depth = self.index_peek_permit_queue_depth.clone();
         let index_peek_permit_wait_seconds = self.index_peek_permit_wait_seconds.clone();
         let index_peek_offload_seconds = self.index_peek_offload_seconds.clone();
@@ -401,6 +413,8 @@ impl ComputeMetrics {
             index_peek_walks_inline,
             index_peek_walks_offloaded,
             index_peek_stashed_total,
+            batched_subscribe_share_bytes_inline,
+            batched_subscribe_share_bytes_stashed,
             index_peek_permit_queue_depth,
             index_peek_permit_wait_seconds,
             index_peek_offload_seconds,
@@ -475,6 +489,10 @@ pub struct WorkerMetrics {
     /// Resolved when the worker's metrics are built, so it reports zero before the first stashed
     /// answer rather than being absent. Whether a peek reached the stash has no other signal.
     pub(crate) index_peek_stashed_total: IntCounter,
+    /// Bytes of the batched subscribe shares that travelled inline.
+    pub(crate) batched_subscribe_share_bytes_inline: IntCounter,
+    /// Bytes of the batched subscribe shares that travelled through the stash.
+    pub(crate) batched_subscribe_share_bytes_stashed: IntCounter,
     /// How many offloaded index peek walks are waiting for a permit.
     pub(crate) index_peek_permit_queue_depth: UIntGauge,
     /// Histogram of how long an offloaded index peek walk waited for its permit.

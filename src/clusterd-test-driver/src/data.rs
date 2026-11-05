@@ -151,6 +151,20 @@ pub async fn write_rows_single_ts(
     rows: &[Row],
     ts: Timestamp,
 ) -> anyhow::Result<()> {
+    let updates: Vec<_> = rows.iter().map(|r| (r.clone(), 1i64)).collect();
+    write_updates_single_ts(client, shard, desc, &updates, ts).await
+}
+
+/// Writes `updates` as `(row, diff)` pairs to `shard` at `ts`, advancing `upper`
+/// to `ts+1`. The shard's upper must be `ts`. An empty `updates` only advances the
+/// upper. Returns once the append succeeds.
+pub async fn write_updates_single_ts(
+    client: &PersistClient,
+    shard: ShardId,
+    desc: &RelationDesc,
+    updates: &[(Row, i64)],
+    ts: Timestamp,
+) -> anyhow::Result<()> {
     let mut writer = client
         .open_writer::<SourceData, (), Timestamp, StorageDiff>(
             shard,
@@ -163,9 +177,9 @@ pub async fn write_rows_single_ts(
         )
         .await?;
 
-    let updates: Vec<_> = rows
+    let updates: Vec<_> = updates
         .iter()
-        .map(|r| ((SourceData(Ok(r.clone())), ()), ts, 1i64))
+        .map(|(r, diff)| ((SourceData(Ok(r.clone())), ()), ts, *diff))
         .collect();
     let lower = Antichain::from_elem(ts);
     let upper = Antichain::from_elem(ts.step_forward());

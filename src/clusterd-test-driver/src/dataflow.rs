@@ -33,8 +33,8 @@ use mz_compute_types::dataflows::{
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection, MetricSinkConnection,
-    SubscribeSinkConnection,
+    BatchedSubscribeSinkConnection, ComputeSinkConnection, ComputeSinkDesc,
+    MaterializedViewSinkConnection, MetricSinkConnection, SubscribeSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::explain::ExplainContext;
@@ -388,6 +388,36 @@ impl DataflowBuilder {
         self
     }
 
+    /// Export a batched subscribe sink `sink_id` reporting the collection `from_id` back as
+    /// `ComputeResponse::BatchedSubscribeResponse` batches.
+    ///
+    /// `value_desc` is the output schema and must match `from_id`'s type, and `up_to` is the
+    /// exclusive upper at which it completes.
+    pub fn export_batched_subscribe(
+        &mut self,
+        sink_id: GlobalId,
+        from_id: GlobalId,
+        value_desc: RelationDesc,
+        up_to: Antichain<Timestamp>,
+    ) -> &mut Self {
+        let desc = ComputeSinkDesc {
+            from: from_id,
+            from_desc: value_desc.clone(),
+            connection: ComputeSinkConnection::BatchedSubscribe(BatchedSubscribeSinkConnection {
+                stash_id: uuid::Uuid::new_v4(),
+                with_snapshot: true,
+                output_desc: value_desc,
+            }),
+            with_snapshot: true,
+            up_to,
+            non_null_assertions: vec![],
+            refresh_schedule: None,
+            from_arrangement: None,
+        };
+        self.mir.export_sink(sink_id, desc);
+        self
+    }
+
     /// Export a metric sink `sink_id` publishing the collection `from_id` into the replica's
     /// in-process Prometheus registry.
     ///
@@ -669,8 +699,8 @@ fn augment(
 
     // Splice the storage metadata into each sink export, mirroring how
     // `compute-client`'s `Instance::create_dataflow` fills the materialized-view
-    // sink's `storage_metadata` from the storage controller. A subscribe carries no
-    // metadata; copy-to is not built by this driver.
+    // sink's `storage_metadata` from the storage controller. A subscribe or a batched
+    // subscribe carries no metadata; copy-to is not built by this driver.
     let mut sink_exports = BTreeMap::new();
     for (id, sink) in lowered.sink_exports {
         let connection = match sink.connection {
@@ -689,6 +719,9 @@ fn augment(
             ComputeSinkConnection::MetricSink(conn) => ComputeSinkConnection::MetricSink(conn),
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 anyhow::bail!("copy-to-s3 sink {id} is not implemented")
+            }
+            ComputeSinkConnection::BatchedSubscribe(conn) => {
+                ComputeSinkConnection::BatchedSubscribe(conn)
             }
         };
         sink_exports.insert(

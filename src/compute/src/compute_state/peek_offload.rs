@@ -77,7 +77,7 @@ struct Bound {
 /// That is how a lowered bound converges without interrupting a walk: a permit released while a
 /// walk is queued goes straight to that walk and never becomes available, so taking free permits
 /// back at the next resize would leave the bound where it was for as long as anything queued.
-pub(super) struct WalkPermit {
+pub(crate) struct WalkPermit {
     permit: Option<OwnedSemaphorePermit>,
     permits: Arc<PeekPermits>,
 }
@@ -170,7 +170,7 @@ impl PeekPermits {
 
     /// Takes a permit if one is free.
     #[cfg(test)]
-    fn try_acquire(self: &Arc<Self>) -> Option<WalkPermit> {
+    pub(crate) fn try_acquire(self: &Arc<Self>) -> Option<WalkPermit> {
         let permit = Arc::clone(&self.semaphore).try_acquire_owned().ok()?;
         Some(WalkPermit {
             permit: Some(permit),
@@ -185,7 +185,7 @@ impl PeekPermits {
 /// positions it has visited. The granularity and the row limit are read at every slice boundary,
 /// the batch runs where the walk opens its upload, and the permit fraction once on the worker.
 #[derive(Clone, Debug)]
-pub(super) struct OffloadConfig {
+pub(crate) struct OffloadConfig {
     permit_fraction: ConfigValHandle<f64>,
     yield_granularity: ConfigValHandle<usize>,
     batch_max_runs: ConfigValHandle<usize>,
@@ -193,7 +193,7 @@ pub(super) struct OffloadConfig {
 }
 
 impl OffloadConfig {
-    pub(super) fn new(config: &ConfigSet) -> Self {
+    pub(crate) fn new(config: &ConfigSet) -> Self {
         Self {
             permit_fraction: INDEX_PEEK_PERMIT_FRACTION.handle(config),
             yield_granularity: INDEX_PEEK_YIELD_GRANULARITY.handle(config),
@@ -454,7 +454,7 @@ impl OffloadedPeek {
 ///
 /// The scan performs no IO. It holds what it produces until the driver takes it, and makes no
 /// progress while it holds a batch the driver has not taken.
-pub(super) trait OffloadScan: Send + 'static {
+pub(crate) trait OffloadScan: Send + 'static {
     /// What the scan hands out while it runs.
     type Batch: Send + 'static;
     /// What a step reports.
@@ -628,11 +628,7 @@ async fn stashed_answer(peek_uuid: Uuid, mut upload: StashUpload, tail: RowBatch
 /// the error of the first hand-out `sink` rejects, which ends the walk. Dropping the receiver
 /// cancels the walk, and dropping the handle aborts it. Either way the scan, the batches it holds,
 /// and its permit are released.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the batched subscribe sink is not wired up")
-)]
-pub(super) fn offload_description_scan<Ok, Err, Sink>(
+pub(crate) fn offload_description_scan<Ok, Err, Sink>(
     scan: DescriptionScan<Ok, Err>,
     mut sink: Sink,
     permits: Arc<PeekPermits>,

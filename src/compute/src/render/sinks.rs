@@ -143,6 +143,9 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
 
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
+            ComputeSinkConnection::BatchedSubscribe(_) => {
+                format!("BatchedSubscribeSink({:?})", sink_id)
+            }
             ComputeSinkConnection::MaterializedView(_) => {
                 format!("MaterializedViewSink({:?})", sink_id)
             }
@@ -195,6 +198,7 @@ fn get_sink_render_for<'scope>(
 ) -> Box<dyn SinkRender<'scope>> {
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::BatchedSubscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::MetricSink(connection) => Box::new(connection.clone()),

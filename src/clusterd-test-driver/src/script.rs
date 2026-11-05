@@ -61,6 +61,7 @@ use crate::dataflow::{
     DataflowBuilder, PersistSink, PersistSource, count_over_index, index_dataflow,
 };
 use crate::driver::Driver;
+use crate::responses::BatchedSubscribeEvent;
 
 /// The default payload padding (bytes) for synthetic rows when a command omits it.
 const DEFAULT_ROW_BYTES: usize = 64;
@@ -164,6 +165,18 @@ pub enum ExportSpec {
         /// The sink's global id.
         sink_id: GlobalId,
         /// The imported or built id the sink streams.
+        on_id: GlobalId,
+        /// Output schema; defaults to the sample schema. Must match `on_id`'s type.
+        schema: Option<String>,
+        /// Exclusive upper at which the subscribe completes; unbounded if absent.
+        up_to: Option<u64>,
+    },
+    /// A batched subscribe sink reporting the collection as batches of descriptions,
+    /// collected by `await-batched-subscribe`.
+    BatchedSubscribe {
+        /// The sink's global id.
+        sink_id: GlobalId,
+        /// The imported or built id the sink reports.
         on_id: GlobalId,
         /// Output schema; defaults to the sample schema. Must match `on_id`'s type.
         schema: Option<String>,
@@ -561,6 +574,22 @@ pub enum Command {
         /// Timeout in seconds; defaults to `DEFAULT_TIMEOUT_SECS`.
         timeout_secs: Option<u64>,
     },
+    /// Wait for batched subscribe sink `id` to report an upper at or beyond `up_to`
+    /// (its completion if absent), then emit the chain its batches form and their
+    /// updates. The output assertion for a batched subscribe sink.
+    ///
+    /// Description boundaries depend on timing, so the output is the chain's bounds,
+    /// one line per batch with a fatal error, the consolidated error updates, and the
+    /// updates as for `await-subscribe`.
+    /// A gap in the chain fails the command.
+    AwaitBatchedSubscribe {
+        /// The batched subscribe sink's global id.
+        id: GlobalId,
+        /// The upper to wait for; the subscribe's completion if absent.
+        up_to: Option<u64>,
+        /// Timeout in seconds; defaults to `DEFAULT_TIMEOUT_SECS`.
+        timeout_secs: Option<u64>,
+    },
     /// Send `CreateInstance`, opening the compute instance (and the reconciliation
     /// window). The settable [`InstanceConfig`] knobs default to the values a plain
     /// `create-instance` supplies; the peek-stash location is always the host's, and
@@ -617,6 +646,8 @@ struct PendingRegistrations {
     indexes: Vec<(GlobalId, IndexEntry)>,
     /// Subscribe sink ids needing a response buffer.
     subscribes: Vec<GlobalId>,
+    /// Batched subscribe sink ids needing a response buffer.
+    batched_subscribes: Vec<GlobalId>,
     /// Materialized-view outputs: sink id and its target shard metadata.
     mv_outputs: Vec<(GlobalId, CollectionMetadata)>,
 }
@@ -934,6 +965,17 @@ impl ScriptState {
                     builder.export_subscribe(sink_id, on_id, desc, up_to_antichain(up_to));
                     registrations.subscribes.push(sink_id);
                 }
+                ExportSpec::BatchedSubscribe {
+                    sink_id,
+                    on_id,
+                    schema,
+                    up_to,
+                } => {
+                    let desc = self.resolve_schema(&schema)?;
+                    self.check_sink_schema(&builder, on_id, &desc)?;
+                    builder.export_batched_subscribe(sink_id, on_id, desc, up_to_antichain(up_to));
+                    registrations.batched_subscribes.push(sink_id);
+                }
             }
         }
         builder.as_of(Timestamp::from(as_of));
@@ -1113,6 +1155,9 @@ impl ScriptState {
                 for sink_id in registrations.subscribes {
                     self.driver.register_subscribe(sink_id);
                 }
+                for sink_id in registrations.batched_subscribes {
+                    self.driver.register_batched_subscribe(sink_id);
+                }
                 for (sink_id, metadata) in registrations.mv_outputs {
                     self.mv_outputs.insert(sink_id, metadata);
                 }
@@ -1187,6 +1232,18 @@ impl ScriptState {
                     .await_subscribe(id, Timestamp::from(up_to), timeout)
                     .await?;
                 Ok(render_updates(&updates))
+            }
+            Command::AwaitBatchedSubscribe {
+                id,
+                up_to,
+                timeout_secs,
+            } => {
+                let timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
+                let events = self
+                    .driver
+                    .await_batched_subscribe(id, up_to_antichain(up_to), timeout)
+                    .await?;
+                render_batched_subscribe(&events)
             }
             Command::CreateInstance {
                 expiration_offset,
@@ -1317,6 +1374,86 @@ fn up_to_antichain(up_to: Option<u64>) -> Antichain<Timestamp> {
         Some(t) => Antichain::from_elem(Timestamp::from(t)),
         None => Antichain::new(),
     }
+}
+
+/// Render a frontier as golden text: its single element, or `empty`.
+fn render_frontier(frontier: &Antichain<Timestamp>) -> String {
+    match frontier.as_option() {
+        Some(time) => time.to_string(),
+        None => "empty".to_string(),
+    }
+}
+
+/// Render a batched subscribe's responses as golden text: a `chain <lower>..<upper>`
+/// line spanning the batches, a `fatal <lower>..<upper>: <message>` line per batch
+/// with a fatal error, a `dropped at <frontier>` line for a drop, an
+/// `error <ts> <diff> <message>` line per error update consolidated by
+/// `(time, message)`, then the updates as [`render_updates`] renders them. Fails if a
+/// batch's lower is not the previous upper.
+fn render_batched_subscribe(events: &[BatchedSubscribeEvent]) -> anyhow::Result<String> {
+    let mut chain: Option<(Antichain<Timestamp>, Antichain<Timestamp>)> = None;
+    let mut lines = Vec::new();
+    let mut updates = Vec::new();
+    let mut errors: BTreeMap<(Timestamp, String), i64> = BTreeMap::new();
+    for event in events {
+        match event {
+            BatchedSubscribeEvent::Batch {
+                lower,
+                upper,
+                updates: batch_updates,
+                errors: batch_errors,
+                fatal,
+            } => {
+                match &mut chain {
+                    None => chain = Some((lower.clone(), upper.clone())),
+                    Some((_, end)) if end == lower => *end = upper.clone(),
+                    Some((_, end)) => anyhow::bail!(
+                        "batch {}..{} does not follow upper {}",
+                        render_frontier(lower),
+                        render_frontier(upper),
+                        render_frontier(end),
+                    ),
+                }
+                if let Some(fatal) = fatal {
+                    lines.push(format!(
+                        "fatal {}..{}: {fatal}",
+                        render_frontier(lower),
+                        render_frontier(upper),
+                    ));
+                }
+                for (error, ts, diff) in batch_errors {
+                    *errors.entry((*ts, error.clone())).or_default() += diff;
+                }
+                updates.extend(batch_updates.iter().cloned());
+            }
+            BatchedSubscribeEvent::DroppedAt { frontier, .. } => {
+                lines.push(format!("dropped at {}", render_frontier(frontier)));
+            }
+        }
+    }
+    let chain = match chain {
+        Some((lower, upper)) => {
+            format!(
+                "chain {}..{}",
+                render_frontier(&lower),
+                render_frontier(&upper)
+            )
+        }
+        None => "chain none".to_string(),
+    };
+    let mut out = vec![chain];
+    out.extend(lines);
+    out.extend(
+        errors
+            .into_iter()
+            .filter(|(_, diff)| *diff != 0)
+            .map(|((ts, error), diff)| format!("error {ts} {diff} {error}")),
+    );
+    let updates = render_updates(&updates);
+    if !updates.is_empty() {
+        out.push(updates);
+    }
+    Ok(out.join("\n"))
 }
 
 /// Render a subscribe's updates as golden text: `<ts> <diff> <datums>` per line.

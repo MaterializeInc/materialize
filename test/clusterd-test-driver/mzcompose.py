@@ -89,6 +89,7 @@ SCRIPTS = [
     "reduce.spec",
     "materialized_view.spec",
     "subscribe.spec",
+    "batched_subscribe.spec",
     "join.spec",
     "index_and_mv.spec",
     "create_time_config.spec",

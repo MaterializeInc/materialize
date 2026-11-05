@@ -25,7 +25,7 @@ use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
-use mz_compute_types::dataflows::RenderDataflowDescription;
+use mz_compute_types::dataflows::{DataflowDescription, RenderDataflowDescription};
 use mz_compute_types::dyncfgs::{
     ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_RESPONSE_STASH_BATCH_BYTES,
     PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_ROW_ITERATION_LIMIT,
@@ -78,16 +78,17 @@ use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::sink::batched_subscribe::QueuedResponse;
 
-mod description_iterator;
-mod description_scan;
+pub(crate) mod description_iterator;
+pub(crate) mod description_scan;
 mod error_scan;
-mod peek_budget;
+pub(crate) mod peek_budget;
 mod peek_metrics;
-mod peek_offload;
+pub(crate) mod peek_offload;
 mod peek_result_iterator;
 mod peek_scan;
-mod peek_stash;
+pub(crate) mod peek_stash;
 
 /// Cheap handles on the dyncfgs that bound how many rows a peek may examine.
 ///
@@ -184,7 +185,8 @@ pub struct ComputeState {
     ///  * Frontiers of indexes are equal to the frontier of their corresponding traces in the
     ///    `TraceManager`.
     ///  * Persist sinks store their current frontier in `CollectionState::sink_write_frontier`.
-    ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
+    ///  * Subscribes report their frontiers through the `subscribe_response_buffer`, and batched
+    ///    subscribes through the `batched_subscribe_response_buffer`.
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
@@ -193,6 +195,14 @@ pub struct ComputeState {
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
     /// and the response itself.
     pub subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>,
+    /// Shared buffer with batched SUBSCRIBE operator instances by which they can respond.
+    ///
+    /// The entries are pairs of sink identifier (to identify the subscribe instance)
+    /// and the response itself.
+    ///
+    /// The responses own the stash batches they name until they are sent, so a response dropped
+    /// with the buffer deletes them.
+    pub batched_subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, QueuedResponse)>>>,
     /// Shared buffer with S3 oneshot operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the s3 oneshot instance)
@@ -330,6 +340,7 @@ impl ComputeState {
             collections: Default::default(),
             traces,
             subscribe_response_buffer: Default::default(),
+            batched_subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
             queued_peeks: Default::default(),
             pending_peeks: Default::default(),
@@ -365,6 +376,14 @@ impl ComputeState {
         self.collections
             .get_mut(&id)
             .expect("collection must exist")
+    }
+
+    /// Replaces the shared sink response buffers, so that responses that sinks queue on the
+    /// buffers they were rendered with are never sent.
+    pub fn discard_queued_sink_responses(&mut self) {
+        self.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
+        self.batched_subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
+        self.copy_to_response_buffer = Rc::new(RefCell::new(Vec::new()));
     }
 
     /// Construct a new frontier probe for the given input and add it to the state of the given
@@ -819,10 +838,7 @@ impl<'a> ActiveComputeState<'a> {
             );
         };
 
-        let subscribe_copy_ids: BTreeSet<_> = dataflow
-            .subscribe_ids()
-            .chain(dataflow.copy_to_ids())
-            .collect();
+        let subscribe_copy_ids = subscribe_or_copy_ids(&dataflow);
 
         // `StartSignal` is attached only to imported sources and imported indexes, and
         // `import_ids` is exactly those two sets, so a dataflow with no imports has nothing
@@ -1451,40 +1467,34 @@ impl<'a> ActiveComputeState<'a> {
     pub fn process_subscribes(&mut self) {
         let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
         for (sink_id, mut response) in subscribe_responses.drain(..) {
-            // Update frontier logging for this subscribe.
-            if let Some(collection) = self.compute_state.collections.get_mut(&sink_id) {
-                let new_frontier = match &response {
-                    SubscribeResponse::Batch(b) => b.upper.clone(),
-                    SubscribeResponse::DroppedAt(_) => Antichain::new(),
-                };
-
-                let reported = collection.reported_frontiers();
-                assert!(
-                    reported.write_frontier.allows_reporting(&new_frontier),
-                    "subscribe write frontier regression: {:?} -> {:?}",
-                    reported.write_frontier,
-                    new_frontier,
-                );
-                assert!(
-                    reported.input_frontier.allows_reporting(&new_frontier),
-                    "subscribe input frontier regression: {:?} -> {:?}",
-                    reported.input_frontier,
-                    new_frontier,
-                );
-
-                collection
-                    .set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
-                collection
-                    .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
-                collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
-            } else {
-                // Presumably tracking state for this subscribe was already dropped by
-                // `drop_collection`. There is nothing left to do for logging.
-            }
+            let new_frontier = match &response {
+                SubscribeResponse::Batch(b) => b.upper.clone(),
+                SubscribeResponse::DroppedAt(_) => Antichain::new(),
+            };
+            log_subscribe_frontier(&mut self.compute_state.collections, sink_id, new_frontier);
 
             response
                 .to_error_if_exceeds(usize::try_from(self.compute_state.max_result_size).unwrap());
             self.send_compute_response(ComputeResponse::SubscribeResponse(sink_id, response));
+        }
+    }
+
+    /// Scan the shared batched subscribe response buffer, and forward results along.
+    ///
+    /// Responses are not bounded by `max_result_size`.
+    pub fn process_batched_subscribes(&mut self) {
+        let mut responses = self
+            .compute_state
+            .batched_subscribe_response_buffer
+            .borrow_mut();
+        for (sink_id, response) in responses.drain(..) {
+            log_subscribe_frontier(
+                &mut self.compute_state.collections,
+                sink_id,
+                response.frontier(),
+            );
+
+            self.response_tx.send_batched_subscribe(sink_id, response);
         }
     }
 
@@ -2200,6 +2210,46 @@ impl CollectionState {
             "allowing writes for dataflow",
         );
         let _ = self.read_only_tx.send(false);
+    }
+}
+
+/// Identifiers of the exports of `dataflow` whose frontiers are not reported through
+/// `Frontiers` responses.
+fn subscribe_or_copy_ids<P, S, O>(dataflow: &DataflowDescription<P, S, O>) -> BTreeSet<GlobalId> {
+    dataflow
+        .subscribe_ids()
+        .chain(dataflow.copy_to_ids())
+        .collect()
+}
+
+/// Records `new_frontier` as the reported frontiers of the subscribe `sink_id`.
+fn log_subscribe_frontier(
+    collections: &mut BTreeMap<GlobalId, CollectionState>,
+    sink_id: GlobalId,
+    new_frontier: Antichain<Timestamp>,
+) {
+    // Update frontier logging for this subscribe.
+    if let Some(collection) = collections.get_mut(&sink_id) {
+        let reported = collection.reported_frontiers();
+        assert!(
+            reported.write_frontier.allows_reporting(&new_frontier),
+            "subscribe write frontier regression: {:?} -> {:?}",
+            reported.write_frontier,
+            new_frontier,
+        );
+        assert!(
+            reported.input_frontier.allows_reporting(&new_frontier),
+            "subscribe input frontier regression: {:?} -> {:?}",
+            reported.input_frontier,
+            new_frontier,
+        );
+
+        collection.set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
+        collection.set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
+        collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
+    } else {
+        // Presumably tracking state for this subscribe was already dropped by
+        // `drop_collection`. There is nothing left to do for logging.
     }
 }
 

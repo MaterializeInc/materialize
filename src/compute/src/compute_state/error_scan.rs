@@ -95,10 +95,6 @@ where
 {
     /// Opens a walk over held `batches`, which must include every held batch that overlaps the
     /// range it walks.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the batched subscribe sink is not wired up")
-    )]
     pub(super) fn from_batches(batches: Vec<B>) -> Self {
         let (cursor, storage) = cursor_list(batches);
         Self {
