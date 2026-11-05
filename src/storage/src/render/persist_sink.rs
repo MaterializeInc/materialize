@@ -275,10 +275,15 @@ fn description_lookahead(lookahead: Duration, timestamp_interval: Duration) -> O
     // Saturates rather than panics, since the lookahead is operator-supplied. A lookahead that
     // large overflows the ceiling in `next_mint`, which then commits nothing.
     let to_millis = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
-    let lookahead = to_millis(lookahead);
-    // The floor is applied past the zero test, which is the only value that turns committing
-    // ahead off.
-    (lookahead > 0).then(|| lookahead.max(to_millis(timestamp_interval)))
+    // The zero test is on the `Duration`, matching the sources that read the same dyncfg to
+    // enable concurrent replication. Testing after truncating to millis would turn a sub-ms
+    // lookahead into concurrent replication without grouping. The floor of one millisecond keeps
+    // a nonzero setting nonzero when the timestamp interval is itself sub-ms.
+    (!lookahead.is_zero()).then(|| {
+        to_millis(lookahead)
+            .max(to_millis(timestamp_interval))
+            .max(1)
+    })
 }
 
 /// Adds one update to `builder`, keeping the batch metrics in step.
@@ -2957,6 +2962,16 @@ mod tests {
             description_lookahead(secs(5), Duration::from_millis(250)),
             Some(5_000),
             "a configured lookahead above the floor stands"
+        );
+        assert_eq!(
+            description_lookahead(Duration::from_micros(500), Duration::from_millis(250)),
+            Some(250),
+            "a sub-ms lookahead is nonzero, as the sources that enable concurrent replication read it"
+        );
+        assert_eq!(
+            description_lookahead(Duration::from_micros(500), Duration::from_micros(500)),
+            Some(1),
+            "a sub-ms lookahead and interval still commit ahead"
         );
     }
 
