@@ -775,7 +775,6 @@ def get_default_system_parameters(
 UNINTERESTING_SYSTEM_PARAMETERS = [
     # Off by default so tests exercise the refusal to drop in-use indexes.
     "enable_drop_in_use_index",
-    "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
     "column_chunk_compress_min_depth",

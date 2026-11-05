@@ -17,17 +17,17 @@
 //!
 //! [Spine]: differential_dataflow::trace::implementations::spine_fueled::Spine
 //!
-//! - The normal Spine works in terms of [Batch] impls. A `Batch` is added to
+//! - The normal Spine works in terms of batches. A batch is added to
 //!   the Spine. As progress is made, the Spine will merge two batches together
-//!   by: constructing a [Batch::Merger], giving it bits of fuel to
+//!   by: constructing a merger, giving it bits of fuel to
 //!   incrementally perform the merge (which spreads out the work, keeping
 //!   latencies even), and then once it's done fueling extracting the new single
 //!   output `Batch` and discarding the inputs.
 //! - Persist instead represents a batch of blob data with a [HollowBatch]
-//!   pointer which contains the normal `Batch` metadata plus the keys necessary
+//!   pointer which contains the normal batch metadata plus the keys necessary
 //!   to retrieve the updates.
 //! - [SpineBatch] wraps `HollowBatch` and has a [FuelingMerge] companion
-//!   (analogous to `Batch::Merger`) that allows us to represent a merge as it
+//!   (analogous to differential's merger) that allows us to represent a merge as it
 //!   is fueling. Normally, this would represent real incremental compaction
 //!   progress, but in persist, it's simply a bookkeeping mechanism. Once fully
 //!   fueled, the `FuelingMerge` is turned into a fueled [SpineBatch],
@@ -44,8 +44,6 @@
 //!   write amplification by merging `N` batches at once where `N` can be
 //!   greater than 2.
 //!
-//! [Batch]: differential_dataflow::trace::Batch
-//! [Batch::Merger]: differential_dataflow::trace::Batch::Merger
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1688,7 +1686,7 @@ const BATCHES_PER_LEVEL: usize = 2;
 ///
 /// The `Spine` is a general-purpose trace implementation based on collection
 /// and merging immutable batches of updates. It is generic with respect to the
-/// batch type, and can be instantiated for any implementor of `trace::Batch`.
+/// batch type.
 ///
 /// ## Design
 ///
