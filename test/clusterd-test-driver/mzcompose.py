@@ -98,6 +98,10 @@ SCRIPTS = [
 # (see `workflow_two_runtime_compute`). Kept separate from `SCRIPTS` so the
 # single-runtime scenarios above stay byte-for-byte unchanged.
 TWO_RUNTIME_SCRIPTS = [
+    "two_runtime_index.spec",
+    "two_runtime_query_dataflow.spec",
+    "two_runtime_reexport.spec",
+    "two_runtime_reexport_interactive.spec",
     # Reconnects with peers on the runtime that does not render a dataflow.
     "reconciliation.spec",
     # Reconnects with an index recreated at the same `as_of`.
