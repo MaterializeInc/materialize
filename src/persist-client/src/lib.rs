@@ -966,15 +966,20 @@ impl PersistClient {
 mod tests {
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::Context;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
+    use async_trait::async_trait;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::assert_ok;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
+    use mz_persist::location::{
+        CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
+    };
     use mz_persist::workload::DataGenerator;
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
     use mz_proto::protobuf_roundtrip;
@@ -1015,6 +1020,58 @@ mod tests {
             .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
+    }
+
+    /// A [Consensus] that, once armed, runs one `compare_and_set` and then
+    /// reports it as timed out. Models the metadata store committing a write
+    /// but losing the response, which persist surfaces as an indeterminate
+    /// error.
+    ///
+    /// UnreliableConsensus can also run-then-timeout, but only probabilistically
+    /// and per-op-kind. This test needs one deterministic timeout on one
+    /// `compare_and_set`.
+    #[derive(Debug)]
+    pub(crate) struct LoseOneCasResponse {
+        pub(crate) inner: Arc<dyn Consensus>,
+        pub(crate) armed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl Consensus for LoseOneCasResponse {
+        fn list_keys(&self) -> ResultStream<'_, String> {
+            self.inner.list_keys()
+        }
+
+        async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+            self.inner.head(key).await
+        }
+
+        async fn compare_and_set(
+            &self,
+            key: &str,
+            new: VersionedData,
+        ) -> Result<CaSResult, ExternalError> {
+            // Delegate first so the write commits, then drop the response. A
+            // committed-but-lost CaS is the case under test.
+            let res = self.inner.compare_and_set(key, new).await;
+            if self.armed.swap(false, Ordering::SeqCst) {
+                return Err(ExternalError::new_timeout(Instant::now()));
+            }
+            res
+        }
+
+        async fn scan(
+            &self,
+            key: &str,
+            from: SeqNo,
+            limit: usize,
+        ) -> Result<Vec<VersionedData>, ExternalError> {
+            self.inner.scan(key, from, limit).await
+        }
+
+        async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
+            self.inner.truncate(key, seqno).await
+        }
     }
 
     pub fn all_ok<'a, K, V, T, D, I>(iter: I, as_of: T) -> Vec<((K, V), T, D)>
