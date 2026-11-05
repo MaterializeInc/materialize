@@ -842,6 +842,8 @@ fn step_back_frontier(frontier: &Antichain<Timestamp>) -> Antichain<Timestamp> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use futures::future::BoxFuture;
@@ -862,6 +864,7 @@ mod tests {
     use mz_storage_types::StorageDiff;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::errors::CollectionMissing;
+    use mz_storage_types::freshness::{FreshnessTree, TickerLookup};
     use mz_storage_types::parameters::StorageParameters;
     use mz_storage_types::sources::SourceData;
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
@@ -1047,6 +1050,18 @@ mod tests {
             &self,
             _id: GlobalId,
         ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+            unimplemented!()
+        }
+
+        fn freshness_tree(&self, _id: GlobalId) -> Option<FreshnessTree> {
+            unimplemented!()
+        }
+
+        fn ticker_lookup(&self) -> Arc<dyn TickerLookup + Send + Sync> {
+            unimplemented!()
+        }
+
+        fn update_ingestion_timestamp_interval(&self, _id: GlobalId, _interval: Duration) {
             unimplemented!()
         }
 

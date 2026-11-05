@@ -1181,7 +1181,7 @@ impl StorageController for Controller {
                          through the group committer",
                     );
                 }
-                DataSource::Progress | DataSource::Other => {
+                DataSource::Progress | DataSource::Catalog | DataSource::Other => {
                     debug!(
                         ?data_source, meta = ?metadata,
                         "not registering {id} with a controller persist worker",
@@ -1273,6 +1273,7 @@ impl StorageController for Controller {
                 | DataSource::Webhook
                 | DataSource::Table
                 | DataSource::Progress
+                | DataSource::Catalog
                 | DataSource::Other => {}
                 DataSource::Sink { .. } => {
                     if !self.read_only {
@@ -1330,6 +1331,8 @@ impl StorageController for Controller {
                             to = ?new_desc,
                             "alter_ingestion_source_desc, updating"
                         );
+                        self.storage_collections
+                            .update_ingestion_timestamp_interval(id, new_desc.timestamp_interval);
                         ingestion.desc = new_desc;
                         ingestions_to_run.insert(id);
                     }
@@ -1980,7 +1983,10 @@ impl StorageController for Controller {
                         ingestions_to_drop.insert(*id);
                         source_statistics_to_drop.push(*id);
                     }
-                    DataSource::Progress | DataSource::Table | DataSource::Other => {
+                    DataSource::Progress
+                    | DataSource::Table
+                    | DataSource::Catalog
+                    | DataSource::Other => {
                         collections_to_drop.push(*id);
                     }
                     DataSource::Introspection(_) | DataSource::Sink { .. } => {
@@ -3405,6 +3411,7 @@ where
             | DataSource::Webhook
             | DataSource::Table
             | DataSource::Progress
+            | DataSource::Catalog
             | DataSource::Other => (),
             DataSource::IngestionExport { ingestion_id, .. } => {
                 // Ingestion exports depend on their primary source's remap
@@ -4014,7 +4021,7 @@ impl CollectionState {
         // duplicate measurements. Collections written by other components (e.g. compute) have
         // their wallclock lags recorded by these components.
         let wallclock_lag_histogram_stash = match &data_source {
-            DataSource::Other => None,
+            DataSource::Catalog | DataSource::Other => None,
             _ => Some(Default::default()),
         };
 

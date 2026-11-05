@@ -139,8 +139,11 @@ pub enum DataSource {
     Webhook,
     /// The adapter layer appends timestamped data, i.e. it is a `TABLE`.
     Table,
+    /// The catalog collection, whose upper the adapter advances together with
+    /// the tables' in group commit.
+    Catalog,
     /// This source's data does not need to be managed by the storage
-    /// controller, e.g. it's a materialized view or the catalog collection.
+    /// controller, e.g. it's a materialized view.
     Other,
     /// This collection is the output collection of a sink.
     Sink { desc: ExportDescription },
@@ -805,6 +808,7 @@ impl DataSource {
         match self {
             DataSource::Table => true,
             DataSource::Other
+            | DataSource::Catalog
             | DataSource::Ingestion(_)
             | DataSource::IngestionExport { .. }
             | DataSource::Introspection(_)
