@@ -65,6 +65,20 @@ mcp-developer
 200 OK
 {"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\"mz_catalog\"]\n]"}],"isError":false}}
 
+# TABLE is a table reference like FROM.
+mcp-developer
+{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM (TABLE mz_catalog.mz_databases) d WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":14,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
+
+# A mutually recursive binding can reference one defined after it.
+mcp-developer
+{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"WITH MUTUALLY RECURSIVE a (name text) AS (TABLE b), b (name text) AS (SELECT name FROM mz_catalog.mz_databases WHERE name = 'materialize') SELECT name FROM a"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":15,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
+
 # =============================================================================
 # query_system_catalog - non-system tables rejected
 # =============================================================================
@@ -82,6 +96,27 @@ mcp-developer
 ----
 200 OK
 {"jsonrpc":"2.0","id":21,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: public.my_view. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# A user table behind TABLE should be rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_catalog.mz_databases UNION ALL TABLE public.my_view"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":26,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: public.my_view. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# A CTE only shadows unqualified names, so public.my_view is still checked.
+mcp-developer
+{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"WITH my_view AS (SELECT 1) SELECT * FROM public.my_view, mz_catalog.mz_databases"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":27,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: public.my_view. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# An ID-form name resolves by ID, so its name proves nothing.
+mcp-developer
+{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM [u1 AS mz_catalog.mz_databases]"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":28,"error":{"code":-32602,"message":"Query validation failed: Query references objects by ID: [u1 AS mz_catalog.mz_databases]. Reference system catalog tables by name.","data":{"error_type":"ValidationError"}}}
 
 # =============================================================================
 # query_system_catalog - DDL rejected
