@@ -18,16 +18,17 @@
   ==================================
 
   These macros enforce schema isolation rules when strict_mode is enabled.
-  They read only the dbt graph, not the database. Each materialization calls
-  its validator before it creates the model, so the checks run during
-  `dbt run` and `dbt build`, not `dbt compile`.
+  They read only the dbt graph, not the database. The source, source_table,
+  sink, view, materialized_view and table materializations call their
+  validator before creating the model, so the checks run during `dbt run` and
+  `dbt build`, not `dbt compile`.
 
-  Rules enforced:
+  Rules enforced (1 to 3 raise an error, 4 warns):
   1. sources can only share a schema with other sources
   2. source_tables can only share a schema with other source_tables or seeds
   3. sinks can only share a schema with other sinks
-  4. views, materialized_views and tables in a schema that contains sources,
-     source_tables or sinks get a warning
+  4. views, materialized_views and tables should not share a schema with
+     sources, source_tables or sinks
 
   Enable strict_mode in dbt_project.yml:
     vars:
@@ -194,8 +195,8 @@
 {% macro validate_non_source_table_schema_isolation(target_schema, target_database) %}
 {#
   Called from: view, materialized_view, table materializations
-  Purpose: Prevent these types from being created in schemas reserved for
-           sources, source_tables, or sinks
+  Purpose: Warn when these types are in a schema that also holds sources,
+           source_tables, or sinks
 
   Logic:
   1. Skip validation if strict_mode is not enabled
