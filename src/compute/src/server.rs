@@ -58,6 +58,7 @@ use crate::metrics::{ComputeMetrics, WorkerMetrics};
 /// Metrics are scraped every 60 s. Updating twice per scrape interval means no scrape sees a value
 /// older than 30 s.
 const METRICS_UPDATE_INTERVAL: Duration = Duration::from_secs(30);
+
 /// Caller-provided configuration for compute.
 #[derive(Clone, Debug)]
 pub struct ComputeInstanceContext {
@@ -828,8 +829,7 @@ impl<'w> Worker<'w> {
         wake_at(*next_metrics_update);
 
         if let Some(compute_state) = self.activate_compute() {
-            compute_state.check_expiration();
-            if let Some(remaining) = compute_state.compute_state.time_until_expiration() {
+            if let Some(remaining) = compute_state.check_expiration() {
                 wake_at(now + remaining);
             }
         }

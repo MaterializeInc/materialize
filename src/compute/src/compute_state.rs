@@ -464,18 +464,6 @@ impl ComputeState {
         collection.compute_probe = Some(probe);
     }
 
-    /// Returns the wall-clock time until the replica expires, if it has an expiration.
-    ///
-    /// [`ActiveComputeState::check_expiration`] panics once this has passed.
-    pub fn time_until_expiration(&self) -> Option<Duration> {
-        let expiration = u64::from(*self.replica_expiration.as_option()?);
-        let now = mz_ore::now::SYSTEM_TIME();
-        // Expiration requires the time to pass the expiration, so wake a millisecond after it.
-        Some(Duration::from_millis(
-            expiration.saturating_sub(now).saturating_add(1),
-        ))
-    }
-
     /// Reports every collection's frontiers on the next maintenance, even without announced
     /// changes.
     pub fn recheck_all_frontiers(&mut self) {
@@ -1596,7 +1584,10 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     /// Checks for dataflow expiration. Panics if we're past the replica expiration time.
-    pub(crate) fn check_expiration(&self) {
+    ///
+    /// Returns the wall-clock time until the next check can observe expiration, or `None` if the
+    /// replica has no expiration.
+    pub(crate) fn check_expiration(&self) -> Option<Duration> {
         let now = mz_ore::now::SYSTEM_TIME();
         if self.compute_state.replica_expiration.less_than(&now.into()) {
             let now_datetime = mz_ore::now::to_datetime(now);
@@ -1624,6 +1615,12 @@ impl<'a> ActiveComputeState<'a> {
                 self.compute_state.replica_expiration.elements(),
             );
         }
+
+        let expiration = u64::from(*self.compute_state.replica_expiration.as_option()?);
+        // Expiration requires the time to pass the expiration, so wake a millisecond after it.
+        Some(Duration::from_millis(
+            expiration.saturating_sub(now).saturating_add(1),
+        ))
     }
 
     /// Returns the dataflow expiration, i.e, the timestamp beyond which diffs can be
