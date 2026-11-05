@@ -42,9 +42,8 @@ function collect(
 ): void {
   const visited = new Set<string>([root]);
   const queue = [root];
-  while (queue.length > 0) {
-    const node = queue.shift();
-    if (node === undefined) break;
+  for (let head = 0; head < queue.length; head++) {
+    const node = queue[head];
     const edges = adjacency.get(node);
     if (!edges) continue;
     for (const e of edges) {

@@ -13,7 +13,10 @@ import { keepPreviousData } from "@tanstack/react-query";
 import React from "react";
 
 import { DatabaseObject } from "~/api/materialize/objects";
-import { SUBSCRIBE_ERROR_CODE } from "~/api/materialize/SubscribeManager";
+import {
+  SUBSCRIBE_ERROR_CODE,
+  SubscribeError,
+} from "~/api/materialize/SubscribeManager";
 import { WorkflowGraphEdge } from "~/api/materialize/workflowGraph";
 import {
   WorkflowGraphCanvasNode,
@@ -155,6 +158,14 @@ function toCanvasNode(
   };
 }
 
+/**
+ * Whether a collection's error leaves nothing to draw. A dropped connection
+ * keeps the rows while the SUBSCRIBE reconnects.
+ */
+const isFailure = (error: SubscribeError | undefined, holdsRows: boolean) =>
+  error !== undefined &&
+  (error.code !== SUBSCRIBE_ERROR_CODE.CONNECTION_CLOSED || !holdsRows);
+
 /** The graph from the edges and catalog collections, without a query per open. */
 const SyncedWorkflowGraph = ({
   focusedObjectId,
@@ -189,20 +200,19 @@ const SyncedWorkflowGraph = ({
   }, [details, nodeIds, objects]);
 
   // An edge whose endpoint has no catalog row yet would make dagre invent a
-  // sizeless node.
-  const graphEdges = React.useMemo(
-    () =>
-      edges.filter(
-        (edge) => nodeMap.has(edge.parentId) && nodeMap.has(edge.childId),
-      ),
-    [edges, nodeMap],
-  );
+  // sizeless node. Keyed on the drawn ids, like the view's nodes.
+  const drawnIds = [...nodeMap.keys()].join(",");
+  const graphEdges = React.useMemo(() => {
+    const drawn = new Set(drawnIds.split(","));
+    return edges.filter(
+      (edge) => drawn.has(edge.parentId) && drawn.has(edge.childId),
+    );
+  }, [edges, drawnIds]);
 
-  // A dropped connection keeps the rows while the SUBSCRIBE reconnects.
-  const hasFailed = [edgesError, objectsError].some(
-    (error) => error && error.code !== SUBSCRIBE_ERROR_CODE.CONNECTION_CLOSED,
-  );
-  if (hasFailed) {
+  if (
+    isFailure(edgesError, edgesReady) ||
+    isFailure(objectsError, objectsSnapshotComplete)
+  ) {
     return <ErrorBox message="An error occurred fetching workflow data." />;
   }
 
@@ -249,7 +259,13 @@ const WorkflowGraphView = ({
     string | undefined
   >(undefined);
 
-  const objectsWithLag = React.useMemo(() => [...nodeMap.keys()], [nodeMap]);
+  // Keyed on the node ids, since `nodeMap` changes when details land, and a new
+  // layout pans the canvas back to the selected node.
+  const nodeIds = [...nodeMap.keys()].join(",");
+  const objectsWithLag = React.useMemo(
+    () => (nodeIds === "" ? [] : nodeIds.split(",")),
+    [nodeIds],
+  );
 
   const { data, isLoading: isLagmapLoading } = useMaterializationLag(
     { objectIds: objectsWithLag },

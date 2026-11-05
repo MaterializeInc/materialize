@@ -184,10 +184,12 @@ const WorkflowGraphSidebar = ({
                 </SidebarItemValue>
               </SidebarItem>
             )}
-            <SidebarItem>
-              <SidebarItemLabel>Database</SidebarItemLabel>
-              <SidebarItemValue>{selectedNode.databaseName}</SidebarItemValue>
-            </SidebarItem>
+            {selectedNode.databaseName && (
+              <SidebarItem>
+                <SidebarItemLabel>Database</SidebarItemLabel>
+                <SidebarItemValue>{selectedNode.databaseName}</SidebarItemValue>
+              </SidebarItem>
+            )}
             <SidebarItem>
               <SidebarItemLabel>Schema</SidebarItemLabel>
               <SidebarItemValue>{selectedNode.schemaName}</SidebarItemValue>
