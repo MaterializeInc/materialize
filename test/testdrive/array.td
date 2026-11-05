@@ -46,3 +46,12 @@ contains:type "bigint_map[]" does not exist
 > CREATE TABLE t1 (a int4[]);
 
 > CREATE TABLE t2 (a _int4);
+
+# A NULL in a record field must not crash the HTTP API.
+
+> CREATE TABLE record_null (k int);
+> INSERT INTO record_null VALUES (1), (2);
+> GRANT SELECT ON record_null TO PUBLIC;
+
+$ http-request method=POST url=http://${testdrive.materialize-http-addr}/api/sql content-type=application/json
+{"query": "SELECT ARRAY[ROW(1), ROW(CASE WHEN k = 1 THEN 1 END)], ARRAY[ROW(1)] || ARRAY[ROW(CASE WHEN k = 1 THEN 1 END)] FROM record_null ORDER BY k"}
