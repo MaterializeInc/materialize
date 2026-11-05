@@ -197,6 +197,25 @@ fn a_frozen_slot_is_replaced_by_a_fresh_one() {
 }
 
 #[mz_ore::test]
+fn a_frozen_slot_reports_no_hold_gap() {
+    // A peer holds the index at the minimum while its agents ask for time one, which is a gap.
+    // Once the incarnation drops, its slot freezes with that gap in its final view, which the
+    // metric does not report, see the NOTE on `hold_gaps`.
+    let id = GlobalId::User(1);
+    let registry = ArrangementSharingRegistry::new();
+    timely::execute_directly(move |worker| {
+        let (dataflow, token, (mut oks, errs, oks_input, errs_input)) =
+            render_incarnation(worker, &registry, id, &as_of_min());
+        let _peer = registry.peer_bundle(id, &as_of_min());
+        oks.set_logical_compaction(Antichain::from_elem(Timestamp::from(1_u64)).borrow());
+        assert_eq!(registry.hold_gaps(), (1, 1), "the peer holds the oks back");
+        drop((token, oks, errs, oks_input, errs_input));
+        worker.drop_dataflow(dataflow);
+        assert_eq!(registry.hold_gaps(), (0, 0), "a frozen slot reports no gap");
+    });
+}
+
+#[mz_ore::test]
 fn handles_available_while_published_gone_after_unpublish() {
     let id = GlobalId::User(1);
     let (registry, token) = publish_index(id, test_rows());
@@ -1494,7 +1513,16 @@ fn render_incarnation(
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
     as_of: &Antichain<Timestamp>,
-) -> (usize, PublishToken, impl Sized) {
+) -> (
+    usize,
+    PublishToken,
+    (
+        RowRowAgent<Timestamp, Diff>,
+        ErrAgent<Timestamp, Diff>,
+        differential_dataflow::input::InputSession<Timestamp, (Row, Row), Diff>,
+        differential_dataflow::input::InputSession<Timestamp, DataflowErrorSer, Diff>,
+    ),
+) {
     let index = worker.next_dataflow_index();
     let (token, keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
         let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();

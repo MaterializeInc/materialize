@@ -221,6 +221,8 @@ pub struct ComputeState {
     pub persist_batches: SharedBatches,
     /// Publishes this runtime's indexes for its peer runtime, if that runtime reads them.
     pub(crate) publisher: Option<ArrangementSharingRegistry>,
+    /// When the hold-gap metrics were last reported, `None` before the first report.
+    hold_gaps_reported_at: Option<Instant>,
     /// Whether this runtime applies the process-global settings.
     process_globals: ProcessGlobals,
     /// The dataflow classes this runtime renders.
@@ -365,6 +367,7 @@ impl ComputeState {
                 sharing_registry.attach_publisher();
                 sharing_registry.clone()
             }),
+            hold_gaps_reported_at: None,
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -1085,7 +1088,7 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     /// Report per-worker metrics.
-    pub(crate) fn report_metrics(&self) {
+    pub(crate) fn report_metrics(&mut self) {
         if let Some(expiration) = self.compute_state.replica_expiration.as_option() {
             let now = Duration::from_millis(mz_ore::now::SYSTEM_TIME()).as_secs_f64();
             let expiration = Duration::from_millis(<u64>::from(expiration)).as_secs_f64();
@@ -1095,6 +1098,34 @@ impl<'a> ActiveComputeState<'a> {
                 .replica_expiration_remaining_seconds
                 .set(remaining)
         }
+
+        // `hold_gaps` takes up to four point locks per published index, and metrics run every
+        // maintenance tick, 10 ms by default. Once a second is ample for a gauge.
+        let now = Instant::now();
+        if self
+            .compute_state
+            .hold_gaps_reported_at
+            .is_some_and(|at| now.duration_since(at) < Duration::from_secs(1))
+        {
+            return;
+        }
+        self.compute_state.hold_gaps_reported_at = Some(now);
+        // A runtime that publishes nothing reports zero, so the other runtime's numbers are not
+        // repeated under a second `role` label: an extra zero leaves a `sum` or a `max` over the
+        // label correct, where a duplicate would not.
+        let (gap, held) = self
+            .compute_state
+            .publisher
+            .as_ref()
+            .map_or((0, 0), ArrangementSharingRegistry::hold_gaps);
+        self.compute_state
+            .metrics
+            .shared_arrangement_hold_gap_ms
+            .set(gap);
+        self.compute_state
+            .metrics
+            .shared_arrangement_held_count
+            .set(u64::cast_from(held));
     }
 
     /// Gives `peek` a turn on the worker if this activation's budget has one left, and queues it
