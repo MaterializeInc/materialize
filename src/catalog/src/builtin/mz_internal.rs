@@ -27,7 +27,8 @@ use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
     MZ_SQL_TEXT_DESC, MZ_STATEMENT_EXECUTION_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
-    REPLICA_STATUS_HISTORY_DESC, WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC,
+    REPLICA_STATUS_HISTORY_DESC, REPLICA_WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC,
+    WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC, WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC,
     WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATISTICS_RAW_DESC};
@@ -3178,6 +3179,238 @@ GROUP BY period_start, period_end, object_id, lag_seconds, labels",
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
+
+pub static MZ_WALLCLOCK_GLOBAL_FRESHNESS_HISTOGRAM_RAW: LazyLock<BuiltinSource> = LazyLock::new(
+    || BuiltinSource {
+        name: "mz_wallclock_global_freshness_histogram_raw",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_WALLCLOCK_GLOBAL_FRESHNESS_HISTOGRAM_RAW_OID,
+        desc: WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC.clone(),
+        column_comments: BTreeMap::from_iter([
+            ("period_start", "The start of the period the row covers."),
+            ("period_end", "The end of the period the row covers."),
+            (
+                "object_id",
+                "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "measure",
+                "The measured quantity: `end_to_end` for the freshness of the object, `local` for the delay the object adds on top of its inputs.",
+            ),
+            (
+                "buckets_per_octave",
+                "The number of histogram buckets per power of two of latency.",
+            ),
+            (
+                "bucket",
+                "The index of the histogram bucket. Bucket boundaries are in milliseconds.",
+            ),
+            ("labels", "Additional labels of the measurement."),
+        ]),
+        data_source: IntrospectionType::WallclockFreshnessHistogram.into(),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    },
+);
+
+pub static MZ_WALLCLOCK_GLOBAL_FRESHNESS_HISTOGRAM: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+        name: "mz_wallclock_global_freshness_histogram",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_FRESHNESS_HISTOGRAM_OID,
+        desc: RelationDesc::builder()
+            .with_column(
+                "period_start",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column(
+                "period_end",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("measure", SqlScalarType::String.nullable(false))
+            .with_column("buckets_per_octave", SqlScalarType::UInt32.nullable(false))
+            .with_column("bucket", SqlScalarType::Int32.nullable(false))
+            .with_column("labels", SqlScalarType::Jsonb.nullable(false))
+            .with_column("count", SqlScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1, 2, 3, 4, 5, 6])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("period_start", "The start of the period the row covers."),
+            ("period_end", "The end of the period the row covers."),
+            (
+                "object_id",
+                "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "measure",
+                "The measured quantity: `end_to_end` for the freshness of the object, `local` for the delay the object adds on top of its inputs.",
+            ),
+            (
+                "buckets_per_octave",
+                "The number of histogram buckets per power of two of latency.",
+            ),
+            (
+                "bucket",
+                "The index of the histogram bucket. Bucket boundaries are in milliseconds.",
+            ),
+            ("labels", "Additional labels of the measurement."),
+            (
+                "count",
+                "The number of virtual arrivals in the bucket. A virtual arrival represents one interval of arrival time, one millisecond by default.",
+            ),
+        ]),
+        sql: "
+SELECT *, count(*) AS count
+FROM mz_internal.mz_wallclock_global_freshness_histogram_raw
+GROUP BY period_start, period_end, object_id, measure, buckets_per_octave, bucket, labels",
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
+pub static MZ_WALLCLOCK_REPLICA_FRESHNESS_HISTOGRAM_RAW: LazyLock<BuiltinSource> = LazyLock::new(
+    || BuiltinSource {
+        name: "mz_wallclock_replica_freshness_histogram_raw",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_WALLCLOCK_REPLICA_FRESHNESS_HISTOGRAM_RAW_OID,
+        desc: REPLICA_WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC.clone(),
+        column_comments: BTreeMap::from_iter([
+            ("period_start", "The start of the period the row covers."),
+            ("period_end", "The end of the period the row covers."),
+            (
+                "object_id",
+                "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "replica_id",
+                "The ID of the replica the freshness is measured on. Corresponds to `mz_cluster_replicas.id`.",
+            ),
+            (
+                "measure",
+                "The measured quantity: `end_to_end` for the freshness of the object, `local` for the delay the object adds on top of its inputs.",
+            ),
+            (
+                "buckets_per_octave",
+                "The number of histogram buckets per power of two of latency.",
+            ),
+            (
+                "bucket",
+                "The index of the histogram bucket. Bucket boundaries are in milliseconds.",
+            ),
+            ("labels", "Additional labels of the measurement."),
+        ]),
+        data_source: IntrospectionType::ReplicaWallclockFreshnessHistogram.into(),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    },
+);
+
+pub static MZ_WALLCLOCK_REPLICA_FRESHNESS_HISTOGRAM: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+    name: "mz_wallclock_replica_freshness_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_WALLCLOCK_REPLICA_FRESHNESS_HISTOGRAM_OID,
+    desc: RelationDesc::builder()
+        .with_column("period_start", SqlScalarType::TimestampTz { precision: None }.nullable(false))
+        .with_column("period_end", SqlScalarType::TimestampTz { precision: None }.nullable(false))
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column("measure", SqlScalarType::String.nullable(false))
+        .with_column("buckets_per_octave", SqlScalarType::UInt32.nullable(false))
+        .with_column("bucket", SqlScalarType::Int32.nullable(false))
+        .with_column("labels", SqlScalarType::Jsonb.nullable(false))
+        .with_column("count", SqlScalarType::Int64.nullable(false))
+        .with_key(vec![0, 1, 2, 3, 4, 5, 6, 7])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "period_start",
+            "The start of the period the row covers.",
+        ),
+        (
+            "period_end",
+            "The end of the period the row covers.",
+        ),
+        (
+            "object_id",
+            "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "replica_id",
+            "The ID of the replica the freshness is measured on. Corresponds to `mz_cluster_replicas.id`.",
+        ),
+        (
+            "measure",
+            "The measured quantity: `end_to_end` for the freshness of the object, `local` for the delay the object adds on top of its inputs.",
+        ),
+        (
+            "buckets_per_octave",
+            "The number of histogram buckets per power of two of latency.",
+        ),
+        (
+            "bucket",
+            "The index of the histogram bucket. Bucket boundaries are in milliseconds.",
+        ),
+        (
+            "labels",
+            "Additional labels of the measurement.",
+        ),
+        (
+            "count",
+            "The number of virtual arrivals in the bucket. A virtual arrival represents one interval of arrival time, one millisecond by default.",
+        ),
+    ]),
+    sql: "
+SELECT *, count(*) AS count
+FROM mz_internal.mz_wallclock_replica_freshness_histogram_raw
+GROUP BY period_start, period_end, object_id, replica_id, measure, buckets_per_octave, bucket, labels",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+}
+});
+
+pub static MZ_WALLCLOCK_FRESHNESS_PROGRESS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_wallclock_freshness_progress",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_WALLCLOCK_FRESHNESS_PROGRESS_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(true))
+        .with_column(
+            "covered_until",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "replica_id",
+            "The ID of the replica the freshness is measured on, or `NULL` for the global freshness. Corresponds to `mz_cluster_replicas.id`.",
+        ),
+        (
+            "covered_until",
+            "The end of the latest period for which end-to-end freshness histogram rows have been recorded. Later times are not yet covered.",
+        ),
+    ]),
+    sql: "
+SELECT object_id, NULL::text AS replica_id, max(period_end) AS covered_until
+FROM mz_internal.mz_wallclock_global_freshness_histogram_raw
+WHERE measure = 'end_to_end'
+GROUP BY object_id
+UNION ALL
+SELECT object_id, replica_id, max(period_end) AS covered_until
+FROM mz_internal.mz_wallclock_replica_freshness_histogram_raw
+WHERE measure = 'end_to_end'
+GROUP BY object_id, replica_id",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
 
 pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> = LazyLock::new(|| {
     BuiltinSource {
