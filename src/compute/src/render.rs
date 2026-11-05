@@ -823,16 +823,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
                 compute_state.traces.set(idx_id, trace);
-                // The trace advances in the dataflow that maintains `gid`. This dataflow imports
-                // it, and the import's probe follows the trace upper.
-                let import_probe = compute_state
-                    .expect_collection_mut(idx_id)
-                    .input_probes
-                    .get(&gid)
-                    .cloned();
-                if let Some(probe) = import_probe {
-                    compute_state.observe_write_frontier(idx_id, &probe);
-                }
+                compute_state.observe_shared_write_frontier(idx_id, gid);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -936,16 +927,7 @@ where
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
                 compute_state.traces.set(idx_id, trace);
-                // The trace advances in the dataflow that maintains `gid`. This dataflow imports
-                // it, and the import's probe follows the trace upper.
-                let import_probe = compute_state
-                    .expect_collection_mut(idx_id)
-                    .input_probes
-                    .get(&gid)
-                    .cloned();
-                if let Some(probe) = import_probe {
-                    compute_state.observe_write_frontier(idx_id, &probe);
-                }
+                compute_state.observe_shared_write_frontier(idx_id, gid);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());

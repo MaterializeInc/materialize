@@ -418,6 +418,7 @@ impl ComputeState {
             return;
         };
         collection.observed.has_write_source = true;
+        collection.write_probe = Some(probe.clone());
         probe.observe(frontier_observer(
             &self.frontier_events,
             id,
@@ -430,6 +431,21 @@ impl ComputeState {
             self.frontier_events
                 .push((id, FrontierSource::Write), frontier)
         });
+    }
+
+    /// Takes the write frontier of index `id` from the probe that supplies the write frontier of
+    /// index `source`, whose trace `id` shares.
+    pub fn observe_shared_write_frontier(&mut self, id: GlobalId, source: GlobalId) {
+        // NOTE: The dataflow exporting `id` imports `source`, but no operator reads that import.
+        // Observed: its stream completes right after the dataflow is built, so its probe reports
+        // the empty frontier while the shared trace still advances.
+        let probe = self
+            .collections
+            .get(&source)
+            .and_then(|collection| collection.write_probe.clone());
+        if let Some(probe) = probe {
+            self.observe_write_frontier(id, &probe);
+        }
     }
 
     /// Takes the write frontier of sink `id` from `frontier`, which the sink maintains.
@@ -2173,6 +2189,9 @@ pub struct CollectionState {
     pub sink_write_frontier: Option<Rc<WatchedFrontier<Timestamp>>>,
     /// Frontier probes for every input to the collection.
     pub input_probes: BTreeMap<GlobalId, MzProbeHandle<Timestamp>>,
+    /// The probe supplying the write frontier of an index, see
+    /// [`ComputeState::observe_write_frontier`].
+    write_probe: Option<MzProbeHandle<Timestamp>>,
     /// A probe reporting the frontier of times through which all collection outputs have been
     /// computed (but not necessarily written).
     ///
@@ -2219,6 +2238,7 @@ impl CollectionState {
             sink_token: None,
             sink_write_frontier: None,
             input_probes: Default::default(),
+            write_probe: None,
             compute_probe: None,
             observed: Default::default(),
             logging: None,
