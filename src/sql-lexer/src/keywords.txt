@@ -61,6 +61,7 @@ Availability
 Avro
 Aws
 Batch
+Batched
 Begin
 Between
 Bigint

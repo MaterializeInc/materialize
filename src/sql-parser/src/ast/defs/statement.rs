@@ -4129,6 +4129,7 @@ impl_display!(RollbackStatement);
 pub enum SubscribeOptionName {
     Snapshot,
     Progress,
+    Batched,
 }
 
 impl AstDisplay for SubscribeOptionName {
@@ -4136,6 +4137,7 @@ impl AstDisplay for SubscribeOptionName {
         match self {
             SubscribeOptionName::Snapshot => f.write_str("SNAPSHOT"),
             SubscribeOptionName::Progress => f.write_str("PROGRESS"),
+            SubscribeOptionName::Batched => f.write_str("BATCHED"),
         }
     }
 }
@@ -4149,7 +4151,9 @@ impl WithOptionName for SubscribeOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            SubscribeOptionName::Snapshot | SubscribeOptionName::Progress => false,
+            SubscribeOptionName::Snapshot
+            | SubscribeOptionName::Progress
+            | SubscribeOptionName::Batched => false,
         }
     }
 }

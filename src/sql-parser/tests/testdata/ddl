@@ -1510,9 +1510,23 @@ SUBSCRIBE foo.bar WITH (PROGRESS) AS OF now()
 Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Progress, value: None }], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
 
 parse-statement
+SUBSCRIBE t WITH (BATCHED)
+----
+SUBSCRIBE t WITH (BATCHED)
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [SubscribeOption { name: Batched, value: None }], as_of: None, up_to: None, output: Diffs })
+
+parse-statement
+SUBSCRIBE t WITH (BATCHED = false, PROGRESS)
+----
+SUBSCRIBE t WITH (BATCHED = false, PROGRESS)
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [SubscribeOption { name: Batched, value: Some(Value(Boolean(false))) }, SubscribeOption { name: Progress, value: None }], as_of: None, up_to: None, output: Diffs })
+
+parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
 ----
-error: Expected one of PROGRESS or SNAPSHOT, found identifier "timestamps"
+error: Expected one of BATCHED or PROGRESS or SNAPSHOT, found identifier "timestamps"
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
                                           ^
 

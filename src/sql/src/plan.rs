@@ -957,6 +957,8 @@ pub struct SubscribePlan {
     pub up_to: Option<Timestamp>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
+    /// Whether the subscribe was requested with `WITH (BATCHED)`.
+    pub batched: bool,
     pub output: SubscribeOutput,
 }
 

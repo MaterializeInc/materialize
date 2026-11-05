@@ -1539,7 +1539,12 @@ pub fn plan_explain_timestamp(
     }))
 }
 
-generate_extracted_config!(SubscribeOption, (Snapshot, bool), (Progress, bool));
+generate_extracted_config!(
+    SubscribeOption,
+    (Snapshot, bool),
+    (Progress, bool),
+    (Batched, bool)
+);
 
 pub fn describe_subscribe(
     scx: &StatementContext,
@@ -1563,8 +1568,11 @@ pub fn describe_subscribe(
             desc
         }
     };
-    let SubscribeOptionExtracted { progress, .. } = stmt.options.try_into()?;
-    let progress = progress.unwrap_or(false);
+    let SubscribeOptionExtracted {
+        progress, batched, ..
+    } = stmt.options.try_into()?;
+    // BATCHED implies PROGRESS.
+    let progress = progress.unwrap_or(false) || batched.unwrap_or(false);
     let mut desc = RelationDesc::builder().with_column(
         "mz_timestamp",
         SqlScalarType::Numeric {
@@ -1811,15 +1819,30 @@ pub fn plan_subscribe(
     };
 
     let SubscribeOptionExtracted {
-        progress, snapshot, ..
+        progress,
+        snapshot,
+        batched,
+        ..
     } = options.try_into()?;
+    let batched = batched.unwrap_or(false);
+    if batched {
+        scx.require_feature_flag(&vars::ENABLE_SUBSCRIBE_BATCHED)?;
+        if progress == Some(false) {
+            sql_bail!("BATCHED implies PROGRESS");
+        }
+        if !matches!(output, plan::SubscribeOutput::Diffs) {
+            sql_bail!("BATCHED requires plain diff output");
+        }
+    }
     Ok(Plan::Subscribe(SubscribePlan {
         from,
         when,
         up_to,
         with_snapshot: snapshot.unwrap_or(true),
         copy_to,
-        emit_progress: progress.unwrap_or(false),
+        // BATCHED implies PROGRESS.
+        emit_progress: progress.unwrap_or(false) || batched,
+        batched,
         output,
     }))
 }

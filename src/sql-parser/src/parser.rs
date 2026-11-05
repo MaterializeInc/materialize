@@ -9225,7 +9225,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_subscribe_option(&mut self) -> Result<SubscribeOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT])? {
+        let name = match self.expect_one_of_keywords(&[BATCHED, PROGRESS, SNAPSHOT])? {
+            BATCHED => SubscribeOptionName::Batched,
             PROGRESS => SubscribeOptionName::Progress,
             SNAPSHOT => SubscribeOptionName::Snapshot,
             _ => unreachable!(),
