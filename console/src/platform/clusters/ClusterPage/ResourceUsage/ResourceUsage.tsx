@@ -59,11 +59,13 @@ import {
   ChangesLane,
   ChangeTooltipContent,
   CpuChart,
+  FittedLegendItem,
   LegendSwatch,
   MemoryChart,
   ReplicaStatusTimeline,
+  ResourceTimeAxis,
   StatusTimelineRow,
-  TimeAxis,
+  TimeGridLines,
 } from "./ResourceUsageCharts";
 import {
   canSwap,
@@ -80,8 +82,9 @@ import {
   stateAt,
 } from "./resourceUsageModel";
 import {
-  CHART_MARGIN,
   MIN_BAR_SLOT_PX,
+  RESOURCE_CHART_MARGIN,
+  truncatedLabelProps,
   useStatusStyles,
 } from "./resourceUsageStyles";
 import { ColoredReplica, useResourceUsageData } from "./useResourceUsageData";
@@ -446,7 +449,8 @@ interface ResourceUsageContentProps {
   unhydratedObjectCounts: Map<string, number> | undefined;
   missingUsage: MissingUsageCause;
   isDdlError: boolean;
-  cpuHeaderAction?: React.ReactNode;
+  /** In the CPU chart's header, or above the message explaining why there's no chart. */
+  replicaToggles?: React.ReactNode;
   isStatusLoading: boolean;
   isStatusError: boolean;
   isHydrationError: boolean;
@@ -474,7 +478,7 @@ const ResourceUsageContent = ({
   isStatusLoading,
   isStatusError,
   isHydrationError,
-  cpuHeaderAction,
+  replicaToggles,
 }: ResourceUsageContentProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { tooltipData, tooltipLeft, tooltipTop, showTooltip, hideTooltip } =
@@ -490,7 +494,7 @@ const ResourceUsageContent = ({
         range: buildXYGraphLayoutProps({
           width,
           height: 0,
-          margin: CHART_MARGIN,
+          margin: RESOURCE_CHART_MARGIN,
         }).xScaleRange,
       }),
     [startDate, endDate, width],
@@ -573,66 +577,69 @@ const ResourceUsageContent = ({
 
   return (
     <Box ref={containerRef} position="relative" width="100%">
-      <VStack spacing={6} alignItems="stretch">
+      <TimeGridLines width={width} xScale={xScale} />
+      <VStack spacing={0} alignItems="stretch" position="relative">
         {hasUsage ? (
           <>
-            <CpuChart {...plotProps} headerAction={cpuHeaderAction} />
-            <VStack spacing={0} alignItems="stretch">
-              <MemoryChart
-                {...plotProps}
-                heapLimitBytes={heapLimitBytes}
-                hasHeapLimit={hasHeapLimit}
-              />
-              <TimeAxis width={width} xScale={xScale} />
-            </VStack>
+            <CpuChart {...plotProps} headerAction={replicaToggles} />
+            <ResourceTimeAxis width={width} xScale={xScale} />
+            <MemoryChart
+              {...plotProps}
+              heapLimitBytes={heapLimitBytes}
+              hasHeapLimit={hasHeapLimit}
+            />
+            <ResourceTimeAxis width={width} xScale={xScale} />
           </>
         ) : (
-          <VStack spacing={2} alignItems="stretch">
+          <VStack spacing={2} alignItems="stretch" pb={4}>
+            {replicaToggles && (
+              <Flex justifyContent="flex-end">{replicaToggles}</Flex>
+            )}
             <MissingUsageMessage
               cause={missingUsage}
               hasReplicas={replicasById.size > 0}
             />
-            <TimeAxis width={width} xScale={xScale} />
           </VStack>
         )}
-        <VStack spacing={1} alignItems="stretch">
-          {isStatusError ? (
-            <Alert variant="error" message="Replica status is unavailable." />
-          ) : isStatusLoading ? (
-            <Flex justifyContent="center">
-              <Spinner size="sm" />
-            </Flex>
-          ) : (
-            <ReplicaStatusTimeline
-              width={width}
-              xScale={xScale}
-              rows={statusRows}
-              hoverTimeMs={tooltipData}
-              onPointerMove={onPointerMove}
-              onPointerLeave={hideTooltip}
-            />
-          )}
-          {!isStatusError && !isStatusLoading && isHydrationError && (
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              Hydration history is unavailable.
-            </Text>
-          )}
-        </VStack>
-        <VStack spacing={1} alignItems="stretch">
-          <ChangesLane
+        {isStatusError ? (
+          <Alert variant="error" message="Replica status is unavailable." />
+        ) : isStatusLoading ? (
+          <Flex justifyContent="center" py={4}>
+            <Spinner size="sm" />
+          </Flex>
+        ) : (
+          <ReplicaStatusTimeline
             width={width}
             xScale={xScale}
-            events={ddlEvents}
-            activeStartMs={changeTooltip.tooltipData?.startMs}
-            onActivate={onChangeActivate}
-            onDeactivate={changeTooltip.hideTooltip}
+            rows={statusRows}
+            hoverTimeMs={tooltipData}
+            onPointerMove={onPointerMove}
+            onPointerLeave={hideTooltip}
           />
-          {isDdlError && (
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              Object creation markers are unavailable.
-            </Text>
-          )}
-        </VStack>
+        )}
+        {!isStatusError && !isStatusLoading && isHydrationError && (
+          <Text textStyle="text-small" color={colors.foreground.secondary}>
+            Hydration history is unavailable.
+          </Text>
+        )}
+        <ResourceTimeAxis width={width} xScale={xScale} />
+        <ChangesLane
+          width={width}
+          xScale={xScale}
+          events={ddlEvents}
+          activeStartMs={changeTooltip.tooltipData?.startMs}
+          onActivate={onChangeActivate}
+          onDeactivate={changeTooltip.hideTooltip}
+        />
+        {isDdlError && (
+          <Text
+            textStyle="text-small"
+            color={colors.foreground.secondary}
+            mt={1}
+          >
+            Object creation markers are unavailable.
+          </Text>
+        )}
       </VStack>
       {tooltipSections.length > 0 &&
         tooltipLeft !== undefined &&
@@ -668,6 +675,9 @@ const ResourceUsageContent = ({
 
 // The legend key that stands for every past replica.
 const PAST_REPLICAS_KEY = "past-replicas";
+// A toggle's square swatch, and the gap between its parts.
+const TOGGLE_SWATCH_PX = 8;
+const TOGGLE_GAP_PX = 4;
 // The most past replicas their toggle's tooltip names before summarizing the
 // rest.
 const PAST_REPLICA_TOOLTIP_LIMIT = 10;
@@ -686,11 +696,14 @@ const ReplicaToggle = forwardRef<ReplicaToggleProps, "button">(
       type="button"
       aria-pressed={isPressed}
       spacing={1}
+      minWidth={0}
       opacity={isPressed ? 1 : 0.5}
       whiteSpace="nowrap"
       {...props}
     >
-      <LegendSwatch color={swatchColor} variant="square" />
+      <Box flexShrink={0}>
+        <LegendSwatch color={swatchColor} variant="square" />
+      </Box>
       {children}
     </HStack>
   ),
@@ -750,25 +763,37 @@ const ReplicaToggles = ({
       listStyleType="none"
     >
       {currentGroups.map((replica) => (
-        <Box as="li" key={replica.id}>
+        <FittedLegendItem
+          key={replica.id}
+          fixedPx={TOGGLE_SWATCH_PX + (replica.size ? 2 : 1) * TOGGLE_GAP_PX}
+          fixedText={replica.size ?? undefined}
+        >
           <ReplicaToggle
             isPressed={visibleKeys.has(replica.id)}
             swatchColor={replica.color}
             onClick={(event) => onToggle(replica.id, event)}
           >
-            <Text textStyle="text-small" color={colors.foreground.primary}>
+            <Text
+              textStyle="text-small"
+              color={colors.foreground.primary}
+              {...truncatedLabelProps}
+            >
               {replica.name}
             </Text>
             {replica.size && (
-              <Text textStyle="text-small" color={colors.foreground.secondary}>
+              <Text
+                textStyle="text-small"
+                color={colors.foreground.secondary}
+                flexShrink={0}
+              >
                 {replica.size}
               </Text>
             )}
           </ReplicaToggle>
-        </Box>
+        </FittedLegendItem>
       ))}
       {pastGroups.length > 0 && (
-        <Box as="li">
+        <FittedLegendItem fixedPx={TOGGLE_SWATCH_PX + TOGGLE_GAP_PX}>
           <Tooltip
             label={<PastReplicaList replicas={pastGroups} />}
             placement="bottom-end"
@@ -781,13 +806,17 @@ const ReplicaToggles = ({
               swatchColor={pastGroups.map(({ color }) => color)}
               onClick={(event) => onToggle(PAST_REPLICAS_KEY, event)}
             >
-              <Text textStyle="text-small" color={colors.foreground.primary}>
+              <Text
+                textStyle="text-small"
+                color={colors.foreground.primary}
+                {...truncatedLabelProps}
+              >
                 +{pastGroups.length} past{" "}
                 {pluralize(pastGroups.length, "replica", "replicas")}
               </Text>
             </ReplicaToggle>
           </Tooltip>
-        </Box>
+        </FittedLegendItem>
       )}
     </Flex>
   );
@@ -967,30 +996,14 @@ export const ResourceUsage = ({
             isStatusLoading={isStatusLoading}
             isStatusError={isStatusError}
             isHydrationError={isHydrationError}
-            cpuHeaderAction={
-              (processReplicas.length > 0 || hasWorkers) && (
-                <HStack spacing={2}>
-                  {processReplicas.length > 0 && (
-                    <Button
-                      ref={processesButtonRef}
-                      size="xs"
-                      variant="outline"
-                      onClick={() => setIsProcessesOpen(true)}
-                    >
-                      Processes
-                    </Button>
-                  )}
-                  {hasWorkers && (
-                    <Button
-                      as={Link}
-                      to={workersLink}
-                      size="xs"
-                      variant="outline"
-                    >
-                      Workers
-                    </Button>
-                  )}
-                </HStack>
+            replicaToggles={
+              selectedReplicaId === undefined && (
+                <ReplicaToggles
+                  currentGroups={currentGroups}
+                  pastGroups={pastGroups}
+                  visibleKeys={visibleLegendItems}
+                  onToggle={toggleLegendItem}
+                />
               )
             }
           />
@@ -1007,40 +1020,40 @@ export const ResourceUsage = ({
       borderWidth="1px"
       borderColor={colors.border.primary}
     >
-      <VStack spacing={6} alignItems="stretch">
-        <Flex
+      <VStack spacing={4} alignItems="stretch">
+        <HStack
           justifyContent="space-between"
-          alignItems="start"
-          flexWrap="wrap"
-          columnGap={4}
-          rowGap={2}
+          alignItems="flex-end"
+          spacing={4}
         >
-          <Text as="h3" textStyle="heading-sm" whiteSpace="nowrap">
-            Resource Usage
-          </Text>
-          {/* NOTE: a basis of 0, as `flex="1"` sets, never wraps this below
-              the title, so long toggles overlap it on a narrow card. */}
-          <Flex
-            flex="1 1 auto"
-            minWidth={0}
-            justifyContent="flex-end"
-            alignItems="center"
-            columnGap={4}
-            rowGap={1}
-          >
+          <HStack spacing={4}>
+            <Text as="h3" textStyle="heading-sm" whiteSpace="nowrap">
+              Resource Usage
+            </Text>
             {history.isRefreshing && (
               <Spinner size="sm" data-testid="refreshing-spinner" />
             )}
-            {selectedReplicaId === undefined && (
-              <ReplicaToggles
-                currentGroups={currentGroups}
-                pastGroups={pastGroups}
-                visibleKeys={visibleLegendItems}
-                onToggle={toggleLegendItem}
-              />
-            )}
-          </Flex>
-        </Flex>
+          </HStack>
+          {(processReplicas.length > 0 || hasWorkers) && (
+            <HStack spacing={2}>
+              {processReplicas.length > 0 && (
+                <Button
+                  ref={processesButtonRef}
+                  size="xs"
+                  variant="outline"
+                  onClick={() => setIsProcessesOpen(true)}
+                >
+                  Processes
+                </Button>
+              )}
+              {hasWorkers && (
+                <Button as={Link} to={workersLink} size="xs" variant="outline">
+                  Workers
+                </Button>
+              )}
+            </HStack>
+          )}
+        </HStack>
         {body}
       </VStack>
       <ProcessesDrawer
