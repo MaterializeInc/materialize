@@ -1352,6 +1352,14 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
 
                 let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
                 error_time.advance_by(self.as_of_frontier.borrow());
+                // The as-of can be at or beyond the `until`, for example on restart of a REFRESH
+                // MV past its last refresh. The error must then be dropped like the rows above,
+                // because `apply_refresh` asserts that no update arrives after the last refresh.
+                let errs = if self.until.less_equal(&error_time) {
+                    Vec::new()
+                } else {
+                    errs
+                };
                 let err_collection = errs
                     .into_iter()
                     .map(move |e| {

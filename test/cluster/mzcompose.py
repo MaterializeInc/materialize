@@ -5522,6 +5522,54 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
         check()
 
 
+def workflow_test_refresh_mv_constant_error_past_last_refresh(
+    c: Composition,
+) -> None:
+    """
+    A REFRESH MV whose plan contains a constant error must not emit that error
+    after its last refresh. On restart the dataflow of a pending replacement
+    can get an as-of beyond its last refresh, and the error, placed at the
+    as-of, reached `apply_refresh` and tripped its soft assertion, crash-looping
+    the replica.
+    """
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_refresh_every_mvs": "true",
+            },
+        ),
+    ):
+        c.up("materialized")
+        c.sql(dedent("""
+                CREATE TABLE t (a int);
+                INSERT INTO t SELECT generate_series(1, 1000);
+                CREATE TABLE t3 (a int);
+                INSERT INTO t3 VALUES (1), (2), (3);
+                CREATE MATERIALIZED VIEW mv AS SELECT a FROM t WHERE a IS NOT NULL;
+                CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv
+                  WITH (REFRESH AT mz_now()::text::int8 + 5000)
+                  AS WITH MUTUALLY RECURSIVE
+                    r(a int) AS (SELECT a FROM t UNION SELECT a FROM e),
+                    e(a int) AS (SELECT (1/0)::int)
+                  SELECT r.a FROM r JOIN t3 ON r.a = t3.a;
+                """))
+
+        # Sleep through the last refresh, then restart so that as-of selection
+        # runs for the replacement's dataflow.
+        time.sleep(10)
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Give the replica time to render the dataflow and, if broken, crash.
+        time.sleep(15)
+        c.sql("SELECT count(*) FROM t3")
+
+        logs = c.invoke("logs", "materialized", capture=True).stdout
+        assert (
+            "Received data after the last refresh" not in logs
+        ), "apply_refresh received data after the last refresh"
+
+
 def workflow_test_refresh_mv_warmup(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
