@@ -222,6 +222,25 @@ documented at the [pgtest crate][pgtest-docs].
 
 [pgtest-docs]: https://dev.materialize.com/api/rust/mz_pgtest/index.html
 
+### Invariants
+
+The invariants framework in
+[misc/python/materialize/invariants/](/misc/python/materialize/invariants)
+verifies result *correctness* under disruptions: multi-threaded scenarios
+(e.g. bank transfers that conserve a total balance) run concurrent writes
+whose invariants hold no matter which individual operations succeed, fail, or
+end up in an unknown state, while toxiproxy cuts the connections between
+environmentd, clusterd, the metadata store, and sources/sinks, and processes
+are killed and restarted. Checker threads verify the invariants continuously
+during the disruptions, and strictly again after healing. Unlike
+parallel-workload (which hunts panics and unexpected errors) it checks exact
+results. The entry point is
+[test/invariants/mzcompose.py](/test/invariants/mzcompose.py):
+
+```shell
+bin/mzcompose --find invariants run default --scenario=table-bank --runtime=120
+```
+
 ## Long-running tests
 
 These are still a work in progress. The beginning of the orchestration has
