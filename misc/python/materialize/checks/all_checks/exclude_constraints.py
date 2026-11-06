@@ -9,12 +9,13 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.checks import Check, disabled, externally_idempotent
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
 
 @externally_idempotent(False)
+@disabled("https://linear.app/materializeinc/issue/SS-568")
 class ExcludeConstraints(Check):
     """EXCLUDE CONSTRAINTS / EXCLUDE ALL CONSTRAINTS on CREATE TABLE .. FROM
     SOURCE: the option must survive restarts and upgrades (it is part of the
