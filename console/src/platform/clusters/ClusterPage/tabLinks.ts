@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { atom } from "jotai";
 import { To } from "react-router-dom";
 
 import { REPLICA_SEARCH_PARAM } from "./useSelectedReplica";
@@ -14,6 +15,13 @@ import { REPLICA_SEARCH_PARAM } from "./useSelectedReplica";
 export const WORKERS_TAB_PATH = "workers";
 export const HYDRATION_TAB_PATH = "hydration";
 export const FRESHNESS_TAB_PATH = "freshness";
+
+/**
+ * The Freshness tab's settings as last seen, which its tab link carries so
+ * they survive leaving the tab and switching clusters. Held in memory only,
+ * so a reload resets them.
+ */
+export const freshnessTabSearchAtom = atom("");
 
 /** The search string that selects `replicaName`, or none for all replicas. */
 export const replicaSearch = (replicaName: string | undefined) =>

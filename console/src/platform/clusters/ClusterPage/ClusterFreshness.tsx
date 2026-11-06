@@ -8,8 +8,9 @@
 // by the Apache License, Version 2.0.
 
 import { HStack, useTheme, VStack } from "@chakra-ui/react";
+import { useSetAtom } from "jotai";
 import React from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { useThresholdControl } from "~/components/ThresholdLineGraph/useThresholdControl";
@@ -21,11 +22,16 @@ import {
   FreshnessFilterControls,
   FreshnessNotes,
 } from "~/platform/freshness/FreshnessPage";
-import { useFreshnessParams } from "~/platform/freshness/useFreshnessParams";
+import {
+  freshnessControlsSearch,
+  useFreshnessParams,
+} from "~/platform/freshness/useFreshnessParams";
 import { absoluteFreshnessPath } from "~/platform/routeHelpers";
 import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { assert } from "~/util";
+
+import { freshnessTabSearchAtom } from "./tabLinks";
 
 /**
  * The Freshness page fixed to this cluster. Its schema links open the Freshness
@@ -47,6 +53,14 @@ export const ClusterFreshness = () => {
     setObjectTypes,
   } = useFreshnessParams();
   const thresholdControl = useThresholdControl(threshold, setThreshold);
+
+  // Only the Freshness settings, because the URL can also carry the
+  // configuration drawer's section, and saving that would reopen the drawer on
+  // the next visit.
+  const [searchParams] = useSearchParams();
+  const search = freshnessControlsSearch(searchParams);
+  const setSavedSearch = useSetAtom(freshnessTabSearchAtom);
+  React.useEffect(() => setSavedSearch(search), [search, setSavedSearch]);
 
   return (
     <MainContentContainer mt="10">

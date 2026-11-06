@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { HStack, IconButton, Tag } from "@chakra-ui/react";
+import { useAtomValue } from "jotai";
 import React from "react";
 import { Navigate, Route, useParams, useSearchParams } from "react-router-dom";
 
@@ -32,6 +33,7 @@ import {
 import { ClusterHydration } from "./Hydration/ClusterHydration";
 import {
   FRESHNESS_TAB_PATH,
+  freshnessTabSearchAtom,
   HYDRATION_TAB_PATH,
   replicaSearch,
   WORKERS_TAB_PATH,
@@ -39,8 +41,11 @@ import {
 import { REPLICA_SEARCH_PARAM } from "./useSelectedReplica";
 
 // The Metrics, Workers and Hydration tabs share a replica choice, so their
-// links carry it.
-const tabs = (replicaName: string | undefined): Tab[] => [
+// links carry it. The Freshness link carries that tab's own settings.
+const tabs = (
+  replicaName: string | undefined,
+  freshnessSearch: string,
+): Tab[] => [
   { label: "Metrics", href: `..${replicaSearch(replicaName)}`, end: true },
   {
     label: "Workers",
@@ -51,7 +56,7 @@ const tabs = (replicaName: string | undefined): Tab[] => [
     label: "Hydration",
     href: `../${HYDRATION_TAB_PATH}${replicaSearch(replicaName)}`,
   },
-  { label: "Freshness", href: `../${FRESHNESS_TAB_PATH}` },
+  { label: "Freshness", href: `../${FRESHNESS_TAB_PATH}${freshnessSearch}` },
 ];
 
 // The configuration drawer's open section, in the URL so it survives a reload
@@ -148,6 +153,7 @@ export const ClusterPageHeader = () => {
   assert(clusterName);
   const [, setSection] = useConfigurationSection();
   const [searchParams] = useSearchParams();
+  const freshnessSearch = useAtomValue(freshnessTabSearchAtom);
   return (
     <>
       <ClusterTitle
@@ -156,7 +162,10 @@ export const ClusterPageHeader = () => {
         onConfigure={() => setSection("overview")}
       />
       <PageTabStrip
-        tabData={tabs(searchParams.get(REPLICA_SEARCH_PARAM) ?? undefined)}
+        tabData={tabs(
+          searchParams.get(REPLICA_SEARCH_PARAM) ?? undefined,
+          freshnessSearch,
+        )}
       />
     </>
   );
