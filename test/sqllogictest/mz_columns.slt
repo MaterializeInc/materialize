@@ -61,20 +61,14 @@ WHERE types.id IS NULL
 
 # --- Builtins -----------------------------------------------------------------
 
-# A builtin table's columns carry the string NULL default of every table column
-# without one, and no other builtin relation has defaults.
-query TT
-SELECT objects.type, coalesce(columns.default, '<null>')
+# Currently we hardcode NULL for the default of all builtin relations. If this ever
+# changes but we forget to update `mz_builtin_columns`, this assertion catches the regression.
+query B
+SELECT DISTINCT columns.default IS NULL
 FROM mz_catalog.mz_columns columns
-JOIN mz_catalog.mz_objects objects ON objects.id = columns.id
 WHERE columns.id LIKE 's%'
-GROUP BY 1, 2
-ORDER BY 1, 2
 ----
-materialized-view  <null>
-source  <null>
-table  NULL
-view  <null>
+true
 
 # `mz_cluster_replica_sizes`'s column information as well as each column's type.
 # `type` is the pretty-printed version of the type while `type_name` is the name stored in
@@ -399,9 +393,8 @@ ORDER BY columns.position
 a  2
 b  NULL
 
-# A table column without a default, or with a bare DEFAULT NULL, reads as the
-# string NULL, which clients compare against (SQL-839). The
-# PostgreSQL-compatible views map it to no default.
+# A table column without a default, or with a bare DEFAULT NULL, reads as SQL
+# NULL, which the PostgreSQL-compatible views report as no default.
 statement ok
 CREATE TABLE no_default (a int, b int DEFAULT 5, c int DEFAULT NULL)
 
@@ -412,9 +405,9 @@ JOIN mz_catalog.mz_tables tables ON columns.id = tables.id
 WHERE tables.name = 'no_default'
 ORDER BY columns.position
 ----
-a  NULL  false
+a  NULL  true
 b  5  false
-c  NULL  false
+c  NULL  true
 
 query TT
 SELECT attr.attname, attr.atthasdef

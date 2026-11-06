@@ -764,7 +764,7 @@ SELECT * FROM builtin_columns",
             ("type", "The data type of the column."),
             (
                 "default",
-                "The default expression of the column. A table column without one reads as the string `NULL`.",
+                "The default expression of the column, or `NULL` if it has none.",
             ),
             (
                 "type_oid",
