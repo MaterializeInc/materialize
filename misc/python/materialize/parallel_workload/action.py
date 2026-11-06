@@ -6428,12 +6428,9 @@ class SourceReadHoldSweepAction(Action):
 
     PREPARED BUT DISABLED (commented out of read_action_list). Intended for the
     kill scenario, where racing envd/clusterd restarts stresses read-hold
-    reinstatement: the SS-346 class (a dependent's read hold on a source's remap
-    shard not upheld across a restart, so its since advances past the
-    dependent's upper) and PER-49 (a compute import as_of behind the compacted
-    since after ALTER TABLE ADD COLUMN + kill). Enabling it now just re-triggers
-    those known coordinator/compute panics.
-    TODO: enable in read_action_list once SS-346 and PER-49 are fixed."""
+    reinstatement. Enabling it now just re-triggers PER-49 (a compute import
+    as_of behind the compacted since after ALTER TABLE ADD COLUMN + kill).
+    TODO: enable in read_action_list once PER-49 is fixed."""
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -6493,7 +6490,7 @@ read_action_list = ActionList(
         # PREPARED BUT DISABLED (see class docstrings): enabling these now just
         # re-detects known-unfixed coordinator bugs rather than finding new ones.
         # (DependencyConsistencyAction, 5),  # TODO: enable once SQL-521 fixed
-        # (SourceReadHoldSweepAction, 5),  # TODO: enable once SS-346 & PER-49 fixed
+        # (SourceReadHoldSweepAction, 5),  # TODO: enable once PER-49 fixed
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
