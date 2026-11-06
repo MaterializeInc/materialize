@@ -1629,10 +1629,10 @@ describe("ResourceUsage", () => {
     expect(lineCount("CPU by Process")).toEqual(2);
     expect(lineCount("Memory by Process")).toEqual(2);
     const legendLabels = () =>
-      within(drawer)
-        .queryAllByText(/^r1 · process \d+$/)
-        .map((label) => label.textContent);
-    expect(legendLabels()).toEqual(["r1 · process 0", "r1 · process 1"]);
+      within(within(drawer).getByRole("list", { name: "Processes" }))
+        .getAllByRole("listitem")
+        .map((item) => item.textContent);
+    expect(legendLabels()).toEqual(["0", "1"]);
     expect(
       within(drawer).getByText(
         "Check a process to draw its line. Memory is a share of each process's heap limit.",
@@ -1648,7 +1648,7 @@ describe("ResourceUsage", () => {
       within(table).getByRole("checkbox", { name: "Show process 1" }),
     );
     expect(lineCount("CPU by Process")).toEqual(1);
-    expect(legendLabels()).toEqual(["r1 · process 0"]);
+    expect(legendLabels()).toEqual(["0"]);
     expect(showEvery).toBePartiallyChecked();
     await userEvent.click(showEvery);
     expect(lineCount("Memory by Process")).toEqual(2);
@@ -1771,11 +1771,10 @@ describe("ResourceUsage", () => {
         ),
       ).toBeVisible();
       expect(
-        within(drawer)
-          .queryAllByText(/^r1 · process \d+$/)
-          .map((label) => label.textContent),
-      ).toEqual(["r1 · process 0"]);
-      expect(within(drawer).getByText("Other processes")).toBeVisible();
+        within(within(drawer).getByRole("list", { name: "Processes" }))
+          .getAllByRole("listitem")
+          .map((item) => item.textContent),
+      ).toEqual(["0", "other"]);
     });
 
     it("highlights a hovered grey process in a color outside the palette", async () => {

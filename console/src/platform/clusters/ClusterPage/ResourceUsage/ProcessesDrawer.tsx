@@ -449,7 +449,6 @@ const ProcessesPanel = ({
       <Box ref={parentRef} width="100%" minWidth={0}>
         {width > 0 && (
           <ProcessLineCharts
-            replicaName={replica.name}
             width={width}
             startMs={view.startMs}
             endMs={view.endMs}
@@ -477,7 +476,6 @@ const ProcessesPanel = ({
 };
 
 const ProcessLineCharts = ({
-  replicaName,
   width,
   startMs,
   endMs,
@@ -487,7 +485,6 @@ const ProcessLineCharts = ({
   highlightedId,
   memoryLimit,
 }: {
-  replicaName: string;
   width: number;
   startMs: number;
   endMs: number;
@@ -552,7 +549,7 @@ const ProcessLineCharts = ({
       return color
         ? [
             {
-              label: `${replicaName} · process ${id}`,
+              label: id,
               color,
               variant: "line" as const,
             },
@@ -562,7 +559,7 @@ const ProcessLineCharts = ({
     ...(processIds.some((id) => !colorById.has(id))
       ? [
           {
-            label: "Other processes",
+            label: "other",
             color: colors.foreground.tertiary,
             variant: "line" as const,
           },
@@ -580,6 +577,7 @@ const ProcessLineCharts = ({
           title="CPU by Process"
           description="% of each process's CPU allocation"
           legend={legend}
+          legendLabel="Processes"
         />
         <ResourceTimeAxis width={width} xScale={xScale} />
         <ProcessLineChart
@@ -746,6 +744,7 @@ const ProcessLineChart = ({
   title,
   description,
   legend,
+  legendLabel,
   hoverTimeMs,
   onHover,
   onLeave,
@@ -760,6 +759,7 @@ const ProcessLineChart = ({
   title: string;
   description: string;
   legend?: ChartHeaderProps["legend"];
+  legendLabel?: string;
   hoverTimeMs: number | undefined;
   onHover: (
     hover: { timeMs: number; metric: ProcessMetric },
@@ -788,7 +788,12 @@ const ProcessLineChart = ({
   );
 
   return (
-    <ChartFrame title={title} description={description} legend={legend}>
+    <ChartFrame
+      title={title}
+      description={description}
+      legend={legend}
+      legendLabel={legendLabel}
+    >
       <svg {...layout.svgProps} display="block" role="img" aria-label={title}>
         <ProcessLines
           layout={layout}

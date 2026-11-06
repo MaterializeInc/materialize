@@ -276,13 +276,19 @@ export const ChartHeader = ({
   );
 };
 
+export interface ResourceChartHeaderProps extends ChartHeaderProps {
+  /** Names the legend's entries as a group, before the first of them. */
+  legendLabel?: string;
+}
+
 /** A title and a legend, baseline-aligned across the top of a chart. */
 export const ResourceChartHeader = ({
   title,
   description,
   legend,
+  legendLabel,
   action,
-}: ChartHeaderProps) => {
+}: ResourceChartHeaderProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   // Only the title and legend take the pointer, so hovering between them
   // reaches the chart below.
@@ -319,35 +325,50 @@ export const ResourceChartHeader = ({
           {...headerItem}
         >
           {legend && (
-            <Flex
-              as="ul"
-              flexWrap="wrap"
-              justifyContent="flex-end"
-              columnGap={4}
-              rowGap={1}
-              minWidth={0}
-              listStyleType="none"
-            >
-              {legend.map(({ label, color, variant }) => (
-                <FittedLegendItem
-                  key={label}
-                  fixedPx={legendSwatchWidthPx(variant) + LEGEND_SWATCH_GAP_PX}
+            <HStack spacing={2} minWidth={0}>
+              {legendLabel && (
+                <Text
+                  textStyle="text-small"
+                  color={colors.foreground.secondary}
+                  flexShrink={0}
+                  aria-hidden
                 >
-                  <HStack spacing={1.5} minWidth={0}>
-                    <Box flexShrink={0}>
-                      <LegendSwatch color={color} variant={variant} />
-                    </Box>
-                    <Text
-                      textStyle="text-small"
-                      color={colors.foreground.secondary}
-                      {...truncatedLabelProps}
-                    >
-                      {label}
-                    </Text>
-                  </HStack>
-                </FittedLegendItem>
-              ))}
-            </Flex>
+                  {legendLabel}:
+                </Text>
+              )}
+              <Flex
+                as="ul"
+                aria-label={legendLabel}
+                flexWrap="wrap"
+                justifyContent="flex-end"
+                columnGap={4}
+                rowGap={1}
+                minWidth={0}
+                listStyleType="none"
+              >
+                {legend.map(({ label, color, variant }) => (
+                  <FittedLegendItem
+                    key={label}
+                    fixedPx={
+                      legendSwatchWidthPx(variant) + LEGEND_SWATCH_GAP_PX
+                    }
+                  >
+                    <HStack spacing={1.5} minWidth={0}>
+                      <Box flexShrink={0}>
+                        <LegendSwatch color={color} variant={variant} />
+                      </Box>
+                      <Text
+                        textStyle="text-small"
+                        color={colors.foreground.secondary}
+                        {...truncatedLabelProps}
+                      >
+                        {label}
+                      </Text>
+                    </HStack>
+                  </FittedLegendItem>
+                ))}
+              </Flex>
+            </HStack>
           )}
           {action}
         </Flex>
@@ -356,7 +377,7 @@ export const ResourceChartHeader = ({
   );
 };
 
-export interface ChartFrameProps extends ChartHeaderProps {
+export interface ChartFrameProps extends ResourceChartHeaderProps {
   /**
    * Leaves room above the chart for the header. Without it, the header floats
    * over the chart's headroom.
