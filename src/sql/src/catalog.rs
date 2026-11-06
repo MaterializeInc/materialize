@@ -1578,6 +1578,7 @@ pub enum ObjectType {
     Table,
     View,
     MaterializedView,
+    Assertion,
     Source,
     Sink,
     MetricSink,
@@ -1601,6 +1602,8 @@ impl ObjectType {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
+            // An assertion's violations collection is a queryable relation.
+            | ObjectType::Assertion
             | ObjectType::Source => true,
             ObjectType::Sink
             | ObjectType::MetricSink
@@ -1625,6 +1628,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Table => ObjectType::Table,
             mz_sql_parser::ast::ObjectType::View => ObjectType::View,
             mz_sql_parser::ast::ObjectType::MaterializedView => ObjectType::MaterializedView,
+            mz_sql_parser::ast::ObjectType::Assertion => ObjectType::Assertion,
             mz_sql_parser::ast::ObjectType::Source => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Subsource => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
@@ -1674,6 +1678,7 @@ impl Display for ObjectType {
             ObjectType::Table => "TABLE",
             ObjectType::View => "VIEW",
             ObjectType::MaterializedView => "MATERIALIZED VIEW",
+            ObjectType::Assertion => "ASSERTION",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
             ObjectType::MetricSink => "METRIC SINK",

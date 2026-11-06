@@ -1050,6 +1050,9 @@ impl ExecuteResponse {
             CreateTable => &[CreatedTable],
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
+            // Prototype: CREATE ASSERTION is rejected at sequence time and never
+            // produces a success response.
+            CreateAssertion => &[],
             CreateIndex => &[CreatedIndex],
             CreateMetricSink => &[CreatedMetricSink],
             CreateType => &[CreatedType],

@@ -2148,6 +2148,9 @@ impl<'a> Parser<'a> {
         {
             self.parse_create_materialized_view()
                 .map_parser_err(StatementKind::CreateMaterializedView)
+        } else if self.peek_keyword(ASSERTION) {
+            self.parse_create_assertion()
+                .map_parser_err(StatementKind::CreateAssertion)
         } else if self.peek_keywords(&[USER]) {
             parser_err!(
                 self,
@@ -4284,6 +4287,45 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    fn parse_create_assertion(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(ASSERTION)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_item_name()?;
+        let in_cluster = if self.parse_keywords(&[IN, CLUSTER]) {
+            Some(self.parse_raw_ident()?)
+        } else {
+            None
+        };
+        let definition = self.parse_assertion_definition()?;
+        Ok(Statement::CreateAssertion(CreateAssertionStatement {
+            if_not_exists,
+            name,
+            in_cluster,
+            definition,
+        }))
+    }
+
+    fn parse_assertion_definition(&mut self) -> Result<AssertionDefinition<Raw>, ParserError> {
+        if self.parse_keyword(ON) {
+            let on = self.parse_raw_name()?;
+            self.expect_keyword(CHECK)?;
+            self.expect_token(&Token::LParen)?;
+            let check = self.parse_expr()?;
+            self.expect_token(&Token::RParen)?;
+            Ok(AssertionDefinition::OnCheck { on, check })
+        } else if self.parse_keyword(CHECK) {
+            self.expect_token(&Token::LParen)?;
+            let check = self.parse_expr()?;
+            self.expect_token(&Token::RParen)?;
+            Ok(AssertionDefinition::Check(check))
+        } else if self.parse_keyword(AS) {
+            let query = self.parse_query()?;
+            Ok(AssertionDefinition::Query(query))
+        } else {
+            self.expected(self.peek_pos(), "ON, CHECK, or AS", self.peek_token())
+        }
+    }
+
     fn parse_materialized_view_option_name(
         &mut self,
     ) -> Result<MaterializedViewOptionName, ParserError> {
@@ -5125,6 +5167,7 @@ impl<'a> Parser<'a> {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
+            | ObjectType::Assertion
             | ObjectType::Source
             | ObjectType::Sink
             | ObjectType::MetricSink
@@ -6029,7 +6072,11 @@ impl<'a> Parser<'a> {
             // Metric sinks are adapter-created and not a user surface, so they deliberately
             // support no ALTER at all, `RENAME TO` and `OWNER TO` included. REASSIGN OWNED
             // works off object ids and is unaffected.
-            ObjectType::Func | ObjectType::Subsource | ObjectType::MetricSink => parser_err!(
+            // Assertions support no ALTER in Phase 1 (DROP + recreate instead).
+            ObjectType::Func
+            | ObjectType::Subsource
+            | ObjectType::MetricSink
+            | ObjectType::Assertion => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
@@ -6776,7 +6823,8 @@ impl<'a> Parser<'a> {
             ObjectType::Table => &[SET, RENAME, OWNER, RESET, ADD],
             ObjectType::MaterializedView => &[SET, RENAME, OWNER, RESET, APPLY],
             ObjectType::View => &[SET, RENAME, OWNER, RESET],
-            ObjectType::Source
+            ObjectType::Assertion
+            | ObjectType::Source
             | ObjectType::Sink
             | ObjectType::MetricSink
             | ObjectType::Index
@@ -7622,6 +7670,7 @@ impl<'a> Parser<'a> {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
+            | ObjectType::Assertion
             | ObjectType::Source
             | ObjectType::Subsource
             | ObjectType::Sink
@@ -8454,7 +8503,10 @@ impl<'a> Parser<'a> {
                         on_object,
                     }
                 }
-                ObjectType::Func => {
+                // SHOW ASSERTIONS is deferred to Phase 2; `parse_plural_object_type`
+                // does not yet produce `Assertion`, so this arm is currently
+                // unreachable but keeps the match exhaustive.
+                ObjectType::Func | ObjectType::Assertion => {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
@@ -10044,7 +10096,10 @@ impl<'a> Parser<'a> {
             | ObjectType::ClusterReplica
             | ObjectType::Role
             | ObjectType::Func
-            | ObjectType::Subsource => {
+            | ObjectType::Subsource
+            // Fine-grained GRANT/REVOKE on assertions is deferred to Phase 3
+            // (Phase 1 is owner + superuser only).
+            | ObjectType::Assertion => {
                 parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -10069,6 +10124,7 @@ impl<'a> Parser<'a> {
                 TABLE,
                 VIEW,
                 MATERIALIZED,
+                ASSERTION,
                 SOURCE,
                 SINK,
                 METRIC,
@@ -10093,6 +10149,7 @@ impl<'a> Parser<'a> {
                     }
                     ObjectType::MaterializedView
                 }
+                ASSERTION => ObjectType::Assertion,
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
                 METRIC => {
@@ -10136,6 +10193,7 @@ impl<'a> Parser<'a> {
                 TABLE,
                 VIEW,
                 MATERIALIZED,
+                ASSERTION,
                 SOURCE,
                 SINK,
                 METRIC,
@@ -10161,6 +10219,7 @@ impl<'a> Parser<'a> {
                         return None;
                     }
                 }
+                ASSERTION => ObjectType::Assertion,
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
                 METRIC => {

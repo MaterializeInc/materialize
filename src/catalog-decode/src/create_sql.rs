@@ -255,6 +255,15 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
 
             "materialized-view"
         }
+        CreateAssertion(stmt) => {
+            let Some(in_cluster) = stmt.in_cluster else {
+                return Err("missing IN CLUSTER".into());
+            };
+            let cluster_id = cluster_id(in_cluster)?;
+            info.insert("cluster_id", json!(cluster_id));
+            info.insert("definition", json!(stmt.definition.to_ast_string_stable()));
+            "assertion"
+        }
         CreateTable(stmt) => {
             insert_retain_history(
                 &mut info,

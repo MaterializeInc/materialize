@@ -276,6 +276,11 @@ impl Coordinator {
                     self.sequence_create_materialized_view(ctx, plan, resolved_ids)
                         .await;
                 }
+                Plan::CreateAssertion(_plan) => {
+                    // Prototype: planning/parsing exists, but execution is not
+                    // wired up yet. Reject at sequence time.
+                    ctx.retire(Err(AdapterError::Unsupported("CREATE ASSERTION")));
+                }
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
                 }

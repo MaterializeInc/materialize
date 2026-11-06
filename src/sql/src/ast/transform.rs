@@ -18,7 +18,8 @@ use mz_sql_parser::ast::CreateTableFromSourceStatement;
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
-    AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    AssertionDefinition, AstInfo, CreateAssertionStatement, CreateConnectionStatement,
+    CreateIndexStatement, CreateMaterializedViewStatement,
     CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
     CreateSubsourceStatement, CreateTableStatement, CreateViewStatement,
     CreateWebhookSourceStatement, Expr, Ident, Query, Raw, RawDataType, RawItemName, Statement,
@@ -45,6 +46,7 @@ pub fn create_stmt_rename_schema_refs(
         | stmt @ Statement::CreateMetricSink(_)
         | stmt @ Statement::CreateView(_)
         | stmt @ Statement::CreateMaterializedView(_)
+        | stmt @ Statement::CreateAssertion(_)
         | stmt @ Statement::CreateTable(_)
         | stmt @ Statement::CreateTableFromSource(_)
         | stmt @ Statement::CreateIndex(_)
@@ -172,6 +174,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
             ..
         })
         | Statement::CreateMaterializedView(CreateMaterializedViewStatement { name, .. })
+        | Statement::CreateAssertion(CreateAssertionStatement { name, .. })
         | Statement::CreateTable(CreateTableStatement { name, .. })
         | Statement::CreateTableFromSource(CreateTableFromSourceStatement { name, .. })
         | Statement::CreateSecret(CreateSecretStatement { name, .. })
@@ -244,6 +247,18 @@ pub fn create_stmt_rename_refs(
                 maybe_update_item_name(target.name_mut());
             }
             rewrite_query(from_name, to_item_name, query)?;
+        }
+        Statement::CreateAssertion(CreateAssertionStatement { definition, .. }) => {
+            // TODO(create-assertion, Phase 2): rewrite item references inside a
+            // CHECK predicate's subqueries, and the general CHECK / AS <query>
+            // forms. Phase 1 handles the `ON <rel>` reference, which is the only
+            // reference a simple row-predicate assertion carries.
+            match definition {
+                AssertionDefinition::OnCheck { on, check: _ } => {
+                    maybe_update_item_name(on.name_mut());
+                }
+                AssertionDefinition::Check(_) | AssertionDefinition::Query(_) => {}
+            }
         }
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)

@@ -754,6 +754,35 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateAssertion(plan::CreateAssertionPlan {
+            name,
+            assertion,
+            if_not_exists: _,
+        }) => {
+            // Creating an assertion requires CREATE on the containing schema,
+            // CREATE on the target cluster, and SELECT on every referenced
+            // relation (the assertion reads those relations to maintain its
+            // violations collection).
+            let mut privileges = vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                (
+                    SystemObjectId::Object(assertion.cluster_id.into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+            ];
+            let items = assertion.dependencies.0.iter().copied();
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
+            RbacRequirements {
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,
@@ -1975,6 +2004,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Table) => TABLE_ACL_MODE,
         SystemObjectType::Object(ObjectType::View) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::MaterializedView) => AclMode::SELECT,
+        SystemObjectType::Object(ObjectType::Assertion) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
@@ -2006,6 +2036,7 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
+        | ObjectType::Assertion
         | ObjectType::Source => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink

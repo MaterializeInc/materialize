@@ -1769,6 +1769,11 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            // Prototype: CREATE ASSERTION is rejected at sequence time, so an
+            // assertion is never created and never produces an audit event.
+            mz_sql::catalog::ObjectType::Assertion => {
+                unreachable!("CREATE ASSERTION is not supported; no Assertion is ever audit-logged")
+            }
         },
         SystemObjectType::System => ObjectType::System,
     }

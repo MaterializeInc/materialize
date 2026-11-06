@@ -46,6 +46,7 @@ use mz_repr::{
 };
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
+    AssertionDefinition, CreateAssertionStatement,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
     AlterMaterializedViewApplyReplacementStatement, AlterNetworkPolicyStatement,
     AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
@@ -151,6 +152,7 @@ use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     AlterClusterPlan, AlterClusterPlanStrategy, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
+    Assertion, CreateAssertionPlan,
     AlterMaterializedViewApplyReplacementPlan, AlterNetworkPolicyPlan, AlterNoopPlan,
     AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
     AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
@@ -2825,6 +2827,13 @@ pub fn describe_create_materialized_view(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_create_assertion(
+    _: &StatementContext,
+    _: CreateAssertionStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn describe_create_network_policy(
     _: &StatementContext,
     _: CreateNetworkPolicyStatement<Aug>,
@@ -3216,6 +3225,136 @@ pub fn plan_create_materialized_view(
         drop_ids,
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
+    }))
+}
+
+/// Plans a `CREATE ASSERTION`.
+///
+/// Phase 1 supports the single-relation `ON <rel> CHECK (<predicate>)` form,
+/// which desugars to the violations query `SELECT * FROM <rel> WHERE NOT
+/// (<predicate>)` and is then planned exactly like a materialized view: the
+/// maintained collection is the set of *violating* rows. The general
+/// `CHECK (...)` and `AS <query>` forms parse but are not yet planned (Phase 2).
+/// See the "CREATE ASSERTION for Materialize" design doc.
+pub fn plan_create_assertion(
+    scx: &StatementContext,
+    mut stmt: CreateAssertionStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_CREATE_ASSERTION)?;
+
+    // Resolve the cluster the assertion's dataflow will run on. Like a
+    // materialized view, an assertion is a maintained dataflow with real cost,
+    // so a concrete cluster is always recorded in `create_sql`.
+    let cluster_id = match &stmt.in_cluster {
+        None => scx.catalog.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    };
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateAssertion(stmt.clone()))?;
+
+    let CreateAssertionStatement {
+        if_not_exists,
+        name,
+        in_cluster: _,
+        definition,
+    } = stmt;
+
+    // Desugar the definition into the "violations" query. Phase 1 only handles
+    // the `ON <rel> CHECK (<predicate>)` form. `WHERE NOT (<predicate>)` yields
+    // Postgres CHECK semantics for free: `WHERE` keeps only TRUE rows, and
+    // `NOT(pred)` is TRUE exactly when `pred` is FALSE, so a row violates only
+    // when the predicate is false (NULL passes).
+    let violations_query = match definition {
+        AssertionDefinition::OnCheck { on, check } => {
+            let select = ast::Select {
+                distinct: None,
+                projection: vec![ast::SelectItem::Wildcard],
+                from: vec![ast::TableWithJoins {
+                    relation: ast::TableFactor::Table { name: on, alias: None },
+                    joins: vec![],
+                }],
+                selection: Some(Expr::Not {
+                    expr: Box::new(check),
+                }),
+                group_by: vec![],
+                having: None,
+                qualify: None,
+                options: vec![],
+            };
+            ast::Query {
+                ctes: ast::CteBlock::Simple(vec![]),
+                body: ast::SetExpr::Select(Box::new(select)),
+                order_by: vec![],
+                limit: None,
+                offset: None,
+            }
+        }
+        AssertionDefinition::Check(_) | AssertionDefinition::Query(_) => {
+            // TODO(create-assertion, Phase 2): plan the general `CHECK (...)`
+            // (e.g. `NOT EXISTS (...)`) and `AS <query>` forms.
+            sql_bail!(
+                "general CHECK (...) and AS <query> assertion forms are not yet supported \
+                 (Phase 1 supports ON <rel> CHECK (<predicate>))"
+            );
+        }
+    };
+
+    let query::PlannedRootQuery {
+        expr,
+        desc,
+        finishing,
+        scope: _,
+    } = query::plan_root_query(scx, violations_query, QueryLifetime::MaterializedView)?;
+    // We get back a trivial finishing, see comment in `plan_view`.
+    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+        &finishing,
+        expr.arity()
+    ));
+    if expr.contains_parameters()? {
+        return Err(PlanError::ParameterNotAllowed("assertions".to_string()));
+    }
+
+    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+
+    let dependencies: BTreeSet<_> = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
+    validate_view_dependencies(scx, &dependencies)?;
+
+    let partial_name = normalize::unresolved_item_name(name)?;
+    let name = scx.allocate_qualified_name(partial_name)?;
+
+    // For PostgreSQL compatibility, prevent creating an assertion when there is
+    // an existing object or type of the same name (unless IF NOT EXISTS).
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if !if_not_exists
+        && let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name)
+    {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    Ok(Plan::CreateAssertion(CreateAssertionPlan {
+        name,
+        assertion: Assertion {
+            create_sql,
+            expr,
+            dependencies: DependencyIds(dependencies),
+            column_names,
+            cluster_id,
+            target_replica: None,
+            compaction_window: None,
+        },
+        if_not_exists,
     }))
 }
 
@@ -6243,6 +6382,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
+        | ObjectType::Assertion
         | ObjectType::Source
         | ObjectType::Sink
         | ObjectType::MetricSink
@@ -7044,7 +7184,13 @@ pub fn plan_alter_item_set_cluster(
     // Prevent access to `SET CLUSTER` for unsupported objects.
     match object_type {
         ObjectType::MaterializedView => {}
-        ObjectType::Index | ObjectType::Sink | ObjectType::MetricSink | ObjectType::Source => {
+        // Assertions have an associated cluster, but ALTER ... SET CLUSTER is
+        // not wired for them in Phase 1 (the parser rejects ALTER ASSERTION).
+        ObjectType::Index
+        | ObjectType::Sink
+        | ObjectType::MetricSink
+        | ObjectType::Assertion
+        | ObjectType::Source => {
             bail_unsupported!(29606, format!("ALTER {object_type} SET CLUSTER"))
         }
         ObjectType::Table
@@ -7490,6 +7636,7 @@ pub fn plan_alter_object_swap(
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
+            | ObjectType::Assertion
             | ObjectType::Source
             | ObjectType::Sink
             | ObjectType::MetricSink
@@ -8583,6 +8730,7 @@ pub(crate) fn resolve_item_or_type<'a>(
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
+        | ObjectType::Assertion
         | ObjectType::Source
         | ObjectType::Sink
         | ObjectType::MetricSink

@@ -262,6 +262,12 @@ impl RustType<proto::ObjectType> for ObjectType {
             ObjectType::Func => proto::ObjectType::Func,
             ObjectType::NetworkPolicy => proto::ObjectType::NetworkPolicy,
             ObjectType::MetricSink => proto::ObjectType::MetricSink,
+            // CREATE ASSERTION is a stubbed prototype (it bails at sequence
+            // time), so an Assertion object is never created or durably
+            // serialized and there is no proto value for it yet.
+            ObjectType::Assertion => {
+                unreachable!("CREATE ASSERTION is not supported; no Assertion is ever persisted")
+            }
         }
     }
 

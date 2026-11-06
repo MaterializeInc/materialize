@@ -90,6 +90,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CreateTable(_)
         | Plan::CreateView(_)
         | Plan::CreateMaterializedView(_)
+        | Plan::CreateAssertion(_)
         | Plan::CreateIndex(_)
         | Plan::CreateMetricSink(_)
         | Plan::CreateType(_)
