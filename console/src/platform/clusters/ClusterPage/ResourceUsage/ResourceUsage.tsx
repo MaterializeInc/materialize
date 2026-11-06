@@ -449,11 +449,8 @@ interface ResourceUsageContentProps {
   unhydratedObjectCounts: Map<string, number> | undefined;
   missingUsage: MissingUsageCause;
   isDdlError: boolean;
-  /**
-   * The replica toggles. In the CPU chart's header, or above the message
-   * explaining why there's no chart.
-   */
-  cpuHeaderAction?: React.ReactNode;
+  /** In the CPU chart's header, or above the message explaining why there's no chart. */
+  replicaToggles?: React.ReactNode;
   isStatusLoading: boolean;
   isStatusError: boolean;
   isHydrationError: boolean;
@@ -481,7 +478,7 @@ const ResourceUsageContent = ({
   isStatusLoading,
   isStatusError,
   isHydrationError,
-  cpuHeaderAction,
+  replicaToggles,
 }: ResourceUsageContentProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { tooltipData, tooltipLeft, tooltipTop, showTooltip, hideTooltip } =
@@ -584,7 +581,7 @@ const ResourceUsageContent = ({
       <VStack spacing={0} alignItems="stretch" position="relative">
         {hasUsage ? (
           <>
-            <CpuChart {...plotProps} headerAction={cpuHeaderAction} />
+            <CpuChart {...plotProps} headerAction={replicaToggles} />
             <ResourceTimeAxis width={width} xScale={xScale} />
             <MemoryChart
               {...plotProps}
@@ -595,8 +592,8 @@ const ResourceUsageContent = ({
           </>
         ) : (
           <VStack spacing={2} alignItems="stretch" pb={4}>
-            {cpuHeaderAction && (
-              <Flex justifyContent="flex-end">{cpuHeaderAction}</Flex>
+            {replicaToggles && (
+              <Flex justifyContent="flex-end">{replicaToggles}</Flex>
             )}
             <MissingUsageMessage
               cause={missingUsage}
@@ -999,7 +996,7 @@ export const ResourceUsage = ({
             isStatusLoading={isStatusLoading}
             isStatusError={isStatusError}
             isHydrationError={isHydrationError}
-            cpuHeaderAction={
+            replicaToggles={
               selectedReplicaId === undefined && (
                 <ReplicaToggles
                   currentGroups={currentGroups}
