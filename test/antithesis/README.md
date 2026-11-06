@@ -237,7 +237,10 @@ Concrete counterexamples remain in `product_candidates` when invalid or missing
 harness evidence prevents product attribution. Without an event export the verdict
 is inconclusive, because harness errors are SDK events rather than product
 assertions. A truncated export or a filter that omits relevant health events
-cannot establish a complete run assessment.
+cannot establish a complete run assessment. Invariants that Materialize processes
+evaluate themselves (panics, halts, soft assertions and persist diagnoses) do not
+depend on workload bookkeeping, so they become product failures even when harness
+evidence is invalid or missing. The other reasons remain listed.
 
 Native halt exits are accepted only when complete, termination-correlated evidence
 explains every reported occurrence using the reviewed product policy. The workload

@@ -1702,16 +1702,24 @@ class Recovery:
         ][-5:]
 
     def no_crash_loop(self) -> tuple[bool, Any]:
-        """No container crash-looped in the last `CRASHLOOP_WINDOW_S`, once
+        """No live container crashed in the last `CRASHLOOP_WINDOW_S`, once
         the sampler has covered that long."""
         with self.restarts_lock:
             covered = self.restarts.covered(CRASHLOOP_WINDOW_S)
-            loops = self.restarts.loops(CRASHLOOP_WINDOW_S)
+            crashed = self.restarts.crashed(CRASHLOOP_WINDOW_S)
         if not covered:
             return False, {"waiting_for_coverage_s": CRASHLOOP_WINDOW_S}
+        return not crashed, {"crashed_in_window": crashed}
+
+    def crash_loops(self) -> tuple[bool, Any]:
+        """No container crash-looped in any `CRASHLOOP_WINDOW_S` window ending
+        within the last `CRASHLOOP_WINDOW_S`, once the sampler has covered both."""
+        with self.restarts_lock:
+            covered = self.restarts.covered(2 * CRASHLOOP_WINDOW_S)
+            loops = self.restarts.loops(CRASHLOOP_WINDOW_S, span_s=CRASHLOOP_WINDOW_S)
         for name, info in loops.items():
             info["exit_log"] = self.exit_log_lines(name)
-        return not loops, {"crash_loops": loops}
+        return covered and not loops, {"covered": covered, "crash_loops": loops}
 
     def retry_ledger(self) -> None:
         families = self.db.execute(
@@ -2025,11 +2033,17 @@ class Recovery:
             started = self.restarts.started
         sampled_s = time.monotonic() - started if started is not None else 0.0
         coverage_wait = max(0.0, CRASHLOOP_WINDOW_S - sampled_s)
+        # A loop of at most one window crashes in every window, so a pass needs
+        # a crash-free window, not just one below the loop threshold. `poll`
+        # passes at the first such sample. A single crash late in the budget is
+        # not a loop, which the two-crash definition decides once it runs out.
         ok, info, took = poll(
             coverage_wait + CRASHLOOP_WINDOW_S * WEDGE_FACTOR,
             self.no_crash_loop,
             "crash loop",
         )
+        if not ok:
+            ok, info = self.crash_loops()
         took = max(0.0, took - coverage_wait)
         self.sampling_done.set()
         always(

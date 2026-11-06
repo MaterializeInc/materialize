@@ -17,8 +17,10 @@ retags every image to a common tag.
 The upgrade scenario also needs environmentd and clusterd at the release the
 environment starts on. The published release images seed AWS-LC from CPU
 jitter, which aborts on Antithesis's deterministic CPU, so `build_upgrade_base`
-rebuilds them from the release tag with `rustc_flags.antithesis_env`. They carry
-no coverage instrumentation: the release tag has no Antithesis flavor.
+rebuilds them from the release tag with `rustc_flags.antithesis_env`. A release
+cut before the Antithesis flavor existed gets only the halt recorder patched in
+and carries no coverage instrumentation. A later release builds its own
+Antithesis flavor, which records halts itself.
 
 `python -m materialize.antithesis.images --registry R --commit C` acquires the
 images, pushes them to `R/<name>:<target_tag(C)>`, and prints the references as
@@ -104,10 +106,25 @@ def upgrade_base_patch_digest() -> str:
     return hashlib.sha256("\0".join(sources).encode()).hexdigest()[:16]
 
 
-def patch_upgrade_base_halt_proof(worktree: Path) -> None:
-    """Add only the halt recorder to the freshly checked-out release source."""
+def _halt_macro_records(source: str) -> bool:
+    parts = source.split("macro_rules! halt {")
+    if len(parts) != 2:
+        return False
+    macro = parts[1].split("\n}", 1)[0]
+    return "$crate::process::record_halt(" in macro and "pub fn record_halt(" in source
+
+
+def patch_upgrade_base_halt_proof(worktree: Path) -> bool:
+    """Add only the halt recorder to the freshly checked-out release source.
+
+    Returns False, leaving the source unchanged, for a release whose `halt!`
+    already records halts. Its recorder is active only in its own Antithesis
+    flavor.
+    """
     path = worktree / "src" / "ore" / "src" / "process.rs"
     original = path.read_text()
+    if UPGRADE_BASE_ORIGINAL_HALT not in original and _halt_macro_records(original):
+        return False
     if (
         original.count(UPGRADE_BASE_ORIGINAL_HALT) != 1
         or "pub fn record_halt(" in original
@@ -117,6 +134,7 @@ def patch_upgrade_base_halt_proof(worktree: Path) -> None:
     path.write_text(
         recorded + "\n" + UPGRADE_BASE_RECORDER % HALT_EVIDENCE_SOURCE.read_text()
     )
+    return True
 
 
 def acquire(root: Path, arch: Arch = Arch.host()) -> dict[str, str]:
@@ -190,7 +208,7 @@ def build_upgrade_base(
         ["git", "worktree", "add", "--detach", str(worktree), str(version)],
         cwd=MZ_ROOT,
     )
-    patch_upgrade_base_halt_proof(worktree)
+    patched = patch_upgrade_base_halt_proof(worktree)
     proof_label = (
         f"LABEL io.materialize.antithesis.halt-proof={upgrade_base_patch_digest()}"
     )
@@ -210,6 +228,8 @@ def build_upgrade_base(
         # own root, and sharing the directory would overwrite this checkout's.
         "CARGO_TARGET_DIR": str(worktree / "target-xcompile"),
     }
+    if not patched:
+        env["CI_ANTITHESIS"] = "1"
     specs = {}
     for name in UPGRADE_BASE_IMAGES:
         spawn.runv(
