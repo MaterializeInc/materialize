@@ -8,8 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import {
-  infiniteQueryOptions,
-  useInfiniteQuery,
+  queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
@@ -77,42 +76,45 @@ const retryTransientErrors = (failureCount: number, error: unknown) => {
  */
 const TICKETS_STALE_TIME_MS = 60_000;
 
-/**
- * How many empty pages in a row to skip before returning one anyway, so a
- * long run of hidden tickets can't keep a request going indefinitely.
- */
-const MAX_EMPTY_PAGES = 5;
+/** The most tickets the global API returns in one page. */
+const TICKETS_PAGE_SIZE = 50;
 
 /**
- * The signed-in user's tickets, a page at a time. Shared by the page and by
- * the nav item, which prefetches it.
+ * How many pages to load at most, so a user with a very long history can't
+ * run up Intercom calls. The API returns the most recently updated first.
+ */
+const MAX_TICKET_PAGES = 10;
+
+export type SupportTicketList = {
+  tickets: SupportTicket[];
+  /** More tickets exist than were loaded (see `MAX_TICKET_PAGES`). */
+  isTruncated: boolean;
+};
+
+/**
+ * All of the signed-in user's tickets, so the table can filter and page
+ * through them. Shared by the page and by the nav item, which prefetches it.
  *
  * The global API hides internal and unshared tickets after searching, so a
- * page can come back empty while there are more pages. Empty pages are
- * skipped here, so each page has tickets to show, unless it's the last one.
+ * page can come back with fewer tickets, or none, while there are more pages.
  */
 export const supportTicketsQueryOptions = (owner: TicketOwner) =>
-  infiniteQueryOptions({
+  queryOptions({
     queryKey: supportTicketQueryKeys.list(owner),
-    queryFn: async ({ pageParam, signal }) => {
-      let { data } = await listSupportTickets(
-        { cursor: pageParam },
-        { signal },
-      );
-      for (
-        let skipped = 0;
-        data.data.length === 0 && data.nextCursor && skipped < MAX_EMPTY_PAGES;
-        skipped++
-      ) {
-        ({ data } = await listSupportTickets(
-          { cursor: data.nextCursor },
+    queryFn: async ({ signal }): Promise<SupportTicketList> => {
+      const tickets: SupportTicket[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < MAX_TICKET_PAGES; page++) {
+        const { data } = await listSupportTickets(
+          { cursor, limit: TICKETS_PAGE_SIZE },
           { signal },
-        ));
+        );
+        tickets.push(...data.data);
+        cursor = data.nextCursor ?? undefined;
+        if (!cursor) return { tickets, isTruncated: false };
       }
-      return data;
+      return { tickets, isTruncated: true };
     },
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     retry: retryTransientErrors,
     staleTime: TICKETS_STALE_TIME_MS,
   });
@@ -123,7 +125,7 @@ export const supportTicketsQueryOptions = (owner: TicketOwner) =>
  * deployed.
  */
 export function useSupportTickets() {
-  return useInfiniteQuery(supportTicketsQueryOptions(useTicketOwner()));
+  return useQuery(supportTicketsQueryOptions(useTicketOwner()));
 }
 
 export function useSupportTicket(ticketId: string | null) {
@@ -153,9 +155,7 @@ export function useListedSupportTicket(
   const list = queryClient.getQueryData(
     supportTicketsQueryOptions(owner).queryKey,
   );
-  return list?.pages
-    .flatMap((page) => page.data)
-    .find((ticket) => ticket.id === ticketId);
+  return list?.tickets.find((ticket) => ticket.id === ticketId);
 }
 
 export function useCreateSupportTicket() {
@@ -171,17 +171,11 @@ export function useCreateSupportTicket() {
       // Intercom's ticket search takes a few seconds to include a new ticket,
       // so a refetch now would come back without it. Add it to the loaded
       // list instead, and refetch the next time the list is used.
-      queryClient.setQueryData(queryKey, (list) => {
-        if (!list) return list;
-        const [first, ...rest] = list.pages;
-        if (!first || first.data.some(({ id }) => id === ticket.id)) {
-          return list;
-        }
-        return {
-          ...list,
-          pages: [{ ...first, data: [ticket, ...first.data] }, ...rest],
-        };
-      });
+      queryClient.setQueryData(queryKey, (list) =>
+        !list || list.tickets.some(({ id }) => id === ticket.id)
+          ? list
+          : { ...list, tickets: [ticket, ...list.tickets] },
+      );
       return queryClient.invalidateQueries({ queryKey, refetchType: "none" });
     },
   });

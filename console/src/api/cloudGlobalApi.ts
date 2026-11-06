@@ -253,14 +253,19 @@ export async function issueIntercomJwt(
 }
 
 export async function listSupportTickets(
-  { cursor }: { cursor?: string } = {},
+  { cursor, limit }: { cursor?: string; limit?: number } = {},
   requestOptions: OpenApiRequestOptions = {},
 ) {
   const { headers, ...options } = requestOptions;
   const { data, response } = await getClient().GET(
     "/api/organization/support/tickets",
     {
-      params: { query: cursor ? { cursor } : {} },
+      params: {
+        query: {
+          ...(cursor ? { cursor } : {}),
+          ...(limit ? { limit } : {}),
+        },
+      },
       signal: requestOptions?.signal,
       headers,
       ...options,

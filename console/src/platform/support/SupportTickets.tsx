@@ -21,22 +21,25 @@ import {
   Text,
   Tooltip,
   useTheme,
+  VisuallyHidden,
+  VisuallyHiddenInput,
   VStack,
 } from "@chakra-ui/react";
 import { createColumnHelper, FilterFn } from "@tanstack/react-table";
 import React from "react";
-import ReactSelect from "react-select";
+import { Link as RouterLink } from "react-router-dom";
 
 import { SupportTicket } from "~/api/cloudGlobalApi";
 import { Alert } from "~/components/Alert";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import { Modal } from "~/components/Modal";
-import { DropdownIndicator, Option } from "~/components/reactSelectComponents";
+import { TablePagination } from "~/components/Table/TablePagination";
 import { UniversalTable } from "~/components/Table/UniversalTable";
 import { useUniversalTable } from "~/components/Table/useUniversalTable";
 import TextLink from "~/components/TextLink";
 import { HELP_CENTER_TICKETS_URL } from "~/externalUrls";
-import { buildReactSelectFilterStyles, MaterializeTheme } from "~/theme";
+import { supportTicketPath } from "~/platform/routeHelpers";
+import { MaterializeTheme } from "~/theme";
 import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
@@ -121,10 +124,13 @@ export const RelativeTime = ({
 type StatusFilter = "open" | "resolved";
 
 const STATUS_FILTER_OPTIONS: { id: StatusFilter | "all"; label: string }[] = [
-  { id: "all", label: "All tickets" },
   { id: "open", label: "Open" },
   { id: "resolved", label: "Resolved" },
+  { id: "all", label: "All tickets" },
 ];
+
+/** Tickets shown per page of the table. */
+const TICKETS_PER_PAGE = 10;
 
 const statusFilter: FilterFn<SupportTicket> = (row, _columnId, value) =>
   value === "resolved" ? isResolved(row.original) : !isResolved(row.original);
@@ -135,17 +141,17 @@ const TicketTitleCell = ({ ticket }: { ticket: SupportTicket }) => {
   const { colors } = useTheme<MaterializeTheme>();
   return (
     <VStack spacing="0" align="start" py="1">
-      {/* A button so the row can be reached with the keyboard. Its click
-          bubbles up to the row, which opens the ticket. */}
-      <Button
-        variant="link"
-        color={colors.foreground.primary}
+      {/* A link, so it reads as clickable, can be reached with the keyboard
+          and opened in a new tab. The row opens the same ticket, so the
+          link's click doesn't also reach the row. */}
+      <TextLink
+        as={RouterLink}
+        to={supportTicketPath(ticket.id)}
         fontWeight="500"
-        textAlign="left"
-        whiteSpace="normal"
+        onClick={(event: React.MouseEvent) => event.stopPropagation()}
       >
         {ticket.title}
-      </Button>
+      </TextLink>
       {ticket.number && (
         <Text textStyle="text-small" color={colors.foreground.secondary}>
           #{ticket.number}
@@ -189,6 +195,7 @@ const columns = [
   }),
 ];
 
+/** Open, Resolved or All tickets, as a row of radio buttons. */
 const TicketStatusFilter = ({
   value,
   onChange,
@@ -196,32 +203,59 @@ const TicketStatusFilter = ({
   value: StatusFilter | undefined;
   onChange: (value: StatusFilter | undefined) => void;
 }) => {
-  const { colors, shadows } = useTheme<MaterializeTheme>();
-  type FilterOption = (typeof STATUS_FILTER_OPTIONS)[number];
+  const { colors } = useTheme<MaterializeTheme>();
+  const selected = value ?? "all";
   return (
-    <ReactSelect<FilterOption, false>
-      aria-label="Filter tickets by status"
-      components={{ Option, DropdownIndicator }}
-      isMulti={false}
-      isSearchable={false}
-      getOptionValue={(option) => option.id}
-      options={STATUS_FILTER_OPTIONS}
-      value={
-        STATUS_FILTER_OPTIONS.find((option) => option.id === value) ??
-        STATUS_FILTER_OPTIONS[0]
-      }
-      onChange={(option) =>
-        onChange(
-          !option || option.id === "all"
-            ? undefined
-            : (option.id as StatusFilter),
-        )
-      }
-      styles={buildReactSelectFilterStyles<FilterOption, false>({
-        colors,
-        shadows,
-      })}
-    />
+    <Box as="fieldset">
+      <VisuallyHidden as="legend">Show tickets</VisuallyHidden>
+      <HStack
+        spacing="0"
+        width="fit-content"
+        borderWidth="1px"
+        borderColor={colors.border.secondary}
+        borderRadius="lg"
+        overflow="hidden"
+      >
+        {STATUS_FILTER_OPTIONS.map((option, index) => {
+          const isSelected = option.id === selected;
+          return (
+            <Box
+              key={option.id}
+              as="label"
+              display="inline-flex"
+              alignItems="center"
+              minHeight="8"
+              px="3"
+              cursor="pointer"
+              fontWeight="500"
+              textStyle="text-ui-med"
+              borderRightWidth={
+                index === STATUS_FILTER_OPTIONS.length - 1 ? "0" : "1px"
+              }
+              borderColor={colors.border.secondary}
+              bg={isSelected ? colors.accent.purple : colors.background.primary}
+              color={
+                isSelected
+                  ? colors.foreground.inverse
+                  : colors.foreground.primary
+              }
+              _focusWithin={{ boxShadow: "input.focus" }}
+            >
+              <VisuallyHiddenInput
+                type="radio"
+                name="support-ticket-status"
+                value={option.id}
+                checked={isSelected}
+                onChange={() =>
+                  onChange(option.id === "all" ? undefined : option.id)
+                }
+              />
+              {option.label}
+            </Box>
+          );
+        })}
+      </HStack>
+    </Box>
   );
 };
 
@@ -231,8 +265,8 @@ export interface SupportTicketsTableProps {
 }
 
 /**
- * The signed-in user's loaded tickets, most recently updated first. Sorting
- * and the status filter apply to the tickets loaded so far.
+ * The signed-in user's tickets, most recently updated first. Open tickets
+ * show by default; the filter, sorting and pages apply to all loaded tickets.
  */
 export const SupportTicketsTable = ({
   tickets,
@@ -243,8 +277,8 @@ export const SupportTicketsTable = ({
     data: tickets,
     columns,
     initialSorting: [{ id: "updatedAt", desc: true }],
-    // Paging happens against the API with "Load more".
-    pageSize: Number.MAX_SAFE_INTEGER,
+    initialState: { columnFilters: [{ id: "status", value: "open" }] },
+    pageSize: TICKETS_PER_PAGE,
   });
   const statusColumn = table.getColumn("status");
   const filterValue = statusColumn?.getFilterValue() as
@@ -276,8 +310,10 @@ export const SupportTicketsTable = ({
         <UniversalTable
           table={table}
           onRowClick={(ticket) => onSelect(ticket.id)}
+          rowSx={{ "&:hover td": { bg: colors.background.secondary } }}
           data-testid="support-tickets-table"
         />
+        <TablePagination table={table} itemLabel="tickets" />
       </Box>
       {shownCount === 0 && (
         <Text
@@ -285,7 +321,7 @@ export const SupportTicketsTable = ({
           color={colors.foreground.secondary}
           data-testid="support-tickets-none-match"
         >
-          No {filterValue === "resolved" ? "resolved" : "open"} tickets loaded.
+          No {filterValue === "resolved" ? "resolved" : "open"} tickets.
         </Text>
       )}
     </VStack>

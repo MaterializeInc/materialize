@@ -300,7 +300,7 @@ const CloudSupportNavItem = ({
   // Start loading the tickets on hover or focus, so they're often there by
   // the time the page opens. A fresh cached list isn't fetched again.
   const prefetchTickets = () =>
-    void queryClient.prefetchInfiniteQuery(supportTicketsQueryOptions(owner));
+    void queryClient.prefetchQuery(supportTicketsQueryOptions(owner));
 
   return (
     <Box

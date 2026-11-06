@@ -356,25 +356,32 @@ describe("SupportPage", () => {
       await renderComponent(<SupportPageWithIntercom />);
 
       expect(
-        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+        await screen.findByRole("link", { name: "Replica keeps restarting" }),
       ).toBeVisible();
       expect(screen.getByText("#4821")).toBeVisible();
       expect(screen.getByText("Waiting on you")).toBeVisible();
       expect(
-        screen.getByRole("button", { name: "RBAC for a dbt service account" }),
-      ).toBeVisible();
+        screen.getByRole("link", { name: "Replica keeps restarting" }),
+      ).toHaveAttribute("href", "/support/tickets/42");
+      // Only open tickets show until another status is picked.
+      expect(screen.getByRole("radio", { name: "Open" })).toBeChecked();
+      expect(
+        screen.queryByRole("link", { name: "RBAC for a dbt service account" }),
+      ).not.toBeInTheDocument();
       expect(
         screen.getByRole("link", { name: "View in Help Center ↗" }),
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
       expect(screen.queryByRole("link", { name: "View tickets" })).toBeNull();
     });
 
-    it("loads more tickets", async () => {
+    it("loads every page of tickets", async () => {
+      const limits: (string | null)[] = [];
       server.use(
         http.get(TICKETS_URL, ({ request }) => {
-          const cursor = new URL(request.url).searchParams.get("cursor");
+          const params = new URL(request.url).searchParams;
+          limits.push(params.get("limit"));
           return HttpResponse.json(
-            cursor === "page-2"
+            params.get("cursor") === "page-2"
               ? {
                   data: [buildTicket({ id: "7", title: "Sink is lagging" })],
                   nextCursor: null,
@@ -383,20 +390,71 @@ describe("SupportPage", () => {
           );
         }),
       );
+      await renderComponent(<SupportPageWithIntercom />);
+
+      expect(
+        await screen.findByRole("link", { name: "Sink is lagging" }),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("link", { name: "Replica keeps restarting" }),
+      ).toBeVisible();
+      expect(limits).toEqual(["50", "50"]);
+      expect(
+        screen.queryByRole("button", { name: "Load more" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("pages through the tickets", async () => {
+      server.use(
+        ticketsHandler(
+          Array.from({ length: 12 }, (_, i) =>
+            buildTicket({
+              id: `${i + 1}`,
+              number: `${5000 + i}`,
+              title: `Ticket ${i + 1}`,
+              updatedAt: `2026-10-${String(30 - i).padStart(2, "0")}T12:00:00Z`,
+            }),
+          ),
+        ),
+      );
       const user = userEvent.setup();
       await renderComponent(<SupportPageWithIntercom />);
 
       expect(
-        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+        await screen.findByRole("link", { name: "Ticket 1" }),
       ).toBeVisible();
-      await user.click(screen.getByRole("button", { name: "Load more" }));
+      expect(screen.getByText(/Showing 1-10 of 12 tickets/)).toBeVisible();
+      expect(
+        screen.queryByRole("link", { name: "Ticket 11" }),
+      ).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Next page" }));
+
+      expect(screen.getByRole("link", { name: "Ticket 11" })).toBeVisible();
+      expect(
+        screen.queryByRole("link", { name: "Ticket 1" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("stops loading after ten pages and points to Help Center", async () => {
+      let requests = 0;
+      server.use(
+        http.get(TICKETS_URL, () => {
+          requests += 1;
+          return HttpResponse.json({
+            data: [
+              buildTicket({ id: `${requests}`, title: `Ticket ${requests}` }),
+            ],
+            nextCursor: `page-${requests + 1}`,
+          });
+        }),
+      );
+      await renderComponent(<SupportPageWithIntercom />);
 
       expect(
-        await screen.findByRole("button", { name: "Sink is lagging" }),
-      ).toBeVisible();
-      expect(
-        screen.queryByRole("button", { name: "Load more" }),
-      ).not.toBeInTheDocument();
+        await screen.findByTestId("support-tickets-truncated"),
+      ).toHaveTextContent("Showing your 10 most recently updated tickets");
+      expect(requests).toBe(10);
     });
 
     it("keeps looking when a page has no visible tickets", async () => {
@@ -413,7 +471,7 @@ describe("SupportPage", () => {
       await renderComponent(<SupportPageWithIntercom />);
 
       expect(
-        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+        await screen.findByRole("link", { name: "Replica keeps restarting" }),
       ).toBeVisible();
       expect(
         screen.queryByTestId("support-tickets-empty"),
@@ -427,7 +485,7 @@ describe("SupportPage", () => {
       });
       await renderComponent(<SupportPageWithIntercom />, { queryClient });
       expect(
-        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+        await screen.findByRole("link", { name: "Replica keeps restarting" }),
       ).toBeVisible();
 
       server.use(
@@ -438,7 +496,7 @@ describe("SupportPage", () => {
       });
 
       expect(
-        screen.getByRole("button", { name: "Replica keeps restarting" }),
+        screen.getByRole("link", { name: "Replica keeps restarting" }),
       ).toBeVisible();
       expect(screen.queryByRole("link", { name: "View tickets" })).toBeNull();
     });
@@ -477,7 +535,7 @@ describe("SupportPage", () => {
       await user.click(screen.getByRole("button", { name: "Try again" }));
 
       expect(
-        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+        await screen.findByRole("link", { name: "Replica keeps restarting" }),
       ).toBeVisible();
     });
 
@@ -497,26 +555,31 @@ describe("SupportPage", () => {
       const user = userEvent.setup();
       await renderComponent(<SupportPageWithIntercom />);
 
-      await screen.findByRole("button", { name: "Replica keeps restarting" });
-      await user.click(
-        screen.getByRole("combobox", { name: "Filter tickets by status" }),
-      );
-      // Options carry their label as a title.
-      await user.click(screen.getByTitle("Resolved"));
+      await screen.findByRole("link", { name: "Replica keeps restarting" });
+      await user.click(screen.getByRole("radio", { name: "Resolved" }));
 
       expect(
-        screen.getByRole("button", { name: "RBAC for a dbt service account" }),
+        screen.getByRole("link", { name: "RBAC for a dbt service account" }),
       ).toBeVisible();
       expect(
-        screen.queryByRole("button", { name: "Replica keeps restarting" }),
+        screen.queryByRole("link", { name: "Replica keeps restarting" }),
       ).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("radio", { name: "All tickets" }));
+
+      expect(
+        screen.getByRole("link", { name: "RBAC for a dbt service account" }),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("link", { name: "Replica keeps restarting" }),
+      ).toBeVisible();
     });
 
     it("shows when a ticket was updated, with the full date on hover", async () => {
       server.use(ticketsHandler([buildTicket()]));
       await renderComponent(<SupportPageWithIntercom />);
 
-      await screen.findByRole("button", { name: "Replica keeps restarting" });
+      await screen.findByRole("link", { name: "Replica keeps restarting" });
       const table = screen.getByTestId("support-tickets-table");
       expect(
         within(table).getByText(
@@ -557,7 +620,7 @@ describe("SupportPage", () => {
       await renderComponent(<SupportPageWithIntercom />);
 
       await user.click(
-        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+        await screen.findByRole("link", { name: "Replica keeps restarting" }),
       );
 
       const dialog = await screen.findByRole("dialog");
@@ -598,7 +661,7 @@ describe("SupportPage", () => {
       );
 
       await user.click(
-        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+        await screen.findByRole("link", { name: "Replica keeps restarting" }),
       );
 
       const ticket = await screen.findByTestId("support-ticket");
@@ -635,7 +698,7 @@ describe("SupportPage", () => {
       );
 
       await user.click(
-        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+        await screen.findByRole("link", { name: "Replica keeps restarting" }),
       );
       await screen.findByTestId("support-ticket");
       const closeButtons = screen.getAllByRole("button", { name: "Close" });
@@ -785,7 +848,7 @@ describe("SupportPage", () => {
       await user.click(await screen.findByRole("button", { name: "Done" }));
 
       expect(
-        await screen.findByRole("button", { name: "Sink is lagging" }),
+        await screen.findByRole("link", { name: "Sink is lagging" }),
       ).toBeVisible();
       expect(listRequests).toBe(1);
     });

@@ -302,8 +302,7 @@ const SupportPage = () => {
   // they answer, "Open a ticket" uses the Messenger and the tickets card
   // links to Help Center. A failed refetch keeps the tickets already loaded.
   const areTicketsAvailable = ticketsQuery.data !== undefined;
-  const tickets = ticketsQuery.data?.pages.flatMap((page) => page.data) ?? [];
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = ticketsQuery;
+  const tickets = ticketsQuery.data?.tickets ?? [];
   // 404 and 503 mean the endpoints aren't deployed or configured here, so the
   // card links to Help Center. Anything else is worth retrying.
   const isTicketsLoadError =
@@ -470,16 +469,19 @@ const SupportPage = () => {
                         navigate(supportTicketPath(ticketId))
                       }
                     />
-                    {hasNextPage && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        alignSelf="start"
-                        onClick={() => fetchNextPage()}
-                        isLoading={isFetchingNextPage}
+                    {ticketsQuery.data?.isTruncated && (
+                      <Text
+                        textStyle="text-small"
+                        color={colors.foreground.secondary}
+                        data-testid="support-tickets-truncated"
                       >
-                        Load more
-                      </Button>
+                        Showing your {tickets.length} most recently updated
+                        tickets. Older ones are in{" "}
+                        <TextLink href={HELP_CENTER_TICKETS_URL} isExternal>
+                          Help Center
+                        </TextLink>
+                        .
+                      </Text>
                     )}
                   </VStack>
                 ) : isTicketsLoadError ? (
