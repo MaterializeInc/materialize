@@ -583,7 +583,7 @@ impl Extent {
 
     /// Decodes the extent through `codec` into `dst`, which must be exactly
     /// the chunk's body length. Reading an in-memory extent faults its pages
-    /// back in, so it is resident again afterwards; the caller owns the
+    /// back in, so it is resident again afterwards. The caller owns the
     /// accounting for that transition (the pool re-counts and re-enqueues it
     /// for the RSS target). A `File` extent is read per
     /// [`FileLocation::read_range_into`] and stays on file.
