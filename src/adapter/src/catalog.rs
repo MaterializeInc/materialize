@@ -95,6 +95,8 @@ use uuid::Uuid;
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
+#[cfg(test)]
+pub(crate) use crate::catalog::state::LocalExpressionCache;
 pub use crate::catalog::transact::{
     DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
 };
