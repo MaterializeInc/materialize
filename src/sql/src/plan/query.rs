@@ -5152,7 +5152,7 @@ fn plan_array(
         }
     } else {
         let out = coerce_homogeneous_exprs(&ecx.with_name("ARRAY"), out, type_hint)?;
-        (ecx.scalar_type(&out[0]), out)
+        (union_scalar_types(ecx, &out)?, out)
     };
 
     // Arrays of `char` type are disallowed due to a known limitation:
@@ -5200,7 +5200,7 @@ fn plan_list(
             });
         }
         let out = coerce_homogeneous_exprs(&ecx.with_name("LIST"), out, type_hint)?;
-        (ecx.scalar_type(&out[0]).without_modifiers(), out)
+        (union_scalar_types(ecx, &out)?.without_modifiers(), out)
     };
 
     if matches!(elem_type, SqlScalarType::Char { .. }) {
@@ -5241,7 +5241,7 @@ fn plan_map(
             values.push(value);
         }
         let values = coerce_homogeneous_exprs(&ecx.with_name("MAP"), values, type_hint)?;
-        let value_type = ecx.scalar_type(&values[0]).without_modifiers();
+        let value_type = union_scalar_types(ecx, &values)?.without_modifiers();
         let out = itertools::interleave(keys, values).collect();
         (value_type, out)
     };
@@ -5306,6 +5306,19 @@ pub fn coerce_homogeneous_exprs(
         }
     }
     Ok(out)
+}
+
+/// Returns the least upper bound of the types of `exprs`, which
+/// [`coerce_homogeneous_exprs`] has already coerced to a common type.
+fn union_scalar_types(
+    ecx: &ExprContext,
+    exprs: &[HirScalarExpr],
+) -> Result<SqlScalarType, PlanError> {
+    let mut typ = ecx.scalar_type(&exprs[0]);
+    for expr in &exprs[1..] {
+        typ = typ.sql_union(&ecx.scalar_type(expr))?;
+    }
+    Ok(typ)
 }
 
 /// Creates a `ColumnOrder` from an `OrderByExpr` and column index.
