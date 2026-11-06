@@ -272,7 +272,7 @@ enum Residency {
     /// [`Residency::BackedResident`]; a free observed at dequeue cancels the
     /// write instead.
     WriteInFlight,
-    /// Extent copy only; the chunk holds no slot. The extent itself may be
+    /// Extent copy only. The chunk holds no slot. The extent itself may be
     /// in the arena (the compressed tier), on the swap device, or on file.
     /// Reads decompress the extent straight into the caller's
     /// buffer and leave the chunk evicted, except that an admitting read
@@ -452,7 +452,7 @@ struct Counters {
 }
 
 /// A buffer pool over compressed extents, backed by swap or by files per its
-/// [`ExtentBackend`]. Cheap to clone; all clones share one budget and one
+/// [`ExtentBackend`]. Cheap to clone. All clones share one budget and one
 /// backing store.
 #[derive(Debug, Clone)]
 pub struct Pool(Arc<PoolInner>);
@@ -592,10 +592,11 @@ struct Spill {
 #[derive(Debug)]
 struct FileRelease {
     interval: std::time::Duration,
-    /// Bytes each class releases per interval. Zero disables the release.
+    /// Bytes each class releases per interval.
     bytes_per_class: u64,
-    /// When the next release is due.
-    due: std::time::Instant,
+    /// When the next release is due. `None` when an interval too long for
+    /// `Instant` put it out of reach.
+    due: Option<std::time::Instant>,
 }
 
 /// Beyond this many queued or in-flight spill entries, eviction degrades to
@@ -667,9 +668,7 @@ struct ExtentEntry {
     chunk: Weak<ChunkMeta>,
     /// The extent's `alloc_size` at enqueue. The file store is opened with
     /// the arena's class ladder, so in file mode this names the extent's
-    /// file class without taking the chunk lock. It is stale when the
-    /// chunk's extent was replaced after enqueue, which only misdirects that
-    /// entry's skip decision.
+    /// file class without taking the chunk lock.
     alloc_size: usize,
 }
 
@@ -845,7 +844,7 @@ impl Pool {
             file_release: Mutex::new(FileRelease {
                 interval: std::time::Duration::ZERO,
                 bytes_per_class: 0,
-                due: std::time::Instant::now(),
+                due: Some(std::time::Instant::now()),
             }),
             queues: std::array::from_fn(|_| Mutex::new(VecDeque::new())),
             extent_queue: Mutex::new(VecDeque::new()),
@@ -1195,8 +1194,8 @@ impl Pool {
     /// Retunes the file store's warm-slot release: every `interval`, a spill
     /// thread punches up to `bytes_per_class` of each extent class's free
     /// slots that still hold blocks, so the store's disk usage follows its
-    /// live extents. Zero bytes disables the release. No effect on a
-    /// swap-backed pool or one without spill threads.
+    /// live extents. A zero interval or zero bytes disables the release. No
+    /// effect on a swap-backed pool or one without spill threads.
     pub fn set_file_release(&self, interval: std::time::Duration, bytes_per_class: u64) {
         let mut release = self.0.file_release();
         release.interval = interval;
@@ -1204,7 +1203,8 @@ impl Pool {
         // A shortened interval takes effect now rather than after the
         // current one. Taking the minimum keeps the per-tick reapplication
         // of an unchanged config from postponing the release.
-        release.due = release.due.min(std::time::Instant::now() + interval);
+        let next = std::time::Instant::now().checked_add(interval);
+        release.due = release.due.into_iter().chain(next).min();
     }
 
     /// Retunes the resident-bytes budget in place and enforces it. Live
@@ -1620,10 +1620,15 @@ impl PoolInner {
         let bytes_per_class = {
             let mut release = self.file_release();
             let now = std::time::Instant::now();
-            if release.bytes_per_class == 0 || now < release.due {
+            // A zero interval would release on every spill-loop wakeup and
+            // punch the warm slots demotions are about to reuse.
+            if release.bytes_per_class == 0
+                || release.interval.is_zero()
+                || release.due.is_none_or(|due| now < due)
+            {
                 return;
             }
-            release.due = now + release.interval;
+            release.due = now.checked_add(release.interval);
             release.bytes_per_class
         };
         store.release_warm(bytes_per_class);
@@ -2149,7 +2154,7 @@ impl PoolInner {
     /// it. This method, [`PoolInner::note_extent_reclaimable`],
     /// [`PoolInner::note_extent_released`], the pageout arms in
     /// [`PoolInner::enforce_compressed_cap`], and the demotion commit in
-    /// [`PoolInner::demote`] are the only adjusters; every flag flip pairs
+    /// [`PoolInner::demote`] are the only adjusters. Every flag flip pairs
     /// with one of them under the chunk's state lock.
     ///
     /// Likewise `extent_file_bytes` equals the sum of `file_bytes()` over
@@ -2264,7 +2269,7 @@ impl PoolInner {
     /// Routes compressed-cap enforcement off latency-sensitive threads: with
     /// spill threads spawned, wakes one to perform the pageouts
     /// (`MADV_PAGEOUT` is synchronous reclaim, bounded per extent but not
-    /// free at chunk rates); without them, enforces inline unless the file
+    /// free at chunk rates). Without them, enforces inline unless the file
     /// store's full hint is set. The test is for
     /// thread existence, not `spill.enabled`: spawned threads trim the tier
     /// in their loop even with eviction hand-off disabled.
@@ -2555,7 +2560,11 @@ impl PoolInner {
             if !matches!(written, Err(WriteError::Full)) {
                 store.free(file_slot);
             }
-            self.full_hint.store(false, Ordering::Relaxed);
+            // A store with writes disabled stays unplaceable however many
+            // slots are free.
+            if !matches!(written, Err(WriteError::Disabled)) {
+                self.full_hint.store(false, Ordering::Relaxed);
+            }
             self.note_extent_released(&extent);
             drop(extent);
             return Demotion::Skipped;
@@ -2798,8 +2807,8 @@ impl ChunkHandle {
                     }
                 }
                 // TODO: a sub-range read of a rangeable stored form (a
-                // sub-block-framed codec) revives only part of the extent;
-                // the whole-extent accounting below would then overcount and
+                // sub-block-framed codec) revives only part of the extent.
+                // The whole-extent accounting below would then overcount and
                 // needs a partial-revival variant.
                 let is_resident = state
                     .extent
@@ -2895,16 +2904,20 @@ impl ChunkHandle {
             let mut state = self.meta.state();
             let body = match state.residency {
                 Residency::UnbackedResident => state.typed.take(),
-                Residency::BackedResident => {
-                    let body = state.typed.take();
-                    if body.is_some() {
-                        let extent = state.extent.take().expect("backed chunk has an extent");
-                        pool.note_extent_released(&extent);
-                        state.residency = Residency::UnbackedResident;
-                    }
-                    body
+                // A demoting extent stays with its demoter until the commit,
+                // which expects to find it, so the body stays too.
+                Residency::BackedResident
+                    if state.typed.is_some()
+                        && !state.extent.as_ref().is_some_and(Extent::is_demoting) =>
+                {
+                    pool.release_extent(&mut state);
+                    state.residency = Residency::UnbackedResident;
+                    state.typed.take()
                 }
-                Residency::WriteInFlight | Residency::Evicted | Residency::Oversize => None,
+                Residency::BackedResident
+                | Residency::WriteInFlight
+                | Residency::Evicted
+                | Residency::Oversize => None,
             };
             if body.is_some() {
                 pool.counters

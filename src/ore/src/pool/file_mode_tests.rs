@@ -1276,12 +1276,13 @@ fn file_release_punches_freed_slots_once_per_interval() {
         store.allocated_bytes() > 0,
         "reapplying the config does not move the release up"
     );
-    pool.set_file_release(Duration::ZERO, u64::MAX);
+    pool.set_file_release(Duration::from_millis(1), u64::MAX);
+    std::thread::sleep(Duration::from_millis(5));
     pool.0.spill_release_file();
     assert_eq!(
         store.allocated_bytes(),
         0,
-        "a shortened interval takes effect now"
+        "a shortened interval takes effect without waiting out the old one"
     );
     assert_drained(&pool);
 }
@@ -1308,4 +1309,112 @@ fn spill_threads_run_the_file_release() {
         std::thread::sleep(Duration::from_millis(10));
     }
     pool.join_spill_threads();
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn file_release_is_off_at_zero_interval_and_survives_huge_ones() {
+    use std::time::Duration;
+
+    let (_dir, pool) = file_pool(256 << 20, 64 << 20);
+    let store = pool.file_store().expect("file mode");
+    let handle = insert(&pool, &payload(SMALL, 50));
+    pool.evict(&handle);
+    drop(handle);
+    assert!(store.allocated_bytes() > 0);
+
+    pool.set_file_release(Duration::ZERO, u64::MAX);
+    pool.0.spill_release_file();
+    assert!(store.allocated_bytes() > 0, "a zero interval disables");
+
+    pool.set_file_release(Duration::MAX, u64::MAX);
+    pool.0.spill_release_file();
+    assert_eq!(
+        store.allocated_bytes(),
+        0,
+        "the first release is due at once"
+    );
+    let handle = insert(&pool, &payload(SMALL, 53));
+    pool.evict(&handle);
+    drop(handle);
+    pool.0.spill_release_file();
+    assert!(
+        store.allocated_bytes() > 0,
+        "an interval past what `Instant` holds is never due again"
+    );
+    pool.set_file_release(Duration::from_millis(1), u64::MAX);
+    std::thread::sleep(Duration::from_millis(5));
+    pool.0.spill_release_file();
+    assert_eq!(store.allocated_bytes(), 0, "a later interval still applies");
+}
+
+/// A typed body whose serialized form is its words.
+#[derive(Debug)]
+struct Words(Vec<u64>);
+
+impl TypedBody for Words {
+    fn words(&self) -> usize {
+        self.0.len()
+    }
+
+    fn serialize_into(&self, dst: &mut [u64]) {
+        dst.copy_from_slice(&self.0);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+fn insert_typed(pool: &Pool, words: Vec<u64>) -> ChunkHandle {
+    pool.insert_typed(Box::new(Words(words)), ChunkHints::default(), &TEST_CODEC)
+}
+
+fn taken(body: Box<dyn TypedBody>) -> Vec<u64> {
+    body.into_any().downcast::<Words>().expect("test body").0
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn typed_take_of_a_backed_chunk_on_file_returns_its_file_slot() {
+    let (_dir, pool) = file_pool(256 << 20, 64 << 20);
+    let orig = payload(SMALL, 51);
+    let handle = insert_typed(&pool, orig.clone());
+    assert!(pool.back_step());
+    assert_eq!(handle.residency(), Residency::BackedResident);
+    pool.0.enforce_compressed_cap(Pass::Background);
+    assert!(handle.file_slot().is_some(), "the backing extent demoted");
+    let body = handle.take_typed().expect("backed typed body");
+    assert_eq!(taken(body), orig);
+    assert_drained(&pool);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn typed_take_during_demotion_keeps_the_body() {
+    let (_dir, pool) = file_pool(256 << 20, 64 << 20);
+    pool.set_rss_target(1 << 30);
+    let orig = payload(SMALL, 52);
+    let handle = insert_typed(&pool, orig.clone());
+    assert!(pool.back_step());
+    assert_eq!(handle.residency(), Residency::BackedResident);
+    let returned = Rc::new(std::cell::RefCell::new(None));
+    let hook_returned = Rc::clone(&returned);
+    arm_demotion_hook(move || {
+        let handle = handle
+            .take_typed()
+            .expect_err("a demoting extent keeps the body in the chunk");
+        *hook_returned.borrow_mut() = Some(handle);
+    });
+    pool.set_rss_target(0);
+    pool.0.enforce_compressed_cap(Pass::Background);
+    let handle = returned.borrow_mut().take().expect("the hook ran");
+    assert!(handle.file_slot().is_some(), "the demotion committed");
+    let body = handle.take_typed().expect("backed typed body");
+    assert_eq!(taken(body), orig);
+    assert_drained(&pool);
 }
