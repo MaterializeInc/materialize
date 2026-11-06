@@ -155,12 +155,45 @@ table.inline-headings {
         &.shown {
             transform: none;
             visibility: visible;
+            // Only the slide animates on the way in, so the drawer is visible,
+            // and can take focus, as soon as it opens.
+            transition: transform .2s ease-out;
 
             .close-topics {
                 opacity: 1;
                 pointer-events: initial;
             }
         }
+    }
+}
+
+// Focus lands here from the skip link and when the drawer opens; Tab then
+// moves on to search.
+.sidebar:focus {
+    outline: none;
+}
+
+.skip-to-topics {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+
+    &:focus {
+        position: static;
+        display: inline-block;
+        width: auto;
+        height: auto;
+        overflow: visible;
+        clip: auto;
+        margin-bottom: var(--xx-small);
+    }
+
+    // The drawer has its own "All Topics" button.
+    @media(max-width: 850px) {
+        display: none;
     }
 }
 
@@ -237,6 +270,13 @@ table.inline-headings {
             -webkit-mask: $icon center / contain no-repeat;
             mask: $icon center / contain no-repeat;
             transition: transform 0.2s ease-out;
+
+            // Forced colors repaint backgrounds as Canvas, which would hide
+            // the masked chevron.
+            @media (forced-colors: active) {
+                background-color: LinkText;
+                forced-color-adjust: none;
+            }
         }
     }
 

@@ -56,6 +56,12 @@ Apache License, Version 2.0. */}}
       <main
         class="content {{ if .Params.make_table_row_headers_searchable }} docsearch_index_table_headers {{ end }}"
       >
+        {{- /*
+          Search and the topic links follow the article in the source, so
+          keyboard users can jump to them. Hidden until focused, and on narrow
+          screens, where "All Topics" opens them.
+        */}}
+        <a class="skip-to-topics" href="#topics">Skip to search and topics</a>
         <button class="show-topics" aria-label="Open the topics sidebar">
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -183,6 +189,8 @@ Apache License, Version 2.0. */}}
       const sidebarOpenButton = document.querySelector("button.show-topics");
       const sidebarCloseButton = document.querySelector("button.close-topics");
       const sidebarWrapper = document.querySelector(".sidebar-wrapper");
+      const topics = document.querySelector("#topics");
+      const content = document.querySelector("main.content");
       const backdrop = document.querySelector(".backdrop");
       const allTables = document.querySelectorAll("table");
 
@@ -198,16 +206,22 @@ Apache License, Version 2.0. */}}
         }
       };
 
+      // The drawer follows <main> in the source, so move focus into it, and
+      // keep keyboard and screen-reader users out of the article behind it.
       sidebarOpenButton.addEventListener("click", () => {
         sidebarWrapper.classList.add("shown");
         backdrop.style.display = "block";
         toggleBodyOverflow(false);
+        content.inert = true;
+        topics.focus();
       });
 
       const closeSidebar = () => {
         sidebarWrapper.classList.remove("shown");
         backdrop.style.display = "none";
         toggleBodyOverflow(true);
+        content.inert = false;
+        sidebarOpenButton.focus();
       };
 
       sidebarCloseButton.addEventListener("click", () => {
@@ -289,6 +303,8 @@ Apache License, Version 2.0. */}}
           menuToggle.classList.remove("open");
           toggleBodyOverflow(true);
           backdrop.style.display = "none";
+          // Wide screens show the sidebar beside the article, not as a drawer.
+          content.inert = false;
         }
       });
 
