@@ -33,6 +33,40 @@ Syntax element | Description
   [sources](../create-source) or read-only tables.
 * **Low performance.** While processing a `DELETE` statement, Materialize cannot
   process other `INSERT`, `UPDATE`, or `DELETE` statements.
+* **Large deletes.** A single `DELETE` that matches a very large number of rows
+  can fail with a timeout or replica-disconnect error. See
+  [Large `DELETE` statements](#large-delete-statements).
+
+### Large `DELETE` statements
+
+Materialize processes a `DELETE` by reading every row the statement matches back
+through the cluster so it can retract it. The work therefore scales with the
+number of rows matched, not just the size of the table or the complexity of the
+`WHERE` clause.
+
+A single `DELETE` that matches a very large number of rows can fail (for example,
+with a timeout or a `replica ... disconnected` error) when reading the matched
+rows back takes longer than the cluster can complete in one statement. There is
+no fixed row or byte limit: the threshold depends on how many rows the statement
+matches, how wide those rows are, and the size of the cluster.
+
+If a large `DELETE` fails this way, split it into smaller statements that each
+match fewer rows. Use a predicate on an [indexed](../create-index) column so each
+batch is cheap to locate, for example by key range:
+
+```mzsql
+-- Instead of one large delete:
+DELETE FROM events WHERE ts < '2026-01-01';
+
+-- Delete in smaller batches by key range:
+DELETE FROM events WHERE ts < '2026-01-01' AND id BETWEEN 0 AND 99999;
+DELETE FROM events WHERE ts < '2026-01-01' AND id BETWEEN 100000 AND 199999;
+-- ...continue until all matching rows are removed.
+```
+
+Increasing the size of the cluster can raise the threshold, but splitting the
+statement is the reliable approach. The same guidance applies to large
+[`UPDATE`](../update) statements, which use the same mechanism.
 
 ## Examples
 

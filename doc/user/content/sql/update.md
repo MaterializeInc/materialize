@@ -30,6 +30,27 @@ Syntax element                | Description
   [sources](../create-source) or read-only tables.
 * **Low performance.** While processing an `UPDATE` statement, Materialize cannot
   process other `INSERT`, `UPDATE`, or `DELETE` statements.
+* **Large updates.** A single `UPDATE` that matches a very large number of rows
+  can fail with a timeout or replica-disconnect error. See
+  [Large `UPDATE` statements](#large-update-statements).
+
+### Large `UPDATE` statements
+
+Materialize processes an `UPDATE` by reading every row the statement matches back
+through the cluster, so the work scales with the number of rows matched, not just
+the size of the table or the complexity of the `WHERE` clause.
+
+A single `UPDATE` that matches a very large number of rows can fail (for example,
+with a timeout or a `replica ... disconnected` error) when reading the matched
+rows back takes longer than the cluster can complete in one statement. There is
+no fixed row or byte limit: the threshold depends on how many rows the statement
+matches, how wide those rows are, and the size of the cluster.
+
+If a large `UPDATE` fails this way, split it into smaller statements that each
+match fewer rows, using a predicate on an [indexed](../create-index) column (for
+example, by key range). Increasing the size of the cluster can raise the
+threshold, but splitting the statement is the reliable approach. The same
+guidance applies to large [`DELETE`](../delete) statements.
 
 ## Privileges
 
