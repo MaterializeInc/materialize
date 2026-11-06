@@ -26,7 +26,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Right size your clusters, using the new Hydration tab on the console {#v26.49-hydration-tab}
 
-The Console's [redesigned cluster page](#v26.47-cluster-details-page) has a new **Hydration** tab that shows how long each replica took to hydrate and the resources required. Use this information to right size your clusters, or diagnose failed hydrations. The page also shows you progress made while a replica is hydrating. To try it, open a cluster and select **Show the new cluster details page** in the breadcrumb bar.
+The Console's [redesigned cluster page](#v26.47-cluster-details-page) has a new **Hydration** tab that shows how long each replica took to hydrate and the resources required. Use this information to right size your clusters, or diagnose failed hydrations. The page also shows you progress made while a replica is hydrating. To try it, open a cluster and select **Show the new cluster details page** in the breadcrumb bar, and navigate to the "Hydration" tab.
 
 ![Hydration tab of the new cluster details page, showing the last successful hydration's duration, peak memory, disk, and heap, and each object's hydration time, slowest first](/images/releases/v2649_hydration.png)
 
