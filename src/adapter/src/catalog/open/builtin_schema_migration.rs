@@ -544,8 +544,8 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
         // Converting mz_materialized_view_refresh_strategies from a builtin table to a
         // materialized view over mz_catalog_raw changes its catalog
         // fingerprint. We also change columns:
-        // - aligned_at (timestamptz) -> aligned_to_expression (text)
-        // - at (timestamptz)-> at_expression (text)
+        // - aligned_to (timestamptz) -> aligned_to_expression (text)
+        // - at (timestamptz) -> at_expression (text)
         MigrationStep::replacement(
             "26.47.0-dev.0",
             CatalogItemType::MaterializedView,

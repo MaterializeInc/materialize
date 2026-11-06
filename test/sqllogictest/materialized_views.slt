@@ -757,12 +757,22 @@ CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '213503982001' days) AS SELE
 query error REFRESH interval too large
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '150000000 days') AS SELECT * FROM t2;
 
+# Beyond `MAX_REFRESH_EVERY_INTERVAL`.
+query error REFRESH interval too large
+CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '10000001 days') AS SELECT * FROM t2;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_max_interval WITH (REFRESH EVERY '10000000 days') AS SELECT * FROM t2;
+
+statement ok
+DROP MATERIALIZED VIEW mv_max_interval;
+
 query error REFRESH interval must be at least 1 ms
 CREATE MATERIALIZED VIEW mv_bad
   WITH (REFRESH EVERY '999 microseconds')
   AS SELECT 1;
 
-# Beyond `timestamptz` range, which is how these get packed.
+# Beyond the `timestamptz` range, see `check_refresh_time`.
 query error REFRESH AT time too large: 18446744073709551615
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT 18446744073709551615) AS SELECT * FROM t2;
 
@@ -1598,6 +1608,15 @@ query I
 SELECT count(*) FROM mz_internal.mz_materialized_view_refresh_strategies WHERE materialized_view_id LIKE 'u%'
 ----
 34
+
+# Every materialized view, builtin or user, has a refresh strategy row.
+query I
+SELECT count(*)
+FROM mz_catalog.mz_materialized_views mv
+FULL OUTER JOIN mz_internal.mz_materialized_view_refresh_strategies rs ON mv.id = rs.materialized_view_id
+WHERE mv.id IS NULL OR rs.materialized_view_id IS NULL
+----
+0
 
 statement ok
 CREATE CLUSTER c_schedule_hydration_time_estimate (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
