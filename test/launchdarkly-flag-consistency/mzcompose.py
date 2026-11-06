@@ -207,6 +207,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     cluster_topology_spread_ignore_non_singular_scale
     cluster_topology_spread_max_skew
     cluster_topology_spread_soft
+    column_paged_batcher_file_release_bytes
+    column_paged_batcher_file_release_interval
     column_paged_batcher_spill_worker_fraction
     compute_correction_v2_chain_proportionality
     compute_correction_v2_chunk_size
@@ -249,6 +251,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
+    enable_column_paged_batcher_file_extents
     enable_columnar_merge_batcher
     enable_compute_correction_v2_spill
     enable_compute_index_peek_offload
