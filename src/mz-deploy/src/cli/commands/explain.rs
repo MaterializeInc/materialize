@@ -144,7 +144,7 @@ pub async fn run(
     };
 
     // Connect to ephemeral Materialize Docker container
-    let runtime = DockerRuntime::new().with_image(&settings.docker_image);
+    let runtime = DockerRuntime::start(&settings.docker_image).await;
     let client = match runtime.get_client().await {
         Ok(client) => client,
         Err(DockerRuntimeError::ContainerStartFailed(e)) => {

@@ -36,6 +36,19 @@
 #![warn(unreachable_pub)]
 #![warn(unused_qualifications)]
 
+use mz_build_info::{BuildInfo, build_info};
+use std::sync::LazyLock;
+
+/// Build information for this `mz-deploy` build.
+///
+/// NOTE: `build_info!` belongs at a leaf of the crate graph, because an
+/// intermediate crate can cache a stale SHA. Nothing depends on `mz-deploy`, so
+/// the library is that leaf and the binary reads it from here.
+pub const BUILD_INFO: BuildInfo = build_info!();
+
+/// The version string reported by `mz-deploy --version`.
+pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
+
 pub mod cli;
 pub mod client;
 pub mod config;
