@@ -8228,6 +8228,53 @@ fn test_startup_only_system_var_warns() {
     );
 }
 
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_alter_system_session_default_notice() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config_internal()
+        .notice_callback(move |notice| tx.unbounded_send(notice).expect("send notice"))
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    const NOTICE: &str = "this will have no effect on the current session";
+    let mut notified = |stmt: &str| -> bool {
+        client.batch_execute(stmt).unwrap();
+        let notices: Vec<postgres::error::DbError> =
+            std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        notices
+            .iter()
+            .any(|notice| notice.message().contains(NOTICE))
+    };
+
+    for stmt in [
+        "ALTER SYSTEM SET statement_timeout = '2min'",
+        "ALTER SYSTEM RESET statement_timeout",
+    ] {
+        assert!(notified(stmt), "session var: {stmt} did not notify");
+    }
+    for stmt in [
+        "ALTER SYSTEM SET enable_refresh_every_mvs = true",
+        "ALTER SYSTEM RESET enable_refresh_every_mvs",
+    ] {
+        assert!(!notified(stmt), "system-only var: {stmt} notified");
+    }
+
+    notified("ALTER SYSTEM SET statement_timeout = '2min'");
+    assert!(
+        notified("ALTER SYSTEM RESET ALL"),
+        "RESET ALL of a changed session var did not notify"
+    );
+    notified("ALTER SYSTEM SET enable_refresh_every_mvs = true");
+    assert!(
+        !notified("ALTER SYSTEM RESET ALL"),
+        "RESET ALL of only system-only vars notified"
+    );
+}
+
 /// The values of `label` across the series of the `family` metric.
 fn label_values(registry: &MetricsRegistry, family: &str, label: &str) -> BTreeSet<String> {
     registry
