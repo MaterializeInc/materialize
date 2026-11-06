@@ -171,7 +171,8 @@ fn enospc_lowers_capacity() {
         u64::cast_from(s.class_size(warm_class))
     );
 
-    // The lowered capacity is permanent, and a warm slot still serves.
+    // The lowered capacity holds until re-derived, and a warm slot still
+    // serves.
     assert_eq!(s.alloc(other_class), Err(AllocError::Full));
     let reused = s.alloc(warm_class).unwrap();
     assert_eq!(reused, warm);
@@ -742,4 +743,87 @@ fn release_warm_takes_the_oldest_free_slots() {
     assert_eq!(s.alloc(class).unwrap(), slots[2], "the newest stays warm");
     assert_eq!(s.alloc(class).unwrap(), slots[1]);
     assert_eq!(s.allocated_bytes(), 2 * size, "the oldest was punched");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn release_warm_restores_capacity_lowered_by_enospc() {
+    let (dir, s) = store(64 << 20);
+    let class = s.class_for(10_000).unwrap();
+    let _held = s.alloc(class).unwrap();
+    let other = s.class_for(300_000).unwrap();
+    fault::fail_next(fault::Op::Fallocate, libc::ENOSPC);
+    assert_eq!(s.alloc(other), Err(AllocError::Full));
+    assert_eq!(s.capacity_bytes(), s.allocated_bytes());
+
+    // The test volume's free space bounds the re-derived capacity.
+    let usable = usable_bytes(sys::available_bytes(dir.path()).unwrap());
+    s.release_warm(0);
+    assert_eq!(
+        s.capacity_bytes(),
+        (s.allocated_bytes() + usable).min(64 << 20),
+        "room on the volume is usable again, up to the configured capacity"
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn release_warm_retries_a_slot_whose_punch_failed_first() {
+    let (_dir, s) = store(64 << 20);
+    let class = s.class_for(10_000).unwrap();
+    let size = u64::cast_from(s.class_size(class));
+    let slots: Vec<_> = (0..3).map(|_| s.alloc(class).unwrap()).collect();
+    for &slot in &slots {
+        s.free(slot);
+    }
+    fault::fail_next(fault::Op::Punch, libc::EIO);
+    assert_eq!(s.release_warm(size), 0);
+    assert_eq!(s.release_warm(size), size);
+    assert_eq!(
+        s.alloc(class).unwrap(),
+        slots[2],
+        "the failed slot did not jump the reuse order"
+    );
+    assert_eq!(s.alloc(class).unwrap(), slots[1]);
+    assert_eq!(s.allocated_bytes(), 2 * size, "the failed slot was punched");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn alloc_waits_for_a_release_of_its_own_class() {
+    // One slot of capacity: an allocation can only succeed by reusing the
+    // slot warm or after a release punched it, never by failing over to
+    // another class.
+    let classes = classes();
+    let class = classes.iter().position(|&c| c >= 10_000).unwrap();
+    let (_dir, s) = store(u64::cast_from(classes[class]));
+    let stop = AtomicBool::new(false);
+    let s = &s;
+    let allocs = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !stop.load(Ordering::Relaxed) {
+                s.release_warm(u64::MAX);
+            }
+        });
+        let allocs: Vec<_> = (0..20_000)
+            .map(|_| {
+                let slot = s.alloc(class);
+                if let Ok(slot) = slot {
+                    s.free(slot);
+                }
+                slot
+            })
+            .collect();
+        // Before asserting, so a failure does not leave the releaser running.
+        stop.store(true, Ordering::Relaxed);
+        allocs
+    });
+    assert!(
+        allocs.iter().all(Result::is_ok),
+        "the only slot is free or being punched"
+    );
+    assert_eq!(s.punching.load(Ordering::Relaxed), 0);
 }
