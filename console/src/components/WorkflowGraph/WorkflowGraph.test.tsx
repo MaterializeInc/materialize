@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { hashKey, QueryKey } from "@tanstack/react-query";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { millisecondsInMinute } from "date-fns/constants";
 import React from "react";
@@ -153,6 +154,33 @@ const detailsHandler = (
     { waitTimeMs },
   );
 
+/** Counts the SQL requests sent under `queryKey`. */
+const countRequests = (queryKey: QueryKey) => {
+  let count = 0;
+  const onRequest = ({ request }: { request: Request }) => {
+    const key = new URL(request.url).searchParams.get("query_key");
+    if (key === hashKey(queryKey)) count++;
+  };
+  server.events.on("request:start", onRequest);
+  onTestFinished(() => {
+    server.events.removeListener("request:start", onRequest);
+  });
+  return () => count;
+};
+
+/** The vitest config fakes timeouts but not the interval React Query polls on. */
+const fakePollTimers = () =>
+  vi.useFakeTimers({
+    shouldAdvanceTime: true,
+    toFake: [
+      "Date",
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+    ],
+  });
+
 const renderAt = async (
   environment: typeof WITH_EDGES,
   focusedObjectId: string,
@@ -247,7 +275,7 @@ describe("WorkflowGraph from the edges collection", () => {
   });
 
   it("shows a node's freshness once it hydrates", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fakePollTimers();
     server.use(
       detailsHandler(NODE_IDS, OBJECTS.map(nodeDetails)),
       lagHandler(NODE_IDS, [
@@ -269,6 +297,90 @@ describe("WorkflowGraph from the edges collection", () => {
 
     expect(await screen.findByText("2s")).toBeVisible();
     expect(screen.queryByText("Not hydrated")).not.toBeInTheDocument();
+  });
+
+  it("polls a node that never hydrates at most once a minute", async () => {
+    fakePollTimers();
+    server.use(
+      detailsHandler(NODE_IDS, OBJECTS.map(nodeDetails)),
+      lagHandler(NODE_IDS, [
+        hydrated(REVENUE.id),
+        { targetObjectId: TOP.id, hydrated: false, lag: null },
+      ]),
+    );
+    await renderAt(WITH_EDGES, REVENUE.id);
+    const lagRequests = countRequests(
+      clusterQueryKeys.materializationLag({ objectIds: NODE_IDS }),
+    );
+    expect(await screen.findByText("Not hydrated")).toBeVisible();
+
+    await act(() => vi.advanceTimersByTimeAsync(5 * millisecondsInMinute));
+    const afterFiveMinutes = lagRequests();
+    await act(() => vi.advanceTimersByTimeAsync(5 * millisecondsInMinute));
+
+    const lastFiveMinutes = lagRequests() - afterFiveMinutes;
+    expect(lastFiveMinutes).toBeGreaterThanOrEqual(4);
+    expect(lastFiveMinutes).toBeLessThanOrEqual(5);
+  });
+
+  it("selects the focus again when the selected node is dropped", async () => {
+    const remainingIds = [ORDERS.id, REVENUE.id];
+    server.use(
+      detailsHandler(NODE_IDS, OBJECTS.map(nodeDetails)),
+      detailsHandler(remainingIds, [ORDERS, REVENUE].map(nodeDetails)),
+      lagHandler(remainingIds),
+    );
+    await renderAt(WITH_EDGES, REVENUE.id);
+    fireEvent.click(await findNode(TOP));
+    expect(await screen.findByTitle(TOP.name)).toBeVisible();
+    expect(screen.queryByTitle(REVENUE.name)).not.toBeInTheDocument();
+
+    allObjectsCollection.applySnapshot({
+      data: [ORDERS, REVENUE],
+      snapshotComplete: true,
+      error: undefined,
+    });
+    workflowGraphEdgesCollection.applySnapshot({
+      data: [EDGES[0]],
+      snapshotComplete: true,
+      error: undefined,
+    });
+
+    expect(await screen.findByTitle(REVENUE.name)).toBeVisible();
+    expect(screen.queryByTitle(TOP.name)).not.toBeInTheDocument();
+  });
+
+  it("waits for a new session's edges to draw an object the held edges predate", async () => {
+    const added = catalogObject("u13", "low_regions");
+    const addedIds = [ORDERS.id, REVENUE.id, added.id];
+    server.use(
+      detailsHandler([added.id], [nodeDetails(added)]),
+      detailsHandler(addedIds, [ORDERS, REVENUE, added].map(nodeDetails)),
+      lagHandler(addedIds),
+    );
+    allObjectsCollection.applySnapshot({
+      data: [...OBJECTS, added],
+      snapshotComplete: true,
+      error: undefined,
+    });
+    // A new session's empty pre-snapshot, over edges held from before `added`.
+    workflowGraphEdgesCollection.applySnapshot({
+      data: [],
+      snapshotComplete: false,
+      error: undefined,
+    });
+    await renderAt(WITH_EDGES, added.id);
+    expect(await screen.findByTestId("loading-spinner")).toBeVisible();
+    expect(screen.queryAllByTitle(nodeTitle(added))).toHaveLength(0);
+
+    workflowGraphEdgesCollection.applySnapshot({
+      data: [...EDGES, { parentId: REVENUE.id, childId: added.id }],
+      snapshotComplete: true,
+      error: undefined,
+    });
+
+    expect(await findNode(added)).toBeVisible();
+    expect(await findNode(REVENUE)).toBeVisible();
   });
 
   it("keeps the graph and selection through a dropped connection", async () => {

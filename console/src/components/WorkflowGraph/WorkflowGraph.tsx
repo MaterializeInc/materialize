@@ -177,8 +177,10 @@ const SyncedWorkflowGraph = ({
     nodeIds,
     objects,
     edgesReady,
+    edgesRefreshing,
     edgesError,
     objectsSnapshotComplete,
+    objectsRefreshing,
     objectsError,
   } = useWorkflowGraphLive(focusedObjectId);
   const { data: details, isError: isDetailsError } =
@@ -217,7 +219,13 @@ const SyncedWorkflowGraph = ({
   }
 
   const nodesReady = nodeIds.every((id) => nodeMap.has(id));
-  if (!edgesReady || (!nodesReady && !objectsSnapshotComplete)) {
+  // Rows held from the cache or an earlier session can predate an object
+  // created since, which would be drawn alone, or reported missing.
+  if (
+    !edgesReady ||
+    (edgesRefreshing && edges.length === 0) ||
+    (!nodesReady && (!objectsSnapshotComplete || objectsRefreshing))
+  ) {
     return <LoadingContainer />;
   }
 
@@ -255,9 +263,20 @@ const WorkflowGraphView = ({
    */
   drawBeforeLag?: boolean;
 }) => {
-  const [selectedNodeId, setSelectedNodeId] = React.useState<
-    string | undefined
-  >(undefined);
+  const [picked, setPicked] = React.useState<{
+    focusedObjectId: string;
+    nodeId: string;
+  }>();
+  // A picked node stays selected while it's in the graph and the focus is
+  // unchanged. Otherwise, as when it's dropped, the focus is.
+  const selectedNodeId =
+    picked?.focusedObjectId === focusedObjectId && nodeMap.has(picked.nodeId)
+      ? picked.nodeId
+      : focusedObjectId;
+  const selectNode = React.useCallback(
+    (nodeId: string) => setPicked({ focusedObjectId, nodeId }),
+    [focusedObjectId],
+  );
 
   // Keyed on the node ids, since `nodeMap` changes when details land, and a new
   // layout pans the canvas back to the selected node.
@@ -319,31 +338,20 @@ const WorkflowGraphView = ({
   });
 
   const upstreamNodes = React.useMemo(() => {
-    if (!selectedNodeId || !graph) return [];
+    if (!graph) return [];
     return getUpstreamNodes(selectedNodeId, graph)
       .map((id) => nodeMap.get(id))
       .filter(notNullOrUndefined);
   }, [graph, nodeMap, selectedNodeId]);
 
   const downstreamNodes = React.useMemo(() => {
-    if (!selectedNodeId || !graph) return [];
+    if (!graph) return [];
     return getDownstreamNodes(selectedNodeId, graph)
       .map((id) => nodeMap.get(id))
       .filter(notNullOrUndefined);
   }, [graph, nodeMap, selectedNodeId]);
 
-  React.useEffect(() => {
-    if (!selectedNodeId && focusedObjectId) {
-      setSelectedNodeId(focusedObjectId);
-    }
-  }, [focusedObjectId, selectedNodeId]);
-
-  if (
-    !focusedObjectId ||
-    !selectedNodeId ||
-    !graph ||
-    (isLagmapLoading && !drawBeforeLag)
-  ) {
+  if (!focusedObjectId || !graph || (isLagmapLoading && !drawBeforeLag)) {
     return <LoadingContainer />;
   }
 
@@ -380,7 +388,7 @@ const WorkflowGraphView = ({
               top={nodePosition.top}
               width={node.width}
               onClick={() => {
-                setSelectedNodeId(id);
+                selectNode(id);
               }}
             />
           );
@@ -416,10 +424,10 @@ const WorkflowGraphView = ({
         selectedNode={nodeMap.get(selectedNodeId)}
         upstreamNodes={upstreamNodes}
         downstreamNodes={downstreamNodes}
-        onNodeClick={setSelectedNodeId}
+        onNodeClick={selectNode}
         nodeMap={nodeMap}
         isDetailsError={isDetailsError}
-        lagInfo={selectedNodeId ? lagMap?.get(selectedNodeId) : undefined}
+        lagInfo={lagMap?.get(selectedNodeId)}
       />
     </Flex>
   );
