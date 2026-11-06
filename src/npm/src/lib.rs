@@ -63,6 +63,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, bail};
 use flate2::read::GzDecoder;
@@ -209,73 +211,35 @@ pub fn ensure(out_dir: Option<PathBuf>) -> Result<(), anyhow::Error> {
             println!("{} needs updating...", pkg.name);
         }
 
-        let mut success = false;
-        for attempt in 1..=attempts {
+        // Retry on any error. Transient network failures (connect errors,
+        // truncated responses) surface as request or archive errors, and a
+        // corrupt download surfaces as a digest mismatch.
+        let mut attempt = 1;
+        loop {
             println!(
                 "downloading {} (attempt {}/{})...",
                 pkg.name, attempt, attempts
             );
-
-            let url = format!(
-                "https://registry.npmjs.org/{}/-/{}-{}.tgz",
-                pkg.name,
-                pkg.name.split('/').next_back().unwrap(),
-                pkg.version,
-            );
-
-            let res = client
-                .get(&url)
-                .send()
-                .and_then(|res| res.error_for_status())
-                .with_context(|| format!("downloading {}", pkg.name))?;
-
-            let mut archive = tar::Archive::new(GzDecoder::new(res));
-            for entry in archive.entries()? {
-                let mut entry = entry?;
-                let path = entry.path()?.strip_prefix("package")?.to_owned();
-                if let Some(css_file) = &pkg.css_file {
-                    if path == Path::new(css_file) {
-                        unpack_entry(&mut entry, &pkg.css_path())?;
-                    }
+            match download_and_verify(&client, pkg) {
+                Ok(()) => {
+                    println!("{} verified successfully.", pkg.name);
+                    break;
                 }
-                if path == Path::new(pkg.js_prod_file) {
-                    unpack_entry(&mut entry, &pkg.js_prod_path())?;
+                Err(e) if attempt < attempts => {
+                    eprintln!(
+                        "attempt {}/{} for {} failed: {:#}",
+                        attempt, attempts, pkg.name, e
+                    );
+                    thread::sleep(Duration::from_secs(attempt));
+                    attempt += 1;
                 }
-                if path == Path::new(pkg.js_dev_file) {
-                    unpack_entry(&mut entry, &pkg.js_dev_path())?;
-                }
-                if let Some((extra_src, _extra_dst)) = &pkg.extra_file {
-                    if path == Path::new(extra_src) {
-                        unpack_entry(&mut entry, &pkg.extra_path())?;
-                    }
+                Err(e) => {
+                    return Err(e.context(format!(
+                        "npm package {} failed after {} attempts",
+                        pkg.name, attempts
+                    )));
                 }
             }
-
-            let digest = pkg
-                .compute_digest()
-                .with_context(|| format!("computing digest for {}", pkg.name))?;
-            if digest == pkg.digest {
-                success = true;
-                println!("{} verified successfully.", pkg.name);
-                break;
-            } else {
-                eprintln!(
-                    "digest mismatch for {} (attempt {}/{})\n  expected: {}\n  actual:   {}",
-                    pkg.name,
-                    attempt,
-                    attempts,
-                    hex::encode(pkg.digest),
-                    hex::encode(digest)
-                );
-            }
-        }
-
-        if !success {
-            bail!(
-                "npm package {} did not match expected digest after {} attempts",
-                pkg.name,
-                attempts
-            );
         }
     }
 
@@ -316,6 +280,61 @@ pub fn ensure(out_dir: Option<PathBuf>) -> Result<(), anyhow::Error> {
         }
     }
 
+    Ok(())
+}
+
+/// Downloads `pkg` from the NPM registry, unpacks its files into the vendor
+/// directories, and checks the unpacked files against `pkg.digest`.
+fn download_and_verify(
+    client: &reqwest::blocking::Client,
+    pkg: &NpmPackage,
+) -> Result<(), anyhow::Error> {
+    let url = format!(
+        "https://registry.npmjs.org/{}/-/{}-{}.tgz",
+        pkg.name,
+        pkg.name.split('/').next_back().unwrap(),
+        pkg.version,
+    );
+
+    let res = client
+        .get(&url)
+        .send()
+        .and_then(|res| res.error_for_status())
+        .with_context(|| format!("downloading {}", pkg.name))?;
+
+    let mut archive = tar::Archive::new(GzDecoder::new(res));
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.strip_prefix("package")?.to_owned();
+        if let Some(css_file) = &pkg.css_file {
+            if path == Path::new(css_file) {
+                unpack_entry(&mut entry, &pkg.css_path())?;
+            }
+        }
+        if path == Path::new(pkg.js_prod_file) {
+            unpack_entry(&mut entry, &pkg.js_prod_path())?;
+        }
+        if path == Path::new(pkg.js_dev_file) {
+            unpack_entry(&mut entry, &pkg.js_dev_path())?;
+        }
+        if let Some((extra_src, _extra_dst)) = &pkg.extra_file {
+            if path == Path::new(extra_src) {
+                unpack_entry(&mut entry, &pkg.extra_path())?;
+            }
+        }
+    }
+
+    let digest = pkg
+        .compute_digest()
+        .with_context(|| format!("computing digest for {}", pkg.name))?;
+    if digest != pkg.digest {
+        bail!(
+            "digest mismatch for {}\n  expected: {}\n  actual:   {}",
+            pkg.name,
+            hex::encode(pkg.digest),
+            hex::encode(digest)
+        );
+    }
     Ok(())
 }
 
