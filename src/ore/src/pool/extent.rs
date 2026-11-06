@@ -73,7 +73,7 @@ pub(crate) const PAGEOUT_RETRY_CAP: u8 = 3;
 /// Consecutive classes above the smallest are within 1.5x of each other,
 /// which bounds a stored payload's internal fragmentation below 1.5x
 /// (page-granular slack at the small end).
-fn extent_classes(page: usize) -> Vec<usize> {
+pub(crate) fn extent_classes(page: usize) -> Vec<usize> {
     let max_comp = max_stored_len(max_chunk_bytes());
     let mut classes = vec![page];
     let mut base = 2 * page;
