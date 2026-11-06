@@ -147,7 +147,10 @@ pub async fn run(
                 }
                 was_active = active;
                 if let Some(relay) = &mut pubsub { relay.reconcile(); }
-                catalog.system_config().dyncfg_updates().apply(&config.system_dyncfgs);
+                // This also releases Persist's initial-configuration barrier,
+                // allowing its PubSub client to connect with the catalog settings.
+                config.catalog_config.persist_clients.cfg()
+                    .apply_from(&catalog.system_config().dyncfg_updates());
                 let mut follower = catalog.replica_config();
                 // Development sibling binaries can have distinct executable build IDs.
                 follower.plan_build = adapter_plan_build.clone();
