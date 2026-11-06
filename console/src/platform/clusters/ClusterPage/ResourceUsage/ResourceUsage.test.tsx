@@ -773,7 +773,7 @@ describe("ResourceUsage", () => {
     expect(within(status).getByText("r2")).toBeInTheDocument();
   });
 
-  it("names a long replica in full inside its status row", async () => {
+  it("cuts a long replica name short, with the full name on hover", async () => {
     await renderResourceUsage({
       withSwap: true,
       replicaNames: { u1: "r1", u2: "blue_green_r2" },
@@ -782,8 +782,9 @@ describe("ResourceUsage", () => {
     const status = await screen.findByRole("img", {
       name: "Replica status over time",
     });
-    expect(within(status).getByText("blue_green_r2")).toBeInTheDocument();
-    expect(within(status).getByText("r1")).toBeInTheDocument();
+    const longName = within(status).getByText("blue…");
+    expect(longName.querySelector("title")).toHaveTextContent("blue_green_r2");
+    expect(within(status).getByText("r1").querySelector("title")).toBeNull();
   });
 
   it("orders the status rows like the replica pills", async () => {

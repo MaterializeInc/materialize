@@ -94,7 +94,12 @@ const BADGE_CHAR_PX = BADGE_FONT_PX * 0.6;
 const BADGE_PADDING_PX = 4;
 // Shorter than a status row, so the row's state shows above and below it.
 const BADGE_HEIGHT_PX = 14;
-const STATUS_LABEL_INSET_PX = 6;
+// A replica's name sits in the right margin with the percent labels, so it
+// gets as many monospace glyphs as fit there.
+const STATUS_NAME_MAX_CHARS = Math.floor(
+  (RESOURCE_CHART_MARGIN.right - AXIS_LABEL_INSET_PX) /
+    (AXIS_LABEL_FONT_PX * 0.6),
+);
 
 // The square swatch is 8px wide, so more stripes are too thin to tell apart.
 const MAX_SWATCH_STRIPES = 3;
@@ -1150,6 +1155,36 @@ const HydratingBadge = ({
   );
 };
 
+/** A replica's name, cut short with its full name on hover. */
+const StatusRowName = ({
+  name,
+  x,
+  y,
+}: {
+  name: string;
+  x: number;
+  y: number;
+}) => {
+  const { colors, fonts } = useTheme<MaterializeTheme>();
+  const isTruncated = name.length > STATUS_NAME_MAX_CHARS;
+  return (
+    <text
+      x={x}
+      y={y}
+      dominantBaseline="central"
+      fill={colors.foreground.primary}
+      fontFamily={fonts.mono}
+      fontSize={AXIS_LABEL_FONT_PX}
+      // The row ignores the pointer so hovering reaches the chart. A cut-off
+      // name takes it back to show its title.
+      pointerEvents={isTruncated ? "auto" : undefined}
+    >
+      {isTruncated && <title>{name}</title>}
+      {isTruncated ? `${name.slice(0, STATUS_NAME_MAX_CHARS - 1)}…` : name}
+    </text>
+  );
+};
+
 const StatusRows = React.memo(
   ({
     layout,
@@ -1160,7 +1195,7 @@ const StatusRows = React.memo(
     xScale: TimeScale;
     rows: StatusTimelineRow[];
   }) => {
-    const { colors, fonts } = useTheme<MaterializeTheme>();
+    const { colors } = useTheme<MaterializeTheme>();
     const statusStyles = useStatusStyles();
     const [rangeStart, rangeEnd] = layout.xScaleRange;
     const rowPitch = STATUS_ROW_HEIGHT_PX + STATUS_ROW_GAP_PX;
@@ -1206,16 +1241,6 @@ const StatusRows = React.memo(
                   </g>
                 );
               })}
-              <text
-                x={rangeStart + STATUS_LABEL_INSET_PX}
-                y={center}
-                dominantBaseline="central"
-                fill={colors.foreground.primary}
-                fontFamily={fonts.mono}
-                fontSize={AXIS_LABEL_FONT_PX}
-              >
-                {row.name}
-              </text>
               {row.timeline.oomAtMs.map((atMs) => (
                 <rect
                   key={atMs}
@@ -1238,6 +1263,11 @@ const StatusRows = React.memo(
                     center={center}
                   />
                 )}
+              <StatusRowName
+                name={row.name}
+                x={rangeEnd + AXIS_LABEL_INSET_PX}
+                y={center}
+              />
             </g>
           );
         })}
