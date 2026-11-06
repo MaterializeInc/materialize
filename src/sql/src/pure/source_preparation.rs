@@ -53,6 +53,8 @@ pub struct SourcePreparationRequest {
 ///
 /// Equal requests reuse cached results, so each variant must include every
 /// catalog-derived input its external reads depend on.
+/// Each request carries every catalog-derived input its upstream reads use. Equal requests reuse a cached result,
+/// so an input missing here would let a stale result be reused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RequestKind {
     Source(Box<CreateSourcePreparation>),
