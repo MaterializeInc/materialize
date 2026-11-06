@@ -22,6 +22,8 @@
 
 mode cockroach
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (
   a INT PRIMARY KEY,
@@ -33,16 +35,24 @@ onlyif cockroach
 statement ok
 INSERT INTO t VALUES (1, 'foo' COLLATE en), (2, NULL), (3, 'bar' COLLATE en)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX ON t (b, a)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test that unspecifying b is like specifying NULL.
 statement ok
 INSERT INTO t (a) VALUES(4)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES(5)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT b FROM t ORDER BY b
 ----
