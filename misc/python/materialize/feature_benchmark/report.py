@@ -64,9 +64,9 @@ class Report:
         output_lines = []
 
         output_lines.append(
-            f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'UNIT':^6} | {'THRESHOLD':^10} | {'Regression?':^13} | 'THIS' is"
+            f"{'NAME':<35} | {'TYPE':<18} | {'THIS':^15} | {'OTHER':^15} | {'UNIT':^6} | {'THRESHOLD':^10} | {'Regression?':^13} | 'THIS' is"
         )
-        output_lines.append("-" * 152)
+        output_lines.append("-" * 155)
 
         for scenario_result in self._result_by_scenario_name.values():
             evaluator = RelativeThresholdEvaluator(scenario_result.scenario_class)
@@ -83,7 +83,7 @@ class Report:
                 regression = "!!YES!!" if evaluator.is_regression(metric) else "no"
                 threshold = f"{(evaluator.get_threshold(metric) * 100):.0f}%"
                 output_lines.append(
-                    f"{scenario_result.scenario_name:<35} | {metric.measurement_type:<15} | {metric.this_as_str():>15} | {metric.other_as_str():>15} | {metric.unit():^6} | {threshold:^10} | {regression:^13} | {evaluator.human_readable(metric, use_colors)}"
+                    f"{scenario_result.scenario_name:<35} | {metric.measurement_type:<18} | {metric.this_as_str():>15} | {metric.other_as_str():>15} | {metric.unit():^6} | {threshold:^10} | {regression:^13} | {evaluator.human_readable(metric, use_colors)}"
                 )
 
         return "\n".join(output_lines)
