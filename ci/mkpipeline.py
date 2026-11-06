@@ -631,7 +631,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     # - CI_FORCE_SWITCH_TO_AWS env variable to 1
     # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in https://buildkite.com/materialize/test/settings/steps and other pipelines
 
-    force = ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "1")
+    force = ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0")
     stuck: set[str] = set()
     # TODO(def-): Remove me when Hetzner fixes its aarch64 availability
     stuck.update(
