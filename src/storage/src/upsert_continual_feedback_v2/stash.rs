@@ -179,9 +179,15 @@ fn next_outer<T: Refines<mz_repr::Timestamp>>(ts: &T) -> Option<T> {
 /// points where the flavors diverge.
 pub(super) trait UpsertStashArm<T, O>
 where
-    T: Timestamp + Lattice + columnar::Columnar + Default,
+    T: Timestamp + Lattice + mz_timely_util::columnar::chunk::PoolColumnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
+    O: mz_timely_util::columnar::chunk::PoolColumnar
+        + Default
+        + Ord
+        + Clone
+        + Send
+        + Sync
+        + 'static,
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
     /// The feedback arrangement's spine. `'static` because the operator
@@ -278,9 +284,15 @@ pub(super) struct ChunkedArm;
 impl<T, O> UpsertStashArm<T, O> for ChunkedArm
 where
     T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + columnar::Columnar + Default,
+    T: columnation::Columnation + mz_timely_util::columnar::chunk::PoolColumnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
+    O: mz_timely_util::columnar::chunk::PoolColumnar
+        + Default
+        + Ord
+        + Clone
+        + Send
+        + Sync
+        + 'static,
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
     type Spine = FeedbackSpine<T>;
@@ -345,9 +357,15 @@ pub(super) struct PagedArm;
 impl<T, O> UpsertStashArm<T, O> for PagedArm
 where
     T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + columnar::Columnar + Default,
+    T: columnation::Columnation + mz_timely_util::columnar::chunk::PoolColumnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
+    O: mz_timely_util::columnar::chunk::PoolColumnar
+        + Default
+        + Ord
+        + Clone
+        + Send
+        + Sync
+        + 'static,
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
     type Spine = FundedValRowSpine<UpsertKey, T, Diff>;

@@ -239,7 +239,13 @@ where
 {
     /// Columnar order key. Must order consistently with the source time it is
     /// projected from.
-    type Order: columnar::Columnar + Clone + Default + Ord + Send + Sync + 'static;
+    type Order: mz_timely_util::columnar::chunk::PoolColumnar
+        + Clone
+        + Default
+        + Ord
+        + Send
+        + Sync
+        + 'static;
     /// Project the source time onto its order key.
     fn upsert_order(&self) -> Self::Order;
 }
@@ -684,7 +690,7 @@ where
     T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
-    T: columnar::Columnar + Default,
+    T: mz_timely_util::columnar::chunk::PoolColumnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     FromTime: Timestamp + Clone + Sync,
     FromTime: UpsertSourceTime,

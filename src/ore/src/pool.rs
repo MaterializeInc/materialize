@@ -80,6 +80,9 @@ use crate::pool::region::{Region, SIZE_CLASSES};
 /// NOTE: Seen OoMs with Miri since it actually allocates the capacity.
 const CLASS_CAPACITY_BYTES: usize = if cfg!(miri) { 16 << 20 } else { 1 << 40 };
 
+/// Bytes per word of a chunk body. Chunk lengths are in `u64` words.
+const WORD_BYTES: usize = std::mem::size_of::<u64>();
+
 /// A chunk-provided transform between a chunk's body bytes and the stored
 /// bytes its extent holds. The pool owns scheduling: spill threads, the
 /// residency state machine, cancellation, and the ledger. It invokes the
@@ -128,6 +131,37 @@ impl ExtentCodec for IdentityCodec {
         assert_eq!(stored.len(), body.len(), "identity stored form is the body");
         body.copy_from_slice(stored);
     }
+}
+
+/// A chunk body the pool holds in its owner's in-memory form, serializing it
+/// only when it has to leave that form: on eviction, on backing, and on a
+/// copy-out read. Under budget a typed chunk therefore costs the pool its
+/// bookkeeping and nothing else, and [`ChunkHandle::take_typed`] hands the
+/// body back without a copy.
+///
+/// The body is immutable once inserted. Spill threads serialize and drop it
+/// under the chunk's state lock, so it must be `Send`.
+pub trait TypedBody: std::any::Any + Send + std::fmt::Debug {
+    /// The serialized length in `u64` words. Must not change while the pool
+    /// holds the body.
+    fn words(&self) -> usize;
+
+    /// Writes the serialized form into `dst`, which is exactly
+    /// [`TypedBody::words`] long, overwriting all of it.
+    fn serialize_into(&self, dst: &mut [u64]);
+
+    /// The body as [`std::any::Any`], for the owner to downcast a borrow.
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// The body as [`std::any::Any`], for the owner to downcast a take.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any>;
+}
+
+/// The serialized form of a typed body, in a fresh buffer.
+fn serialize_typed(body: &dyn TypedBody) -> Vec<u64> {
+    let mut words = vec![0; body.words()];
+    body.serialize_into(&mut words);
+    words
 }
 
 /// The largest stored form [`ExtentCodec::encode`] may produce for a
@@ -473,6 +507,10 @@ struct ChunkState {
     /// Reads copy the slot out under the state lock; no pointer into the
     /// slot outlives the lock under which it was formed.
     slot: Option<u32>,
+    /// The resident body of a chunk inserted by [`Pool::insert_typed`], in
+    /// place of a slot. A resident chunk holds at most one of `slot` and
+    /// `typed`; eviction drops whichever it holds.
+    typed: Option<Box<dyn TypedBody>>,
     /// The backing copy; present exactly in the `BackedResident` and
     /// `Evicted` states.
     extent: Option<SwapExtent>,
@@ -503,6 +541,7 @@ impl ChunkMeta {
                 touched: false,
                 freed: false,
                 slot,
+                typed: None,
                 extent: None,
                 oversize,
             }),
@@ -510,7 +549,7 @@ impl ChunkMeta {
     }
 
     fn len_bytes(&self) -> usize {
-        self.len * std::mem::size_of::<u64>()
+        self.len * WORD_BYTES
     }
 
     /// Locks the chunk's state.
@@ -608,7 +647,7 @@ impl Pool {
     ) -> ChunkHandle {
         let inner = &self.0;
         inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
-        let len_bytes = len * std::mem::size_of::<u64>();
+        let len_bytes = len * WORD_BYTES;
         if len == 0 {
             fill(&mut []);
             let meta = ChunkMeta::new(
@@ -705,6 +744,53 @@ impl Pool {
                 .queue(band(meta.depth))
                 .push_back(Arc::downgrade(&meta));
         }
+        inner.enforce_budget();
+        ChunkHandle { meta }
+    }
+
+    /// Inserts a chunk in its owner's in-memory form (see [`TypedBody`]),
+    /// charged against the budget at its serialized length. Admission
+    /// follows [`Pool::insert_with`]: a chunk the budget denies even after
+    /// enforcement is serialized and compressed on the calling thread, and a
+    /// body with no size class to evict into is serialized onto the heap.
+    pub fn insert_typed(
+        &self,
+        body: Box<dyn TypedBody>,
+        hints: ChunkHints,
+        codec: &'static dyn ExtentCodec,
+    ) -> ChunkHandle {
+        let len = body.words();
+        let len_bytes = len * WORD_BYTES;
+        let class = region::size_class_for(len_bytes).filter(|_| len > 0);
+        let inner = &self.0;
+        if class.is_none() {
+            return self.insert_with(len, hints, codec, |dst| body.serialize_into(dst));
+        }
+        if !inner.reserve_insert(len_bytes) {
+            inner.enforce_budget();
+            if !inner.reserve_insert(len_bytes) {
+                inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
+                return self
+                    .insert_extent(len, class, hints, codec, |dst| body.serialize_into(dst));
+            }
+        }
+        inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
+        let meta = ChunkMeta::new(
+            inner,
+            len,
+            class,
+            hints.depth,
+            codec,
+            Residency::UnbackedResident,
+            None,
+            None,
+        );
+        meta.state().typed = Some(body);
+        let meta = Arc::new(meta);
+        inner.live_chunks.fetch_add(1, Ordering::Relaxed);
+        inner
+            .queue(band(meta.depth))
+            .push_back(Arc::downgrade(&meta));
         inner.enforce_budget();
         ChunkHandle { meta }
     }
@@ -1198,23 +1284,29 @@ impl PoolInner {
     }
 
     fn evict_locked(&self, meta: &Arc<ChunkMeta>, state: &mut ChunkState) {
-        let Some(slot) = state.slot else {
-            return;
-        };
-        if state.freed {
+        if state.freed || (state.slot.is_none() && state.typed.is_none()) {
             return;
         }
         match state.residency {
             Residency::UnbackedResident => {
-                // SAFETY: the slot belongs to this live chunk and the state
-                // lock is held, so nothing else touches the slot while this
-                // borrow is live (reads copy out under the same lock).
-                let data = unsafe { self.slot_data(meta, slot) };
                 // Inline eviction runs on whichever thread tripped the
                 // budget, so the compression scratch must not stay parked
                 // on it.
-                let extent =
-                    SwapExtent::write(&self.extent_arena, data, meta.codec, Scratch::Shrink);
+                let extent = match (state.slot, state.typed.as_deref()) {
+                    (Some(slot), _) => {
+                        // SAFETY: the slot belongs to this live chunk and the
+                        // state lock is held, so nothing else touches the
+                        // slot while this borrow is live (reads copy out
+                        // under the same lock).
+                        let data = unsafe { self.slot_data(meta, slot) };
+                        SwapExtent::write(&self.extent_arena, data, meta.codec, Scratch::Shrink)
+                    }
+                    (None, Some(body)) => {
+                        let data = serialize_typed(body);
+                        SwapExtent::write(&self.extent_arena, &data, meta.codec, Scratch::Shrink)
+                    }
+                    (None, None) => unreachable!("checked above"),
+                };
                 self.counters
                     .evictions_compress
                     .fetch_add(1, Ordering::Relaxed);
@@ -1229,7 +1321,7 @@ impl PoolInner {
         }
         // `release_slot`'s precondition holds: the state lock is held and
         // `!freed` was checked above under it.
-        self.release_slot(meta, state);
+        self.release_resident(meta, state);
         state.residency = Residency::Evicted;
     }
 
@@ -1362,7 +1454,7 @@ impl PoolInner {
         // captured under the lock and remains owned by this chunk for the
         // unlocked compression: in `WriteInFlight`, eviction skips the chunk
         // and `ChunkHandle::drop` defers slot release to this thread.
-        let slot;
+        let source: Result<u32, Vec<u64>>;
         {
             let mut state = meta.state();
             if state.freed {
@@ -1374,20 +1466,30 @@ impl PoolInner {
                     .spill_cancelled
                     .fetch_add(1, Ordering::Relaxed);
                 self.counters.writes_elided.fetch_add(1, Ordering::Relaxed);
-                self.release_slot(meta, &mut state);
+                self.release_resident(meta, &mut state);
                 return;
             }
             if state.residency != Residency::WriteInFlight {
                 return;
             }
-            slot = state.slot.expect("write-in-flight chunk has a slot");
+            // A typed body is serialized here, under the lock: the
+            // serialization is one copy, and compressing the copy below needs
+            // no lock.
+            source = match (state.slot, state.typed.as_deref()) {
+                (Some(slot), _) => Ok(slot),
+                (None, Some(body)) => Err(serialize_typed(body)),
+                (None, None) => unreachable!("write-in-flight chunk holds a slot or a body"),
+            };
         }
-        // SAFETY: the chunk is live (the queue holds an `Arc`) and in
-        // `WriteInFlight`, so the slot is not recycled (`ChunkHandle::drop`
-        // defers slot release to this thread in that state) and its contents
-        // are immutable; concurrent copy-out reads take the state lock and
-        // read the slot, but nothing writes it.
-        let data = unsafe { self.slot_data(meta, slot) };
+        let data = match &source {
+            // SAFETY: the chunk is live (the queue holds an `Arc`) and in
+            // `WriteInFlight`, so the slot is not recycled (`ChunkHandle::drop`
+            // defers slot release to this thread in that state) and its
+            // contents are immutable; concurrent copy-out reads take the
+            // state lock and read the slot, but nothing writes it.
+            Ok(slot) => unsafe { self.slot_data(meta, *slot) },
+            Err(words) => &words[..],
+        };
         // Spill threads see a steady job stream, so they keep the grown
         // compression scratch for the next job.
         let extent = SwapExtent::write(&self.extent_arena, data, meta.codec, Scratch::Retain);
@@ -1398,7 +1500,7 @@ impl PoolInner {
             self.counters
                 .spill_cancelled
                 .fetch_add(1, Ordering::Relaxed);
-            self.release_slot(meta, &mut state);
+            self.release_resident(meta, &mut state);
             return;
         }
         self.commit_extent(meta, &mut state, extent);
@@ -1416,7 +1518,7 @@ impl PoolInner {
                 self.counters
                     .evictions_compress
                     .fetch_add(1, Ordering::Relaxed);
-                self.release_slot(meta, &mut state);
+                self.release_resident(meta, &mut state);
                 state.residency = Residency::Evicted;
             }
         };
@@ -1425,6 +1527,19 @@ impl PoolInner {
         // here (rather than relying on the spill loop alone) so the
         // threadless test hooks observe deterministic post-commit states.
         self.enforce_compressed_cap();
+    }
+
+    /// Releases whichever resident form the chunk holds, its slot or its
+    /// typed body, under [`PoolInner::release_slot`]'s precondition.
+    fn release_resident(&self, meta: &ChunkMeta, state: &mut ChunkState) {
+        if state.slot.is_some() {
+            self.release_slot(meta, state);
+        } else if let Some(body) = state.typed.take() {
+            drop(body);
+            self.counters
+                .resident_bytes
+                .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+        }
     }
 
     /// Releases `state`'s slot — slot returned to the region free list,
@@ -1694,7 +1809,8 @@ impl PoolInner {
                     }
                     Residency::BackedResident => {}
                 }
-                if state.touched || meta.class != Some(class) {
+                // A typed victim has no slot to hand over.
+                if state.touched || meta.class != Some(class) || state.slot.is_none() {
                     self.queue(band).push_back(weak);
                     continue;
                 }
@@ -1959,7 +2075,7 @@ impl PoolInner {
         // the missing slot.
         if state.residency != Residency::UnbackedResident
             || state.freed
-            || state.slot.is_none()
+            || (state.slot.is_none() && state.typed.is_none())
             || !self.spill_eligible()
         {
             return false;
@@ -2111,7 +2227,7 @@ impl ChunkHandle {
                         extent.read_range_into(
                             meta.codec,
                             meta.len_bytes(),
-                            range.start * 8,
+                            range.start * WORD_BYTES,
                             bytes,
                         );
                     }
@@ -2143,11 +2259,23 @@ impl ChunkHandle {
                 }
             }
             Residency::UnbackedResident | Residency::BackedResident | Residency::WriteInFlight => {
-                let slot = state.slot.expect("resident non-empty chunk has a slot");
-                // SAFETY: the slot belongs to this chunk while the state lock
-                // is held (eviction and free both take it).
-                let src = unsafe { meta.pool.slot_data(meta, slot) };
-                dst.extend_from_slice(&src[range.start..range.end]);
+                match (state.slot, state.typed.as_deref()) {
+                    (Some(slot), _) => {
+                        // SAFETY: the slot belongs to this chunk while the
+                        // state lock is held (eviction and free both take
+                        // it).
+                        let src = unsafe { meta.pool.slot_data(meta, slot) };
+                        dst.extend_from_slice(&src[range.start..range.end]);
+                    }
+                    (None, Some(body)) if range == (0..meta.len) => {
+                        dst.resize(meta.len, 0);
+                        body.serialize_into(dst);
+                    }
+                    (None, Some(body)) => {
+                        dst.extend_from_slice(&serialize_typed(body)[range.start..range.end]);
+                    }
+                    (None, None) => unreachable!("resident non-empty chunk holds a slot or a body"),
+                }
             }
         }
         drop(state);
@@ -2157,6 +2285,65 @@ impl ChunkHandle {
         if extent_revived {
             meta.pool.enforce_or_defer_compressed_cap();
         }
+    }
+
+    /// Runs `f` on the chunk's typed body while it is resident, under the
+    /// chunk's state lock, or on `None` without the lock in every other
+    /// state. Eviction only ever `try_lock`s a chunk, so a borrowed body is
+    /// skipped rather than waited on.
+    ///
+    /// NOTE: `f` must not touch this chunk through the pool. The state lock
+    /// is not reentrant, so a read of the same chunk inside `f` deadlocks.
+    pub fn with_typed<X>(&self, f: impl FnOnce(Option<&dyn TypedBody>) -> X) -> X {
+        let mut state = self.meta.state();
+        if state.typed.is_some() {
+            state.touched = true;
+            return f(state.typed.as_deref());
+        }
+        drop(state);
+        f(None)
+    }
+
+    /// Whether the chunk currently holds a resident typed body. Advisory: a
+    /// concurrent eviction can change the answer as soon as it returns.
+    pub fn is_typed(&self) -> bool {
+        self.meta.state().typed.is_some()
+    }
+
+    /// Frees the chunk and returns its typed body without a copy when the
+    /// body is resident and no spill thread is serializing it, else returns
+    /// the handle unchanged.
+    pub fn take_typed(self) -> Result<Box<dyn TypedBody>, ChunkHandle> {
+        let pool = &self.meta.pool;
+        let body = {
+            let mut state = self.meta.state();
+            let body = match state.residency {
+                Residency::UnbackedResident => state.typed.take(),
+                Residency::BackedResident => {
+                    let body = state.typed.take();
+                    if body.is_some() {
+                        let extent = state.extent.take().expect("backed chunk has an extent");
+                        pool.note_extent_released(&extent);
+                        state.residency = Residency::UnbackedResident;
+                    }
+                    body
+                }
+                Residency::WriteInFlight | Residency::Evicted | Residency::Oversize => None,
+            };
+            if body.is_some() {
+                pool.counters
+                    .resident_bytes
+                    .fetch_sub(u64::cast_from(self.meta.len_bytes()), Ordering::Relaxed);
+                // Mark the chunk dead before the lock drops. Eager backing
+                // otherwise sees an `UnbackedResident` chunk with no body,
+                // moves it to `WriteInFlight`, and the spill thread panics
+                // finding nothing to serialize.
+                state.freed = true;
+            }
+            body
+        };
+        // The emptied chunk drops as an unbacked chunk holding nothing.
+        body.ok_or(self)
     }
 
     /// Copies the whole contents into `dst` (per [`ChunkHandle::read_into`],
@@ -2210,13 +2397,13 @@ impl Drop for ChunkHandle {
         // here, so concurrent queue visitors skip the chunk.
         match state.residency {
             Residency::UnbackedResident => {
-                if state.slot.is_some() {
+                if state.slot.is_some() || state.typed.is_some() {
                     pool.counters.writes_elided.fetch_add(1, Ordering::Relaxed);
-                    pool.release_slot(&self.meta, &mut state);
+                    pool.release_resident(&self.meta, &mut state);
                 }
             }
             Residency::BackedResident => {
-                pool.release_slot(&self.meta, &mut state);
+                pool.release_resident(&self.meta, &mut state);
                 if let Some(extent) = &state.extent {
                     pool.note_extent_released(extent);
                 }
@@ -2308,7 +2495,7 @@ mod tests {
     }
 
     /// Words that fill a 64 KiB class exactly.
-    const SMALL: usize = (64 << 10) / 8;
+    const SMALL: usize = (64 << 10) / WORD_BYTES;
 
     #[allow(dead_code)]
     fn assert_handle_send_sync() {
@@ -2958,7 +3145,7 @@ mod tests {
         assert_eq!(read_admit(&handle), small_orig);
         let stats = pool.stats();
         assert_eq!(stats.admissions_steal, 1, "no headroom, so the read steals");
-        assert_eq!(stats.resident_bytes, u64::cast_from(SMALL / 2 * 8));
+        assert_eq!(stats.resident_bytes, u64::cast_from(SMALL / 2 * WORD_BYTES));
         assert_eq!(victim.residency(), Residency::Evicted);
         assert_eq!(read(&victim), victim_orig, "victim serves from its extent");
 
@@ -3012,7 +3199,7 @@ mod tests {
         let resident = insert(&pool, &mut orig.clone());
         assert_eq!(read_admit(&resident), orig);
         assert_eq!(resident.residency(), Residency::UnbackedResident);
-        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1;
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES + 1;
         let oversize_orig = payload(words, 90);
         let oversize = insert(&pool, &mut oversize_orig.clone());
         assert_eq!(read_admit(&oversize), oversize_orig);
@@ -3292,14 +3479,14 @@ mod tests {
 
     #[mz_ore::test]
     fn insertion_debt_is_bounded_during_enforcement() {
-        let budget = 2 * SMALL * 8;
+        let budget = 2 * SMALL * WORD_BYTES;
         let pool = test_pool(budget);
         let guard = pool.0.enforcing.lock().expect("enforcement lock");
         let mut handles = Vec::new();
         for seed in 0..16 {
             handles.push(insert(&pool, &mut payload(SMALL, seed)));
             assert!(
-                pool.stats().resident_bytes <= u64::cast_from(budget + SMALL * 8),
+                pool.stats().resident_bytes <= u64::cast_from(budget + SMALL * WORD_BYTES),
                 "an occupied enforcer must not allow unlimited insertion debt",
             );
         }
@@ -3315,7 +3502,7 @@ mod tests {
 
     #[mz_ore::test]
     fn admission_reserves_before_concurrent_fills() {
-        let budget = 2 * SMALL * 8;
+        let budget = 2 * SMALL * WORD_BYTES;
         let pool = test_pool(budget);
         let guard = pool.0.enforcing.lock().expect("enforcement lock");
         let gate = Arc::new(std::sync::Barrier::new(9));
@@ -3341,7 +3528,7 @@ mod tests {
             .map(|t| t.join().expect("producer panicked"))
             .collect();
         drop(guard);
-        assert!(reserved <= u64::cast_from(budget + SMALL * 8));
+        assert!(reserved <= u64::cast_from(budget + SMALL * WORD_BYTES));
         assert!(pool.stats().direct_extent_inserts > 0);
         for (seed, handle) in handles.iter().enumerate() {
             assert_eq!(read(handle), payload(SMALL, u64::cast_from(seed)));
@@ -3437,13 +3624,13 @@ mod tests {
     #[mz_ore::test]
     fn oversize_round_trips() {
         let pool = test_pool(256 << 20);
-        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1;
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES + 1;
         let orig = payload(words, 10);
         let handle = insert(&pool, &mut orig.clone());
         assert_eq!(handle.residency(), Residency::Oversize);
         assert_eq!(handle.size_class_bytes(), None);
         let stats = pool.stats();
-        assert_eq!(stats.oversize_bytes, u64::cast_from(words * 8));
+        assert_eq!(stats.oversize_bytes, u64::cast_from(words * WORD_BYTES));
         // The payload outgrew the largest class, and no class was exhausted.
         assert_eq!(stats.oversize_payloads, 1);
         assert_eq!(stats.slot_exhausted_fallbacks, 0);
@@ -3462,7 +3649,7 @@ mod tests {
     #[mz_ore::test]
     fn payload_lands_in_smallest_fitting_class() {
         let pool = test_pool(256 << 20);
-        let handle = insert(&pool, &mut payload((100 << 10) / 8, 11));
+        let handle = insert(&pool, &mut payload((100 << 10) / WORD_BYTES, 11));
         assert_eq!(handle.size_class_bytes(), Some(128 << 10));
         let exact = insert(&pool, &mut payload(SMALL, 12));
         assert_eq!(exact.size_class_bytes(), Some(64 << 10));
@@ -3616,12 +3803,12 @@ mod tests {
         assert_eq!(pool.stats().warm_bytes, 64 << 10, "freed slot parks warm");
         // A payload of just over a page reuses the warm slot; the slot's
         // pages past it are released.
-        let words = 4096 / 8 + 1;
+        let words = 4096 / WORD_BYTES + 1;
         let orig = payload(words, 61);
         let handle = insert(&pool, &mut orig.clone());
         let stats = pool.stats();
         assert_eq!(stats.warm_reuses, 1, "reused the warm slot");
-        assert_eq!(stats.resident_bytes, u64::cast_from(words * 8));
+        assert_eq!(stats.resident_bytes, u64::cast_from(words * WORD_BYTES));
         assert_eq!(read(&handle), orig);
         // Round-trips through the extent as well.
         pool.evict(&handle);
@@ -3837,7 +4024,7 @@ mod tests {
             assert!(dst.is_empty())
         });
         assert!(read(&empty).is_empty());
-        let big_len = (SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8) + 1;
+        let big_len = (SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES) + 1;
         let big = pool.insert_with(big_len, ChunkHints::default(), &TEST_CODEC, |dst| {
             dst.fill(7)
         });
@@ -3867,5 +4054,226 @@ mod tests {
         let d = insert(&pool, &mut payload(SMALL, 703));
         assert_eq!(d.residency(), Residency::UnbackedResident);
         assert_eq!(read(&d), payload(SMALL, 703));
+    }
+
+    /// A typed body whose serialized form is its words.
+    #[derive(Debug, PartialEq)]
+    struct Words(Vec<u64>);
+
+    impl TypedBody for Words {
+        fn words(&self) -> usize {
+            self.0.len()
+        }
+
+        fn serialize_into(&self, dst: &mut [u64]) {
+            dst.copy_from_slice(&self.0);
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+            self
+        }
+    }
+
+    fn insert_typed(pool: &Pool, words: Vec<u64>) -> ChunkHandle {
+        pool.insert_typed(Box::new(Words(words)), ChunkHints::default(), &TEST_CODEC)
+    }
+
+    fn borrowed(handle: &ChunkHandle) -> Option<Vec<u64>> {
+        handle.with_typed(|typed| {
+            typed.map(|typed| {
+                let words = typed.as_any().downcast_ref::<Words>().expect("test body");
+                words.0.clone()
+            })
+        })
+    }
+
+    fn taken(typed: Box<dyn TypedBody>) -> Vec<u64> {
+        typed.into_any().downcast::<Words>().expect("test body").0
+    }
+
+    #[mz_ore::test]
+    fn typed_insert_borrows_and_takes_without_serializing() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 800);
+        let handle = insert_typed(&pool, orig.clone());
+        assert_eq!(handle.residency(), Residency::UnbackedResident);
+        assert!(handle.is_typed());
+        assert_eq!(pool.stats().resident_bytes, 64 << 10);
+        assert_eq!(borrowed(&handle), Some(orig.clone()));
+        assert_eq!(read(&handle), orig, "copy-out serializes on demand");
+        let body = handle.take_typed().expect("resident typed body");
+        assert_eq!(taken(body), orig);
+        let stats = pool.stats();
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(stats.live_chunks, 0);
+        assert_eq!(stats.frees, 1);
+        assert_eq!(stats.extent_bytes_written, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_ranged_reads_match_full_read_slice() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 801);
+        let handle = insert_typed(&pool, orig.clone());
+        for range in [0..1, 7..SMALL - 3, SMALL - 1..SMALL, 0..SMALL] {
+            let mut out = Vec::new();
+            handle.read_range_into(range.clone(), &mut out);
+            assert_eq!(out, orig[range]);
+        }
+    }
+
+    #[mz_ore::test]
+    fn typed_evict_then_read_and_admit() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 802);
+        let handle = insert_typed(&pool, orig.clone());
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        assert!(!handle.is_typed());
+        let stats = pool.stats();
+        assert_eq!(stats.evictions_compress, 1);
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(borrowed(&handle), None);
+        pool.poison_free_slots();
+        assert_eq!(read(&handle), orig);
+        assert_eq!(read_admit(&handle), orig);
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        assert_eq!(pool.stats().admissions_budget, 1);
+        assert_eq!(read(&handle), orig, "admitted chunk reads from its slot");
+        let handle = handle
+            .take_typed()
+            .expect_err("an admitted chunk holds a slot, not a typed body");
+        drop(handle);
+        assert_eq!(pool.stats().resident_bytes, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_eager_backing_keeps_the_body_and_makes_eviction_cheap() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 803);
+        let handle = insert_typed(&pool, orig.clone());
+        assert!(pool.back_step(), "one chunk is backable");
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        assert_eq!(borrowed(&handle), Some(orig.clone()));
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        let stats = pool.stats();
+        assert_eq!(stats.eager_backs, 1);
+        assert_eq!(stats.evictions_cheap, 1);
+        assert_eq!(stats.evictions_compress, 0);
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(read(&handle), orig);
+    }
+
+    #[mz_ore::test]
+    fn typed_take_after_backing_releases_the_extent() {
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(usize::MAX / 2);
+        let orig = payload(SMALL, 804);
+        let handle = insert_typed(&pool, orig.clone());
+        assert!(pool.back_step());
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        assert!(pool.stats().extent_resident_bytes > 0);
+        let body = handle.take_typed().expect("backed typed body");
+        assert_eq!(taken(body), orig);
+        let stats = pool.stats();
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(stats.extent_resident_bytes, 0);
+        assert_eq!(stats.live_chunks, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_take_races_eager_backing() {
+        let pool = test_pool(usize::MAX);
+        pool.set_rss_target(usize::MAX / 2);
+        pool.set_spill_threads(4);
+        pool.set_eager_backing(true);
+        for round in 0..rounds(20_000, 20) {
+            let orig = payload(SMALL, round);
+            match insert_typed(&pool, orig.clone()).take_typed() {
+                Ok(body) => assert_eq!(taken(body), orig),
+                // A spill thread is backing the body.
+                Err(handle) => assert_eq!(read(&handle), orig),
+            }
+        }
+        pool.set_eager_backing(false);
+        pool.quiesce_spill();
+        pool.join_spill_threads();
+        assert_eq!(pool.stats().resident_bytes, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_spill_evict_round_trip() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let orig = payload(SMALL, 805);
+        let handle = insert_typed(&pool, orig.clone());
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::WriteInFlight);
+        assert_eq!(borrowed(&handle), Some(orig.clone()), "readable in flight");
+        let handle = handle
+            .take_typed()
+            .expect_err("a spill thread owns an in-flight body");
+        assert!(pool.spill_step());
+        assert_eq!(handle.residency(), Residency::Evicted);
+        let stats = pool.stats();
+        assert_eq!(stats.evictions_compress, 1);
+        assert_eq!(stats.resident_bytes, 0);
+        pool.poison_free_slots();
+        assert_eq!(read(&handle), orig);
+    }
+
+    #[mz_ore::test]
+    fn typed_spill_freed_while_queued_is_elided() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let handle = insert_typed(&pool, payload(SMALL, 806));
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::WriteInFlight);
+        drop(handle);
+        assert!(pool.spill_step());
+        let stats = pool.stats();
+        assert_eq!(stats.spill_cancelled, 1);
+        assert_eq!(stats.writes_elided, 1);
+        assert_eq!(stats.extent_bytes_written, 0);
+        assert_eq!(stats.resident_bytes, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_budget_is_enforced_on_insert() {
+        let budget = 4 * (64 << 10);
+        let pool = test_pool(budget);
+        let handles: Vec<_> = (0..16)
+            .map(|seed| insert_typed(&pool, payload(SMALL, 900 + seed)))
+            .collect();
+        let stats = pool.stats();
+        assert!(
+            stats.resident_bytes <= u64::cast_from(budget) + insert_slack(u64::cast_from(budget)),
+            "resident {} over budget {budget}",
+            stats.resident_bytes,
+        );
+        assert!(stats.evictions_compress > 0);
+        for (seed, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, 900 + u64::cast_from(seed)));
+        }
+        drop(handles);
+        let stats = pool.stats();
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(stats.live_chunks, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_body_beyond_the_classes_is_serialized_to_the_heap() {
+        let pool = test_pool(256 << 20);
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES + 1;
+        let orig = payload(words, 807);
+        let handle = insert_typed(&pool, orig.clone());
+        assert_eq!(handle.residency(), Residency::Oversize);
+        assert!(!handle.is_typed());
+        assert_eq!(read(&handle), orig);
     }
 }

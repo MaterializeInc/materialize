@@ -175,6 +175,7 @@ where
 /// columnation.
 pub trait MzData:
     columnation::Columnation
+    + mz_timely_util::columnar::chunk::PoolColumnar
     + for<'a> columnar::Columnar<
         Container: Container<Ref<'a>: Copy + Ord> + Clone + Send + columnar::Push<Self>,
     >
@@ -184,6 +185,7 @@ pub trait MzData:
 impl<T> MzData for T
 where
     T: columnation::Columnation,
+    T: mz_timely_util::columnar::chunk::PoolColumnar,
     T: columnar::Columnar<Container: Clone + Send + columnar::Push<T>>,
     for<'a> Ref<'a, T>: Copy + Ord,
 {
