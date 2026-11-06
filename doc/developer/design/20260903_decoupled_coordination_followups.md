@@ -56,8 +56,8 @@ changed-only history output.
 The execution loop in `src/clusterd/src/catalog_follower.rs` follows catalog
 changes incrementally but rebuilds its wanted set and calls
 `storage_metadata::resolve` each reconciliation turn. That function reconstructs
-definitions, reads selected plans, resolves schemas and obtains physical uppers
-for wanted dependencies and outputs.
+definitions, resolves schemas and reads retained progress for wanted dependencies
+and outputs. Warm progress and immutable-plan hits no longer refresh consensus.
 
 Cache immutable resolution by GlobalId, shard, schema version and selected plan.
 Invalidate from existing catalog effects and retry missing prerequisites
@@ -111,6 +111,21 @@ follow-up. Neither is approval to add projection-recovery protocols, watermarks
 or another policy owner during this milestone.
 
 ## Separate correctness investigations
+
+### Critical protection at collection birth
+
+Source inspection found a possible ordering gap, not yet reproduced. The native
+follower installs and schedules execution before `compaction.reconcile` attaches
+critical readers. If the creating adapter stalls before its storage attachment,
+a leased Persist reader could advance since beyond the committed permission.
+`register_leased_reader(use_critical_since=true)` falls back to trace since when
+no critical reader exists. Attaching one later cannot restore discarded history.
+
+Reproduce this ordering before changing physical-readability checks. Establishing
+protection belongs at collection birth/execution attachment. A fresh `recent_since`
+can detect an existing mismatch but cannot prevent a later race. Existing checks
+remain in place. The consensus-read audit is recorded in
+`~/.local/share/aj/m3-evidence/consensus-read-removal/readability-review.md`.
 
 ### Shared plans for peer-created indexes
 
