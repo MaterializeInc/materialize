@@ -277,6 +277,8 @@ export const ChartHeader = ({
 };
 
 export interface ResourceChartHeaderProps extends ChartHeaderProps {
+  /** `opacity` fades a swatch to match marks drawn see-through. */
+  legend?: Array<{ label: string; opacity?: number } & LegendSwatchProps>;
   /** Names the legend's entries as a group, before the first of them. */
   legendLabel?: string;
 }
@@ -348,7 +350,7 @@ export const ResourceChartHeader = ({
                 minWidth={0}
                 listStyleType="none"
               >
-                {legend.map(({ label, color, variant }) => (
+                {legend.map(({ label, color, variant, opacity }) => (
                   <FittedLegendItem
                     key={label}
                     fixedPx={
@@ -356,7 +358,7 @@ export const ResourceChartHeader = ({
                     }
                   >
                     <HStack spacing={1.5} minWidth={0}>
-                      <Box flexShrink={0}>
+                      <Box flexShrink={0} opacity={opacity}>
                         <LegendSwatch color={color} variant={variant} />
                       </Box>
                       <Text
@@ -1275,9 +1277,10 @@ export const ReplicaStatusTimeline = ({
       isHeaderInset
       title="Replica Status"
       legend={[
-        ...Object.values(statusStyles).map(({ label, color }) => ({
+        ...Object.values(statusStyles).map(({ label, color, opacity }) => ({
           label,
           color,
+          opacity,
           variant: "square" as const,
         })),
         {
