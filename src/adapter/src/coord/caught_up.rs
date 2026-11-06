@@ -1470,7 +1470,9 @@ mod tests {
         ));
         for incarnation in [1, 2] {
             let mut replaced = after.clone();
-            let old = replaced.remove(&incarnation).unwrap();
+            let old = replaced
+                .remove(&incarnation)
+                .expect("fixture contains both replica incarnations");
             replaced.insert(5, old);
             assert!(!readiness_executions_match(
                 before.iter(),
