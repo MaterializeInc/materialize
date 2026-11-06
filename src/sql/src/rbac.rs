@@ -1620,7 +1620,18 @@ fn generate_rbac_requirements(
                 ownership: update_privileges
                     .iter()
                     .filter_map(|update_privilege| update_privilege.target_id.object_id())
-                    .cloned()
+                    .map(|object_id| match object_id {
+                        // A privilege on an index is an index-scoped grant on the
+                        // index's relation, so name the relation in errors. Both
+                        // always have the same owner.
+                        ObjectId::Item(item_id) => {
+                            match catalog.get_item(item_id).index_details() {
+                                Some((_, on)) => ObjectId::Item(catalog.resolve_item_id(&on)),
+                                None => object_id.clone(),
+                            }
+                        }
+                        _ => object_id.clone(),
+                    })
                     .collect(),
                 privileges,
                 // To grant/revoke a privilege on some object, generally the grantor/revoker must be the
@@ -1878,8 +1889,8 @@ fn generate_read_privileges(
     )
 }
 
-/// Like [`generate_read_privileges`], for a query that `role_id` runs and
-/// whose results go only to the session: `SELECT`, `SUBSCRIBE`, and `COPY TO`.
+/// Like [`generate_read_privileges`], for a one-off query that `role_id` runs:
+/// `SELECT`, `SUBSCRIBE`, and `COPY TO`.
 ///
 /// A relation the role may read only through an index (see [`index_routes`])
 /// needs no `SELECT` on the relation itself. The caller must then run
@@ -2066,7 +2077,10 @@ fn holds_privileges(
 }
 
 /// The indexes built on relation `id`.
-fn indexes_on(catalog: &impl SessionCatalog, id: CatalogItemId) -> Vec<CatalogItemId> {
+pub(crate) fn indexes_on(
+    catalog: &(impl SessionCatalog + ?Sized),
+    id: CatalogItemId,
+) -> Vec<CatalogItemId> {
     catalog
         .get_item(&id)
         .used_by()
@@ -2082,12 +2096,13 @@ fn indexes_on(catalog: &impl SessionCatalog, id: CatalogItemId) -> Vec<CatalogIt
 }
 
 /// The relations among `ids` that `role_id` may read only through an index,
-/// each mapped to the indexes on it that the role holds `SELECT` on.
+/// each mapped to the indexes the role was granted it through.
 ///
-/// `SELECT` on an index lets a role read the index's relation without `SELECT`
-/// on the relation, provided the query reads it through that index. A role
-/// that holds `SELECT` on the relation itself reads it without restriction,
-/// so such a relation is absent from the result.
+/// `GRANT SELECT ON <relation> TO <role> USING INDEX <index>` lets the role
+/// read the relation without `SELECT` on it, provided the query reads it
+/// through that index. The grant is stored as `SELECT` in the index's
+/// privileges. A role that holds `SELECT` on the relation itself reads it
+/// without restriction, so such a relation is absent from the result.
 fn index_routes(
     catalog: &impl SessionCatalog,
     role_id: RoleId,
@@ -2123,8 +2138,8 @@ fn index_routes(
 
 /// Checks that an optimized query reads each relation that the session's role
 /// may read only through an index (see [`index_routes`]) through indexes the
-/// role holds `SELECT` on, and never through another index or the relation's
-/// storage collection.
+/// role was granted it through, and never through another index or the
+/// relation's storage collection.
 ///
 /// `depends_on` holds the relations the query names, which are the ones RBAC
 /// checked. `source_imports` and `index_imports` are the optimized plan's
@@ -2207,7 +2222,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::Index) => AclMode::SELECT,
+        SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,

@@ -15,8 +15,8 @@ from materialize.mz_version import MzVersion
 
 
 class IndexSelectPrivilege(Check):
-    """`GRANT SELECT ON INDEX` survives restarts and upgrades, and still lets
-    the grantee read the indexed view through the index."""
+    """`GRANT SELECT ... USING INDEX` survives restarts and upgrades, and still
+    lets the grantee read the view through the index."""
 
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v26.50.0-dev")
@@ -25,7 +25,7 @@ class IndexSelectPrivilege(Check):
         return dedent(f"""
             > CREATE VIEW index_select_priv_v{i} AS SELECT f1 FROM index_select_priv_t WHERE f1 > {i}
             > CREATE INDEX index_select_priv_i{i} IN CLUSTER index_select_priv_cluster ON index_select_priv_v{i} (f1)
-            > GRANT SELECT ON INDEX index_select_priv_i{i} TO index_select_priv_role
+            > GRANT SELECT ON index_select_priv_v{i} TO index_select_priv_role USING INDEX index_select_priv_i{i}
             """)
 
     def initialize(self) -> Testdrive:
@@ -56,10 +56,10 @@ class IndexSelectPrivilege(Check):
         # index.
         reads = "\n".join(f"SELECT * FROM index_select_priv_v{i}" for i in range(3))
         return Testdrive(dedent("""
-                > SELECT name, privilege_type FROM mz_internal.mz_show_object_privileges WHERE grantee = 'index_select_priv_role' AND object_type = 'index'
-                index_select_priv_i0 SELECT
-                index_select_priv_i1 SELECT
-                index_select_priv_i2 SELECT
+                > SELECT name, index FROM mz_internal.mz_show_index_scoped_privileges WHERE grantee = 'index_select_priv_role'
+                index_select_priv_v0 index_select_priv_i0
+                index_select_priv_v1 index_select_priv_i1
+                index_select_priv_v2 index_select_priv_i2
 
                 > SELECT count(*) FROM index_select_priv_v2
                 4

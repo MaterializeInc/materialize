@@ -5809,7 +5809,6 @@ fn write_grant_object_type_plural<W: fmt::Write>(
 ) {
     match object_type {
         ObjectType::NetworkPolicy => f.write_str("POLICIES"),
-        ObjectType::Index => f.write_str("INDEXES"),
         other => {
             f.write_node(other);
             f.write_str("S");
@@ -5863,6 +5862,8 @@ pub struct GrantPrivilegesStatement<T: AstInfo> {
     pub target: GrantTargetSpecification<T>,
     /// The roles that will granted the privileges.
     pub roles: Vec<T::RoleName>,
+    /// Restricts the grant to reads through this index on the target relation.
+    pub using_index: Option<T::ItemName>,
 }
 
 impl<T: AstInfo> AstDisplay for GrantPrivilegesStatement<T> {
@@ -5873,6 +5874,10 @@ impl<T: AstInfo> AstDisplay for GrantPrivilegesStatement<T> {
         f.write_node(&self.target);
         f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.roles));
+        if let Some(index) = &self.using_index {
+            f.write_str(" USING INDEX ");
+            f.write_node(index);
+        }
     }
 }
 impl_display_t!(GrantPrivilegesStatement);
@@ -5886,6 +5891,8 @@ pub struct RevokePrivilegesStatement<T: AstInfo> {
     pub target: GrantTargetSpecification<T>,
     /// The roles that will have privileges revoked.
     pub roles: Vec<T::RoleName>,
+    /// Restricts the grant to reads through this index on the target relation.
+    pub using_index: Option<T::ItemName>,
 }
 
 impl<T: AstInfo> AstDisplay for RevokePrivilegesStatement<T> {
@@ -5896,6 +5903,10 @@ impl<T: AstInfo> AstDisplay for RevokePrivilegesStatement<T> {
         f.write_node(&self.target);
         f.write_str(" FROM ");
         f.write_node(&display::comma_separated(&self.roles));
+        if let Some(index) = &self.using_index {
+            f.write_str(" USING INDEX ");
+            f.write_node(index);
+        }
     }
 }
 impl_display_t!(RevokePrivilegesStatement);

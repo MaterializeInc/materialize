@@ -6734,15 +6734,8 @@ impl<'a> Parser<'a> {
             .expect_err("only returns errors")
         })?;
         self.expect_keyword(ON)?;
-        let statement_type = if is_grant { "GRANT" } else { "REVOKE" };
-        let object_type = self.expect_grant_revoke_plural_object_type(statement_type)?;
-        if object_type == ObjectType::Index {
-            return parser_err!(
-                self,
-                self.peek_prev_pos(),
-                format!("Unsupported {statement_type} on {object_type}")
-            );
-        }
+        let object_type =
+            self.expect_grant_revoke_plural_object_type(if is_grant { "GRANT" } else { "REVOKE" })?;
         if is_grant {
             self.expect_keyword(TO)?;
         } else {
@@ -9883,10 +9876,12 @@ impl<'a> Parser<'a> {
         let target = self.expect_grant_target_specification("GRANT")?;
         self.expect_keyword(TO)?;
         let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
+        let using_index = self.parse_privilege_using_index()?;
         Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
             privileges,
             target,
             roles,
+            using_index,
         }))
     }
 
@@ -9925,11 +9920,23 @@ impl<'a> Parser<'a> {
         let target = self.expect_grant_target_specification("REVOKE")?;
         self.expect_keyword(FROM)?;
         let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
+        let using_index = self.parse_privilege_using_index()?;
         Ok(Statement::RevokePrivileges(RevokePrivilegesStatement {
             privileges,
             target,
             roles,
+            using_index,
         }))
+    }
+
+    /// Parse the optional `USING INDEX <name>` clause that ends a `GRANT` or
+    /// `REVOKE` privilege statement.
+    fn parse_privilege_using_index(&mut self) -> Result<Option<RawItemName>, ParserError> {
+        if self.parse_keywords(&[USING, INDEX]) {
+            Ok(Some(self.parse_raw_name()?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Parse a `REVOKE ROLE` statement, assuming that the `REVOKE` token
@@ -10047,6 +10054,7 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Sink
             | ObjectType::MetricSink
+            | ObjectType::Index
             | ObjectType::ClusterReplica
             | ObjectType::Role
             | ObjectType::Func
@@ -10058,7 +10066,6 @@ impl<'a> Parser<'a> {
                 )
             }
             ObjectType::Table
-            | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Cluster
             | ObjectType::Secret

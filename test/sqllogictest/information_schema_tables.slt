@@ -441,6 +441,10 @@ mz_index_advice
 VIEW
 materialize
 mz_internal
+mz_index_scoped_privileges
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_internal_cluster_replicas
 MATERIALIZED VIEW
 materialize
@@ -674,6 +678,10 @@ VIEW
 materialize
 mz_internal
 mz_show_default_privileges
+VIEW
+materialize
+mz_internal
+mz_show_index_scoped_privileges
 VIEW
 materialize
 mz_internal

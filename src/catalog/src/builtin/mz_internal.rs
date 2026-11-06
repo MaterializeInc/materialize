@@ -7291,6 +7291,122 @@ WHERE
     ontology: None,
 });
 
+// `GRANT SELECT ON <relation> TO <role> USING INDEX <index>` is stored as
+// `SELECT` in the index's privileges. Those privileges are listed only here,
+// because a privilege on an index is not something a role can hold in general.
+pub static MZ_INDEX_SCOPED_PRIVILEGES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_index_scoped_privileges",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_INDEX_SCOPED_PRIVILEGES_OID,
+        desc: RelationDesc::builder()
+            .with_column("index_id", SqlScalarType::String.nullable(false))
+            .with_column("on_id", SqlScalarType::String.nullable(false))
+            .with_column("grantor", SqlScalarType::String.nullable(false))
+            .with_column("grantee", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "index_id",
+                "The ID of the index that reads are restricted to. Corresponds to `mz_catalog.mz_indexes.id`.",
+            ),
+            (
+                "on_id",
+                "The ID of the relation the role may read. Corresponds to `mz_catalog.mz_relations.id`.",
+            ),
+            (
+                "grantor",
+                "The role that granted the privilege. Corresponds to `mz_catalog.mz_roles.id`.",
+            ),
+            (
+                "grantee",
+                "The role that the privilege was granted to. Corresponds to `mz_catalog.mz_roles.id`, or `p` for `PUBLIC`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL index_id,
+    ASSERT NOT NULL on_id,
+    ASSERT NOT NULL grantor,
+    ASSERT NOT NULL grantee
+) AS
+SELECT
+    i.id AS index_id,
+    i.on_id AS on_id,
+    p.grantor AS grantor,
+    p.grantee AS grantee
+FROM
+    mz_internal.mz_catalog_raw r
+    JOIN mz_catalog.mz_indexes i
+        ON i.id = mz_internal.parse_catalog_id(r.data->'key'->'gid'),
+    mz_internal.mz_aclexplode(
+        mz_internal.parse_catalog_privileges(r.data->'value'->'privileges')) p
+WHERE
+    r.data->>'kind' = 'Item' AND
+    i.id LIKE 'u%' AND
+    p.privilege_type = 'SELECT'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
+pub static MZ_SHOW_INDEX_SCOPED_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_show_index_scoped_privileges",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_INDEX_SCOPED_PRIVILEGES_OID,
+    desc: RelationDesc::builder()
+        .with_column("grantor", SqlScalarType::String.nullable(true))
+        .with_column("grantee", SqlScalarType::String.nullable(true))
+        .with_column("database", SqlScalarType::String.nullable(true))
+        .with_column("schema", SqlScalarType::String.nullable(true))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("index", SqlScalarType::String.nullable(false))
+        .with_column("cluster", SqlScalarType::String.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("grantor", "The role that granted the privilege."),
+        ("grantee", "The role that the privilege was granted to."),
+        (
+            "database",
+            "The name of the database containing the relation.",
+        ),
+        ("schema", "The name of the schema containing the relation."),
+        ("name", "The name of the relation the role may read."),
+        (
+            "index",
+            "The name of the index that reads are restricted to.",
+        ),
+        (
+            "cluster",
+            "The name of the cluster that maintains the index.",
+        ),
+    ]),
+    sql: r#"SELECT
+    grantor.name AS grantor,
+    CASE privileges.grantee
+            WHEN 'p' THEN 'PUBLIC'
+            ELSE grantee.name
+        END AS grantee,
+    databases.name AS database,
+    schemas.name AS schema,
+    relations.name AS name,
+    indexes.name AS index,
+    clusters.name AS cluster
+FROM mz_internal.mz_index_scoped_privileges AS privileges
+JOIN mz_catalog.mz_relations relations ON privileges.on_id = relations.id
+JOIN mz_catalog.mz_indexes indexes ON privileges.index_id = indexes.id
+LEFT JOIN mz_catalog.mz_clusters clusters ON indexes.cluster_id = clusters.id
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
+LEFT JOIN mz_catalog.mz_schemas schemas ON relations.schema_id = schemas.id
+LEFT JOIN mz_catalog.mz_databases databases ON schemas.database_id = databases.id
+WHERE privileges.grantee NOT LIKE 's%'"#,
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
 pub static MZ_SHOW_OBJECT_PRIVILEGES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_object_privileges",
     schema: MZ_INTERNAL_SCHEMA,

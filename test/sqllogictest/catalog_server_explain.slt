@@ -255,11 +255,11 @@ mz_catalog.mz_objects:
             Key: (#0{id})
       →Differential Join %0:mz_indexes[#3{on_id}] » %1:l0[#0{id}]
         Final closure:
-          Project: #0, #1, #6, #2, #7, #4, #3, #5
-          Map: "index"
+          Project: #0, #1, #5, #2, #6, #4, #3, #7
+          Map: "index", null
         →Arrange (#3{on_id})
           →Fused with Child Map/Filter/Project
-            Project: #0..=#5, #8
+            Project: #0..=#5
               →Arranged mz_catalog.mz_indexes
                 Key: (#0{id})
         →Arrange (#0{id})
@@ -4930,7 +4930,7 @@ mz_catalog.mz_columns:
                               →Read l1
       →Differential Join %1:mz_catalog_raw[#1{schema_name}, #2{name}] » %0[#0{schema_name}, #1{relation_name}]
         →Arrange (#0{schema_name}, #1{relation_name})
-          →Constant (1938 rows)
+          →Constant (1948 rows)
         →Arrange (#1{schema_name}, #2{name})
           →Fused with Child Map/Filter/Project
             Project: #6, #4, #3
@@ -5109,9 +5109,9 @@ EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_indexes";
 mz_catalog.mz_indexes:
   →Union
     →Fused with Child Map/Filter/Project
-      Project: #6..=#11, #4, #12, #13
+      Project: #6..=#11, #4, #12
       Filter: ("Item" = #2) AND ("index" = (#5 ->> "type"))
-      Map: (#0{data} -> "value"), (((#3 -> "definition") -> "V1") ->> "create_sql"), parse_catalog_create_sql(#4), parse_catalog_id((#1 -> "gid")), text_to_oid((#3 ->> "oid")), (#3 ->> "name"), (#5{parsed} ->> "on_id"), (#5{parsed} ->> "cluster_id"), parse_catalog_id((#3 -> "owner_id")), redact_sql(#4), parse_catalog_privileges((#3 -> "privileges"))
+      Map: (#0{data} -> "value"), (((#3 -> "definition") -> "V1") ->> "create_sql"), parse_catalog_create_sql(#4), parse_catalog_id((#1 -> "gid")), text_to_oid((#3 ->> "oid")), (#3 ->> "name"), (#5{parsed} ->> "on_id"), (#5{parsed} ->> "cluster_id"), parse_catalog_id((#3 -> "owner_id")), redact_sql(#4)
         →Read mz_internal.mz_catalog_raw
     →Delta Cross Join [%0[#1{name}] » %2:mz_catalog_raw[#1{schema_name}, #2{object_name}] » %1:mz_catalog_raw[#1{name}] » %3:mz_catalog_raw[×]] [%1:mz_catalog_raw[×] » %0[#1{name}] » %2:mz_catalog_raw[#1{schema_name}, #2{object_name}] » %3:mz_catalog_raw[×]] [%2:mz_catalog_raw[#1{schema_name}, #2{object_name}] » %0[#2{on_schema_name}, #3{on_name}] » %1:mz_catalog_raw[#1{name}] » %3:mz_catalog_raw[×]] [%3:mz_catalog_raw[×] » %1:mz_catalog_raw[×] » %0[#1{name}] » %2:mz_catalog_raw[#1{schema_name}, #2{object_name}]]
       path %0:
@@ -5119,29 +5119,29 @@ mz_catalog.mz_indexes:
           Project: #0, #1, #5..=#9
           Map: (((((((((((("CREATE INDEX \"" || #1{name}) || "\" IN CLUSTER [") || #7{id}) || "] ON [") || #6{id}) || " AS \"") || #2{on_schema_name}) || "\".\"") || #3{on_name}) || "\"] (") || #4{key_exprs}) || ")"), redact_sql(#8{create_sql})
         Final closure:
-          Project: #2, #0, #1, #3, #4, #7, #5, #6, #8
-          Map: "s1", null
+          Project: #2, #0, #1, #3, #4, #7, #5, #6
+          Map: "s1"
       path %1:
         after %3:
           Project: #0, #1, #5..=#9
           Map: (((((((((((("CREATE INDEX \"" || #1{name}) || "\" IN CLUSTER [") || #7{id}) || "] ON [") || #6{id}) || " AS \"") || #2{on_schema_name}) || "\".\"") || #3{on_name}) || "\"] (") || #4{key_exprs}) || ")"), redact_sql(#8{create_sql})
         Final closure:
-          Project: #2, #0, #1, #3, #4, #7, #5, #6, #8
-          Map: "s1", null
+          Project: #2, #0, #1, #3, #4, #7, #5, #6
+          Map: "s1"
       path %2:
         after %3:
           Project: #0, #1, #5..=#9
           Map: (((((((((((("CREATE INDEX \"" || #1{name}) || "\" IN CLUSTER [") || #7{id}) || "] ON [") || #6{id}) || " AS \"") || #2{on_schema_name}) || "\".\"") || #3{on_name}) || "\"] (") || #4{key_exprs}) || ")"), redact_sql(#8{create_sql})
         Final closure:
-          Project: #2, #0, #1, #3, #4, #7, #5, #6, #8
-          Map: "s1", null
+          Project: #2, #0, #1, #3, #4, #7, #5, #6
+          Map: "s1"
       path %3:
         after %2:
           Project: #2, #3, #5, #7, #6, #8, #9
           Map: (((((((((((("CREATE INDEX \"" || #3{name}) || "\" IN CLUSTER [") || #6{id}) || "] ON [") || #7{id}) || " AS \"") || #0{on_schema_name}) || "\".\"") || #1{on_name}) || "\"] (") || #4{key_exprs}) || ")"), redact_sql(#8{create_sql})
         Final closure:
-          Project: #2, #0, #1, #3, #4, #7, #5, #6, #8
-          Map: "s1", null
+          Project: #2, #0, #1, #3, #4, #7, #5, #6
+          Map: "s1"
       →Arrange (#1{name}) (#2{on_schema_name}, #3{on_name})
         →Constant (82 rows)
       →Arrange (empty key) (#1{name})
@@ -5171,15 +5171,15 @@ mz_catalog.mz_indexes:
           Project: #1..=#6, #8
           Map: ("s" || ((#7{data} -> "value") ->> "catalog_id"))
         Final closure:
-          Project: #1..=#3, #6, #0, #7, #4, #5, #8
-          Map: "s1", null
+          Project: #1..=#3, #6, #0, #7, #4, #5
+          Map: "s1"
       path %1:
         after %0:
           Project: #5, #3, #7..=#11
           Map: (#4{data} -> "value"), ("si" || (#6 ->> "catalog_id")), text_to_oid((#6 ->> "oid")), (((#0{idx_name} || "_") || #5{cluster_id}) || "_primary_idx"), (((((((((("CREATE INDEX \"" || #0{idx_name}) || "_") || #5{cluster_id}) || "_primary_idx\" IN CLUSTER [") || #5{cluster_id}) || "] ON \"mz_introspection\".\"") || #0{idx_name}) || "\" (") || #2{col_list}) || ")"), redact_sql(#10{create_sql})
         Final closure:
-          Project: #2..=#4, #1, #0, #7, #5, #6, #8
-          Map: "s1", null
+          Project: #2..=#4, #1, #0, #7, #5, #6
+          Map: "s1"
       path %2:
         after %0:
           Project: #3, #0, #5..=#9
@@ -5188,8 +5188,8 @@ mz_catalog.mz_indexes:
           Project: #1..=#6, #8
           Map: ("s" || ((#7{data} -> "value") ->> "catalog_id"))
         Final closure:
-          Project: #1..=#3, #6, #0, #7, #4, #5, #8
-          Map: "s1", null
+          Project: #1..=#3, #6, #0, #7, #4, #5
+          Map: "s1"
       →Arrange (#1{idx_name})
         →Fused with Child Map/Filter/Project
           Project: #0, #3, #4
@@ -5343,7 +5343,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (51 rows)
+        →Constant (52 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5743,7 +5743,7 @@ mz_catalog.mz_views:
           Project: #5, #0, #6, #1, #2, #8, #3, #4, #7
           Map: "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (198 rows)
+        →Constant (199 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5884,7 +5884,7 @@ mz_internal.mz_history_retention_strategies:
           Project: #3, #5
           Map: ("s" || ((#4{data} -> "value") ->> "catalog_id"))
         →Arrange (#2{name}, #0{object_type}, #1{schema_name})
-          →Constant (180 rows)
+          →Constant (181 rows)
         →Arrange (((#0{data} -> "key") ->> "object_name"), ((#0{data} -> "key") ->> "object_type"), ((#0{data} -> "key") ->> "schema_name"))
           →Fused with Child Map/Filter/Project
             Project: #0
@@ -6046,7 +6046,7 @@ mz_internal.mz_materialized_view_refresh_strategies:
         Project: #0..=#3, #3
         Map: "on-commit", null, null
       →Arrange (#1{name}, #0{schema_name})
-        →Constant (51 rows)
+        →Constant (52 rows)
       →Arrange (((#0{data} -> "key") ->> "object_name"), ((#0{data} -> "key") ->> "schema_name"))
         →Fused with Child Map/Filter/Project
           Project: #0
@@ -6230,7 +6230,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1090 rows)
+            →Constant (1100 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -8796,7 +8796,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_columns";
 ----
 Explained Query (fast path):
-  →Constant (1938 rows)
+  →Constant (1948 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8836,7 +8836,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (51 rows)
+  →Constant (52 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8866,7 +8866,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_views";
 ----
 Explained Query (fast path):
-  →Constant (198 rows)
+  →Constant (199 rows)
 
 Target cluster: mz_catalog_server
 
@@ -9866,7 +9866,7 @@ Explained Query:
               Key: (#0{id})
     cte l15 =
       →Fused with Child Map/Filter/Project
-        Project: #0, #3, #4, #9
+        Project: #0, #3, #4, #8
         Map: true
           →Arranged mz_catalog.mz_indexes
             Key: (#0{id})
@@ -10514,7 +10514,7 @@ Explained Query:
         →Arrange (#1) (case when (#3) IS NULL then null else #2 end)
           →Union
             →Fused with Child Map/Filter/Project
-              Project: #0, #3, #4, #9
+              Project: #0, #3, #4, #8
               Map: true
                 →Arranged mz_catalog.mz_indexes
                   Key: (#0{id})
@@ -10784,7 +10784,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1090 rows)
+            →Constant (1100 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -18989,15 +18989,15 @@ Explained Query:
     cte l37 =
       →Union
         →Fused with Child Map/Filter/Project
-          Project: #0..=#8, #3, #9..=#16
+          Project: #0..=#7, #3, #8..=#15
             →Read l36
         →Fused with Child Map/Filter/Project
-          Project: #0..=#8, #3, #9..=#15, #17
-            →Table Function guard_subquery_size(#16)
+          Project: #0..=#7, #3, #8..=#14, #16
+            →Table Function guard_subquery_size(#15)
               →Accumulable GroupAggregate
                 Simple aggregates: count(*)
                 →Fused with Child Map/Filter/Project
-                  Project: #0..=#15
+                  Project: #0..=#14
                     →Read l36
     cte l38 =
       →Arrange (empty key)
@@ -19089,27 +19089,27 @@ Explained Query:
               Filter: (false = (#4{type} = "view")) AND (false = (#4{type} = "table")) AND (false = (#4{type} = "source")) AND (false = (#4{type} = "materialized-view"))
               Map: null
                 →Read l0
-            →Differential Join %0:l29[#0..=#15] » %1[#0..=#15]
+            →Differential Join %0:l29[#0..=#14] » %1[#0..=#14]
               after %1:
-                Project: #17, #0, #1, #10
-                Map: regclasstooid(#16)
-              →Arrange (#0..=#15)
+                Project: #16, #0, #1, #9
+                Map: regclasstooid(#15)
+              →Arrange (#0..=#14)
                 →Stream l29
-              →Arrange (#0..=#15)
+              →Arrange (#0..=#14)
                 →Union
                   →Fused with Child Map/Filter/Project
-                    Project: #0..=#8, #10..=#17
+                    Project: #0..=#7, #9..=#16
                       →Read l37
                   →Map/Filter/Project
-                    Project: #0..=#16
+                    Project: #0..=#15
                     Map: null
                       →Consolidating Union
                         →Negate Diffs
                           →Map/Filter/Project
-                            Project: #0..=#8, #10..=#16
+                            Project: #0..=#7, #9..=#15
                               →Distinct GroupAggregate
                                 →Fused with Child Map/Filter/Project
-                                  Project: #0..=#16
+                                  Project: #0..=#15
                                     →Read l37
                         →Unarranged Raw Stream
                           →Arranged l30

@@ -23,7 +23,8 @@ use crate::catalog::{
     SystemObjectType,
 };
 use crate::names::{
-    Aug, ObjectId, ResolvedDatabaseSpecifier, ResolvedRoleName, SchemaSpecifier, SystemObjectId,
+    Aug, ObjectId, ResolvedDatabaseSpecifier, ResolvedItemName, ResolvedRoleName, SchemaSpecifier,
+    SystemObjectId,
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::{
@@ -34,8 +35,10 @@ use crate::plan::{
     AlterDefaultPrivilegesPlan, AlterNoopPlan, AlterOwnerPlan, GrantPrivilegesPlan, GrantRolePlan,
     Plan, PlanNotice, ReassignOwnedPlan, RevokePrivilegesPlan, RevokeRolePlan, UpdatePrivilege,
 };
+use crate::rbac;
 use crate::session::user::SYSTEM_USER;
 use mz_ore::str::StrExt;
+use mz_repr::CatalogItemId;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
 use mz_sql_parser::ast::{
@@ -361,9 +364,13 @@ pub fn plan_grant_privileges(
         privileges,
         target,
         roles,
+        using_index,
     }: GrantPrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, target, roles)?;
+    let plan = match using_index {
+        Some(index) => plan_index_scoped_privilege(scx, privileges, target, roles, index)?,
+        None => plan_update_privilege(scx, privileges, target, roles)?,
+    };
     Ok(Plan::GrantPrivileges(plan.into()))
 }
 
@@ -380,10 +387,112 @@ pub fn plan_revoke_privileges(
         privileges,
         target,
         roles,
+        using_index,
     }: RevokePrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, target, roles)?;
+    let plan = match using_index {
+        Some(index) => plan_index_scoped_privilege(scx, privileges, target, roles, index)?,
+        None => {
+            let mut plan = plan_update_privilege(scx, privileges, target, roles)?;
+            // Revoking `SELECT` on a relation also revokes the index-scoped
+            // grants on it, the way PostgreSQL revokes column privileges along
+            // with the table privilege. Otherwise the role could still read
+            // the relation through an index after `REVOKE SELECT ON` it.
+            let index_scoped: Vec<_> = plan
+                .update_privileges
+                .iter()
+                .filter(|update| update.acl_mode.contains(AclMode::SELECT))
+                .filter_map(|update| match &update.target_id {
+                    SystemObjectId::Object(ObjectId::Item(id)) => Some(*id),
+                    _ => None,
+                })
+                .flat_map(|id| rbac::indexes_on(scx.catalog, id))
+                .map(|index_id| index_scoped_update(scx, index_id))
+                .collect();
+            plan.update_privileges.extend(index_scoped);
+            plan
+        }
+    };
     Ok(Plan::RevokePrivileges(plan.into()))
+}
+
+/// Plans `GRANT` or `REVOKE` of `SELECT ON <relation> ... USING INDEX <index>`.
+///
+/// The grant is stored as `SELECT` in the index's privileges, which no other
+/// statement can set. [`rbac::check_index_routed_reads`] defines what it lets
+/// the grantee read.
+fn plan_index_scoped_privilege(
+    scx: &StatementContext,
+    privileges: PrivilegeSpecification,
+    target: GrantTargetSpecification<Aug>,
+    roles: Vec<ResolvedRoleName>,
+    index: ResolvedItemName,
+) -> Result<UpdatePrivilegesPlan, PlanError> {
+    let single_object = matches!(
+        &target,
+        GrantTargetSpecification::Object {
+            object_spec_inner: GrantTargetSpecificationInner::Objects { names },
+            ..
+        } if names.len() == 1
+    );
+    if !single_object {
+        sql_bail!("USING INDEX requires exactly one relation");
+    }
+    if matches!(privileges, PrivilegeSpecification::All) {
+        sql_bail!("USING INDEX supports only the SELECT privilege");
+    }
+    // Validates the privilege type and the relation like any other grant on it.
+    let mut plan = plan_update_privilege(scx, privileges, target, roles)?;
+    let relation_id = match plan.update_privileges.as_slice() {
+        [
+            UpdatePrivilege {
+                acl_mode,
+                target_id: SystemObjectId::Object(ObjectId::Item(id)),
+                ..
+            },
+        ] if ObjectType::from(scx.get_item(id).item_type()).is_relation() => {
+            if *acl_mode != AclMode::SELECT {
+                sql_bail!("USING INDEX supports only the SELECT privilege");
+            }
+            *id
+        }
+        _ => sql_bail!("USING INDEX requires exactly one relation"),
+    };
+    let index_id = match &index {
+        ResolvedItemName::Item { id, .. } => *id,
+        _ => sql_bail!("{} is not an index", index.full_name_str().quoted()),
+    };
+    let index_item = scx.get_item(&index_id);
+    let index_on = index_item
+        .index_details()
+        .map(|(_, on)| scx.catalog.resolve_item_id(&on));
+    if index_on != Some(relation_id) {
+        let relation = scx.get_item(&relation_id);
+        sql_bail!(
+            "{} is not an index on {}",
+            scx.catalog
+                .resolve_full_name(index_item.name())
+                .to_string()
+                .quoted(),
+            scx.catalog
+                .resolve_full_name(relation.name())
+                .to_string()
+                .quoted(),
+        );
+    }
+    plan.update_privileges = vec![index_scoped_update(scx, index_id)];
+    Ok(plan)
+}
+
+fn index_scoped_update(scx: &StatementContext, index_id: CatalogItemId) -> UpdatePrivilege {
+    UpdatePrivilege {
+        acl_mode: AclMode::SELECT,
+        target_id: SystemObjectId::Object(ObjectId::Item(index_id)),
+        // An index's owner is always its relation's owner, which is the
+        // grantor of every grant on the relation.
+        grantor: scx.get_item(&index_id).owner_id(),
+        acl_from_all: false,
+    }
 }
 
 struct UpdatePrivilegesPlan {
