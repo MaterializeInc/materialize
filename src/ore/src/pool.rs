@@ -80,6 +80,9 @@ use crate::pool::region::{Region, SIZE_CLASSES};
 /// NOTE: Seen OoMs with Miri since it actually allocates the capacity.
 const CLASS_CAPACITY_BYTES: usize = if cfg!(miri) { 16 << 20 } else { 1 << 40 };
 
+/// Bytes per word of a chunk body. Chunk lengths are in `u64` words.
+const WORD_BYTES: usize = std::mem::size_of::<u64>();
+
 /// A chunk-provided transform between a chunk's body bytes and the stored
 /// bytes its extent holds. The pool owns scheduling: spill threads, the
 /// residency state machine, cancellation, and the ledger. It invokes the
@@ -136,9 +139,9 @@ impl ExtentCodec for IdentityCodec {
 /// bookkeeping and nothing else, and [`ChunkHandle::take_typed`] hands the
 /// body back without a copy.
 ///
-/// The body is immutable once inserted, and eviction may serialize or drop
-/// it on any thread, which is what the `Send + Sync` bound is for.
-pub trait TypedBody: std::any::Any + Send + Sync + std::fmt::Debug {
+/// The body is immutable once inserted. Spill threads serialize and drop it
+/// under the chunk's state lock, so it must be `Send`.
+pub trait TypedBody: std::any::Any + Send + std::fmt::Debug {
     /// The serialized length in `u64` words. Must not change while the pool
     /// holds the body.
     fn words(&self) -> usize;
@@ -546,7 +549,7 @@ impl ChunkMeta {
     }
 
     fn len_bytes(&self) -> usize {
-        self.len * std::mem::size_of::<u64>()
+        self.len * WORD_BYTES
     }
 
     /// Locks the chunk's state.
@@ -644,7 +647,7 @@ impl Pool {
     ) -> ChunkHandle {
         let inner = &self.0;
         inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
-        let len_bytes = len * std::mem::size_of::<u64>();
+        let len_bytes = len * WORD_BYTES;
         if len == 0 {
             fill(&mut []);
             let meta = ChunkMeta::new(
@@ -757,7 +760,7 @@ impl Pool {
         codec: &'static dyn ExtentCodec,
     ) -> ChunkHandle {
         let len = body.words();
-        let len_bytes = len * std::mem::size_of::<u64>();
+        let len_bytes = len * WORD_BYTES;
         let class = region::size_class_for(len_bytes).filter(|_| len > 0);
         let inner = &self.0;
         if class.is_none() {
@@ -1526,6 +1529,19 @@ impl PoolInner {
         self.enforce_compressed_cap();
     }
 
+    /// Releases whichever resident form the chunk holds, its slot or its
+    /// typed body, under [`PoolInner::release_slot`]'s precondition.
+    fn release_resident(&self, meta: &ChunkMeta, state: &mut ChunkState) {
+        if state.slot.is_some() {
+            self.release_slot(meta, state);
+        } else if let Some(body) = state.typed.take() {
+            drop(body);
+            self.counters
+                .resident_bytes
+                .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+        }
+    }
+
     /// Releases `state`'s slot — slot returned to the region free list,
     /// physical pages discarded unless the slot joins the bounded warm pool —
     /// and decrements resident bytes. Releasing pages beyond the warm pool is
@@ -1542,19 +1558,6 @@ impl PoolInner {
     /// `dontneed` below sound, and what makes keeping a warm slot's stale
     /// contents safe: the slot's next occupant fully overwrites every byte
     /// it reads, satisfying the contents-undefined contract either way.
-    /// Releases whichever resident form the chunk holds, its slot or its
-    /// typed body, under [`PoolInner::release_slot`]'s precondition.
-    fn release_resident(&self, meta: &ChunkMeta, state: &mut ChunkState) {
-        if state.slot.is_some() {
-            self.release_slot(meta, state);
-        } else if let Some(body) = state.typed.take() {
-            drop(body);
-            self.counters
-                .resident_bytes
-                .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
-        }
-    }
-
     fn release_slot(&self, meta: &ChunkMeta, state: &mut ChunkState) {
         let slot = state.slot.take().expect("slotted chunk");
         let region = self.region_of(meta);
@@ -2224,7 +2227,7 @@ impl ChunkHandle {
                         extent.read_range_into(
                             meta.codec,
                             meta.len_bytes(),
-                            range.start * 8,
+                            range.start * WORD_BYTES,
                             bytes,
                         );
                     }
@@ -2492,7 +2495,7 @@ mod tests {
     }
 
     /// Words that fill a 64 KiB class exactly.
-    const SMALL: usize = (64 << 10) / 8;
+    const SMALL: usize = (64 << 10) / WORD_BYTES;
 
     #[allow(dead_code)]
     fn assert_handle_send_sync() {
@@ -3142,7 +3145,7 @@ mod tests {
         assert_eq!(read_admit(&handle), small_orig);
         let stats = pool.stats();
         assert_eq!(stats.admissions_steal, 1, "no headroom, so the read steals");
-        assert_eq!(stats.resident_bytes, u64::cast_from(SMALL / 2 * 8));
+        assert_eq!(stats.resident_bytes, u64::cast_from(SMALL / 2 * WORD_BYTES));
         assert_eq!(victim.residency(), Residency::Evicted);
         assert_eq!(read(&victim), victim_orig, "victim serves from its extent");
 
@@ -3196,7 +3199,7 @@ mod tests {
         let resident = insert(&pool, &mut orig.clone());
         assert_eq!(read_admit(&resident), orig);
         assert_eq!(resident.residency(), Residency::UnbackedResident);
-        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1;
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES + 1;
         let oversize_orig = payload(words, 90);
         let oversize = insert(&pool, &mut oversize_orig.clone());
         assert_eq!(read_admit(&oversize), oversize_orig);
@@ -3476,14 +3479,14 @@ mod tests {
 
     #[mz_ore::test]
     fn insertion_debt_is_bounded_during_enforcement() {
-        let budget = 2 * SMALL * 8;
+        let budget = 2 * SMALL * WORD_BYTES;
         let pool = test_pool(budget);
         let guard = pool.0.enforcing.lock().expect("enforcement lock");
         let mut handles = Vec::new();
         for seed in 0..16 {
             handles.push(insert(&pool, &mut payload(SMALL, seed)));
             assert!(
-                pool.stats().resident_bytes <= u64::cast_from(budget + SMALL * 8),
+                pool.stats().resident_bytes <= u64::cast_from(budget + SMALL * WORD_BYTES),
                 "an occupied enforcer must not allow unlimited insertion debt",
             );
         }
@@ -3499,7 +3502,7 @@ mod tests {
 
     #[mz_ore::test]
     fn admission_reserves_before_concurrent_fills() {
-        let budget = 2 * SMALL * 8;
+        let budget = 2 * SMALL * WORD_BYTES;
         let pool = test_pool(budget);
         let guard = pool.0.enforcing.lock().expect("enforcement lock");
         let gate = Arc::new(std::sync::Barrier::new(9));
@@ -3525,7 +3528,7 @@ mod tests {
             .map(|t| t.join().expect("producer panicked"))
             .collect();
         drop(guard);
-        assert!(reserved <= u64::cast_from(budget + SMALL * 8));
+        assert!(reserved <= u64::cast_from(budget + SMALL * WORD_BYTES));
         assert!(pool.stats().direct_extent_inserts > 0);
         for (seed, handle) in handles.iter().enumerate() {
             assert_eq!(read(handle), payload(SMALL, u64::cast_from(seed)));
@@ -3621,13 +3624,13 @@ mod tests {
     #[mz_ore::test]
     fn oversize_round_trips() {
         let pool = test_pool(256 << 20);
-        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1;
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES + 1;
         let orig = payload(words, 10);
         let handle = insert(&pool, &mut orig.clone());
         assert_eq!(handle.residency(), Residency::Oversize);
         assert_eq!(handle.size_class_bytes(), None);
         let stats = pool.stats();
-        assert_eq!(stats.oversize_bytes, u64::cast_from(words * 8));
+        assert_eq!(stats.oversize_bytes, u64::cast_from(words * WORD_BYTES));
         // The payload outgrew the largest class, and no class was exhausted.
         assert_eq!(stats.oversize_payloads, 1);
         assert_eq!(stats.slot_exhausted_fallbacks, 0);
@@ -3646,7 +3649,7 @@ mod tests {
     #[mz_ore::test]
     fn payload_lands_in_smallest_fitting_class() {
         let pool = test_pool(256 << 20);
-        let handle = insert(&pool, &mut payload((100 << 10) / 8, 11));
+        let handle = insert(&pool, &mut payload((100 << 10) / WORD_BYTES, 11));
         assert_eq!(handle.size_class_bytes(), Some(128 << 10));
         let exact = insert(&pool, &mut payload(SMALL, 12));
         assert_eq!(exact.size_class_bytes(), Some(64 << 10));
@@ -3800,12 +3803,12 @@ mod tests {
         assert_eq!(pool.stats().warm_bytes, 64 << 10, "freed slot parks warm");
         // A payload of just over a page reuses the warm slot; the slot's
         // pages past it are released.
-        let words = 4096 / 8 + 1;
+        let words = 4096 / WORD_BYTES + 1;
         let orig = payload(words, 61);
         let handle = insert(&pool, &mut orig.clone());
         let stats = pool.stats();
         assert_eq!(stats.warm_reuses, 1, "reused the warm slot");
-        assert_eq!(stats.resident_bytes, u64::cast_from(words * 8));
+        assert_eq!(stats.resident_bytes, u64::cast_from(words * WORD_BYTES));
         assert_eq!(read(&handle), orig);
         // Round-trips through the extent as well.
         pool.evict(&handle);
@@ -4021,7 +4024,7 @@ mod tests {
             assert!(dst.is_empty())
         });
         assert!(read(&empty).is_empty());
-        let big_len = (SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8) + 1;
+        let big_len = (SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES) + 1;
         let big = pool.insert_with(big_len, ChunkHints::default(), &TEST_CODEC, |dst| {
             dst.fill(7)
         });
@@ -4266,7 +4269,7 @@ mod tests {
     #[mz_ore::test]
     fn typed_body_beyond_the_classes_is_serialized_to_the_heap() {
         let pool = test_pool(256 << 20);
-        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1;
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES + 1;
         let orig = payload(words, 807);
         let handle = insert_typed(&pool, orig.clone());
         assert_eq!(handle.residency(), Residency::Oversize);

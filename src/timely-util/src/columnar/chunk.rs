@@ -739,11 +739,12 @@ impl ExtentCodec for Lz4Codec {
 /// of maximal times (see `ColumnChunk::time_bounds`).
 type TimeBounds<T> = (Antichain<T>, SmallVec<[T; 1]>);
 
-/// A columnar type a spilled chunk can hold in its typed form. The pool's spill threads take
-/// and borrow typed bodies, so the containers and the time bounds must cross threads.
-pub trait PoolColumnar: Columnar<Container: Send + Sync> + Send + Sync {}
+/// A columnar type a spilled chunk can hold in its typed form. Spill threads serialize and drop
+/// typed bodies, so the containers must be `Send`. The pooled body shares its time bounds with
+/// the chunk through an `Arc`, so the values must also be `Sync`.
+pub trait PoolColumnar: Columnar<Container: Send> + Send + Sync {}
 
-impl<C: Columnar<Container: Send + Sync> + Send + Sync> PoolColumnar for C {}
+impl<C: Columnar<Container: Send> + Send + Sync> PoolColumnar for C {}
 
 /// A [`ColumnBody`] as the pool holds it: in its typed form until the pool
 /// has to serialize it.
