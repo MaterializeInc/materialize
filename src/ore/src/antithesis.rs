@@ -213,14 +213,10 @@ pub const DESIGNED_HALTS: &[DesignedHalt] = &[
                  to run as leader",
     },
     DesignedHalt {
-        matches: &["rebooting in read-only mode"],
-        reason: "0dt catch-up: the leader ran DDL the read-only generation must reboot \
-                 to pick up",
-    },
-    DesignedHalt {
-        matches: &["after the reader has expired"],
-        reason: "a persist listen outlived its reader lease, which takes a stall longer \
-                 than the lease duration",
+        matches: &["has been promoted; halting"],
+        reason: "0dt: another process of this deployment generation was promoted, either \
+                 in a replacement pod or this container's previous process after a skipped \
+                 catch-up, so this read-only process leaves the restart to Kubernetes",
     },
     DesignedHalt {
         matches: &["has been expired out of state"],
@@ -371,9 +367,8 @@ mod tests {
             "fenced by envd @ Ok(Some(PersistEpoch(Some(4)))). ours = Some(3)",
             "fenced by another process @ [1, 2]. ours = [0, 1]",
             "fenced out old deployment; rebooting as leader",
-            "there have been DDL that we need to react to; rebooting in read-only mode. new ids: [u7]",
-            "Listen on s123 received a batch Description { .. } advanced past the listen frontier \
-             Antichain { elements: [5] } after the reader has expired. This can happen in exceptional cases",
+            "restarted in place, but deployment generation 4 has been promoted; halting",
+            "deployment generation 4 has been promoted; halting",
             "unhandled error in compute_import: batch fetcher could not fetch batch part k: \
              reader r1 has been expired out of state; the process likely failed to heartbeat it",
             "unhandled error in compute_import: compute_import u5: s1 cannot serve requested as_of \

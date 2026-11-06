@@ -89,6 +89,47 @@ def test_upgrade_base_patch_rejects_unreviewed_source(
     assert process.read_text() == text
 
 
+def test_upgrade_base_patch_leaves_a_release_with_its_own_recorder_unchanged(
+    tmp_path: Path,
+) -> None:
+    process = tmp_path / "src" / "ore" / "src" / "process.rs"
+    process.parent.mkdir(parents=True)
+    release = (images.MZ_ROOT / "src" / "ore" / "src" / "process.rs").read_text()
+    process.write_text(release)
+    assert not images.patch_upgrade_base_halt_proof(tmp_path)
+    assert process.read_text() == release
+
+
+def test_upgrade_base_build_uses_the_release_flavor_when_it_records_halts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    worktree = tmp_path / "release"
+    envs = []
+
+    def run(command, **kwargs):
+        command = list(map(str, command))
+        if command[:3] == ["git", "worktree", "add"]:
+            process = worktree / "src" / "ore" / "src" / "process.rs"
+            process.parent.mkdir(parents=True)
+            process.write_text(
+                (images.MZ_ROOT / "src" / "ore" / "src" / "process.rs").read_text()
+            )
+            for name in images.UPGRADE_BASE_IMAGES:
+                dockerfile = worktree / "src" / name / "ci" / "Dockerfile"
+                dockerfile.parent.mkdir(parents=True)
+                dockerfile.write_text("FROM scratch\n")
+        elif command[:2] == ["bin/mzimage", "acquire"]:
+            envs.append(kwargs["env"])
+
+    monkeypatch.delenv("CI_ANTITHESIS", raising=False)
+    monkeypatch.setattr(images.spawn, "runv", run)
+    monkeypatch.setattr(
+        images.spawn, "capture", lambda command, **kwargs: f"local/{command[-1]}:proof"
+    )
+    images.build_upgrade_base(MzVersion.parse_mz("v26.52.0"), worktree)
+    assert [env["CI_ANTITHESIS"] for env in envs] == ["1", "1"]
+
+
 def test_upgrade_base_build_binds_both_image_fingerprints_to_the_proof(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

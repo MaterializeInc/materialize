@@ -72,6 +72,20 @@ _HARNESS_ASSERTIONS = {
     "workload state was reset after setup",
     "workload telemetry records measurements without errors",
 }
+# Invariants Materialize's own processes evaluate (`mz_ore::antithesis`,
+# `soft_assert!`, persist). Their counterexamples do not depend on workload
+# bookkeeping, so harness failures do not block their attribution.
+_NATIVE_INVARIANT_PREFIXES = (
+    "Materialize process ",
+    "soft assertion failed at ",
+    "persist: ",
+)
+
+
+def native_invariant(prop: Mapping[str, Any]) -> bool:
+    group = prop.get("group") or ""
+    message = str(prop.get("name", "")).removeprefix(f"{group}: ")
+    return group in _INVARIANT_GROUPS and message.startswith(_NATIVE_INVARIANT_PREFIXES)
 
 
 def _record(prop: Mapping[str, Any], reason: str, **details: Any) -> dict[str, Any]:
@@ -452,16 +466,14 @@ def summarize(
     if events is None:
         reasons.append("no harness health event export was provided")
     # Aggregate exports do not prove which model failures share a timeline with
-    # a counterexample, so invalid or missing harness evidence blocks attribution.
-    product_failures = (
-        []
-        if reasons
-        else [
-            record
-            for record in product_candidates
-            if not record.get("designed_panic_conflicts")
-        ]
-    )
+    # a counterexample, so invalid or missing harness evidence blocks attribution
+    # of everything except native invariants.
+    product_failures = [
+        record
+        for record in product_candidates
+        if not record.get("designed_panic_conflicts")
+        and (not reasons or native_invariant(record["property"]))
+    ]
     if any(record.get("attribution_only") for record in result["unresolved"]):
         reasons.append(
             "native panic evidence includes unresolved designed-panic context"

@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from materialize import MZ_ROOT
 from materialize.antithesis import findings
 from materialize.antithesis.exit_evidence import ExitDisposition
 
@@ -298,6 +300,49 @@ def test_invalid_or_unassessed_harness_retains_oracle_failure_as_candidate(
     assert report["verdict"] == "inconclusive"
     assert not report["product_failures"]
     assert report["product_candidates"][0]["property"] == raw
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Materialize process panicked",
+        "Materialize process halted for an unexpected reason",
+        "soft assertion failed at src/adapter/src/coord.rs:12",
+        "persist: blob missing although the leasing reader is still in state",
+    ],
+)
+def test_harness_failures_do_not_block_native_invariants(message: str) -> None:
+    harness = prop("command_exit", "Always: Commands finish with zero exit code")
+    native = prop(
+        "native", "Always: Unreachable", name=f"Always: Unreachable: {message}"
+    )
+    report = findings.summarize([harness, native, prop("wrong_rows")], events=None)
+    assert report["verdict"] == "product_failure"
+    assert [r["property"]["id"] for r in report["product_failures"]] == ["native"]
+    assert len(report["product_candidates"]) == 2
+    assert report["inconclusive_reasons"]
+
+
+def test_every_native_rust_invariant_is_recognized() -> None:
+    literal = re.compile(
+        r"(?:assert_always|assert_unreachable|antithesis_always|antithesis_unreachable)!\(\s*"
+        r'(?:::std::concat!\(\s*)?"((?:[^"\\]|\\.)*)"'
+    )
+    messages = {
+        message
+        for path in (MZ_ROOT / "src").rglob("*.rs")
+        if "tests" not in path.relative_to(MZ_ROOT).parts
+        for message in literal.findall(path.read_text(errors="replace"))
+    }
+    assert "Materialize process panicked" in messages
+    unrecognized = sorted(
+        message
+        for message in messages
+        if not findings.native_invariant(
+            {"group": "Always: Unreachable", "name": f"Always: Unreachable: {message}"}
+        )
+    )
+    assert unrecognized == []
 
 
 @pytest.mark.parametrize(

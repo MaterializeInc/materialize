@@ -376,29 +376,30 @@ def _poison(conn: psycopg.Connection, expected: model.Expected, deadline: float)
             _unexpected(error, "subscribe overflow")
 
 
-def _old_stream_stays_failed(conn: psycopg.Connection, poison: str) -> None:
-    try:
-        conn.execute("FETCH ALL c WITH (timeout = '1s')").fetchall()
-    except psycopg.Error as error:
-        if (
-            error.sqlstate == "25P02"
-            or error.sqlstate == "XX000"
-            and str(error) == poison
-        ):
-            always(
-                True,
-                "aggregate retractions: an errored SUBSCRIBE never silently becomes healthy",
-                {},
-            )
-            telemetry.comparison("aggregate_retractions", "subscribe", True)
-            return
-        _unexpected(error, "poisoned subscribe")
+def _lagging_stream_reports_poison(
+    conn: psycopg.Connection, dirty: model.Expected, deadline: float
+) -> None:
+    # The stream's as_of precedes the poison, and the poison and its repair
+    # commit at distinct timestamps, so the error must arrive before any later
+    # update even though the client fetches only after the repair.
+    updates: list[list[Any]] = []
+    while not updates:
+        _check_deadline(deadline)
+        try:
+            rows = conn.execute("FETCH ALL c WITH (timeout = '1s')").fetchall()
+        except psycopg.Error as error:
+            if not expected_overflow(error, dirty, subscribe=True):
+                _unexpected(error, "lagging subscribe")
+            break
+        updates = [list(row) for row in rows if not row[1]]
     always(
-        False,
+        not updates,
         "aggregate retractions: an errored SUBSCRIBE never silently becomes healthy",
-        {},
+        {"updates": updates},
     )
-    raise Interrupted
+    telemetry.comparison("aggregate_retractions", "subscribe", not updates)
+    if updates:
+        raise Interrupted
 
 
 def _insert(
@@ -467,9 +468,11 @@ def run_round(
         healthy = model.evaluate(plan.baseline)
         _peek(writer, _projection(slot.view), healthy, "mv")
         _peek(writer, _projection(_recompute(slot)), healthy, "recompute")
-        with _connect(host) as old:
+        with _connect(host) as old, _connect(host) as lagging:
             as_of = _begin_stream(old, _projection(slot.view))
             _snapshot(old, healthy, deadline, as_of)
+            as_of = _begin_stream(lagging, _projection(slot.view))
+            _snapshot(lagging, healthy, deadline, as_of)
             _arm_poison(db, writer, slot)
             _insert(writer, slot, 1, plan.poison)
             dirty = model.evaluate((*plan.baseline, *plan.poison))
@@ -477,7 +480,7 @@ def run_round(
                 writer, _projection(slot.view), dirty, "mv"
             )
             _peek(writer, _projection(_recompute(slot)), dirty, "recompute")
-            poison = _poison(old, dirty, deadline)
+            _poison(old, dirty, deadline)
             evidence["poison_seen"] = True
             if fault is not None:
                 evidence["fault"] = fault()
@@ -489,8 +492,9 @@ def run_round(
             repaired = model.evaluate((*plan.baseline, plan.extra))
             _peek(writer, _projection(slot.view), repaired, "mv")
             _peek(writer, _projection(_recompute(slot)), repaired, "recompute")
-            _old_stream_stays_failed(old, poison)
+            _lagging_stream_reports_poison(lagging, dirty, deadline)
             old.execute("ROLLBACK")
+            lagging.execute("ROLLBACK")
         with _connect(host) as fresh:
             as_of = _begin_stream(fresh, _projection(slot.view))
             _snapshot(fresh, repaired, deadline, as_of)

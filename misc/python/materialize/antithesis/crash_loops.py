@@ -24,6 +24,7 @@ than the kubelet's minimum restart backoff (10 s).
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -103,25 +104,53 @@ class Tracker:
             and self.last_sample - self.started >= window_s
         )
 
-    def loops(self, window_s: float) -> dict[str, dict[str, Any]]:
-        """Containers that crash-looped in the last `window_s` before the
-        latest sample, with their restart history relative to that sample."""
-        if self.last_sample is None:
-            return {}
-        now = self.last_sample
-        lo = now - window_s
-        result = {}
+    def _live_crashes(
+        self, now: float
+    ) -> Iterator[tuple[_History, list[tuple[float, int]]]]:
         for h in self.containers.values():
             if h.last_seen < now or h.deleting:
                 continue
-            in_window = [r for r in h.restarts if r["observed_at"] >= lo]
-            crashes = sum(
-                r["restarts"] for r in in_window if r["class"] in CRASH_CLASSES
+            yield h, [
+                (r["observed_at"], r["restarts"])
+                for r in h.restarts
+                if r["class"] in CRASH_CLASSES
+            ]
+
+    def crashed(self, window_s: float) -> list[str]:
+        """Live containers that crashed in the last `window_s` before the
+        latest sample."""
+        if self.last_sample is None:
+            return []
+        lo = self.last_sample - window_s
+        return [
+            h.name
+            for h, crashes in self._live_crashes(self.last_sample)
+            if any(at >= lo for at, _ in crashes)
+        ]
+
+    def loops(self, window_s: float, span_s: float = 0.0) -> dict[str, dict[str, Any]]:
+        """Containers that crash-looped in some `window_s` window ending within
+        the last `span_s` before the latest sample, with their restart history
+        relative to that sample."""
+        if self.last_sample is None:
+            return {}
+        now = self.last_sample
+        result = {}
+        for h, crashes in self._live_crashes(now):
+            # A window's count rises only when its end reaches a crash, so the
+            # earliest end and the crashes inside the span are the only
+            # candidate maxima.
+            ends = [now - span_s] + [
+                at for at, _ in crashes if now - span_s < at <= now
+            ]
+            most = max(
+                sum(n for at, n in crashes if end - window_s <= at <= end)
+                for end in ends
             )
-            if crashes < LOOP_MIN_CRASHES:
+            if most < LOOP_MIN_CRASHES:
                 continue
             result[h.name] = {
-                "crashes_in_window": crashes,
+                "crashes_in_window": most,
                 "restart_count": h.restart_count,
                 "waiting_reason": h.waiting_reason,
                 "history": [

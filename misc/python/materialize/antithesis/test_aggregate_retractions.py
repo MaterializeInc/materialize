@@ -137,16 +137,29 @@ def test_fresh_healthy_read_cannot_ignore_a_stale_overflow_error(monkeypatch):
     assert violation.call_count == 1
 
 
-def test_a_poisoned_cursor_cannot_silently_recover(monkeypatch):
+def test_a_lagging_stream_cannot_skip_the_repaired_poison(monkeypatch):
     monkeypatch.setattr(driver, "always", assert_product)
+    plan = model.generate(random.Random(3))
+    dirty = model.evaluate((*plan.baseline, *plan.poison))
+    monkeypatch.setattr(driver, "unreachable", Mock())
+    progress = (10, True, None)
     conn = Mock()
-    conn.execute.return_value.fetchall.return_value = []
+    conn.execute.return_value.fetchall.side_effect = lambda: [progress]
+    with pytest.raises(driver.Interrupted):
+        driver._lagging_stream_reports_poison(conn, dirty, time.monotonic() + 0.05)
+    conn.execute.return_value.fetchall.side_effect = [
+        [progress],
+        [(11, False, 1, 0, 1, 2, 3, 1, 1)],
+    ]
     with pytest.raises(AssertionError):
-        driver._old_stream_stays_failed(conn, "interval out of range")
-    conn.execute.side_effect = psycopg.errors.InFailedSqlTransaction(
-        "transaction aborted"
-    )
-    driver._old_stream_stays_failed(conn, "interval out of range")
+        driver._lagging_stream_reports_poison(conn, dirty, time.monotonic() + 30)
+    overflow = psycopg.errors.InternalError_("interval out of range")
+    conn.execute.return_value.fetchall.side_effect = [[progress], overflow]
+    driver._lagging_stream_reports_poison(conn, dirty, time.monotonic() + 30)
+    aborted = psycopg.errors.InFailedSqlTransaction("transaction aborted")
+    conn.execute.return_value.fetchall.side_effect = [aborted]
+    with pytest.raises(driver.Interrupted):
+        driver._lagging_stream_reports_poison(conn, dirty, time.monotonic() + 30)
 
 
 @pytest.mark.parametrize("diff", [0, -1, 1_000_000_000_000])
@@ -379,20 +392,20 @@ def test_verified_repair_retires_intent_only_after_fresh_stream_check(
     monkeypatch.setattr(driver, "_begin_stream", lambda *args: 10)
     monkeypatch.setattr(driver, "_insert", Mock())
     monkeypatch.setattr(driver, "_poison", Mock(return_value="expected overflow"))
-    monkeypatch.setattr(driver, "_old_stream_stays_failed", Mock())
+    monkeypatch.setattr(driver, "_lagging_stream_reports_poison", Mock())
     snapshots = 0
 
     def snapshot(*args):
         nonlocal snapshots
         snapshots += 1
-        if snapshots == 2:
+        if snapshots == 3:
             assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (1,)
 
     monkeypatch.setattr(driver, "_snapshot", snapshot)
     driver.run_round(
         "host", slot, model.generate(random.Random(3)), time.monotonic() + 30, db=db
     )
-    assert snapshots == 2
+    assert snapshots == 3
     assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (0,)
 
 
