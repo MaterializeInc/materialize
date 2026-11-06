@@ -4236,6 +4236,23 @@ def workflow_orchestratord_upgrade(
         # have to wait longer to ensure that the old ones are gone
         retry(check, 180)
 
+    def wait_for_bootstrap():
+        """Wait until environmentd answers SQL, which it does only after bootstrap.
+
+        A rollout counts as complete before that. Upgrading then could let the
+        read-only generation initialize shards the old one hasn't created yet, and
+        the old one would halt on their newer version tag (SQL-885).
+        """
+
+        def check():
+            with port_forward_environmentd() as port:
+                with psycopg.connect(
+                    f"host=localhost port={port} user=materialize", connect_timeout=30
+                ) as conn:
+                    conn.execute("SELECT 1")
+
+        retry(check, 240)
+
     parser.add_argument(
         "--recreate-cluster",
         action=argparse.BooleanOptionalAction,
@@ -4286,6 +4303,7 @@ def workflow_orchestratord_upgrade(
     check_environmentd_version(versions[-3])
     check_clusterd_version(versions[-3])
     check_balancerd_version(versions[-3])
+    wait_for_bootstrap()
 
     for version in versions[-2:]:
         print(f"running orchestratord {version}")
@@ -4341,6 +4359,7 @@ def workflow_orchestratord_upgrade(
     check_environmentd_version(versions[-3])
     check_clusterd_version(versions[-3])
     check_balancerd_version(versions[-3])
+    wait_for_bootstrap()
 
     print(f"running orchestratord {versions[-1]}")
     definition["operator"]["operator"]["image"]["tag"] = str(versions[-1])
