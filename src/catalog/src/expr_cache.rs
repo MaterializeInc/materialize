@@ -440,7 +440,22 @@ impl ExpressionCache {
         &mut self,
         revisions: Vec<(GlobalId, Uuid)>,
     ) -> Result<BTreeMap<(GlobalId, Uuid), GlobalExpressions>, PlanStoreError> {
-        self.durable_cache.synchronize().await;
+        // Written revisions are immutable. Catalog selection establishes their
+        // authority, so a local hit needs no freshness check. Do not cache misses:
+        // another writer may publish the requested revision before the next read.
+        if revisions.iter().any(|(id, revision)| {
+            self.durable_cache
+                .get_local(&CacheKey {
+                    build_version: self.written_plan_namespace.clone(),
+                    id: *id,
+                    expr_type: ExpressionType::Written {
+                        revision: *revision,
+                    },
+                })
+                .is_none()
+        }) {
+            self.durable_cache.synchronize().await;
+        }
         revisions
             .into_iter()
             .filter_map(|(id, revision)| {
@@ -656,8 +671,9 @@ impl ExpressionCacheHandle {
         rx.await.map_err(|_| PlanStoreError::Shutdown)?
     }
 
-    /// Reads the requested revisions after synchronizing with other writers. Missing entries
-    /// are omitted, never generated. Callers select revisions from their committed catalog.
+    /// Reads immutable revisions locally, synchronizing with other writers if any
+    /// requested revision is missing. Missing entries are omitted, never generated.
+    /// Callers select revisions from their committed catalog.
     pub async fn read_plans(
         &self,
         revisions: Vec<(GlobalId, Uuid)>,
@@ -716,7 +732,26 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn written_plan_revisions() {
-        let persist = PersistClient::new_for_tests().await;
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let cache = mz_persist_client::cache::PersistClientCache::new(
+            mz_persist_client::cfg::PersistConfig::new_for_tests(),
+            &registry,
+            |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+        );
+        let persist = cache
+            .open(mz_persist_client::PersistLocation::new_in_mem())
+            .await
+            .expect("persist client");
+        let upper_reads = || {
+            registry
+                .gather()
+                .into_iter()
+                .find(|family| family.name() == "mz_persist_cmd_fetch_upper_count")
+                .expect("upper read counter")
+                .get_metric()[0]
+                .get_counter()
+                .value()
+        };
         let shard = ShardId::new();
         let build = Version::new(0, 1, 0);
         let writer = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
@@ -728,6 +763,16 @@ mod tests {
         let plan = gen_global_expressions();
         let mut changed = plan.clone();
         changed.physical_plan.debug_name = "another plan".into();
+
+        let before = upper_reads();
+        assert!(
+            reader
+                .read_plans(Vec::new())
+                .await
+                .expect("empty read")
+                .is_empty()
+        );
+        assert_eq!(upper_reads(), before, "empty requests do not synchronize");
 
         assert!(
             reader
@@ -743,6 +788,7 @@ mod tests {
             ])
             .await
             .expect("write revisions");
+        let before = upper_reads();
         assert_eq!(
             reader
                 .read_plans(vec![(id, first), (id, second), (id, absent)])
@@ -750,6 +796,20 @@ mod tests {
                 .expect("synchronized read"),
             BTreeMap::from([((id, first), plan.clone()), ((id, second), changed.clone())])
         );
+        assert_eq!(
+            upper_reads(),
+            before + 1.0,
+            "misses synchronize once per batch"
+        );
+        let before = upper_reads();
+        assert_eq!(
+            reader
+                .read_plans(vec![(id, first), (id, second)])
+                .await
+                .expect("local revisions"),
+            BTreeMap::from([((id, first), plan.clone()), ((id, second), changed.clone())])
+        );
+        assert_eq!(upper_reads(), before, "immutable hits do not synchronize");
         reader
             .write_plans(vec![(id, first, plan.clone())])
             .await
