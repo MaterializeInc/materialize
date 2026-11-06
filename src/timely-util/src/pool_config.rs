@@ -87,6 +87,9 @@ pub fn active_pool() -> Option<mz_ore::pool::Pool> {
 /// file store that cannot be created or opened falls back to swap, which
 /// needs no scratch space. This is the only place that decides the fallback.
 fn build_pool(backend: ExtentBackend) -> Option<mz_ore::pool::Pool> {
+    // Logged with the installed backend, so a swap pool tells "file never
+    // requested" apart from a fallback.
+    let requested_file = matches!(backend, ExtentBackend::File { .. });
     let built = match &backend {
         ExtentBackend::Swap => mz_ore::pool::Pool::new(),
         ExtentBackend::File { dir, .. } => std::fs::create_dir_all(dir)
@@ -104,7 +107,11 @@ fn build_pool(backend: ExtentBackend) -> Option<mz_ore::pool::Pool> {
     };
     match built {
         Ok(pool) => {
-            tracing::info!(backend = ?pool.backend_kind(), "buffer pool installed");
+            tracing::info!(
+                requested_file,
+                backend = ?pool.backend_kind(),
+                "buffer pool installed",
+            );
             Some(pool)
         }
         Err(err) => {

@@ -2894,7 +2894,7 @@ def workflow_test_pool_file_backend(c: Composition) -> None:
         # The replica installs the pool when it applies the configuration,
         # which can trail the first query.
         backends: dict[str, float] = {}
-        fallback = None
+        metrics = Metrics("")
         for _ in range(30):
             metrics = Metrics(
                 c.exec(
@@ -2902,7 +2902,6 @@ def workflow_test_pool_file_backend(c: Composition) -> None:
                 ).stdout
             )
             backends = metrics.with_name("mz_column_pool_backend{")
-            fallback = metrics.get_value("mz_column_pool_backend_fallback")
             if any(v == 1 for v in backends.values()):
                 break
             time.sleep(1)
@@ -2910,7 +2909,10 @@ def workflow_test_pool_file_backend(c: Composition) -> None:
         active = [k for k, v in backends.items() if v == 1]
         assert len(active) == 1, f"no single active pool backend: {backends}"
         assert 'backend="file_' in active[0], f"pool runs on {active[0]}"
+        fallback = metrics.get_value("mz_column_pool_backend_fallback")
         assert fallback == 0, f"file store fell back to swap: {fallback}"
+        capacity = metrics.get_value("mz_column_pool_extent_file_capacity_bytes")
+        assert capacity > 0, f"file store has no capacity: {capacity}"
 
 
 def workflow_test_replica_metrics(c: Composition) -> None:

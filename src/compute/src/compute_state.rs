@@ -563,8 +563,9 @@ impl ComputeState {
                 // write then pages out immediately, the pre-tier behavior.
                 let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
 
-                // The file store lives in its own subdirectory so it cannot
-                // collide with other scratch users.
+                // The file store lives in its own subdirectory so its files
+                // cannot collide with other scratch users. It shares their
+                // space, which its capacity tracks.
                 let backend = match &scratch {
                     Some(scratch) if ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get(config) => {
                         ExtentBackend::File {

@@ -140,7 +140,8 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS: Config<bool> = Config::new(
 pub const COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL: Config<Duration> = Config::new(
     "column_paged_batcher_file_release_interval",
     Duration::from_secs(1),
-    "Interval at which the buffer pool releases free file store slots to the filesystem.",
+    "Interval at which the buffer pool releases free file store slots to the filesystem. \
+     Zero disables the release.",
     ParameterScope::Replica,
 );
 
