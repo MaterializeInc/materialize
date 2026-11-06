@@ -15,10 +15,6 @@
 import type { ColumnType } from "kysely";
 import type { IPostgresInterval } from "postgres-interval";
 
-export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
-  ? ColumnType<S, I | undefined, U>
-  : ColumnType<T, T | undefined, T>;
-
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
 export type Interval = ColumnType<IPostgresInterval, IPostgresInterval | number | string, IPostgresInterval | number | string>;
@@ -100,9 +96,9 @@ export interface MzActivityLogThinned {
 }
 
 export interface MzAggregates {
-  agg_kind: Generated<string>;
-  agg_num_direct_args: Generated<number>;
-  oid: Generated<number>;
+  agg_kind: string;
+  agg_num_direct_args: number;
+  oid: number;
 }
 
 export interface MzArrangementBatcherAllocationsRaw {
@@ -213,11 +209,11 @@ export interface MzArrayTypes {
   /**
    * The ID of the array's element type.
    */
-  element_id: Generated<string>;
+  element_id: string;
   /**
    * The ID of the array type.
    */
-  id: Generated<string>;
+  id: string;
 }
 
 export interface MzAuditEvents {
@@ -351,7 +347,27 @@ export interface MzBaseTypes {
   /**
    * The ID of the type.
    */
-  id: Generated<string>;
+  id: string;
+}
+
+export interface MzBuiltinColumns {
+  default: string | null;
+  name: string;
+  nullable: boolean;
+  position: string;
+  relation_name: string;
+  schema_name: string;
+  type: string;
+  type_mod: number;
+  type_oid: number;
+}
+
+export interface MzBuiltinIndexColumns {
+  index_position: string;
+  name: string;
+  nullable: boolean;
+  on_position: string;
+  type: string;
 }
 
 export interface MzBuiltinIndexes {
@@ -670,46 +686,46 @@ export interface MzClusterReplicaSizeInternal {
   /**
    * The replica size's disk limit in bytes (0 if explicitly disabled). Used internally to compute the public `disk` column.
    */
-  disk_bytes: Generated<string>;
+  disk_bytes: string;
   /**
    * The human-readable replica size.
    */
-  size: Generated<string>;
+  size: string;
   /**
    * Whether the replica size's pods are configured to allow swap. Used internally to compute the public `disk` column.
    */
-  swap_enabled: Generated<boolean>;
+  swap_enabled: boolean;
 }
 
 export interface MzClusterReplicaSizes {
   /**
    * The CPU allocation per process, in billionths of a vCPU core.
    */
-  cpu_nano_cores: Generated<string>;
+  cpu_nano_cores: string;
   /**
    * The number of compute credits consumed per hour.
    */
-  credits_per_hour: Generated<Numeric>;
+  credits_per_hour: Numeric;
   /**
    * The disk allocation per process.
    */
-  disk_bytes: Generated<string | null>;
+  disk_bytes: string | null;
   /**
    * The RAM allocation per process, in bytes.
    */
-  memory_bytes: Generated<string>;
+  memory_bytes: string;
   /**
    * The number of processes in the replica.
    */
-  processes: Generated<string>;
+  processes: string;
   /**
    * The human-readable replica size.
    */
-  size: Generated<string>;
+  size: string;
   /**
    * The number of Timely Dataflow workers per process.
    */
-  workers: Generated<string>;
+  workers: string;
 }
 
 export interface MzClusterReplicaStatuses {
@@ -908,37 +924,37 @@ export interface MzClusterWorkloadClasses {
 
 export interface MzColumns {
   /**
-   * The default expression of the column.
+   * The default expression of the column. A table column without one reads as the string `NULL`.
    */
-  default: Generated<string | null>;
+  default: string | null;
   /**
    * The unique ID of the table, source, or view containing the column.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the column.
    */
-  name: Generated<string>;
+  name: string;
   /**
    * Can the column contain a `NULL` value?
    */
-  nullable: Generated<boolean>;
+  nullable: boolean;
   /**
    * The 1-indexed position of the column in its containing table, source, or view.
    */
-  position: Generated<string>;
+  position: string;
   /**
    * The data type of the column.
    */
-  type: Generated<string>;
+  type: string;
   /**
    * The packed type identifier of the column.
    */
-  type_mod: Generated<number>;
+  type_mod: number;
   /**
    * The OID of the type of the column (references `mz_types`).
    */
-  type_oid: Generated<number>;
+  type_oid: number;
 }
 
 export interface MzComments {
@@ -1557,15 +1573,15 @@ export interface MzEgressIps {
   /**
    * The CIDR representation.
    */
-  cidr: Generated<string>;
+  cidr: string;
   /**
    * The start of the range of IP addresses.
    */
-  egress_ip: Generated<string>;
+  egress_ip: string;
   /**
    * The number of leading bits in the CIDR netmask.
    */
-  prefix_length: Generated<number>;
+  prefix_length: number;
 }
 
 export interface MzExpectedGroupSizeAdvice {
@@ -1622,39 +1638,39 @@ export interface MzFunctions {
   /**
    * The ID of each argument's type. Each entry refers to `mz_types.id`.
    */
-  argument_type_ids: Generated<string[]>;
+  argument_type_ids: string[];
   /**
    * Materialize's unique ID for the function.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the function.
    */
-  name: Generated<string>;
+  name: string;
   /**
    * A PostgreSQL-compatible OID for the function.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the function. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The returned value's type, or `NULL` if the function does not return a value. Refers to `mz_types.id`. Note that for table functions with > 1 column, this type corresponds to [`record`].
    */
-  return_type_id: Generated<string | null>;
+  return_type_id: string | null;
   /**
    * Whether the function returns a set, i.e. the function is a table function.
    */
-  returns_set: Generated<boolean>;
+  returns_set: boolean;
   /**
    * The ID of the schema to which the function belongs. Corresponds to `mz_schemas.id`.
    */
-  schema_id: Generated<string>;
+  schema_id: string;
   /**
    * The ID of the variadic argument's type, or `NULL` if the function does not have a variadic argument. Refers to `mz_types.id`.
    */
-  variadic_argument_type_id: Generated<string | null>;
+  variadic_argument_type_id: string | null;
 }
 
 export interface MzGlobalFrontiers {
@@ -1730,23 +1746,23 @@ export interface MzIndexColumns {
   /**
    * The ID of the index which contains this column. Corresponds to `mz_indexes.id`.
    */
-  index_id: Generated<string>;
+  index_id: string;
   /**
    * The 1-indexed position of this column within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)
    */
-  index_position: Generated<string>;
+  index_position: string;
   /**
    * Can this column of the index evaluate to `NULL`?
    */
-  nullable: Generated<boolean>;
+  nullable: boolean;
   /**
    * If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
    */
-  on_expression: Generated<string | null>;
+  on_expression: string | null;
   /**
    * If not `NULL`, specifies the 1-indexed position of a column in the relation on which this index is built that determines the value of this index column.
    */
-  on_position: Generated<string | null>;
+  on_position: string | null;
 }
 
 export interface MzIndexes {
@@ -1859,23 +1875,23 @@ export interface MzLicenseKeys {
   /**
    * The environment ID that this license key was issued for.
    */
-  environment_id: Generated<string>;
+  environment_id: string;
   /**
    * The date and time when this license key expires.
    */
-  expiration: Generated<Timestamp>;
+  expiration: Timestamp;
   /**
    * The identifier of the license key.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The start of the validity period for this license key.
    */
-  not_before: Generated<Timestamp>;
+  not_before: Timestamp;
   /**
    * The name of the organization that this license key was issued to.
    */
-  organization: Generated<string>;
+  organization: string;
 }
 
 export interface MzLirMapping {
@@ -1913,15 +1929,15 @@ export interface MzListTypes {
   /**
    * The IID of the list's element type.
    */
-  element_id: Generated<string>;
+  element_id: string;
   /**
    * The element type modifiers, or `NULL` if none.
    */
-  element_modifiers: Generated<string | null>;
+  element_modifiers: string | null;
   /**
    * The ID of the list type.
    */
-  id: Generated<string>;
+  id: string;
 }
 
 export interface MzMappableObjects {
@@ -1939,23 +1955,23 @@ export interface MzMapTypes {
   /**
    * The ID of the map type.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The ID of the map's key type.
    */
-  key_id: Generated<string>;
+  key_id: string;
   /**
    * The key type modifiers, or `NULL` if none.
    */
-  key_modifiers: Generated<string | null>;
+  key_modifiers: string | null;
   /**
    * The ID of the map's value type.
    */
-  value_id: Generated<string>;
+  value_id: string;
   /**
    * The value type modifiers, or `NULL` if none.
    */
-  value_modifiers: Generated<string | null>;
+  value_modifiers: string | null;
 }
 
 export interface MzMaterializationDependencies {
@@ -2346,23 +2362,23 @@ export interface MzObjectArrangementSizeHistory {
   /**
    * The timestamp when this snapshot was collected.
    */
-  collection_timestamp: Generated<Timestamp>;
+  collection_timestamp: Timestamp;
   /**
    * Whether the arrangement had finished its initial hydration on this replica when the snapshot was collected. Filter for `true` to consider only stable, post-build sizes.
    */
-  hydration_complete: Generated<boolean>;
+  hydration_complete: boolean;
   /**
    * The ID of the compute object (index or materialized view). Corresponds to `mz_objects.id`.
    */
-  object_id: Generated<string>;
+  object_id: string;
   /**
    * The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.
    */
-  replica_id: Generated<string>;
+  replica_id: string;
   /**
    * The total arrangement heap and batcher size in bytes for this object on this replica at `collection_timestamp`, rounded to the nearest 10 MiB to reduce per-byte churn in the underlying differential collection. Objects with less than 5 MiB of arrangements are not recorded. May reflect a mid-build size if `hydration_complete` is `false`.
    */
-  size: Generated<Int8>;
+  size: Int8;
 }
 
 export interface MzObjectArrangementSizes {
@@ -2486,31 +2502,31 @@ export interface MzObjectHydrationHistory {
   /**
    * The ID of the object's cluster.
    */
-  cluster_id: Generated<string>;
+  cluster_id: string;
   /**
    * When hydration finished.
    */
-  hydrated_at: Generated<Timestamp | null>;
+  hydrated_at: Timestamp | null;
   /**
    * When the object's dataflow was installed on the replica.
    */
-  installed_at: Generated<Timestamp>;
+  installed_at: Timestamp;
   /**
    * The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view while that mapping exists. Dropping the dataflow retracts the mapping, so historical IDs may no longer resolve.
    */
-  object_id: Generated<string>;
+  object_id: string;
   /**
    * The ID of the cluster replica. May name a replica that no longer exists.
    */
-  replica_id: Generated<string>;
+  replica_id: string;
   /**
    * When hydration work began, or `NULL` if the replica reported none. A replica that observed no start reports the installation time instead, so a zero interval between the two does not mean the dataflow started immediately.
    */
-  started_at: Generated<Timestamp | null>;
+  started_at: Timestamp | null;
   /**
    * The terminal status. Currently always `hydrated`.
    */
-  status: Generated<string>;
+  status: string;
 }
 
 export interface MzObjectLifetimes {
@@ -2620,25 +2636,25 @@ export interface MzOntologySemanticTypes {
 }
 
 export interface MzOperators {
-  argument_type_ids: Generated<string[]>;
-  name: Generated<string>;
-  oid: Generated<number>;
-  return_type_id: Generated<string | null>;
+  argument_type_ids: string[];
+  name: string;
+  oid: number;
+  return_type_id: string | null;
 }
 
 export interface MzOptimizerNotices {
-  action: Generated<string | null>;
-  action_type: Generated<string | null>;
-  created_at: Generated<Timestamp>;
-  dependency_ids: Generated<string>;
-  hint: Generated<string>;
-  id: Generated<string>;
-  message: Generated<string>;
-  notice_type: Generated<string>;
-  object_id: Generated<string | null>;
-  redacted_action: Generated<string | null>;
-  redacted_hint: Generated<string | null>;
-  redacted_message: Generated<string | null>;
+  action: string | null;
+  action_type: string | null;
+  created_at: Timestamp;
+  dependency_ids: string;
+  hint: string;
+  id: string;
+  message: string;
+  notice_type: string;
+  object_id: string | null;
+  redacted_action: string | null;
+  redacted_hint: string | null;
+  redacted_message: string | null;
 }
 
 export interface MzOverriddenSystemParameters {
@@ -2731,7 +2747,7 @@ export interface MzPseudoTypes {
   /**
    * The ID of the type.
    */
-  id: Generated<string>;
+  id: string;
 }
 
 export interface MzRecentActivityLog {
@@ -3086,39 +3102,39 @@ export interface MzReplicaHydrationHistory {
   /**
    * The ID of the replica's cluster.
    */
-  cluster_id: Generated<string>;
+  cluster_id: string;
   /**
    * The latest maintained compute dataflow hydration in the hydration episode.
    */
-  finished_at: Generated<Timestamp | null>;
+  finished_at: Timestamp | null;
   /**
    * The number of maintained compute dataflows in the hydration episode. Includes the replica's system introspection dataflows, so it exceeds the number of indexes and materialized views you created.
    */
-  object_count: Generated<string>;
+  object_count: string;
   /**
    * The process-lifetime scratch-filesystem or swap high-water mark when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.
    */
-  peak_disk_bytes: Generated<string | null>;
+  peak_disk_bytes: string | null;
   /**
    * The process-lifetime cgroup memory high-water mark when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak.
    */
-  peak_memory_bytes: Generated<string | null>;
+  peak_memory_bytes: string | null;
   /**
    * The ID of a process within the replica. Episode timing and object_count are replica-wide and repeated for each process.
    */
-  process_id: Generated<string | null>;
+  process_id: string | null;
   /**
    * The ID of the cluster replica. May name a replica that no longer exists.
    */
-  replica_id: Generated<string>;
+  replica_id: string;
   /**
    * The earliest maintained compute dataflow installation in the hydration episode.
    */
-  started_at: Generated<Timestamp>;
+  started_at: Timestamp;
   /**
    * The hydration episode's status. Currently always `hydrated`.
    */
-  status: Generated<string>;
+  status: string;
 }
 
 export interface MzReplicaSystemParameters {
@@ -3140,19 +3156,19 @@ export interface MzRoleAuth {
   /**
    * The hashed password for the role, if any. Uses the `SCRAM-SHA-256` algorithm.
    */
-  password_hash: Generated<string | null>;
+  password_hash: string | null;
   /**
    * The ID of the role. Corresponds to `mz_roles.id`.
    */
-  role_id: Generated<string>;
+  role_id: string;
   /**
    * A PostgreSQL-compatible OID for the role.
    */
-  role_oid: Generated<number>;
+  role_oid: number;
   /**
    * The time at which the password was last updated.
    */
-  updated_at: Generated<Timestamp>;
+  updated_at: Timestamp;
 }
 
 export interface MzRoleMembers {
@@ -3339,23 +3355,23 @@ export interface MzSessions {
   /**
    * The IP address of the client that initiated the session.
    */
-  client_ip: Generated<string | null>;
+  client_ip: string | null;
   /**
    * The time at which the session connected to the system.
    */
-  connected_at: Generated<Timestamp>;
+  connected_at: Timestamp;
   /**
    * The connection ID of the session. Unique only for active sessions and can be recycled. Corresponds to `pg_backend_pid()`.
    */
-  connection_id: Generated<string>;
+  connection_id: string;
   /**
    * The globally unique ID of the session.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The role ID of the role that the session is logged in as. Corresponds to `mz_catalog.mz_roles`.
    */
-  role_id: Generated<string>;
+  role_id: string;
 }
 
 export interface MzShowAllMyPrivileges {
@@ -4348,33 +4364,33 @@ export interface MzStorageUsage {
 }
 
 export interface MzStorageUsageByShard {
-  collection_timestamp: Generated<Timestamp>;
-  id: Generated<string>;
-  shard_id: Generated<string | null>;
-  size_bytes: Generated<string>;
+  collection_timestamp: Timestamp;
+  id: string;
+  shard_id: string | null;
+  size_bytes: string;
 }
 
 export interface MzSubscriptions {
   /**
    * The ID of the cluster on which the subscription is running. Corresponds to `mz_clusters.id`.
    */
-  cluster_id: Generated<string>;
+  cluster_id: string;
   /**
    * The time at which the subscription was created.
    */
-  created_at: Generated<Timestamp>;
+  created_at: Timestamp;
   /**
    * The ID of the subscription.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The IDs of objects referenced by the subscription. Corresponds to `mz_objects.id`
    */
-  referenced_object_ids: Generated<string>;
+  referenced_object_ids: string;
   /**
    * The ID of the session that runs the subscription. Corresponds to `mz_sessions.id`.
    */
-  session_id: Generated<string>;
+  session_id: string;
 }
 
 export interface MzSystemPrivileges {
@@ -4450,50 +4466,50 @@ export interface MzTimezoneNames {
 }
 
 export interface MzTypePgMetadata {
-  id: Generated<string>;
-  typinput: Generated<number>;
-  typlen: Generated<number | null>;
-  typreceive: Generated<number>;
-  typsend: Generated<number>;
+  id: string;
+  typinput: number;
+  typlen: number | null;
+  typreceive: number;
+  typsend: number;
 }
 
 export interface MzTypes {
   /**
    * The category of the type.
    */
-  category: Generated<string>;
+  category: string;
   /**
    * The `CREATE` SQL statement for the type.
    */
-  create_sql: Generated<string | null>;
+  create_sql: string | null;
   /**
    * Materialize's unique ID for the type.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the type.
    */
-  name: Generated<string>;
+  name: string;
   /**
    * A PostgreSQL-compatible OID for the type.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the type. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the type.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
   /**
    * The redacted `CREATE` SQL statement for the type.
    */
-  redacted_create_sql: Generated<string | null>;
+  redacted_create_sql: string | null;
   /**
    * The ID of the schema to which the type belongs. Corresponds to `mz_schemas.id`.
    */
-  schema_id: Generated<string>;
+  schema_id: string;
 }
 
 export interface MzViews {
@@ -4616,15 +4632,15 @@ export interface MzWebhookSources {
   /**
    * The ID of the webhook source. Corresponds to `mz_sources.id`.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the webhook source.
    */
-  name: Generated<string>;
+  name: string;
   /**
    * The URL which can be used to send events to the source.
    */
-  url: Generated<string>;
+  url: string;
 }
 
 export interface PgAttrdefAllDatabases {
@@ -4760,6 +4776,8 @@ export interface DB {
   mz_aws_privatelink_connection_statuses: MzAwsPrivatelinkConnectionStatuses;
   mz_aws_privatelink_connections: MzAwsPrivatelinkConnections;
   mz_base_types: MzBaseTypes;
+  mz_builtin_columns: MzBuiltinColumns;
+  mz_builtin_index_columns: MzBuiltinIndexColumns;
   mz_builtin_indexes: MzBuiltinIndexes;
   mz_builtin_log_indexes: MzBuiltinLogIndexes;
   mz_builtin_materialized_views: MzBuiltinMaterializedViews;
