@@ -114,26 +114,6 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
         *name = self.transformer.transform_name(name);
     }
 
-    /// Normalize an UnresolvedSchemaName to be fully qualified (`database.schema`).
-    ///
-    /// Converts unqualified schema names (e.g., `public`) to fully qualified
-    /// names (e.g., `materialize.public`) using the current file's FQN context.
-    pub fn normalize_unresolved_schema_name(&self, name: &mut UnresolvedSchemaName) {
-        match name.0.len() {
-            1 => {
-                // Unqualified: schema only (e.g., "public")
-                // Prepend database to make database.schema
-                let schema = name.0[0].clone();
-                let database = Ident::new(self.transformer.database_name())
-                    .expect("valid database identifier");
-                name.0 = vec![database, schema];
-            }
-            _ => {
-                // Already qualified or invalid - leave as-is
-            }
-        }
-    }
-
     /// Normalize connection references in CREATE SINK statements.
     ///
     /// Handles both Kafka and Iceberg sink types, ensuring their connection

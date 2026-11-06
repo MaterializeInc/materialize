@@ -72,13 +72,6 @@ pub enum LoadError {
         source: std::io::Error,
     },
 
-    #[error("Failed to write cache file: {path}")]
-    CacheWriteFailed {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
     #[error("Failed to create directory: {path}")]
     DirectoryCreationFailed {
         path: PathBuf,
