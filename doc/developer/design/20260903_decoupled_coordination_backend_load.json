@@ -1,0 +1,1894 @@
+{
+  "scope": "Matched debug fixtures. Uncached Persist API completions, not provider HTTP or OS I/O. Rates average two measured windows.",
+  "evidence": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution",
+  "runs": {
+    "main": {
+      "directory": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/main-audit-1793998684",
+      "status": {
+        "status": "passed",
+        "kind": "main",
+        "run": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/main-audit-1793998684",
+        "arguments": {
+          "kind": "main",
+          "evidence_dir": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution",
+          "postgres_image": "postgres:18",
+          "warmup": 300,
+          "window": 300,
+          "windows": 2,
+          "profile_seconds": 0,
+          "label": "main-audit",
+          "scheduling_diagnostics": false,
+          "frontier_lifecycle": false,
+          "system_parameter": [
+            "enable_metric_sink=false",
+            "persist_enable_incremental_compaction=false",
+            "enable_columnar_accumulable_diff=false",
+            "compute_mv_sink_shared_batch_max_bytes=0"
+          ]
+        },
+        "readiness_seconds": 19.237252029008232,
+        "measurement_status": "passed",
+        "profile_errors": {}
+      },
+      "build": {
+        "source_head": "77ae0a3034efefb22919b6257dd40e5ebc1827bb",
+        "saved_at": 1793998670.8844736,
+        "build_log": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/build-main.log",
+        "workspace_cache_invalidation": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/main-workspace-cache-invalidation.json",
+        "toolchain": "1.98.1",
+        "jobs": 2,
+        "profile": "dev",
+        "patches": [
+          "backend-audit-main.patch"
+        ],
+        "binaries": {
+          "clusterd": {
+            "path": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/artifacts/main/clusterd",
+            "build_id": "bf7a328c42ecf7db035d9ba013f8476f42b9220e",
+            "sha256": "d10b024b5e6bcd875513211547af983e3ead0174a93f33cc3d9c763259647dd6"
+          },
+          "environmentd": {
+            "path": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/artifacts/main/environmentd",
+            "build_id": "b54e37334148fd9aa821cfdf82d7f1db609c03b7",
+            "sha256": "7b97810d602502d1d3dbb8ab928dd097e57023707d308bb9da31cdfc81022b5f"
+          }
+        }
+      },
+      "effective_settings": {
+        "persist_shard_metrics": "both",
+        "log_filter": "info",
+        "enable_metric_sink": "off",
+        "persist_enable_incremental_compaction": "off",
+        "enable_columnar_accumulable_diff": "off",
+        "compute_temporal_bucketing_summary": "2 s",
+        "persist_blob_cache_mem_limit_bytes": "134217728",
+        "persist_pg_consensus_read_committed": "off",
+        "compute_mv_sink_shared_batch_max_bytes": "0"
+      },
+      "reconciled_checks": 160,
+      "unavailable_checks": 0,
+      "unmeasured_event_roles": [
+        [],
+        []
+      ],
+      "counter_rates": {
+        "blob_delete": {
+          "succeeded_count_per_second": 4.300984892992727,
+          "failed_count_per_second": 0.0,
+          "bytes_count_per_second": 82526.61516767717,
+          "events_per_second": 4.300984892992727
+        },
+        "blob_get": {
+          "succeeded_count_per_second": 2.276280177128839,
+          "failed_count_per_second": 0.0,
+          "bytes_count_per_second": 27616.225128805756,
+          "events_per_second": 2.276280177128839
+        },
+        "blob_set": {
+          "succeeded_count_per_second": 4.554086883834227,
+          "failed_count_per_second": 0.0,
+          "bytes_count_per_second": 97298.46408016483,
+          "events_per_second": 4.554086883834227,
+          "nominal_attempted_bytes_per_second": 97298.46408016483
+        },
+        "consensus_cas": {
+          "succeeded_count_per_second": 83.0306899408887,
+          "failed_count_per_second": 0.0,
+          "bytes_count_per_second": 49075.145918986214,
+          "events_per_second": 83.0306899408887,
+          "nominal_attempted_bytes_per_second": 49084.10251967442
+        }
+      },
+      "window_rates": [
+        {
+          "blob_delete": {
+            "succeeded_count_per_second": 3.583347380917171,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 64416.035766614186,
+            "events_per_second": 3.583347380917171
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 2.1314972788905493,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 16824.910485491877,
+            "events_per_second": 2.1314972788905493
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 4.659016748292769,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 104671.26295618777,
+            "events_per_second": 4.659016748292769
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 83.08255322144248,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 49051.414532077666,
+            "events_per_second": 83.08255322144248
+          }
+        },
+        {
+          "blob_delete": {
+            "succeeded_count_per_second": 5.018622405068281,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 100637.19456874013,
+            "events_per_second": 5.018622405068281
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 2.421063075367128,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 38407.539772119635,
+            "events_per_second": 2.421063075367128
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 4.4491570193756855,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 89925.6652041419,
+            "events_per_second": 4.4491570193756855
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 82.9788266603349,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 49098.87730589476,
+            "events_per_second": 82.9788266603349
+          }
+        }
+      ],
+      "role_counter_rates": {
+        "environmentd": {
+          "blob_delete": {
+            "succeeded_count_per_second": 3.400131053685699,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 61828.38891195977,
+            "events_per_second": 3.400131053685699
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 0.14985921725205528,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 9996.051501699294,
+            "events_per_second": 0.14985921725205528
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 3.568303538850775,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 64261.80871179381,
+            "events_per_second": 3.568303538850775
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 30.676088438725447,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 18922.10144956398,
+            "events_per_second": 30.676088438725447
+          }
+        },
+        "replica-s1-s1": {
+          "blob_delete": {
+            "succeeded_count_per_second": 0.0,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 0.0,
+            "events_per_second": 0.0
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 0.019981911467026173,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 137.1383552529195,
+            "events_per_second": 0.019981911467026173
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 0.0,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 0.0,
+            "events_per_second": 0.0
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 0.05495113620666777,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 14.84679306017032,
+            "events_per_second": 0.05495113620666777
+          }
+        },
+        "replica-s2-s2": {
+          "blob_delete": {
+            "succeeded_count_per_second": 0.9008538393070269,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 20698.22625571738,
+            "events_per_second": 0.9008538393070269
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 2.066475522082433,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 17208.759342057303,
+            "events_per_second": 2.066475522082433
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 0.9857833449834521,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 33036.65536837102,
+            "events_per_second": 0.9857833449834521
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 52.219722952621865,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 30116.902013936193,
+            "events_per_second": 52.219722952621865
+          }
+        },
+        "replica-s3-s3": {
+          "blob_delete": {
+            "succeeded_count_per_second": 0.0,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 0.0,
+            "events_per_second": 0.0
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 0.01998188709014528,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 137.13790773335046,
+            "events_per_second": 0.01998188709014528
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 0.0,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 0.0,
+            "events_per_second": 0.0
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 0.038298800380575676,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 10.155848341532868,
+            "events_per_second": 0.038298800380575676
+          }
+        },
+        "replica-u1-u1": {
+          "blob_delete": {
+            "succeeded_count_per_second": 0.0,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 0.0,
+            "events_per_second": 0.0
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 0.019981639237179022,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 137.1380220628896,
+            "events_per_second": 0.019981639237179022
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 0.0,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 0.0,
+            "events_per_second": 0.0
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 0.04162861295413613,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 11.139814084339033,
+            "events_per_second": 0.04162861295413613
+          }
+        }
+      },
+      "nominal_cas_outcome_rates": {
+        "committed": 83.03735036781241,
+        "mismatch": 0.006660417483483159
+      },
+      "nominal_work_rates": [
+        {
+          "operation": "consensus_cas",
+          "work_class": "append empty",
+          "calls_per_second": 72.98172824932527,
+          "bytes_per_second": 41613.81912514253
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "reader maintenance",
+          "calls_per_second": 4.9170714112854785,
+          "bytes_per_second": 1357.6239976526763
+        },
+        {
+          "operation": "blob_set",
+          "work_class": "upload",
+          "calls_per_second": 2.044739550490711,
+          "bytes_per_second": 15953.46267003313
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "append data",
+          "calls_per_second": 2.137985026146592,
+          "bytes_per_second": 2441.3740995213348
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "source fetch",
+          "calls_per_second": 2.034837488720055,
+          "bytes_per_second": 15871.34713983531
+        },
+        {
+          "operation": "blob_set",
+          "work_class": "compaction",
+          "calls_per_second": 1.8582735737393639,
+          "bytes_per_second": 29408.601433611602
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "compaction",
+          "calls_per_second": 1.8582735737393639,
+          "bytes_per_second": 3487.201420493381
+        },
+        {
+          "operation": "blob_set",
+          "work_class": "rollup maintenance",
+          "calls_per_second": 0.6494086564132634,
+          "bytes_per_second": 51924.899108780366
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "rollup maintenance",
+          "calls_per_second": 0.6510737619640777,
+          "bytes_per_second": 98.13397160775108
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "gc",
+          "calls_per_second": 0.42960700325608875,
+          "bytes_per_second": 70.02928057949052
+        },
+        {
+          "operation": "blob_delete",
+          "work_class": "gc",
+          "calls_per_second": 4.297654686610861,
+          "bytes_per_second": 82494.27553350286
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "liveness",
+          "calls_per_second": 0.08325747593140378,
+          "bytes_per_second": 0.0
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "writer maintenance",
+          "calls_per_second": 0.068271759578347,
+          "bytes_per_second": 13.980778780052944
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "gc",
+          "calls_per_second": 0.016651424594470388,
+          "bytes_per_second": 1521.270258485355
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "acquisition",
+          "calls_per_second": 0.011655738990570541,
+          "bytes_per_second": 480.1381864479206
+        },
+        {
+          "operation": "blob_delete",
+          "work_class": "compaction cleanup",
+          "calls_per_second": 0.0033302063818544418,
+          "bytes_per_second": 32.33963417418849
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "rollup read",
+          "calls_per_second": 0.12987804889232316,
+          "bytes_per_second": 9743.469544037189
+        },
+        {
+          "operation": "blob_set",
+          "work_class": "batch upload",
+          "calls_per_second": 0.0016651031909272209,
+          "bytes_per_second": 11.500867739734314
+        }
+      ],
+      "catalog_mv_output_count": 50,
+      "catalog_mv_progress_links": [
+        {
+          "publisher": "environmentd",
+          "catalog_append": "progress",
+          "output_commits": 30058,
+          "per_second": 50.05166995304512
+        }
+      ],
+      "named_blob_rates": [
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_delete",
+          "work_class": "gc",
+          "calls_per_second": 0.018316041858339974,
+          "bytes_per_second": 7089.552854983474
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_set",
+          "work_class": "rollup maintenance",
+          "calls_per_second": 0.009990729041983906,
+          "bytes_per_second": 752.4850595044511
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_get",
+          "work_class": "gc",
+          "calls_per_second": 0.00333019472662201,
+          "bytes_per_second": 252.581957662106
+        }
+      ],
+      "duplicate_gets": [],
+      "duplicate_pairs": [],
+      "compaction_input_producers": [],
+      "unknown_events": [],
+      "errors": [],
+      "cache": {
+        "environmentd": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 3482.0,
+            "mz_persist_blob_cache_hits_bytes": 74441093.0,
+            "mz_persist_blob_cache_size_blobs": 789.0,
+            "mz_persist_blob_cache_size_bytes": 29974783.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 2296.0,
+            "mz_persist_blob_cache_hits_bytes": 48686035.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        },
+        "replica-s1-s1": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 8.0,
+            "mz_persist_blob_cache_hits_bytes": 42354.0,
+            "mz_persist_blob_cache_size_blobs": 8.0,
+            "mz_persist_blob_cache_size_bytes": 198417.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 7.0,
+            "mz_persist_blob_cache_hits_bytes": 42173.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        },
+        "replica-s2-s2": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 1192.0,
+            "mz_persist_blob_cache_hits_bytes": 128155650.0,
+            "mz_persist_blob_cache_size_blobs": 2221.0,
+            "mz_persist_blob_cache_size_bytes": 33330749.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 703.0,
+            "mz_persist_blob_cache_hits_bytes": 24930384.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        },
+        "replica-s3-s3": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 6.0,
+            "mz_persist_blob_cache_hits_bytes": 41992.0,
+            "mz_persist_blob_cache_size_blobs": 9.0,
+            "mz_persist_blob_cache_size_bytes": 201568.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 5.0,
+            "mz_persist_blob_cache_hits_bytes": 41811.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        },
+        "replica-u1-u1": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 10.0,
+            "mz_persist_blob_cache_hits_bytes": 42716.0,
+            "mz_persist_blob_cache_size_blobs": 8.0,
+            "mz_persist_blob_cache_size_bytes": 122188.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 4.0,
+            "mz_persist_blob_cache_hits_bytes": 41630.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        }
+      }
+    },
+    "native": {
+      "directory": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/native-audit-1793996274",
+      "status": {
+        "status": "passed",
+        "kind": "native",
+        "run": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/native-audit-1793996274",
+        "arguments": {
+          "kind": "native",
+          "evidence_dir": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution",
+          "postgres_image": "postgres:18",
+          "warmup": 300,
+          "window": 300,
+          "windows": 2,
+          "profile_seconds": 0,
+          "label": "native-audit",
+          "scheduling_diagnostics": false,
+          "frontier_lifecycle": false,
+          "system_parameter": [
+            "enable_metric_sink=false",
+            "persist_enable_incremental_compaction=false",
+            "enable_columnar_accumulable_diff=false"
+          ]
+        },
+        "readiness_seconds": 36.09342940303031,
+        "measurement_status": "passed",
+        "profile_errors": {},
+        "launcher_stop_code": 0
+      },
+      "build": {
+        "source_head": "604c47268074fcd100910dc9ab4c4720f1ba1662",
+        "saved_at": 1793996273.6698477,
+        "build_log": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/build-native.log",
+        "workspace_cache_invalidation": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/workspace-cache-invalidation.json",
+        "toolchain": "1.98.1",
+        "jobs": 2,
+        "profile": "dev",
+        "patches": [
+          "backend-audit-native.patch",
+          "controller-metrics-used.patch"
+        ],
+        "binaries": {
+          "adapterd": {
+            "path": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/artifacts/native/adapterd",
+            "build_id": "d0a040723a34adb7b1efdcd8528f026865c3657e",
+            "sha256": "8f81650d7a6d70b492da264d1bca8a2b91c6061583de0a2f4e277be59e037b1f"
+          },
+          "clusterd": {
+            "path": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/artifacts/native/clusterd",
+            "build_id": "6b6aeacf2511f5b78a74afcfbc8feb5bd08c5942",
+            "sha256": "0eba7fd5feaefcc70dea8fa4c95c4431ce5d73e4b4b34673d83e84a10b89a3c4"
+          },
+          "controllerd": {
+            "path": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/artifacts/native/controllerd",
+            "build_id": "c7cf0b46cf8dd1a1ee7b4cd8bc44e2076c3c196b",
+            "sha256": "45d7aa075c922c433e1bb60f1498188b77f3cc6621a6cec09901b61a3bd86ea1"
+          },
+          "pubsubd": {
+            "path": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/artifacts/native/pubsubd",
+            "build_id": "f27904b8e5ed6e410b993e5c7962190417dd3258",
+            "sha256": "bccdec2f8637ae620b67c24371dcf6978f8723bd56854ca450291bd0e564c0e6"
+          }
+        }
+      },
+      "effective_settings": {
+        "catalog_read_protection_publish_interval": "10 s",
+        "persist_shard_metrics": "both",
+        "log_filter": "info",
+        "enable_metric_sink": "off",
+        "persist_enable_incremental_compaction": "off",
+        "enable_columnar_accumulable_diff": "off",
+        "compute_temporal_bucketing_summary": "2 s",
+        "persist_blob_cache_mem_limit_bytes": "134217728",
+        "persist_pg_consensus_read_committed": "off"
+      },
+      "reconciled_checks": 192,
+      "unavailable_checks": 32,
+      "unmeasured_event_roles": [
+        [],
+        []
+      ],
+      "counter_rates": {
+        "blob_delete": {
+          "succeeded_count_per_second": 9.38229686299393,
+          "failed_count_per_second": 0.0,
+          "bytes_count_per_second": 256075.41351891492,
+          "events_per_second": 9.38229686299393
+        },
+        "blob_get": {
+          "succeeded_count_per_second": 14.36621999439982,
+          "failed_count_per_second": 0.0,
+          "bytes_count_per_second": 314778.2028205741,
+          "events_per_second": 14.36621999439982
+        },
+        "blob_set": {
+          "succeeded_count_per_second": 9.606918664916273,
+          "failed_count_per_second": 0.0,
+          "bytes_count_per_second": 288360.31558108295,
+          "events_per_second": 9.606918664916273,
+          "nominal_attempted_bytes_per_second": 288360.31558108295
+        },
+        "consensus_cas": {
+          "succeeded_count_per_second": 120.63314497444,
+          "failed_count_per_second": 0.003329254987357844,
+          "bytes_count_per_second": 81783.4017356513,
+          "events_per_second": 120.63647422942736,
+          "nominal_attempted_bytes_per_second": 82476.1593078363
+        }
+      },
+      "window_rates": [
+        {
+          "blob_delete": {
+            "succeeded_count_per_second": 10.185090581321754,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 228398.5434914342,
+            "events_per_second": 10.185090581321754
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 14.017083479800048,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 275239.2151830582,
+            "events_per_second": 14.017083479800048
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 9.635566784269303,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 282942.1470622544,
+            "events_per_second": 9.635566784269303
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 119.86810463388179,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 81170.49691144135,
+            "events_per_second": 119.86810463388179
+          }
+        },
+        {
+          "blob_delete": {
+            "succeeded_count_per_second": 8.57950314466611,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 283752.28354639566,
+            "events_per_second": 8.57950314466611
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 14.71535650899959,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 354317.19045809,
+            "events_per_second": 14.71535650899959
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 9.57827054556324,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 293778.4840999116,
+            "events_per_second": 9.57827054556324
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 121.39818531499824,
+            "failed_count_per_second": 0.006658509974715688,
+            "bytes_count_per_second": 82396.30655986124,
+            "events_per_second": 121.40484382497294
+          }
+        }
+      ],
+      "role_counter_rates": {
+        "adapterd": {
+          "blob_delete": {
+            "succeeded_count_per_second": 3.0214200053811835,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 105910.71574063445,
+            "events_per_second": 3.0214200053811835
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 0.48109404412710954,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 42143.92082527204,
+            "events_per_second": 0.48109404412710954
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 1.9976204093412449,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 104843.8502952634,
+            "events_per_second": 1.9976204093412449
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 36.613031129214605,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 22438.453790438252,
+            "events_per_second": 36.613031129214605
+          }
+        },
+        "controllerd": {
+          "blob_delete": {
+            "succeeded_count_per_second": 0.0,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 0.0,
+            "events_per_second": 0.0
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 0.5093672139744838,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 26812.56829914618,
+            "events_per_second": 0.5093672139744838
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 0.016646149234196755,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 1354.7522851082886,
+            "events_per_second": 0.016646149234196755
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 0.12650966597379132,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 142.2989297124502,
+            "events_per_second": 0.12650966597379132
+          }
+        },
+        "replica-s1-s1": {
+          "blob_delete": {
+            "succeeded_count_per_second": 2.0325176307805517,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 38838.48301196101,
+            "events_per_second": 2.0325176307805517
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 1.2268419064419982,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 33402.3216642388,
+            "events_per_second": 1.2268419064419982
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 1.3716655382797682,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 21142.34406789214,
+            "events_per_second": 1.3716655382797682
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 1.4798674381941481,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 2941.0160803681615,
+            "events_per_second": 1.4798674381941481
+          }
+        },
+        "replica-s2-s2": {
+          "blob_delete": {
+            "succeeded_count_per_second": 1.789542660485392,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 60997.65027414645,
+            "events_per_second": 1.789542660485392
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 9.502036656678701,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 113198.17394385772,
+            "events_per_second": 9.502036656678701
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 3.4425772915569444,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 100133.62174946003,
+            "events_per_second": 3.4425772915569444
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 79.40393131904875,
+            "failed_count_per_second": 0.0016646346974526802,
+            "bytes_count_per_second": 50491.05720561379,
+            "events_per_second": 79.4055959537462
+          }
+        },
+        "replica-s3-s3": {
+          "blob_delete": {
+            "succeeded_count_per_second": 1.3651435219853547,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 39153.365490150936,
+            "events_per_second": 1.3651435219853547
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 1.280168622767552,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 63220.1231275645,
+            "events_per_second": 1.280168622767552
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 1.386719297718079,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 39977.366949706615,
+            "events_per_second": 1.386719297718079
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 1.479943679950431,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 2951.6587441740157,
+            "events_per_second": 1.479943679950431
+          }
+        },
+        "replica-u1-u1": {
+          "blob_delete": {
+            "succeeded_count_per_second": 1.17367304436145,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 11175.199002022102,
+            "events_per_second": 1.17367304436145
+          },
+          "blob_get": {
+            "succeeded_count_per_second": 1.3667115504099743,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 36001.094960494826,
+            "events_per_second": 1.3667115504099743
+          },
+          "blob_set": {
+            "succeeded_count_per_second": 1.3916899787860388,
+            "failed_count_per_second": 0.0,
+            "bytes_count_per_second": 20908.38023365252,
+            "events_per_second": 1.3916899787860388
+          },
+          "consensus_cas": {
+            "succeeded_count_per_second": 1.5298617420582947,
+            "failed_count_per_second": 0.001664620289905164,
+            "bytes_count_per_second": 2818.9169853446256,
+            "events_per_second": 1.5315263623481998
+          }
+        }
+      },
+      "nominal_cas_outcome_rates": {
+        "committed": 119.6126952846003,
+        "mismatch": 1.0137907252258394,
+        "error": 0.003329254987357844
+      },
+      "nominal_work_rates": [
+        {
+          "operation": "blob_set",
+          "work_class": "upload",
+          "calls_per_second": 5.858040513710805,
+          "bytes_per_second": 51523.53213522431
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "append data",
+          "calls_per_second": 6.612139464285362,
+          "bytes_per_second": 11217.058361328738
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "source fetch",
+          "calls_per_second": 9.070884559845158,
+          "bytes_per_second": 84194.56771298914
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "compaction",
+          "calls_per_second": 3.0530263023223196,
+          "bytes_per_second": 108223.32488005266
+        },
+        {
+          "operation": "blob_set",
+          "work_class": "compaction",
+          "calls_per_second": 2.8366263585172393,
+          "bytes_per_second": 152104.2105463549
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "compaction",
+          "calls_per_second": 2.853273227563531,
+          "bytes_per_second": 9984.81096707508
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "append empty",
+          "calls_per_second": 100.99983910576833,
+          "bytes_per_second": 58138.24884985895
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "reader maintenance",
+          "calls_per_second": 8.361705539124584,
+          "bytes_per_second": 2134.300925947378
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "row fetch",
+          "calls_per_second": 2.0841644094811627,
+          "bytes_per_second": 114556.85469773154
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "writer maintenance",
+          "calls_per_second": 0.3662306861903775,
+          "bytes_per_second": 65.31057195470605
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "gc",
+          "calls_per_second": 0.507729461807186,
+          "bytes_per_second": 92.41510885564365
+        },
+        {
+          "operation": "blob_set",
+          "work_class": "rollup maintenance",
+          "calls_per_second": 0.9122517926882246,
+          "bytes_per_second": 84732.57289950387
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "rollup maintenance",
+          "calls_per_second": 0.9122517926882246,
+          "bytes_per_second": 138.502443514762
+        },
+        {
+          "operation": "blob_delete",
+          "work_class": "gc",
+          "calls_per_second": 9.194187318376688,
+          "bytes_per_second": 253999.22063440416
+        },
+        {
+          "operation": "blob_delete",
+          "work_class": "batch cleanup",
+          "calls_per_second": 0.17978585962239507,
+          "bytes_per_second": 1698.1188204614682
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "liveness",
+          "calls_per_second": 0.09988045827426927,
+          "bytes_per_second": 0.0
+        },
+        {
+          "operation": "consensus_cas",
+          "work_class": "compaction scheduling",
+          "calls_per_second": 0.01664598738478705,
+          "bytes_per_second": 9.278527587832555
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "gc",
+          "calls_per_second": 0.0482765112111474,
+          "bytes_per_second": 7358.241440224578
+        },
+        {
+          "operation": "blob_delete",
+          "work_class": "compaction cleanup",
+          "calls_per_second": 0.00832368499481846,
+          "bytes_per_second": 378.0740640490882
+        },
+        {
+          "operation": "blob_get",
+          "work_class": "acquisition",
+          "calls_per_second": 0.009987753265794786,
+          "bytes_per_second": 445.21408957606843
+        }
+      ],
+      "catalog_mv_output_count": 50,
+      "catalog_mv_progress_links": [
+        {
+          "publisher": "adapterd",
+          "catalog_append": "progress",
+          "output_commits": 32033,
+          "per_second": 53.32491984381681
+        },
+        {
+          "publisher": "replica-u1-u1",
+          "catalog_append": "data",
+          "output_commits": 2580,
+          "per_second": 4.294890057525054
+        },
+        {
+          "publisher": "adapterd",
+          "catalog_append": "data",
+          "output_commits": 22,
+          "per_second": 0.03662324081959411
+        },
+        {
+          "publisher": "replica-s3-s3",
+          "catalog_append": "data",
+          "output_commits": 2766,
+          "per_second": 4.604532231492515
+        },
+        {
+          "publisher": "replica-s2-s2",
+          "catalog_append": "data",
+          "output_commits": 2476,
+          "per_second": 4.1217720943294935
+        },
+        {
+          "publisher": "replica-s1-s1",
+          "catalog_append": "data",
+          "output_commits": 2731,
+          "per_second": 4.546269591256458
+        }
+      ],
+      "named_blob_rates": [
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "operation": "blob_set",
+          "work_class": "upload",
+          "calls_per_second": 4.190025797564725,
+          "bytes_per_second": 16656.223892334645
+        },
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "operation": "blob_get",
+          "work_class": "source fetch",
+          "calls_per_second": 5.949594539652922,
+          "bytes_per_second": 21215.764650217036
+        },
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "operation": "blob_get",
+          "work_class": "compaction",
+          "calls_per_second": 2.87490426843276,
+          "bytes_per_second": 23929.144741807133
+        },
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "operation": "blob_set",
+          "work_class": "compaction",
+          "calls_per_second": 0.9522012440126468,
+          "bytes_per_second": 18750.99625337132
+        },
+        {
+          "object": "mz_internal.mz_storage_frontier_observations",
+          "operation": "blob_set",
+          "work_class": "upload",
+          "calls_per_second": 1.11034335758346,
+          "bytes_per_second": 8827.896206183412
+        },
+        {
+          "object": "mz_internal.mz_storage_frontier_observations",
+          "operation": "blob_get",
+          "work_class": "source fetch",
+          "calls_per_second": 2.2156994692946688,
+          "bytes_per_second": 17625.685677260582
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_set",
+          "work_class": "upload",
+          "calls_per_second": 0.5060662471598143,
+          "bytes_per_second": 25724.658936726224
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_get",
+          "work_class": "source fetch",
+          "calls_per_second": 0.872296792385485,
+          "bytes_per_second": 45189.82148898896
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_get",
+          "work_class": "row fetch",
+          "calls_per_second": 2.0841644094811627,
+          "bytes_per_second": 114556.85469773154
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_set",
+          "work_class": "compaction",
+          "calls_per_second": 0.2397144285385184,
+          "bytes_per_second": 122636.46000456074
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_get",
+          "work_class": "compaction",
+          "calls_per_second": 0.17812203388955972,
+          "bytes_per_second": 84294.18013824553
+        },
+        {
+          "object": "mz_internal.mz_storage_frontier_observations",
+          "operation": "blob_set",
+          "work_class": "compaction",
+          "calls_per_second": 0.37954783778456574,
+          "bytes_per_second": 7552.584802204838
+        },
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "operation": "blob_set",
+          "work_class": "rollup maintenance",
+          "calls_per_second": 0.051605635999198415,
+          "bytes_per_second": 13839.602540148404
+        },
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "operation": "blob_delete",
+          "work_class": "batch cleanup",
+          "calls_per_second": 0.156479863774603,
+          "bytes_per_second": 634.3523015294436
+        },
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "operation": "blob_get",
+          "work_class": "gc",
+          "calls_per_second": 0.011653011233095685,
+          "bytes_per_second": 3161.542968004371
+        },
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "operation": "blob_delete",
+          "work_class": "gc",
+          "calls_per_second": 4.944252921523401,
+          "bytes_per_second": 43913.75700853837
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_delete",
+          "work_class": "batch cleanup",
+          "calls_per_second": 0.019976629912687373,
+          "bytes_per_second": 1035.8064994464407
+        },
+        {
+          "object": "mz_internal.mz_storage_frontier_observations",
+          "operation": "blob_set",
+          "work_class": "rollup maintenance",
+          "calls_per_second": 0.02164081798686392,
+          "bytes_per_second": 4881.586776096667
+        },
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "operation": "blob_delete",
+          "work_class": "compaction cleanup",
+          "calls_per_second": 0.00665894384106285,
+          "bytes_per_second": 63.82087645464183
+        },
+        {
+          "object": "mz_internal.mz_storage_frontier_observations",
+          "operation": "blob_delete",
+          "work_class": "gc",
+          "calls_per_second": 1.6729974754665657,
+          "bytes_per_second": 21670.775112495914
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_delete",
+          "work_class": "gc",
+          "calls_per_second": 0.7407879741923998,
+          "bytes_per_second": 141157.10509524355
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_set",
+          "work_class": "rollup maintenance",
+          "calls_per_second": 0.014982142226718072,
+          "bytes_per_second": 2399.3417346807973
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_get",
+          "work_class": "gc",
+          "calls_per_second": 0.01997639337872468,
+          "bytes_per_second": 3165.2508480784454
+        },
+        {
+          "object": "mz_internal.mz_storage_frontier_observations",
+          "operation": "blob_delete",
+          "work_class": "batch cleanup",
+          "calls_per_second": 0.003329365935104688,
+          "bytes_per_second": 27.960019485583963
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "operation": "blob_delete",
+          "work_class": "compaction cleanup",
+          "calls_per_second": 0.0016647411537556091,
+          "bytes_per_second": 314.25318759444633
+        }
+      ],
+      "duplicate_gets": [
+        {
+          "role": "replica-s2-s2",
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "calls": 3768,
+          "unique_keys": 1980,
+          "bytes": 16349143,
+          "repeat_calls": 1788,
+          "close_repeats": 1788,
+          "close_repeat_bytes": 6375844,
+          "cross_reader": 1787,
+          "delete_between": 0
+        },
+        {
+          "role": "replica-s2-s2",
+          "object": "mz_internal.mz_storage_frontier_observations",
+          "calls": 1331,
+          "unique_keys": 666,
+          "bytes": 10587982,
+          "repeat_calls": 665,
+          "close_repeats": 665,
+          "close_repeat_bytes": 5291720,
+          "cross_reader": 665,
+          "delete_between": 0
+        },
+        {
+          "role": "replica-s2-s2",
+          "object": "mz_internal.mz_catalog_raw",
+          "calls": 575,
+          "unique_keys": 285,
+          "bytes": 40785479,
+          "repeat_calls": 290,
+          "close_repeats": 290,
+          "close_repeat_bytes": 16996890,
+          "cross_reader": 290,
+          "delete_between": 0
+        }
+      ],
+      "duplicate_pairs": [
+        {
+          "role": "replica-s2-s2",
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "first_work": "source fetch",
+          "second_work": "source fetch",
+          "max_gap_seconds": 0.011927127838134766,
+          "median_gap_seconds": 0.0002970695495605469,
+          "count": 1787,
+          "bytes": 6372295,
+          "examples": [
+            {
+              "key": "s1520e6f9-98a4-43a0-a6ab-a71c5557a1ea/n2604600/p4d16a881-f3d4-48ea-88ec-9409e07269ca",
+              "lines": [
+                49899,
+                49900
+              ],
+              "readers": [
+                "r77ed8983-91eb-476a-87bc-693ba225c157",
+                "r2d290638-5acd-4291-9bc8-fb657ea071a6"
+              ],
+              "purposes": [
+                "shard_source(s716) pid=635767 worker=0 operator=[118, 1, 4, 3]",
+                "shard_source(s716) pid=635767 worker=0 operator=[137, 1, 4, 3]"
+              ],
+              "gap_seconds": 0.00034880638122558594
+            },
+            {
+              "key": "s1520e6f9-98a4-43a0-a6ab-a71c5557a1ea/n2604600/p8b67a35f-5727-4c7e-aaab-35ad4e5a4f98",
+              "lines": [
+                49909,
+                49910
+              ],
+              "readers": [
+                "r77ed8983-91eb-476a-87bc-693ba225c157",
+                "r2d290638-5acd-4291-9bc8-fb657ea071a6"
+              ],
+              "purposes": [
+                "shard_source(s716) pid=635767 worker=0 operator=[118, 1, 4, 3]",
+                "shard_source(s716) pid=635767 worker=0 operator=[137, 1, 4, 3]"
+              ],
+              "gap_seconds": 0.0002620220184326172
+            }
+          ]
+        },
+        {
+          "role": "replica-s2-s2",
+          "object": "mz_internal.mz_storage_frontier_observations",
+          "first_work": "source fetch",
+          "second_work": "source fetch",
+          "max_gap_seconds": 0.013343095779418945,
+          "median_gap_seconds": 0.00028395652770996094,
+          "count": 665,
+          "bytes": 5291720,
+          "examples": [
+            {
+              "key": "sf1627d9a-4aa4-4883-b5a8-703d7e8f36e4/n2604600/p0aee75fe-b4d4-4f45-9060-cc14aecac76c",
+              "lines": [
+                49932,
+                49933
+              ],
+              "readers": [
+                "r5f7842c4-64d3-4cc4-bb90-1023df375a29",
+                "rd98612ab-0f78-4a33-84e1-060125310993"
+              ],
+              "purposes": [
+                "shard_source(s717) pid=635767 worker=0 operator=[118, 1, 5, 3]",
+                "shard_source(s717) pid=635767 worker=0 operator=[137, 1, 5, 3]"
+              ],
+              "gap_seconds": 0.00022792816162109375
+            },
+            {
+              "key": "sf1627d9a-4aa4-4883-b5a8-703d7e8f36e4/n2604600/pcc3b9b54-4133-4d98-a1a4-f674b123895b",
+              "lines": [
+                50123,
+                50124
+              ],
+              "readers": [
+                "r5f7842c4-64d3-4cc4-bb90-1023df375a29",
+                "rd98612ab-0f78-4a33-84e1-060125310993"
+              ],
+              "purposes": [
+                "shard_source(s717) pid=635767 worker=0 operator=[118, 1, 5, 3]",
+                "shard_source(s717) pid=635767 worker=0 operator=[137, 1, 5, 3]"
+              ],
+              "gap_seconds": 0.00019311904907226562
+            }
+          ]
+        },
+        {
+          "role": "replica-s2-s2",
+          "object": "mz_internal.mz_catalog_raw",
+          "first_work": "source fetch",
+          "second_work": "source fetch",
+          "max_gap_seconds": 0.002671957015991211,
+          "median_gap_seconds": 9.1552734375e-05,
+          "count": 290,
+          "bytes": 16996890,
+          "examples": [
+            {
+              "key": "sa40ccf30-e8b9-1fb9-e913-c035c2c328f5/n2604600/pc5edc01d-2b46-4d37-b048-c10431d9f0e9",
+              "lines": [
+                50051,
+                50052
+              ],
+              "readers": [
+                "red40e564-7c3a-4151-9f08-eecb225b8c24",
+                "r28ac49f9-5f84-4361-a730-ae490fd35690"
+              ],
+              "purposes": [
+                "shard_source(s449) pid=635767 worker=0 operator=[3, 1, 1, 3]",
+                "shard_source(s449) pid=635767 worker=0 operator=[29, 1, 1, 3]"
+              ],
+              "gap_seconds": 0.0003368854522705078
+            },
+            {
+              "key": "sa40ccf30-e8b9-1fb9-e913-c035c2c328f5/n2604600/pfd9473c4-2aa5-4df8-ab4e-39da0799234d",
+              "lines": [
+                50234,
+                50235
+              ],
+              "readers": [
+                "red40e564-7c3a-4151-9f08-eecb225b8c24",
+                "rff80305a-df08-4167-8ed7-5463319be565"
+              ],
+              "purposes": [
+                "shard_source(s449) pid=635767 worker=0 operator=[3, 1, 1, 3]",
+                "shard_source(s449) pid=635767 worker=0 operator=[25, 1, 1, 3]"
+              ],
+              "gap_seconds": 4.315376281738281e-05
+            }
+          ]
+        },
+        {
+          "role": "replica-s2-s2",
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "first_work": "source fetch",
+          "second_work": "compaction",
+          "max_gap_seconds": 0.0006568431854248047,
+          "median_gap_seconds": 0.0006568431854248047,
+          "count": 1,
+          "bytes": 3549,
+          "examples": [
+            {
+              "key": "s1520e6f9-98a4-43a0-a6ab-a71c5557a1ea/n2604600/pc602c6ae-f5ea-449d-8e65-39792a3a0ffb",
+              "lines": [
+                78113,
+                78114
+              ],
+              "readers": [
+                "r2d290638-5acd-4291-9bc8-fb657ea071a6",
+                null
+              ],
+              "purposes": [
+                "shard_source(s716) pid=635767 worker=0 operator=[137, 1, 4, 3]",
+                null
+              ],
+              "gap_seconds": 0.0006568431854248047
+            }
+          ]
+        }
+      ],
+      "compaction_input_producers": [
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "consumer": "compaction",
+          "producer": "upload",
+          "cross_process": true,
+          "calls": 1250,
+          "bytes": 5142415,
+          "calls_per_second": 2.080848438878169,
+          "bytes_per_second": 8560.468875244065
+        },
+        {
+          "object": "mz_internal.mz_replica_frontier_observations",
+          "consumer": "compaction",
+          "producer": "compaction",
+          "cross_process": true,
+          "calls": 477,
+          "bytes": 9232135,
+          "calls_per_second": 0.7940558295545395,
+          "bytes_per_second": 15368.675866563117
+        },
+        {
+          "object": "mz_internal.mz_catalog_raw",
+          "consumer": "compaction",
+          "producer": "compaction",
+          "cross_process": true,
+          "calls": 107,
+          "bytes": 50637262,
+          "calls_per_second": 0.17812203388955974,
+          "bytes_per_second": 84294.18013824556
+        }
+      ],
+      "unknown_events": [],
+      "errors": [
+        {
+          "role": "replica-s2-s2",
+          "op": "consensus_cas",
+          "key": "s1520e6f9-98a4-43a0-a6ab-a71c5557a1ea",
+          "command": "compare_and_append",
+          "context": "audit_append{writer=w79c6b29a-67fa-4e96-9e5f-3dda2b009928 purpose=\"replica frontier observations\" updates=106 lower=Antichain { elements: [1793997057300] } upper=Antichain { elements: [1793997057351] }}:audit_cas{command=\"compare_and_append\" payload_len=1890}:consensus::compare_and_set{shard=\"s1520e6f9-98a4-43a0-a6ab-a71c5557a1ea\" size_bytes=1890}: ",
+          "line": 117987
+        },
+        {
+          "role": "replica-u1-u1",
+          "op": "consensus_cas",
+          "key": "s1520e6f9-98a4-43a0-a6ab-a71c5557a1ea",
+          "command": "compare_and_append",
+          "context": "audit_append{writer=w48637837-ff71-405a-8820-766d5bb29be6 purpose=\"replica frontier observations\" updates=68 lower=Antichain { elements: [1793997101658] } upper=Antichain { elements: [1793997101672] }}:audit_cas{command=\"compare_and_append\" payload_len=1151}:consensus::compare_and_set{shard=\"s1520e6f9-98a4-43a0-a6ab-a71c5557a1ea\" size_bytes=1151}: ",
+          "line": 125522
+        }
+      ],
+      "cache": {
+        "adapterd": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 3188.0,
+            "mz_persist_blob_cache_hits_bytes": 100208456.0,
+            "mz_persist_blob_cache_size_blobs": 893.0,
+            "mz_persist_blob_cache_size_bytes": 91448079.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 2032.0,
+            "mz_persist_blob_cache_hits_bytes": 63776108.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        },
+        "controllerd": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 27.0,
+            "mz_persist_blob_cache_hits_bytes": 2748431.0,
+            "mz_persist_blob_cache_size_blobs": 526.0,
+            "mz_persist_blob_cache_size_bytes": 29415740.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 19.0,
+            "mz_persist_blob_cache_hits_bytes": 727389.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        },
+        "replica-s1-s1": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 382.0,
+            "mz_persist_blob_cache_hits_bytes": 10057845.0,
+            "mz_persist_blob_cache_size_blobs": 1875.0,
+            "mz_persist_blob_cache_size_bytes": 45106573.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 253.0,
+            "mz_persist_blob_cache_hits_bytes": 7224426.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        },
+        "replica-s2-s2": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 5834.0,
+            "mz_persist_blob_cache_hits_bytes": 120510395.0,
+            "mz_persist_blob_cache_size_blobs": 6399.0,
+            "mz_persist_blob_cache_size_bytes": 131239333.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 3897.0,
+            "mz_persist_blob_cache_hits_bytes": 76236598.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        },
+        "replica-s3-s3": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 332.0,
+            "mz_persist_blob_cache_hits_bytes": 6169449.0,
+            "mz_persist_blob_cache_size_blobs": 1815.0,
+            "mz_persist_blob_cache_size_bytes": 71184668.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 220.0,
+            "mz_persist_blob_cache_hits_bytes": 3889808.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        },
+        "replica-u1-u1": {
+          "final": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 382.0,
+            "mz_persist_blob_cache_hits_bytes": 8581573.0,
+            "mz_persist_blob_cache_size_blobs": 2240.0,
+            "mz_persist_blob_cache_size_bytes": 60150409.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          },
+          "delta": {
+            "mz_persist_blob_cache_evictions": 0.0,
+            "mz_persist_blob_cache_hits_blobs": 237.0,
+            "mz_persist_blob_cache_hits_bytes": 5347362.0,
+            "mz_persist_blob_hedge_warm_errors": 0.0,
+            "mz_persist_blob_hedges_fired": 0.0,
+            "mz_persist_blob_hedges_won": 0.0
+          }
+        }
+      }
+    }
+  },
+  "critical_since_request_candidates": {
+    "counts": [
+      {
+        "role": "adapterd",
+        "kind": "all",
+        "count": 2413
+      },
+      {
+        "role": "replica-s2-s2",
+        "kind": "all",
+        "count": 1515
+      },
+      {
+        "role": "replica-u1-u1",
+        "kind": "all",
+        "count": 37
+      },
+      {
+        "role": "replica-s1-s1",
+        "kind": "all",
+        "count": 17
+      },
+      {
+        "role": "replica-s3-s3",
+        "kind": "all",
+        "count": 17
+      },
+      {
+        "role": "replica-u1-u1",
+        "kind": "nonadvancing_requested",
+        "count": 11
+      },
+      {
+        "role": "adapterd",
+        "kind": "nonadvancing_requested",
+        "count": 78
+      },
+      {
+        "role": "replica-s2-s2",
+        "kind": "nonadvancing_requested",
+        "count": 392
+      }
+    ],
+    "examples": [
+      [
+        "replica-u1-u1",
+        "sb2dca9bc-bd81-41ed-96f5-1a500456b90c",
+        55451,
+        1793996641000,
+        [
+          1793996641000,
+          "adapterd",
+          55153
+        ]
+      ],
+      [
+        "replica-u1-u1",
+        "sb2dca9bc-bd81-41ed-96f5-1a500456b90c",
+        64230,
+        1793996701000,
+        [
+          1793996701000,
+          "adapterd",
+          64073
+        ]
+      ],
+      [
+        "adapterd",
+        "sa40ccf30-e8b9-1fb9-e913-c035c2c328f5",
+        67521,
+        1793996704799,
+        [
+          1793996704799,
+          "replica-s2-s2",
+          64885
+        ]
+      ],
+      [
+        "adapterd",
+        "s502988f8-a0db-4355-9a17-f19c51f1ce79",
+        67522,
+        1793996704799,
+        [
+          1793996704799,
+          "replica-s2-s2",
+          64112
+        ]
+      ],
+      [
+        "adapterd",
+        "sc996dd3a-e34b-4bfd-813d-46e8432f4962",
+        67525,
+        1793996704799,
+        [
+          1793996704799,
+          "replica-s2-s2",
+          64120
+        ]
+      ]
+    ]
+  },
+  "plan_witness": {
+    "directory": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/native-plans-1793999722",
+    "result": {
+      "status": "passed",
+      "kind": "native",
+      "run": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/native-plans-1793999722",
+      "arguments": {
+        "kind": "native",
+        "evidence_dir": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution",
+        "postgres_image": "postgres:18",
+        "warmup": 0,
+        "window": 8,
+        "windows": 1,
+        "profile_seconds": 0,
+        "label": "native-plans",
+        "scheduling_diagnostics": false,
+        "plan_diagnostics": true,
+        "frontier_lifecycle": false,
+        "system_parameter": [
+          "enable_metric_sink=false",
+          "persist_enable_incremental_compaction=false",
+          "enable_columnar_accumulable_diff=false"
+        ]
+      },
+      "readiness_seconds": 35.28343509801198,
+      "measurement_status": "passed",
+      "profile_errors": {},
+      "launcher_stop_code": 0
+    },
+    "sink_implementation": [
+      "off"
+    ],
+    "roots": [
+      [
+        "3",
+        "Dataflow: mz_internal.mz_catalog_shared_ind"
+      ],
+      [
+        "25",
+        "Dataflow: mz_internal.mz_catalog_deployment_authority"
+      ],
+      [
+        "29",
+        "Dataflow: mz_internal.mz_object_dependencies"
+      ],
+      [
+        "91",
+        "Dataflow: mz_internal.mz_object_dependencies_ind"
+      ],
+      [
+        "118",
+        "Dataflow: mz_internal.mz_frontiers_ind"
+      ],
+      [
+        "137",
+        "Dataflow: mz_catalog.mz_cluster_replica_frontiers_ind"
+      ]
+    ],
+    "source_readers": [
+      {
+        "reader": "re6065fc7-376e-455e-bb57-096b155f3c0b",
+        "source": "mz_internal.mz_catalog_raw",
+        "dataflow": "mz_internal.mz_catalog_shared_ind",
+        "root": 3,
+        "line": 1761
+      },
+      {
+        "reader": "r0d6dd341-069f-40ff-9bb5-b339d92c1791",
+        "source": "mz_internal.mz_catalog_raw",
+        "dataflow": "mz_internal.mz_catalog_deployment_authority",
+        "root": 25,
+        "line": 2851
+      },
+      {
+        "reader": "rf59d61ab-6971-405b-acb0-ea8a18294666",
+        "source": "mz_internal.mz_catalog_raw",
+        "dataflow": "mz_internal.mz_object_dependencies",
+        "root": 29,
+        "line": 3292
+      },
+      {
+        "reader": "r5b4503d7-a7d0-440a-bfa4-693bad4c1842",
+        "source": "mz_internal.mz_replica_frontier_observations",
+        "dataflow": "mz_internal.mz_frontiers_ind",
+        "root": 118,
+        "line": 3652
+      },
+      {
+        "reader": "r6f3f8911-e93d-48a6-9622-e1cd73ea1c1c",
+        "source": "mz_internal.mz_storage_frontier_observations",
+        "dataflow": "mz_internal.mz_frontiers_ind",
+        "root": 118,
+        "line": 3654
+      },
+      {
+        "reader": "rfb7a65a2-2b48-49a6-9eaf-f7656253e786",
+        "source": "mz_internal.mz_replica_frontier_observations",
+        "dataflow": "mz_catalog.mz_cluster_replica_frontiers_ind",
+        "root": 137,
+        "line": 3677
+      },
+      {
+        "reader": "rfcec5b9f-9509-400c-a228-4c2f52cf389f",
+        "source": "mz_internal.mz_storage_frontier_observations",
+        "dataflow": "mz_catalog.mz_cluster_replica_frontiers_ind",
+        "root": 137,
+        "line": 3680
+      }
+    ],
+    "plan_hashes": {
+      "plan-mz_catalog.mz_cluster_replica_frontiers_ind-optimized.json": "206de58c1dee505699377a22c60ec0098aab84cdc108b130bc6de0a0a503f661",
+      "plan-mz_catalog.mz_cluster_replica_frontiers_ind-physical.json": "d53307d4bcdc27b55e5d60c99c313c2d27b0c739889393bd50c56661ab62521f",
+      "plan-mz_internal.mz_catalog_deployment_authority-optimized.json": "5762d91bd9d3abb23e3262d3678c824e2eb616ff198109146280777135334b1d",
+      "plan-mz_internal.mz_catalog_deployment_authority-physical.json": "4eaa7eb4cc30de0406cbd0f184cb3ca3883eb4c5f475b43d92a43948dd1b827b",
+      "plan-mz_internal.mz_catalog_shared_ind-optimized.json": "4d675826e9a38ee6a3571b8282f639479358676f419102dd33a78ac16e3a2061",
+      "plan-mz_internal.mz_catalog_shared_ind-physical.json": "0f613e4b541ef9fb1131b3ba2082dfaaf3917e2b66a48a8d4c7b449281707628",
+      "plan-mz_internal.mz_frontiers_ind-optimized.json": "0833586d363b4c395aadbb14742c54c264473e31d4a7c4c63988f063ad47ec45",
+      "plan-mz_internal.mz_frontiers_ind-physical.json": "3835ffed895be8bbeafe1549f989cfaf092f7f41972f109048a38e245407778d",
+      "plan-mz_internal.mz_object_dependencies-optimized.json": "d0672e23f5b2f86668a3e82f9917062fb44aaf37faf3bce6c39378fbe0286a73",
+      "plan-mz_internal.mz_object_dependencies-physical.json": "d99cf541f1e6a628d34bf58b72541e91efe15c37daecca9d06768ced49771e6a",
+      "plan-validation.json": "3aab07c2d8397e910b4bb8931ee6adea491a52f2895b01750ebe2000eee76834"
+    }
+  },
+  "raw_source_readers": {
+    "counts": {
+      "3": 234,
+      "29": 234,
+      "25": 56
+    },
+    "authority_get_examples": [
+      {
+        "key": "sa40ccf30-e8b9-1fb9-e913-c035c2c328f5/n2604600/pfd9473c4-2aa5-4df8-ab4e-39da0799234d",
+        "bytes": 131354,
+        "line": 50235,
+        "time": 1793996621.693484,
+        "context": "timely{name=\"compute\" worker_id=0}:audit_source_fetch{reader=rff80305a-df08-4167-8ed7-5463319be565 filter=Listen { as_of: Antichain { elements: [1793996288068] }, lower: Antichain { elements: [1793996620791] } } transient=false}:blob::get{shard=\"sa40ccf30-e8b9-1fb9-e913-c035c2c328f5\"}: ",
+        "purpose": "shard_source(s449) pid=635767 worker=0 operator=[25, 1, 1, 3]"
+      },
+      {
+        "key": "sa40ccf30-e8b9-1fb9-e913-c035c2c328f5/n2604600/p7261592e-1f31-4a3b-8d81-58d3d944f098",
+        "bytes": 131354,
+        "line": 52112,
+        "time": 1793996634.160969,
+        "context": "timely{name=\"compute\" worker_id=0}:audit_source_fetch{reader=rff80305a-df08-4167-8ed7-5463319be565 filter=Listen { as_of: Antichain { elements: [1793996288068] }, lower: Antichain { elements: [1793996633758] } } transient=false}:blob::get{shard=\"sa40ccf30-e8b9-1fb9-e913-c035c2c328f5\"}: ",
+        "purpose": "shard_source(s449) pid=635767 worker=0 operator=[25, 1, 1, 3]"
+      }
+    ],
+    "evidence": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/native-audit-1793996274/raw-source-reader-counts.json"
+  },
+  "portable_patch_verification": [
+    {
+      "base": "604c472680",
+      "measured_patch": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/backend-audit-native.patch",
+      "portable_patch": "/home/ubuntu/materialize/misc/benchmarks/native-idle/backend-audit.patch",
+      "identical_source": true,
+      "files": {
+        "src/persist-client/src/batch.rs": "ba72661ef37cc3d900947a3360b382ebf6445a8ea40a22baf6f55ce854510676",
+        "src/persist-client/src/fetch.rs": "fb44daf16a42049b9b7cb1638d5c3e629d52e029d27302c92ec75c32ed65bfb9",
+        "src/persist-client/src/internal/compact.rs": "2466a406dff2def45b69c51ed254fb71d53dfe99e0b7c6be2a9677667ebd561c",
+        "src/persist-client/src/internal/gc.rs": "1599310c8ba8a61ffde40abbb8380eb66de59c1dab8cbeaca991714d4ff82423",
+        "src/persist-client/src/internal/machine.rs": "e538b152407392aa181ac658253e832d9d1f277981524fe07eb55b63f6adeecf",
+        "src/persist-client/src/internal/maintenance.rs": "afce3987d5f491016a98db0069dd63b5edc1cb6ea66d571f42220d62dea337e3",
+        "src/persist-client/src/internal/metrics.rs": "1242d068b000f2dec385dad074cb2a5cccec2030c2d5ce90b28da3f8861494c9",
+        "src/persist-client/src/internal/state_versions.rs": "62dd1765f421f2dd70bae7c0e12a9ae4275b6eed8fc4e6b66fbd33c8437c3ee8",
+        "src/persist-client/src/iter.rs": "fa1b75116b1644943c2faf0d1bcb39e727af252cd1d9d4ec9293b87d9596f6d1",
+        "src/persist-client/src/lib.rs": "c2be1cf02c1a40711b9d23b649923f8a994a63be6965123feb4a23a603f1a156",
+        "src/persist-client/src/read.rs": "57c8e15aa495605a4cd40709dab342d3b855f72b9123a45dbe727422f217525c",
+        "src/persist-client/src/write.rs": "49f9e03323bd4414b18763ff70ee9b0f010d4daf10ca80c9f2e8d2926969782d"
+      }
+    },
+    {
+      "base": "77ae0a3034",
+      "measured_patch": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/backend-audit-main.patch",
+      "portable_patch": "/home/ubuntu/materialize/misc/benchmarks/native-idle/backend-audit-main.patch",
+      "identical_source": true,
+      "files": {
+        "src/persist-client/src/batch.rs": "5d44427618f6a5898262c16088ecab51cc9d410731726cf250c61661eacda06d",
+        "src/persist-client/src/fetch.rs": "644552aa72339d090823eaf643a1560106acd0d2f11b0182e67bfb73289af11c",
+        "src/persist-client/src/internal/compact.rs": "47fb8aa83e851d58aedae64db361524920677c64a7fcdf90927dd953eae707df",
+        "src/persist-client/src/internal/gc.rs": "1599310c8ba8a61ffde40abbb8380eb66de59c1dab8cbeaca991714d4ff82423",
+        "src/persist-client/src/internal/machine.rs": "aa265af14c88326bfe90d089bf5884003b76f355495320f05521aa410f315143",
+        "src/persist-client/src/internal/maintenance.rs": "afce3987d5f491016a98db0069dd63b5edc1cb6ea66d571f42220d62dea337e3",
+        "src/persist-client/src/internal/metrics.rs": "cbb759e08fb2a1aa74595b12eba4e859c02f5103efaae253eda40bb5f02b9a13",
+        "src/persist-client/src/internal/state_versions.rs": "512db9f87b8c081021113ef7d912e9ad49be82811a806c2a594b4bc0b316b642",
+        "src/persist-client/src/iter.rs": "787253c1adfd60ce2746c03b92f6b2e5a4c9d20664fcbeffe2eafc3ca8e8d800",
+        "src/persist-client/src/lib.rs": "392eab10a3f32e485f0e28e665cd0482cbb3d4246abba62d13b96334a469a0cc",
+        "src/persist-client/src/read.rs": "ebdc98ce3c2aa8faf3d21dbce8a2ff08622cf7230542069b5222a68a48c78f05",
+        "src/persist-client/src/write.rs": "786c18ac348b52ad6563024fbec6bb468d17d782a7de468311db5cf7147f5809"
+      }
+    },
+    {
+      "base": "604c472680",
+      "measured_patch": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/controller-metrics-used.patch",
+      "portable_patch": "/home/ubuntu/materialize/misc/benchmarks/native-idle/controller-metrics.patch",
+      "identical_source": true,
+      "files": {
+        "src/environmentd/src/controllerd/http.rs": "0237a44591214ed4e729c6da629af569157bcda6d54645f4f40fbd9a99c435e0",
+        "src/environmentd/src/controllerd/runtime.rs": "e52fb4f94f23e77408aa3f8f195964bf088669a6295074f69dad2c19b605b5ad"
+      }
+    }
+  ],
+  "artifact_hashes": {
+    "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/backend-audit-native.patch": "ab66466478c063922dce4f69eed524b4cad4239dd32aed698f5973375f34f184",
+    "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/backend-audit-main.patch": "d9d134213694775719f5f3b9e954760da04647900cfcc9ca201c3a7f92613c31",
+    "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/controller-metrics-used.patch": "9f0eed7e1a6add6fd86ea29fa3402ad150c337504a3254e30e3c8dacfdcc934f",
+    "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/derive.py": "900ef1c038ee1997888f21a815a443ff7c96e469decabd37a2476e79555e0ff5",
+    "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/summarize.py": "da96366568bc7d7a5ed52653fc486d9605a5da649a6ae3146b3d0d9e5bb69a5b",
+    "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/native-binary-sha256.txt": "230e6708e20e5625a648adb5da1b98d7d4fc78cde88efa8432dccb297a7651e9",
+    "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/main-binary-sha256.txt": "15afb9b3cc1863b4c8431f4d57eae96ec7d68a310ccb706d115deb1b724ff8e4",
+    "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/patch-verification.json": "6754fabd7a2a1d6e5e98bed6fdab79ca36a24530260808df5090f76e52c6cd12",
+    "/home/ubuntu/materialize/misc/benchmarks/native-idle/backend-audit.patch": "474f271c977e1ce75b1dd562f192c5ca55229a457938c8d43b728689f81f86d3",
+    "/home/ubuntu/materialize/misc/benchmarks/native-idle/backend-audit-main.patch": "a308ad657b52c8219d53dfd93a992f944d0b4496ddce384893d62e6200eb11c0"
+  }
+}

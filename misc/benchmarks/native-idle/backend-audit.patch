@@ -1,0 +1,464 @@
+diff --git a/src/persist-client/src/batch.rs b/src/persist-client/src/batch.rs
+index 1c18527be0..1c582b812e 100644
+--- a/src/persist-client/src/batch.rs
++++ b/src/persist-client/src/batch.rs
+@@ -45,7 +45,7 @@ use semver::Version;
+ use timely::PartialOrder;
+ use timely::order::TotalOrder;
+ use timely::progress::{Antichain, Timestamp};
+-use tracing::{Instrument, debug_span, trace_span, warn};
++use tracing::{Instrument, debug_span, warn};
+
+ use crate::async_runtime::IsolatedRuntime;
+ use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
+@@ -166,7 +166,7 @@ where
+
+     /// Deletes the blobs that make up this batch from the given blob store and
+     /// marks them as deleted.
+-    #[instrument(level = "debug", fields(shard = %self.shard_id()))]
++    #[instrument(level = "info", name = "audit_batch_cleanup", fields(shard = %self.shard_id()))]
+     pub async fn delete(mut self) {
+         if !self.batch_delete_enabled {
+             self.mark_consumed();
+@@ -928,7 +928,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
+
+                         RunWithMeta::new(output_batch.parts, total_compacted_updates)
+                     }
+-                    .instrument(debug_span!("batch::compact_runs")),
++                    .instrument(tracing::info_span!("batch::compact_runs")),
+                 );
+                 (RunOrder::Structured, Pending::new(handle))
+             };
+@@ -1000,7 +1000,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
+
+                         RunWithMeta::single(RunPart::Many(run_ref), total_updates)
+                     }
+-                    .instrument(debug_span!("batch::spill_run")),
++                    .instrument(tracing::info_span!("batch::spill_run")),
+                 );
+                 Pending::new(handle)
+             };
+@@ -1287,7 +1287,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
+             shard_metrics.blob_sets.inc();
+             blob.set(&key, Bytes::clone(&buf)).await
+         })
+-        .instrument(trace_span!("batch::set", payload_len))
++        .instrument(tracing::info_span!("audit_part_set", payload_len))
+         .await;
+         batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
+         batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
+diff --git a/src/persist-client/src/fetch.rs b/src/persist-client/src/fetch.rs
+index 89c833073d..e82d5ff14b 100644
+--- a/src/persist-client/src/fetch.rs
++++ b/src/persist-client/src/fetch.rs
+@@ -198,6 +198,7 @@ where
+     ///
+     /// Note to check the `LeasedBatchPart` documentation for how to handle the
+     /// returned value.
++    #[mz_ore::instrument(level = "info", name = "audit_source_fetch", fields(reader = %part.reader_id, filter = ?part.filter, transient = self.is_transient))]
+     pub async fn fetch_leased_part(
+         &mut self,
+         part: ExchangeableBatchPart<T>,
+@@ -398,6 +399,7 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
+ ///
+ /// Note to check the `LeasedBatchPart` documentation for how to handle the
+ /// returned value.
++#[mz_ore::instrument(level = "info", name = "audit_row_fetch", fields(reader = %reader_id, filter = ?part.filter))]
+ pub(crate) async fn fetch_leased_part<K, V, T, D>(
+     cfg: &PersistConfig,
+     part: &LeasedBatchPart<T>,
+diff --git a/src/persist-client/src/internal/compact.rs b/src/persist-client/src/internal/compact.rs
+index 5c666ef6a9..b3c7806301 100644
+--- a/src/persist-client/src/internal/compact.rs
++++ b/src/persist-client/src/internal/compact.rs
+@@ -33,7 +33,7 @@ use timely::PartialOrder;
+ use timely::progress::{Antichain, Timestamp};
+ use tokio::sync::mpsc::Sender;
+ use tokio::sync::{TryAcquireError, mpsc, oneshot};
+-use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
++use tracing::{Instrument, Span, debug, error, trace, warn};
+
+ use crate::async_runtime::IsolatedRuntime;
+ use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
+@@ -234,8 +234,7 @@ where
+                     .queued_seconds
+                     .inc_by(enqueued.elapsed().as_secs_f64());
+
+-                let compact_span =
+-                    debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
++                let compact_span = tracing::info_span!(parent: None, "audit_compaction", shard = %machine.shard_id());
+                 compact_span.follows_from(&Span::current());
+                 let gc = gc.clone();
+                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
+@@ -387,7 +386,7 @@ where
+         let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+         let machine_clone = machine.clone();
+         let metrics_clone = Arc::clone(&machine.applier.metrics);
+-        let compact_span = debug_span!("compact::consolidate");
++        let compact_span = tracing::info_span!("audit_consolidate");
+         let res = tokio::time::timeout(
+             timeout,
+             // Compaction is cpu intensive, so be polite and spawn it on the isolated runtime.
+@@ -562,6 +561,7 @@ where
+                         &*metrics,
+                         &metrics.retries.external.compaction_noop_delete,
+                     )
++                    .instrument(tracing::info_span!("audit_compaction_discard", result = ?apply_merge_result))
+                     .await;
+             }
+         };
+diff --git a/src/persist-client/src/internal/gc.rs b/src/persist-client/src/internal/gc.rs
+index ccfdfa7fd6..8d625ffd6f 100644
+--- a/src/persist-client/src/internal/gc.rs
++++ b/src/persist-client/src/internal/gc.rs
+@@ -153,7 +153,7 @@ where
+                     );
+                 }
+
+-                let gc_span = debug_span!(parent: None, "gc_and_truncate", shard_id=%consolidated_req.shard_id);
++                let gc_span = tracing::info_span!(parent: None, "audit_gc", shard = %consolidated_req.shard_id, merged_requests);
+                 gc_span.follows_from(&Span::current());
+
+                 let start = Instant::now();
+diff --git a/src/persist-client/src/internal/machine.rs b/src/persist-client/src/internal/machine.rs
+index b7c42ac701..aac9131f92 100644
+--- a/src/persist-client/src/internal/machine.rs
++++ b/src/persist-client/src/internal/machine.rs
+@@ -232,6 +232,7 @@ where
+     }
+
+     /// Registers a leased reader, returning its initial state.
++    #[mz_ore::instrument(level = "info", name = "audit_reader", fields(reader = %reader_id, purpose))]
+     pub async fn register_leased_reader(
+         &self,
+         reader_id: &LeasedReaderId,
+@@ -239,6 +240,7 @@ where
+         lease_duration: Duration,
+         use_critical_since: bool,
+     ) -> (LeasedReaderState<T>, RoutineMaintenance) {
++        tracing::info!(target: "mz_persist_client::backend_audit", shard = %self.shard_id(), reader = %reader_id, purpose, "BACKEND_READER");
+         let metrics = Arc::clone(&self.applier.metrics);
+         let (_seqno, (reader_state, seqno_since), maintenance) = self
+             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
+@@ -273,12 +275,14 @@ where
+         (reader_state, maintenance)
+     }
+
++    #[mz_ore::instrument(level = "info", name = "audit_reader", fields(reader = %reader_id, purpose))]
+     pub async fn register_critical_reader(
+         &self,
+         reader_id: &CriticalReaderId,
+         default_opaque: Opaque,
+         purpose: &str,
+     ) -> (CriticalReaderState<T>, RoutineMaintenance) {
++        tracing::info!(target: "mz_persist_client::backend_audit", shard = %self.shard_id(), reader = %reader_id, purpose, "BACKEND_READER");
+         let metrics = Arc::clone(&self.applier.metrics);
+         let (_seqno, state, maintenance) = self
+             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
+@@ -293,6 +297,7 @@ where
+         (state, maintenance)
+     }
+
++    #[mz_ore::instrument(level = "info", name = "audit_schema_register")]
+     pub async fn register_schema(
+         &self,
+         key_schema: &K::Schema,
+@@ -382,6 +387,7 @@ where
+         }
+     }
+
++    #[mz_ore::instrument(level = "info", name = "audit_append", fields(writer = %writer_id, purpose = ?debug_info.purpose, updates = batch.len, lower = ?batch.desc.lower(), upper = ?batch.desc.upper()))]
+     async fn compare_and_append_idempotent(
+         &self,
+         batch: &HollowBatch<T>,
+@@ -640,6 +646,7 @@ where
+     }
+
+     /// Downgrades the reader's since capability, also heartbeating its lease.
++    #[mz_ore::instrument(level = "info", name = "audit_reader", fields(reader = %reader_id, since = ?new_since, held_seqno = ?outstanding_seqno))]
+     pub async fn downgrade_since(
+         &self,
+         reader_id: &LeasedReaderId,
+@@ -655,6 +662,7 @@ where
+         .await
+     }
+
++    #[mz_ore::instrument(level = "info", name = "audit_reader", fields(reader = %reader_id, since = ?new_since))]
+     pub async fn compare_and_downgrade_since(
+         &self,
+         reader_id: &CriticalReaderId,
+@@ -681,6 +689,7 @@ where
+         }
+     }
+
++    #[mz_ore::instrument(level = "info", name = "audit_reader", fields(reader = %reader_id))]
+     pub async fn expire_leased_reader(
+         &self,
+         reader_id: &LeasedReaderId,
+@@ -695,6 +704,7 @@ where
+     }
+
+     #[allow(dead_code)] // TODO(bkirwi): remove this when since behaviour on expiry has settled
++    #[mz_ore::instrument(level = "info", name = "audit_reader", fields(reader = %reader_id))]
+     pub async fn expire_critical_reader(
+         &self,
+         reader_id: &CriticalReaderId,
+@@ -708,6 +718,7 @@ where
+         (seqno, maintenance)
+     }
+
++    #[mz_ore::instrument(level = "info", name = "audit_writer", fields(writer = %writer_id))]
+     pub async fn expire_writer(&self, writer_id: &WriterId) -> (SeqNo, RoutineMaintenance) {
+         let metrics = Arc::clone(&self.applier.metrics);
+         let (seqno, _existed, maintenance) = self
+diff --git a/src/persist-client/src/internal/maintenance.rs b/src/persist-client/src/internal/maintenance.rs
+index e9cf0c69bb..c5611db56e 100644
+--- a/src/persist-client/src/internal/maintenance.rs
++++ b/src/persist-client/src/internal/maintenance.rs
+@@ -121,6 +121,8 @@ impl RoutineMaintenance {
+             futures.push(
+                 isolated_runtime
+                     .spawn_named(|| "persist::write_rollup", async move {
++                        let span = tracing::info_span!("audit_rollup_maintenance", shard = %machine.shard_id());
++                        tracing::Instrument::instrument(async {
+                         machine
+                             .applier
+                             .fetch_and_update_state(Some(rollup_seqno))
+@@ -134,6 +136,7 @@ impl RoutineMaintenance {
+                             rollup_seqno
+                         );
+                         machine.add_rollup_for_current_seqno().await
++                        }, span).await
+                     })
+                     .boxed(),
+             );
+diff --git a/src/persist-client/src/internal/metrics.rs b/src/persist-client/src/internal/metrics.rs
+index c1e58fea5b..e2fccdf828 100644
+--- a/src/persist-client/src/internal/metrics.rs
++++ b/src/persist-client/src/internal/metrics.rs
+@@ -3207,6 +3207,12 @@ impl Blob for MetricsBlob {
+                 .bytes
+                 .inc_by(u64::cast_from(value.len()));
+         }
++        let (outcome, bytes) = match &res {
++            Ok(Some(value)) => ("ok", value.len()),
++            Ok(None) => ("missing", 0),
++            Err(_) => ("error", 0),
++        };
++        tracing::info!(target: "mz_persist_client::backend_audit", op = "blob_get", key, outcome, bytes, "BACKEND_IO");
+         res
+     }
+
+@@ -3259,23 +3265,37 @@ impl Blob for MetricsBlob {
+             self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));
+             self.metrics.blob.blob_sizes.observe(f64::cast_lossy(bytes));
+         }
++        let outcome = if res.is_ok() { "ok" } else { "error" };
++        let metric_bytes = if res.is_ok() { bytes } else { 0 };
++        tracing::info!(target: "mz_persist_client::backend_audit", op = "blob_set", key, outcome, bytes = metric_bytes, attempted_bytes = bytes, "BACKEND_IO");
+         res
+     }
+
+     #[instrument(name = "blob::delete", fields(shard=blob_key_shard_id(key)))]
+     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+-        let bytes = self
++        let res = self
+             .metrics
+             .blob
+             .delete
+             .run_op(|| self.blob.delete(key), Self::on_err)
+-            .await?;
+-        if let Some(bytes) = bytes {
+-            self.metrics.blob.delete.bytes.inc_by(u64::cast_from(bytes));
+-        } else {
+-            self.metrics.blob.delete_noop.inc();
++            .await;
++        let (outcome, metric_bytes) = match &res {
++            Ok(Some(bytes)) => ("ok", *bytes),
++            Ok(None) => ("missing", 0),
++            Err(_) => ("error", 0),
++        };
++        match &res {
++            Ok(Some(bytes)) => self
++                .metrics
++                .blob
++                .delete
++                .bytes
++                .inc_by(u64::cast_from(*bytes)),
++            Ok(None) => self.metrics.blob.delete_noop.inc(),
++            Err(_) => {}
+         }
+-        Ok(bytes)
++        tracing::info!(target: "mz_persist_client::backend_audit", op = "blob_delete", key, outcome, bytes = metric_bytes, "BACKEND_IO");
++        res
+     }
+
+     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+@@ -3355,6 +3375,7 @@ impl Consensus for MetricsConsensus {
+         new: VersionedData,
+     ) -> Result<CaSResult, ExternalError> {
+         let bytes = new.data.len();
++        let seqno = new.seqno.0;
+         let res = self
+             .metrics
+             .consensus
+@@ -3370,6 +3391,17 @@ impl Consensus for MetricsConsensus {
+                 .inc_by(u64::cast_from(bytes)),
+             Ok(CaSResult::ExpectationMismatch) | Err(_) => {}
+         }
++        let outcome = match &res {
++            Ok(CaSResult::Committed) => "committed",
++            Ok(CaSResult::ExpectationMismatch) => "mismatch",
++            Err(_) => "error",
++        };
++        let metric_bytes = if matches!(&res, Ok(CaSResult::Committed)) {
++            bytes
++        } else {
++            0
++        };
++        tracing::info!(target: "mz_persist_client::backend_audit", op = "consensus_cas", key, seqno, outcome, bytes = metric_bytes, attempted_bytes = bytes, "BACKEND_IO");
+         res
+     }
+
+diff --git a/src/persist-client/src/internal/state_versions.rs b/src/persist-client/src/internal/state_versions.rs
+index 2172582b36..9d134ef8bf 100644
+--- a/src/persist-client/src/internal/state_versions.rs
++++ b/src/persist-client/src/internal/state_versions.rs
+@@ -259,7 +259,11 @@ impl StateVersions {
+             &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
+             || async { self.consensus.compare_and_set(&path, new.clone()).await },
+         )
+-        .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
++        .instrument(tracing::info_span!(
++            "audit_cas",
++            command = cmd_name,
++            payload_len
++        ))
+         .await
+         .map_err(|err| {
+             debug!("apply_unbatched_cmd {} errored: {}", cmd_name, err);
+@@ -875,7 +879,7 @@ impl StateVersions {
+                 )
+                 .await
+         })
+-        .instrument(debug_span!("rollup::set", payload_len))
++        .instrument(tracing::info_span!("audit_rollup_set", payload_len))
+         .await;
+     }
+
+@@ -966,7 +970,7 @@ impl StateVersions {
+         retry_external(&self.metrics.retries.external.rollup_get, || async {
+             self.blob.get(&rollup_key.complete(shard_id)).await
+         })
+-        .instrument(debug_span!("rollup::get"))
++        .instrument(tracing::info_span!("audit_rollup_get"))
+         .await
+         .map(|buf| {
+             self.metrics
+@@ -981,8 +985,8 @@ impl StateVersions {
+         let _ = retry_external(&self.metrics.retries.external.rollup_delete, || async {
+             self.blob.delete(&key.complete(shard_id)).await
+         })
+-        .await
+-        .instrument(debug_span!("rollup::delete"));
++        .instrument(tracing::info_span!("audit_rollup_delete"))
++        .await;
+     }
+ }
+
+diff --git a/src/persist-client/src/iter.rs b/src/persist-client/src/iter.rs
+index 050062e4ec..e0fc99cc2e 100644
+--- a/src/persist-client/src/iter.rs
++++ b/src/persist-client/src/iter.rs
+@@ -36,7 +36,7 @@ use mz_persist_types::part::Part;
+ use mz_persist_types::{Codec, Codec64};
+ use semver::Version;
+ use timely::progress::Timestamp;
+-use tracing::{Instrument, debug_span};
++use tracing::Instrument;
+
+ use crate::ShardId;
+ use crate::fetch::{EncodedPart, FetchBatchFilter, FetchConfig};
+@@ -773,7 +773,7 @@ where
+                         }
+                         _ => continue,
+                     };
+-                    let span = debug_span!("compaction::prefetch");
++                    let span = tracing::info_span!("audit_prefetch");
+                     let data = data.clone();
+                     let handle = mz_ore::task::spawn(|| "persist::compaction::prefetch", {
+                         let shard_id = self.shard_id;
+diff --git a/src/persist-client/src/lib.rs b/src/persist-client/src/lib.rs
+index 2f2f503f82..505fc482b4 100644
+--- a/src/persist-client/src/lib.rs
++++ b/src/persist-client/src/lib.rs
+@@ -260,6 +260,7 @@ impl PersistClient {
+         self.cfg.set_state_version_target(target)
+     }
+
++    #[mz_ore::instrument(level = "info", name = "audit_acquire", fields(purpose = ?diagnostics.handle_purpose))]
+     async fn make_machine<K, V, T, D>(
+         &self,
+         shard_id: ShardId,
+diff --git a/src/persist-client/src/read.rs b/src/persist-client/src/read.rs
+index 8649c97c98..57db5a8820 100644
+--- a/src/persist-client/src/read.rs
++++ b/src/persist-client/src/read.rs
+@@ -1136,6 +1136,8 @@ pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L = Le
+     max_bytes: usize,
+     _lease: L,
+     read_schemas: Schemas<K, V>,
++    // Keep attribution when the cursor is polled after construction returns.
++    audit_span: tracing::Span,
+ }
+
+ impl<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64, L> Cursor<K, V, T, D, L> {
+@@ -1161,12 +1163,15 @@ where
+             max_bytes,
+             _lease,
+             read_schemas: _,
++            audit_span,
+         } = self;
+
+-        let part = consolidator
+-            .next_chunk(*max_len, *max_bytes)
+-            .await
+-            .expect("fetching a leased part")?;
++        let part = tracing::Instrument::instrument(
++            consolidator.next_chunk(*max_len, *max_bytes),
++            audit_span.clone(),
++        )
++        .await
++        .expect("fetching a leased part")?;
+         let key_decoder = self
+             .read_schemas
+             .key
+@@ -1243,6 +1248,7 @@ where
+     /// To keep memory usage down when reading a snapshot that consolidates well, this consolidates
+     /// as it goes. However, note that only the serialized data is consolidated: the deserialized
+     /// data will only be consolidated if your K/V codecs are one-to-one.
++    #[mz_ore::instrument(level = "info", name = "audit_snapshot_cursor", fields(reader = %self.reader_id))]
+     pub async fn snapshot_cursor(
+         &mut self,
+         as_of: Antichain<T>,
+@@ -1316,6 +1322,7 @@ where
+         let max_bytes = BLOB_TARGET_SIZE.get(persist_cfg).max(1);
+
+         Ok(Cursor {
++            audit_span: tracing::info_span!("audit_cursor"),
+             consolidator,
+             max_len,
+             max_bytes,
+diff --git a/src/persist-client/src/write.rs b/src/persist-client/src/write.rs
+index 02c91d37c7..e173b45e1c 100644
+--- a/src/persist-client/src/write.rs
++++ b/src/persist-client/src/write.rs
+@@ -943,7 +943,7 @@ where
+
+     /// Uploads the given `updates` as one `Batch` to the blob store and returns
+     /// a handle to the batch.
+-    #[instrument(level = "trace", fields(shard = %self.machine.shard_id()))]
++    #[mz_ore::instrument(level = "info", name = "audit_upload", fields(writer = %self.writer_id, purpose = ?self.debug_state.purpose))]
+     pub async fn batch<SB, KB, VB, TB, DB, I>(
+         &mut self,
+         updates: I,

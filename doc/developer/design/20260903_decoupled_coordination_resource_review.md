@@ -1,5 +1,9 @@
 # Native coordination: resource review
 
+The subsequent [backend trace](20260903_decoupled_coordination_backend_load.md)
+resolves the CAS/blob attribution left open here. This report remains the
+uninstrumented CPU, memory and scheduling comparison.
+
 Native still uses **2.0× CPU and 2.2× PSS** in the fresh idle development-build
 comparison. The catalog replica contributes **62% of the extra CPU**. The main
 caller-side targets are frontier computation and observation traffic, not another

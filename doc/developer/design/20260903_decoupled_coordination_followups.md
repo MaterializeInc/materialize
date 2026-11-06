@@ -1,14 +1,35 @@
 # Decoupled coordination: architectural follow-ups
 
-This is an audit backlog, not an expansion of Milestone 3. The two-adapter
-startup/frontier repair takes priority. Implementation of the opportunities
-below needs separate scope agreement. Findings are based on source inspection
-unless runtime evidence is cited.
+This is an audit backlog, not an expansion of Milestone 3. Implementation of
+the opportunities below needs separate scope agreement. Findings are based on
+source inspection unless runtime evidence is cited.
 
 The direction is incremental observation and publication by the component that
 owns a fact. Reuse existing identities, catalog changes and Persist listeners.
 Do not introduce a designated maintenance adapter, another consensus protocol,
 or a general sampling framework.
+
+## Backend writes and blob consumption
+
+The [backend attribution](20260903_decoupled_coordination_backend_load.md)
+reconciles CAS/blob calls and bytes against actual events. Prioritize shared
+frontier inputs or validated intermediates: two indexes independently fetch the
+same cold observation parts. A separate retained dependency MV lacks a common
+source predicate. Do not redirect its history through the unretained shared
+catalog arrangement.
+
+Most CAS excess is empty completeness fanout into 50 durable catalog outputs.
+Output coalescing needs a latency budget, not slower read-protection publication.
+At the collection-manager boundary, peer progress can inform an idle completeness
+deadline without choosing an owner. Preserve the existing maximum lag and all
+pending command obligations. Source statistics has two partition timers, not
+unconditional empty scraping.
+
+Additional blob bytes are dominated by catalog publication and cross-process
+compaction. Most observation producers already batch near their report cadence.
+No saving from further batching is established. A cached shared-since shortcut
+would need a Persist API that is absent at this revision, so it remains deferred.
+The report separates measured attribution from prospective savings.
 
 ## Duplicate progress observation
 

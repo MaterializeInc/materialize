@@ -42,6 +42,7 @@ parser.add_argument("--windows", type=int, default=2)
 parser.add_argument("--profile-seconds", type=int, default=30)
 parser.add_argument("--label", default=None)
 parser.add_argument("--scheduling-diagnostics", action="store_true")
+parser.add_argument("--plan-diagnostics", action="store_true")
 parser.add_argument(
     "--frontier-lifecycle",
     action="store_true",
@@ -54,6 +55,8 @@ if args.warmup < 0 or args.window < 4 or args.windows < 1 or args.profile_second
     parser.error("require warmup >= 0, window >= 4, windows >= 1, profile-seconds >= 0")
 if args.frontier_lifecycle and args.kind != "native":
     parser.error("--frontier-lifecycle requires native")
+if args.plan_diagnostics and args.kind != "native":
+    parser.error("--plan-diagnostics requires native")
 assert not any(
     p.info["name"] in NAMES | {"rustc", "cargo"} for p in psutil.process_iter(["name"])
 ), "no runtime/build interference"
@@ -714,6 +717,35 @@ try:
                 timeout=1800,
             )
         result["frontier_lifecycle_status"] = "passed"
+    if args.plan_diagnostics:
+        # These queries run after the measurement windows. Stored plans and
+        # Timely root IDs connect source-reader diagnostics to their consumers.
+        with connect(sql_addr) as c:
+            c.execute("SET cluster=mz_catalog_server")
+            c.execute("SET statement_timeout='30s'")
+            save(
+                "dataflow-roots.json",
+                c.execute(
+                    "SELECT id, name FROM mz_introspection.mz_dataflows ORDER BY id"
+                ).fetchall(),
+            )
+            save(
+                "sink-implementation.json",
+                c.execute("SHOW enable_compute_sync_mv_sink").fetchone(),
+            )
+            for kind, name in [
+                ("INDEX", "mz_internal.mz_catalog_shared_ind"),
+                ("MATERIALIZED VIEW", "mz_internal.mz_catalog_deployment_authority"),
+                ("MATERIALIZED VIEW", "mz_internal.mz_object_dependencies"),
+                ("INDEX", "mz_internal.mz_frontiers_ind"),
+                ("INDEX", "mz_catalog.mz_cluster_replica_frontiers_ind"),
+            ]:
+                for stage in ("OPTIMIZED", "PHYSICAL"):
+                    query = f"EXPLAIN {stage} PLAN FOR {kind} {name}"
+                    save(
+                        f"plan-{name}-{stage.lower()}.json",
+                        {"query": query, "rows": c.execute(query).fetchall()},
+                    )
     result["status"] = "passed"
 except BaseException as error:
     result.update(status="failed", error=repr(error))
