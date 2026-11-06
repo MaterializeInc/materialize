@@ -290,6 +290,15 @@
       "dyncfg": true
     },
     {
+      "name": "compute_arrangement_exert_skip_layer0",
+      "typeName": "boolean",
+      "default": "on",
+      "description": "When enabled, idle arrangements do not exert merge effort on their smallest spine layer.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "compute_correction_v2_chain_proportionality",
       "typeName": "double-precision floating-point number",
       "default": "3",
