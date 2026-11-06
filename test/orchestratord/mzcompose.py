@@ -109,6 +109,12 @@ def get_tag(tag: str | None = None) -> str:
     return tag or ci_util.dev_docker_tag()
 
 
+# Whether the operator under test is this build rather than the image pinned in
+# the chart. Set by setup(). Modifications that need operator flags newer than
+# the pinned image check it.
+ORCHESTRATORD_OVERRIDE = True
+
+
 def get_version(tag: str | None = None) -> MzVersion:
     return MzVersion.parse_mz(get_tag(tag))
 
@@ -1189,6 +1195,56 @@ class TelemetrySegmentClientSide(Modification):
             assert (
                 not expected in args
             ), f"Expected no {expected} in environmentd args, but found {args}"
+
+
+class UserNamespaces(Modification):
+    """Run the Materialize pods with `hostUsers: false`.
+
+    The chart leaves this off by default because nodes must allow user
+    namespaces. Exercising it here keeps the opt-in path covered. Kind nodes
+    need the sysfs mount set up in `setup()` for these pods to start.
+    """
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        # The operator image pinned in the chart predates --enable-user-namespaces.
+        if ORCHESTRATORD_OVERRIDE and version >= MzVersion.parse_mz("v26.50.0-dev.0"):
+            return [True, False]
+        return [False]
+
+    @classmethod
+    def default(cls) -> Any:
+        return False
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["operator"]["operator"]["args"]["enableUserNamespaces"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        expected = False if self.value else None
+
+        def check_pods(kind: str, data: dict[str, Any]) -> None:
+            assert data["items"], f"No {kind} pods found"
+            for pod in data["items"]:
+                actual = pod["spec"].get("hostUsers")
+                assert (
+                    actual == expected
+                ), f"Expected hostUsers={expected} on {kind} pod {pod['metadata']['name']}, got {actual}"
+
+        def check() -> None:
+            check_pods("orchestratord", get_orchestratord_data())
+            check_pods("environmentd", get_environmentd_data())
+            # environmentd only passes the flag on to clusterd from v26.50.
+            if MzVersion.parse_mz(mods[EnvironmentdImageRef]) >= MzVersion.parse_mz(
+                "v26.50.0-dev.0"
+            ):
+                check_pods("clusterd", get_clusterd_data())
+            if mods[BalancerdEnabled]:
+                check_pods("balancerd", get_balancerd_data())
+            if mods[ConsoleEnabled]:
+                check_pods("console", get_console_data())
+
+        # Pods from the previous generation can take a while to go away.
+        retry(check, 240)
 
 
 class ObservabilityEnabled(Modification):
@@ -5220,6 +5276,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
     with open(MZ_ROOT / "misc" / "helm-charts" / "testing" / "balancer.yaml") as f:
         definition["balancer"] = yaml.load(f, Loader=yaml.Loader)
 
+    global ORCHESTRATORD_OVERRIDE
+    ORCHESTRATORD_OVERRIDE = args.orchestratord_override
     get_version(args.tag)
     if args.orchestratord_override:
         definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
@@ -5232,9 +5290,6 @@ def setup(c: Composition, args) -> dict[str, Any]:
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
     # TODO: Remove once the pinned operator image knows '--disable-database-network-policies'
     definition["operator"]["operator"]["args"]["enableDatabaseNetworkPolicies"] = True
-    # TODO: Remove once the pinned operator image knows '--enable-user-namespaces'
-    if not args.orchestratord_override:
-        definition["operator"]["operator"]["args"]["enableUserNamespaces"] = False
     definition["operator"]["clusterd"]["nodeSelector"][
         "workload"
     ] = "materialize-instance"
@@ -5245,6 +5300,10 @@ def setup(c: Composition, args) -> dict[str, Any]:
     definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
         c.compose["services"]["environmentd"]["image"], args.tag
     )
+    # Too slow with 10 min default in upgrade tests.
+    definition["materialize"]["spec"]["environmentdExtraArgs"] = [
+        "--system-parameter-default=with_0dt_caught_up_check_stability_period=60s"
+    ]
     definition["balancer"]["spec"]["balancerdImageRef"] = get_image(
         c.compose["services"]["balancerd"]["image"], args.tag
     )

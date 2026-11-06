@@ -7352,9 +7352,10 @@ impl<'a> Parser<'a> {
                 REAL => other(ident!("float4")),
 
                 // Time-like types
+                // Take `WITH` only as part of `WITH TIME ZONE`. A cast can be followed by a
+                // clause's `WITH`, e.g.  `COPY t FROM '...'::timestamp WITH (FORMAT CSV)`.
                 TIME => {
-                    if self.parse_keyword(WITH) {
-                        self.expect_keywords(&[TIME, ZONE])?;
+                    if self.parse_keywords(&[WITH, TIME, ZONE]) {
                         other(ident!("timetz"))
                     } else {
                         if self.parse_keyword(WITHOUT) {
@@ -7365,8 +7366,7 @@ impl<'a> Parser<'a> {
                 }
                 TIMESTAMP => {
                     let typ_mod = self.parse_timestamp_precision()?;
-                    if self.parse_keyword(WITH) {
-                        self.expect_keywords(&[TIME, ZONE])?;
+                    if self.parse_keywords(&[WITH, TIME, ZONE]) {
                         RawDataType::Other {
                             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!(
                                 "timestamptz"

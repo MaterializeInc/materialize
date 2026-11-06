@@ -49,6 +49,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
@@ -77,6 +78,7 @@ SERVICES = [
         },
         support_external_clusterd=True,
     ),
+    MySql(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),
@@ -1577,6 +1579,66 @@ def workflow_pg_snapshot_freshness_release(c: Composition) -> None:
         c.run_testdrive_files("pg-snapshot-freshness/04-release.td")
 
 
+def workflow_mysql_snapshot_freshness(c: Composition) -> None:
+    """Test that already hydrated tables of a MySQL source keep ingesting CDC
+    while a newly added table's snapshot runs, and that a table added alongside
+    completes its own snapshot without waiting. The new table's snapshot is
+    held with the mysql_snapshot_pause failpoint."""
+
+    mysql_password = f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}"
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=mysql_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "mysql", "clusterd1")
+
+        c.run_testdrive_files(mysql_password, "mysql-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files(
+            mysql_password, "mysql-snapshot-freshness/02-add-tables.td"
+        )
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="clusterd1", workers=4)
+        ):
+            c.up("clusterd1")
+            c.run_testdrive_files("mysql-snapshot-freshness/03-verify.td")
+
+
+def workflow_mysql_snapshot_freshness_release(c: Composition) -> None:
+    """Test that a MySQL table whose snapshot is held while CDC streams into
+    it converges once the hold lifts within the same dataflow incarnation. What
+    commits is the snapshot plus the updates the persist sink staged behind the
+    held frontier, not a re-run snapshot. The hold is timed with the
+    mysql_snapshot_pause failpoint, long enough for the staging assertions of
+    the shared add-tables phase to run against a frontier that is still held."""
+
+    mysql_password = f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}"
+    with c.override(
+        # The release waits out the hold. After that the shard upper waits for
+        # the frontier to pass the ceiling the sink committed ahead of it.
+        Testdrive(no_reset=True, default_timeout="120s"),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=[
+                "FAILPOINTS=mysql_snapshot_pause=return(t_paused:30000)"
+            ],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "mysql", "clusterd1")
+
+        c.run_testdrive_files(mysql_password, "mysql-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files(
+            mysql_password, "mysql-snapshot-freshness/02-add-tables.td"
+        )
+        c.run_testdrive_files(mysql_password, "mysql-snapshot-freshness/04-release.td")
+
+
 def workflow_pg_seal_on_replay(c: Composition) -> None:
     """Test that a PostgreSQL table whose incompatible schema change is found
     while the replication slot replays changes the table already committed is
@@ -1608,6 +1670,63 @@ def workflow_pg_seal_on_replay(c: Composition) -> None:
         c.kill("clusterd1")
         c.up("clusterd1")
         c.run_testdrive_files("pg-seal-on-replay/02-verify.td")
+
+
+def workflow_pg_late_add_restart(c: Composition) -> None:
+    """Test that a table added to an established PostgreSQL source reports
+    snapshot_committed = false while its snapshot is held, and that
+    environmentd restarts while the table is still snapshotting."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+
+        # Each ingestion render opens a leased reader on the remap shard and
+        # holds it at the since it read for 300s (`deferred_expire` in
+        # async_storage_worker.rs). The setup's renders read a since of 0, so
+        # the remap since only moves past 0 once they expire.
+        time.sleep(330)
+
+        c.testdrive(
+            "> CREATE TABLE t_paused FROM SOURCE mz_source (REFERENCE t_paused);"
+        )
+
+        # A new table reads snapshot_committed = false until its first report,
+        # which would satisfy the assertion vacuously. WAL written after the
+        # table is added can only reach its offset_known through a report from
+        # the ingestion that includes it.
+        lsn = c.sql_query(
+            "INSERT INTO t_before VALUES (3) RETURNING pg_current_wal_insert_lsn() - '0/0'",
+            service="postgres",
+            user="postgres",
+            password="postgres",
+            database="postgres",
+        )[0][0]
+
+        c.testdrive(dedent(f"""
+                > SELECT u.offset_known::numeric >= {lsn}
+                  FROM mz_internal.mz_source_statuses s
+                  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+                  WHERE s.name = 't_paused'
+                true
+
+                > SELECT u.snapshot_committed
+                  FROM mz_internal.mz_source_statuses s
+                  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+                  WHERE s.name = 't_paused'
+                false
+                """))
+
+        c.kill("materialized")
+        c.up("materialized")
 
 
 def workflow_sink_failure(c: Composition) -> None:
@@ -3300,6 +3419,25 @@ def workflow_test_optimizer_metrics(c: Composition) -> None:
     assert 0 < time < 10, f"got {time}"
     time = metrics.get_e2e_optimization_time("subscribe")
     assert 0 < time < 10, f"got {time}"
+
+
+def workflow_test_dropped_role_begin(c: Composition) -> None:
+    c.up("materialized")
+    c.sql("CREATE ROLE dropped_role")
+
+    with c.sql_connection(user="dropped_role") as conn:
+        conn.autocommit = False
+        c.sql("DROP ROLE dropped_role")
+
+        # Psycopg first sends an implicit BEGIN. Duplicate error responses
+        # mask the dropped-role error with a client-side InternalError.
+        try:
+            conn.execute("SELECT 1")
+        except psycopg.errors.InsufficientPrivilege as e:
+            assert "was concurrently dropped" in str(e), str(e)
+            assert conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        else:
+            raise AssertionError("query succeeded after its role was dropped")
 
 
 def workflow_test_pgwire_metrics(c: Composition) -> None:

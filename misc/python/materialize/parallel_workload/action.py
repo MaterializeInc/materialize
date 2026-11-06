@@ -332,6 +332,7 @@ class Action:
             "division by zero",
             "out of range",
             "is only defined for finite arguments",
+            "Window function performance issue",  # TODO: Remove when SQL-858 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
             # A persistent object (sink, non-temp view) referencing a temporary
             # one is correctly rejected. We still let the workload attempt it,
@@ -3008,6 +3009,9 @@ class FlipFlagsAction(Action):
             "'.*'",
         ]
         self.flags_with_values["persist_shard_info_metric"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_gc_remove_finalized_rollups"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_part_decode_batch_rows"] = [
             "''",
             "7",
@@ -3284,7 +3288,6 @@ class FlipFlagsAction(Action):
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",
-            "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
             "linear_join_yielding",
@@ -3477,6 +3480,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
             "enable_mcp_protocol_2026_07_28",
+            "enable_mcp_unified",
             "mcp_max_response_size",
             "mcp_request_timeout",
             "mz_metrics_lgalloc_map_refresh_interval",

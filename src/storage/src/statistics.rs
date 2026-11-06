@@ -346,15 +346,18 @@ impl SinkStatisticsMetrics {
 pub struct SourceStatisticsMetadata {
     /// The resumption upper of the source.
     resume_upper: Antichain<Timestamp>,
+    /// The as_of of the ingestion dataflow, where an export that snapshots lands its snapshot.
+    as_of: Antichain<Timestamp>,
     /// Time at which the source (more precisely: this metadata object) was created.
     created_at: Instant,
 }
 
 impl SourceStatisticsMetadata {
     /// Create a new `SourceStatisticsMetadata` object.
-    pub fn new(resume_upper: Antichain<Timestamp>) -> Self {
+    pub fn new(resume_upper: Antichain<Timestamp>, as_of: Antichain<Timestamp>) -> Self {
         Self {
             resume_upper,
+            as_of,
             created_at: Instant::now(),
         }
     }
@@ -555,6 +558,7 @@ impl SourceStatistics {
         shard_id: &mz_persist_client::ShardId,
         envelope: SourceEnvelope,
         resume_upper: Antichain<Timestamp>,
+        as_of: Antichain<Timestamp>,
     ) -> Self {
         Self {
             stats: Rc::new(RefCell::new(StatsInner {
@@ -584,7 +588,7 @@ impl SourceStatistics {
                     envelope,
                 ),
             })),
-            meta: SourceStatisticsMetadata::new(resume_upper),
+            meta: SourceStatisticsMetadata::new(resume_upper, as_of),
         }
     }
 
@@ -633,7 +637,9 @@ impl SourceStatistics {
 
     /// Set the `snapshot_committed` stat based on the reported upper.
     pub fn update_snapshot_committed(&self, upper: &Antichain<Timestamp>) {
-        let value = *upper != Antichain::from_elem(Timestamp::MIN);
+        // An upper past the minimum is not enough. When the as_of is past the minimum, the sink
+        // commits the empty interval below it before the snapshot lands at the as_of.
+        let value = PartialOrder::less_than(&self.meta.as_of, upper);
         let mut cur = self.stats.borrow_mut();
         cur.stats.snapshot_committed = Some(value);
         cur.prom.snapshot_committed.set(if value { 1 } else { 0 });
@@ -778,7 +784,11 @@ impl SourceStatistics {
         if matches!(cur.stats.rehydration_latency_ms, Some(Some(_))) {
             return; // source was already hydrated before
         }
-        if !PartialOrder::less_than(&self.meta.resume_upper, upper) {
+        // An export that snapshots has a resume upper at or below the as_of, and passes the
+        // resume upper before its snapshot commits (see `update_snapshot_committed`).
+        if !PartialOrder::less_than(&self.meta.resume_upper, upper)
+            || !PartialOrder::less_than(&self.meta.as_of, upper)
+        {
             return; // source is not yet hydrated
         }
 
@@ -999,6 +1009,7 @@ impl AggregatedStatistics {
         id: GlobalId,
         ingestion_id: GlobalId,
         resume_upper: Antichain<Timestamp>,
+        as_of: Antichain<Timestamp>,
         stats: F,
     ) {
         self.local_source_statistics
@@ -1007,7 +1018,7 @@ impl AggregatedStatistics {
                 assert_eq!(ingestion_id, *ingestion_id2);
                 *epoch += 1;
                 stats.reset_gauges();
-                stats.meta = SourceStatisticsMetadata::new(resume_upper);
+                stats.meta = SourceStatisticsMetadata::new(resume_upper, as_of);
             })
             .or_insert_with(|| (0, ingestion_id, stats()));
 

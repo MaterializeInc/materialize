@@ -326,6 +326,12 @@ pub fn plan_create_table(
     let mut keys = Vec::new();
 
     for (i, c) in columns.into_iter().enumerate() {
+        if c.collation
+            .as_ref()
+            .is_some_and(|collation| !query::is_supported_collation(collation))
+        {
+            bail_unsupported!("COLLATE");
+        }
         let aug_data_type = &c.data_type;
         let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
         let mut nullable = true;

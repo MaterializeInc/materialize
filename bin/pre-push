@@ -15,9 +15,25 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+# Clippy and rustdoc compile the whole workspace, which takes tens of minutes
+# from a cold target dir. Skip them when nothing that can affect a Rust build
+# changed against main. If main can't be resolved, run them.
+rust_changed=true
+upstream=$(git remote -v | awk 'tolower($2) ~ /[:\/]materializeinc\/materialize(\.git)?$/ && $3 == "(fetch)" { print $1; exit }')
+if [[ -n "$upstream" ]] && base=$(git merge-base HEAD "$upstream/main" 2>/dev/null); then
+    changed=$(git diff --name-only "$base" HEAD)
+    if ! grep -qE '\.(rs|proto)$|(^|/)Cargo\.(toml|lock)$|^(src/|clippy\.toml|rust-toolchain|\.cargo/)' <<< "$changed"; then
+        rust_changed=false
+    fi
+fi
+
 try bin/lint
-try cargo clippy --all-targets -- -D warnings
-try bin/doc --no-deps
-try bin/doc --document-private-items
+if $rust_changed; then
+    try cargo clippy --all-targets -- -D warnings
+    try bin/doc --no-deps
+    try bin/doc --document-private-items
+else
+    echo "No Rust-relevant changes against $upstream/main, skipping clippy and rustdoc"
+fi
 
 try_status_report

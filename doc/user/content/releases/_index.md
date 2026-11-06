@@ -24,6 +24,12 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-11-05 (v26.49.0)* <br>
 *Released to Materialize Self-Managed: 2026-11-06* <br>
 
+### Advisory {#v26.49-advisory}
+
+- **Query plans may change when a SQL Server source table is re-created**: Starting with this release, a table created from a SQL Server source records at most one key, the `PRIMARY KEY` or `UNIQUE` constraint behind its CDC capture instance's index (see [Unique keys](/ingest-data/sql-server/#unique-keys)). Tables created before this release keep the keys they recorded at creation. If a re-created table had other `PRIMARY KEY` or `UNIQUE` constraints, views, indexes, and materialized views that depend on it can get a different plan, for example a `DISTINCT` over the columns of a no longer recorded constraint is kept instead of removed, and may use more memory or CPU as a result. Query results do not change. Before dropping a `PRIMARY KEY` or `UNIQUE` constraint that the capture instance does not use from a table created before this release, re-create the table in Materialize.
+
+  **Upgrade impact**: Before promoting a deployment that re-creates SQL Server source tables, for example through [source versioning](/ingest-data/sql-server/source-versioning/), compare the plans of the objects that depend on them with [`EXPLAIN PLAN`](/sql/explain-plan/). A retained `DISTINCT` can need a larger cluster.
+
 ### Improvements {#v26.49-improvements}
 - **Investigate hydration on the cluster details page**: The Console's [redesigned cluster details page](#v26.47-cluster-details-page) gains a **Hydration** tab that charts each replica's hydrations over the last 24 hours, 7 days, or 30 days with their duration, peak memory, disk, and heap use and the objects that took longest, shows which objects a hydrating replica is working on, and calls out a replica that keeps restarting without finishing, such as one running out of memory.
 - **Freshness page on Self-Managed**: The Console's [Freshness page](#v26.48-freshness-page), which tracks p90, p99, p99.9, and maximum freshness across your environment's objects, is now available on Materialize Self-Managed.
@@ -41,6 +47,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - **Configurable `environmentd` probes on Self-Managed**: Operators can now tune the `environmentd` readiness and liveness probes and add a startup probe, per environment through the `Materialize` resource or operator-wide through Helm values.
 - **PodDisruptionBudgets for the balancer and Console on Self-Managed**: The Materialize operator now creates a PodDisruptionBudget for the balancer and Console deployments, so a node drain evicts at most one of their pods at a time, and operators who manage RBAC outside the Helm chart must grant the operator access to `poddisruptionbudgets`.
 - **Console metrics on Self-Managed**: Console pods now serve Prometheus metrics for request rate, status codes, and latency at `/metrics` on an internal port, 8081 by default, and are annotated for Prometheus scraping when scrape annotations are enabled in the operator's Helm values.
+- **SQL Server tables key only on the capture instance's index**: A table created from a SQL Server source now records as its key only the `PRIMARY KEY` or `UNIQUE` constraint backing the index its CDC capture instance uses, which SQL Server does not allow dropping while that capture instance is the table's newest one. Other `UNIQUE` constraints are no longer recorded, so dropping one upstream can no longer cause queries in Materialize to return incorrect results. See [Unique keys](/ingest-data/sql-server/#unique-keys).
 
 ### Agent Skills {#v26.49-agent-skills}
 - **mz-docs**: The skill now finds pages through the live documentation's `llms.txt` index and fetches them from materialize.com instead of bundling a copy of the docs, so it reads the current documentation and needs network access to materialize.com.
@@ -55,7 +62,6 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - Fixed name lookup and source creation in a transaction not seeing a schema renamed earlier in the same transaction, and fixed cluster replica renames in a transaction taking effect before commit and surviving a rollback.
 - Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` sometimes succeeding on a materialized view sealed by an unrecoverable source error, which left the catalog showing the new definition while the view's data stayed frozen, and made `CREATE REPLACEMENT MATERIALIZED VIEW` reject an already-sealed target.
 - Fixed restarts without a version change re-optimizing every view created since the previous restart, which made startup slow on deployments that recreate views frequently, by caching the optimized plan of `CREATE VIEW` as `CREATE MATERIALIZED VIEW` and `CREATE INDEX` already do.
-- Reduced the risk of new SQL Server source tables returning incorrect results after a unique constraint or primary key is dropped upstream, by recording only the key that the table's CDC capture instance prevents from being dropped.
 
 ## v26.48.2
 *Released to Materialize Cloud: 2026-10-29 (v26.48.0)* <br>

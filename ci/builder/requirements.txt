@@ -50,10 +50,8 @@ pdoc==16.0.0
 pg8000==1.31.6
 prettytable==3.18.0
 psutil==7.2.2
-# TODO: Bump psycopg/psycopg-binary to >= 3.3.6 when SQL-840 is fixed, and
-# drop their ignore entry in .github/dependabot.yml
-psycopg==3.3.3
-psycopg-binary==3.3.3
+psycopg==3.3.6
+psycopg-binary==3.3.6
 pydantic==2.14.2
 pyelftools==0.33
 pyjwt==2.15.1
@@ -70,7 +68,7 @@ scipy==1.18.1; python_version >= "3.11"
 scipy-stubs==1.18.1.1
 semver==3.1.0
 shtab==1.13.0
-sqlparse==0.6.0
+sqlparse==0.6.1
 toml==0.10.2
 twine==7.0.0
 types-Markdown==3.11.2.20261029

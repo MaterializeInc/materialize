@@ -47,11 +47,14 @@
 //! change will apply.
 //!
 //! `spine_fueled` is `trace/implementations/spine_fueled.rs` from
-//! differential-dataflow 0.25.1 with its crate-internal paths rewritten. The
-//! funding changes are its two funding fields and their constants, the
-//! `insert` path that funds them, and the `exert` path that spends them, so
-//! the diff against upstream stays reviewable. Everything else, including the
-//! `Trace` and `TraceReader` contracts, is upstream's.
+//! differential-dataflow at the revision its header names, with its
+//! crate-internal paths rewritten. It imports differential's `SpineBatch` and
+//! `Merger` traits instead of defining its own, so the batch types that
+//! implement them for the stock spine fit this one. The funding changes are
+//! its two funding fields and their constants, the `insert` path that funds
+//! them, and the `exert` path that spends them, so the diff against upstream
+//! stays reviewable. Everything else, including the `Trace` and `TraceReader`
+//! contracts, is upstream's.
 
 #[rustfmt::skip]
 #[allow(clippy::as_conversions, clippy::needless_pass_by_ref_mut)]

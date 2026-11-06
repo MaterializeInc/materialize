@@ -38,6 +38,8 @@ export type UseSubscribeOptions<T extends object, R> = {
   subscribe: RawBuilder<T> | undefined;
   closeSocketOnComplete?: boolean;
   clusterName?: string;
+  /** Pins the session to one replica of `clusterName`, to read its introspection. */
+  clusterReplicaName?: string;
   select?: SelectFunction<T, R>;
 };
 
@@ -171,7 +173,10 @@ export function useGlobalSubscribeCollection<
       scopeAtom: options.scopeAtom,
       upsertKey: options.upsertKey,
       select: options.select,
-      sessionVariables: { cluster: options.clusterName },
+      sessionVariables: {
+        cluster: options.clusterName,
+        cluster_replica: options.clusterReplicaName,
+      },
       closeSocketOnComplete: options.closeSocketOnComplete,
     });
     return session.destroy;

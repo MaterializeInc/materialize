@@ -12,8 +12,15 @@
  * A reusable "card" component.
  */
 
-import { BoxProps, HeadingProps } from "@chakra-ui/layout";
-import { Box, Heading, HStack, StackProps, useTheme } from "@chakra-ui/react";
+import {
+  Box,
+  BoxProps,
+  Heading,
+  HeadingProps,
+  HStack,
+  StackProps,
+  useTheme,
+} from "@chakra-ui/react";
 import React from "react";
 
 import { MaterializeTheme } from "~/theme";

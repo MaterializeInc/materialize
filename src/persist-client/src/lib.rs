@@ -984,7 +984,7 @@ mod tests {
 
     use crate::batch::BLOB_TARGET_SIZE;
     use crate::cache::PersistClientCache;
-    use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
+    use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, GC_REMOVE_FINALIZED_ROLLUPS};
     use crate::critical::Opaque;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
@@ -1000,6 +1000,8 @@ mod tests {
         cache
             .cfg
             .set_config(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS, 1);
+        // Off by default only for upgrade compatibility.
+        cache.cfg.set_config(&GC_REMOVE_FINALIZED_ROLLUPS, true);
         dyncfgs.apply(cache.cfg());
 
         // Enable compaction in tests to ensure we get coverage.

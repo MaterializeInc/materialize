@@ -70,7 +70,7 @@ use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
     ControllerSinkStatistics, ControllerSourceStatistics, WebhookStatistics,
 };
-use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_client::storage_collections::{StorageCollections, shard_has_no_updates};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
@@ -1063,11 +1063,17 @@ impl StorageController for Controller {
                 // We don't care about the dependency since when the write
                 // frontier is empty. In that case, no-one can write down any
                 // more updates.
-                if description.primary.is_none() {
-                    mz_ore::soft_assert_or_log!(
-                        write_frontier.elements() == &[Timestamp::MIN]
-                            || write_frontier.is_empty()
-                            || PartialOrder::less_than(&dependency_since, &write_frontier),
+                //
+                // An ingestion export whose shard holds no updates is exempt,
+                // see `StorageCollectionsImpl::create_collections_for_bootstrap`.
+                if description.primary.is_none()
+                    && write_frontier.elements() != &[Timestamp::MIN]
+                    && !write_frontier.is_empty()
+                    && !PartialOrder::less_than(&dependency_since, &write_frontier)
+                    && !(matches!(data_source, DataSource::IngestionExport { .. })
+                        && shard_has_no_updates(persist_client, id, &metadata).await)
+                {
+                    mz_ore::soft_panic_or_log!(
                         "dependency since has advanced past dependent ({id}) upper \n
                             dependent ({id}): upper {:?} \n
                             dependency since {:?} \n
