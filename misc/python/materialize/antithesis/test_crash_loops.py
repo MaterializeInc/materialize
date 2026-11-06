@@ -73,6 +73,45 @@ def test_crashes_outside_the_window_do_not_count() -> None:
     assert list(t.loops(900)) == ["clusterd/pod-u1/c"]
 
 
+def test_a_slow_loop_is_caught_between_its_crashes() -> None:
+    # Crashes every 500 s: the 720 s window ending at 1400 holds one crash, but
+    # the window ending at the crash at 1100 held two.
+    t = run(
+        [
+            (0, [sample(0)]),
+            (100, [sample(1, "halt")]),
+            (600, [sample(2, "halt")]),
+            (1100, [sample(3, "halt")]),
+            (1400, [sample(3, "halt")]),
+        ]
+    )
+    assert t.loops(720) == {}
+    loops = t.loops(720, span_s=720)
+    assert loops["clusterd/pod-u1/c"]["crashes_in_window"] == 2
+
+
+def test_any_live_crash_in_the_window_is_reported_until_it_ages_out() -> None:
+    samples: list[tuple[float, list[Sample]]] = [
+        (0, [sample(0), sample(0, uid="u2")]),
+        (100, [sample(1, "halt"), sample(1, "halt", deleting=True, uid="u2")]),
+        (800, [sample(1, "halt"), sample(1, "halt", deleting=True, uid="u2")]),
+    ]
+    assert run(samples).crashed(720) == ["clusterd/pod-u1/c"]
+    assert run(samples + [(900, [sample(1, "halt")])]).crashed(720) == []
+
+
+def test_a_single_crash_in_the_span_is_not_a_loop() -> None:
+    t = run(
+        [
+            (0, [sample(0)]),
+            (100, [sample(1, "halt")]),
+            (1000, [sample(2, "halt")]),
+            (1500, [sample(2, "halt")]),
+        ]
+    )
+    assert t.loops(720, span_s=720) == {}
+
+
 def test_external_kills_are_not_crashes() -> None:
     t = run(
         [(0, [sample(0)]), (100, [sample(1, "killed")]), (200, [sample(2, "killed")])]
