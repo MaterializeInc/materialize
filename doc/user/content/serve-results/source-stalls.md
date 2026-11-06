@@ -40,9 +40,15 @@ in [`mz_frontiers`](/sql/system-catalog/mz_internal/#mz_frontiers).
 ### What happens to timestamps
 
 Materialize serves every query at a single timestamp. Each collection, whether
-a source table, index, or materialized view, can answer queries at timestamps
-between its **read frontier** and its **write frontier**. While a source
-ingests, its write frontier keeps advancing.
+a source table, index, or materialized view, tracks two frontiers:
+
+- The **write frontier** is how far the collection's data is complete. All
+  changes before it are known, and new data arrives at or after it.
+- The **read frontier** is the earliest timestamp the collection can still
+  answer. Materialize compacts older history, so it moves forward over time.
+
+A collection can answer queries at timestamps between its read frontier and its
+write frontier. While a source ingests, both frontiers keep advancing.
 
 - **During a stall**, the write frontier freezes at the last timestamp the
   source ingested. The data up to that timestamp stays intact and readable.
@@ -61,6 +67,11 @@ frontier of a healthy source B keeps advancing. Once B's read frontier moves
 past A's frozen write frontier, no timestamp works for both, and a query that
 reads A and B together blocks until A resumes.
 
+For example, a query that joins source A and source B must find a timestamp
+that both sources can answer:
+
+![Timelines of the read and write frontiers of two sources, healthy and with source A stalled](/images/serve-results/source-stall-frontiers.svg)
+
 The isolation level adds its own constraint. Under **strict serializable** (the
 default), a query must read at the current time, so any query that reads stalled
 data blocks. Under **serializable**, a query can read at an earlier timestamp,
@@ -75,7 +86,7 @@ resumes.
 |-------------|--------------|---------------------|-------------------|
 | Reads only healthy inputs | Serves | Serves | Serves |
 | Reads only the stalled source's tables, or indexes and views over them | Serves stale | Blocks | Serves stale, then errors once the stall exceeds the bound |
-| Reads an indexed or materialized view created before the stall that joins the stalled and healthy sources | Serves stale | Blocks | Serves stale, then errors once the stall exceeds the bound |
+| Reads an indexed view or materialized view which joins the stalled and healthy sources | Serves stale | Blocks | Serves stale, then errors once the stall exceeds the bound |
 | Ad hoc query that joins a stalled input with a healthy one, including user-writable tables | Blocks | Blocks | Errors |
 | `SUBSCRIBE` to the stalled source's tables | Emits the snapshot as of the stall, then waits | Blocks before the snapshot | Errors once the stall exceeds the bound |
 | Explicit transaction that reads stalled data | Blocks | Blocks | Errors |
@@ -87,11 +98,7 @@ healthy inputs, because it holds back their read frontier. Don't rely on this.
 Maintain the query instead, as described below.
 {{< /note >}}
 
-To see why a specific query does or doesn't serve, run [`EXPLAIN
-TIMESTAMP`](/sql/explain-timestamp/). It reports the read and write frontier of
-each input and whether the query `can respond immediately`.
-
-## Serve across sources
+## How to join across sources and serve stale
 
 To keep serving a query that combines several sources, maintain it as an
 [indexed view](/fundamentals/concepts/views/#indexes-on-views) or a
