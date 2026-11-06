@@ -133,8 +133,10 @@ export function useWorkflowGraphLive(objectId: string) {
     nodeIds,
     objects: objects ?? NO_OBJECTS,
     edgesReady: edgesStatus.snapshotComplete,
+    edgesRefreshing: edgesStatus.isRefreshing,
     edgesError: edgesStatus.error,
     objectsSnapshotComplete: objectsStatus.snapshotComplete,
+    objectsRefreshing: objectsStatus.isRefreshing,
     objectsError: objectsStatus.error,
   };
 }
