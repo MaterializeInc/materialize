@@ -187,3 +187,7 @@ required-features = ["pager"]
 [[example]]
 name = "pager_merge"
 required-features = ["pager"]
+
+[[example]]
+name = "pool_extents"
+required-features = ["pool"]
