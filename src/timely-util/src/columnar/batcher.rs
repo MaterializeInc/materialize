@@ -25,7 +25,7 @@ use columnar::bytes::indexed;
 use columnar::{BorrowedOf, Clear, Columnar, Index, Len};
 use columnation::Columnation;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::trace::implementations::merge_batcher::Merger;
+use differential_dataflow::trace::implementations::merge_batcher::{Extractor, Merger};
 use timely::Container;
 use timely::PartialOrder;
 use timely::container::{ContainerBuilder, PushInto};
@@ -672,7 +672,6 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
-    type Time = T;
     type Chunk = ColumnBody<(D, T, R)>;
 
     fn merge(
@@ -788,6 +787,31 @@ where
         }
     }
 
+    fn len(chunk: &Self::Chunk) -> usize {
+        chunk.len()
+    }
+
+    fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
+        // Serialized footprint stands in for both `size` and `capacity`: the
+        // chunk owns one logical allocation worth of leaf storage, and we
+        // ship/recycle the whole thing rather than tracking per-leaf
+        // capacities. Treating `size == capacity` matches how the framework
+        // accounts already-shipped chunks (no slack to absorb).
+        let bytes = chunk.length_in_bytes();
+        (bytes, bytes, 1)
+    }
+}
+
+impl<D, T, R> Extractor for ColumnMerger<D, T, R>
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Clone + Ord + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+{
+    type Time = T;
+
     fn extract(
         &mut self,
         merged: Vec<Self::Chunk>,
@@ -822,20 +846,6 @@ where
         if !ready.is_empty() {
             ship.push(ready);
         }
-    }
-
-    fn len(chunk: &Self::Chunk) -> usize {
-        chunk.len()
-    }
-
-    fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
-        // Serialized footprint stands in for both `size` and `capacity`: the
-        // chunk owns one logical allocation worth of leaf storage, and we
-        // ship/recycle the whole thing rather than tracking per-leaf
-        // capacities. Treating `size == capacity` matches how the framework
-        // accounts already-shipped chunks (no slack to absorb).
-        let bytes = chunk.length_in_bytes();
-        (bytes, bytes, 1)
     }
 }
 

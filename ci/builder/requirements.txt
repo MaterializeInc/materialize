@@ -68,7 +68,7 @@ scipy==1.18.1; python_version >= "3.11"
 scipy-stubs==1.18.1.1
 semver==3.1.0
 shtab==1.13.0
-sqlparse==0.6.0
+sqlparse==0.6.1
 toml==0.10.2
 twine==7.0.0
 types-Markdown==3.11.2.20261029

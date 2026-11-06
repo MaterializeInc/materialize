@@ -563,6 +563,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                                 Ok(HollowRollup {
                                     key: v.into_rust()?,
                                     encoded_size_bytes: None,
+                                    finalized: false,
                                 })
                             },
                         )?
@@ -1044,6 +1045,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
                 HollowRollup {
                     key: key.into_rust()?,
                     encoded_size_bytes: None,
+                    finalized: false,
                 },
             );
         }
@@ -1874,6 +1876,7 @@ impl RustType<ProtoHollowRollup> for HollowRollup {
         ProtoHollowRollup {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+            finalized: self.finalized,
         }
     }
 
@@ -1881,6 +1884,7 @@ impl RustType<ProtoHollowRollup> for HollowRollup {
         Ok(HollowRollup {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
+            finalized: proto.finalized,
         })
     }
 }
@@ -2212,10 +2216,12 @@ mod tests {
         let r1 = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
             encoded_size_bytes: None,
+            finalized: false,
         };
         let r2 = HollowRollup {
             key: PartialRollupKey("bar".to_owned()),
             encoded_size_bytes: Some(2),
+            finalized: false,
         };
         let shard_id = ShardId::new();
         let mut state = TypedState::<(), (), u64, i64>::new(
@@ -2268,6 +2274,7 @@ mod tests {
             HollowRollup {
                 key: PartialRollupKey("foo".to_owned()),
                 encoded_size_bytes: None,
+                finalized: false,
             },
         );
         let mut proto = Rollup::from(state.into(), Vec::new()).into_proto();
@@ -2477,6 +2484,7 @@ mod tests {
         let r1_rollup = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
             encoded_size_bytes: None,
+            finalized: false,
         };
         let r1 = StateFieldDiff {
             key: SeqNo(1),
@@ -2485,6 +2493,7 @@ mod tests {
         let r2_rollup = HollowRollup {
             key: PartialRollupKey("bar".to_owned()),
             encoded_size_bytes: Some(2),
+            finalized: false,
         };
         let r2 = StateFieldDiff {
             key: SeqNo(2),
@@ -2493,6 +2502,7 @@ mod tests {
         let r3_rollup = HollowRollup {
             key: PartialRollupKey("baz".to_owned()),
             encoded_size_bytes: None,
+            finalized: false,
         };
         let r3 = StateFieldDiff {
             key: SeqNo(3),

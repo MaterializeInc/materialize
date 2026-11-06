@@ -260,10 +260,10 @@ export const clusterQueryKeys = {
         objectIds: [...params.objectIds].sort().join(","),
       }),
     ] as const,
-  replicaUtilization: () =>
+  replicaUtilization: (params: { includeSwap: boolean }) =>
     [
       ...clusterQueryKeys.all(),
-      buildQueryKeyPart("replicaUtilization"),
+      buildQueryKeyPart("replicaUtilization", params),
     ] as const,
   replicaHydration: () =>
     [...clusterQueryKeys.all(), buildQueryKeyPart("replicaHydration")] as const,
@@ -343,7 +343,7 @@ export const clusterQueryKeys = {
     ] as const,
   objectCreationTimes: (params: {
     objectIds: string[];
-    timePeriodMinutes: number;
+    timePeriodMinutes?: number;
   }) =>
     [
       ...clusterQueryKeys.all(),
@@ -385,11 +385,19 @@ const toUtilizationMap = ({
  * every page, for as long as the session lasts.
  */
 export function useReplicaUtilization() {
+  const includeSwap =
+    useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
   return useQuery({
     refetchInterval: 30_000,
-    queryKey: clusterQueryKeys.replicaUtilization(),
-    queryFn: ({ queryKey, signal }) =>
-      fetchReplicaUtilization({ queryKey, requestOptions: { signal } }),
+    queryKey: clusterQueryKeys.replicaUtilization({ includeSwap }),
+    queryFn: ({ queryKey, signal }) => {
+      const [, params] = queryKey;
+      return fetchReplicaUtilization({
+        params,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
     select: toUtilizationMap,
   });
 }
@@ -1273,10 +1281,14 @@ export function replicaStatusesUpdatedAt(replicas: Cluster["replicas"]) {
  * Status transitions and OOM kills of the given replicas, fetched again only
  * when `statusesUpdatedAt` changes. Pass `replicaStatusesUpdatedAt` of the
  * cluster's replicas. Idle while `replicaIds` is empty.
+ *
+ * `keepOverlapping` keeps the previous answer up while a new set of replicas
+ * shares one with it, for a view that derives history from it.
  */
 export function useReplicaStatusHistory(
   replicaIds: string[],
   statusesUpdatedAt: number | undefined,
+  { keepOverlapping = false }: { keepOverlapping?: boolean } = {},
 ) {
   return useQuery({
     queryKey: clusterQueryKeys.replicaStatusHistory({
@@ -1293,13 +1305,15 @@ export function useReplicaStatusHistory(
         requestOptions: { signal },
       });
     },
-    // A new transition changes the key. The same replicas' history stays up
-    // meanwhile, but never other replicas'. After `queryFn`, so the data type
-    // is inferred from it.
-    placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey[1].replicaIds.join(",") === replicaIds.join(",")
-        ? previous
-        : undefined,
+    // A new transition changes the key, and the same replicas' history stays
+    // up meanwhile. After `queryFn`, so the data type is inferred from it.
+    placeholderData: (previous, previousQuery) => {
+      const previousIds = previousQuery?.queryKey[1].replicaIds ?? [];
+      const isKept = keepOverlapping
+        ? previousIds.some((id) => replicaIds.includes(id))
+        : previousIds.join(",") === replicaIds.join(",");
+      return isKept ? previous : undefined;
+    },
   });
 }
 
@@ -1750,10 +1764,13 @@ export function useReplicaHeapBytes(replicaIds: string[]) {
   });
 }
 
-/** Creation times of the given objects over the window. Idle while `objectIds` is empty. */
+/**
+ * Creation times of the given objects over the window, or whenever they were
+ * created without one. Idle while `objectIds` is empty.
+ */
 export function useObjectCreationTimes(params: {
   objectIds: string[];
-  timePeriodMinutes: number;
+  timePeriodMinutes?: number;
 }) {
   return useQuery({
     queryKey: clusterQueryKeys.objectCreationTimes(params),
@@ -1766,10 +1783,13 @@ export function useObjectCreationTimes(params: {
         params: {
           objectIds: queryKeyParams.objectIds,
           objectTypes: ["index", "materialized-view"],
-          startDate: subMinutes(
-            new Date(),
-            queryKeyParams.timePeriodMinutes,
-          ).toISOString(),
+          startDate:
+            queryKeyParams.timePeriodMinutes === undefined
+              ? undefined
+              : subMinutes(
+                  new Date(),
+                  queryKeyParams.timePeriodMinutes,
+                ).toISOString(),
         },
         queryKey,
         requestOptions: { signal },

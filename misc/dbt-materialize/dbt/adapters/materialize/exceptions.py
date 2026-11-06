@@ -19,20 +19,6 @@ from dbt_common.dataclass_schema import ValidationError
 from dbt_common.exceptions import CompilationError
 
 
-class RefreshIntervalConfigNotDictError(CompilationError):
-    def __init__(self, raw_refresh_interval: Any):
-        self.raw_refresh_interval = raw_refresh_interval
-        super().__init__(msg=self.get_message())
-
-    def get_message(self) -> str:
-        msg = (
-            f"Invalid refresh_interval config:\n"
-            f"  Got: {self.raw_refresh_interval}\n"
-            f'  Expected a dictionary with at minimum a "at", "at_creation", or "every" key'
-        )
-        return msg
-
-
 class RefreshIntervalConfigError(CompilationError):
     def __init__(self, exc: ValidationError):
         self.exc = exc

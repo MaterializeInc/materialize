@@ -21,7 +21,7 @@ use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::operator::StreamExt;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::generic::Session;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -118,7 +118,12 @@ where
                 let mut budget = budget;
 
                 input.for_each(|cap, data| {
-                    queue.push_back((cap.retain(0), cap.retain(1), std::mem::take(data)))
+                    // A message's stamp need not be a singleton, so hold the whole set.
+                    queue.push_back((
+                        cap.retain_stamp(0),
+                        cap.retain_stamp(1),
+                        std::mem::take(data),
+                    ))
                 });
 
                 while let Some((ok_cap, err_cap, data)) = queue.pop_front() {
@@ -172,8 +177,8 @@ fn process_flat_map_row<T>(
     datums: &mut DatumVec,
     datums_mfp: &mut DatumVec,
     table_func_output: &mut Vec<(Row, Diff)>,
-    ok_session: &mut Session<'_, '_, T, FlatMapOk<T>, Capability<T>>,
-    err_session: &mut Session<'_, '_, T, FlatMapErr<T>, Capability<T>>,
+    ok_session: &mut Session<'_, '_, T, FlatMapOk<T>, CapabilitySet<T>>,
+    err_session: &mut Session<'_, '_, T, FlatMapErr<T>, CapabilitySet<T>>,
     budget: &mut usize,
 ) where
     T: RenderTimestamp,
@@ -233,8 +238,8 @@ fn drain_through_mfp<T>(
     extensions: &[(Row, Diff)],
     mfp_plan: &MfpPlan<LirScalarExpr>,
     until: &Antichain<Timestamp>,
-    ok_output: &mut Session<'_, '_, T, FlatMapOk<T>, Capability<T>>,
-    err_output: &mut Session<'_, '_, T, FlatMapErr<T>, Capability<T>>,
+    ok_output: &mut Session<'_, '_, T, FlatMapOk<T>, CapabilitySet<T>>,
+    err_output: &mut Session<'_, '_, T, FlatMapErr<T>, CapabilitySet<T>>,
     budget: &mut usize,
 ) where
     T: RenderTimestamp,
@@ -290,7 +295,7 @@ mod tests {
     use differential_dataflow::input::Input;
     use mz_expr::MapFilterProject;
     use mz_repr::{Datum, ReprScalarType};
-    use timely::dataflow::operators::InspectCore;
+    use timely::dataflow::operators::Inspect;
     use timely::dataflow::operators::capture::{Capture, Extract};
 
     use super::*;
@@ -332,8 +337,9 @@ mod tests {
                     flat_map_stage(stream, scope, exprs, func, mfp, Antichain::new(), budget);
                 // Counted per container: a per-record `inspect` needs
                 // `&Container: IntoIterator`, which on macOS recurses through `objc2`'s
-                // blanket impls until the trait solver overflows.
-                oks.inspect_container(move |event| {
+                // blanket impls until the trait solver overflows. `inspect_core` carries
+                // no such bound.
+                oks.inspect_core(move |event| {
                     if let Ok((_time, data)) = event {
                         *sink.borrow_mut() += data.borrow().into_index_iter().count();
                     }

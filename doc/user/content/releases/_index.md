@@ -20,6 +20,58 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.49.1
+*Released to Materialize Cloud: 2026-11-05 (v26.49.0)* <br>
+*Released to Materialize Self-Managed: 2026-11-06* <br>
+
+### Right size your clusters, using the new Hydration tab on the console {#v26.49-hydration-tab}
+
+The Console's [redesigned cluster page](#v26.47-cluster-details-page) has a new **Hydration** tab that shows how long each replica took to hydrate and the resources required. Use this information to right size your clusters, or diagnose failed hydrations. The page also shows you progress made while a replica is hydrating. To try it, open a cluster and select **Show the new cluster details page** in the breadcrumb bar, and navigate to the "Hydration" tab.
+
+![Hydration tab of the new cluster details page, showing the last successful hydration's duration, peak memory, disk, and heap, and each object's hydration time, slowest first](/images/releases/v2649_hydration.png)
+
+### Advisory {#v26.49-advisory}
+
+**Query plans and performance may change if a SQL Server source table is re-created**: Starting with this release, a table created from a SQL Server source records at most one key, the `PRIMARY KEY` or `UNIQUE` constraint behind its CDC capture instance's index. Previously, Materialize recorded every `PRIMARY KEY` and `UNIQUE` constraint on the upstream table. See [Unique keys](/ingest-data/sql-server/#unique-keys) to understand more.
+
+Materialize uses these constraints to optimize query plans. This change means that moving forward, objects built on top of tables from SQL Server sources might see different performance. For example, a `DISTINCT` over the affected columns may use more memory or CPU as a result.
+
+Query results do not change. However, if you re-ingest an upstream table, objects built on the new version of the upstream table might see different query performance.
+
+Tables created before this release keep every key they recorded. Before you drop a `PRIMARY KEY` or `UNIQUE` constraint that the capture instance does not use from one of these tables, re-create the table in Materialize.
+
+**Upgrade impact**: Before promoting a deployment that re-creates SQL Server source tables, for example through [source versioning](/ingest-data/sql-server/source-versioning/), compare the plans of the objects that depend on them with [`EXPLAIN PLAN`](/sql/explain-plan/). Certain objects, notably objects using `DISTINCT`, might require larger cluster sizes.
+
+### Improvements {#v26.49-improvements}
+- **Concurrent DDL for rename and swap transactions is now supported**: Transactions whose DDL consists only of `ALTER ... RENAME` or `ALTER ... SWAP` can now run concurrently while another session runs unrelated DDL. This means it is easier to manage large environments with several concurrent users, who are all concurrently deploying changes to Materialize. Previously, these transactions failed if any other session ran DDL before they committed, even DDL on unrelated objects, such as creating a new view. Transactions that conflict will still fail at commit, such as if a target was missing or a permission was revoked.
+- **SQL Server tables key only on the capture instance's index**: A table created from a SQL Server source now records as its key only the `PRIMARY KEY` or `UNIQUE` constraint backing the index its CDC capture instance uses, which SQL Server does not allow dropping while that capture instance is the table's newest one. Other `UNIQUE` constraints are no longer recorded, so dropping one upstream can no longer cause queries in Materialize to return incorrect results. See [Unique keys](/ingest-data/sql-server/#unique-keys).
+- **Freshness and cluster details pages on Self-Managed**: The Console's [Freshness page](#v26.48-freshness-page), which tracks p90, p99, p99.9, and maximum freshness across your environment's objects, and its [redesigned cluster details page](#v26.47-cluster-details-page), which charts each replica's CPU, memory, and disk use against its limits, marks when a replica was hydrating or ran out of memory, and ranks the objects using the most memory, are now available on Materialize Self-Managed. To try the cluster details page, open a cluster and select **Show the new cluster details page** in the breadcrumb bar.
+- **Higher query throughput at high concurrency**: Materialize now does less work per query, so it can serve more queries per second when many clients query it at once. In our benchmarks of single-row lookups on an index over 256 concurrent connections, throughput roughly doubled.
+- **Improved performance for materialized views on large replicas**: Materialize now batches small writes from materialized views more efficiently on replicas larger than 1600cc. In our tests, this reduced bytes written to the metadata database by 70% for materialized views with steady-state updates.
+- **`DROP INDEX` no longer orphans the objects reading from an index**: `DROP INDEX`, with or without `CASCADE`, now fails with an error that names the dependent objects when a materialized view or another index reads from the index, instead of leaving those readers running on an orphaned dataflow, so drop the readers first and drop indexes on the same relation newest first; Terraform configurations that replace such an index need `lifecycle { replace_triggered_by = [...] }` on the materialized view that reads it.
+- **Lower catalog server load when connections close**: Closing a connection no longer forces an immediate write to the system tables, which cut `mz_catalog_server` CPU per closed connection from 326 ms to 3 ms in testing, and a closed session can now remain visible in `mz_sessions` for up to about a second.
+- **Faster Console views on large clusters**: The Console's freshness, hydration, index, and materialized view views now query catalog data more efficiently for clusters with more than 330 objects, which cut materialization lag queries at 2,000 objects from about 171 seconds to under one second in a benchmark on production-scale catalog data and is intended to reduce `mz_catalog_server` load.
+- **Accurate query latency in the SQL Shell**: Below each result, the Console's SQL Shell shows both the round-trip time and the time Materialize spent on the statement, for example `Returned in 148.0ms · 12.0ms in Materialize`, so you can tell how much of a query's latency was spent in Materialize. See [Query timing](/developer-tools/console/sql-shell/#query-timing).
+- **Faster TPC-H load generator snapshots**: TPC-H load generator sources now build their snapshot on every worker of the cluster instead of one, so in local testing on a scale-factor-1 source the `lineitem` table became readable after 7.7 seconds on 8 workers, down from 26.0 seconds on 1 worker.
+- **PodDisruptionBudgets for the balancer and Console on Self-Managed**: The Materialize operator now creates a PodDisruptionBudget for the balancer and Console deployments, so a node drain evicts at most one of their pods at a time. Operators who manage RBAC outside the Helm chart must grant the operator access to `poddisruptionbudgets`.
+
+### Agent Skills {#v26.49-agent-skills}
+- **mz-docs**: The skill now finds pages through the live documentation's `llms.txt` index and fetches them from materialize.com instead of bundling a copy of the docs, so it reads the current documentation and needs network access to materialize.com.
+
+### Guides {#v26.49-guides}
+- [Build SCD Type 2 history from an Iceberg sink](/export-data/patterns/scd-type-2-iceberg/)
+
+### Bug Fixes {#v26.49-bug-fixes}
+- Fixed the Console's clusters list showing a dash in the Disk column for every replica in Self-Managed deployments that use swap, which now shows swap use as a share of the replica's heap limit.
+- Fixed `CASE` expressions with many or deeply nested arms overflowing the stack when creating a view, using excessive memory, or taking time exponential in the nesting depth when the branches contain subqueries; creating one large machine-generated materialized view now raises memory use by 1.2 GiB instead of 3.8 GiB.
+- Fixed saving the Console's Alter cluster form during a graceful resize or while a burst replica was running, which could cancel the resize even when only renaming the cluster, or keep the extra replicas of the resize or the burst replica.
+- Fixed `SELECT DISTINCT` and `GROUP BY` returning duplicate rows on a view or materialized view column computed from a keyed column by a cast that rounds or truncates sub-microsecond `time`, `timestamp`, or `timestamptz` values.
+- Fixed `SET LOCAL` values carrying over to a session's next transaction when a waiting `COMMIT` was canceled, which with connection pooling could make an unrelated query run with another transaction's isolation level or real-time recency setting.
+- Fixed the HTTP and WebSocket SQL APIs and the simple query protocol reporting the statement that ends an implicit transaction as successful when the transaction then failed to commit, and fixed the HTTP and WebSocket APIs then continuing with the request's next query.
+- Fixed name lookup and source creation in a transaction not seeing a schema renamed earlier in the same transaction, and fixed cluster replica renames in a transaction taking effect before commit and surviving a rollback.
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` sometimes succeeding on a materialized view sealed by an unrecoverable source error, which left the catalog showing the new definition while the view's data stayed frozen, and made `CREATE REPLACEMENT MATERIALIZED VIEW` reject an already-sealed target.
+- Fixed restarts without a version change re-optimizing every view created since the previous restart, which made startup slow on deployments that recreate views frequently, by caching the optimized plan of `CREATE VIEW` as `CREATE MATERIALIZED VIEW` and `CREATE INDEX` already do.
+
 ## v26.48.2
 *Released to Materialize Cloud: 2026-10-29 (v26.48.0)* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
@@ -68,7 +120,6 @@ CREATE TABLE orders
 For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/mysql/) for MySQL and the guide on [excluding nullability constraints](/ingest-data/mysql/source-versioning/#excluding-nullability-constraints).
 
 ### Improvements {#v26.48-improvements}
-- **New cluster details page on Self-Managed**: The [redesigned cluster details page](#v26.47-cluster-details-page) is now available on Materialize Self-Managed. The page charts each replica's CPU, memory, and disk use against its limits, marks when a replica was hydrating or ran out of memory, and ranks the objects using the most memory. To try it, open a cluster and select **Show the new cluster details page** in the breadcrumb bar.
 - **Fewer Kafka clients on replicas running many sources**: A worker now creates a Kafka reader consumer only once it is responsible for a partition of the source's topic, instead of one per source per worker, which on a four-worker replica with 11 mostly single-partition sources cut the replica's Kafka clients from 55 to 24. Each consumer runs a thread per broker, so the old count was what drove the CPU throttling and degraded freshness seen with a few hundred sources on one replica.
 - **Time zone data updated to 2026e**: Materialize now ships IANA time zone data 2026e, in which `America/Winnipeg`, `Canada/Central`, `America/Rainy_River`, and `America/Inuvik` stop falling back on 2026-11-01 and keep their summer offsets year-round, and `EST5EDT`, `CST6CDT`, `MST7MDT`, and `PST8PDT` return to US federal rules.
 - **External autoscaling for the connection balancer**: The `Materialize` resource gains a `balancerdExternallyScaled` field, and `Balancer` an `externallyScaled` field, that stop the Kubernetes operator from reasserting the balancerd Deployment's replica count on every reconcile, so a HorizontalPodAutoscaler can own it. `balancerdReplicas` then only seeds the count when the Deployment is first created.

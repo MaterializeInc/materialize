@@ -153,6 +153,7 @@ message ProtoIdMerge {
 message ProtoHollowRollup {
   string key = 1;
   optional uint64 encoded_size_bytes = 2;
+  bool finalized = 3;
 }
 
 message ProtoActiveRollup {

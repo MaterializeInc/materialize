@@ -12,6 +12,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
+use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_repr::{Diff, GlobalId};
 use mz_row_spine::FundedValRowSpine;
@@ -107,9 +108,9 @@ pub(super) async fn drain_sealed_input_chunked<T, O>(
 ) -> DrainStats
 where
     T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + columnar::Columnar + Default,
+    T: columnation::Columnation + mz_timely_util::columnar::chunk::PoolColumnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar,
+    O: mz_timely_util::columnar::chunk::PoolColumnar,
 {
     let mut eligible_count: u64 = 0;
     let mut result_count: u64 = 0;
@@ -344,7 +345,10 @@ where
     let mut updates: u64 = 0;
     let mut deletes: u64 = 0;
 
-    let (mut cursor, storage) = trace.cursor();
+    let batches = trace
+        .batches_through(Antichain::new().borrow())
+        .expect("complete batch set for the feedback trace; is it closed?");
+    let (mut cursor, storage) = cursor_list(batches);
 
     for chunk in &sealed {
         for (key, ts, diff) in chunk.borrow().into_index_iter() {

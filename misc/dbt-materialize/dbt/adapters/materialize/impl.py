@@ -39,7 +39,6 @@ from dbt.adapters.materialize.exceptions import (
     IndexConfigError,
     PartitionByConfigError,
     RefreshIntervalConfigError,
-    RefreshIntervalConfigNotDictError,
 )
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres.column import PostgresColumn
@@ -91,8 +90,6 @@ class MaterializeRefreshIntervalConfig(dbtClassMixin):
             return cls.from_dict(raw_refresh_interval)
         except ValidationError as exc:
             raise RefreshIntervalConfigError(exc)
-        except TypeError:
-            raise RefreshIntervalConfigNotDictError(raw_refresh_interval)
 
 
 @dataclass

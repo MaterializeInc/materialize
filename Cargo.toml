@@ -354,8 +354,8 @@ deadpool = { version = "0.13.1", default-features = false, features = ["managed"
 deadpool-postgres = "0.14.2"
 dec = "0.4.9"
 derivative = "2.2.0"
-differential-dataflow = "0.25.0"
-differential-dogs3 = "0.25.0"
+differential-dataflow = "0.26.0"
+differential-dogs3 = "0.26.0"
 digest = "0.11.3"
 dirs = "7.0.0"
 duckdb = { version = "1.10506.1", default-features = false }
@@ -553,7 +553,7 @@ tiberius = { version = "0.12", default-features = false, features = ["chrono", "
 tikv-jemalloc-ctl = { version = "0.7", features = ["stats", "use_std"] }
 tikv-jemallocator = { version = "0.7", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 time = "0.3.17"
-timely = "0.31.0"
+timely = "0.32.0"
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
 tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"
@@ -685,8 +685,8 @@ chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "14
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git", rev = "a84c6b71825efaffb332c0d19f18c2bdf9ee7b40" }
 
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "20a1646031763eb813cb5184343f3e10c5918d32" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "20a1646031763eb813cb5184343f3e10c5918d32" }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "a52ca1e7f3c37530aabd3c4c521ea62410fba0be" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "a52ca1e7f3c37530aabd3c4c521ea62410fba0be" }
 
 # v0.37.1 plus the upstream rustls verifier fixes for `skip_domain_validation`
 # and `accept_invalid_certs` (blackbeam/mysql_async#408, #409). Drop this patch

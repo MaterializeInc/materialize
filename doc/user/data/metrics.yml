@@ -3247,6 +3247,12 @@ metrics:
   help: count of fetch_recent_live_diffs that hit the slow path
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_state_finalized_rollup_assigned
+  help: >-
+    count of rollups assigned on finalized shards, normally two or three per shard
+    (steady growth means a rollup loop)
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_force_applied_hostname
   help: count of when hostname diffs needed to be force applied
   source: src/persist-client/src/internal/metrics.rs
