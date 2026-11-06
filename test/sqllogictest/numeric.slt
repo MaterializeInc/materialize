@@ -2267,6 +2267,72 @@ SELECT sum(f1) FROM A;
 ----
 -Infinity
 
+# A sum mixing the largest integer digits with the smallest fractional digits
+# must stay exact, and must stay invertible once the large values retract.
+statement ok
+CREATE TABLE numeric_sum_wide (a numeric);
+
+statement ok
+CREATE MATERIALIZED VIEW numeric_sum_wide_mv AS SELECT sum(a) FROM numeric_sum_wide;
+
+statement ok
+INSERT INTO numeric_sum_wide VALUES ('0.000000000000000000000000000000000000001');
+
+statement ok
+INSERT INTO numeric_sum_wide SELECT '999999999999999999999999999999999999999'::numeric FROM generate_series(1, 1001);
+
+query R
+SELECT sum(a) FROM numeric_sum_wide;
+----
+Infinity
+
+query R
+SELECT * FROM numeric_sum_wide_mv;
+----
+Infinity
+
+statement ok
+INSERT INTO numeric_sum_wide SELECT '-999999999999999999999999999999999999999'::numeric FROM generate_series(1, 1001);
+
+query R
+SELECT sum(a) FROM numeric_sum_wide;
+----
+0.000000000000000000000000000000000000001
+
+query R
+SELECT * FROM numeric_sum_wide_mv;
+----
+0.000000000000000000000000000000000000001
+
+statement ok
+DELETE FROM numeric_sum_wide WHERE a > 1;
+
+query R
+SELECT sum(a) FROM numeric_sum_wide;
+----
+-Infinity
+
+query R
+SELECT * FROM numeric_sum_wide_mv;
+----
+-Infinity
+
+statement ok
+DELETE FROM numeric_sum_wide WHERE a < 0;
+
+query R
+SELECT sum(a) FROM numeric_sum_wide;
+----
+0.000000000000000000000000000000000000001
+
+query R
+SELECT * FROM numeric_sum_wide_mv;
+----
+0.000000000000000000000000000000000000001
+
+statement ok
+DROP TABLE numeric_sum_wide CASCADE;
+
 # sqllogictest rounding/truncation behavior.
 #
 # Note: this behavior is called out in the developer docs, so if it ever changes be sure to update
