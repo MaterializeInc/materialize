@@ -219,6 +219,19 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: lint-skill-metrics
+        label: Lint skill metrics
+        command: bin/ci-builder run stable ci/test/lint-skill-metrics.sh
+        inputs:
+          - .agents/skills/mz-release-signoff
+          - doc/user/data/metrics.yml
+        depends_on: []
+        timeout_in_minutes: 10
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
       - id: lint-deps
         label: Lint dependencies
         command: bin/ci-builder run stable ci/test/lint-deps.sh
