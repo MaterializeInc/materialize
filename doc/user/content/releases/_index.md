@@ -20,6 +20,29 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.50.0
+*Released to Materialize Cloud: 2026-11-12* <br>
+*Released to Materialize Self-Managed: 2026-11-13* <br>
+
+### Improvements {#v26.50-improvements}
+- **Diagnose hydration from the cluster details page**: The Console's [redesigned cluster details page](#v26.47-cluster-details-page) gains a **Hydration** tab that charts a replica's hydrations over the last 24 hours, 7 days, or 30 days, breaks a selected hydration down into each object's working time alongside its duration, peak memory, disk, heap, and highest CPU sample, shows live progress while a replica is still hydrating, and raises an alert for a replica that keeps restarting without finishing.
+- **MCP endpoints serve the 2026-07-28 protocol**: Materialize's built-in MCP endpoints now serve the 2026-07-28 protocol revision alongside 2025-11-25 by default, so a client that asks for 2026-07-28 is served it instead of falling back to the older revision.
+- **The standalone MCP server packages are retired**: The `mcp-materialize` and `mcp-materialize-agents` PyPI packages are deprecated, archived on PyPI, and removed from the repository in favor of the built-in MCP server at `/api/mcp/agent`; they use APIs that `mcp` 2.x removed and fail to start on a fresh install, so move to the built-in server.
+- **Readiness-based balancer rotation on Self-Managed**: With connection watermarks configured, a balancer approaching its connection limit now reports itself unready on `/api/readyz` so a load balancer takes it out of rotation, and the operator's new `balancerd.readinessProbePath` value lets deployments behind a network load balancer point the readiness probe at `/api/livez` instead.
+- **Run Materialize pods in Kubernetes user namespaces**: The operator can now run the `environmentd`, `clusterd`, balancer, and Console pods with `hostUsers: false` through the new `operator.args.enableUserNamespaces` Helm value, so a container escape lands as an unprivileged user on the node rather than as root; it is off by default and requires nodes that permit user namespaces, which Bottlerocket does not.
+- **The Freshness page on Self-Managed**: The Console's Freshness page is now enabled in Self-Managed deployments, where it was previously turned off.
+- **Swap usage in the Console's Disk column**: On Self-Managed deployments whose cluster sizes allocate no disk, the clusters list's **Disk** column now shows swap's share of the memory limit instead of a dash, and filters and sorts on that value.
+- **`dbt-materialize` 1.9.12**: Version 1.9.12 of the dbt adapter is released with fixes for blue/green deployments and error messages, support for dbt-postgres 1.11, and a strict-mode warning, which previously never fired, when a view, materialized view, or table is built in a schema reserved for sources, source tables, and sinks.
+
+### Bug Fixes {#v26.50-bug-fixes}
+- Fixed a cast to `time`, `timestamp`, or `timestamptz` failing to parse when a clause's `WITH` follows it, as in `COPY t TO 's3://b/' || now()::timestamp WITH (FORMAT = 'csv')`.
+- Fixed a failed query sending a second, duplicate error when its transaction rolled back, which recent versions of client libraries such as `psycopg` reject.
+- Fixed `ALTER CLUSTER` not validating a newly referenced hydration size when the hydration strategy was changed together with a resize or an unmanaged-to-managed conversion, rather than on its own.
+- Fixed `mz_source_statistics` reporting `snapshot_committed` and a `rehydration_latency` for a table added to an existing source before that table's snapshot had started.
+- Fixed a spurious internal consistency error at startup when `environmentd` restarted while a table newly added to a source was still snapshotting.
+- Fixed the Console's Codex instructions telling you to run `codex mcp login materialize-agent` while writing the configuration under a different name, so the login command failed with "No MCP server named ... found".
+- Fixed a panic in background storage maintenance when two processes raced to clean up the same collection and one found the work already done.
+
 ## v26.49.1
 *Released to Materialize Cloud: 2026-11-05 (v26.49.0)* <br>
 *Released to Materialize Self-Managed: 2026-11-06* <br>
