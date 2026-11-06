@@ -591,6 +591,20 @@ impl Serialize for JsonbDatum<'_> {
             Datum::True => serializer.serialize_bool(true),
             Datum::False => serializer.serialize_bool(false),
             Datum::Numeric(n) => {
+                let n = n.into_inner();
+                if !n.is_finite() {
+                    // NaN and ±Infinity are not valid JSON numbers. Serialize
+                    // them as strings, matching what cast_jsonbable_to_jsonb
+                    // does on the SQL cast path.
+                    let s = if n.is_nan() {
+                        "NaN"
+                    } else if n.is_negative() {
+                        "-Infinity"
+                    } else {
+                        "Infinity"
+                    };
+                    return serializer.serialize_str(s);
+                }
                 // To serialize an arbitrary-precision number, we present
                 // serde_json with the following magic struct:
                 //
@@ -599,10 +613,7 @@ impl Serialize for JsonbDatum<'_> {
                 //     }
                 //
                 let mut s = serializer.serialize_struct(SERDE_JSON_NUMBER_TOKEN, 1)?;
-                s.serialize_field(
-                    SERDE_JSON_NUMBER_TOKEN,
-                    &n.into_inner().to_standard_notation_string(),
-                )?;
+                s.serialize_field(SERDE_JSON_NUMBER_TOKEN, &n.to_standard_notation_string())?;
                 s.end()
             }
             Datum::String(s) => serializer.serialize_str(s),
