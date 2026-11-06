@@ -2,6 +2,13 @@
 
 ## Current objective
 
+The fresh resource comparison is complete. Native uses about twice upstream's
+CPU and 2.2 times its PSS. Consensus scan counts are close, but writes and blob
+traffic remain higher. Caller-side frontier computation is the largest identified
+CPU target. See the [report](20260903_decoupled_coordination_resource_review.md)
+and [measurements](20260903_decoupled_coordination_resource_review.json).
+Persist-internal changes are deferred. No production repair was made.
+
 The replica-scan investigation and broader observer survey are complete. Actual
 scan events reconcile with counters on native and matched upstream. Independent
 consumers duplicate empty recovery reads, but the catalog helper itself is a
@@ -16,11 +23,12 @@ payload changed little. See the
 
 ## Next concrete action
 
-Agree on a bounded repair. The smallest is avoiding pre-rollup refreshes when
-the required seqno is already cached. Broader work should share recovery at the
-existing shard-state boundary, not remove data consumers or introduce handover
-protocols. Sharing the query client's full WAL reader is another scoped cleanup.
-No production behavior change was made by this investigation.
+Agree on the next bounded caller-side repair. First inspect frontier index plans
+for reusable observation/placement work, preserving their public and retirement
+semantics. Sharing the query snapshot WAL reader is a separate concrete ownership
+cleanup. Immutable producer-fact reuse is smaller: plan decoding accounts for
+only 1.2% of catalog-replica CPU samples. Backend producer batching needs evidence
+of fragmentation before changing the existing deduplication/batching path.
 
 ## Live limitations
 
@@ -33,7 +41,8 @@ The final debug witness passed both idle windows and two-adapter join/restart/
 removal under survivor writes. Controller PubSub delivery was observed directly.
 Targeted tests and combined Clippy passed. Physical-readability checks and all
 certification/fencing boundaries remain. The new native/main diagnostic fixtures
-also passed and stopped cleanly. No owned runtime remains.
+also passed and stopped cleanly. The latest CPU/heap/scheduling comparison passed.
+All owned runtimes are stopped. Remaining caveats are in the resource report.
 
 ## Verified outcomes and remaining limits
 
@@ -65,6 +74,10 @@ The PR stays draft.
 
 ## Essential evidence and local state
 
+- Resources: `~/.local/share/aj/m3-evidence/native-main-usage/`, runs
+  `main-1793988015/` and `native-1793989320/`. Includes source/binary verification,
+  raw counters, CPU/heap profiles, scheduling, memory mappings and reviewed source
+  notes. The upstream-only setting failure and exact retry are retained separately.
 - Replica scans: report above and
   `~/.local/share/aj/m3-evidence/replica-scan-necessity/`. Completed runs are
   `v2/scan-audit-1793974261/` and `main/scan-audit-main-1793979420/`.

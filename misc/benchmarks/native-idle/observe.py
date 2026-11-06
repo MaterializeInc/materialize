@@ -14,6 +14,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -289,6 +290,9 @@ def sample(duration, phase, pg_group):
             assert (
                 psutil.virtual_memory().available > 3 * 1024**3
             ), "preserve VM memory headroom"
+            assert (
+                shutil.disk_usage(RUN).free > 30 * 1024**3
+            ), "preserve 30 GiB free disk"
             rows = []
             for pid, record in owned.items():
                 p = psutil.Process(pid)

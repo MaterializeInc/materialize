@@ -12,6 +12,13 @@ or a general sampling framework.
 
 ## Duplicate progress observation
 
+Persist-internal repairs are deferred. The current
+[resource comparison](20260903_decoupled_coordination_resource_review.md) ranks
+caller-side targets instead: frontier SQL/arrangement reuse, a shared query WAL
+reader, immutable producer facts, and evidence-driven observation batching.
+The measured memory premium includes caches, allocator residency and loaded code.
+Small plan-lifetime cleanups alone do not explain or remove it.
+
 The [measured scan audit](20260903_decoupled_coordination_replica_scans.md)
 confirms duplicate empty scans across same-process readers and upper observers.
 Distinct consumers do not require independent fallback polling. Keep oracle/
