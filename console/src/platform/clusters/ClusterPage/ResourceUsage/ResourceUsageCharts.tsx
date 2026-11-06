@@ -303,7 +303,7 @@ export const ResourceChartHeader = ({
       width="100%"
       pointerEvents="none"
     >
-      <HStack spacing={2} alignItems="baseline" flexShrink={0} {...headerItem}>
+      <HStack spacing={2} alignItems="baseline" {...headerItem}>
         <Text textStyle="text-ui-med">{title}</Text>
         {description && (
           <Text textStyle="text-small" color={colors.foreground.secondary}>
