@@ -55,7 +55,7 @@
     "@segment/analytics-next": "^1.84.3",
     "@sentry/react": "^10.45.0",
     "@stripe/react-stripe-js": "^7.0.1",
-    "@stripe/stripe-js": "^10.2.0",
+    "@stripe/stripe-js": "^10.2.1",
     "@tanstack/db": "0.15.2",
     "@tanstack/react-db": "0.5.12",
     "@tanstack/react-query": "^5.105.2",
