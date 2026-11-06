@@ -433,7 +433,6 @@ export interface MzCatalogRaw {
   data: Json;
 }
 
-// TODO: hand-added for mz >= 26.34. Keep through `yarn gen:types` until every environment has it.
 export interface MzClusterAutoScalingStrategies {
   /**
    * The ID of the cluster. Corresponds to `mz_clusters.id`.
@@ -473,7 +472,6 @@ export interface MzClusterPrometheusMetrics {
   value: number;
 }
 
-// TODO: hand-added for mz >= 26.34. Keep through `yarn gen:types` until every environment has it.
 export interface MzClusterReconfigurations {
   /**
    * The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff.
