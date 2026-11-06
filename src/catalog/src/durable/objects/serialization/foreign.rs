@@ -611,6 +611,11 @@ impl RustType<proto::ClusterSchedule> for ClusterSchedule {
             } => proto::ClusterSchedule::Refresh(proto::ClusterScheduleRefreshOptions {
                 rehydration_time_estimate: hydration_time_estimate.into_proto(),
             }),
+            ClusterSchedule::Idle { idle_timeout } => {
+                proto::ClusterSchedule::Idle(proto::ClusterScheduleIdleOptions {
+                    idle_timeout: idle_timeout.into_proto(),
+                })
+            }
         }
     }
 
@@ -619,6 +624,9 @@ impl RustType<proto::ClusterSchedule> for ClusterSchedule {
             proto::ClusterSchedule::Manual => Ok(ClusterSchedule::Manual),
             proto::ClusterSchedule::Refresh(csro) => Ok(ClusterSchedule::Refresh {
                 hydration_time_estimate: csro.rehydration_time_estimate.into_rust()?,
+            }),
+            proto::ClusterSchedule::Idle(options) => Ok(ClusterSchedule::Idle {
+                idle_timeout: options.idle_timeout.into_rust()?,
             }),
         }
     }

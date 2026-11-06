@@ -137,6 +137,14 @@ impl Coordinator {
                 return Err(e);
             }
         }
+        if let Some(cluster_id) = target_cluster_id {
+            catalog_serving::check_cluster_workload_restrictions(
+                self.catalog().state(),
+                cluster_id,
+                ctx.session(),
+                plan,
+            )?;
+        }
 
         Ok((target_cluster, target_cluster_id))
     }
@@ -199,6 +207,14 @@ impl Coordinator {
                 &sql_impl_resolved_ids,
             ) {
                 return ctx.retire(Err(e.into()));
+            }
+            if let Some(cluster_id) = target_cluster_id {
+                self.cluster_activity.record_plan(
+                    self.catalog().state(),
+                    cluster_id,
+                    ctx.session().user(),
+                    &plan,
+                );
             }
 
             match plan {

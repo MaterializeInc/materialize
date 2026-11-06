@@ -144,6 +144,9 @@ fn cluster_schedule(schedule: &mz_sql::plan::ClusterSchedule) -> ClusterSchedule
         } => ClusterSchedule::Refresh {
             hydration_time_estimate: *hydration_time_estimate,
         },
+        mz_sql::plan::ClusterSchedule::Idle { idle_timeout } => ClusterSchedule::Idle {
+            idle_timeout: *idle_timeout,
+        },
     }
 }
 

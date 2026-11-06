@@ -124,6 +124,7 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
+        "enable_cluster_schedule_on_idle": "true",
         # Pinned explicitly so runs against older versions (which predate the
         # flag or defaulted it off) behave like current ones, where it defaults
         # on.
@@ -410,6 +411,14 @@ def get_variable_system_parameters(
             "enable_frontend_subscribes",
             "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false",
             ["true", "false"],
+        ),
+        # sqllogictest and `TestHarness` sizes are all in the `legacy` family,
+        # so enforcing it would reject nearly every query they run.
+        # `test/testdrive/cluster-workload-restrictions.td` sets it.
+        VariableSystemParameter(
+            "cluster_family_allowed_workloads",
+            "{}",
+            ["{}"],
         ),
         VariableSystemParameter(
             "enable_simplify_from_less_existence",
@@ -1101,8 +1110,9 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         disabled: bool = False,
         is_cc: bool = True,
         memory_limit: str = "4 GiB",
+        allowed_workloads: list[str] | None = None,
     ) -> dict[str, Any]:
-        return {
+        size: dict[str, Any] = {
             "cpu_exclusive": False,
             "cpu_limit": None,
             "credits_per_hour": f"{workers * scale}",
@@ -1114,12 +1124,23 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
             "workers": workers,
             # "selectors": {},
         }
+        if allowed_workloads is not None:
+            size["allowed_workloads"] = allowed_workloads
+        return size
 
     replica_sizes = {
         bootstrap_cluster_replica_size(): replica_size(1, 1),
         "scale=2,workers=4": replica_size(2, 4),
         "scale=1,workers=1,legacy": replica_size(1, 1, is_cc=False),
         "scale=1,workers=2,legacy": replica_size(1, 2, is_cc=False),
+        "scale=1,workers=1,ingest-only": replica_size(
+            1, 1, allowed_workloads=["ingest"]
+        ),
+        "scale=1,workers=1,no-ingest": replica_size(
+            1,
+            1,
+            allowed_workloads=["sink", "compute_maintained", "compute_interactive"],
+        ),
         # Intentionally not following the naming scheme
         "free": replica_size(1, 1, disabled=True),
     }

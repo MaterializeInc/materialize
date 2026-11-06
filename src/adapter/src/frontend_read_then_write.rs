@@ -473,7 +473,9 @@ fn validate_read_then_write(
     let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
     let cluster_id = cluster.id;
 
-    if cluster.replicas().next().is_none() {
+    if cluster.replicas().next().is_none()
+        && !crate::cluster_activity::resumes_on_demand(catalog.state(), cluster_id, session.user())
+    {
         return Err(AdapterError::NoClusterReplicasAvailable {
             name: cluster.name.clone(),
             is_managed: cluster.is_managed(),

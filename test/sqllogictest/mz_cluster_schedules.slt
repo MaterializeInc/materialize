@@ -15,7 +15,7 @@ reset-server
 
 # --- Schema -------------------------------------------------------------------
 
-# Lock down: 3 columns, canonical order, types, and nullability.
+# Lock down: 4 columns, canonical order, types, and nullability.
 query TTT
 SELECT c.name, c.type, c.nullable::text
 FROM mz_catalog.mz_columns c
@@ -27,6 +27,7 @@ ORDER BY c.position
 cluster_id  text  false
 type  text  false
 refresh_hydration_time_estimate  interval  true
+idle_timeout  interval  true
 
 # --- Default quickstart has a manual schedule --------------------------------
 
@@ -97,6 +98,45 @@ manual  true
 
 statement ok
 DROP CLUSTER c_on_refresh
+
+# --- ON IDLE schedule shape --------------------------------------------------
+
+statement ok
+CREATE CLUSTER c_on_idle SIZE = 'scale=1,workers=1', SCHEDULE = ON IDLE (IDLE TIMEOUT = '10 minutes')
+
+query TBT
+SELECT s.type, s.refresh_hydration_time_estimate IS NULL, s.idle_timeout::text
+FROM mz_internal.mz_cluster_schedules s
+JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.name = 'c_on_idle'
+----
+on-idle  true  00:10:00
+
+query TT
+SHOW CREATE CLUSTER c_on_idle
+----
+c_on_idle  CREATE␠CLUSTER␠"c_on_idle"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠false,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠ON␠IDLE␠(IDLE␠TIMEOUT␠=␠'00:10:00'))
+
+# Without IDLE TIMEOUT, the default applies.
+statement ok
+ALTER CLUSTER c_on_idle SET (SCHEDULE = ON IDLE)
+
+query T
+SELECT s.idle_timeout::text
+FROM mz_internal.mz_cluster_schedules s
+JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.name = 'c_on_idle'
+----
+00:15:00
+
+statement error IDLE TIMEOUT must be positive
+ALTER CLUSTER c_on_idle SET (SCHEDULE = ON IDLE (IDLE TIMEOUT = '0s'))
+
+statement error REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+CREATE CLUSTER c_on_idle_rf SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1, SCHEDULE = ON IDLE
+
+statement ok
+DROP CLUSTER c_on_idle
 
 # --- type column is constrained to {'manual', 'on-refresh'} ------------------
 

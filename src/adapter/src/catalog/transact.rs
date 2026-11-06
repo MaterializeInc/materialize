@@ -45,6 +45,7 @@ use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
+use mz_ore::str::StrExt;
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist_types::ShardId;
 use mz_repr::adt::interval::Interval;
@@ -368,6 +369,10 @@ pub enum ReplicaCreateDropReason {
     /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
     /// estimate) as the `scheduling_policies` detail.
     OnRefresh(RefreshWindowDecision),
+    /// The cluster controller's on-idle strategy created the replica to resume a
+    /// `SCHEDULE = ON IDLE` cluster for ad-hoc work. Audited as the `schedule`
+    /// reason, without a `scheduling_policies` detail.
+    OnIdle,
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
     /// replication-factor decrease).
@@ -393,6 +398,7 @@ impl ReplicaCreateDropReason {
                 CreateOrDropClusterReplicaReasonV1::Schedule,
                 Some(refresh_window_decision_to_audit_log(decision)),
             ),
+            ReplicaCreateDropReason::OnIdle => (CreateOrDropClusterReplicaReasonV1::Schedule, None),
             ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
         }
     }
@@ -1740,6 +1746,15 @@ impl Catalog {
                             ErrorKind::ReadOnlyCluster(cluster_name),
                         )));
                     }
+                }
+
+                if let Some((cluster_id, class)) = state.item_workload(&item) {
+                    state.ensure_cluster_allows_workload(
+                        &state.clusters_by_id[&cluster_id],
+                        class,
+                        session.map(|s| s.user()),
+                        || format!("host {} {}", item.typ(), name.item.quoted()),
+                    )?;
                 }
 
                 let owner_privileges = vec![rbac::owner_privilege(item.typ().into(), owner_id)];
