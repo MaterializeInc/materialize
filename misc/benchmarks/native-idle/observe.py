@@ -480,7 +480,18 @@ try:
     for _ in range(30):
         if (
             subprocess.run(
-                ["docker", "exec", container, "pg_isready", "-U", "root"],
+                # The image's temporary initialization server accepts only Unix
+                # sockets. Wait for the TCP server used by Materialize instead.
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "pg_isready",
+                    "-h",
+                    "127.0.0.1",
+                    "-U",
+                    "root",
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             ).returncode
