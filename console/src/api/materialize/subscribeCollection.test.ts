@@ -14,7 +14,7 @@ import {
   createSubscribeCollection,
   syncEngineCacheKey,
 } from "./subscribeCollection";
-import { SubscribeState } from "./SubscribeManager";
+import { SUBSCRIBE_ERROR_CODE, SubscribeState } from "./SubscribeManager";
 
 type Row = { id: string; name: string };
 
@@ -243,6 +243,24 @@ describe("createSubscribeCollection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("holds the current rows when a socket closes before its snapshot", async () => {
+    const { collection, applySnapshot, statusAtom } = freshCollection();
+    applySnapshot(state([{ id: "1", name: "a" }]));
+
+    const closed = {
+      code: SUBSCRIBE_ERROR_CODE.CONNECTION_CLOSED,
+      message: "Socket closed unexpectedly, code: 1006",
+    };
+    applySnapshot(state([], false, closed));
+    await flush();
+    expect(collection.get("1")?.name).toBe("a");
+    expect(getStore().get(statusAtom)).toEqual({
+      error: closed,
+      snapshotComplete: true,
+      isRefreshing: true,
+    });
   });
 
   it("clears a stale error when an empty pre-snapshot follows a reconnect", () => {
