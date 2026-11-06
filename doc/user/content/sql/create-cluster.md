@@ -209,7 +209,8 @@ catalog, but you cannot directly modify individual replicas.
 You can pause a cluster's work by specifying a replication factor of `0`. Doing
 so removes all replicas of the cluster. Any indexes, materialized views,
 sources, and sinks on the cluster will cease to make progress, and any queries
-directed to the cluster will block. You can later resume the cluster's work by
+directed to the cluster will fail with `has no replicas available to service
+request`. You can later resume the cluster's work by
 using [`ALTER CLUSTER`] to set a nonzero replication factor.
 
 {{< note >}}
