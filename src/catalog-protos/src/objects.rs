@@ -998,9 +998,26 @@ pub struct ClusterScheduleRefreshOptions {
     Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterScheduleIdleOptions {
+    pub idle_timeout: Duration,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum ClusterSchedule {
     Manual,
     Refresh(ClusterScheduleRefreshOptions),
+    Idle(ClusterScheduleIdleOptions),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

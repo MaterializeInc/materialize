@@ -2253,6 +2253,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_cluster_schedule_on_idle,
+        desc: "`SCHEDULE = ON IDLE` cluster option",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_auto_scaling_strategy,
         desc: "`AUTO SCALING STRATEGY` cluster option",
         default: true,

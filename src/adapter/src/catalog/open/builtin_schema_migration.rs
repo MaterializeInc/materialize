@@ -581,6 +581,15 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_cluster_replica_sizes",
         ),
+        // `mz_cluster_schedules` gained a trailing `idle_timeout` column. It is
+        // derived from `mz_catalog_raw`, so replacing the shard loses nothing.
+        // See the NOTE above on the version.
+        MigrationStep::replacement(
+            "26.51.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_schedules",
+        ),
     ]
 });
 

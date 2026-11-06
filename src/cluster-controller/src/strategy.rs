@@ -34,8 +34,9 @@ use mz_repr::{Timestamp, TimestampManipulation};
 
 use crate::ctx::{
     BurstAudit, BurstFinishCause, BurstRecord, BurstWrite, ClusterSchedule, ClusterState,
-    CreateReason, OnTimeout, ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus,
-    ReconfigurationWrite, RefreshWindowDecision, RefreshWindowInputs, ReplicaShape, StateWrite,
+    CreateReason, IdleActivity, OnTimeout, ReconfigurationAudit, ReconfigurationRecord,
+    ReconfigurationStatus, ReconfigurationWrite, RefreshWindowDecision, RefreshWindowInputs,
+    ReplicaShape, StateWrite,
 };
 
 /// A replica slot a strategy desires this tick. The reconcile kernel unions
@@ -116,6 +117,8 @@ pub struct SignalRequest {
     /// Pull the refresh-window inputs (bound REFRESH MV frontiers, schedules,
     /// the current read timestamp).
     pub refresh_window: bool,
+    /// Pull the cluster's ad-hoc activity.
+    pub idle_activity: bool,
 }
 
 impl SignalRequest {
@@ -128,12 +131,14 @@ impl SignalRequest {
             readiness,
             hydratable_objects,
             refresh_window,
+            idle_activity,
         } = other;
         SignalRequest {
             hydration: self.hydration || hydration,
             readiness: self.readiness.union(&readiness).cloned().collect(),
             hydratable_objects: self.hydratable_objects || hydratable_objects,
             refresh_window: self.refresh_window || refresh_window,
+            idle_activity: self.idle_activity || idle_activity,
         }
     }
 }
@@ -175,6 +180,8 @@ pub struct LiveSignals {
     /// [`ClusterControllerCtx::refresh_window_inputs`]:
     ///     crate::ctx::ClusterControllerCtx::refresh_window_inputs
     pub refresh_window: Option<RefreshWindowInputs>,
+    /// The cluster's ad-hoc activity. `None` when not requested.
+    pub idle_activity: Option<IdleActivity>,
 }
 
 /// The implicit baseline strategy, always present.
@@ -549,7 +556,7 @@ impl OnRefreshStrategy {
 impl Strategy for OnRefreshStrategy {
     fn signal_request(&self, state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
         SignalRequest {
-            refresh_window: !matches!(state.schedule, ClusterSchedule::Manual),
+            refresh_window: matches!(state.schedule, ClusterSchedule::Refresh { .. }),
             ..Default::default()
         }
     }
@@ -561,34 +568,10 @@ impl Strategy for OnRefreshStrategy {
         _config: &ConfigSignals,
         _now: Timestamp,
     ) -> StateWrite {
-        // The controller owns a scheduled cluster's replica set, so hold the
-        // realized `replication_factor` at `0`. A stale non-zero value (e.g.
-        // carried over from a cluster that was just given a schedule) would
-        // otherwise have the implicit baseline desire a replica the on-refresh
-        // strategy does not, a flap.
-        // Only write when it is actually non-zero, to keep steady ticks no-ops.
-        if matches!(state.schedule, ClusterSchedule::Manual) || state.replication_factor == 0 {
+        if !matches!(state.schedule, ClusterSchedule::Refresh { .. }) {
             return StateWrite::default();
         }
-        // While a reconfiguration record is in progress, the graceful strategy
-        // owns `new_replication_factor` (its cut-over sets it from the record's
-        // target), so skip the normalization to keep the field single-writer
-        // within a tick. The sequencer never writes a record for a scheduled
-        // cluster, so this state is reachable only for a record written before
-        // the cluster acquired its schedule (pre-upgrade catalog state). A
-        // cut-over there can briefly set a non-zero rf on the scheduled
-        // cluster. The next tick sees the record settled and normalizes it.
-        if state
-            .reconfiguration
-            .as_ref()
-            .is_some_and(|record| record.is_in_progress())
-        {
-            return StateWrite::default();
-        }
-        StateWrite {
-            new_replication_factor: Some(0),
-            ..Default::default()
-        }
+        normalize_scheduled_replication_factor(state)
     }
 
     fn desired_replicas(
@@ -624,6 +607,121 @@ impl Strategy for OnRefreshStrategy {
         vec![DesiredReplica {
             shape: state.realized_shape(),
             reason: CreateReason::OnRefresh(decision),
+        }]
+    }
+}
+
+/// The write that holds a scheduled cluster's realized `replication_factor` at
+/// `0`, or no write.
+fn normalize_scheduled_replication_factor(state: &ClusterState) -> StateWrite {
+    // The controller owns a scheduled cluster's replica set, so hold the
+    // realized `replication_factor` at `0`. A stale non-zero value (e.g.
+    // carried over from a cluster that was just given a schedule) would
+    // otherwise have the implicit baseline desire a replica the scheduling
+    // strategy does not, a flap.
+    // Only write when it is actually non-zero, to keep steady ticks no-ops.
+    if state.replication_factor == 0 {
+        return StateWrite::default();
+    }
+    // While a reconfiguration record is in progress, the graceful strategy
+    // owns `new_replication_factor` (its cut-over sets it from the record's
+    // target), so skip the normalization to keep the field single-writer
+    // within a tick. The sequencer never writes a record for a scheduled
+    // cluster, so this state is reachable only for a record written before
+    // the cluster acquired its schedule (pre-upgrade catalog state). A
+    // cut-over there can briefly set a non-zero rf on the scheduled
+    // cluster. The next tick sees the record settled and normalizes it.
+    if state
+        .reconfiguration
+        .as_ref()
+        .is_some_and(|record| record.is_in_progress())
+    {
+        return StateWrite::default();
+    }
+    StateWrite {
+        new_replication_factor: Some(0),
+        ..Default::default()
+    }
+}
+
+/// The on-idle strategy.
+///
+/// Engaged for clusters scheduled `ON IDLE`. It contributes one replica at the
+/// realized shape while the cluster has in-flight ad-hoc work, or had ad-hoc
+/// work start less than `idle_timeout` ago, and nothing otherwise, which
+/// suspends the cluster.
+///
+/// Without activity since tracking began, a cluster that has replicas is
+/// treated as active at `tracked_since`. A restart then keeps a cluster that
+/// was on at the restart on for one more idle timeout, and leaves one that was
+/// off, off.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OnIdleStrategy;
+
+impl OnIdleStrategy {
+    /// Whether `activity` keeps the cluster in `state` on at `now`.
+    fn active(
+        state: &ClusterState,
+        idle_timeout: std::time::Duration,
+        activity: &IdleActivity,
+        now: Timestamp,
+    ) -> bool {
+        if activity.in_flight {
+            return true;
+        }
+        let last_activity = activity
+            .last_activity
+            .or_else(|| (!state.replicas.is_empty()).then_some(activity.tracked_since));
+        last_activity.is_some_and(|last| {
+            // An idle deadline past the end of the timestamp space never passes.
+            match last.try_step_forward_by(&duration_to_ts(idle_timeout)) {
+                Some(deadline) => now < deadline,
+                None => true,
+            }
+        })
+    }
+}
+
+impl Strategy for OnIdleStrategy {
+    fn signal_request(&self, state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
+        SignalRequest {
+            idle_activity: matches!(state.schedule, ClusterSchedule::Idle { .. }),
+            ..Default::default()
+        }
+    }
+
+    fn update_state(
+        &self,
+        state: &ClusterState,
+        _signals: &LiveSignals,
+        _config: &ConfigSignals,
+        _now: Timestamp,
+    ) -> StateWrite {
+        if !matches!(state.schedule, ClusterSchedule::Idle { .. }) {
+            return StateWrite::default();
+        }
+        normalize_scheduled_replication_factor(state)
+    }
+
+    fn desired_replicas(
+        &self,
+        state: &ClusterState,
+        signals: &LiveSignals,
+        _config: &ConfigSignals,
+        now: Timestamp,
+    ) -> Vec<DesiredReplica> {
+        let ClusterSchedule::Idle { idle_timeout } = state.schedule else {
+            return Vec::new();
+        };
+        let Some(activity) = &signals.idle_activity else {
+            return Vec::new();
+        };
+        if !Self::active(state, idle_timeout, activity, now) {
+            return Vec::new();
+        }
+        vec![DesiredReplica {
+            shape: state.realized_shape(),
+            reason: CreateReason::OnIdle,
         }]
     }
 }

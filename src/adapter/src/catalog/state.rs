@@ -76,9 +76,9 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    ClusterSchedule, CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateMetricSinkPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -102,6 +102,7 @@ use crate::AdapterError;
 use crate::catalog::{Catalog, ConnCatalog};
 use crate::config::ScopedParameters;
 use crate::coord::{ConnMeta, infer_sql_type_for_catalog};
+use crate::error::WorkloadRestriction;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 
@@ -2867,14 +2868,45 @@ impl CatalogState {
         user: Option<&User>,
         action: impl FnOnce() -> String,
     ) -> Result<(), AdapterError> {
-        if Self::workload_restrictions_apply(cluster, user)
-            && !self.cluster_allows_workload(cluster, class, &self.family_allowed_workloads())
-        {
-            return Err(AdapterError::WorkloadNotAllowed {
-                cluster: cluster.name.clone(),
-                action: action(),
-                class,
-            });
+        if !Self::workload_restrictions_apply(cluster, user) {
+            return Ok(());
+        }
+        let restriction = if !schedule_allows_workload(cluster, class) {
+            WorkloadRestriction::IdleSchedule
+        } else if !self.cluster_allows_workload(cluster, class, &self.family_allowed_workloads()) {
+            WorkloadRestriction::ReplicaSizes
+        } else {
+            return Ok(());
+        };
+        Err(AdapterError::WorkloadNotAllowed {
+            cluster: cluster.name.clone(),
+            action: action(),
+            class,
+            restriction,
+        })
+    }
+
+    /// Fails if `schedule` does not allow the workload class of an object
+    /// bound to `cluster`.
+    pub(crate) fn ensure_schedule_allows_cluster_workloads(
+        &self,
+        cluster: &Cluster,
+        schedule: &ClusterSchedule,
+        user: &User,
+    ) -> Result<(), AdapterError> {
+        if !Self::workload_restrictions_apply(cluster, Some(user)) {
+            return Ok(());
+        }
+        for id in &cluster.bound_objects {
+            let Some((_, class)) = self.item_workload(self.get_entry(id).item()) else {
+                continue;
+            };
+            if !schedule_allows(schedule, class) {
+                return Err(AdapterError::WorkloadScheduleConflict {
+                    cluster: cluster.name.clone(),
+                    class,
+                });
+            }
         }
         Ok(())
     }
@@ -3346,6 +3378,23 @@ impl Catalog {
 /// The workload classes allowed per replica size family. Families without an
 /// entry allow every class.
 pub(crate) type FamilyWorkloads = BTreeMap<String, BTreeSet<WorkloadClass>>;
+
+/// Reports whether the schedule of `cluster` allows `class`.
+fn schedule_allows_workload(cluster: &Cluster, class: WorkloadClass) -> bool {
+    match &cluster.config.variant {
+        ClusterVariant::Managed(managed) => schedule_allows(&managed.schedule, class),
+        ClusterVariant::Unmanaged => true,
+    }
+}
+
+/// Reports whether `schedule` allows `class`. An `ON IDLE` cluster is off
+/// whenever it has no ad-hoc work, which would stall ingestion.
+fn schedule_allows(schedule: &ClusterSchedule, class: WorkloadClass) -> bool {
+    match schedule {
+        ClusterSchedule::Idle { .. } => class != WorkloadClass::Ingest,
+        ClusterSchedule::Manual | ClusterSchedule::Refresh { .. } => true,
+    }
+}
 
 /// Reports whether `allocation` allows `class`, both by its own setting and by
 /// its family's entry in `families`.

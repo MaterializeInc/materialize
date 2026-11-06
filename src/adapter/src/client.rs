@@ -311,6 +311,7 @@ impl Client {
             occ_write_semaphore,
             group_commit_notifier,
             read_only,
+            cluster_activity,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -324,6 +325,7 @@ impl Client {
             occ_write_semaphore,
             group_commit_notifier,
             read_only,
+            cluster_activity,
         );
 
         let mut client = SessionClient {
@@ -1789,6 +1791,14 @@ impl SessionClient {
                 &sql_impl_ids,
             ) {
                 return Err(e.into());
+            }
+            if let Some(cluster_id) = target_cluster_id {
+                self.peek_client.cluster_activity.record_plan(
+                    catalog.state(),
+                    cluster_id,
+                    session.user(),
+                    &plan,
+                );
             }
         }
 

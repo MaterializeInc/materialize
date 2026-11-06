@@ -1048,6 +1048,7 @@ impl crate::coord::Coordinator {
             Arc::clone(&self.occ_write_semaphore),
             self.group_commit_tx.clone(),
             self.controller.read_only(),
+            Arc::clone(&self.cluster_activity),
         )
     }
 

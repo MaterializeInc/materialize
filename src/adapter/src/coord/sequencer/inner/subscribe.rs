@@ -186,7 +186,14 @@ impl Coordinator {
         let cluster_id = cluster.id;
 
         // Only check cluster replicas if we're not in explain mode.
-        if explain_ctx.needs_cluster() && cluster.replicas().next().is_none() {
+        if explain_ctx.needs_cluster()
+            && cluster.replicas().next().is_none()
+            && !crate::cluster_activity::resumes_on_demand(
+                self.catalog().state(),
+                cluster_id,
+                session.user(),
+            )
+        {
             return Err(AdapterError::NoClusterReplicasAvailable {
                 name: cluster.name.clone(),
                 is_managed: cluster.is_managed(),

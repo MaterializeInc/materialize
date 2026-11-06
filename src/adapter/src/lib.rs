@@ -39,6 +39,7 @@ macro_rules! coord_bail {
 }
 
 mod active_compute_sink;
+mod cluster_activity;
 mod command;
 mod coord;
 mod error;

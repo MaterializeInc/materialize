@@ -15,6 +15,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
+use mz_catalog::memory::objects::ClusterVariant;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
@@ -47,6 +48,7 @@ use tracing::{Span, debug, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::Catalog;
+use crate::cluster_activity;
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord;
 use crate::coord::peek::{FastPathPlan, PeekPlan, PeekResponseUnary};
@@ -573,6 +575,12 @@ impl PeekClient {
             &resolved_ids,
             &sql_impl_ids,
         )?;
+        self.cluster_activity.record_plan(
+            catalog.state(),
+            target_cluster_id,
+            session.user(),
+            &plan,
+        );
 
         if let Some((_, wait_future)) =
             coord::appends::waiting_on_startup_appends(&*catalog, session, &plan)
@@ -595,7 +603,10 @@ impl PeekClient {
             )
             .override_from(&explain_ctx);
 
-        if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
+        if cluster.replicas().next().is_none()
+            && explain_ctx.needs_cluster()
+            && !cluster_activity::resumes_on_demand(catalog.state(), cluster.id(), session.user())
+        {
             return Err(AdapterError::NoClusterReplicasAvailable {
                 name: cluster.name.clone(),
                 is_managed: cluster.is_managed(),
@@ -934,7 +945,23 @@ impl PeekClient {
                     let loc = &r.config.location;
                     loc.workers().unwrap_or_else(|| loc.num_processes())
                 });
-                let max_worker_count = match worker_counts.max() {
+                // A suspended `ON IDLE` cluster resumes at its managed size.
+                let resumes = cluster_activity::resumes_on_demand(
+                    catalog.state(),
+                    cluster.id(),
+                    session.user(),
+                );
+                let resume_workers = match &cluster.config.variant {
+                    ClusterVariant::Managed(managed) if resumes => catalog
+                        .cluster_replica_sizes()
+                        .0
+                        .get(&managed.size)
+                        .map(|allocation| {
+                            allocation.workers.get() * usize::from(allocation.scale.get())
+                        }),
+                    _ => None,
+                };
+                let max_worker_count = match worker_counts.max().or(resume_workers) {
                     Some(count) => u64::cast_from(count),
                     None => {
                         return Err(AdapterError::NoClusterReplicasAvailable {

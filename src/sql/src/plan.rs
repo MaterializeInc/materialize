@@ -665,6 +665,10 @@ pub enum ClusterSchedule {
     /// `hydration_time_estimate` determines how much time before a refresh to turn the
     /// cluster On, so that it can rehydrate already before the refresh time.
     Refresh { hydration_time_estimate: Duration },
+    /// The cluster is On while it runs ad-hoc work (queries, `SUBSCRIBE`, and the
+    /// reads of writes), and turns Off `idle_timeout` after the last such work
+    /// ends. Ad-hoc work against an Off cluster turns it back On and waits for it.
+    Idle { idle_timeout: Duration },
 }
 
 impl Default for ClusterSchedule {

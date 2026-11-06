@@ -369,6 +369,10 @@ pub enum ReplicaCreateDropReason {
     /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
     /// estimate) as the `scheduling_policies` detail.
     OnRefresh(RefreshWindowDecision),
+    /// The cluster controller's on-idle strategy created the replica to resume a
+    /// `SCHEDULE = ON IDLE` cluster for ad-hoc work. Audited as the `schedule`
+    /// reason, without a `scheduling_policies` detail.
+    OnIdle,
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
     /// replication-factor decrease).
@@ -394,6 +398,7 @@ impl ReplicaCreateDropReason {
                 CreateOrDropClusterReplicaReasonV1::Schedule,
                 Some(refresh_window_decision_to_audit_log(decision)),
             ),
+            ReplicaCreateDropReason::OnIdle => (CreateOrDropClusterReplicaReasonV1::Schedule, None),
             ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
         }
     }

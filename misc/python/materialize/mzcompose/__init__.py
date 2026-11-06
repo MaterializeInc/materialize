@@ -124,6 +124,7 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
+        "enable_cluster_schedule_on_idle": "true",
         # Pinned explicitly so runs against older versions (which predate the
         # flag or defaulted it off) behave like current ones, where it defaults
         # on.

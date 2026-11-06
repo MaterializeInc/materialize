@@ -282,6 +282,19 @@ impl Coordinator {
             }
         }
 
+        if let Set(schedule) = &options.schedule {
+            self.catalog()
+                .state()
+                .ensure_schedule_allows_cluster_workloads(cluster, schedule, session.user())?;
+            // A running cluster that becomes `ON IDLE` stays on for one idle
+            // timeout, as if it had just run ad-hoc work.
+            if matches!(schedule, mz_sql::plan::ClusterSchedule::Idle { .. })
+                && cluster.replicas().next().is_some()
+            {
+                self.cluster_activity.record(cluster_id, false);
+            }
+        }
+
         match &options.workload_class {
             Set(wc) => new_config.workload_class.clone_from(wc),
             Reset => new_config.workload_class = None,

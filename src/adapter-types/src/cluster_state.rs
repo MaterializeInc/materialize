@@ -248,6 +248,10 @@ pub enum ClusterSchedule {
     /// how far ahead of a refresh the cluster should turn on so it can rehydrate
     /// before the refresh time.
     Refresh { hydration_time_estimate: Duration },
+    /// The cluster is scheduled `ON IDLE`: `replication_factor` is held at `0`
+    /// and one replica runs while the cluster has ad-hoc work, until
+    /// `idle_timeout` after the last of it.
+    Idle { idle_timeout: Duration },
 }
 
 /// The user-configured autoscaling policy of a managed cluster, mirrored from

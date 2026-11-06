@@ -169,10 +169,10 @@ use crate::plan::{
     WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
-    self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
-    ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
-    ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
-    VarInput,
+    self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_ON_IDLE,
+    ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
+    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_METRIC_SINK,
+    ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -5217,7 +5217,7 @@ pub fn plan_create_cluster_inner(
                     .default_cluster_replication_factor()
             })
         } else {
-            scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
+            require_schedule_feature_flag(scx, &schedule)?;
             if replication_factor.is_some() {
                 sql_bail!(
                     "REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL"
@@ -5419,7 +5419,8 @@ pub fn unplan_create_cluster(
             // always 1 or less.
             let replication_factor = match &schedule {
                 ClusterScheduleOptionValue::Manual => Some(replication_factor),
-                ClusterScheduleOptionValue::Refresh { .. } => {
+                ClusterScheduleOptionValue::Refresh { .. }
+                | ClusterScheduleOptionValue::Idle { .. } => {
                     // A cluster with a refresh schedule is turned On/Off by the cluster scheduling
                     // policy, so its replication factor should always be 0 or 1, and CREATE/ALTER
                     // reject setting both a non-MANUAL schedule and a higher replication factor. If
@@ -5632,6 +5633,9 @@ fn unplan_compute_replica_config(
     }
 }
 
+/// The `IDLE TIMEOUT` of a `SCHEDULE = ON IDLE` cluster that does not give one.
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
 /// Convert a [`ClusterScheduleOptionValue`] into a [`ClusterSchedule`].
 ///
 /// The reverse of [`unplan_cluster_schedule`].
@@ -5640,40 +5644,47 @@ fn plan_cluster_schedule(
 ) -> Result<ClusterSchedule, PlanError> {
     Ok(match schedule {
         ClusterScheduleOptionValue::Manual => ClusterSchedule::Manual,
-        // If `HYDRATION TIME ESTIMATE` is not explicitly given, we default to 0.
         ClusterScheduleOptionValue::Refresh {
-            hydration_time_estimate: None,
+            hydration_time_estimate,
         } => ClusterSchedule::Refresh {
-            hydration_time_estimate: Duration::from_millis(0),
+            hydration_time_estimate: match hydration_time_estimate {
+                Some(value) => plan_schedule_duration("HYDRATION TIME ESTIMATE", value)?,
+                None => Duration::ZERO,
+            },
         },
-        // Otherwise we convert the `IntervalValue` to a `Duration`.
-        ClusterScheduleOptionValue::Refresh {
-            hydration_time_estimate: Some(interval_value),
-        } => {
-            let interval = Interval::try_from_value(Value::Interval(interval_value))?;
-            if interval.as_microseconds() < 0 {
-                sql_bail!(
-                    "HYDRATION TIME ESTIMATE must be non-negative; got: {}",
-                    interval
-                );
+        ClusterScheduleOptionValue::Idle { idle_timeout } => {
+            let idle_timeout = match idle_timeout {
+                Some(value) => plan_schedule_duration("IDLE TIMEOUT", value)?,
+                None => DEFAULT_IDLE_TIMEOUT,
+            };
+            // A zero timeout would suspend the cluster between every two statements.
+            if idle_timeout.is_zero() {
+                sql_bail!("IDLE TIMEOUT must be positive");
             }
-            if interval.months != 0 {
-                // This limitation is because we want this interval to be cleanly convertable
-                // to a unix epoch timestamp difference. When the interval involves months, then
-                // this is not true anymore, because months have variable lengths.
-                sql_bail!("HYDRATION TIME ESTIMATE must not involve units larger than days");
-            }
-            let duration = interval.duration()?;
-            if u64::try_from(duration.as_millis()).is_err()
-                || Interval::from_duration(&duration).is_err()
-            {
-                sql_bail!("HYDRATION TIME ESTIMATE too large");
-            }
-            ClusterSchedule::Refresh {
-                hydration_time_estimate: duration,
-            }
+            ClusterSchedule::Idle { idle_timeout }
         }
     })
+}
+
+/// Converts the interval of the schedule option `option` to a [`Duration`].
+fn plan_schedule_duration(
+    option: &str,
+    value: mz_sql_parser::ast::IntervalValue,
+) -> Result<Duration, PlanError> {
+    let interval = Interval::try_from_value(Value::Interval(value))?;
+    if interval.as_microseconds() < 0 {
+        sql_bail!("{option} must be non-negative; got: {interval}");
+    }
+    if interval.months != 0 {
+        // The interval must convert cleanly to a unix epoch timestamp difference,
+        // which months of variable length do not.
+        sql_bail!("{option} must not involve units larger than days");
+    }
+    let duration = interval.duration()?;
+    if u64::try_from(duration.as_millis()).is_err() || Interval::from_duration(&duration).is_err() {
+        sql_bail!("{option} too large");
+    }
+    Ok(duration)
 }
 
 /// Convert a [`ClusterSchedule`] into a [`ClusterScheduleOptionValue`].
@@ -5691,6 +5702,29 @@ fn unplan_cluster_schedule(schedule: ClusterSchedule) -> ClusterScheduleOptionVa
             ClusterScheduleOptionValue::Refresh {
                 hydration_time_estimate: Some(interval_value),
             }
+        }
+        ClusterSchedule::Idle { idle_timeout } => {
+            let interval = Interval::from_duration(&idle_timeout)
+                .expect("planning ensured that this is convertible back to Interval");
+            ClusterScheduleOptionValue::Idle {
+                idle_timeout: Some(literal::unplan_interval(&interval)),
+            }
+        }
+    }
+}
+
+/// Fails unless the feature flag gating the non-MANUAL `schedule` is on.
+fn require_schedule_feature_flag(
+    scx: &StatementContext,
+    schedule: &ClusterScheduleOptionValue,
+) -> Result<(), PlanError> {
+    match schedule {
+        ClusterScheduleOptionValue::Manual => Ok(()),
+        ClusterScheduleOptionValue::Refresh { .. } => {
+            scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)
+        }
+        ClusterScheduleOptionValue::Idle { .. } => {
+            scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_ON_IDLE)
         }
     }
 }
@@ -6782,7 +6816,9 @@ pub fn plan_alter_cluster(
                     if schedule.is_some()
                         && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                     {
-                        scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
+                        if let Some(schedule) = &schedule {
+                            require_schedule_feature_flag(scx, schedule)?;
+                        }
 
                         // A cluster with a non-MANUAL schedule is automatically turned On/Off by
                         // the cluster scheduling policy, which means its replication factor is

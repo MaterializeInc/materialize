@@ -1101,6 +1101,7 @@ impl Coordinator {
             if !clusters_to_drop.is_empty() {
                 for cluster_id in &clusters_to_drop {
                     self.controller.drop_cluster(*cluster_id);
+                    self.cluster_activity.forget(*cluster_id);
                 }
             }
             // A dropped cluster, or one left without replicas, cannot serve

@@ -4812,6 +4812,18 @@ impl<'a> Parser<'a> {
         let kw = self.expect_one_of_keywords(&[MANUAL, ON])?;
         let value = match kw {
             MANUAL => ClusterScheduleOptionValue::Manual,
+            ON if self.parse_keyword(IDLE) => {
+                let idle_timeout = if self.consume_token(&Token::LParen) {
+                    self.expect_keywords(&[IDLE, TIMEOUT])?;
+                    let _ = self.consume_token(&Token::Eq);
+                    let interval = self.parse_interval_value()?;
+                    self.expect_token(&Token::RParen)?;
+                    Some(interval)
+                } else {
+                    None
+                };
+                ClusterScheduleOptionValue::Idle { idle_timeout }
+            }
             ON => {
                 self.expect_keyword(REFRESH)?;
                 // Parse optional `(HYDRATION TIME ESTIMATE ...)`
