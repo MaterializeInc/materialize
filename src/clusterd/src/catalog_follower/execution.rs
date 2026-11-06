@@ -388,7 +388,12 @@ impl ReplicaEnactment {
         build: &str,
         ops: Vec<Op>,
     ) -> anyhow::Result<BTreeMap<GlobalId, Timestamp>> {
-        let ts = self.io.wait(catalog.current_upper()).await;
+        // Only a timestamp floor. Transaction catch-up still certifies the
+        // candidate prefix, and commit allocates through the timestamp oracle.
+        let ts = catalog
+            .observed_position()
+            .expect("native catalog prefix")
+            .upper;
         let mut catch_up =
             mz_catalog::catalog::TransactionCatchUp::new(self.protection.incarnation());
         let result = self

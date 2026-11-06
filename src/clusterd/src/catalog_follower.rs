@@ -343,7 +343,10 @@ pub(crate) async fn run(
                         .then_some(*id)
                     })
             });
-            let ts = catalog.current_upper().await;
+            let ts = catalog
+                .observed_position()
+                .expect("synchronized native catalog")
+                .upper;
             match catalog
                 .transact(
                     None,
