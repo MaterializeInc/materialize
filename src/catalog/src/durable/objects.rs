@@ -404,6 +404,7 @@ impl DurableType for ClusterReplicaSize {
             swap_enabled,
             disabled,
             selectors,
+            allowed_workloads: _,
         } = self.allocation;
         (
             ClusterReplicaSizeKey { id: self.id },
@@ -450,6 +451,7 @@ impl DurableType for ClusterReplicaSize {
                 swap_enabled: value.swap_enabled,
                 disabled: value.disabled,
                 selectors: value.selectors,
+                allowed_workloads: None,
             },
         }
     }

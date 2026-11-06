@@ -80,6 +80,7 @@ memory_bytes  uint8  The␠RAM␠allocation␠per␠process,␠in␠bytes.
 disk_bytes  uint8  The␠disk␠allocation␠per␠process.
 credits_per_hour  numeric  The␠number␠of␠compute␠credits␠consumed␠per␠hour.
 disabled  boolean  Whether␠the␠size␠is␠disabled.␠Existing␠replicas␠keep␠running␠on␠a␠disabled␠size,␠but␠new␠clusters␠and␠replicas␠cannot␠choose␠it.
+allowed_workloads  list  The␠workload␠classes␠that␠clusters␠of␠this␠size␠may␠run:␠`ingest`,␠`sink`,␠`compute_maintained`,␠`compute_interactive`,␠and␠`compute_introspection`.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replicas' ORDER BY position
