@@ -189,6 +189,8 @@ table.inline-headings {
         overflow: visible;
         clip: auto;
         margin-bottom: var(--xx-small);
+        // <main> is a flex column; keep the focus ring to the link's text.
+        align-self: flex-start;
     }
 
     // The drawer has its own "All Topics" button.
