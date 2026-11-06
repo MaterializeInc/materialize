@@ -52,7 +52,7 @@ jobs:
           repositories: cla
           permission-contents: write
       - name: CLA Assistant
-        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # 2.6.1 # zizmor: ignore[archived-uses]
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1 # zizmor: ignore[archived-uses]
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The action reads the token for the remote signatures repository
@@ -64,7 +64,7 @@ jobs:
           branch: main
           path-to-signatures: signatures.v1.json
           path-to-document: https://github.com/MaterializeInc/cla/blob/main/cla.md
-          allowlist: materialize-bot,materialize-bot-monitoring,dependabot[bot],claude,github-actions[bot],devin-ai-integration[bot]
+          allowlist: materialize-bot,materialize-bot-monitoring,renovate[bot],claude,github-actions[bot],devin-ai-integration[bot]
           custom-notsigned-prcomment: Thank you for your submission! We really appreciate it. Like many source-available projects, we require that you sign our [Contributor License Agreement](https://github.com/MaterializeInc/cla/blob/main/cla.md) (CLA) before we can accept your contribution.<br><br>You can sign the CLA by posting a comment with the message below.
           custom-pr-sign-comment: I have read the Contributor License Agreement (CLA) and I hereby sign the CLA.
           custom-allsigned-prcomment: All contributors have signed the CLA.

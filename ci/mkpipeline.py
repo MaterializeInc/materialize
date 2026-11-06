@@ -482,7 +482,6 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
 
     tag = os.environ["BUILDKITE_TAG"]
     branch = os.getenv("BUILDKITE_BRANCH")
-    build_author = os.getenv("BUILDKITE_BUILD_AUTHOR")
     # use the base priority of the entire pipeline
     priority += pipeline.get("priority", 0)
 
@@ -494,8 +493,8 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
     if branch == "main":
         priority -= 50
 
-    # Dependabot is less urgent than manual PRs
-    if build_author == "Dependabot":
+    # Dependency updates are less urgent than manual PRs.
+    if branch and branch.startswith("renovate/"):
         priority -= 40
 
     for step in steps(pipeline):

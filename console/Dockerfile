@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
 # digest for security fixes.
 FROM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS builder
 
@@ -35,7 +35,7 @@ ENV SOURCE_MAPS='true'
 ENV NODE_OPTIONS='--max_old_space_size=4096'
 RUN yarn build
 
-# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
 # digest for security fixes.
 FROM nginxinc/nginx-unprivileged:alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
 
