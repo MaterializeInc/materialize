@@ -9,10 +9,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Duration;
 
+use futures::StreamExt;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_expr::CollectionPlan;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::Opaque;
-use mz_persist_client::{Diagnostics, PersistClient};
+use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::RustType;
 use mz_repr::{CatalogItemId, Datum, GlobalId, Row, Timestamp};
@@ -653,6 +657,8 @@ async fn frontier_retry_exhaustion_returns_committed_effects() {
 struct Fixture {
     catalog: Catalog,
     persist: PersistClient,
+    persist_cache: PersistClientCache,
+    persist_location: PersistLocation,
     qualifiers: ItemQualifiers,
     prefix: String,
     observed_uppers: BTreeMap<GlobalId, Antichain<Timestamp>>,
@@ -660,7 +666,13 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
-        let persist = PersistClient::new_for_tests().await;
+        // Noop PubSub keeps independent clients disconnected until a watch is polled.
+        let persist_cache = PersistClientCache::new_no_metrics();
+        let persist_location = PersistLocation::new_in_mem();
+        let persist = persist_cache
+            .open(persist_location.clone())
+            .await
+            .expect("open fixture Persist");
         let organization = Uuid::new_v4();
         let mut bootstrap = crate::durable::test_bootstrap_args();
         bootstrap.default_cluster_replication_factor = 0;
@@ -714,6 +726,8 @@ impl Fixture {
         Self {
             catalog,
             persist,
+            persist_cache,
+            persist_location,
             qualifiers,
             prefix,
             observed_uppers: BTreeMap::new(),
@@ -726,6 +740,15 @@ impl Fixture {
             .transact(None, None, ts, None, ops)
             .await
             .expect("catalog transaction");
+    }
+
+    async fn independent_persist(&mut self) -> PersistClient {
+        // Existing clients retain their own shared state, including warm watches.
+        self.persist_cache.clear_state_cache();
+        self.persist_cache
+            .open(self.persist_location.clone())
+            .await
+            .expect("open independent Persist client")
     }
 
     async fn reopen(self) -> Self {
@@ -907,23 +930,7 @@ impl Fixture {
         upper: u64,
         updates: Vec<((SourceData, ()), Timestamp, StorageDiff)>,
     ) {
-        let shard = self.catalog.state().storage_metadata().collection_metadata[&id];
-        let desc = self
-            .catalog
-            .state()
-            .try_get_desc_by_global_id(&id)
-            .expect("persisted relation")
-            .into_owned();
-        let mut writer = self
-            .persist
-            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
-                shard,
-                Arc::new(desc),
-                Arc::new(UnitSchema),
-                Diagnostics::for_tests(),
-            )
-            .await
-            .expect("open source writer");
+        let mut writer = self.source_writer(&self.persist, id).await;
         let expected = writer.upper().clone();
         writer
             .compare_and_append(
@@ -953,6 +960,29 @@ impl Fixture {
             }])
             .await;
         }
+    }
+
+    async fn source_writer(
+        &self,
+        persist: &PersistClient,
+        id: GlobalId,
+    ) -> mz_persist_client::write::WriteHandle<SourceData, (), Timestamp, StorageDiff> {
+        let shard = self.catalog.state().storage_metadata().collection_metadata[&id];
+        let desc = self
+            .catalog
+            .state()
+            .try_get_desc_by_global_id(&id)
+            .expect("persisted relation")
+            .into_owned();
+        persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(desc),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("open source writer")
     }
 
     async fn propose_bounds(&mut self, ids: &[GlobalId], proposed: u64, expected: u64) {
@@ -1033,6 +1063,230 @@ async fn index_retention_tracks_durable_input_upper_without_replicas() {
     f.propose_bounds(&[input, index], 120_000, 110_000).await;
     assert!(f.catalog.state().client_incarnations().is_empty());
     assert!(f.catalog.state().client_read_requirements().is_empty());
+    f.catalog.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn index_retention_uses_cached_progress_under_candidate_policy_after_closure() {
+    let mut f = Fixture::new().await;
+    let input = f.source("input").await;
+    let row = SourceData(Ok(Row::pack_slice(&[Datum::Int64(42)])));
+    f.append(
+        input,
+        100_000,
+        vec![((row.clone(), ()), Timestamp::new(50_000), 1)],
+    )
+    .await;
+    let (index_id, index) = f
+        .create_with_plan(
+            "retaining_index",
+            format!(
+                "CREATE INDEX retaining_index IN CLUSTER quickstart \
+                 ON {}.input (counter) WITH (RETAIN HISTORY FOR '80 seconds')",
+                f.prefix,
+            ),
+            Some(BTreeSet::from([input])),
+        )
+        .await;
+    // Keep producer maintenance out of the validator's retained state too.
+    f.persist = f.independent_persist().await;
+    let mut f = f.reopen().await;
+    let shard = f.catalog.state().storage_metadata().collection_metadata[&input];
+    let mut progress = Box::pin(
+        f.persist
+            .upper_frontiers::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("retain validator's shared shard state"),
+    );
+    assert_eq!(
+        progress.next().await,
+        Some(Antichain::from_elem(Timestamp::new(100_000)))
+    );
+    f.propose_bounds(&[input, index], 100_000, 20_000).await;
+
+    let peer = f.independent_persist().await;
+    let mut writer = f.source_writer(&peer, input).await;
+    writer
+        .compare_and_append(
+            Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+            Antichain::from_elem(Timestamp::new(100_000)),
+            Antichain::new(),
+        )
+        .await
+        .expect("valid closure")
+        .expect("uncontended closure");
+    writer.expire().await;
+
+    // Do not poll the watch yet. Finite evidence is valid under the candidate's
+    // shorter lag even though the shard is now closed. A fresh read, or using
+    // the old 80s policy, would incorrectly keep the index bound at 20_000.
+    f.transact(vec![
+        Op::AlterRetainHistory {
+            id: index_id,
+            value: Some(mz_sql_parser::ast::Value::String("10 seconds".into())),
+            window: CompactionWindow::Duration(Timestamp::new(10_000)),
+        },
+        Op::SetReadProtection {
+            requirements: vec![],
+            bounds: vec![CollectionCompactionBound {
+                id: index,
+                frontier: Some(Timestamp::new(99_000)),
+            }],
+        },
+    ])
+    .await;
+    f.assert_bound(index, 90_000);
+    f.assert_bound(input, 20_000);
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), progress.next())
+            .await
+            .expect("watch repairs missed completion"),
+        Some(Antichain::new())
+    );
+    // Empty maps to MIN, not a new permission or a retraction of the already
+    // committed finite bound. The input floor is still only 20_000, so preserving
+    // 90_000 requires the old index bound, not just the floor join.
+    f.propose_bounds(&[index], 99_000, 90_000).await;
+    drop(progress);
+
+    // Reconstruct the catalog with a cold Persist cache, not the completed watch.
+    f.persist = f.independent_persist().await;
+    let mut f = f.reopen().await;
+    f.assert_bound(input, 20_000);
+    f.assert_bound(index, 90_000);
+    assert_eq!(
+        f.catalog
+            .state()
+            .get_entry(&index_id)
+            .item()
+            .custom_logical_compaction_window(),
+        Some(CompactionWindow::Duration(Timestamp::new(10_000)))
+    );
+    f.propose_bounds(&[index], 99_000, 90_000).await;
+    f.propose_bounds(&[input, index], 99_000, 90_000).await;
+
+    let mut since = f
+        .persist
+        .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
+            shard,
+            PersistClient::CONTROLLER_CRITICAL_SINCE,
+            Opaque::encode(&0u64),
+            Diagnostics::for_tests(),
+        )
+        .await
+        .expect("open compaction enforcer");
+    let opaque = since.opaque().clone();
+    since
+        .compare_and_downgrade_since(
+            &opaque,
+            (
+                &opaque,
+                &f.catalog.state().collection_compaction_bounds()[&input],
+            ),
+        )
+        .await
+        .expect("apply committed permission");
+    drop(since);
+    f.persist = f.independent_persist().await;
+    let f = f.reopen().await;
+    for id in [input, index] {
+        f.assert_bound(id, 90_000);
+    }
+
+    let mut reader = f
+        .persist
+        .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+            shard,
+            Arc::new(
+                f.catalog
+                    .state()
+                    .try_get_desc_by_global_id(&input)
+                    .expect("reconstructed source descriptor")
+                    .into_owned(),
+            ),
+            Arc::new(UnitSchema),
+            Diagnostics::for_tests(),
+            false,
+        )
+        .await
+        .expect("open reader after completion and cold restart");
+    assert!(
+        reader
+            .snapshot_and_fetch(Antichain::from_elem(Timestamp::new(85_000)))
+            .await
+            .is_err()
+    );
+    let rows = reader
+        .snapshot_and_fetch(Antichain::from_elem(Timestamp::new(90_000)))
+        .await
+        .expect("committed policy boundary remains readable after completion");
+    assert_eq!(
+        rows.into_iter()
+            .map(|((row, ()), _, diff)| (row, diff))
+            .collect::<Vec<_>>(),
+        vec![(row, 1)]
+    );
+    reader.expire().await;
+    f.catalog.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn index_retention_watch_refresh_allows_later_proposals() {
+    let mut f = Fixture::new().await;
+    let input = f.source("input").await;
+    f.advance_upper(input, 100_000).await;
+    let index = f.index("retaining_index", "input", &[input]).await;
+    f.persist = f.independent_persist().await;
+    let mut f = f.reopen().await;
+    let shard = f.catalog.state().storage_metadata().collection_metadata[&input];
+    let mut progress = Box::pin(
+        f.persist
+            .upper_frontiers::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("retain validator's shared shard state"),
+    );
+    assert_eq!(
+        progress.next().await,
+        Some(Antichain::from_elem(Timestamp::new(100_000)))
+    );
+    f.propose_bounds(&[input, index], 100_000, 90_000).await;
+
+    let peer = f.independent_persist().await;
+    let mut writer = f.source_writer(&peer, input).await;
+    writer
+        .compare_and_append(
+            Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+            Antichain::from_elem(Timestamp::new(100_000)),
+            Antichain::from_elem(Timestamp::new(120_000)),
+        )
+        .await
+        .expect("valid advance")
+        .expect("uncontended advance");
+    writer.expire().await;
+    f.observed_uppers
+        .insert(input, Antichain::from_elem(Timestamp::new(120_000)));
+    // A publisher knows more than this validator. Cached progress may clip the
+    // index without preventing a later proposal once the progress owner polls.
+    f.propose_bounds(&[index], 120_000, 90_000).await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), progress.next())
+            .await
+            .expect("watch repairs missed finite progress"),
+        Some(Antichain::from_elem(Timestamp::new(120_000)))
+    );
+    f.propose_bounds(&[index], 120_000, 110_000).await;
+    drop(progress);
+    let f = f.reopen().await;
+    f.assert_bound(index, 110_000);
     f.catalog.expire().await;
 }
 
@@ -1258,7 +1512,7 @@ async fn index_retention_protects_logical_input_eliminated_by_optimizer() {
     let live = f.source("live_input").await;
     let eliminated = f.source("eliminated_input").await;
     f.advance_upper(live, 100_000).await;
-    f.advance_upper(eliminated, 100_000).await;
+    f.advance_upper(eliminated, 70_000).await;
     let (view_id, _) = f
         .create(
             "logical_view",
@@ -1282,7 +1536,34 @@ async fn index_retention_protects_logical_input_eliminated_by_optimizer() {
         BTreeSet::from([live]),
         "fixture must actually eliminate the second input"
     );
-    f.index("retaining_index", "logical_view", &[live]).await;
-    f.propose_bounds(&[live, eliminated], 100_000, 90_000).await;
+    let index = f.index("retaining_index", "logical_view", &[live]).await;
+
+    // Only the live input has a retained observation in this process. The slower
+    // logical input is absent both from the selected plan and the proposal's
+    // observations. Validation must acquire its cold state and include its upper.
+    f.observed_uppers.remove(&eliminated);
+    f.persist = f.independent_persist().await;
+    let mut f = f.reopen().await;
+    let live_shard = f.catalog.state().storage_metadata().collection_metadata[&live];
+    let mut progress = Box::pin(
+        f.persist
+            .upper_frontiers::<SourceData, (), Timestamp, StorageDiff>(
+                live_shard,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("retain only live input state"),
+    );
+    assert_eq!(
+        progress.next().await,
+        Some(Antichain::from_elem(Timestamp::new(100_000)))
+    );
+    f.propose_bounds(&[live, eliminated, index], 100_000, 60_000)
+        .await;
+    drop(progress);
+    let f = f.reopen().await;
+    for id in [live, eliminated, index] {
+        f.assert_bound(id, 60_000);
+    }
     f.catalog.expire().await;
 }

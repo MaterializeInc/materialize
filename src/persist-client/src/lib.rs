@@ -750,6 +750,31 @@ impl PersistClient {
         Ok(machine.applier.fetch_upper(|upper| upper.clone()).await)
     }
 
+    /// Returns the upper from shared shard state without refreshing warm state.
+    ///
+    /// Cold state is acquired through the normal initialization path. Shared
+    /// state is weakly cached, so callers without a retained handle may reacquire
+    /// it on later calls. This operation is not linearized with writes and does
+    /// not provide read protection or drive notification-loss recovery. Callers
+    /// needing ongoing progress must retain an existing watcher, such as
+    /// [`Self::upper_frontiers`]. An unused shard is initialized at minimum.
+    pub async fn observed_upper<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<Antichain<T>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(machine.applier.clone_upper())
+    }
+
     /// Observes the initially known upper and subsequent strict advances.
     ///
     /// The stream retains shared shard state, using Persist notifications and

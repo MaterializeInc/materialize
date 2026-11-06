@@ -304,13 +304,20 @@ pub(super) async fn constrain_index_retention(
         .iter()
         .flat_map(|r| r.shards.iter().copied())
         .collect();
-    // Bound metadata fanout without serializing a round trip for every input.
+    // A finite durable upper justifies the candidate policy even after an
+    // unobserved closure, as with controller policy changes on cached frontiers.
+    // Observed empty uppers contribute nothing to the meet. They grant no new
+    // permission when all inputs are closed, not a freeze that revokes previous
+    // finite evidence. Committed bounds and active read requirements still apply.
+    // Bound cold-state acquisition without serializing a round trip per input.
+    // Existing progress owners refresh retained state. Unretained inputs may
+    // require cold acquisition, but must never be omitted from this complete set.
     // Failed observations abort publication, retaining permission and allowing
     // the publisher to retry the complete candidate against a fresh prefix.
     let uppers: BTreeMap<_, _> = stream::iter(shards)
         .map(|shard| async move {
             let upper = persist
-                .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                .observed_upper::<SourceData, (), Timestamp, StorageDiff>(
                     shard,
                     Diagnostics {
                         shard_name: shard.to_string(),

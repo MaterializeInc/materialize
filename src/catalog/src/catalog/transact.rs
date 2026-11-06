@@ -1779,7 +1779,8 @@ impl Catalog {
         tx.finalize_index_compaction_bounds();
         if matches!(mode, TransactInnerMode::Commit) {
             // A dry run has synthetic storage identities and grants no compaction
-            // permission. Observe durable progress only at the commit boundary.
+            // permission. Validate the committing candidate against complete
+            // durable progress observations, which need not be fresh reads.
             let changed = tx.changed_compaction_bounds().collect();
             super::retention::constrain_index_retention(
                 persist_client,
