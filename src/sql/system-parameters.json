@@ -257,7 +257,7 @@
       "name": "column_paged_batcher_file_release_interval",
       "typeName": "duration",
       "default": "1 s",
-      "description": "Interval at which the buffer pool releases free file store slots to the filesystem.",
+      "description": "Interval at which the buffer pool releases free file store slots to the filesystem. Zero disables the release.",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true

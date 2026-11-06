@@ -359,7 +359,7 @@ def get_variable_system_parameters(
                     ["true", "false"],
                 )
             ]
-            if version >= MzVersion.parse_mz("v26.47.0-dev")
+            if version >= MzVersion.parse_mz("v26.51.0-dev")
             else []
         ),
         # On by default so CI exercises the columnar accumulable diff layout, which
