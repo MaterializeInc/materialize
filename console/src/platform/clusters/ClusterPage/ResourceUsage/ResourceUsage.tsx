@@ -63,8 +63,8 @@ import {
   LegendSwatch,
   MemoryChart,
   ReplicaStatusTimeline,
+  ResourceTimeAxis,
   StatusTimelineRow,
-  TimeAxis,
   TimeGridLines,
 } from "./ResourceUsageCharts";
 import {
@@ -82,8 +82,8 @@ import {
   stateAt,
 } from "./resourceUsageModel";
 import {
-  CHART_MARGIN,
   MIN_BAR_SLOT_PX,
+  RESOURCE_CHART_MARGIN,
   truncatedLabelProps,
   useStatusStyles,
 } from "./resourceUsageStyles";
@@ -497,7 +497,7 @@ const ResourceUsageContent = ({
         range: buildXYGraphLayoutProps({
           width,
           height: 0,
-          margin: CHART_MARGIN,
+          margin: RESOURCE_CHART_MARGIN,
         }).xScaleRange,
       }),
     [startDate, endDate, width],
@@ -585,13 +585,13 @@ const ResourceUsageContent = ({
         {hasUsage ? (
           <>
             <CpuChart {...plotProps} headerAction={cpuHeaderAction} />
-            <TimeAxis width={width} xScale={xScale} />
+            <ResourceTimeAxis width={width} xScale={xScale} />
             <MemoryChart
               {...plotProps}
               heapLimitBytes={heapLimitBytes}
               hasHeapLimit={hasHeapLimit}
             />
-            <TimeAxis width={width} xScale={xScale} />
+            <ResourceTimeAxis width={width} xScale={xScale} />
           </>
         ) : (
           <VStack spacing={2} alignItems="stretch" pb={4}>
@@ -625,7 +625,7 @@ const ResourceUsageContent = ({
             Hydration history is unavailable.
           </Text>
         )}
-        <TimeAxis width={width} xScale={xScale} />
+        <ResourceTimeAxis width={width} xScale={xScale} />
         <ChangesLane
           width={width}
           xScale={xScale}

@@ -15,11 +15,14 @@ import { buildXYGraphLayoutProps } from "~/utils/graph";
 
 import { ReplicaState } from "./resourceUsageModel";
 
+/** Shared by every chart so their plot areas line up on one time axis. */
+export const CHART_MARGIN = { top: 24, right: 16, bottom: 8, left: 56 };
+
 /**
- * Shared by every chart so their plot areas line up on one time axis. The
- * right margin holds the percent labels.
+ * Shared by the Resource Usage charts and the processes drawer so their plot
+ * areas line up on one time axis. The right margin holds the percent labels.
  */
-export const CHART_MARGIN = { top: 0, right: 40, bottom: 0, left: 0 };
+export const RESOURCE_CHART_MARGIN = { top: 0, right: 40, bottom: 0, left: 0 };
 
 export const PERCENT_TICKS = [0, 25, 50, 75, 100];
 
@@ -54,10 +57,10 @@ export const percentChart = (peak: number, width: number) => {
   const layout = buildXYGraphLayoutProps({
     width,
     height:
-      CHART_MARGIN.top +
+      RESOURCE_CHART_MARGIN.top +
       (top / PERCENT_TICK_STEP) * PERCENT_TICK_STEP_PX +
-      CHART_MARGIN.bottom,
-    margin: CHART_MARGIN,
+      RESOURCE_CHART_MARGIN.bottom,
+    margin: RESOURCE_CHART_MARGIN,
   });
   return {
     layout,

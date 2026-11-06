@@ -52,7 +52,7 @@ import { parseDbVersion } from "~/version/api";
 import { ClusterMetrics } from "../ClusterMetrics";
 import { ResourceUsage } from "./ResourceUsage";
 import { mergedBucketMs } from "./resourceUsageModel";
-import { CHART_MARGIN, MIN_BAR_SLOT_PX } from "./resourceUsageStyles";
+import { MIN_BAR_SLOT_PX, RESOURCE_CHART_MARGIN } from "./resourceUsageStyles";
 
 // The Metrics page's other card has its own tests and queries.
 vi.mock("../MemoryByObject", () => ({ MemoryByObject: () => null }));
@@ -604,9 +604,10 @@ const hoverAt = async (timeMs: number) => {
   const svg = await screen.findByRole("img", { name: "Memory usage" });
   const overlay = svg.querySelector('rect[fill="transparent"]');
   if (!overlay) throw new Error("hover overlay not rendered");
-  const plotWidthPx = WIDTH_PX - CHART_MARGIN.left - CHART_MARGIN.right;
+  const plotWidthPx =
+    WIDTH_PX - RESOURCE_CHART_MARGIN.left - RESOURCE_CHART_MARGIN.right;
   const clientX =
-    CHART_MARGIN.left +
+    RESOURCE_CHART_MARGIN.left +
     ((timeMs - WINDOW_START_MS) / (NOW_MS - WINDOW_START_MS)) * plotWidthPx;
   fireEvent.pointerMove(overlay, { clientX, clientY: 80 });
   return screen.findByTestId("chart-tooltip");
@@ -1270,7 +1271,8 @@ describe("ResourceUsage", () => {
     expect(barWidths.length).toBeGreaterThan(0);
     // No bar is split with replicas that weren't running at its time: each
     // spans at least one hourly bucket, less the 2px gap between times.
-    const plotWidthPx = WIDTH_PX - CHART_MARGIN.left - CHART_MARGIN.right;
+    const plotWidthPx =
+      WIDTH_PX - RESOURCE_CHART_MARGIN.left - RESOURCE_CHART_MARGIN.right;
     const hourPx = (plotWidthPx * HOUR_MS) / (TIME_PERIOD_MINUTES * 60_000);
     expect(Math.min(...barWidths)).toBeGreaterThan(hourPx - 2 - 0.01);
 
@@ -1285,7 +1287,8 @@ describe("ResourceUsage", () => {
     const groupMs = mergedBucketMs({
       sourceBucketMs: HOUR_MS,
       domainMs: TIME_PERIOD_MINUTES * 60_000,
-      plotWidthPx: WIDTH_PX - CHART_MARGIN.left - CHART_MARGIN.right,
+      plotWidthPx:
+        WIDTH_PX - RESOURCE_CHART_MARGIN.left - RESOURCE_CHART_MARGIN.right,
       replicaCount: 1,
       minSlotPx: MIN_BAR_SLOT_PX,
     });
@@ -1808,10 +1811,11 @@ describe("ResourceUsage", () => {
       const endMs = Date.now();
       const hoverMs =
         Math.floor(NEWER_MS / BUCKET_MS) * BUCKET_MS + BUCKET_MS / 2;
-      const plotWidthPx = WIDTH_PX - CHART_MARGIN.left - CHART_MARGIN.right;
+      const plotWidthPx =
+        WIDTH_PX - RESOURCE_CHART_MARGIN.left - RESOURCE_CHART_MARGIN.right;
       fireEvent.pointerMove(overlay, {
         clientX:
-          CHART_MARGIN.left +
+          RESOURCE_CHART_MARGIN.left +
           ((hoverMs - (endMs - DAY_MS)) / DAY_MS) * plotWidthPx,
         clientY: 80,
       });

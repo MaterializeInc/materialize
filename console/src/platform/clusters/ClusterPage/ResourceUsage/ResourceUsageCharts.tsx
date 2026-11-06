@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { Box, Flex, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
+import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { GridRows } from "@visx/grid";
 import { scaleLinear, scaleTime } from "@visx/scale";
 import { Line, LinePath } from "@visx/shape";
@@ -52,8 +53,8 @@ import {
   seriesWithBarAt,
 } from "./resourceUsageModel";
 import {
-  CHART_MARGIN,
   percentChart,
+  RESOURCE_CHART_MARGIN,
   truncatedLabelProps,
   useStatusStyles,
 } from "./resourceUsageStyles";
@@ -72,7 +73,7 @@ const AXIS_LABEL_INSET_PX = 4;
 const TIME_AXIS_HEIGHT_PX = 18;
 const STATUS_ROW_HEIGHT_PX = 18;
 const STATUS_ROW_GAP_PX = 10;
-const STATUS_MARGIN = { ...CHART_MARGIN, top: 0, bottom: 0 };
+const STATUS_MARGIN = { ...RESOURCE_CHART_MARGIN, top: 0, bottom: 0 };
 const MIN_STATUS_SEGMENT_PX = 4;
 const CHANGES_ROW_HEIGHT_PX = 18;
 // Creations closer than this share a tick, which is also each tick's hover
@@ -224,8 +225,59 @@ export interface ChartHeaderProps {
   action?: React.ReactNode;
 }
 
-/** A title and a legend, baseline-aligned across the top of a chart. */
 export const ChartHeader = ({
+  title,
+  description,
+  legend,
+  action,
+}: ChartHeaderProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Flex
+      justifyContent="space-between"
+      alignItems="baseline"
+      flexWrap="wrap"
+      columnGap={6}
+      rowGap={1}
+      width="100%"
+    >
+      <HStack spacing={2} alignItems="baseline">
+        <Text textStyle="text-ui-med">{title}</Text>
+        {description && (
+          <Text textStyle="text-small" color={colors.foreground.secondary}>
+            {description}
+          </Text>
+        )}
+      </HStack>
+      {legend && (
+        <Flex
+          as="ul"
+          flexWrap="wrap"
+          columnGap={4}
+          rowGap={1}
+          listStyleType="none"
+        >
+          {legend.map(({ label, color, variant }) => (
+            <HStack as="li" key={label} spacing={1.5}>
+              <LegendSwatch color={color} variant={variant} />
+              <Text
+                textStyle="text-small"
+                color={colors.foreground.secondary}
+                whiteSpace="nowrap"
+              >
+                {label}
+              </Text>
+            </HStack>
+          ))}
+        </Flex>
+      )}
+      {action}
+    </Flex>
+  );
+};
+
+/** A title and a legend, baseline-aligned across the top of a chart. */
+export const ResourceChartHeader = ({
   title,
   description,
   legend,
@@ -331,14 +383,54 @@ export const ChartFrame = ({
     >
       {children}
       <Box position="absolute" top={1} left={0} right={0} pointerEvents="none">
-        <ChartHeader {...header} />
+        <ResourceChartHeader {...header} />
       </Box>
     </Box>
   );
 };
 
-/** Dashed lines at `ticks`, labeled in the right margin just below each. */
 export const PercentAxis = ({
+  layout,
+  yScale,
+  ticks,
+}: {
+  layout: Layout;
+  yScale: PercentScale;
+  ticks: number[];
+}) => {
+  const { colors, fonts } = useTheme<MaterializeTheme>();
+  return (
+    <>
+      <GridRows
+        {...layout.gridRowsProps}
+        scale={yScale}
+        tickValues={ticks}
+        stroke={colors.border.primary}
+        strokeDasharray="2 4"
+        pointerEvents="none"
+      />
+      <AxisLeft<AxisScale<number>>
+        {...layout.axisLeftProps}
+        scale={yScale}
+        tickValues={ticks}
+        hideAxisLine
+        hideTicks
+        tickFormat={(value) => `${value.valueOf()}%`}
+        tickLabelProps={() => ({
+          fill: colors.foreground.secondary,
+          fontFamily: fonts.mono,
+          fontSize: 12,
+          textAnchor: "end",
+          dx: -4,
+          dy: 4,
+        })}
+      />
+    </>
+  );
+};
+
+/** Dashed lines at `ticks`, labeled in the right margin just below each. */
+export const ResourcePercentAxis = ({
   layout,
   yScale,
   ticks,
@@ -482,7 +574,7 @@ const CpuMarks = React.memo(
     const { colors } = useTheme<MaterializeTheme>();
     return (
       <>
-        <PercentAxis layout={layout} yScale={yScale} ticks={ticks} />
+        <ResourcePercentAxis layout={layout} yScale={yScale} ticks={ticks} />
         {series.map((replica) => (
           <LinePath
             key={replica.id}
@@ -704,7 +796,7 @@ const MemoryMarks = React.memo(
     );
     return (
       <>
-        <PercentAxis layout={layout} yScale={yScale} ticks={ticks} />
+        <ResourcePercentAxis layout={layout} yScale={yScale} ticks={ticks} />
         <g pointerEvents="none">{bars}</g>
         {ramLimit !== undefined && (
           <ThresholdLine
@@ -868,8 +960,55 @@ const timeTickValues = (xScale: TimeScale) => {
   ];
 };
 
-/** Each tick's label, just right of its gridline. */
 export const TimeAxis = ({ width, xScale, tickFormat }: TimeAxisProps) => {
+  const { colors, fonts } = useTheme<MaterializeTheme>();
+  const [startDate, endDate] = xScale.domain();
+  // Evenly spaced and labeled by time before now, matching `UtilizationGraph`.
+  // Clock labels take the scale's round times instead, which stay put as the
+  // window slides.
+  const tickValues = tickFormat
+    ? xScale.ticks(TIME_TICK_COUNT).map((date) => date.getTime())
+    : Array.from(
+        { length: TIME_TICK_COUNT },
+        (_, tickIndex) =>
+          startDate.getTime() +
+          (tickIndex * (endDate.getTime() - startDate.getTime())) /
+            TIME_TICK_COUNT,
+      );
+  return (
+    // Visible overflow keeps the edge labels, centered on the plot's ends, from
+    // being clipped. The card's padding leaves room for them.
+    <svg width={width} height={24} overflow="visible" aria-hidden>
+      <AxisBottom<AxisScale<number>>
+        top={0}
+        scale={xScale}
+        tickValues={tickValues}
+        hideTicks
+        stroke={colors.border.secondary}
+        strokeWidth={2}
+        tickFormat={(value) =>
+          tickFormat
+            ? tickFormat(value.valueOf())
+            : relativeTimeTickFormat(value.valueOf(), startDate, endDate)
+        }
+        tickLabelProps={() => ({
+          fill: colors.foreground.secondary,
+          fontFamily: fonts.mono,
+          fontSize: 12,
+          textAnchor: "middle",
+          dy: 4,
+        })}
+      />
+    </svg>
+  );
+};
+
+/** Each tick's label, just right of its gridline. */
+export const ResourceTimeAxis = ({
+  width,
+  xScale,
+  tickFormat,
+}: TimeAxisProps) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
   const [startDate, endDate] = xScale.domain();
   const endMs = endDate.getTime();

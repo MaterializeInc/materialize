@@ -71,13 +71,13 @@ import {
   HoverOverlay,
   Layout,
   LegendSwatch,
-  PercentAxis,
   PercentScale,
-  TimeAxis,
+  ResourcePercentAxis,
+  ResourceTimeAxis,
   TimeGridLines,
   TimeScale,
 } from "./ResourceUsageCharts";
-import { CHART_MARGIN, percentChart } from "./resourceUsageStyles";
+import { percentChart, RESOURCE_CHART_MARGIN } from "./resourceUsageStyles";
 import { useReplicaProcessSamples } from "./useReplicaProcessSamples";
 
 // The per-process history is raw per-minute samples, so the drawer reads at
@@ -511,7 +511,7 @@ const ProcessLineCharts = ({
         range: buildXYGraphLayoutProps({
           width,
           height: 0,
-          margin: CHART_MARGIN,
+          margin: RESOURCE_CHART_MARGIN,
         }).xScaleRange,
       }),
     [startMs, endMs, width],
@@ -581,14 +581,14 @@ const ProcessLineCharts = ({
           description="% of each process's CPU allocation"
           legend={legend}
         />
-        <TimeAxis width={width} xScale={xScale} />
+        <ResourceTimeAxis width={width} xScale={xScale} />
         <ProcessLineChart
           {...chartProps}
           metric="memory"
           title="Memory by Process"
           description={`% of each process's ${memoryLimit}`}
         />
-        <TimeAxis width={width} xScale={xScale} />
+        <ResourceTimeAxis width={width} xScale={xScale} />
       </VStack>
       {hoveredBucket &&
         tooltipData &&
@@ -699,7 +699,7 @@ const ProcessLines = React.memo(
 
     return (
       <>
-        <PercentAxis layout={layout} yScale={yScale} ticks={ticks} />
+        <ResourcePercentAxis layout={layout} yScale={yScale} ticks={ticks} />
         {order.map((processLine) =>
           draw(processLine, {
             color:
