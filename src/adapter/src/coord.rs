@@ -184,6 +184,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
+
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle, truncate_sql_for_logging};
 use crate::command::{Command, ExecuteResponse};
@@ -2725,6 +2726,13 @@ impl Coordinator {
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
         }
+
+        // Catalog open packed the size rows before the coordinator could read
+        // `cluster_family_allowed_workloads`.
+        builtin_table_updates.extend(
+            self.catalog_mut()
+                .repack_replica_sizes_if_family_workloads_changed(),
+        );
 
         debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
         // When 0dt is enabled, we create new shards for any migrated builtin storage collections.

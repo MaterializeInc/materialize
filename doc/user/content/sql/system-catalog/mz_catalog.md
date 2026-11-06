@@ -117,6 +117,7 @@ any kind of capacity planning.
 | `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
 | `disabled`             | [`boolean`] | Whether the size is disabled. Existing replicas keep running on a disabled size, but new clusters and replicas cannot choose it.                             |
+| `allowed_workloads`    | [`text list`] | The workload classes that clusters of this size may run: `ingest`, `sink`, `compute_maintained`, `compute_interactive`, and `compute_introspection`.            |
 
 ### `mz_cluster_replicas`
 

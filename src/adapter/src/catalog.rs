@@ -96,6 +96,7 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
 pub(crate) use crate::catalog::transact::{CommandExecutionError, CommandWork};
+pub(crate) use crate::catalog::state::FamilyWorkloads;
 pub use crate::catalog::transact::{
     DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
 };
@@ -194,6 +195,16 @@ impl Clone for Catalog {
 }
 
 impl Catalog {
+    /// See [`CatalogState::repack_replica_sizes_if_family_workloads_changed`].
+    pub(crate) fn repack_replica_sizes_if_family_workloads_changed(
+        &mut self,
+    ) -> Vec<BuiltinTableUpdate> {
+        let updates = self
+            .state
+            .repack_replica_sizes_if_family_workloads_changed();
+        self.state.resolve_builtin_table_updates(updates)
+    }
+
     /// Set the optimized plan for the item identified by `id`.
     ///
     /// # Panics

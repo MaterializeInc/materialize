@@ -21,7 +21,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
+    ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging, WorkloadClass,
 };
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_ore::cast::CastFrom;
@@ -50,10 +50,11 @@ use mz_adapter_types::dyncfgs::{
 };
 
 use super::return_if_err;
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribeOwner};
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
 use crate::coord::{
     AlterCluster, AlterClusterAwaitReconfiguration, ClusterStage, Coordinator, Message,
-    PlanValidity, StageResult, Staged,
+    PlanValidity, StageResult, Staged, catalog_serving,
 };
 use crate::{AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse, session::Session};
 
@@ -106,6 +107,51 @@ impl Coordinator {
     ) {
         let stage = return_if_err!(self.alter_cluster_validate(ctx.session(), plan).await, ctx);
         self.sequence_staged(ctx, Span::current(), stage).await;
+    }
+
+    /// Fails if `size` does not allow a workload class that `cluster_id` runs,
+    /// including its active subscribes and `COPY TO` sinks, whose dataflows a
+    /// new replica of `size` would also run.
+    fn ensure_size_allows_cluster_workloads(
+        &self,
+        cluster_id: ClusterId,
+        size: &str,
+        session: &Session,
+    ) -> Result<(), AdapterError> {
+        let state = self.catalog().state();
+        let running = self
+            .active_compute_sinks
+            .values()
+            .filter(|sink| sink.cluster_id() == cluster_id)
+            .filter_map(|sink| {
+                let (conn_id, class) = match sink {
+                    ActiveComputeSink::Subscribe(subscribe) => match &subscribe.owner {
+                        ActiveSubscribeOwner::Session { conn_id, .. } => (
+                            conn_id,
+                            catalog_serving::subscribe_workload(
+                                state,
+                                subscribe.depends_on.iter().copied(),
+                            ),
+                        ),
+                        // Background subscribes are internal, which is exempt.
+                        ActiveSubscribeOwner::Background => return None,
+                    },
+                    ActiveComputeSink::CopyTo(copy_to) => {
+                        (&copy_to.conn_id, WorkloadClass::ComputeInteractive)
+                    }
+                };
+                let internal = self
+                    .active_conns
+                    .get(conn_id)
+                    .map_or(true, |conn| conn.user().is_internal());
+                (!internal).then_some(class)
+            });
+        state.ensure_size_allows_cluster_workloads(
+            state.get_cluster(cluster_id),
+            size,
+            session.user(),
+            running,
+        )
     }
 
     #[instrument]
@@ -260,6 +306,23 @@ impl Coordinator {
                 if !matches!(options.auto_scaling_strategy, Unchanged) {
                     coord_bail!("Cannot change AUTO SCALING STRATEGY of unmanaged clusters");
                 }
+            }
+        }
+
+        // These options create replicas, so every size they can create one of
+        // must allow the workloads already on the cluster.
+        let adds_replicas = !matches!(options.size, Unchanged)
+            || !matches!(options.replication_factor, Unchanged)
+            || !matches!(options.managed, Unchanged)
+            || !matches!(options.auto_scaling_strategy, Unchanged);
+        if let (Managed(managed), true) = (&new_config.variant, adds_replicas) {
+            let hydration_size = managed
+                .auto_scaling_strategy
+                .as_ref()
+                .and_then(|strategy| strategy.on_hydration.as_ref())
+                .map(|on_hydration| on_hydration.hydration_size.as_str());
+            for size in std::iter::once(managed.size.as_str()).chain(hydration_size) {
+                self.ensure_size_allows_cluster_workloads(cluster_id, size, session)?;
             }
         }
 
@@ -1340,6 +1403,7 @@ impl Coordinator {
                     }
                     None => None,
                 };
+                self.ensure_size_allows_cluster_workloads(cluster_id, &size, session)?;
                 let location = mz_catalog::durable::ReplicaLocation::Managed {
                     // The user-pinned `AVAILABILITY ZONE`, if any, as a zero- or
                     // one-element list.

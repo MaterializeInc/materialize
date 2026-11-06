@@ -3142,6 +3142,14 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
             SqlScalarType::Numeric { max_scale: None }.nullable(false),
         )
         .with_column("disabled", SqlScalarType::Bool.nullable(false))
+        .with_column(
+            "allowed_workloads",
+            SqlScalarType::List {
+                element_type: Box::new(SqlScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
+        )
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("size", "The human-readable replica size."),
@@ -3163,6 +3171,8 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
         (
             "disabled",
             "Whether the size is disabled. Existing replicas keep running on a disabled size, but new clusters and replicas cannot choose it.",
+            "allowed_workloads",
+            "The workload classes that clusters of this size may run: `ingest`, `sink`, `compute_maintained`, `compute_interactive`, and `compute_introspection`.",
         ),
     ]),
     is_retained_metrics_object: true,
