@@ -322,7 +322,9 @@ export const ResourceChartHeader = ({
           columnGap={4}
           rowGap={1}
           minWidth={0}
-          {...headerItem}
+          px={headerItem.px}
+          // This box fills the row, so only its contents take the pointer.
+          sx={{ "& > *": { pointerEvents: "auto" } }}
         >
           {legend && (
             <HStack spacing={2} minWidth={0}>
