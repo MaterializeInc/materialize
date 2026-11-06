@@ -1485,12 +1485,15 @@ where
                 self.send_parameter_statuses(params).await?;
             }
             Ok(_) => {}
-            Err(err) => {
+            Err(err) if action == EndTransactionAction::Commit => {
                 self.send(BackendMessage::ErrorResponse(
                     err.into_response(Severity::Error),
                 ))
                 .await?;
             }
+            // We only roll back after an error was already sent, and a client expects just one
+            // error per failed query.
+            Err(_) => {}
         }
         Ok(())
     }

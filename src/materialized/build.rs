@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
     #[cfg(target_os = "linux")]
     custom_labels::build::emit_build_instructions();
 }

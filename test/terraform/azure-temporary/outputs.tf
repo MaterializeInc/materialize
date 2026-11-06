@@ -58,12 +58,12 @@ output "aks_workload_identity_client_id" {
 
 output "materialize_nodepool_name" {
   description = "The name of the Materialize node pool"
-  value       = module.materialize_nodepool.nodepool_name
+  value       = module.nodepool_materialize.nodepool_name
 }
 
-output "materialize_nodepool_id" {
-  description = "The ID of the Materialize node pool"
-  value       = module.materialize_nodepool.nodepool_id
+output "materialize_nodeclass_name" {
+  description = "The name of the Materialize AKSNodeClass"
+  value       = module.nodepool_materialize.nodeclass_name
 }
 
 # Database outputs

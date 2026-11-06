@@ -29,6 +29,8 @@ enum TimezoneAbbrevSpec<'a> {
 }
 
 fn main() -> Result<()> {
+    println!("cargo:rerun-if-changed={DEFAULT_TZNAMES}");
+
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
 
     // Convert the default PostgreSQL timezone abbreviation file into a Rust

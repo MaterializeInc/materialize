@@ -14,8 +14,8 @@
 aiohttp==3.14.5
 black==26.10.1
 # Pulls in dependencies that make launchdarkly/cloud tests fail, keep for now
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.43.122
-boto3==1.43.122
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.43.123
+boto3==1.43.123
 click==8.5.0
 cryptography==50.0.2
 colored==2.3.2
@@ -31,7 +31,7 @@ jupyterlab==4.6.5
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
-launchdarkly-api==25.1.0
+launchdarkly-api==25.1.1
 # NOTE matplotlib 3.10.9 is required for Python 3.10 compatibility
 matplotlib==3.10.9; python_version < "3.11"
 matplotlib==3.11.2; python_version >= "3.11"
@@ -50,7 +50,6 @@ pdoc==16.0.0
 pg8000==1.31.6
 prettytable==3.18.0
 psutil==7.2.2
-# TODO: Bump psycopg/psycopg-binary to >= 3.3.6 when SQL-840 is fixed
 psycopg==3.3.6
 psycopg-binary==3.3.6
 pydantic==2.14.2
@@ -69,15 +68,15 @@ scipy==1.18.1; python_version >= "3.11"
 scipy-stubs==1.18.1.1
 semver==3.1.0
 shtab==1.13.0
-sqlparse==0.6.0
+sqlparse==0.6.1
 toml==0.10.2
 twine==7.0.0
 types-Markdown==3.11.2.20261029
 types-prettytable==3.4.2.6
 types-psutil==7.2.2.20260906
 types-PyMYSQL==1.2.0.20260923
-types-PyYAML==6.0.12.20260906
-types-requests==2.33.0.20261006
+types-PyYAML==6.0.12.20261030
+types-requests==2.33.0.20261030
 types-setuptools==84.0.0.20261006
 types-toml==0.10.8.20260518
 typing-extensions==4.16.0

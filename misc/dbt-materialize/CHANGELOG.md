@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+* Quote names in the hints `deploy_init` prints when the deploying role lacks
+  a permission, so each hint can be run as is for names that need quoting. The
+  ownership hints now quote the cluster or schema name, and the CREATECLUSTER
+  hint quotes the role.
+
+## 1.9.12 - 2026-11-03
+
 * Fix the deployment timestamp in the schema comment `deploy_promote` leaves
   behind. It read the second row of the first column instead of the second
   column of the only row, so every tag said `Deployment by <user> on ` with
@@ -45,6 +52,15 @@
   warning until the deployment failed later on. The checks also count
   membership in the owning role as ownership, matching how Materialize decides
   who may run the swap in `deploy_promote`.
+
+* Warn in `strict_mode` when a `view`, `materialized_view` or `table` model is
+  built in a schema that also holds sources, sinks or source tables. The check
+  for this never ran, because the flags it set inside a loop did not survive
+  the loop. It warns instead of failing because runs that exclude sources and
+  sinks, as the docs recommend, have always passed it. It will become an error
+  in a future release.
+
+* Allow installing with `dbt-postgres` 1.11.
 
 ## 1.9.11 - 2026-07-26
 

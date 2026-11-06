@@ -199,12 +199,12 @@ def run_sqlancer(
     c.up("materialized")
 
     c.sql(
-        "ALTER SYSTEM SET max_databases TO 1000",
+        "ALTER SYSTEM SET max_databases TO 10000",
         user="mz_system",
         port=6877,
     )
     c.sql(
-        "ALTER SYSTEM SET max_tables TO 1000",
+        "ALTER SYSTEM SET max_tables TO 10000",
         user="mz_system",
         port=6877,
     )

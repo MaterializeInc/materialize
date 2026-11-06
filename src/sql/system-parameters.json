@@ -932,15 +932,6 @@
       "dyncfg": true
     },
     {
-      "name": "enable_compute_half_join2",
-      "typeName": "boolean",
-      "default": "on",
-      "description": "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
-      "scope": "environment",
-      "userVisible": false,
-      "dyncfg": true
-    },
-    {
       "name": "enable_compute_index_peek_offload",
       "typeName": "boolean",
       "default": "on",
@@ -1402,8 +1393,17 @@
     {
       "name": "enable_mcp_protocol_2026_07_28",
       "typeName": "boolean",
-      "default": "off",
+      "default": "on",
       "description": "Whether the MCP endpoints serve the 2026-07-28 protocol revision alongside 2025-11-25. When false, requests are served on the 2025-11-25 protocol only.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_mcp_unified",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether the unified MCP HTTP endpoint is enabled. When false, requests to /api/mcp return 503 Service Unavailable.",
       "scope": "environment",
       "userVisible": false,
       "dyncfg": true
@@ -3163,6 +3163,15 @@
       "dyncfg": true
     },
     {
+      "name": "persist_gc_remove_finalized_rollups",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether GC removes a finalized shard's old rollups from state and blob.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "persist_gc_use_active_gc",
       "typeName": "boolean",
       "default": "off",
@@ -4082,7 +4091,7 @@
       "name": "storage_persist_sink_description_lookahead",
       "typeName": "duration",
       "default": "0 s",
-      "description": "Determines how far past the remap upper the source persist sink will commit to a ceiling in order to group data into one batch and one description, and whether the Postgres replication stream is read while a snapshot runs. Zero disables both, leaving every timestamp writing its own batch. Other values below the tick interval are clamped to the tick interval.",
+      "description": "Determines how far past the remap upper the source persist sink will commit to a ceiling in order to group data into one batch and one description, and whether the Postgres and MySQL replication streams are read while a snapshot runs. Zero disables both, leaving every timestamp writing its own batch. Other values below the tick interval are clamped to the tick interval.",
       "scope": "environment",
       "userVisible": false,
       "dyncfg": true

@@ -54,6 +54,12 @@ import {
   fetchClusters,
 } from "~/api/materialize/cluster/clusterList";
 import {
+  fetchClusterHydrationEpisodes,
+  fetchClusterReplicaHistory,
+  fetchEpisodeObjectHydrations,
+  fetchReplicaCpuPeak,
+} from "~/api/materialize/cluster/hydrationHistory";
+import {
   fetchIndexesList,
   ListFilters,
 } from "~/api/materialize/cluster/indexesList";
@@ -72,7 +78,10 @@ import {
   MaterializationLagParams,
 } from "~/api/materialize/cluster/materializationLag";
 import fetchMaxReplicasPerCluster from "~/api/materialize/cluster/maxReplicasPerCluster";
-import { fetchObjectCreationTimes } from "~/api/materialize/cluster/objectCreationTimes";
+import {
+  fetchDroppedObjectLifetimes,
+  fetchObjectCreationTimes,
+} from "~/api/materialize/cluster/objectCreationTimes";
 import { fetchReplicaHeapLimits } from "~/api/materialize/cluster/replicaHeapLimits";
 import { fetchReplicaHydration } from "~/api/materialize/cluster/replicaHydration";
 import {
@@ -251,10 +260,10 @@ export const clusterQueryKeys = {
         objectIds: [...params.objectIds].sort().join(","),
       }),
     ] as const,
-  replicaUtilization: () =>
+  replicaUtilization: (params: { includeSwap: boolean }) =>
     [
       ...clusterQueryKeys.all(),
-      buildQueryKeyPart("replicaUtilization"),
+      buildQueryKeyPart("replicaUtilization", params),
     ] as const,
   replicaHydration: () =>
     [...clusterQueryKeys.all(), buildQueryKeyPart("replicaHydration")] as const,
@@ -273,6 +282,41 @@ export const clusterQueryKeys = {
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("replicaHydrationEpisodes", params),
+    ] as const,
+  clusterHydrationEpisodes: (params: {
+    clusterId: string;
+    timePeriodMinutes: number;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("clusterHydrationEpisodes", params),
+    ] as const,
+  clusterReplicaHistory: (params: {
+    clusterId: string;
+    timePeriodMinutes: number;
+    currentReplicaIdsKey: string;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("clusterReplicaHistory", params),
+    ] as const,
+  episodeObjectHydrations: (params: {
+    replicaId: string;
+    startDate: string;
+    endDate: string;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("episodeObjectHydrations", params),
+    ] as const,
+  replicaCpuPeak: (params: {
+    replicaId: string;
+    startDate: string;
+    endDate: string;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaCpuPeak", params),
     ] as const,
   unhydratedComputeObjects: (params: { replicaIds: string[] }) =>
     [
@@ -299,11 +343,20 @@ export const clusterQueryKeys = {
     ] as const,
   objectCreationTimes: (params: {
     objectIds: string[];
-    timePeriodMinutes: number;
+    timePeriodMinutes?: number;
   }) =>
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("objectCreationTimes", params),
+    ] as const,
+  droppedObjectLifetimes: (params: {
+    clusterId: string;
+    timePeriodMinutes: number;
+    refetchKey: string;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("droppedObjectLifetimes", params),
     ] as const,
   maintainedObjectNames: (objectIds: string[]) =>
     [
@@ -332,11 +385,19 @@ const toUtilizationMap = ({
  * every page, for as long as the session lasts.
  */
 export function useReplicaUtilization() {
+  const includeSwap =
+    useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
   return useQuery({
     refetchInterval: 30_000,
-    queryKey: clusterQueryKeys.replicaUtilization(),
-    queryFn: ({ queryKey, signal }) =>
-      fetchReplicaUtilization({ queryKey, requestOptions: { signal } }),
+    queryKey: clusterQueryKeys.replicaUtilization({ includeSwap }),
+    queryFn: ({ queryKey, signal }) => {
+      const [, params] = queryKey;
+      return fetchReplicaUtilization({
+        params,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
     select: toUtilizationMap,
   });
 }
@@ -951,7 +1012,8 @@ export function useReplicaOfflineEvents(
 // TODO: remove these gates once all environments are past them.
 const UTILIZATION_INDEXED_VIEWS_MIN_VERSION = "26.32.0";
 export const REPLICA_MEMORY_BREAKDOWN_MIN_VERSION = "26.44.0";
-const REPLICA_HYDRATION_HISTORY_MIN_VERSION = "26.43.0";
+export const REPLICA_HYDRATION_HISTORY_MIN_VERSION = "26.43.0";
+export const OBJECT_HYDRATION_TIMES_MIN_VERSION = "26.39.0";
 
 /**
  * Which source serves a utilization window: a live SUBSCRIBE to the un-binned
@@ -1219,10 +1281,14 @@ export function replicaStatusesUpdatedAt(replicas: Cluster["replicas"]) {
  * Status transitions and OOM kills of the given replicas, fetched again only
  * when `statusesUpdatedAt` changes. Pass `replicaStatusesUpdatedAt` of the
  * cluster's replicas. Idle while `replicaIds` is empty.
+ *
+ * `keepOverlapping` keeps the previous answer up while a new set of replicas
+ * shares one with it, for a view that derives history from it.
  */
 export function useReplicaStatusHistory(
   replicaIds: string[],
   statusesUpdatedAt: number | undefined,
+  { keepOverlapping = false }: { keepOverlapping?: boolean } = {},
 ) {
   return useQuery({
     queryKey: clusterQueryKeys.replicaStatusHistory({
@@ -1239,13 +1305,15 @@ export function useReplicaStatusHistory(
         requestOptions: { signal },
       });
     },
-    // A new transition changes the key. The same replicas' history stays up
-    // meanwhile, but never other replicas'. After `queryFn`, so the data type
-    // is inferred from it.
-    placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey[1].replicaIds.join(",") === replicaIds.join(",")
-        ? previous
-        : undefined,
+    // A new transition changes the key, and the same replicas' history stays
+    // up meanwhile. After `queryFn`, so the data type is inferred from it.
+    placeholderData: (previous, previousQuery) => {
+      const previousIds = previousQuery?.queryKey[1].replicaIds ?? [];
+      const isKept = keepOverlapping
+        ? previousIds.some((id) => replicaIds.includes(id))
+        : previousIds.join(",") === replicaIds.join(",");
+      return isKept ? previous : undefined;
+    },
   });
 }
 
@@ -1274,6 +1342,149 @@ export function useReplicaHydrationEpisodes(params: {
             queryKeyParams.timePeriodMinutes,
           ).toISOString(),
         },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+  });
+}
+
+/**
+ * A cluster's hydration episodes over the window, polled at the history's
+ * collection interval. Idle while the environment predates the history.
+ */
+export function useClusterHydrationEpisodes(params: {
+  clusterId: string;
+  timePeriodMinutes: number;
+}) {
+  const hasHydrationHistory =
+    useEnvironmentGate(REPLICA_HYDRATION_HISTORY_MIN_VERSION) === true;
+  return useQuery({
+    queryKey: clusterQueryKeys.clusterHydrationEpisodes(params),
+    enabled: hasHydrationHistory,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchClusterHydrationEpisodes({
+        params: {
+          clusterId: queryKeyParams.clusterId,
+          startDate: subMinutes(
+            new Date(),
+            queryKeyParams.timePeriodMinutes,
+          ).toISOString(),
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+  });
+}
+
+/**
+ * A cluster's replicas over the window, dropped ones included. Replicas are
+ * only created or dropped along with a change to the current ones, so this is
+ * fetched again only when `currentReplicaIds` changes.
+ */
+export function useClusterReplicaHistory(params: {
+  clusterId: string;
+  timePeriodMinutes: number;
+  currentReplicaIds: string[];
+}) {
+  return useQuery({
+    queryKey: clusterQueryKeys.clusterReplicaHistory({
+      clusterId: params.clusterId,
+      timePeriodMinutes: params.timePeriodMinutes,
+      currentReplicaIdsKey: [...params.currentReplicaIds].sort().join(","),
+    }),
+    staleTime: Infinity,
+    // A set of current replicas can come back, as when a burst replica is
+    // dropped, and its cached answer would lack the replicas made since.
+    gcTime: 0,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchClusterReplicaHistory({
+        params: {
+          clusterId: queryKeyParams.clusterId,
+          startDate: subMinutes(
+            new Date(),
+            queryKeyParams.timePeriodMinutes,
+          ).toISOString(),
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    // A replica added or dropped changes the key. The same cluster's earlier
+    // answer stays up meanwhile, but never another cluster's.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1].clusterId === params.clusterId
+        ? previous
+        : undefined,
+  });
+}
+
+/**
+ * The object hydrations of one finished episode, fetched until there are as
+ * many as the episode's objects. Idle without an episode or before the history
+ * exists.
+ */
+export function useEpisodeObjectHydrations(
+  episode:
+    | {
+        replicaId: string;
+        startedAt: Date;
+        finishedAt: Date;
+        objectCount: number;
+      }
+    | undefined,
+) {
+  const hasHydrationHistory =
+    useEnvironmentGate(REPLICA_HYDRATION_HISTORY_MIN_VERSION) === true;
+  // The collector can record an episode a visit before some of its objects,
+  // which then show up at the replica's next visit.
+  const isComplete = (rows: unknown[] | undefined) =>
+    rows !== undefined && rows.length >= (episode?.objectCount ?? 0);
+  return useQuery({
+    queryKey: clusterQueryKeys.episodeObjectHydrations({
+      replicaId: episode?.replicaId ?? "",
+      startDate: episode?.startedAt.toISOString() ?? "",
+      endDate: episode?.finishedAt.toISOString() ?? "",
+    }),
+    enabled: hasHydrationHistory && episode !== undefined,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchEpisodeObjectHydrations({
+        params: queryKeyParams,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    // After `queryFn`, so the data type is inferred from it.
+    staleTime: (query) => (isComplete(query.state.data) ? Infinity : 0),
+    refetchInterval: (query) => (isComplete(query.state.data) ? false : 60_000),
+  });
+}
+
+/**
+ * The highest CPU sampled on a replica over a past window, which never
+ * changes, so this is fetched once. Idle without a window.
+ */
+export function useReplicaCpuPeak(
+  window: { replicaId: string; startDate: Date; endDate: Date } | undefined,
+) {
+  return useQuery({
+    queryKey: clusterQueryKeys.replicaCpuPeak({
+      replicaId: window?.replicaId ?? "",
+      startDate: window?.startDate.toISOString() ?? "",
+      endDate: window?.endDate.toISOString() ?? "",
+    }),
+    enabled: window !== undefined,
+    staleTime: Infinity,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchReplicaCpuPeak({
+        params: queryKeyParams,
         queryKey,
         requestOptions: { signal },
       });
@@ -1553,10 +1764,13 @@ export function useReplicaHeapBytes(replicaIds: string[]) {
   });
 }
 
-/** Creation times of the given objects over the window. Idle while `objectIds` is empty. */
+/**
+ * Creation times of the given objects over the window, or whenever they were
+ * created without one. Idle while `objectIds` is empty.
+ */
 export function useObjectCreationTimes(params: {
   objectIds: string[];
-  timePeriodMinutes: number;
+  timePeriodMinutes?: number;
 }) {
   return useQuery({
     queryKey: clusterQueryKeys.objectCreationTimes(params),
@@ -1569,6 +1783,51 @@ export function useObjectCreationTimes(params: {
         params: {
           objectIds: queryKeyParams.objectIds,
           objectTypes: ["index", "materialized-view"],
+          startDate:
+            queryKeyParams.timePeriodMinutes === undefined
+              ? undefined
+              : subMinutes(
+                  new Date(),
+                  queryKeyParams.timePeriodMinutes,
+                ).toISOString(),
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    // The earlier answer stays up while the objects overlap, as after one is
+    // created, which another cluster's objects never do.
+    placeholderData: (previous, previousQuery) => {
+      const objectIds = new Set(params.objectIds);
+      return previousQuery?.queryKey[1].objectIds.some((id) =>
+        objectIds.has(id),
+      )
+        ? previous
+        : undefined;
+    },
+  });
+}
+
+/**
+ * When the cluster's indexes and materialized views created over the window
+ * and dropped since were created and dropped. Fetched again when `refetchKey` changes, and
+ * idle while it's empty.
+ */
+export function useDroppedObjectLifetimes(params: {
+  clusterId: string;
+  timePeriodMinutes: number;
+  refetchKey: string;
+}) {
+  return useQuery({
+    queryKey: clusterQueryKeys.droppedObjectLifetimes(params),
+    enabled: params.refetchKey !== "",
+    staleTime: Infinity,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchDroppedObjectLifetimes({
+        params: {
+          clusterId: queryKeyParams.clusterId,
+          objectTypes: ["index", "materialized-view"],
           startDate: subMinutes(
             new Date(),
             queryKeyParams.timePeriodMinutes,
@@ -1578,6 +1837,11 @@ export function useObjectCreationTimes(params: {
         requestOptions: { signal },
       });
     },
+    // The same cluster's earlier answer stays up while a new key loads.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1].clusterId === params.clusterId
+        ? previous
+        : undefined,
   });
 }
 

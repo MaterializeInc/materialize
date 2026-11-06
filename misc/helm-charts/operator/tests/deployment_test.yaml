@@ -17,7 +17,7 @@ tests:
       of: Deployment
   - equal:
       path: spec.template.spec.containers[0].image
-      value: materialize/orchestratord:v26.48.2
+      value: materialize/orchestratord:v26.49.1
   - equal:
       path: spec.template.spec.containers[0].imagePullPolicy
       value: IfNotPresent
@@ -429,3 +429,28 @@ tests:
   - equal:
       path: spec.template.spec.terminationGracePeriodSeconds
       value: 30
+- it: should pass the balancerd readiness probe path
+  set:
+    balancerd.readinessProbePath: /api/livez
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--balancerd-readiness-probe-path=/api/livez"
+- it: should not use user namespaces by default
+  asserts:
+  - notExists:
+      path: spec.template.spec.hostUsers
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--enable-user-namespaces"
+
+- it: should run the operator in a user namespace and pass the flag when enabled
+  set:
+    operator.args.enableUserNamespaces: true
+  asserts:
+  - equal:
+      path: spec.template.spec.hostUsers
+      value: false
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--enable-user-namespaces"

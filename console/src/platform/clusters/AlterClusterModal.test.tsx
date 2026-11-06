@@ -15,6 +15,7 @@ import React from "react";
 import { onTestFinished } from "vitest";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
+import { labelSql } from "~/api/materialize/executeSqlV2";
 import {
   ErrorCode,
   ExtendedRequest,
@@ -390,13 +391,16 @@ describe("ClusterOverview", () => {
     await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
     expect(sent).toEqual([
       [
-        [
-          `ALTER CLUSTER "prod" SET (`,
-          "  AUTO SCALING STRATEGY = (",
-          "    ON HYDRATION (HYDRATION SIZE = '1600cc', LINGER DURATION = '90s')",
-          "  )",
-          ")",
-        ].join("\n"),
+        labelSql(
+          [
+            `ALTER CLUSTER "prod" SET (`,
+            "  AUTO SCALING STRATEGY = (",
+            "    ON HYDRATION (HYDRATION SIZE = '1600cc', LINGER DURATION = '90s')",
+            "  )",
+            ")",
+          ].join("\n"),
+          "clusters.alter",
+        ),
       ],
     ]);
   });
@@ -412,7 +416,7 @@ describe("ClusterOverview", () => {
     await user.click(screen.getByRole("button", { name: "Alter cluster" }));
 
     await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
-    expect(sent).toEqual([[RESET_PROD]]);
+    expect(sent).toEqual([[labelSql(RESET_PROD, "clusters.alter")]]);
   });
 
   it("removes a policy in the same SET as a resize to its burst size", async () => {
@@ -428,7 +432,10 @@ describe("ClusterOverview", () => {
     await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
     expect(sent).toEqual([
       [
-        `ALTER CLUSTER "prod" SET (\n  SIZE = '800cc',\n  AUTO SCALING STRATEGY = ()\n)`,
+        labelSql(
+          `ALTER CLUSTER "prod" SET (\n  SIZE = '800cc',\n  AUTO SCALING STRATEGY = ()\n)`,
+          "clusters.alter",
+        ),
       ],
     ]);
   });
@@ -467,8 +474,18 @@ describe("ClusterOverview", () => {
 
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent).toEqual([
-      [`ALTER CLUSTER "prod" SET (\n  SIZE = '1600cc'\n)`],
-      [`ALTER CLUSTER "prod" SET (\n  REPLICATION FACTOR = 2\n)`],
+      [
+        labelSql(
+          `ALTER CLUSTER "prod" SET (\n  SIZE = '1600cc'\n)`,
+          "clusters.alter",
+        ),
+      ],
+      [
+        labelSql(
+          `ALTER CLUSTER "prod" SET (\n  REPLICATION FACTOR = 2\n)`,
+          "clusters.alter",
+        ),
+      ],
     ]);
   });
 
@@ -486,7 +503,9 @@ describe("ClusterOverview", () => {
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Alter cluster" }));
     await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
-    expect(sent).toEqual([[`ALTER CLUSTER "prod" RENAME TO "renamed"`]]);
+    expect(sent).toEqual([
+      [labelSql(`ALTER CLUSTER "prod" RENAME TO "renamed"`, "clusters.alter")],
+    ]);
   });
 
   it("diffs against the values it opened with when they change under it", async () => {
@@ -532,7 +551,12 @@ describe("ClusterOverview", () => {
 
     await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
     expect(sent).toEqual([
-      [`ALTER CLUSTER "prod" SET (\n  REPLICATION FACTOR = 2\n)`],
+      [
+        labelSql(
+          `ALTER CLUSTER "prod" SET (\n  REPLICATION FACTOR = 2\n)`,
+          "clusters.alter",
+        ),
+      ],
     ]);
   });
 
@@ -563,7 +587,10 @@ describe("ClusterOverview", () => {
 
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toEqual([
-      `ALTER CLUSTER "prod" SET (\n  REPLICATION FACTOR = 2\n)`,
+      labelSql(
+        `ALTER CLUSTER "prod" SET (\n  REPLICATION FACTOR = 2\n)`,
+        "clusters.alter",
+      ),
     ]);
   });
 
@@ -585,7 +612,7 @@ describe("ClusterOverview", () => {
         screen.queryByRole("dialog", { name: "Alter cluster" }),
       ).not.toBeInTheDocument(),
     );
-    expect(sent).toEqual([[RESET_PROD]]);
+    expect(sent).toEqual([[labelSql(RESET_PROD, "clusters.alter")]]);
 
     await user.click(screen.getByRole("button", { name: "Open" }));
     expect(
@@ -597,7 +624,10 @@ describe("ClusterOverview", () => {
 
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toEqual([
-      `ALTER CLUSTER "prod" SET (\n  REPLICATION FACTOR = 2\n)`,
+      labelSql(
+        `ALTER CLUSTER "prod" SET (\n  REPLICATION FACTOR = 2\n)`,
+        "clusters.alter",
+      ),
     ]);
   });
 

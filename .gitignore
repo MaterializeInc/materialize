@@ -40,6 +40,7 @@ services.log
 test/scalability/results/**/*.csv
 test/scalability/results/**/*.png
 misc/wasm/target
+misc/materialize-sdk/target
 parallel-benchmark.db
 license_key
 /trufflehog.log

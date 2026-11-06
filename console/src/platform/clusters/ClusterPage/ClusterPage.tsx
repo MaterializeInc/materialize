@@ -28,10 +28,16 @@ import {
   CONFIGURATION_SECTIONS,
   ConfigurationSection,
 } from "./Configuration/clusterConfigurationModel";
-import { replicaSearch, WORKERS_TAB_PATH } from "./tabLinks";
+import { ClusterHydration } from "./Hydration/ClusterHydration";
+import {
+  HYDRATION_TAB_PATH,
+  replicaSearch,
+  WORKERS_TAB_PATH,
+} from "./tabLinks";
 import { REPLICA_SEARCH_PARAM } from "./useSelectedReplica";
 
-// The Metrics and Workers tabs share a replica choice, so their links carry it.
+// The Metrics, Workers and Hydration tabs share a replica choice, so their
+// links carry it.
 const tabs = (replicaName: string | undefined): Tab[] => [
   { label: "Metrics", href: `..${replicaSearch(replicaName)}`, end: true },
   {
@@ -39,6 +45,10 @@ const tabs = (replicaName: string | undefined): Tab[] => [
     href: `../${WORKERS_TAB_PATH}${replicaSearch(replicaName)}`,
   },
   { label: "Objects", href: "../objects" },
+  {
+    label: "Hydration",
+    href: `../${HYDRATION_TAB_PATH}${replicaSearch(replicaName)}`,
+  },
 ];
 
 // The configuration drawer's open section, in the URL so it survives a reload
@@ -173,6 +183,10 @@ const ClusterPage = () => {
         <Route
           path="objects/:objectType"
           element={<ClusterObjects key={clusterName} />}
+        />
+        <Route
+          path={HYDRATION_TAB_PATH}
+          element={<ClusterHydration key={clusterName} />}
         />
         <Route
           path="replicas"

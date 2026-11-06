@@ -176,6 +176,13 @@ The payload has the following structure:
 }
 ```
 
+##### Execution time notice
+
+With the [`emit_execution_time_notice`](/sql/set/#other-configuration-parameters)
+configuration parameter on, an
+[execution time notice](/serve-results/execution-time-notice/) precedes the
+`CommandComplete` of a successful statement.
+
 #### `Error`
 
 Executing a statement resulted in an error.

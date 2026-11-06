@@ -293,8 +293,18 @@ pub const ENABLE_MCP_DEVELOPER_QUERY_TOOL: Config<bool> = Config::new(
 /// asks for 2026-07-28, so modern clients keep falling back to `initialize`.
 pub const ENABLE_MCP_PROTOCOL_2026_07_28: Config<bool> = Config::new(
     "enable_mcp_protocol_2026_07_28",
-    false,
+    true,
     "Whether the MCP endpoints serve the 2026-07-28 protocol revision alongside 2025-11-25. When false, requests are served on the 2025-11-25 protocol only.",
+    ParameterScope::Environment,
+);
+
+/// Whether the unified MCP endpoint at `/api/mcp` is enabled. Separate from the
+/// `/api/mcp/agent` and `/api/mcp/developer` flags, so each route rolls out on
+/// its own.
+pub const ENABLE_MCP_UNIFIED: Config<bool> = Config::new(
+    "enable_mcp_unified",
+    false,
+    "Whether the unified MCP HTTP endpoint is enabled. When false, requests to /api/mcp return 503 Service Unavailable.",
     ParameterScope::Environment,
 );
 
@@ -594,6 +604,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_DEVELOPER)
         .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
         .add(&ENABLE_MCP_PROTOCOL_2026_07_28)
+        .add(&ENABLE_MCP_UNIFIED)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)

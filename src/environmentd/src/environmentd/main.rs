@@ -259,6 +259,10 @@ pub struct Args {
         env = "ORCHESTRATOR_KUBERNETES_ENABLE_PROMETHEUS_SCRAPE_ANNOTATIONS"
     )]
     orchestrator_kubernetes_enable_prometheus_scrape_annotations: bool,
+    /// Whether to run service (clusterd) pods in a Kubernetes user namespace
+    /// by setting `hostUsers: false` on their pod specs.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_ENABLE_USER_NAMESPACES")]
+    orchestrator_kubernetes_enable_user_namespaces: bool,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -868,6 +872,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                 .orchestrator_kubernetes_disable_pod_metrics_collection,
                             enable_prometheus_scrape_annotations: args
                                 .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
+                            enable_user_namespaces: args
+                                .orchestrator_kubernetes_enable_user_namespaces,
                         },
                         &metrics_registry,
                     ))

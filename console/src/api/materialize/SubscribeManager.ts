@@ -24,7 +24,7 @@ import {
   SessionVariables,
   SqlRequest,
 } from "./types";
-import { Connectable } from "./WebsocketConnectionManager";
+import { backoffDelayMs, Connectable } from "./WebsocketConnectionManager";
 
 export enum SUBSCRIBE_ERROR_CODE {
   CONNECTION_CLOSED = "MZC001",
@@ -75,6 +75,14 @@ export interface SubscribeManagerOptions<
 export type SelectFunction<T extends object, R> = (row: SubscribeRow<T>) => R;
 
 /**
+ * How long to wait before resending a statement that has failed
+ * `failureCount` times in a row without a snapshot. The first resend is
+ * immediate, so a subscribe whose target replica restarted resumes at once.
+ */
+const resendDelayMs = (failureCount: number) =>
+  failureCount <= 1 ? 0 : backoffDelayMs(failureCount - 2);
+
+/**
  * Stateful object that executes Materialize SUBSCRIBE over a websocket. Results from the
  * socket are returned in raw form, meaning each progress message potentially causes a
  * render.
@@ -103,6 +111,9 @@ export class SubscribeManager<T extends object, R> implements Connectable {
   private querySent: boolean = false;
   /** True when the socket signalled ready before any request was set. */
   private readyAwaitingRequest: boolean = false;
+  /** Runs that ended in an error since the last snapshot or connection. */
+  private failureCount = 0;
+  private resendHandle: NodeJS.Timeout | undefined;
   private currentTimestamp: number | undefined;
   private connectionId: number | undefined;
   /** Holds completed timestamp messages, waiting for the flush interval */
@@ -173,6 +184,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
 
   disconnect = () => {
     clearInterval(this.flushIntervalHandle);
+    clearTimeout(this.resendHandle);
     this.socket.disconnect();
   };
 
@@ -222,6 +234,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
 
   /** Clears connection state and internal buffers without touching the exposed snapshot. */
   private resetForNewConnection = () => {
+    clearTimeout(this.resendHandle);
     this.columns = [];
     this.querySent = false;
     this.readyAwaitingRequest = false;
@@ -241,6 +254,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     // marks the held data. Any following setState clears it.
     this.resetForNewConnection();
     this.connectionId = undefined;
+    this.failureCount = 0;
     if (this.snapshotState.snapshotComplete || this.snapshotState.error) {
       this.snapshotState = {
         ...this.snapshotState,
@@ -307,12 +321,29 @@ export class SubscribeManager<T extends object, R> implements Connectable {
       this.setState({ isComplete: true });
       return;
     }
-    if (this.sqlRequest) {
+    if (!this.sqlRequest) {
+      this.readyAwaitingRequest = true;
+      return;
+    }
+    if (!this.querySent) {
       this.socket.send(this.sqlRequest);
       this.querySent = true;
-    } else {
-      this.readyAwaitingRequest = true;
+      return;
     }
+    // The server ended the subscribe already sent, as when its target replica
+    // restarts, and the resend streams a new snapshot. Listeners keep the held
+    // state, error included, until the new run updates it, so a statement that
+    // fails every time doesn't flicker.
+    if (this.currentState.error) this.failureCount += 1;
+    this.resetForNewConnection();
+    // The server readies the session after every error, so without a delay a
+    // statement that always fails, such as one the user may not run, is resent
+    // as fast as the round trip.
+    this.resendHandle = setTimeout(() => {
+      if (!this.sqlRequest || !this.isConnected()) return;
+      this.socket.send(this.sqlRequest);
+      this.querySent = true;
+    }, resendDelayMs(this.failureCount));
   };
 
   private onClose = (event: CloseEvent) => {
@@ -372,6 +403,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     // announced, since that notifies listeners that may call `getUpper`.
     this.currentTimestamp = meta.mzTimestamp;
     if (completesSnapshot) {
+      this.failureCount = 0;
       // Eagerly flush the buffer to make the snapshot available.
       this.flushSocketBuffer();
       this.setState({

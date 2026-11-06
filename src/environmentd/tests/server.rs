@@ -3876,6 +3876,40 @@ async fn test_statement_metrics() {
         ],
     );
 
+    // An HTTP or WebSocket result that needs no cluster gets the same strategy. The metric's
+    // `application_name` label holds only recognized names, so this uses the SQL Shell's.
+    let mut http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
+    http_url
+        .query_pairs_mut()
+        .append_pair("options", r#"{"application_name":"web_console_shell"}"#);
+    let response = reqwest::Client::new()
+        .post(http_url)
+        .json(&serde_json::json!({"query": "SELECT 1"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let strategy = server
+        .metrics_registry
+        .gather()
+        .into_iter()
+        .find(|m| m.name() == "mz_time_to_first_row_seconds")
+        .expect("mz_time_to_first_row_seconds metric should exist")
+        .get_metric()
+        .iter()
+        .find(|m| {
+            m.get_label()
+                .iter()
+                .any(|l| l.name() == "application_name" && l.value() == "web_console_shell")
+        })
+        .and_then(|m| {
+            m.get_label()
+                .iter()
+                .find(|l| l.name() == "strategy")
+                .map(|l| l.value().to_string())
+        });
+    assert_eq!(strategy.as_deref(), Some("constant"));
+
     // Each SELECT or SUBSCRIBE with an AS OF clause counts once per execution. A cursor's SUBSCRIBE
     // counts when FETCH runs it, not at DECLARE.
     let as_of_queries = |kind, statement, application_name| {
@@ -5861,7 +5895,8 @@ fn run_mcp_datadriven_inner(
     });
 }
 
-/// Tests the MCP agent endpoint with the query tool explicitly disabled.
+/// Tests the MCP agent endpoint with the query tool explicitly disabled,
+/// and with 2026-07-28 off so the file covers that path.
 #[mz_ore::test]
 fn test_mcp_agent() {
     let harness = test_util::TestHarness::default()
@@ -5869,6 +5904,10 @@ fn test_mcp_agent() {
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(
             "enable_mcp_agent_query_tool".to_string(),
+            "false".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
             "false".to_string(),
         );
     run_mcp_datadriven("tests/testdata/mcp/agent", harness);
@@ -5983,7 +6022,8 @@ fn test_mcp_developer_protocol_2026_07_28() {
     run_mcp_datadriven("tests/testdata/mcp/developer_2026_07_28", harness);
 }
 
-/// Tests the MCP developer endpoint with the query tool explicitly disabled.
+/// Tests the MCP developer endpoint with the query tool explicitly disabled,
+/// and with 2026-07-28 off so the file covers that path.
 #[mz_ore::test]
 fn test_mcp_developer_with_query_tool_disabled() {
     let harness = test_util::TestHarness::default()
@@ -5991,6 +6031,10 @@ fn test_mcp_developer_with_query_tool_disabled() {
         .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
         .with_system_parameter_default(
             "enable_mcp_developer_query_tool".to_string(),
+            "false".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
             "false".to_string(),
         );
     run_mcp_datadriven("tests/testdata/mcp/developer", harness);

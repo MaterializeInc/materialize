@@ -88,6 +88,9 @@ pub struct Config {
     pub ephemeral_volume_class: Option<String>,
     pub scheduler_name: Option<String>,
     pub enable_security_context: bool,
+    /// Whether to run environmentd and clusterd pods in a Kubernetes user
+    /// namespace (`hostUsers: false`).
+    pub enable_user_namespaces: bool,
     pub enable_internal_statement_logging: bool,
     pub statement_logging_max_sample_rate: Option<f64>,
     pub statement_logging_target_data_rate: Option<usize>,

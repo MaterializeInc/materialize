@@ -282,11 +282,16 @@ pub fn build_ingestion_dataflow(
                 Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
             };
 
-            // Only Postgres keeps its remap upper still through a snapshot, so only its ceiling
-            // ends near where the frontier lands when the pin lifts. MySQL and SQL Server tick
-            // through theirs, which would hold the shard upper at the as_of for the whole replay.
-            // TODO: include them once their snapshots run concurrently with CDC.
-            let oltp_source = matches!(connection, GenericSourceConnection::Postgres(_));
+            // The ceiling has to end near where the frontier lands when the pin lifts. Postgres and
+            // MySQL read the replication stream during a snapshot whenever the lookahead is
+            // nonzero. The data they stage then tracks the remap upper. SQL Server ticks its remap
+            // upper through a snapshot and replays it afterwards. A ceiling there would hold the
+            // shard upper at the as_of for the whole replay.
+            // TODO: include SQL Server once its snapshots run concurrently with CDC.
+            let oltp_source = matches!(
+                connection,
+                GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_)
+            );
 
             let base_source_config = RawSourceCreationConfig {
                 name: format!("{}-{}", connection.name(), primary_source_id),
