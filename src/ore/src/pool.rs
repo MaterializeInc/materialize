@@ -2331,6 +2331,11 @@ impl ChunkHandle {
                 pool.counters
                     .resident_bytes
                     .fetch_sub(u64::cast_from(self.meta.len_bytes()), Ordering::Relaxed);
+                // Mark the chunk dead before the lock drops. Eager backing
+                // otherwise sees an `UnbackedResident` chunk with no body,
+                // moves it to `WriteInFlight`, and the spill thread panics
+                // finding nothing to serialize.
+                state.freed = true;
             }
             body
         };
@@ -4176,6 +4181,26 @@ mod tests {
         assert_eq!(stats.resident_bytes, 0);
         assert_eq!(stats.extent_resident_bytes, 0);
         assert_eq!(stats.live_chunks, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_take_races_eager_backing() {
+        let pool = test_pool(usize::MAX);
+        pool.set_rss_target(usize::MAX / 2);
+        pool.set_spill_threads(4);
+        pool.set_eager_backing(true);
+        for round in 0..rounds(20_000, 20) {
+            let orig = payload(SMALL, round);
+            match insert_typed(&pool, orig.clone()).take_typed() {
+                Ok(body) => assert_eq!(taken(body), orig),
+                // A spill thread is backing the body.
+                Err(handle) => assert_eq!(read(&handle), orig),
+            }
+        }
+        pool.set_eager_backing(false);
+        pool.quiesce_spill();
+        pool.join_spill_threads();
+        assert_eq!(pool.stats().resident_bytes, 0);
     }
 
     #[mz_ore::test]
