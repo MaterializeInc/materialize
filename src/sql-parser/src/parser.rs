@@ -10186,14 +10186,16 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// Look for an object type and return it if it matches.
+    /// Look for an object type and return it if it matches. This is used only by
+    /// GRANT/REVOKE, where a bare `assertion` must remain a table name, so
+    /// `ASSERTION` is intentionally excluded here (DROP/SHOW use
+    /// `expect_object_type`, which does accept it).
     fn parse_object_type(&mut self) -> Option<ObjectType> {
         Some(
             match self.parse_one_of_keywords(&[
                 TABLE,
                 VIEW,
                 MATERIALIZED,
-                ASSERTION,
                 SOURCE,
                 SINK,
                 METRIC,
@@ -10219,7 +10221,6 @@ impl<'a> Parser<'a> {
                         return None;
                     }
                 }
-                ASSERTION => ObjectType::Assertion,
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
                 METRIC => {
