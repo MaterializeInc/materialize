@@ -20,6 +20,17 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.49.1
+*Released to Materialize Cloud: 2026-11-05* <br>
+*Released to Materialize Self-Managed: 2026-11-06* <br>
+
+### Improvements {#v26.49.1-improvements}
+- **Freshness page on Self-Managed**: The Console's [Freshness page](#v26.48-freshness-page) is now available on Materialize Self-Managed, where it was previously turned off, so you can track aggregate freshness across your environment and find the objects that are lagging.
+- **See how a cluster hydrated, and why it did not**: The Console's [redesigned cluster details page](#v26.47-cluster-details-page) gains a **Hydration** tab that charts each replica's past hydrations over the last 24 hours, 7 days, or 30 days, breaks one down into per-object waiting and working time alongside its peak memory, disk, heap, and CPU, and calls out a replica that keeps restarting before it finishes hydrating.
+
+### Bug Fixes {#v26.49.1-bug-fixes}
+- Fixed the Console's cluster list showing a dash in the Disk column for every replica on cluster sizes that allocate no disk, which is every size on a self-managed deployment with swap enabled; the column now shows swap usage as a share of the replica's heap limit, the same figure the cluster details page already charts as disk (<red>*Materialize Self-Managed only*</red>).
+
 ## v26.49.0
 *Released to Materialize Cloud: 2026-11-05* <br>
 *Released to Materialize Self-Managed: 2026-11-06* <br>
