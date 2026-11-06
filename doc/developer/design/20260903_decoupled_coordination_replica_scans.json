@@ -1,0 +1,3011 @@
+{
+  "native": {
+    "run": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/v2/scan-audit-1793974261",
+    "windows": [
+      {
+        "roles": {
+          "controllerd": 0.056595100163475964,
+          "replica-s1-s1": 0.29965346760573564,
+          "replica-s2-s2": 4.854513267619347,
+          "replica-s3-s3": 0.2130927406623164,
+          "replica-u1-u1": 0.2363993040382956,
+          "adapterd": 2.087638607185044
+        },
+        "total_scans_per_second": 7.747892487274215,
+        "catalog": {
+          "reader fallback": {
+            "scans": 458,
+            "empty": 323,
+            "bytes": 60992,
+            "scans_per_second": 1.5249431252192462,
+            "bytes_per_second": 203.07714212526696
+          },
+          "command CAS recovery": {
+            "scans": 206,
+            "empty": 13,
+            "bytes": 58898,
+            "scans_per_second": 0.6858914493344208,
+            "bytes_per_second": 196.10502224708114
+          },
+          "live-state maintenance": {
+            "scans": 93,
+            "empty": 0,
+            "bytes": 25603267,
+            "scans_per_second": 0.3096500232432094,
+            "bytes_per_second": 85247.8733510978
+          },
+          "rollup": {
+            "scans": 197,
+            "empty": 0,
+            "bytes": 16008348,
+            "scans_per_second": 0.6559253180528198,
+            "bytes_per_second": 53300.91752995037
+          },
+          "rollup state refresh": {
+            "scans": 197,
+            "empty": 197,
+            "bytes": 0,
+            "scans_per_second": 0.6559253180528198,
+            "bytes_per_second": 0.0
+          },
+          "upper-only fallback / catalog follower storage metadata": {
+            "scans": 143,
+            "empty": 64,
+            "bytes": 36801,
+            "scans_per_second": 0.4761285303632144,
+            "bytes_per_second": 122.53151081046612
+          },
+          "machine acquisition": {
+            "scans": 19,
+            "empty": 0,
+            "bytes": 607865,
+            "scans_per_second": 0.06326183270560191,
+            "bytes_per_second": 2023.9291546100374
+          },
+          "writer-upper fallback": {
+            "scans": 93,
+            "empty": 57,
+            "bytes": 12928,
+            "scans_per_second": 0.3096500232432094,
+            "bytes_per_second": 43.0446828009485
+          },
+          "append upper recovery": {
+            "scans": 15,
+            "empty": 14,
+            "bytes": 1060,
+            "scans_per_second": 0.04994355213600151,
+            "bytes_per_second": 3.5293443509441067
+          },
+          "explicit upper": {
+            "scans": 35,
+            "empty": 35,
+            "bytes": 0,
+            "scans_per_second": 0.11653495498400353,
+            "bytes_per_second": 0.0
+          },
+          "upper-only fallback / catalog progress": {
+            "scans": 2,
+            "empty": 1,
+            "bytes": 882,
+            "scans_per_second": 0.006659140284800202,
+            "bytes_per_second": 2.936680865596889
+          }
+        },
+        "reconciliation": {
+          "controllerd": {
+            "metric_delta": 17,
+            "strict_events": 17,
+            "loose_events": 17,
+            "nominal_events": 17,
+            "reconciled": true,
+            "elapsed": 300.37936059650383,
+            "start_wall": 1793974608.0772262,
+            "end_wall": 1793974908.4565868
+          },
+          "pubsubd": {
+            "metric_delta": null,
+            "strict_events": 0,
+            "loose_events": 0,
+            "nominal_events": 0,
+            "reconciled": null,
+            "elapsed": 300.35505594848655,
+            "start_wall": 1793974608.1173415,
+            "end_wall": 1793974908.4723976
+          },
+          "replica-s1-s1": {
+            "metric_delta": 90,
+            "strict_events": 90,
+            "loose_events": 90,
+            "nominal_events": 90,
+            "reconciled": true,
+            "elapsed": 300.34693313950265,
+            "start_wall": 1793974608.1375194,
+            "end_wall": 1793974908.4844525
+          },
+          "replica-s2-s2": {
+            "metric_delta": 1458,
+            "strict_events": 1458,
+            "loose_events": 1458,
+            "nominal_events": 1458,
+            "reconciled": true,
+            "elapsed": 300.3390699795127,
+            "start_wall": 1793974608.1750689,
+            "end_wall": 1793974908.514139
+          },
+          "replica-s3-s3": {
+            "metric_delta": 64,
+            "strict_events": 64,
+            "loose_events": 64,
+            "nominal_events": 64,
+            "reconciled": true,
+            "elapsed": 300.3387154394877,
+            "start_wall": 1793974608.2175822,
+            "end_wall": 1793974908.5562975
+          },
+          "replica-u1-u1": {
+            "metric_delta": 71,
+            "strict_events": 71,
+            "loose_events": 71,
+            "nominal_events": 71,
+            "reconciled": true,
+            "elapsed": 300.33929367447854,
+            "start_wall": 1793974608.2553108,
+            "end_wall": 1793974908.5946045
+          },
+          "adapterd": {
+            "metric_delta": 627,
+            "strict_events": 627,
+            "loose_events": 627,
+            "nominal_events": 627,
+            "reconciled": true,
+            "elapsed": 300.33933930999774,
+            "start_wall": 1793974608.309911,
+            "end_wall": 1793974908.6492503
+          }
+        }
+      },
+      {
+        "roles": {
+          "controllerd": 0.04328288509134386,
+          "replica-s1-s1": 0.332936257904721,
+          "replica-s2-s2": 5.80625951106969,
+          "replica-s3-s3": 0.2097500648291553,
+          "replica-u1-u1": 0.21641495859430848,
+          "adapterd": 1.837862101060507
+        },
+        "total_scans_per_second": 8.446505778549726,
+        "catalog": {
+          "reader fallback": {
+            "scans": 566,
+            "empty": 455,
+            "bytes": 52561,
+            "scans_per_second": 1.8843709193035805,
+            "bytes_per_second": 174.99014114755389
+          },
+          "command CAS recovery": {
+            "scans": 271,
+            "empty": 37,
+            "bytes": 77160,
+            "scans_per_second": 0.9022341327407604,
+            "bytes_per_second": 256.8870320379228
+          },
+          "live-state maintenance": {
+            "scans": 86,
+            "empty": 0,
+            "bytes": 21689660,
+            "scans_per_second": 0.2863178428623815,
+            "bytes_per_second": 72210.8914374242
+          },
+          "rollup": {
+            "scans": 165,
+            "empty": 0,
+            "bytes": 13526180,
+            "scans_per_second": 0.5493307450266621,
+            "bytes_per_second": 45032.40325311962
+          },
+          "rollup state refresh": {
+            "scans": 165,
+            "empty": 165,
+            "bytes": 0,
+            "scans_per_second": 0.5493307450266621,
+            "bytes_per_second": 0.0
+          },
+          "upper-only fallback / catalog follower storage metadata": {
+            "scans": 217,
+            "empty": 177,
+            "bytes": 20609,
+            "scans_per_second": 0.7224531616411254,
+            "bytes_per_second": 68.6130746924514
+          },
+          "writer-upper fallback": {
+            "scans": 196,
+            "empty": 154,
+            "bytes": 19085,
+            "scans_per_second": 0.6525383395468229,
+            "bytes_per_second": 63.53925617475059
+          },
+          "machine acquisition": {
+            "scans": 23,
+            "empty": 0,
+            "bytes": 300671,
+            "scans_per_second": 0.07657337657947412,
+            "bytes_per_second": 1001.0171178055245
+          },
+          "append upper recovery": {
+            "scans": 20,
+            "empty": 20,
+            "bytes": 0,
+            "scans_per_second": 0.06658554485171662,
+            "bytes_per_second": 0.0
+          },
+          "explicit upper": {
+            "scans": 32,
+            "empty": 32,
+            "bytes": 0,
+            "scans_per_second": 0.10653687176274661,
+            "bytes_per_second": 0.0
+          },
+          "upper-only fallback / catalog progress": {
+            "scans": 3,
+            "empty": 1,
+            "bytes": 5052,
+            "scans_per_second": 0.009987831727757494,
+            "bytes_per_second": 16.81950862954362
+          }
+        },
+        "reconciliation": {
+          "controllerd": {
+            "metric_delta": 13,
+            "strict_events": 13,
+            "loose_events": 13,
+            "nominal_events": 13,
+            "reconciled": true,
+            "elapsed": 300.3496641354868,
+            "start_wall": 1793974908.4565868,
+            "end_wall": 1793975208.806251
+          },
+          "pubsubd": {
+            "metric_delta": null,
+            "strict_events": 0,
+            "loose_events": 0,
+            "nominal_events": 0,
+            "reconciled": null,
+            "elapsed": 300.3496906654764,
+            "start_wall": 1793974908.4723976,
+            "end_wall": 1793975208.8220882
+          },
+          "replica-s1-s1": {
+            "metric_delta": 100,
+            "strict_events": 100,
+            "loose_events": 100,
+            "nominal_events": 100,
+            "reconciled": true,
+            "elapsed": 300.35779409948736,
+            "start_wall": 1793974908.4844525,
+            "end_wall": 1793975208.8422465
+          },
+          "replica-s2-s2": {
+            "metric_delta": 1744,
+            "strict_events": 1744,
+            "loose_events": 1744,
+            "nominal_events": 1744,
+            "reconciled": true,
+            "elapsed": 300.3654929089971,
+            "start_wall": 1793974908.514139,
+            "end_wall": 1793975208.8796318
+          },
+          "replica-s3-s3": {
+            "metric_delta": 63,
+            "strict_events": 63,
+            "loose_events": 63,
+            "nominal_events": 63,
+            "reconciled": true,
+            "elapsed": 300.35747570001695,
+            "start_wall": 1793974908.5562975,
+            "end_wall": 1793975208.9137733
+          },
+          "replica-u1-u1": {
+            "metric_delta": 65,
+            "strict_events": 65,
+            "loose_events": 65,
+            "nominal_events": 65,
+            "reconciled": true,
+            "elapsed": 300.34892422500707,
+            "start_wall": 1793974908.5946045,
+            "end_wall": 1793975208.9435287
+          },
+          "adapterd": {
+            "metric_delta": 552,
+            "strict_events": 552,
+            "loose_events": 552,
+            "nominal_events": 552,
+            "reconciled": true,
+            "elapsed": 300.3489759549848,
+            "start_wall": 1793974908.6492503,
+            "end_wall": 1793975208.9982262
+          }
+        }
+      }
+    ],
+    "artifact_manifest": {
+      "base": "2d17eeffb73b589f894069e1ca5efd595353eeb9",
+      "patch_sha256": "ba4bfd767db6ef5deb099cc7b3d94645da4bea65c8940cd28cb98b0cf36833b2",
+      "artifacts": {
+        "controllerd": {
+          "path": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/v2/artifacts/native/controllerd",
+          "bytes": 822011032,
+          "sha256": "9b99fa6e634ee83793cf1b00f5b49ce5e29371d1a4d1dc24bd8bf8fa327c1a56"
+        },
+        "clusterd": {
+          "path": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/v2/artifacts/native/clusterd",
+          "bytes": 1026735832,
+          "sha256": "6ccef718064605c9b9eed206407c2ce3ba81074c4b95c4024a856bc458e42665"
+        },
+        "pubsubd": {
+          "path": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/v2/artifacts/native/pubsubd",
+          "bytes": 99594968,
+          "sha256": "08d3e909421a7fb815e7976fb31d6eb5be6f14e179255a4cdef595c983d8013f"
+        },
+        "adapterd": {
+          "path": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/v2/artifacts/native/adapterd",
+          "bytes": 821985912,
+          "sha256": "454a6f07d724922c79b40d2062ba79ea521927869f76b917bd2977303cc44f3a"
+        }
+      }
+    },
+    "settings": {
+      "catalog_read_protection_publish_interval": "10 s",
+      "persist_shard_metrics": "both",
+      "log_filter": "info",
+      "enable_metric_sink": "off",
+      "persist_enable_incremental_compaction": "off",
+      "enable_columnar_accumulable_diff": "off",
+      "compute_temporal_bucketing_summary": "2 s",
+      "persist_blob_cache_mem_limit_bytes": "134217728",
+      "persist_pg_consensus_read_committed": "off"
+    },
+    "result": {
+      "status": "passed",
+      "kind": "native",
+      "run": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/v2/scan-audit-1793974261",
+      "arguments": {
+        "kind": "native",
+        "evidence_dir": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/v2",
+        "postgres_image": "postgres:18",
+        "warmup": 300,
+        "window": 300,
+        "windows": 2,
+        "profile_seconds": 0,
+        "label": "scan-audit",
+        "scheduling_diagnostics": false,
+        "frontier_lifecycle": false,
+        "system_parameter": []
+      },
+      "readiness_seconds": 36.65885430198978,
+      "measurement_status": "passed",
+      "profile_errors": {},
+      "launcher_stop_code": 0
+    },
+    "catalog_shards": [
+      {
+        "shard": "s5258babe-0100-4e55-b739-d0859d69da1d",
+        "objects": [
+          "mz_internal.mz_subscriptions_raw"
+        ],
+        "scans": 303,
+        "empty": 288,
+        "bytes": 44622,
+        "categories": {
+          "live-state maintenance": 1,
+          "reader fallback": 302
+        }
+      },
+      {
+        "shard": "sc549d651-028c-f73c-a592-abf4d3a43f50",
+        "objects": [
+          "mz_internal.mz_catalog_raw"
+        ],
+        "scans": 83,
+        "empty": 72,
+        "bytes": 23681,
+        "categories": {
+          "append upper recovery": 2,
+          "explicit upper": 67,
+          "reader fallback": 7,
+          "upper-only fallback": 7
+        }
+      },
+      {
+        "shard": "s1c0f94d6-9911-4103-8770-501faf6b42f5",
+        "objects": [
+          "mz_internal.mz_catalog_deployment_authority"
+        ],
+        "scans": 78,
+        "empty": 57,
+        "bytes": 5617259,
+        "categories": {
+          "live-state maintenance": 9,
+          "reader fallback": 42,
+          "rollup": 9,
+          "rollup state refresh": 9,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 4
+        }
+      },
+      {
+        "shard": "s2a92fa60-ea0e-4b9e-b6ce-51153c0d7deb",
+        "objects": [
+          "mz_internal.mz_mysql_source_tables"
+        ],
+        "scans": 65,
+        "empty": 33,
+        "bytes": 1120813,
+        "categories": {
+          "command CAS recovery": 9,
+          "live-state maintenance": 3,
+          "reader fallback": 14,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 15,
+          "writer-upper fallback": 10
+        }
+      },
+      {
+        "shard": "s6aa5922b-bd38-4431-a107-8577ebfc9670",
+        "objects": [
+          "mz_internal.mz_replica_frontier_observations"
+        ],
+        "scans": 65,
+        "empty": 49,
+        "bytes": 5694694,
+        "categories": {
+          "append upper recovery": 33,
+          "command CAS recovery": 11,
+          "live-state maintenance": 1,
+          "rollup": 10,
+          "rollup state refresh": 10
+        }
+      },
+      {
+        "shard": "s10a0e499-642e-487a-af2b-f1ac6af616fd",
+        "objects": [
+          "mz_catalog.mz_audit_events"
+        ],
+        "scans": 61,
+        "empty": 42,
+        "bytes": 1677092,
+        "categories": {
+          "live-state maintenance": 5,
+          "reader fallback": 29,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 8,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "s9ef5279c-7b17-4c02-bb29-6b59946de18f",
+        "objects": [
+          "mz_internal.mz_postgres_source_tables"
+        ],
+        "scans": 61,
+        "empty": 34,
+        "bytes": 1069550,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 3,
+          "reader fallback": 12,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 11,
+          "writer-upper fallback": 9
+        }
+      },
+      {
+        "shard": "s4c124583-eee6-4e65-b477-0c657ba7bb52",
+        "objects": [
+          "mz_internal.mz_sql_server_source_tables"
+        ],
+        "scans": 60,
+        "empty": 35,
+        "bytes": 791107,
+        "categories": {
+          "command CAS recovery": 11,
+          "live-state maintenance": 2,
+          "reader fallback": 8,
+          "rollup": 5,
+          "rollup state refresh": 5,
+          "upper-only fallback": 14,
+          "writer-upper fallback": 15
+        }
+      },
+      {
+        "shard": "s16f24672-5635-43d6-b297-9060e85f203f",
+        "objects": [
+          "mz_catalog.mz_sources"
+        ],
+        "scans": 57,
+        "empty": 45,
+        "bytes": 1192646,
+        "categories": {
+          "live-state maintenance": 3,
+          "reader fallback": 19,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 11,
+          "writer-upper fallback": 10
+        }
+      },
+      {
+        "shard": "sdcd2b32f-35b0-4625-877f-483b3f8f1d8d",
+        "objects": [
+          "mz_internal.mz_kafka_source_tables"
+        ],
+        "scans": 53,
+        "empty": 26,
+        "bytes": 1066930,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 3,
+          "reader fallback": 4,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 10,
+          "writer-upper fallback": 10
+        }
+      },
+      {
+        "shard": "s3b9dba1c-9170-4631-af00-ff800726a253",
+        "objects": [
+          "mz_catalog.mz_connections"
+        ],
+        "scans": 52,
+        "empty": 23,
+        "bytes": 2667545,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 3,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "upper-only fallback": 8,
+          "writer-upper fallback": 9,
+          "reader fallback": 4
+        }
+      },
+      {
+        "shard": "sa153648f-12c0-4cd2-a200-f351d08a1c6a",
+        "objects": [
+          "mz_internal.mz_cluster_reconfigurations"
+        ],
+        "scans": 52,
+        "empty": 21,
+        "bytes": 1774892,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 6,
+          "reader fallback": 6,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "upper-only fallback": 9,
+          "writer-upper fallback": 3
+        }
+      },
+      {
+        "shard": "sd7f117f9-a907-407c-8bec-bf9b8df18425",
+        "objects": [
+          "mz_catalog.mz_indexes"
+        ],
+        "scans": 52,
+        "empty": 25,
+        "bytes": 1929757,
+        "categories": {
+          "command CAS recovery": 7,
+          "live-state maintenance": 6,
+          "reader fallback": 14,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "writer-upper fallback": 6,
+          "upper-only fallback": 3
+        }
+      },
+      {
+        "shard": "se976d968-dd88-425f-8f38-556bcb8a87c7",
+        "objects": [
+          "mz_catalog.mz_secrets"
+        ],
+        "scans": 52,
+        "empty": 21,
+        "bytes": 1812235,
+        "categories": {
+          "command CAS recovery": 11,
+          "live-state maintenance": 6,
+          "reader fallback": 10,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "upper-only fallback": 7,
+          "writer-upper fallback": 2
+        }
+      },
+      {
+        "shard": "s2aff51e4-b4b8-43a5-94e1-3431b40cb4a6",
+        "objects": [
+          "mz_catalog.mz_views"
+        ],
+        "scans": 51,
+        "empty": 27,
+        "bytes": 1193344,
+        "categories": {
+          "command CAS recovery": 5,
+          "live-state maintenance": 3,
+          "reader fallback": 15,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 8,
+          "writer-upper fallback": 6
+        }
+      },
+      {
+        "shard": "s7d09bb4b-f7c0-4f73-88d7-07f850c3e6c7",
+        "objects": [
+          "mz_catalog.mz_materialized_views"
+        ],
+        "scans": 51,
+        "empty": 22,
+        "bytes": 1299682,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 5,
+          "reader fallback": 14,
+          "rollup": 5,
+          "rollup state refresh": 5,
+          "upper-only fallback": 7,
+          "writer-upper fallback": 3
+        }
+      },
+      {
+        "shard": "s0e6c9d39-9331-4122-b4a4-5f87884b9cb2",
+        "objects": [
+          "mz_catalog.mz_tables"
+        ],
+        "scans": 50,
+        "empty": 35,
+        "bytes": 1412615,
+        "categories": {
+          "live-state maintenance": 4,
+          "reader fallback": 12,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 12,
+          "writer-upper fallback": 8
+        }
+      },
+      {
+        "shard": "sc7e75a33-ce47-429a-b54d-5bc2e61a6443",
+        "objects": [
+          "mz_catalog.mz_adapters"
+        ],
+        "scans": 50,
+        "empty": 20,
+        "bytes": 2325424,
+        "categories": {
+          "command CAS recovery": 13,
+          "live-state maintenance": 3,
+          "reader fallback": 5,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "writer-upper fallback": 8,
+          "upper-only fallback": 5
+        }
+      },
+      {
+        "shard": "sfde99096-d728-4c65-bb61-b432960cc955",
+        "objects": [
+          "mz_catalog.mz_databases"
+        ],
+        "scans": 50,
+        "empty": 22,
+        "bytes": 3388337,
+        "categories": {
+          "command CAS recovery": 7,
+          "live-state maintenance": 5,
+          "reader fallback": 13,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "upper-only fallback": 4,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "s141011e0-2b62-4015-8fd4-ad337c591fd2",
+        "objects": [
+          "mz_catalog.mz_kafka_sinks"
+        ],
+        "scans": 49,
+        "empty": 23,
+        "bytes": 1075278,
+        "categories": {
+          "command CAS recovery": 13,
+          "live-state maintenance": 3,
+          "reader fallback": 6,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 7,
+          "writer-upper fallback": 6
+        }
+      },
+      {
+        "shard": "sf8a28d53-220a-4d1a-8a69-191dcfd2e8d1",
+        "objects": [
+          "mz_catalog.mz_schemas"
+        ],
+        "scans": 49,
+        "empty": 23,
+        "bytes": 1905437,
+        "categories": {
+          "command CAS recovery": 6,
+          "live-state maintenance": 6,
+          "reader fallback": 8,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "upper-only fallback": 8,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "s25ca0984-caeb-47bf-9d63-b9f8a75a0cae",
+        "objects": [
+          "mz_internal.mz_aws_connections"
+        ],
+        "scans": 47,
+        "empty": 21,
+        "bytes": 1022337,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 3,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "upper-only fallback": 6,
+          "writer-upper fallback": 10,
+          "reader fallback": 4
+        }
+      },
+      {
+        "shard": "s2c0e1efb-d7b1-4ec8-89a3-c2316b4ca6ec",
+        "objects": [
+          "mz_internal.mz_adapter_statuses"
+        ],
+        "scans": 47,
+        "empty": 19,
+        "bytes": 1139586,
+        "categories": {
+          "command CAS recovery": 14,
+          "live-state maintenance": 3,
+          "reader fallback": 5,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 6
+        }
+      },
+      {
+        "shard": "s48c18a1d-873e-40ec-ab72-469577a653ac",
+        "objects": [
+          "mz_internal.mz_adapter_endpoints"
+        ],
+        "scans": 47,
+        "empty": 18,
+        "bytes": 1158294,
+        "categories": {
+          "command CAS recovery": 14,
+          "live-state maintenance": 3,
+          "reader fallback": 5,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 6
+        }
+      },
+      {
+        "shard": "s5c7ccb60-5ab5-4890-b392-943dda2d98ce",
+        "objects": [
+          "mz_internal.mz_cluster_schedules"
+        ],
+        "scans": 47,
+        "empty": 22,
+        "bytes": 940395,
+        "categories": {
+          "command CAS recovery": 14,
+          "live-state maintenance": 2,
+          "reader fallback": 7,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "s7fac153a-a9e3-46f7-8899-cebcf096b7b1",
+        "objects": [
+          "mz_catalog.mz_kafka_connections"
+        ],
+        "scans": 47,
+        "empty": 17,
+        "bytes": 1112204,
+        "categories": {
+          "command CAS recovery": 14,
+          "live-state maintenance": 3,
+          "reader fallback": 6,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "s886bde75-81b6-462a-9a34-6685b96a04e2",
+        "objects": [
+          "mz_catalog.mz_role_members"
+        ],
+        "scans": 47,
+        "empty": 21,
+        "bytes": 900119,
+        "categories": {
+          "command CAS recovery": 10,
+          "live-state maintenance": 2,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 10,
+          "writer-upper fallback": 5,
+          "reader fallback": 6
+        }
+      },
+      {
+        "shard": "s2b80aea2-5087-45b1-8670-a8d577a33716",
+        "objects": [
+          "mz_internal.mz_metric_sinks"
+        ],
+        "scans": 46,
+        "empty": 23,
+        "bytes": 1045737,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 3,
+          "reader fallback": 7,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "upper-only fallback": 6,
+          "writer-upper fallback": 6
+        }
+      },
+      {
+        "shard": "s32e9a7e9-37c4-4ef6-b888-e0a3d8fe3074",
+        "objects": [
+          "mz_catalog.mz_iceberg_sinks"
+        ],
+        "scans": 46,
+        "empty": 19,
+        "bytes": 1110471,
+        "categories": {
+          "command CAS recovery": 13,
+          "live-state maintenance": 3,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 8,
+          "writer-upper fallback": 5,
+          "reader fallback": 3
+        }
+      },
+      {
+        "shard": "sddf4ba4d-2f9c-41e8-a214-5a779d1bba25",
+        "objects": [
+          "mz_internal.mz_overridden_system_parameters"
+        ],
+        "scans": 46,
+        "empty": 19,
+        "bytes": 1036293,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 3,
+          "reader fallback": 7,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "upper-only fallback": 6,
+          "writer-upper fallback": 6
+        }
+      },
+      {
+        "shard": "sf7ebec95-b9cd-4f4e-ae3f-5ae1cb58990c",
+        "objects": [
+          "mz_catalog.mz_roles"
+        ],
+        "scans": 46,
+        "empty": 17,
+        "bytes": 1408755,
+        "categories": {
+          "command CAS recovery": 8,
+          "live-state maintenance": 4,
+          "reader fallback": 10,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 6,
+          "writer-upper fallback": 4
+        }
+      },
+      {
+        "shard": "s35b2d965-4c65-4479-8f2d-5078ab38446a",
+        "objects": [
+          "mz_catalog.mz_default_privileges"
+        ],
+        "scans": 45,
+        "empty": 19,
+        "bytes": 1099164,
+        "categories": {
+          "command CAS recovery": 13,
+          "live-state maintenance": 3,
+          "reader fallback": 4,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "upper-only fallback": 8,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "s4f390c2f-466c-42c7-84c0-491d9141dc2e",
+        "objects": [
+          "mz_internal.mz_postgres_sources"
+        ],
+        "scans": 45,
+        "empty": 16,
+        "bytes": 1051394,
+        "categories": {
+          "command CAS recovery": 11,
+          "live-state maintenance": 3,
+          "reader fallback": 8,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "upper-only fallback": 6,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "scbc45d60-0207-4777-8a81-06d0dca2c769",
+        "objects": [
+          "mz_internal.mz_replica_system_parameters"
+        ],
+        "scans": 45,
+        "empty": 19,
+        "bytes": 1074865,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 3,
+          "reader fallback": 2,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 6,
+          "writer-upper fallback": 8
+        }
+      },
+      {
+        "shard": "sef58c72a-2468-4886-9368-2b0c3ac6c93e",
+        "objects": [
+          "mz_internal.mz_pending_cluster_replicas"
+        ],
+        "scans": 45,
+        "empty": 20,
+        "bytes": 879118,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 2,
+          "reader fallback": 6,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 6,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "sf3133d8c-f26a-4aae-882b-d1dd23e69d97",
+        "objects": [
+          "mz_internal.mz_source_references"
+        ],
+        "scans": 45,
+        "empty": 18,
+        "bytes": 858380,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 2,
+          "reader fallback": 8,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 4,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "s1ee53a41-941b-46f6-91be-b9f6a6eccbc2",
+        "objects": [
+          "mz_internal.mz_object_global_ids"
+        ],
+        "scans": 44,
+        "empty": 28,
+        "bytes": 1764124,
+        "categories": {
+          "command CAS recovery": 2,
+          "live-state maintenance": 5,
+          "reader fallback": 11,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "upper-only fallback": 7,
+          "writer-upper fallback": 3
+        }
+      },
+      {
+        "shard": "s87c4027e-1667-449b-960c-c7ef530d7399",
+        "objects": [
+          "mz_internal.mz_cluster_auto_scaling_strategies"
+        ],
+        "scans": 44,
+        "empty": 15,
+        "bytes": 1377474,
+        "categories": {
+          "command CAS recovery": 10,
+          "live-state maintenance": 4,
+          "reader fallback": 7,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 2
+        }
+      },
+      {
+        "shard": "sb213eff0-8184-4449-b0f1-01478abb64ec",
+        "objects": [
+          "mz_internal.mz_internal_cluster_replicas"
+        ],
+        "scans": 44,
+        "empty": 17,
+        "bytes": 1004138,
+        "categories": {
+          "command CAS recovery": 13,
+          "live-state maintenance": 3,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "upper-only fallback": 8,
+          "reader fallback": 4,
+          "writer-upper fallback": 4
+        }
+      },
+      {
+        "shard": "sb2920c89-57b2-402a-8de9-b7431bb56232",
+        "objects": [
+          "mz_internal.mz_cluster_system_parameters"
+        ],
+        "scans": 44,
+        "empty": 15,
+        "bytes": 996499,
+        "categories": {
+          "command CAS recovery": 13,
+          "live-state maintenance": 3,
+          "reader fallback": 4,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "writer-upper fallback": 7,
+          "upper-only fallback": 5
+        }
+      },
+      {
+        "shard": "sd8c6e776-b61f-41a3-9b55-c173a7760688",
+        "objects": [
+          "mz_internal.mz_cluster_workload_classes"
+        ],
+        "scans": 44,
+        "empty": 19,
+        "bytes": 1071649,
+        "categories": {
+          "command CAS recovery": 11,
+          "live-state maintenance": 3,
+          "reader fallback": 4,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "upper-only fallback": 7,
+          "writer-upper fallback": 7
+        }
+      },
+      {
+        "shard": "s952920ea-368a-4616-9ee0-d60b28bd8ecb",
+        "objects": [
+          "mz_catalog.mz_role_parameters"
+        ],
+        "scans": 42,
+        "empty": 17,
+        "bytes": 1030481,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 3,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 7,
+          "reader fallback": 3
+        }
+      },
+      {
+        "shard": "s376f7509-c46f-4862-a327-0c94127a7937",
+        "objects": [
+          "mz_catalog.mz_system_privileges"
+        ],
+        "scans": 41,
+        "empty": 16,
+        "bytes": 909286,
+        "categories": {
+          "command CAS recovery": 12,
+          "live-state maintenance": 2,
+          "reader fallback": 4,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 4
+        }
+      },
+      {
+        "shard": "scdb0bc18-a8ee-42e2-bdc8-d832734924ed",
+        "objects": [
+          "mz_catalog.mz_kafka_sources"
+        ],
+        "scans": 41,
+        "empty": 31,
+        "bytes": 1114951,
+        "categories": {
+          "live-state maintenance": 3,
+          "reader fallback": 12,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 8,
+          "writer-upper fallback": 4
+        }
+      },
+      {
+        "shard": "s39e38223-d678-4ff9-ae41-f2d5951a1678",
+        "objects": [
+          "mz_internal.mz_comments"
+        ],
+        "scans": 40,
+        "empty": 29,
+        "bytes": 1150814,
+        "categories": {
+          "live-state maintenance": 3,
+          "reader fallback": 10,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 8
+        }
+      },
+      {
+        "shard": "sd97eb25b-97c0-4e13-96ca-39f24d046fed",
+        "objects": [
+          "mz_catalog.mz_sinks"
+        ],
+        "scans": 39,
+        "empty": 24,
+        "bytes": 1115296,
+        "categories": {
+          "live-state maintenance": 3,
+          "reader fallback": 12,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 4,
+          "writer-upper fallback": 6
+        }
+      },
+      {
+        "shard": "s009487ee-b407-4b01-8861-def74b8644d4",
+        "objects": [
+          "mz_catalog.mz_clusters"
+        ],
+        "scans": 38,
+        "empty": 14,
+        "bytes": 1233555,
+        "categories": {
+          "command CAS recovery": 11,
+          "live-state maintenance": 5,
+          "reader fallback": 4,
+          "rollup": 5,
+          "rollup state refresh": 5,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 3
+        }
+      },
+      {
+        "shard": "s05e21e4a-ac03-432b-84ae-8da69cf96710",
+        "objects": [
+          "mz_catalog.mz_ssh_tunnel_connections"
+        ],
+        "scans": 38,
+        "empty": 13,
+        "bytes": 999613,
+        "categories": {
+          "command CAS recovery": 11,
+          "live-state maintenance": 3,
+          "rollup": 6,
+          "rollup state refresh": 6,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 4,
+          "reader fallback": 3
+        }
+      },
+      {
+        "shard": "s0088195e-6b16-4584-a107-981e785705b5",
+        "objects": [
+          "mz_internal.mz_cluster_replica_size_internal"
+        ],
+        "scans": 36,
+        "empty": 36,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 36
+        }
+      },
+      {
+        "shard": "s64b601d7-f7ca-4852-b4ba-8019e34dd741",
+        "objects": [
+          "mz_catalog.mz_cluster_replica_sizes"
+        ],
+        "scans": 35,
+        "empty": 35,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 35
+        }
+      },
+      {
+        "shard": "s8cd87a54-59b8-4b49-85aa-94136bde0c90",
+        "objects": [
+          "mz_internal.mz_network_policy_rules"
+        ],
+        "scans": 35,
+        "empty": 19,
+        "bytes": 2544937,
+        "categories": {
+          "command CAS recovery": 3,
+          "live-state maintenance": 3,
+          "reader fallback": 4,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "upper-only fallback": 6,
+          "writer-upper fallback": 3
+        }
+      },
+      {
+        "shard": "s1993346e-2efa-4a67-a952-38fcd33377a1",
+        "objects": [
+          "mz_internal.mz_webhook_sources"
+        ],
+        "scans": 34,
+        "empty": 34,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 34
+        }
+      },
+      {
+        "shard": "s51aa6323-b0b8-411f-9a7a-e33e56897357",
+        "objects": [
+          "mz_internal.mz_storage_usage_by_shard"
+        ],
+        "scans": 34,
+        "empty": 19,
+        "bytes": 5193,
+        "categories": {
+          "command CAS recovery": 14,
+          "reader fallback": 20
+        }
+      },
+      {
+        "shard": "s82e6ee29-ca17-4d8b-b8b4-1df9a1161502",
+        "objects": [
+          "mz_internal.mz_object_arrangement_size_history"
+        ],
+        "scans": 34,
+        "empty": 34,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 34
+        }
+      },
+      {
+        "shard": "sd5a6b0e9-6c86-4937-a5f1-7a240678f4fc",
+        "objects": [
+          "mz_internal.mz_replacements"
+        ],
+        "scans": 33,
+        "empty": 20,
+        "bytes": 1094393,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 5,
+          "writer-upper fallback": 6,
+          "command CAS recovery": 1,
+          "reader fallback": 4
+        }
+      },
+      {
+        "shard": "s2ea600a6-e08f-4992-a4b0-0b83576d233a",
+        "objects": [
+          "mz_internal.mz_network_policies"
+        ],
+        "scans": 32,
+        "empty": 17,
+        "bytes": 1889375,
+        "categories": {
+          "command CAS recovery": 3,
+          "live-state maintenance": 2,
+          "reader fallback": 5,
+          "rollup": 8,
+          "rollup state refresh": 8,
+          "upper-only fallback": 3,
+          "writer-upper fallback": 3
+        }
+      },
+      {
+        "shard": "sd4f469f1-5746-475d-97fd-436c4ada16bb",
+        "objects": [
+          "mz_internal.mz_object_dependencies"
+        ],
+        "scans": 32,
+        "empty": 20,
+        "bytes": 1398032,
+        "categories": {
+          "live-state maintenance": 4,
+          "reader fallback": 3,
+          "rollup": 7,
+          "rollup state refresh": 7,
+          "upper-only fallback": 6,
+          "writer-upper fallback": 5
+        }
+      },
+      {
+        "shard": "s55d6b907-fcb8-4c9f-8610-edf210c0aee4",
+        "objects": [
+          "mz_catalog.mz_cluster_replicas"
+        ],
+        "scans": 29,
+        "empty": 20,
+        "bytes": 950642,
+        "categories": {
+          "live-state maintenance": 3,
+          "reader fallback": 10,
+          "rollup": 5,
+          "rollup state refresh": 5,
+          "writer-upper fallback": 3,
+          "upper-only fallback": 3
+        }
+      },
+      {
+        "shard": "s0494ba49-15ee-462a-a0f7-7f6a6854e197",
+        "objects": [
+          "mz_internal.mz_object_hydration_history"
+        ],
+        "scans": 24,
+        "empty": 1,
+        "bytes": 533045,
+        "categories": {
+          "machine acquisition": 21,
+          "rollup": 1,
+          "rollup state refresh": 1,
+          "live-state maintenance": 1
+        }
+      },
+      {
+        "shard": "s72013fda-0471-4c12-b2ab-052ec00ae046",
+        "objects": [
+          "mz_internal.mz_replica_hydration_history"
+        ],
+        "scans": 24,
+        "empty": 1,
+        "bytes": 543104,
+        "categories": {
+          "machine acquisition": 21,
+          "rollup": 1,
+          "rollup state refresh": 1,
+          "live-state maintenance": 1
+        }
+      },
+      {
+        "shard": "scc158ec6-3236-473b-b4cb-668e936a85ed",
+        "objects": [
+          "mz_internal.mz_cluster_replica_metrics_history"
+        ],
+        "scans": 17,
+        "empty": 1,
+        "bytes": 95474,
+        "categories": {
+          "reader fallback": 7,
+          "rollup": 1,
+          "rollup state refresh": 1,
+          "upper-only fallback": 8
+        }
+      },
+      {
+        "shard": "s6bead292-a492-4b50-8816-43618d9ef69e",
+        "objects": [
+          "mz_catalog.mz_role_auth"
+        ],
+        "scans": 16,
+        "empty": 0,
+        "bytes": 4270,
+        "categories": {
+          "command CAS recovery": 4,
+          "reader fallback": 12
+        }
+      },
+      {
+        "shard": "sb44df1a7-83e5-432a-b28e-e6e91e2d4c48",
+        "objects": [
+          "mz_internal.mz_cluster_replica_status_history"
+        ],
+        "scans": 15,
+        "empty": 0,
+        "bytes": 13269,
+        "categories": {
+          "reader fallback": 8,
+          "upper-only fallback": 7
+        }
+      },
+      {
+        "shard": "s2cde59ed-f737-436d-92b4-60bfff2660c9",
+        "objects": [
+          "mz_catalog.mz_types"
+        ],
+        "scans": 12,
+        "empty": 1,
+        "bytes": 2870,
+        "categories": {
+          "command CAS recovery": 3,
+          "reader fallback": 9
+        }
+      },
+      {
+        "shard": "s0a64be2d-7cce-4534-8d7c-efdc48c5c108",
+        "objects": [
+          "mz_catalog.mz_map_types"
+        ],
+        "scans": 11,
+        "empty": 0,
+        "bytes": 2870,
+        "categories": {
+          "command CAS recovery": 3,
+          "reader fallback": 8
+        }
+      },
+      {
+        "shard": "s28c252e8-49d2-48f7-97ec-bc84dbcbf5c9",
+        "objects": [
+          "mz_catalog.mz_functions"
+        ],
+        "scans": 11,
+        "empty": 1,
+        "bytes": 2800,
+        "categories": {
+          "command CAS recovery": 2,
+          "reader fallback": 9
+        }
+      },
+      {
+        "shard": "s7cd192d5-8837-4205-a659-f7ddd8b43b02",
+        "objects": [
+          "mz_internal.mz_type_pg_metadata"
+        ],
+        "scans": 11,
+        "empty": 0,
+        "bytes": 2870,
+        "categories": {
+          "command CAS recovery": 1,
+          "reader fallback": 10
+        }
+      },
+      {
+        "shard": "s7d415770-93da-40f4-979b-0f0c10df0a30",
+        "objects": [
+          "mz_catalog.mz_pseudo_types"
+        ],
+        "scans": 11,
+        "empty": 0,
+        "bytes": 2870,
+        "categories": {
+          "command CAS recovery": 1,
+          "reader fallback": 10
+        }
+      },
+      {
+        "shard": "s982ae003-0653-4d44-b17c-551669e4f1e4",
+        "objects": [
+          "mz_catalog.mz_columns"
+        ],
+        "scans": 11,
+        "empty": 1,
+        "bytes": 2800,
+        "categories": {
+          "command CAS recovery": 3,
+          "reader fallback": 8
+        }
+      },
+      {
+        "shard": "s9e1177a2-b873-4d48-a906-463e8ca5053e",
+        "objects": [
+          "mz_catalog.mz_index_columns"
+        ],
+        "scans": 11,
+        "empty": 0,
+        "bytes": 2870,
+        "categories": {
+          "reader fallback": 11
+        }
+      },
+      {
+        "shard": "sf3fb1d76-71a8-4656-bdf1-3404a6f56ebd",
+        "objects": [
+          "mz_internal.mz_optimizer_notices"
+        ],
+        "scans": 11,
+        "empty": 10,
+        "bytes": 280,
+        "categories": {
+          "command CAS recovery": 1,
+          "reader fallback": 10
+        }
+      },
+      {
+        "shard": "sfc5a1db3-4e8d-4f78-bd15-9ecaab072602",
+        "objects": [
+          "mz_catalog.mz_array_types"
+        ],
+        "scans": 11,
+        "empty": 0,
+        "bytes": 2870,
+        "categories": {
+          "command CAS recovery": 3,
+          "reader fallback": 8
+        }
+      },
+      {
+        "shard": "s0b284497-97c4-49b3-8e42-5fc57e6d4f9d",
+        "objects": [
+          "mz_catalog.mz_base_types"
+        ],
+        "scans": 10,
+        "empty": 0,
+        "bytes": 2800,
+        "categories": {
+          "command CAS recovery": 1,
+          "reader fallback": 9
+        }
+      },
+      {
+        "shard": "sbf96d8e8-8f70-4008-813b-295664c64d4e",
+        "objects": [
+          "mz_catalog.mz_list_types"
+        ],
+        "scans": 10,
+        "empty": 0,
+        "bytes": 2800,
+        "categories": {
+          "command CAS recovery": 2,
+          "reader fallback": 8
+        }
+      },
+      {
+        "shard": "sb2432daf-d487-4701-9a92-cf351b8367b7",
+        "objects": [
+          "mz_internal.mz_wallclock_lag_history"
+        ],
+        "scans": 3,
+        "empty": 1,
+        "bytes": 81822,
+        "categories": {
+          "rollup": 1,
+          "rollup state refresh": 1,
+          "upper-only fallback": 1
+        }
+      },
+      {
+        "shard": "s68635375-bd07-4fdf-ad0e-6fc8b2b859d6",
+        "objects": [
+          "mz_internal.mz_storage_shards"
+        ],
+        "scans": 2,
+        "empty": 1,
+        "bytes": 71615,
+        "categories": {
+          "rollup": 1,
+          "rollup state refresh": 1
+        }
+      },
+      {
+        "shard": "s97b9c5d2-f910-45a1-b5ad-46656915f5cf",
+        "objects": [
+          "mz_internal.mz_sql_text"
+        ],
+        "scans": 2,
+        "empty": 1,
+        "bytes": 67267,
+        "categories": {
+          "rollup": 1,
+          "rollup state refresh": 1
+        }
+      },
+      {
+        "shard": "sc519ee18-f215-400c-b28a-408c2b76628c",
+        "objects": [
+          "mz_internal.mz_statement_execution_history"
+        ],
+        "scans": 2,
+        "empty": 1,
+        "bytes": 67267,
+        "categories": {
+          "rollup": 1,
+          "rollup state refresh": 1
+        }
+      },
+      {
+        "shard": "s797498bd-b43f-4ca9-8ee7-cdae16ef5672",
+        "objects": [],
+        "scans": 2,
+        "empty": 2,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 2
+        }
+      },
+      {
+        "shard": "s0b459873-3aee-4732-814f-3b75d3ed8a3a",
+        "objects": [
+          "mz_internal.mz_storage_statuses_raw"
+        ],
+        "scans": 1,
+        "empty": 0,
+        "bytes": 830,
+        "categories": {
+          "upper-only fallback": 1
+        }
+      },
+      {
+        "shard": "s2e0f7e43-bb66-4426-9b37-0d30e2918943",
+        "objects": [
+          "mz_internal.mz_compute_dependencies"
+        ],
+        "scans": 1,
+        "empty": 0,
+        "bytes": 868,
+        "categories": {
+          "upper-only fallback": 1
+        }
+      },
+      {
+        "shard": "s48bfbba5-5c3a-43f5-b07c-ebb42f795ed1",
+        "objects": [
+          "mz_internal.mz_frontiers_raw"
+        ],
+        "scans": 1,
+        "empty": 0,
+        "bytes": 830,
+        "categories": {
+          "upper-only fallback": 1
+        }
+      },
+      {
+        "shard": "sb765b4bc-173f-49bd-a390-4a3e40a60c87",
+        "objects": [
+          "mz_internal.mz_sink_statistics_raw"
+        ],
+        "scans": 1,
+        "empty": 0,
+        "bytes": 546,
+        "categories": {
+          "command CAS recovery": 1
+        }
+      },
+      {
+        "shard": "seaf80d86-4d4c-4d4e-ab6e-27d87acec4e0",
+        "objects": [
+          "mz_internal.mz_cluster_replica_frontiers_raw"
+        ],
+        "scans": 1,
+        "empty": 0,
+        "bytes": 830,
+        "categories": {
+          "upper-only fallback": 1
+        }
+      },
+      {
+        "shard": "sec566dae-dfdc-4dd5-ad42-b1a2e2de1a23",
+        "objects": [
+          "mz_internal.mz_compute_hydration_times_raw"
+        ],
+        "scans": 1,
+        "empty": 0,
+        "bytes": 889,
+        "categories": {
+          "upper-only fallback": 1
+        }
+      },
+      {
+        "shard": "sf2a22760-59f4-4104-8773-5bd176c69dfb",
+        "objects": [
+          "mz_internal.mz_object_arrangement_sizes_raw"
+        ],
+        "scans": 1,
+        "empty": 0,
+        "bytes": 889,
+        "categories": {
+          "upper-only fallback": 1
+        }
+      }
+    ],
+    "clock_spread_seconds": 7.152557373046875e-07
+  },
+  "main": {
+    "run": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/main/scan-audit-main-1793979420",
+    "windows": [
+      {
+        "roles": {
+          "environmentd": 5.128739085006034,
+          "replica-s1-s1": 0.019982182472668662,
+          "replica-s2-s2": 1.848351239423435,
+          "replica-s3-s3": 0.009991365646117467,
+          "replica-u1-u1": 0.03996755893432714
+        },
+        "total_scans_per_second": 7.047031431482582,
+        "catalog": {
+          "live-state maintenance": {
+            "scans": 88,
+            "empty": 0,
+            "bytes": 15354642,
+            "scans_per_second": 0.293071908232905,
+            "bytes_per_second": 51136.52535423988
+          },
+          "rollup": {
+            "scans": 142,
+            "empty": 0,
+            "bytes": 10345503,
+            "scans_per_second": 0.4729114882849149,
+            "bytes_per_second": 34454.276202718676
+          },
+          "rollup state refresh": {
+            "scans": 142,
+            "empty": 142,
+            "bytes": 0,
+            "scans_per_second": 0.4729114882849149,
+            "bytes_per_second": 0.0
+          },
+          "reader fallback": {
+            "scans": 165,
+            "empty": 164,
+            "bytes": 278,
+            "scans_per_second": 0.5495098279366969,
+            "bytes_per_second": 0.9258408010084954
+          },
+          "command CAS recovery": {
+            "scans": 3,
+            "empty": 1,
+            "bytes": 585,
+            "scans_per_second": 0.009991087780667216,
+            "bytes_per_second": 1.9482621172301071
+          },
+          "machine acquisition": {
+            "scans": 15,
+            "empty": 0,
+            "bytes": 414059,
+            "scans_per_second": 0.049955438903336084,
+            "bytes_per_second": 1378.9666051250956
+          }
+        },
+        "reconciliation": {
+          "environmentd": {
+            "metric_delta": 1540,
+            "strict_events": 1540,
+            "loose_events": 1544,
+            "nominal_events": 1540,
+            "reconciled": true,
+            "elapsed": 300.2687355459784,
+            "start_wall": 1793979752.3637211,
+            "end_wall": 1793980052.6324565
+          },
+          "replica-s1-s1": {
+            "metric_delta": 6,
+            "strict_events": 6,
+            "loose_events": 6,
+            "nominal_events": 6,
+            "reconciled": true,
+            "elapsed": 300.2675012204854,
+            "start_wall": 1793979752.427215,
+            "end_wall": 1793980052.6947165
+          },
+          "replica-s2-s2": {
+            "metric_delta": 555,
+            "strict_events": 555,
+            "loose_events": 555,
+            "nominal_events": 555,
+            "reconciled": true,
+            "elapsed": 300.26760507549625,
+            "start_wall": 1793979752.4571972,
+            "end_wall": 1793980052.7248023
+          },
+          "replica-s3-s3": {
+            "metric_delta": 3,
+            "strict_events": 3,
+            "loose_events": 3,
+            "nominal_events": 3,
+            "reconciled": true,
+            "elapsed": 300.2592544659565,
+            "start_wall": 1793979752.499462,
+            "end_wall": 1793980052.7587163
+          },
+          "replica-u1-u1": {
+            "metric_delta": 12,
+            "strict_events": 12,
+            "loose_events": 12,
+            "nominal_events": 12,
+            "reconciled": true,
+            "elapsed": 300.2435054819798,
+            "start_wall": 1793979752.5365047,
+            "end_wall": 1793980052.7800102
+          }
+        }
+      },
+      {
+        "roles": {
+          "environmentd": 5.312604982174497,
+          "replica-s1-s1": 0.009992440777409265,
+          "replica-s2-s2": 1.5888029979263627,
+          "replica-s3-s3": 0.016654132397318874,
+          "replica-u1-u1": 0.03663810123709918
+        },
+        "total_scans_per_second": 6.964692654512687,
+        "catalog": {
+          "live-state maintenance": {
+            "scans": 75,
+            "empty": 0,
+            "bytes": 13181721,
+            "scans_per_second": 0.24981179212678659,
+            "bytes_per_second": 43905.9912843373
+          },
+          "rollup": {
+            "scans": 104,
+            "empty": 0,
+            "bytes": 7723768,
+            "scans_per_second": 0.34640568508247743,
+            "bytes_per_second": 25726.51101402035
+          },
+          "rollup state refresh": {
+            "scans": 104,
+            "empty": 104,
+            "bytes": 0,
+            "scans_per_second": 0.34640568508247743,
+            "bytes_per_second": 0.0
+          },
+          "reader fallback": {
+            "scans": 174,
+            "empty": 174,
+            "bytes": 0,
+            "scans_per_second": 0.5795633577341449,
+            "bytes_per_second": 0.0
+          },
+          "machine acquisition": {
+            "scans": 20,
+            "empty": 0,
+            "bytes": 335875,
+            "scans_per_second": 0.06661647790047642,
+            "bytes_per_second": 1118.740475741126
+          }
+        },
+        "reconciliation": {
+          "environmentd": {
+            "metric_delta": 1595,
+            "strict_events": 1591,
+            "loose_events": 1595,
+            "nominal_events": 1595,
+            "reconciled": true,
+            "elapsed": 300.22936118001235,
+            "start_wall": 1793980052.6324565,
+            "end_wall": 1793980352.8618178
+          },
+          "replica-s1-s1": {
+            "metric_delta": 3,
+            "strict_events": 3,
+            "loose_events": 3,
+            "nominal_events": 3,
+            "reconciled": true,
+            "elapsed": 300.22694823294296,
+            "start_wall": 1793980052.6947165,
+            "end_wall": 1793980352.9216647
+          },
+          "replica-s2-s2": {
+            "metric_delta": 477,
+            "strict_events": 477,
+            "loose_events": 477,
+            "nominal_events": 477,
+            "reconciled": true,
+            "elapsed": 300.22601960253087,
+            "start_wall": 1793980052.7248023,
+            "end_wall": 1793980352.9508219
+          },
+          "replica-s3-s3": {
+            "metric_delta": 5,
+            "strict_events": 5,
+            "loose_events": 5,
+            "nominal_events": 5,
+            "reconciled": true,
+            "elapsed": 300.2257866525033,
+            "start_wall": 1793980052.7587163,
+            "end_wall": 1793980352.984503
+          },
+          "replica-u1-u1": {
+            "metric_delta": 11,
+            "strict_events": 11,
+            "loose_events": 11,
+            "nominal_events": 11,
+            "reconciled": true,
+            "elapsed": 300.23389937198954,
+            "start_wall": 1793980052.7800102,
+            "end_wall": 1793980353.0139096
+          }
+        }
+      }
+    ],
+    "artifact_manifest": {
+      "base": "77ae0a3034efefb22919b6257dd40e5ebc1827bb",
+      "patch_sha256": "ac94c5d90824a69db3b03d4df761611a610dd59ede73e00c87659c558f154018",
+      "artifacts": {
+        "clusterd": {
+          "path": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/main/artifacts/main/clusterd",
+          "bytes": 777923336,
+          "sha256": "82af49b8a4843a004a48c4f30b307ffb5b4e9777a830f6fdacd49a8dce3b6ddf"
+        },
+        "environmentd": {
+          "path": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/main/artifacts/main/environmentd",
+          "bytes": 808844632,
+          "sha256": "49981d8c451996171260b5ca2e15470ec88e93c051cc40dd72cd05d922c67530"
+        }
+      }
+    },
+    "settings": {
+      "persist_shard_metrics": "both",
+      "log_filter": "info",
+      "enable_metric_sink": "off",
+      "persist_enable_incremental_compaction": "off",
+      "enable_columnar_accumulable_diff": "off",
+      "compute_temporal_bucketing_summary": "2 s",
+      "persist_blob_cache_mem_limit_bytes": "134217728",
+      "persist_pg_consensus_read_committed": "off",
+      "compute_mv_sink_shared_batch_max_bytes": "0"
+    },
+    "result": {
+      "status": "passed",
+      "kind": "main",
+      "run": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/main/scan-audit-main-1793979420",
+      "arguments": {
+        "kind": "main",
+        "evidence_dir": "/home/ubuntu/.local/share/aj/m3-evidence/replica-scan-necessity/main",
+        "postgres_image": "postgres:18",
+        "warmup": 300,
+        "window": 300,
+        "windows": 2,
+        "profile_seconds": 0,
+        "label": "scan-audit-main",
+        "scheduling_diagnostics": false,
+        "frontier_lifecycle": false,
+        "system_parameter": [
+          "enable_metric_sink=false",
+          "persist_enable_incremental_compaction=false",
+          "enable_columnar_accumulable_diff=false",
+          "compute_mv_sink_shared_batch_max_bytes=0"
+        ]
+      },
+      "readiness_seconds": 20.215358835004736,
+      "measurement_status": "passed",
+      "profile_errors": {}
+    },
+    "catalog_shards": [
+      {
+        "shard": "sa811dc7d-99a0-474b-a1dd-6059970e2d36",
+        "objects": [
+          "mz_internal.mz_webhook_sources"
+        ],
+        "scans": 35,
+        "empty": 35,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 35
+        }
+      },
+      {
+        "shard": "sf219ebc4-09a4-4574-9b33-ddd23410c096",
+        "objects": [
+          "mz_internal.mz_cluster_replica_size_internal"
+        ],
+        "scans": 35,
+        "empty": 35,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 35
+        }
+      },
+      {
+        "shard": "s53ef77a9-a961-4996-9920-b5ad19566cae",
+        "objects": [
+          "mz_internal.mz_object_arrangement_size_history"
+        ],
+        "scans": 34,
+        "empty": 34,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 34
+        }
+      },
+      {
+        "shard": "sd8128a81-75f6-418c-af73-c939555c2a27",
+        "objects": [
+          "mz_catalog.mz_cluster_replica_sizes"
+        ],
+        "scans": 34,
+        "empty": 34,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 34
+        }
+      },
+      {
+        "shard": "sa0287f96-3810-4755-b9bb-5010bb903a6c",
+        "objects": [
+          "mz_internal.mz_replica_hydration_history"
+        ],
+        "scans": 20,
+        "empty": 1,
+        "bytes": 437878,
+        "categories": {
+          "machine acquisition": 18,
+          "rollup": 1,
+          "rollup state refresh": 1
+        }
+      },
+      {
+        "shard": "sc3a8c299-a2e3-4f4e-9f70-80393155766d",
+        "objects": [
+          "mz_internal.mz_object_hydration_history"
+        ],
+        "scans": 19,
+        "empty": 1,
+        "bytes": 384839,
+        "categories": {
+          "machine acquisition": 17,
+          "rollup": 1,
+          "rollup state refresh": 1
+        }
+      },
+      {
+        "shard": "sece279f3-aa42-4210-88ce-d50b564b4af6",
+        "objects": [
+          "mz_internal.mz_optimizer_notices"
+        ],
+        "scans": 19,
+        "empty": 19,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 19
+        }
+      },
+      {
+        "shard": "s77d71274-4494-4d9e-8e12-4170bd9d5925",
+        "objects": [
+          "mz_catalog.mz_pseudo_types"
+        ],
+        "scans": 18,
+        "empty": 18,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 18
+        }
+      },
+      {
+        "shard": "saa287248-4bdb-454a-a4a2-cb9d4bcb3112",
+        "objects": [
+          "mz_catalog.mz_array_types"
+        ],
+        "scans": 18,
+        "empty": 18,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 18
+        }
+      },
+      {
+        "shard": "s42dab817-8475-48fa-b0bf-c6aecd5651ac",
+        "objects": [
+          "mz_catalog.mz_functions"
+        ],
+        "scans": 17,
+        "empty": 16,
+        "bytes": 278,
+        "categories": {
+          "reader fallback": 17
+        }
+      },
+      {
+        "shard": "s67b3c8f3-0f7e-4c21-9844-397dc74a222f",
+        "objects": [
+          "mz_catalog.mz_role_auth"
+        ],
+        "scans": 17,
+        "empty": 17,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 17
+        }
+      },
+      {
+        "shard": "s86a9b1ac-9a4b-44dc-970e-32a8a1b21a56",
+        "objects": [
+          "mz_catalog.mz_map_types"
+        ],
+        "scans": 17,
+        "empty": 17,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 17
+        }
+      },
+      {
+        "shard": "s87bb7e8d-4f9e-479b-b1a0-d2c1497cfed2",
+        "objects": [
+          "mz_catalog.mz_base_types"
+        ],
+        "scans": 17,
+        "empty": 17,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 17
+        }
+      },
+      {
+        "shard": "sbee26e2e-e630-4728-8c2d-2417395cb9c8",
+        "objects": [
+          "mz_catalog.mz_connections"
+        ],
+        "scans": 17,
+        "empty": 6,
+        "bytes": 2729077,
+        "categories": {
+          "live-state maintenance": 5,
+          "rollup": 6,
+          "rollup state refresh": 6
+        }
+      },
+      {
+        "shard": "s20663d4d-5743-4a52-aae5-07eebb6cccd8",
+        "objects": [
+          "mz_catalog.mz_types"
+        ],
+        "scans": 16,
+        "empty": 16,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 16
+        }
+      },
+      {
+        "shard": "s24c9546e-8e36-4671-9b3b-b8afc8b067d6",
+        "objects": [
+          "mz_internal.mz_storage_usage_by_shard"
+        ],
+        "scans": 16,
+        "empty": 16,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 16
+        }
+      },
+      {
+        "shard": "s25250a9f-05ce-4ebf-b362-abd6fb721b78",
+        "objects": [
+          "mz_catalog.mz_sinks"
+        ],
+        "scans": 16,
+        "empty": 5,
+        "bytes": 1350283,
+        "categories": {
+          "live-state maintenance": 6,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s3adcee2a-d8b5-44d6-a5af-06155ab74d1b",
+        "objects": [
+          "mz_catalog.mz_list_types"
+        ],
+        "scans": 16,
+        "empty": 16,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 16
+        }
+      },
+      {
+        "shard": "s3bc302ca-f603-4cf4-8dbe-ee32cb8018cd",
+        "objects": [
+          "mz_catalog.mz_audit_events"
+        ],
+        "scans": 16,
+        "empty": 5,
+        "bytes": 1373883,
+        "categories": {
+          "live-state maintenance": 6,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s7bcb02eb-3226-4bd5-a505-419ce43a4fa0",
+        "objects": [
+          "mz_internal.mz_type_pg_metadata"
+        ],
+        "scans": 16,
+        "empty": 16,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 16
+        }
+      },
+      {
+        "shard": "s657d7c3a-181c-43e9-85e1-068e4bd3bf04",
+        "objects": [
+          "mz_catalog.mz_views"
+        ],
+        "scans": 15,
+        "empty": 5,
+        "bytes": 1101353,
+        "categories": {
+          "live-state maintenance": 5,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s7831e9f7-edaa-4ae2-853e-36973ea4521a",
+        "objects": [
+          "mz_catalog.mz_indexes"
+        ],
+        "scans": 15,
+        "empty": 5,
+        "bytes": 1181786,
+        "categories": {
+          "live-state maintenance": 5,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s87d0931e-b5ca-4e62-be85-825f9ecfa3e0",
+        "objects": [
+          "mz_catalog.mz_clusters"
+        ],
+        "scans": 15,
+        "empty": 5,
+        "bytes": 1214964,
+        "categories": {
+          "live-state maintenance": 5,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sa847cfc6-0c41-48ca-9bdc-4b98ecf598c6",
+        "objects": [
+          "mz_catalog.mz_materialized_views"
+        ],
+        "scans": 15,
+        "empty": 5,
+        "bytes": 1138772,
+        "categories": {
+          "live-state maintenance": 5,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sc2a2fbff-3b7b-4061-9608-c8253402b337",
+        "objects": [
+          "mz_internal.mz_comments"
+        ],
+        "scans": 15,
+        "empty": 5,
+        "bytes": 1149318,
+        "categories": {
+          "live-state maintenance": 5,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sde4d23a5-45b3-4724-8888-274b57a16492",
+        "objects": [
+          "mz_internal.mz_network_policy_rules"
+        ],
+        "scans": 15,
+        "empty": 6,
+        "bytes": 1762155,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 6,
+          "rollup state refresh": 6
+        }
+      },
+      {
+        "shard": "sf77d7c6e-e86a-4a5d-b188-28013e4bad55",
+        "objects": [
+          "mz_catalog.mz_sources"
+        ],
+        "scans": 15,
+        "empty": 5,
+        "bytes": 1084875,
+        "categories": {
+          "live-state maintenance": 5,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s16a9e107-6da0-4063-a02b-7a21bf8d4159",
+        "objects": [
+          "mz_internal.mz_overridden_system_parameters"
+        ],
+        "scans": 14,
+        "empty": 5,
+        "bytes": 953285,
+        "categories": {
+          "live-state maintenance": 4,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s274afe7f-9a54-4aa7-bac0-6d0250520554",
+        "objects": [
+          "mz_catalog.mz_columns"
+        ],
+        "scans": 14,
+        "empty": 5,
+        "bytes": 1051427,
+        "categories": {
+          "live-state maintenance": 4,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s4db0afdb-0fcc-4ba0-95b1-7462d6c77d01",
+        "objects": [
+          "mz_catalog.mz_cluster_replicas"
+        ],
+        "scans": 14,
+        "empty": 5,
+        "bytes": 1025942,
+        "categories": {
+          "live-state maintenance": 4,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s6c94130c-8467-4b5a-b6fd-60b7047a9557",
+        "objects": [
+          "mz_catalog.mz_tables"
+        ],
+        "scans": 14,
+        "empty": 5,
+        "bytes": 1063584,
+        "categories": {
+          "live-state maintenance": 4,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sb89c421e-4491-4eae-a9db-f0c880f257d2",
+        "objects": [
+          "mz_internal.mz_network_policies"
+        ],
+        "scans": 14,
+        "empty": 6,
+        "bytes": 1459072,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 6,
+          "rollup state refresh": 6
+        }
+      },
+      {
+        "shard": "s2a255a50-af86-4102-8bd5-d25c3a1cd5ed",
+        "objects": [
+          "mz_internal.mz_cluster_reconfigurations"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 805275,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s2fadbc83-d39f-4e7f-8476-c91005ec7019",
+        "objects": [
+          "mz_catalog.mz_kafka_connections"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 790896,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s36ff013a-fa96-47d1-9784-b275fd6e7be5",
+        "objects": [
+          "mz_internal.mz_cluster_schedules"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 873270,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s45b78025-93a3-4769-862a-3909cfc1302b",
+        "objects": [
+          "mz_catalog.mz_secrets"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 777306,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s4ed0082e-687f-435b-802f-771f5d092a03",
+        "objects": [
+          "mz_catalog.mz_kafka_sinks"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 784587,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s79d51e7c-cbe3-4e7b-99f8-0d37a29cb39e",
+        "objects": [
+          "mz_internal.mz_replacements"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 733507,
+        "categories": {
+          "command CAS recovery": 2,
+          "live-state maintenance": 3,
+          "rollup": 4,
+          "rollup state refresh": 4
+        }
+      },
+      {
+        "shard": "s9269da7e-7dee-4899-8876-af7af00b84c8",
+        "objects": [
+          "mz_internal.mz_postgres_sources"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 767430,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s9ec5b0d1-7480-4916-8fb6-cb72d0f2d608",
+        "objects": [
+          "mz_internal.mz_object_dependencies"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 853297,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sa0954909-7ac6-4eff-8ab9-fb25b2132019",
+        "objects": [
+          "mz_catalog.mz_kafka_sources"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 821422,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sb4478898-0434-41b0-afa1-0960d9a02ff2",
+        "objects": [
+          "mz_internal.mz_source_references"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 846240,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sb44b7073-f142-4832-b563-6302d97b5c3f",
+        "objects": [
+          "mz_internal.mz_mysql_source_tables"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 759226,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sbb477f8f-45fc-409d-9508-214ec4bc7d32",
+        "objects": [
+          "mz_catalog.mz_ssh_tunnel_connections"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 808765,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sbeb99daf-a7a9-47fb-8440-837cd3272c7e",
+        "objects": [
+          "mz_internal.mz_replica_system_parameters"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 815634,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sc19b29d2-a229-402d-be68-f5102ef38eb0",
+        "objects": [
+          "mz_internal.mz_kafka_source_tables"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 763302,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sc2b13866-6fdd-4056-8800-48d7a8a1ed0e",
+        "objects": [
+          "mz_internal.mz_object_global_ids"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 837520,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sd13f6f71-e154-4dbd-94c9-99db0fd1846d",
+        "objects": [
+          "mz_internal.mz_postgres_source_tables"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 749236,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sd59b299c-ccda-4cf8-b9c6-b31468682ce8",
+        "objects": [
+          "mz_catalog.mz_roles"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 872697,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "se2aae41a-7874-4803-927b-ed26cf1e125e",
+        "objects": [
+          "mz_catalog.mz_schemas"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 837152,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sef455e15-126e-4cc4-b6b8-95fbf931c835",
+        "objects": [
+          "mz_internal.mz_sql_server_source_tables"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 812578,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sf393a8d5-922c-4f1a-ba8a-82faf11b55d5",
+        "objects": [
+          "mz_catalog.mz_index_columns"
+        ],
+        "scans": 13,
+        "empty": 5,
+        "bytes": 861326,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s0983e4e9-f4d5-45e7-a49d-d254c22b1407",
+        "objects": [
+          "mz_internal.mz_pending_cluster_replicas"
+        ],
+        "scans": 12,
+        "empty": 5,
+        "bytes": 627684,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s3ddf1e5f-b33a-4c44-91ed-649460229339",
+        "objects": [
+          "mz_internal.mz_metric_sinks"
+        ],
+        "scans": 12,
+        "empty": 5,
+        "bytes": 614310,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s5ef62b3e-4d8c-453f-aa4f-71a49b69673c",
+        "objects": [
+          "mz_catalog.mz_default_privileges"
+        ],
+        "scans": 12,
+        "empty": 5,
+        "bytes": 689907,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s65acc9f5-1666-418c-922b-2126daa60325",
+        "objects": [
+          "mz_internal.mz_cluster_auto_scaling_strategies"
+        ],
+        "scans": 12,
+        "empty": 5,
+        "bytes": 634431,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s8deb780d-0089-4a1d-81bf-4a55b97c2dfe",
+        "objects": [
+          "mz_internal.mz_cluster_workload_classes"
+        ],
+        "scans": 12,
+        "empty": 4,
+        "bytes": 837866,
+        "categories": {
+          "command CAS recovery": 1,
+          "live-state maintenance": 3,
+          "rollup": 4,
+          "rollup state refresh": 4
+        }
+      },
+      {
+        "shard": "sbdc9a6ca-3236-42a5-95af-faeabe789daf",
+        "objects": [
+          "mz_internal.mz_cluster_system_parameters"
+        ],
+        "scans": 12,
+        "empty": 5,
+        "bytes": 626160,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "sc55ab500-0e9b-4cee-9a61-8ea1f55ef1fe",
+        "objects": [
+          "mz_catalog.mz_system_privileges"
+        ],
+        "scans": 12,
+        "empty": 5,
+        "bytes": 655740,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "se650b972-e220-4a88-bf48-cb347721395a",
+        "objects": [
+          "mz_internal.mz_aws_connections"
+        ],
+        "scans": 12,
+        "empty": 5,
+        "bytes": 648256,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 5,
+          "rollup state refresh": 5
+        }
+      },
+      {
+        "shard": "s33f99950-efd9-41be-923e-17ec3a361d34",
+        "objects": [
+          "mz_catalog.mz_role_parameters"
+        ],
+        "scans": 11,
+        "empty": 4,
+        "bytes": 765484,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 4,
+          "rollup state refresh": 4
+        }
+      },
+      {
+        "shard": "s83ce3766-f006-4c4d-a239-3db495d8d53d",
+        "objects": [
+          "mz_internal.mz_history_retention_strategies"
+        ],
+        "scans": 11,
+        "empty": 4,
+        "bytes": 791615,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 4,
+          "rollup state refresh": 4
+        }
+      },
+      {
+        "shard": "sd0a52de1-c9f6-44ef-90d2-abd24169fc80",
+        "objects": [
+          "mz_catalog.mz_role_members"
+        ],
+        "scans": 11,
+        "empty": 4,
+        "bytes": 748318,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 4,
+          "rollup state refresh": 4
+        }
+      },
+      {
+        "shard": "s978d4256-0873-402b-8ce7-beacbe30f9ef",
+        "objects": [
+          "mz_catalog.mz_iceberg_sinks"
+        ],
+        "scans": 10,
+        "empty": 4,
+        "bytes": 520967,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 4,
+          "rollup state refresh": 4
+        }
+      },
+      {
+        "shard": "sb9fa677b-ae00-4c2c-98eb-e253f01e1529",
+        "objects": [
+          "mz_catalog.mz_databases"
+        ],
+        "scans": 10,
+        "empty": 4,
+        "bytes": 1186289,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 4,
+          "rollup state refresh": 4
+        }
+      },
+      {
+        "shard": "sfa33edeb-bb3d-4369-982b-b65e1ecfa4a0",
+        "objects": [
+          "mz_internal.mz_materialized_view_refresh_strategies"
+        ],
+        "scans": 10,
+        "empty": 4,
+        "bytes": 596267,
+        "categories": {
+          "live-state maintenance": 2,
+          "rollup": 4,
+          "rollup state refresh": 4
+        }
+      },
+      {
+        "shard": "s01a5f403-a717-468c-89e4-87c724755972",
+        "objects": [
+          "mz_internal.mz_internal_cluster_replicas"
+        ],
+        "scans": 9,
+        "empty": 3,
+        "bytes": 716135,
+        "categories": {
+          "live-state maintenance": 3,
+          "rollup": 3,
+          "rollup state refresh": 3
+        }
+      },
+      {
+        "shard": "sc35471a2-19bc-4f9c-abfb-2afc55ac4aa5",
+        "objects": [
+          "mz_internal.mz_cluster_replica_status_history"
+        ],
+        "scans": 4,
+        "empty": 4,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 4
+        }
+      },
+      {
+        "shard": "s47326d2b-fd91-4ac2-bc78-a8a317b923e4",
+        "objects": [
+          "mz_internal.mz_compute_hydration_times"
+        ],
+        "scans": 3,
+        "empty": 3,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 3
+        }
+      },
+      {
+        "shard": "s8b272f0a-8547-4ea3-8e44-a7c630dfa30d",
+        "objects": [
+          "mz_internal.mz_wallclock_lag_history"
+        ],
+        "scans": 2,
+        "empty": 2,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 2
+        }
+      },
+      {
+        "shard": "sbad449e6-6cf9-405d-b9b5-4b4e58debd02",
+        "objects": [
+          "mz_internal.mz_cluster_replica_metrics_history"
+        ],
+        "scans": 2,
+        "empty": 2,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 2
+        }
+      },
+      {
+        "shard": "sed112d2d-8cfd-31f8-a695-c8e124ddd231",
+        "objects": [
+          "mz_internal.mz_catalog_raw"
+        ],
+        "scans": 2,
+        "empty": 1,
+        "bytes": 63565,
+        "categories": {
+          "rollup": 1,
+          "rollup state refresh": 1
+        }
+      },
+      {
+        "shard": "s5ee15686-6fdf-490b-a357-ab07a2327cb5",
+        "objects": [
+          "mz_internal.mz_frontiers"
+        ],
+        "scans": 2,
+        "empty": 2,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 2
+        }
+      },
+      {
+        "shard": "sd226ef5b-28e4-4bb2-b0a9-4f12bc1b38c9",
+        "objects": [
+          "mz_catalog.mz_cluster_replica_frontiers"
+        ],
+        "scans": 1,
+        "empty": 1,
+        "bytes": 0,
+        "categories": {
+          "reader fallback": 1
+        }
+      }
+    ],
+    "clock_spread_seconds": 1.7642974853515625e-05
+  },
+  "scope": "Actual completed consensus scans. Not wakeup counts, and not a deletion counterfactual."
+}

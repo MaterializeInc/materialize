@@ -1,0 +1,244 @@
+diff --git a/src/persist-client/src/fetch.rs b/src/persist-client/src/fetch.rs
+index 9c150f4667..b432ae0d48 100644
+--- a/src/persist-client/src/fetch.rs
++++ b/src/persist-client/src/fetch.rs
+@@ -404,7 +404,9 @@ where
+     // Refreshing state talks to consensus; this runs on an already-fatal path
+     // and a partition from consensus may be the very reason the lease was
+     // lost, so don't let the diagnosis block the restart indefinitely.
+-    let refresh = applier.fetch_and_update_state(None);
++    let refresh = applier
++        .fetch_and_update_state(None)
++        .instrument(tracing::info_span!("audit_missing_blob_refresh"));
+     if tokio::time::timeout(MISSING_BLOB_DIAGNOSIS_TIMEOUT, refresh)
+         .await
+         .is_err()
+diff --git a/src/persist-client/src/internal/apply.rs b/src/persist-client/src/internal/apply.rs
+index 171d8dca68..6c8c601aef 100644
+--- a/src/persist-client/src/internal/apply.rs
++++ b/src/persist-client/src/internal/apply.rs
+@@ -43,7 +43,7 @@ use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
+ use mz_persist_types::schema::SchemaId;
+ use mz_persist_types::{Codec, Codec64};
+ use timely::progress::{Antichain, Timestamp};
+-use tracing::debug;
++use tracing::{Instrument, debug};
+
+ /// An applier of persist commands.
+ ///
+@@ -132,7 +132,9 @@ where
+     /// Fetches the latest state from Consensus and passes its `upper` to the provided closure.
+     pub async fn fetch_upper<R, F: FnMut(&Antichain<T>) -> R>(&self, mut f: F) -> R {
+         self.metrics.cmds.fetch_upper_count.inc();
+-        self.fetch_and_update_state(None).await;
++        self.fetch_and_update_state(None)
++            .instrument(tracing::info_span!("audit_explicit_upper"))
++            .await;
+         self.upper(|_seqno, upper| f(upper))
+     }
+
+@@ -407,7 +409,9 @@ where
+                 }
+                 ApplyCmdResult::ExpectationMismatch(seqno) => {
+                     cmd.cas_mismatch.inc();
+-                    self.fetch_and_update_state(Some(seqno)).await;
++                    self.fetch_and_update_state(Some(seqno))
++                        .instrument(tracing::info_span!("audit_command_retry", command = %cmd.name))
++                        .await;
+                 }
+             }
+         }
+diff --git a/src/persist-client/src/internal/gc.rs b/src/persist-client/src/internal/gc.rs
+index ccfdfa7fd6..c09b92fa11 100644
+--- a/src/persist-client/src/internal/gc.rs
++++ b/src/persist-client/src/internal/gc.rs
+@@ -237,6 +237,7 @@ where
+             machine
+                 .applier
+                 .fetch_and_update_state(Some(req.new_seqno_since))
++                .instrument(tracing::info_span!("audit_gc_refresh"))
+                 .await;
+             let current_seqno_since = machine.applier.seqno_since();
+             assert!(
+diff --git a/src/persist-client/src/internal/machine.rs b/src/persist-client/src/internal/machine.rs
+index 7ba5b4b123..a67049494e 100644
+--- a/src/persist-client/src/internal/machine.rs
++++ b/src/persist-client/src/internal/machine.rs
+@@ -359,7 +359,10 @@ where
+                     // side-channel that didn't update our local cache of the
+                     // machine state. So, fetch the latest state and try again
+                     // if we indeed get something different.
+-                    self.applier.fetch_and_update_state(Some(seqno)).await;
++                    self.applier
++                        .fetch_and_update_state(Some(seqno))
++                        .instrument(tracing::info_span!("audit_upper_mismatch"))
++                        .await;
+                     let (current_seqno, current_upper) =
+                         self.applier.upper(|seqno, upper| (seqno, upper.clone()));
+
+@@ -934,7 +937,12 @@ where
+                 Wake::Watch(_) => self.applier.metrics.watch.wait_woken_via_watch.inc(),
+                 Wake::Sleep(_) => {
+                     self.applier.metrics.watch.wait_woken_via_sleep.inc();
+-                    self.applier.fetch_and_update_state(Some(seqno)).await;
++                    let purpose = reader_id
++                        .and_then(|id| self.applier.reader_lease(id.clone()))
++                        .map(|lease| lease.debug.purpose);
++                    self.applier.fetch_and_update_state(Some(seqno))
++                        .instrument(tracing::info_span!("audit_wait_retry", wait_for = %metrics.name, reader = ?reader_id, purpose = ?purpose, frontier = ?frontier))
++                        .await;
+                 }
+             }
+
+diff --git a/src/persist-client/src/internal/maintenance.rs b/src/persist-client/src/internal/maintenance.rs
+index e9cf0c69bb..40971fd247 100644
+--- a/src/persist-client/src/internal/maintenance.rs
++++ b/src/persist-client/src/internal/maintenance.rs
+@@ -22,6 +22,7 @@ use futures_util::future::BoxFuture;
+ use mz_persist::location::SeqNo;
+ use mz_persist_types::{Codec, Codec64};
+ use timely::progress::Timestamp;
++use tracing::Instrument;
+
+ use crate::internal::compact::CompactReq;
+ use crate::internal::gc::GcReq;
+@@ -124,6 +125,7 @@ impl RoutineMaintenance {
+                         machine
+                             .applier
+                             .fetch_and_update_state(Some(rollup_seqno))
++                            .instrument(tracing::info_span!("audit_rollup_refresh"))
+                             .await;
+                         // We don't have to write at exactly rollup_seqno, just need
+                         // something recent.
+diff --git a/src/persist-client/src/internal/metrics.rs b/src/persist-client/src/internal/metrics.rs
+index a6497287f5..9721ba9095 100644
+--- a/src/persist-client/src/internal/metrics.rs
++++ b/src/persist-client/src/internal/metrics.rs
+@@ -3512,6 +3512,11 @@ impl Consensus for MetricsConsensus {
+                 .bytes
+                 .inc_by(u64::cast_from(bytes));
+         }
++        tracing::info!(target: "mz_persist_client::scan_audit", shard = key,
++            from = ?from, limit,
++            rows = ?res.as_ref().ok().map(Vec::len),
++            bytes = ?res.as_ref().ok().map(|rows| rows.iter().map(|r| r.data.len()).sum::<usize>()),
++            "CONSENSUS_SCAN");
+         res
+     }
+
+diff --git a/src/persist-client/src/internal/state_versions.rs b/src/persist-client/src/internal/state_versions.rs
+index 0322d302b8..758a9391c8 100644
+--- a/src/persist-client/src/internal/state_versions.rs
++++ b/src/persist-client/src/internal/state_versions.rs
+@@ -142,6 +142,7 @@ impl StateVersions {
+
+     /// Fetches the `current` state of the requested shard, or creates it if
+     /// uninitialized.
++    #[tracing::instrument(level = "info", skip_all)]
+     pub async fn maybe_init_shard<K, V, T, D>(
+         &self,
+         shard_metrics: &ShardMetrics,
+@@ -378,6 +379,7 @@ impl StateVersions {
+     /// copy of all or recent live diffs, to avoid fetches where possible.
+     ///
+     /// Panics if called on an uninitialized shard.
++    #[tracing::instrument(level = "info", skip_all)]
+     pub async fn fetch_current_state<T>(
+         &self,
+         shard_id: &ShardId,
+@@ -451,6 +453,7 @@ impl StateVersions {
+     /// Returns an iterator over all live states for the requested shard.
+     ///
+     /// Returns None if called on an uninitialized shard.
++    #[tracing::instrument(level = "info", skip_all)]
+     pub async fn fetch_all_live_states<T>(
+         &self,
+         shard_id: ShardId,
+@@ -525,6 +528,7 @@ impl StateVersions {
+     /// the caller simply needs to fetch the latest state.
+     ///
+     /// Returns an empty Vec iff called on an uninitialized shard.
++    #[tracing::instrument(level = "info", skip_all)]
+     pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> Vec<VersionedData> {
+         let path = shard_id.to_string();
+         let diffs = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+@@ -553,6 +557,7 @@ impl StateVersions {
+
+     /// Fetches all live_diffs for a shard up to and including a given threshold, allowing us to
+     /// reconstruct states up to and including that version.
++    #[tracing::instrument(level = "info", skip_all)]
+     pub async fn fetch_live_diffs_through(
+         &self,
+         shard_id: &ShardId,
+@@ -599,6 +604,7 @@ impl StateVersions {
+     /// "Recent" is defined as either:
+     /// * All of the diffs known in Consensus
+     /// * All of the diffs in Consensus after the latest rollup
++    #[tracing::instrument(level = "info", skip_all)]
+     pub async fn fetch_recent_live_diffs<T>(&self, shard_id: &ShardId) -> RecentLiveDiffs
+     where
+         T: Timestamp + Lattice + Codec64,
+@@ -670,6 +676,7 @@ impl StateVersions {
+     ///
+     /// TODO: Apply a limit to this scan. This could additionally be used as an internal
+     /// call within `fetch_recent_live_diffs`.
++    #[tracing::instrument(level = "info", skip_all)]
+     pub async fn fetch_all_live_diffs_gt_seqno<K, V, T, D>(
+         &self,
+         shard_id: &ShardId,
+@@ -748,6 +755,7 @@ impl StateVersions {
+         (initial_state, diff)
+     }
+
++    #[tracing::instrument(level = "info", skip_all)]
+     pub async fn write_rollup_for_state<K, V, T, D>(
+         &self,
+         shard_metrics: &ShardMetrics,
+diff --git a/src/persist-client/src/lib.rs b/src/persist-client/src/lib.rs
+index 8ce9c5ee83..f7289dee75 100644
+--- a/src/persist-client/src/lib.rs
++++ b/src/persist-client/src/lib.rs
+@@ -249,6 +249,7 @@ impl PersistClient {
+         &self.cfg.configs
+     }
+
++    #[tracing::instrument(level = "info", skip_all, fields(purpose = %diagnostics.handle_purpose))]
+     async fn make_machine<K, V, T, D>(
+         &self,
+         shard_id: ShardId,
+diff --git a/src/persist-client/src/schema.rs b/src/persist-client/src/schema.rs
+index 3f75f9dfb3..b90bd8fb1f 100644
+--- a/src/persist-client/src/schema.rs
++++ b/src/persist-client/src/schema.rs
+@@ -21,6 +21,7 @@ use mz_persist_types::columnar::data_type;
+ use mz_persist_types::schema::{Migration, SchemaId, backward_compatible};
+ use mz_persist_types::{Codec, Codec64};
+ use timely::progress::Timestamp;
++use tracing::Instrument;
+
+ use crate::internal::apply::Applier;
+ use crate::internal::encoding::Schemas;
+@@ -193,7 +194,10 @@ where
+             Err(seqno) => seqno,
+         };
+         self.applier.metrics.schema.cache_fetch_state_count.inc();
+-        self.applier.fetch_and_update_state(Some(seqno)).await;
++        self.applier
++            .fetch_and_update_state(Some(seqno))
++            .instrument(tracing::info_span!("audit_schema_refresh"))
++            .await;
+         map.get_or_try_init(key, || {
+             self.applier
+                 .schemas(|seqno, schemas| f(schemas).ok_or(seqno))
+diff --git a/src/persist-client/src/write.rs b/src/persist-client/src/write.rs
+index 4a93586776..06d38584ac 100644
+--- a/src/persist-client/src/write.rs
++++ b/src/persist-client/src/write.rs
+@@ -974,6 +974,7 @@ where
+     }
+
+     /// Blocks until the given `frontier` is less than the upper of the shard.
++    #[tracing::instrument(level = "info", skip_all, name = "audit_writer_upper_wait")]
+     pub async fn wait_for_upper_past(&mut self, frontier: &Antichain<T>) {
+         let mut watch = self.machine.applier.watch();
+         self.machine

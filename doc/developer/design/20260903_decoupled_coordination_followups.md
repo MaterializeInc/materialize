@@ -10,6 +10,30 @@ owns a fact. Reuse existing identities, catalog changes and Persist listeners.
 Do not introduce a designated maintenance adapter, another consensus protocol,
 or a general sampling framework.
 
+## Duplicate progress observation
+
+The [measured scan audit](20260903_decoupled_coordination_replica_scans.md)
+confirms duplicate empty scans across same-process readers and upper observers.
+Distinct consumers do not require independent fallback polling. Keep oracle/
+catalog certification separate from background recovery. The catalog helper
+itself accounts for little traffic, and currently supplies normal recovery for
+its bounded row listener. Removing it alone would rely on incidental operations
+or slower lease heartbeats.
+
+Concrete candidates are skipping satisfied pre-rollup refreshes, sharing
+same-process shard recovery, injecting an existing full WAL reader into query
+snapshots, and removing query compute waits' cache-only timer after verifying
+notification coverage. Protected prewarming can reuse existing catalog progress
+for its separate protection projection. Readiness reference freshness needs an
+explicit contract decision before replacing its fresh target with cached state.
+
+Preserve pre-install/restart coverage, process placement, cancellation, complete
+logical inputs and missing-versus-completed progress. Existing MV mint upper
+observations and lagging read-back frontiers are different facts. The report
+contains measured caller/shard attribution and source-linked evidence under
+`~/.local/share/aj/m3-evidence/replica-scan-necessity/`. Implementation needs a
+bounded follow-up, not blanket listener removal or a new ownership protocol.
+
 ## Recurring full reads
 
 ### Retired-row cleanup

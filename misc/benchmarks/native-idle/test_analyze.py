@@ -9,12 +9,18 @@
 
 """Counter-boundary checks for the recorded experiment's reducer."""
 
+import contextlib
+import datetime
 import gzip
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from analyze import metrics, operation_rates
+from analyze_scans import analyze as analyze_scans
+from analyze_scans import parse, scan_count, summarize
 from analyze_scheduling import COLUMNS, reduce
 
 PREFIX = "mz_persist_external_"
@@ -106,6 +112,86 @@ class SchedulingReduction(unittest.TestCase):
         after["rows"][0][3] = 99
         with self.assertRaisesRegex(AssertionError, "counter reset"):
             reduce(before, after)
+
+
+class ScanAttribution(unittest.TestCase):
+    @staticmethod
+    def event(timestamp, span="audit_rollup_refresh", rows="Some(0)", size="Some(0)"):
+        stamp = (
+            datetime.datetime.fromtimestamp(timestamp, datetime.UTC)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        return (
+            f"cluster-s2-replica-s2-gen-0: {stamp} INFO {span}: "
+            "mz_persist_client::scan_audit: CONSENSUS_SCAN "
+            f'shard="s00000000-0000-0000-0000-000000000001" '
+            f"from=SeqNo(7) limit=100 rows={rows} bytes={size}\n"
+        )
+
+    @staticmethod
+    def counters(path, succeeded, failed=0):
+        with gzip.open(path, "wt") as out:
+            for suffix, value in [("succeeded", succeeded), ("failed", failed)]:
+                out.write(
+                    f'mz_persist_external_{suffix}_count{{op="consensus_scan"}} {value}\n'
+                )
+
+    def test_empty_failure_and_unclassified_are_distinct(self):
+        empty = parse(self.event(1700000000))
+        failure = parse(self.event(1700000001, rows="None", size="None"))
+        unknown = parse(self.event(1700000002, span="new_caller"))
+        self.assertEqual(empty["role"], "replica-s2-s2")
+        self.assertEqual(empty["category"], "rollup state refresh")
+        self.assertEqual(unknown["category"], "unclassified")
+        group = summarize([empty, failure])[0]
+        self.assertEqual((group["scans"], group["empty"], group["failed"]), (2, 1, 1))
+        self.assertIsNone(parse("an unrelated log event"))
+
+    def test_absent_counter_is_not_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory) / "metrics.gz"
+            with gzip.open(p, "wt") as out:
+                out.write("some_other_metric 0\n")
+            self.assertIsNone(scan_count(p))
+            self.counters(p, 0)
+            self.assertEqual(scan_count(p), 0)
+            self.counters(p, 7, 2)
+            self.assertEqual(scan_count(p), 9)
+
+    def test_scrape_uncertainty_missing_events_and_counter_reset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            epoch = 1700000000
+            (run / "usage.jsonl").write_text(
+                json.dumps({"time": 1000, "wall_time": epoch + 1000}) + "\n"
+            )
+            (run / "runtime.log").write_text(
+                "".join(self.event(epoch + 1000 + t) for t in [0.05, 1, 9, 10.05])
+            )
+            for i, start in enumerate([1000, 1010]):
+                (run / f"steady-{i}-metrics-timing.json").write_text(
+                    json.dumps({"replica-s2-s2": {"start": start, "end": start + 0.1}})
+                )
+                self.counters(run / f"steady-{i}-replica-s2-s2.prom.gz", 5 + 3 * i)
+
+            def result():
+                with contextlib.redirect_stdout(io.StringIO()):
+                    analyze_scans(run)
+                return json.loads((run / "scan-analysis.json").read_text())["windows"][
+                    0
+                ]["roles"]["replica-s2-s2"]
+
+            observed = result()
+            self.assertEqual(observed["strict_events"], 2)
+            self.assertEqual(observed["loose_events"], 4)
+            self.assertEqual(observed["metric_delta"], 3)
+            self.assertTrue(observed["reconciled"])
+            self.counters(run / "steady-1-replica-s2-s2.prom.gz", 10)
+            self.assertFalse(result()["reconciled"])
+            self.counters(run / "steady-1-replica-s2-s2.prom.gz", 4)
+            with self.assertRaisesRegex(ValueError, "counter reset"):
+                result()
 
 
 if __name__ == "__main__":

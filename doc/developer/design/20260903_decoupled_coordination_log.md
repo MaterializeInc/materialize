@@ -2,7 +2,13 @@
 
 ## Current objective
 
-The consensus-read removal goal is implemented and verified. Scans fell 93%, from
+The replica-scan investigation and broader observer survey are complete. Actual
+scan events reconcile with counters on native and matched upstream. Independent
+consumers duplicate empty recovery reads, but the catalog helper itself is a
+small cost. See the [report](20260903_decoupled_coordination_replica_scans.md) and
+[measured attribution](20260903_decoupled_coordination_replica_scans.json).
+
+The preceding consensus-read removal goal is implemented and verified. Scans fell 93%, from
 122–123/s to 7.9–8.4/s. Explicit upper fetches fell 99%. CPU, PSS and metadata
 payload changed little. See the
 [report](20260903_decoupled_coordination_observed_progress.md) and
@@ -10,10 +16,11 @@ payload changed little. See the
 
 ## Next concrete action
 
-Choose the next bounded goal with Aljoscha. Prioritize reproducing the separate
-critical-reader birth-ordering risk before removing physical-since checks.
-Catalog replica CPU/frontier reductions are the next performance candidate.
-Neither investigation is authorized by the completed optimization alone.
+Agree on a bounded repair. The smallest is avoiding pre-rollup refreshes when
+the required seqno is already cached. Broader work should share recovery at the
+existing shard-state boundary, not remove data consumers or introduce handover
+protocols. Sharing the query client's full WAL reader is another scoped cleanup.
+No production behavior change was made by this investigation.
 
 ## Live limitations
 
@@ -25,7 +32,8 @@ M3 work. See the [follow-up inventory](20260903_decoupled_coordination_followups
 The final debug witness passed both idle windows and two-adapter join/restart/
 removal under survivor writes. Controller PubSub delivery was observed directly.
 Targeted tests and combined Clippy passed. Physical-readability checks and all
-certification/fencing boundaries remain. No owned runtime is running.
+certification/fencing boundaries remain. The new native/main diagnostic fixtures
+also passed and stopped cleanly. No owned runtime remains.
 
 ## Verified outcomes and remaining limits
 
@@ -57,6 +65,12 @@ The PR stays draft.
 
 ## Essential evidence and local state
 
+- Replica scans: report above and
+  `~/.local/share/aj/m3-evidence/replica-scan-necessity/`. Completed runs are
+  `v2/scan-audit-1793974261/` and `main/scan-audit-main-1793979420/`.
+  Source audits cover replica and non-replica owners, with the heartbeat-recovery
+  correction retained. The initial upstream linker failure, successful cold
+  retry and disk guard are recorded under `main/`.
 - Cached frontier repair: report above and
   `~/.local/share/aj/m3-evidence/cached-storage-frontiers/`. Fresh and restarted
   lifecycle checks passed. The measured candidate's idle windows passed, but its
@@ -78,7 +92,10 @@ The PR stays draft.
 - Txn-WAL retirement: `~/.local/share/aj/m3-evidence/txn-retirement/repair.md`.
 - Earlier details: [archive](20260903_decoupled_coordination_log_archive.md).
 
-Owned runtimes are stopped. Pinned idle-measurement binaries and raw evidence
-remain. Obsolete shared-plan, full-writer and authority-projection demonstration
-binaries were removed, retaining their reports and logs. Temporary controller profiling routes are absent from production source. The unrelated persist-traffic
-worktree is untouched. Keep heavy work sequential and low-concurrency.
+Pinned final baselines and raw evidence remain. Obsolete intermediate binaries
+were removed with hash inventories. Temporary scan logging and controller
+profiling routes are removed from production source, with reproducible patches
+under `misc/benchmarks/native-idle/`. The isolated upstream checkout was restored
+and removed. The unrelated persist-traffic worktree is untouched. Keep heavy work
+sequential and low-concurrency, and stop builds before free disk falls below
+30 GiB. Do not accumulate unused incremental/debug artifacts across rebuilds.
