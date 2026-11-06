@@ -52,6 +52,10 @@ if ! [[ "$version" = *-dev* ]]; then
     sed -i.bak \
         "s/^Licensed Work:.*/Licensed Work:             Materialize Version v$version/" \
         LICENSE
+    sed -i.bak \
+        "s/^latest_stable:.*/latest_stable: v$version/" \
+        doc/user/data/release.yml
+    rm -f doc/user/data/release.yml.bak
 else
     # Rename all upgrade tests that reference `current_source` to explicitly
     # reference the version of the last release.
