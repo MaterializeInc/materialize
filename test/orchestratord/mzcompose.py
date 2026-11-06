@@ -17,6 +17,7 @@ import datetime
 import json
 import os
 import random
+import re
 import shutil
 import signal
 import subprocess
@@ -4026,6 +4027,9 @@ def workflow_manually_promote(
     apply_materialize(definition)
 
     wait_for_ready_to_promote()
+    # The new generation is running but not promoted, so the environment is
+    # still served by the old one.
+    retry(check_environment_metrics_agree_with_resource, 60)
 
     # Promote using v1alpha1 requestRollout.
     mz_v1 = get_materialize_v1alpha1()
@@ -4046,6 +4050,7 @@ def workflow_manually_promote(
         ],
     )
     wait_for_rollout_complete()
+    retry(check_environment_metrics_agree_with_resource, 60)
     print("Test 1 PASSED: Promotion via v1alpha1 requestRollout succeeded")
 
     # --- Test 2: Promote using v1 requestedRolloutHash ---
@@ -4784,13 +4789,13 @@ def get_lease_transitions(lease_name: str) -> int:
     return int(transitions) if transitions else 0
 
 
-def get_operator_is_leader_metric(pod: str) -> float:
-    """The `orchestratord_is_leader` gauge scraped from an operator pod.
+def get_operator_metrics(pod: str) -> str:
+    """The metrics scraped from an operator pod, in the text exposition format.
 
     Scraped through the API server's pod proxy rather than a port-forward,
     since the operator image has no shell or HTTP client to exec into.
     """
-    metrics = spawn.capture(
+    return spawn.capture(
         [
             "kubectl",
             "get",
@@ -4798,10 +4803,70 @@ def get_operator_is_leader_metric(pod: str) -> float:
             f"/api/v1/namespaces/materialize/pods/{pod}:3100/proxy/metrics",
         ]
     )
-    for line in metrics.splitlines():
+
+
+def get_operator_is_leader_metric(pod: str) -> float:
+    """The `orchestratord_is_leader` gauge scraped from an operator pod."""
+    for line in get_operator_metrics(pod).splitlines():
         if line.startswith("orchestratord_is_leader "):
             return float(line.split(" ", 1)[1])
     raise AssertionError(f"operator pod {pod} does not report orchestratord_is_leader")
+
+
+ENVIRONMENT_METRICS = ("mz_environment_info", "mz_environment_active_generation")
+
+
+def get_operator_environment_series(
+    pod: str,
+) -> dict[str, list[tuple[dict[str, str], float]]]:
+    """The labels and value of each environment series an operator pod
+    reports, by metric name."""
+    series: dict[str, list[tuple[dict[str, str], float]]] = {}
+    for line in get_operator_metrics(pod).splitlines():
+        name, brace, rest = line.partition("{")
+        if name not in ENVIRONMENT_METRICS or not brace:
+            continue
+        labels, _, value = rest.rpartition("} ")
+        series.setdefault(name, []).append(
+            (dict(re.findall(r'(\w+)="([^"]*)"', labels)), float(value))
+        )
+    return series
+
+
+def check_environment_metrics_agree_with_resource() -> None:
+    """Assert that the lease holder, and no other operator replica, describes
+    the environment as its Materialize resource does.
+
+    `mz_environment_active_generation` must follow `status.activeGeneration`
+    rather than the newest generation running, since the node drain alerts
+    rely on it to tell the serving generation's pods from a rollout's.
+    """
+    mz = get_materialize_v1alpha1()
+    labels = {
+        "environment_id": mz["spec"]["environmentId"],
+        "environment_name": mz["metadata"]["name"],
+        "environment_namespace": mz["metadata"]["namespace"],
+    }
+    generation = mz["status"]["activeGeneration"]
+    expected = {
+        "mz_environment_info": [(labels, 1.0)],
+        "mz_environment_active_generation": [
+            ({**labels, "generation": str(generation)}, float(generation))
+        ],
+    }
+    holder = get_lease_holder(LEADER_ELECTION_LEASE)
+    assert holder is not None, f"lease {LEADER_ELECTION_LEASE} has no holder"
+    reported = {
+        pod: get_operator_environment_series(pod) for pod in get_operator_pod_names()
+    }
+    assert reported.get(holder) == expected, (
+        f"lease {LEADER_ELECTION_LEASE} is held by {holder!r}, expected it to "
+        f"report {expected}, but the replicas report {reported}"
+    )
+    for pod, series in reported.items():
+        assert (
+            pod == holder or not series
+        ), f"operator pod {pod} does not hold the lease, but reports {series}"
 
 
 def check_is_leader_metric_agrees_with_lease() -> None:
@@ -4944,6 +5009,7 @@ def workflow_leader_failover(
     # Retried because the leader sets the gauge when it starts running the
     # controllers, which is just after it writes the lease.
     retry(check_is_leader_metric_agrees_with_lease, 60)
+    retry(check_environment_metrics_agree_with_resource, 60)
     print(
         "The controller lease is held by an operator pod, which reports itself leader"
     )
@@ -4976,6 +5042,7 @@ def workflow_leader_failover(
     # wait for it to complete.
     request_rollout_via_v1(definition)
     run(definition, expect_fail=False)
+    retry(check_environment_metrics_agree_with_resource, 60)
     print("Reconciliation works after leader pod deletion")
 
     # --- Case 2: rolling restart of the operator deployment ------------------
@@ -5045,10 +5112,12 @@ def workflow_leader_failover(
 
     retry(lease_taken_over_again, 120)
     retry(webhook_works, 60)
-    # This is the case that exercises clearing the gauge: unlike the failovers
+    # This is the case that exercises clearing the gauges: unlike the failovers
     # above, the replica that gave leadership up is still running, so it has to
-    # stop reporting itself leader rather than being replaced by a fresh pod.
+    # stop reporting itself leader, and stop describing the environment, rather
+    # than being replaced by a fresh pod.
     retry(check_is_leader_metric_agrees_with_lease, 60)
+    retry(check_environment_metrics_agree_with_resource, 60)
     request_rollout_via_v1(definition)
     run(definition, expect_fail=False)
 
