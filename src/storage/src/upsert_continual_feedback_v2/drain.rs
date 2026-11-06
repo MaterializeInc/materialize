@@ -108,9 +108,9 @@ pub(super) async fn drain_sealed_input_chunked<T, O>(
 ) -> DrainStats
 where
     T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + columnar::Columnar + Default,
+    T: columnation::Columnation + mz_timely_util::columnar::chunk::PoolColumnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar,
+    O: mz_timely_util::columnar::chunk::PoolColumnar,
 {
     let mut eligible_count: u64 = 0;
     let mut result_count: u64 = 0;

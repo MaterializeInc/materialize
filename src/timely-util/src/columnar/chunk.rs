@@ -538,7 +538,9 @@ impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> ColumnChunk<D, T, R, G
     /// resident.
     fn commit(body: ColumnBody<(D, T, R)>, depth: u8) -> Self
     where
-        T: Timestamp,
+        D: PoolColumnar,
+        T: Timestamp + PoolColumnar,
+        R: PoolColumnar,
     {
         let len_bytes = body.length_in_bytes();
         metrics::record(metrics::Stage::Commit, body.len(), len_bytes);
@@ -558,7 +560,9 @@ impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> ColumnChunk<D, T, R, G
     /// copies.
     fn spill_body(body: ColumnBody<(D, T, R)>, pool: &Pool, depth: u8) -> Self
     where
-        T: Timestamp,
+        D: PoolColumnar,
+        T: Timestamp + PoolColumnar,
+        R: PoolColumnar,
     {
         let (codec, compressed) = codec_for_depth(depth);
         let len_bytes = body.length_in_bytes();
@@ -608,7 +612,9 @@ impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> ColumnChunk<D, T, R, G
     /// that shares bodies rewrites its clones immediately.
     fn survive_merge(self) -> Self
     where
-        T: Timestamp,
+        D: PoolColumnar,
+        T: Timestamp + PoolColumnar,
+        R: PoolColumnar,
     {
         let depth = self.depth().saturating_add(1);
         match self {
@@ -733,6 +739,12 @@ impl ExtentCodec for Lz4Codec {
 /// of maximal times (see `ColumnChunk::time_bounds`).
 type TimeBounds<T> = (Antichain<T>, SmallVec<[T; 1]>);
 
+/// A columnar type a spilled chunk can hold in its typed form. The pool's spill threads take
+/// and borrow typed bodies, so the containers and the time bounds must cross threads.
+pub trait PoolColumnar: Columnar<Container: Send + Sync> + Send + Sync {}
+
+impl<C: Columnar<Container: Send + Sync> + Send + Sync> PoolColumnar for C {}
+
 /// A [`ColumnBody`] as the pool holds it: in its typed form until the pool
 /// has to serialize it.
 ///
@@ -752,15 +764,6 @@ impl<D: Columnar, T: Columnar, R: Columnar> PooledBody<D, T, R> {
     }
 }
 
-// SAFETY: prototype only. Every instantiated container and timestamp is
-// built from owned `Vec`s and plain values, with no `Rc` or thread-local
-// state, so moving it to a spill thread or sharing it with one is sound for
-// them. TODO: replace with `Send + Sync` bounds on the containers and the
-// timestamp before this leaves the prototype.
-unsafe impl<D: Columnar, T: Columnar, R: Columnar> Send for PooledBody<D, T, R> {}
-// SAFETY: as for `Send` above.
-unsafe impl<D: Columnar, T: Columnar, R: Columnar> Sync for PooledBody<D, T, R> {}
-
 impl<D: Columnar, T: Columnar, R: Columnar> std::fmt::Debug for PooledBody<D, T, R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PooledBody")
@@ -769,7 +772,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> std::fmt::Debug for PooledBody<D, T,
     }
 }
 
-impl<D: Columnar + 'static, T: Columnar + 'static, R: Columnar + 'static> TypedBody
+impl<D: PoolColumnar + 'static, T: PoolColumnar + 'static, R: PoolColumnar + 'static> TypedBody
     for PooledBody<D, T, R>
 {
     fn words(&self) -> usize {
@@ -869,11 +872,11 @@ pub fn try_spill_ref<C: Columnar>(body: &ColumnBody<C>, depth: u8) -> Option<Chu
 impl<D, T, R, G> Chunk for ColumnChunk<D, T, R, G>
 where
     G: SpillGate,
-    D: Columnar,
+    D: PoolColumnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Default + Timestamp + Lattice + Ord,
+    T: PoolColumnar + Default + Timestamp + Lattice + Ord,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    R: PoolColumnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
     type Time = T;
 
@@ -1212,9 +1215,9 @@ where
 impl<D, T, R, G> ColumnChunk<D, T, R, G>
 where
     G: SpillGate,
-    D: Columnar,
-    T: Columnar + Timestamp,
-    R: Columnar,
+    D: PoolColumnar,
+    T: PoolColumnar + Timestamp,
+    R: PoolColumnar,
     for<'a> columnar::Ref<'a, D>: Ord,
     for<'a> columnar::Ref<'a, T>: Ord,
 {
@@ -1392,13 +1395,13 @@ fn extract_view_into<'v, 'p, K, V, T, R>(
 impl<K, V, T, R, G> UnloadChunk for ColumnChunk<(K, V), T, R, G>
 where
     G: SpillGate,
-    K: Columnar,
+    K: PoolColumnar,
     for<'a> columnar::Ref<'a, K>: Copy + Ord,
-    V: Columnar,
+    V: PoolColumnar,
     for<'a> columnar::Ref<'a, V>: Copy + Ord,
-    T: Columnar + Default + Timestamp + Lattice + Ord,
+    T: PoolColumnar + Default + Timestamp + Lattice + Ord,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    R: PoolColumnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
     /// The flat columnar accumulation. Appends are bulk column-range copies,
     /// and a group straddling chunks stitches by plain concatenation.
@@ -1718,9 +1721,9 @@ impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> Default
 impl<D, T, R, G> differential_dataflow::trace::implementations::merge_batcher::Merger
     for AccountedChunkMerger<D, T, R, G>
 where
-    D: Columnar + 'static,
-    T: Columnar + Timestamp + 'static,
-    R: Columnar + 'static,
+    D: PoolColumnar + 'static,
+    T: PoolColumnar + Timestamp + 'static,
+    R: PoolColumnar + 'static,
     G: SpillGate,
     for<'a> columnar::Ref<'a, D>: Ord,
     for<'a> columnar::Ref<'a, T>: Ord,
@@ -1755,9 +1758,9 @@ where
 impl<D, T, R, G> differential_dataflow::trace::implementations::merge_batcher::Extractor
     for AccountedChunkMerger<D, T, R, G>
 where
-    D: Columnar + 'static,
-    T: Columnar + Timestamp + 'static,
-    R: Columnar + 'static,
+    D: PoolColumnar + 'static,
+    T: PoolColumnar + Timestamp + 'static,
+    R: PoolColumnar + 'static,
     G: SpillGate,
     for<'a> columnar::Ref<'a, D>: Ord,
     for<'a> columnar::Ref<'a, T>: Ord,
