@@ -1,6 +1,6 @@
 # Reference dashboards metric reference
 
-Two dashboards that the release bot files under `Reference`: `release-health`, UID `zKe0K0N4z`, and `networking`, UID `bHQE8bN4k`. Neither belongs to a database team, and neither is organized around comparing one release against another. They answer a different question: is the fleet available, and did the rollout itself proceed. Use them to establish that the deploy landed and nothing is on fire, then use the team dashboards to look for regressions.
+Two dashboards that the release bot files under `Reference`: `release-health`, UID `zKe0K0N4z`, and `networking`, UID `bHQE8bN4k`, with its top-50 copy `networking-top-50`, UID `axhjnp`, which the bot links. Neither belongs to a database team, and neither is organized around comparing one release against another. They answer a different question: is the fleet available, and did the rollout itself proceed. Use them to establish that the deploy landed and nothing is on fire, then use the team dashboards to look for regressions.
 
 ## Scoping differs from every other dashboard
 
