@@ -750,6 +750,57 @@ impl PersistClient {
         Ok(machine.applier.fetch_upper(|upper| upper.clone()).await)
     }
 
+    /// Observes the initially known upper and subsequent strict advances.
+    ///
+    /// The stream retains shared shard state, using Persist notifications and
+    /// the normal listen retry policy to repair missed updates. Observations may
+    /// coalesce and are not linearized with concurrent writes. The empty upper
+    /// is the final observation. Polling drives progress, and dropping the stream
+    /// cancels observation without reader/writer registration or expiration.
+    /// This grants no read protection. An unused shard is initialized at minimum.
+    pub async fn upper_frontiers<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<
+        impl futures::Stream<Item = Antichain<T>> + Send + 'static + use<K, V, T, D>,
+        InvalidUsage<T>,
+    >
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(futures::stream::unfold(
+            (machine, None::<Antichain<T>>),
+            |(machine, previous)| async move {
+                if let Some(previous) = previous {
+                    if previous.is_empty() {
+                        return None;
+                    }
+                    let mut watch = machine.applier.watch();
+                    machine
+                        .wait_for_upper_past(
+                            &previous,
+                            &mut watch,
+                            None,
+                            &machine.applier.metrics.retries.next_listen_batch,
+                            crate::internal::machine::next_listen_batch_retry_params(
+                                &machine.applier.cfg,
+                            ),
+                        )
+                        .await;
+                }
+                let upper = machine.applier.clone_upper();
+                Some((upper.clone(), (machine, Some(upper))))
+            },
+        ))
+    }
+
     /// Waits until `frontier` is strictly less than the shard upper, without
     /// registering a writer or acquiring read protection.
     ///
@@ -1312,6 +1363,84 @@ mod tests {
             client.consensus.head(&shard.to_string()).await.unwrap(),
             before
         );
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // epoll_wait is unavailable in Miri
+    async fn upper_frontiers_without_registration(dyncfgs: ConfigUpdates) {
+        use futures::{FutureExt, StreamExt};
+
+        let client = new_test_client(&dyncfgs).await;
+        let shard = ShardId::new();
+        let mut writer = client
+            .open_writer::<(), (), u64, i64>(
+                shard,
+                Arc::new(Default::default()),
+                Arc::new(Default::default()),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        writer.expect_compare_and_append(&[], 0, 5).await;
+        let mut observer = client.clone();
+        observer.shared_states = Arc::new(StateCache::new_no_metrics());
+        let mut stream = Box::pin(
+            observer
+                .upper_frontiers::<(), (), u64, i64>(shard, Diagnostics::for_tests())
+                .await
+                .unwrap(),
+        );
+        let before = client.consensus.head(&shard.to_string()).await.unwrap();
+        assert_eq!(stream.next().await, Some(Antichain::from_elem(5)));
+        assert!(stream.next().now_or_never().is_none());
+        drop(stream);
+        tokio::task::yield_now().await;
+        assert_eq!(
+            client.consensus.head(&shard.to_string()).await.unwrap(),
+            before,
+            "canceling observation must not register or expire a handle"
+        );
+
+        let mut stream = Box::pin(
+            observer
+                .upper_frontiers::<(), (), u64, i64>(shard, Diagnostics::for_tests())
+                .await
+                .unwrap(),
+        );
+        assert_eq!(stream.next().await, Some(Antichain::from_elem(5)));
+        writer.expect_compare_and_append(&[], 5, 6).await;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), stream.next())
+                .await
+                .unwrap(),
+            Some(Antichain::from_elem(6)),
+            "fallback repairs a disconnected observer"
+        );
+        writer
+            .compare_and_append(
+                Vec::<(((), ()), u64, i64)>::new(),
+                Antichain::from_elem(6),
+                Antichain::new(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), stream.next())
+                .await
+                .unwrap(),
+            Some(Antichain::new())
+        );
+        let before = client.consensus.head(&shard.to_string()).await.unwrap();
+        assert_eq!(stream.next().await, None);
+        drop(stream);
+        tokio::task::yield_now().await;
+        assert_eq!(
+            client.consensus.head(&shard.to_string()).await.unwrap(),
+            before,
+            "completing observation must not expire a handle"
+        );
+        writer.expire().await;
     }
 
     // Sanity check that the open_reader and open_writer calls work.

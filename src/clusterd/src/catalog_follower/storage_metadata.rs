@@ -11,10 +11,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use futures::StreamExt;
 use mz_catalog::catalog::Catalog;
 use mz_catalog::expr_cache::ExpressionCacheHandle;
 use mz_catalog::memory::objects::{CatalogItem, TableDataSource};
 use mz_compute_types::sinks::ComputeSinkConnection;
+use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::schema::SchemaId;
 use mz_repr::{GlobalId, RelationDesc, RelationVersion, Timestamp};
@@ -47,6 +49,78 @@ pub(super) struct Resolution {
     pub metadata: BTreeMap<GlobalId, CollectionMetadata>,
     pub uppers: BTreeMap<GlobalId, Antichain<Timestamp>>,
     pub pending: BTreeMap<GlobalId, Pending>,
+}
+
+#[derive(Default)]
+pub(super) struct Progress {
+    shards: BTreeMap<ShardId, UpperWatch>,
+}
+
+struct UpperWatch {
+    upper: tokio::sync::watch::Receiver<Antichain<Timestamp>>,
+    task: AbortOnDropHandle<()>,
+}
+
+impl Progress {
+    /// Observe durable progress without acquiring read protection or registering
+    /// writers. One Persist wait per distinct progress shard retains shared state
+    /// and repairs missed PubSub updates. Runtime readers may be on another
+    /// process, or suspended until this follower observes enough progress to
+    /// schedule them, so their watches cannot provide this liveness guarantee.
+    async fn observe(
+        &mut self,
+        persist: &PersistClient,
+        metadata: &BTreeMap<GlobalId, CollectionMetadata>,
+    ) -> anyhow::Result<BTreeMap<GlobalId, Antichain<Timestamp>>> {
+        let wanted: BTreeMap<_, _> = metadata
+            .iter()
+            .map(|(id, metadata)| (metadata.txns_shard.unwrap_or(metadata.data_shard), id))
+            .collect();
+        self.shards.retain(|shard, _| wanted.contains_key(shard));
+        let mut observed = BTreeMap::new();
+        for (shard, id) in wanted {
+            if !self.shards.contains_key(&shard) {
+                let mut uppers = Box::pin(
+                    persist
+                        .upper_frontiers::<SourceData, (), Timestamp, StorageDiff>(
+                            shard,
+                            diagnostics(*id),
+                        )
+                        .await?,
+                );
+                let initial = uppers.next().await.expect("initial upper observation");
+                let (tx, upper) = tokio::sync::watch::channel(initial);
+                let task = mz_ore::task::spawn(
+                    || format!("catalog-storage-progress-{shard}"),
+                    async move {
+                        while let Some(frontier) = uppers.next().await {
+                            tx.send_replace(frontier);
+                            tokio::task::consume_budget().await;
+                        }
+                    },
+                )
+                .abort_on_drop();
+                self.shards.insert(shard, UpperWatch { upper, task });
+            }
+            let watch = &self.shards[&shard];
+            let finished = watch.task.is_finished();
+            let upper = watch.upper.borrow().clone();
+            if finished && !upper.is_empty() {
+                self.shards.remove(&shard);
+                anyhow::bail!("storage progress watch for {shard} stopped before completion");
+            }
+            observed.insert(shard, upper);
+        }
+        Ok(metadata
+            .iter()
+            .map(|(id, metadata)| {
+                (
+                    *id,
+                    observed[&metadata.txns_shard.unwrap_or(metadata.data_shard)].clone(),
+                )
+            })
+            .collect())
+    }
 }
 
 enum Schema {
@@ -87,6 +161,7 @@ pub(super) async fn resolve(
     persist: &PersistClient,
     location: &PersistLocation,
     txns_shard: Option<ShardId>,
+    progress: &mut Progress,
 ) -> anyhow::Result<Resolution> {
     let definitions = definitions(catalog, wanted);
     let shards = &catalog.state().storage_metadata().collection_metadata;
@@ -199,7 +274,7 @@ pub(super) async fn resolve(
         };
         result.metadata.insert(*id, metadata);
     }
-    result.uppers = uppers(persist, &result.metadata).await?;
+    result.uppers = progress.observe(persist, &result.metadata).await?;
     Ok(result)
 }
 

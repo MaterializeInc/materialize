@@ -283,6 +283,7 @@ async fn exercise_liveness() {
             &fixture.persist,
             &config.persist_location,
             opened.txn_wal_shard,
+            &mut storage_metadata::Progress::default(),
         ))
         .await
         .unwrap();

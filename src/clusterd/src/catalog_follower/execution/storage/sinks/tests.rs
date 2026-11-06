@@ -280,6 +280,7 @@ async fn completed_sink_health_requires_closed_output_and_current_placement() {
             &persist,
             &location,
             Some(wal),
+            &mut storage_metadata::Progress::default(),
         )
         .await
         .unwrap();

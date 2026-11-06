@@ -433,6 +433,7 @@ pub(crate) async fn run(
     let mut delay = Duration::from_secs(1);
     let mut pending_metadata = true;
     let mut compaction = compaction::Compaction::default();
+    let mut storage_progress = storage_metadata::Progress::default();
     loop {
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
@@ -544,6 +545,7 @@ pub(crate) async fn run(
                     &persist,
                     &config.persist_location,
                     txns_shard,
+                    &mut storage_progress,
                 ),
             )
             .await?;

@@ -19,6 +19,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::SqlScalarType;
 use mz_repr::role_id::RoleId;
 use mz_storage_client::controller::StorageTxn;
+use std::sync::Arc;
 
 // Read the fixture's bootstrap identity from durable storage. Production obtains
 // the same immutable identity from OpenCommittedCatalog.
@@ -36,7 +37,17 @@ async fn resolve(
         .transaction()
         .await?
         .get_txn_wal_shard();
-    super::resolve(catalog, wanted, store, build, persist, location, wal).await
+    super::resolve(
+        catalog,
+        wanted,
+        store,
+        build,
+        persist,
+        location,
+        wal,
+        &mut Progress::default(),
+    )
+    .await
 }
 
 async fn durable(catalog: &Catalog, change: impl FnOnce(&mut Transaction<'_>)) {
@@ -61,6 +72,157 @@ async fn register(persist: &PersistClient, shard: ShardId, desc: &RelationDesc) 
             .expect("valid metadata fixture"),
         Some(RelationVersion::root().into())
     );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn retained_progress_repairs_missed_notifications() {
+    use mz_persist_client::cache::PersistClientCache;
+    use std::time::Duration;
+
+    let registry = mz_ore::metrics::MetricsRegistry::new();
+    let mut cache = PersistClientCache::new(
+        mz_persist_client::cfg::PersistConfig::new_for_tests(),
+        &registry,
+        |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+    );
+    let upper_reads = || {
+        registry
+            .gather()
+            .into_iter()
+            .find(|family| family.name() == "mz_persist_cmd_fetch_upper_count")
+            .expect("upper read counter")
+            .get_metric()[0]
+            .get_counter()
+            .value()
+    };
+    let location = PersistLocation::new_in_mem();
+    let producer = cache.open(location.clone()).await.unwrap();
+    let wal = ShardId::new();
+    let desc = RelationDesc::empty();
+    let mut writer = producer
+        .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+            wal,
+            Arc::new(desc.clone()),
+            Arc::new(UnitSchema),
+            diagnostics(GlobalId::User(1)),
+        )
+        .await
+        .unwrap();
+    let empty = || Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new();
+    writer
+        .compare_and_append(
+            empty(),
+            Antichain::from_elem(0.into()),
+            Antichain::from_elem(10.into()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Separate process-local state, with PubSub disabled and no runtime readers.
+    cache.clear_state_cache();
+    let observer = cache.open(location.clone()).await.unwrap();
+    let ids = [GlobalId::User(1), GlobalId::User(2)];
+    let mut metadata: BTreeMap<_, _> = ids
+        .into_iter()
+        .map(|id| {
+            (
+                id,
+                CollectionMetadata {
+                    persist_location: location.clone(),
+                    data_shard: ShardId::new(),
+                    txns_shard: Some(wal),
+                    relation_desc: desc.clone(),
+                },
+            )
+        })
+        .collect();
+    let mut progress = Progress::default();
+    let initial = progress.observe(&observer, &metadata).await.unwrap();
+    assert!(
+        initial
+            .values()
+            .all(|upper| upper == &Antichain::from_elem(10.into()))
+    );
+
+    writer
+        .compare_and_append(
+            empty(),
+            Antichain::from_elem(10.into()),
+            Antichain::from_elem(20.into()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    // The observer may already have repaired the gap. Sampling must return its
+    // retained observation without independently fetching a newer upper.
+    let observed = progress.shards[&wal].upper.borrow().clone();
+    let reads = upper_reads();
+    assert_eq!(
+        progress.observe(&observer, &metadata).await.unwrap(),
+        ids.into_iter().map(|id| (id, observed.clone())).collect(),
+    );
+    assert_eq!(upper_reads(), reads, "sampling does not fetch fresh uppers");
+
+    let upper = &mut progress.shards.get_mut(&wal).unwrap().upper;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while *upper.borrow() != Antichain::from_elem(20.into()) {
+            upper.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("Persist fallback repairs missed WAL progress");
+    let advanced = progress.observe(&observer, &metadata).await.unwrap();
+    assert!(
+        advanced
+            .values()
+            .all(|upper| upper == &Antichain::from_elem(20.into()))
+    );
+
+    // Rebinding one ID cannot reuse its old WAL observation or affect its peer.
+    metadata.get_mut(&ids[0]).unwrap().txns_shard = None;
+    let rebound = progress.observe(&observer, &metadata).await.unwrap();
+    assert_eq!(rebound[&ids[0]], Antichain::from_elem(Timestamp::MIN));
+    assert_eq!(rebound[&ids[1]], Antichain::from_elem(20.into()));
+    let rebound_shard = metadata[&ids[0]].data_shard;
+    let mut completing = producer
+        .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+            rebound_shard,
+            Arc::new(desc),
+            Arc::new(UnitSchema),
+            diagnostics(ids[0]),
+        )
+        .await
+        .unwrap();
+    completing
+        .compare_and_append(
+            empty(),
+            Antichain::from_elem(Timestamp::MIN),
+            Antichain::new(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let upper = &mut progress.shards.get_mut(&rebound_shard).unwrap().upper;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !upper.borrow().is_empty() {
+            upper.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("retained watch observes completion");
+    let completed = progress.observe(&observer, &metadata).await.unwrap();
+    assert!(completed[&ids[0]].is_empty());
+    assert_eq!(completed[&ids[1]], Antichain::from_elem(20.into()));
+    assert!(
+        progress
+            .observe(&observer, &BTreeMap::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    writer.expire().await;
+    completing.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -430,6 +592,7 @@ async fn missing_wal_identity_remains_pending() {
         &persist,
         &PersistLocation::new_in_mem(),
         None,
+        &mut Progress::default(),
     )
     .await
     .expect("WAL pending");
