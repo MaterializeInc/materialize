@@ -148,6 +148,13 @@ impl SlotAllocator {
         self.free_warm.pop_front()
     }
 
+    /// Puts a slot taken by [`SlotAllocator::pop_oldest_warm`] back at the
+    /// old end of the warm free list.
+    pub(crate) fn return_oldest_warm(&mut self, slot: u32) {
+        crate::soft_assert_no_log!(slot < self.high_water);
+        self.free_warm.push_front(slot);
+    }
+
     /// Test hook: the number of allocated slots not on a free list.
     #[cfg(test)]
     pub(crate) fn in_use(&self) -> usize {
@@ -273,7 +280,7 @@ impl Region {
         let mut slots = self.slots.lock().expect("region allocator poisoned");
         let mut cooled = 0;
         while cooled < want_bytes {
-            let Some(slot) = slots.free_warm.pop_back() else {
+            let Some(slot) = slots.pop_oldest_warm() else {
                 break;
             };
             let offset = usize::cast_from(slot) * self.class_size;

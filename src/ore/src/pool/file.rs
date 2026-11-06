@@ -57,7 +57,10 @@
 //! it with [`WriteError::Full`] after the store punches and takes back the
 //! slot. A short direct write is retried whole first, and its final error
 //! is classified the same way. Either `ENOSPC` additionally lowers the
-//! capacity to the bytes allocated at that moment, permanently. Any other
+//! capacity to the bytes allocated at that moment. The volume can be shared
+//! with other writers, so [`FileStore::release_warm`] re-derives the
+//! capacity from the volume's free space, and room another writer frees
+//! becomes usable again. Any other
 //! write or `fallocate` error disables writes for the store's lifetime. Data
 //! already written stays readable. A read error, short read, or checksum
 //! mismatch panics: there is no correct value to return, and the pool's
@@ -66,7 +69,7 @@
 use std::alloc::Layout;
 use std::fs::File;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -186,22 +189,36 @@ pub(crate) struct FileStore {
     io_mode: IoMode,
     page: usize,
     capacity: AtomicU64,
-    /// Bytes of slots with allocated blocks, in use or warm. Never exceeds
-    /// `capacity` except transiently after `ENOSPC` lowers it.
+    /// The capacity `open` set. Re-derivation never raises the capacity
+    /// above it.
+    capacity_limit: u64,
+    dir: PathBuf,
+    /// Bytes of slots with allocated blocks, in use or warm. Exceeds
+    /// `capacity` after `ENOSPC` or a re-derivation lowers the capacity,
+    /// until slots are punched.
     allocated: AtomicU64,
+    /// Bytes of slots taken off a warm list to be punched and not yet put
+    /// back. They are still charged to `allocated`.
+    punching: AtomicU64,
     writes_disabled: AtomicBool,
     enospc_seen: AtomicBool,
     counters: Counters,
 }
 
-/// The capacity of a store on a volume with `available` bytes free to
-/// unprivileged writers: those bytes minus the larger of 1 GiB and 2% of
-/// them. `None` if that cannot hold one slot of `largest_class` bytes, the
-/// largest extent class.
-fn derived_capacity(available: u64, largest_class: usize) -> Option<u64> {
+/// The bytes a store may allocate on a volume with `available` bytes free
+/// to unprivileged writers: those bytes minus the larger of 1 GiB and 2% of
+/// them.
+fn usable_bytes(available: u64) -> u64 {
     // Headroom for filesystem metadata of the preallocated extents and for
     // incidental writers sharing the volume.
-    let capacity = available.saturating_sub(std::cmp::max(1 << 30, available / 50));
+    available.saturating_sub(std::cmp::max(1 << 30, available / 50))
+}
+
+/// The capacity of a new store on a volume with `available` bytes free, per
+/// [`usable_bytes`]. `None` if that cannot hold one slot of `largest_class`
+/// bytes, the largest extent class.
+fn derived_capacity(available: u64, largest_class: usize) -> Option<u64> {
+    let capacity = usable_bytes(available);
     (capacity >= u64::cast_from(largest_class)).then_some(capacity)
 }
 
@@ -278,7 +295,10 @@ impl FileStore {
             io_mode,
             page,
             capacity: AtomicU64::new(capacity),
+            capacity_limit: capacity,
+            dir: dir.to_path_buf(),
             allocated: AtomicU64::new(0),
+            punching: AtomicU64::new(0),
             writes_disabled: AtomicBool::new(false),
             enospc_seen: AtomicBool::new(false),
             counters: Counters::default(),
@@ -325,11 +345,27 @@ impl FileStore {
         // A cold or never-touched slot has no blocks. A concurrent
         // allocation can take the room a punch made, so punch again until
         // the reservation succeeds or nothing is left to punch.
-        while !self.reserve(size) {
-            if !self.punch_for(class, size) {
-                c.slots().free(index, false);
-                return Err(AllocError::Full);
+        loop {
+            if self.reserve(size) {
+                break;
             }
+            if self.punch_for(class, size) {
+                continue;
+            }
+            // Slots another thread is punching, including this class's warm
+            // slots, stay charged until each punch returns. Failing now
+            // would report `Full` with room about to free.
+            if self.punching.load(Ordering::Acquire) > 0 {
+                std::thread::yield_now();
+                continue;
+            }
+            // A punch that finished after the failed reservation released
+            // its bytes before it cleared `punching`.
+            if self.reserve(size) {
+                break;
+            }
+            c.slots().free(index, false);
+            return Err(AllocError::Full);
         }
         match sys::fallocate(&c.file, self.offset(slot), c.size) {
             Ok(()) => Ok(slot),
@@ -341,6 +377,9 @@ impl FileStore {
                 match sys::punch_hole(&c.file, self.offset(slot), c.size) {
                     Ok(()) => {
                         self.allocated.fetch_sub(size, Ordering::Relaxed);
+                        self.counters
+                            .holes_punched_bytes
+                            .fetch_add(size, Ordering::Relaxed);
                         c.slots().free(index, false);
                     }
                     Err(punch_err) => {
@@ -580,7 +619,8 @@ impl FileStore {
             .enumerate()
             .filter(|&(i, _)| i != class)
             .map(|(_, c)| c.warm_bytes.load(Ordering::Relaxed))
-            .sum();
+            .sum::<u64>()
+            .saturating_add(self.punching.load(Ordering::Relaxed));
         self.allocated
             .load(Ordering::Relaxed)
             .saturating_sub(punchable)
@@ -593,12 +633,34 @@ impl FileStore {
         (0..self.classes.len()).any(|class| self.can_alloc(class))
     }
 
-    /// Punches warm slots of every class, up to `max_bytes` per class
-    /// rounded up to a whole slot, and returns the bytes punched.
+    /// Re-derives the capacity from the volume's free space, then punches
+    /// warm slots of every class, up to `max_bytes` per class rounded up to a
+    /// whole slot, and returns the bytes punched.
     pub(crate) fn release_warm(&self, max_bytes: u64) -> u64 {
+        self.refresh_capacity();
         (0..self.classes.len())
             .map(|class| self.punch_warm(class, max_bytes).0)
             .sum()
+    }
+
+    /// Sets the capacity to the bytes allocated plus the volume's
+    /// [`usable_bytes`], at most the capacity `open` set. Keeps the capacity
+    /// if the volume cannot be queried.
+    fn refresh_capacity(&self) {
+        let Ok(available) = sys::available_bytes(&self.dir) else {
+            return;
+        };
+        // The store's own blocks are absent from `available`, so they are
+        // added back. A concurrent `ENOSPC` can lower the capacity between
+        // the load and the store, and is then overwritten by a value derived
+        // from free space observed just before it, which the next `ENOSPC`
+        // lowers again.
+        let capacity = self
+            .allocated
+            .load(Ordering::Relaxed)
+            .saturating_add(usable_bytes(available))
+            .min(self.capacity_limit);
+        self.capacity.store(capacity, Ordering::Relaxed);
     }
 
     pub(crate) fn stats(&self) -> FileStoreStats {
@@ -701,6 +763,12 @@ impl FileStore {
                 c.warm_bytes.fetch_sub(class_size, Ordering::Relaxed);
                 popped.push(index);
             }
+            // Under the lock, so an `alloc` never sees the slots neither
+            // warm nor punching.
+            self.punching.fetch_add(
+                u64::cast_from(popped.len()).saturating_mul(class_size),
+                Ordering::Relaxed,
+            );
             popped
         };
         let mut punched = 0;
@@ -712,6 +780,9 @@ impl FileStore {
             }
             punched += 1;
             self.allocated.fetch_sub(class_size, Ordering::Relaxed);
+            // Release orders the `allocated` decrement before it for
+            // `alloc`, which reads `punching` with acquire.
+            self.punching.fetch_sub(class_size, Ordering::Release);
             self.counters
                 .holes_punched_bytes
                 .fetch_add(class_size, Ordering::Relaxed);
@@ -721,10 +792,16 @@ impl FileStore {
         for &index in cold {
             slots.free(index, false);
         }
-        for &index in warm {
-            slots.free(index, true);
+        // Back to the old end, in their original order, so the next release
+        // retries them first and `alloc` does not prefer them.
+        for &index in warm.iter().rev() {
+            slots.return_oldest_warm(index);
             c.warm_bytes.fetch_add(class_size, Ordering::Relaxed);
         }
+        self.punching.fetch_sub(
+            u64::cast_from(warm.len()).saturating_mul(class_size),
+            Ordering::Release,
+        );
         (
             u64::cast_from(punched).saturating_mul(class_size),
             !warm.is_empty(),
