@@ -24,7 +24,7 @@ use crate::collection_reader::CollectionReader;
 /// collection. `retired` must remain true for each selected row forever.
 ///
 /// The caller must supply committed metadata and read protection for the snapshot
-/// at the current upper minus one, as required by [`CollectionReader`]. Transactional
+/// at the supplied completed `upper` minus one, as required by [`CollectionReader`]. Transactional
 /// tables must instead reconcile through their txn-WAL.
 ///
 /// Makes one conditional attempt. On an upper conflict the candidate is discarded,
@@ -35,9 +35,12 @@ pub async fn retract_retired_rows(
     writer: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     id: GlobalId,
     metadata: CollectionMetadata,
+    upper: Timestamp,
     retired: impl Fn(&Row) -> bool,
 ) -> Result<bool, StorageError> {
-    let Some(candidate) = prepare_retired_rows(reader, writer, id, metadata, retired).await? else {
+    let Some(candidate) =
+        prepare_retired_rows(reader, writer, id, metadata, upper, retired).await?
+    else {
         return Ok(false);
     };
     candidate.commit(writer, id).await?;
@@ -77,9 +80,10 @@ impl RetiredRows {
 
 async fn prepare_retired_rows(
     reader: &CollectionReader,
-    writer: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    writer: &WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     id: GlobalId,
     metadata: CollectionMetadata,
+    upper: Timestamp,
     retired: impl Fn(&Row) -> bool,
 ) -> Result<Option<RetiredRows>, StorageError> {
     assert!(
@@ -87,9 +91,6 @@ async fn prepare_retired_rows(
         "cleanup must not bypass txn-WAL"
     );
     assert_eq!(metadata.data_shard, writer.shard_id());
-    let Some(upper) = writer.fetch_recent_upper().await.as_option().copied() else {
-        return Ok(None);
-    };
     let Some(as_of) = upper.step_back() else {
         return Ok(None);
     };
@@ -257,11 +258,12 @@ mod tests {
         );
 
         // Both collectors have read the same prefix before either submits.
-        let first = prepare_retired_rows(&reader, &mut writer, id, metadata.clone(), retired)
+        let cut = writer.shared_upper().into_option().unwrap();
+        let first = prepare_retired_rows(&reader, &writer, id, metadata.clone(), cut, retired)
             .await
             .unwrap()
             .unwrap();
-        let second = prepare_retired_rows(&reader, &mut peer, id, metadata.clone(), retired)
+        let second = prepare_retired_rows(&reader, &peer, id, metadata.clone(), cut, retired)
             .await
             .unwrap()
             .unwrap();
@@ -271,11 +273,24 @@ mod tests {
             second.commit(&mut peer, id).await,
             Err(StorageError::InvalidUppers(_))
         ));
+        // Even a peer advance before snapshot preparation must not retarget the
+        // caller's protected cut. Its old retractions lose their conditional append.
+        assert!(matches!(
+            retract_retired_rows(&reader, &mut peer, id, metadata.clone(), cut, retired).await,
+            Err(StorageError::InvalidUppers(_))
+        ));
         let upper = writer.fetch_recent_upper().await.clone();
         assert!(
-            !retract_retired_rows(&reader, &mut peer, id, metadata.clone(), retired)
-                .await
-                .unwrap()
+            !retract_retired_rows(
+                &reader,
+                &mut peer,
+                id,
+                metadata.clone(),
+                upper.as_option().copied().unwrap(),
+                retired
+            )
+            .await
+            .unwrap()
         );
         assert_eq!(writer.fetch_recent_upper().await, &upper);
 
@@ -296,8 +311,9 @@ mod tests {
             0.into(),
         )
         .await;
+        let cut = writer.shared_upper().into_option().unwrap();
         assert!(
-            retract_retired_rows(&reader, &mut peer, id, metadata.clone(), retired)
+            retract_retired_rows(&reader, &mut peer, id, metadata.clone(), cut, retired)
                 .await
                 .unwrap()
         );

@@ -739,6 +739,17 @@ impl QueryClient {
     ) -> Result<PreparedRead, AdapterError> {
         let upper = self.write_frontier(catalog, bundle).await?;
         let read_ts = timestamp(&upper)?;
+        self.prepare_read_at_upper(catalog, bundle, upper, read_ts)
+            .await
+    }
+
+    async fn prepare_read_at_upper(
+        &self,
+        catalog: &Catalog,
+        bundle: &CollectionIdBundle,
+        upper: Antichain<Timestamp>,
+        read_ts: Option<Timestamp>,
+    ) -> Result<PreparedRead, AdapterError> {
         let mut index_inputs = BTreeMap::new();
         let mut storage = bundle.storage_ids.clone();
         for (cluster, ids) in &bundle.compute_ids {
@@ -844,6 +855,30 @@ impl QueryClient {
         timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
     ) -> Result<(ReadHolds, Antichain<Timestamp>), AdapterError> {
         let prepared = self.prepare_read(catalog, bundle, timestamp).await?;
+        self.acquire_prepared_read(catalog, prepared).await
+    }
+
+    /// Acquires protection using an already observed durable upper. The caller
+    /// owns timestamp selection and freshness, and must check the returned holds
+    /// before reading. This avoids resampling progress for fixed-cut maintenance.
+    pub(crate) async fn acquire_read_holds_at_upper(
+        &self,
+        catalog: &Catalog,
+        bundle: &CollectionIdBundle,
+        upper: Antichain<Timestamp>,
+        read_ts: Timestamp,
+    ) -> Result<ReadHolds, AdapterError> {
+        let prepared = self
+            .prepare_read_at_upper(catalog, bundle, upper, Some(read_ts))
+            .await?;
+        Ok(self.acquire_prepared_read(catalog, prepared).await?.0)
+    }
+
+    async fn acquire_prepared_read(
+        &self,
+        catalog: &Catalog,
+        prepared: PreparedRead,
+    ) -> Result<(ReadHolds, Antichain<Timestamp>), AdapterError> {
         // A planning snapshot can predate incarnation allocation, including a
         // frozen prewarming savepoint. Absence there requires the live writer's
         // validation, not permanent closure or reuse of cached protection.
@@ -867,7 +902,7 @@ impl QueryClient {
         let (tx, rx) = oneshot::channel();
         self.coordinator.send(Command::AcquireClientReadProtection {
             incarnation: self.protection.incarnation(),
-            bundle: bundle.clone(),
+            bundle: prepared.bundle.clone(),
             read_ts: prepared.read_ts,
             tx,
         });

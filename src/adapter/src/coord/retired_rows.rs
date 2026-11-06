@@ -71,9 +71,15 @@ impl Coordinator {
                     tracing::warn!(%error, "unable to collect retired current-status rows");
                 }
                 for table in [&*MZ_SESSIONS_RAW, &*MZ_SUBSCRIPTIONS_RAW] {
-                    let result =
-                        collect_session_rows(&catalog, &client, &coordinator, &retirement, table)
-                            .await;
+                    let result = collect_session_rows(
+                        &catalog,
+                        &client,
+                        &persist,
+                        &coordinator,
+                        &retirement,
+                        table,
+                    )
+                    .await;
                     if let Err(error) = result {
                         tracing::warn!(
                             %error, table = table.name, "unable to collect retired session rows"
@@ -112,31 +118,28 @@ async fn collect_current_status(
         )
         .await?;
     let result: anyhow::Result<()> = async {
-        let Some(as_of) = writer
-            .fetch_recent_upper()
-            .await
-            .as_option()
-            .and_then(|upper| upper.step_back())
-        else {
+        let upper = writer.shared_upper();
+        let Some(as_of) = upper.as_option().and_then(|upper| upper.step_back()) else {
             return Ok(());
         };
         let bundle = CollectionIdBundle {
             storage_ids: [id].into(),
             ..Default::default()
         };
-        let (holds, _) = client
-            .acquire_read_holds_and_upper(catalog, &bundle, |_| Ok(Some(as_of)))
+        let holds = client
+            .acquire_read_holds_at_upper(catalog, &bundle, upper, as_of)
             .await?;
         if !holds.least_valid_read().less_equal(&as_of) {
             return Ok(());
         }
-        // The helper resamples the same shard's monotone upper.
-        // These holds also cover its potentially newer snapshot.
+        // Keep the protected cut and conditional append paired. A peer advance
+        // rejects this candidate instead of moving its retractions to a new cut.
         let result = retract_retired_rows(
             client.collection_reader().await,
             &mut writer,
             id,
             metadata,
+            as_of.step_forward(),
             |row| match row.iter().nth(owner_column) {
                 Some(Datum::UInt64(incarnation)) => retirement.is_retired(incarnation),
                 _ => false,
@@ -155,6 +158,7 @@ async fn collect_current_status(
 async fn collect_session_rows(
     catalog: &Catalog,
     client: &QueryClient,
+    persist: &PersistClient,
     coordinator: &CoordinatorClient,
     retirement: &ClientIncarnationRetirement,
     table: &'static BuiltinTable,
@@ -175,14 +179,18 @@ async fn collect_session_rows(
         storage_ids: [id].into(),
         ..Default::default()
     };
-    let (holds, upper) = client
-        .acquire_read_holds_and_upper(catalog, &bundle, |upper| {
-            Ok(upper.as_option().and_then(|upper| upper.step_back()))
-        })
+    let upper = persist
+        .observed_upper::<SourceData, (), Timestamp, StorageDiff>(
+            metadata.txns_shard.expect("session rows require txn-WAL"),
+            Diagnostics::from_purpose("retired session cleanup"),
+        )
         .await?;
     let Some(as_of) = upper.as_option().and_then(|upper| upper.step_back()) else {
         return Ok(());
     };
+    let holds = client
+        .acquire_read_holds_at_upper(catalog, &bundle, upper, as_of)
+        .await?;
     if !holds.least_valid_read().less_equal(&as_of) || as_of.checked_add(2).is_none() {
         return Ok(());
     }
