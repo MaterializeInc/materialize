@@ -60,10 +60,10 @@ type ColumnRow = {
  */
 class MaterializeIntrospector extends PostgresIntrospector {
   // The inherited query is kysely's, which calls `pg_get_serial_sequence`
-  // (missing in Materialize) and lists only relkinds 'r', 'v' and 'p', which
-  // skips the catalog's builtin materialized views ('m'). No column is
-  // auto-incrementing, since Materialize's pg_class reports no sequences
-  // (relkind 'S'). Ignores `includePattern` and `excludePattern`.
+  // (missing in Materialize). Lists tables and views only, since
+  // kysely-codegen lists materialized views itself. Materialize's pg_class
+  // reports no sequences (relkind 'S'), so no column is auto-incrementing,
+  // and no foreign tables ('f'). Ignores `includePattern` and `excludePattern`.
   protected async getTables({
     db,
   }: IntrospectOptions<PostgresDB>): Promise<TableMetadata[]> {
@@ -83,7 +83,7 @@ class MaterializeIntrospector extends PostgresIntrospector {
       JOIN pg_catalog.pg_namespace AS ns ON c.relnamespace = ns.oid
       JOIN pg_catalog.pg_type AS typ ON a.atttypid = typ.oid
       JOIN pg_catalog.pg_namespace AS dtns ON typ.typnamespace = dtns.oid
-      WHERE c.relkind IN ('r', 'v', 'm')
+      WHERE c.relkind IN ('r', 'v')
         AND ns.nspname !~ '^pg_'
         AND ns.nspname <> 'information_schema'
         AND has_schema_privilege(ns.nspname, 'USAGE')
@@ -103,7 +103,8 @@ class MaterializeIntrospector extends PostgresIntrospector {
         table = {
           name: row.table,
           schema: row.schema,
-          isView: row.relkind !== "r",
+          isView: row.relkind === "v",
+          isForeign: false,
           columns: [],
         };
         tables.set(key, table);
@@ -136,7 +137,9 @@ try {
     db,
     dialect,
     logger: new Logger(),
-    schemas: SCHEMAS,
+    defaultSchemas: SCHEMAS,
+    // Undefined writes to kysely-codegen's default file in node_modules.
+    outFile: null,
   });
   writeFileSync(OUT_FILE, HEADER + types);
   console.log(`Wrote ${OUT_FILE}`);
