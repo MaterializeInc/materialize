@@ -469,7 +469,7 @@ export const ResourcePercentAxis = ({
   yScale: PercentScale;
   ticks: number[];
 }) => {
-  const { colors } = useTheme<MaterializeTheme>();
+  const { colors, fonts } = useTheme<MaterializeTheme>();
   const [rangeStart, rangeEnd] = layout.xScaleRange;
   return (
     <>
@@ -491,6 +491,7 @@ export const ResourcePercentAxis = ({
             y={yScale(tick) + AXIS_LABEL_INSET_PX}
             dominantBaseline="hanging"
             fill={colors.foreground.secondary}
+            fontFamily={fonts.mono}
             fontSize={AXIS_LABEL_FONT_PX}
           >
             {tick}%
