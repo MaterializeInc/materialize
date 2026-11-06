@@ -1,6 +1,6 @@
 ---
 title: "CREATE SOURCE: SQL Server (Legacy Syntax)"
-description: "Connecting Materialize to a SQL Server database for Change Data Capture (CDC)."
+description: "Creates a source from SQL Server 2016+ using the legacy syntax, which ingests upstream tables as subsources."
 pagerank: 40
 menu:
   main:
