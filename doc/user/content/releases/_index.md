@@ -36,7 +36,9 @@ The Console's [redesigned cluster page](#v26.47-cluster-details-page) has a new 
 
 Materialize uses these constraints to optimize query plans. This change means that moving forward, objects built on top of tables from SQL Server sources might see different performance. For example, a `DISTINCT` over the affected columns may use more memory or CPU as a result.
 
-Query results do not change. Existing tables, and existing objects remain unaffected. However, if you re-ingest an upstream table, objects built on the new version of the upstream table might see different query performance.
+Query results do not change. However, if you re-ingest an upstream table, objects built on the new version of the upstream table might see different query performance.
+
+Tables created before this release keep every key they recorded. Before you drop a `PRIMARY KEY` or `UNIQUE` constraint that the capture instance does not use from one of these tables, re-create the table in Materialize.
 
 **Upgrade impact**: Before promoting a deployment that re-creates SQL Server source tables, for example through [source versioning](/ingest-data/sql-server/source-versioning/), compare the plans of the objects that depend on them with [`EXPLAIN PLAN`](/sql/explain-plan/). Certain objects, notably objects using `DISTINCT`, might require larger cluster sizes.
 
