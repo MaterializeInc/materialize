@@ -62,6 +62,7 @@ import { formatDurationExact, formatDurationForAxis } from "~/utils/format";
 import {
   FreshnessScope,
   OBJECT_TYPE_FILTERS,
+  rangeLabelFor,
   SCOPE_LABELS,
   TIME_PERIOD_OPTIONS,
 } from "./constants";
@@ -127,6 +128,8 @@ interface FreshnessViewOptions {
   predicate: Predicate;
   thresholdControl: ThresholdControl;
   typeFilters: string[];
+  /** Where the tables' placement links go. The current page when absent. */
+  placementPathname?: string;
 }
 
 interface HighlightControlsProps {
@@ -175,17 +178,20 @@ const HighlightControls = ({
   );
 };
 
-const FreshnessContent = ({
+export interface FreshnessContentProps extends FreshnessViewOptions {
+  setPredicate: (predicate: Predicate) => void;
+  scopeId: string;
+  lookbackMs: number;
+}
+
+/** The Summary, graph and tables for the objects in one cluster or schema. */
+export const FreshnessContent = ({
   scope,
   scopeId,
   lookbackMs,
   setPredicate,
   ...viewOptions
-}: FreshnessViewOptions & {
-  setPredicate: (predicate: Predicate) => void;
-  scopeId: string;
-  lookbackMs: number;
-}) => {
+}: FreshnessContentProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const objects = useFreshnessObjectsWhere(inFreshnessScope(scope, scopeId));
   // Distinguishes a scope that has nothing in it from one whose objects have
@@ -296,6 +302,7 @@ const FreshnessView = ({
   predicate,
   thresholdControl,
   typeFilters,
+  placementPathname,
 }: FreshnessViewOptions & {
   data: FreshnessData;
   latestByObjectId: Map<string, number | null>;
@@ -358,6 +365,7 @@ const FreshnessView = ({
                 rows={breaching}
                 scope={scope}
                 itemLabel="objects"
+                placementPathname={placementPathname}
               />
             )}
           </AccordionPanel>
@@ -371,11 +379,114 @@ const FreshnessView = ({
                 No objects with freshness data {SCOPE_LABELS[scope].place}.
               </Box>
             ) : (
-              <FreshnessTable rows={rows} scope={scope} itemLabel="objects" />
+              <FreshnessTable
+                rows={rows}
+                scope={scope}
+                itemLabel="objects"
+                placementPathname={placementPathname}
+              />
             )}
           </AccordionPanel>
         </AccordionItem>
       </Accordion>
+    </VStack>
+  );
+};
+
+export interface FreshnessFilterControlsProps {
+  scope: FreshnessScope;
+  timePeriodMinutes: number;
+  setTimePeriodMinutes: (minutes: number) => void;
+  objectTypes: string[];
+  setObjectTypes: (types: string[]) => void;
+}
+
+/** The Time range and Object types menus. */
+export const FreshnessFilterControls = ({
+  scope,
+  timePeriodMinutes,
+  setTimePeriodMinutes,
+  objectTypes,
+  setObjectTypes,
+}: FreshnessFilterControlsProps) => (
+  <>
+    <LabeledSelect
+      label="Time range"
+      aria-label="Time range"
+      width="auto"
+      value={timePeriodMinutes}
+      onChange={(e) =>
+        setTimePeriodMinutes(
+          parseTimePeriod(e.target.value) ?? timePeriodMinutes,
+        )
+      }
+    >
+      {Object.entries(TIME_PERIOD_OPTIONS).map(([value, text]) => (
+        <option key={value} value={value}>
+          {text}
+        </option>
+      ))}
+    </LabeledSelect>
+    <Box minWidth="60">
+      <SearchableSelect<SelectOption, true>
+        isMulti
+        label="Object types"
+        ariaLabel="Object types"
+        placeholder="All"
+        options={OBJECT_TYPE_FILTERS[scope].map((filter) => ({
+          id: filter.value,
+          name: filter.label,
+        }))}
+        value={OBJECT_TYPE_FILTERS[scope]
+          .filter((filter) => objectTypes.includes(filter.value))
+          .map((filter) => ({ id: filter.value, name: filter.label }))}
+        onChange={(chosen) => setObjectTypes(chosen.map((option) => option.id))}
+      />
+    </Box>
+  </>
+);
+
+/** How to read the numbers in `FreshnessContent`. */
+export const FreshnessNotes = () => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <VStack
+      alignItems="flex-start"
+      spacing="2"
+      color={colors.foreground.secondary}
+    >
+      <Text textStyle="text-small">
+        Freshness is wallclock lag: how far behind wall clock time an
+        object&rsquo;s results are. Each object reports it once a minute. A
+        percentile ranks those minutes, so p99 is the lag that 99% of minutes
+        stayed at or under. The Summary section pools the readings for all
+        objects shown and ranks those results together.
+      </Text>
+      <Text textStyle="text-small">
+        The graph displays 60 points per object. Each point describes the worst
+        lag observed on that object during a timespan equal to 1/60 of the
+        selected time window. At 6 hours, for example, each point represents the
+        worst minute during a 6-minute span.
+      </Text>
+      <Text textStyle="text-small">
+        A percentile needs enough readings to differ from pMAX: about 100 for
+        p99 and 1,000 for p99.9. Over 1 hour an object has 60, so its p99 equals
+        its pMAX. A scope with few objects displays this same convergence in the
+        Summary section.
+      </Text>
+      <Text textStyle="text-small">
+        The &ldquo;Now&rdquo; column in the tables and the &ldquo;current&rdquo;
+        option in the threshold menu display the reading from the latest minute.
+        The final point on the graph displays the worst minute in the most
+        recent timespan (e.g., 24 minutes at a 24 hour time window). Therefore,
+        at longer time windows, the last point on the graph can sit above the
+        &ldquo;Now&rdquo; reading in the table.
+      </Text>
+      <Text textStyle="text-small">
+        pMAX (in the table, as a threshold option and in the Summary) updates
+        once per minute. The graph and all percentiles refresh once per
+        timespan.
+      </Text>
     </VStack>
   );
 };
@@ -454,11 +565,6 @@ const FreshnessPage = () => {
   const scopeError = scope === "cluster" ? clustersError : schemasError;
   const scopeReady = scope === "cluster" ? clustersReady : schemasReady;
 
-  const rangeLabel =
-    TIME_PERIOD_OPTIONS[
-      String(timePeriodMinutes) as keyof typeof TIME_PERIOD_OPTIONS
-    ] ?? `${timePeriodMinutes}m`;
-
   // The heading stays and the body swaps, so the page does not flash empty on
   // every load. The control bar goes with the body: its picker has nothing to
   // offer until the subscribe lands.
@@ -519,41 +625,13 @@ const FreshnessPage = () => {
                 />
               )}
             </ScopedSelect>
-            <LabeledSelect
-              label="Time range"
-              aria-label="Time range"
-              width="auto"
-              value={timePeriodMinutes}
-              onChange={(e) =>
-                setTimePeriodMinutes(
-                  parseTimePeriod(e.target.value) ?? timePeriodMinutes,
-                )
-              }
-            >
-              {Object.entries(TIME_PERIOD_OPTIONS).map(([value, text]) => (
-                <option key={value} value={value}>
-                  {text}
-                </option>
-              ))}
-            </LabeledSelect>
-            <Box minWidth="60">
-              <SearchableSelect<SelectOption, true>
-                isMulti
-                label="Object types"
-                ariaLabel="Object types"
-                placeholder="All"
-                options={OBJECT_TYPE_FILTERS[scope].map((filter) => ({
-                  id: filter.value,
-                  name: filter.label,
-                }))}
-                value={OBJECT_TYPE_FILTERS[scope]
-                  .filter((filter) => objectTypes.includes(filter.value))
-                  .map((filter) => ({ id: filter.value, name: filter.label }))}
-                onChange={(chosen) =>
-                  setObjectTypes(chosen.map((option) => option.id))
-                }
-              />
-            </Box>
+            <FreshnessFilterControls
+              scope={scope}
+              timePeriodMinutes={timePeriodMinutes}
+              setTimePeriodMinutes={setTimePeriodMinutes}
+              objectTypes={objectTypes}
+              setObjectTypes={setObjectTypes}
+            />
           </HStack>
         </VStack>
       </PageHeader>
@@ -569,7 +647,7 @@ const FreshnessPage = () => {
               scope={scope}
               scopeId={selected.id}
               lookbackMs={timePeriodMinutes * 60_000}
-              rangeLabel={rangeLabel}
+              rangeLabel={rangeLabelFor(timePeriodMinutes)}
               predicate={predicate}
               setPredicate={setPredicate}
               thresholdControl={thresholdControl}
@@ -589,47 +667,7 @@ const FreshnessPage = () => {
         )}
 
         {/* Explains the numbers above, so it waits until there are some. */}
-        {selected && (
-          <VStack
-            alignItems="flex-start"
-            spacing="2"
-            color={colors.foreground.secondary}
-          >
-            <Text textStyle="text-small">
-              Freshness is wallclock lag: how far behind wall clock time an
-              object&rsquo;s results are. Each object reports it once a minute.
-              A percentile ranks those minutes, so p99 is the lag that 99% of
-              minutes stayed at or under. The Summary section pools the readings
-              for all objects shown and ranks those results together.
-            </Text>
-            <Text textStyle="text-small">
-              The graph displays 60 points per object. Each point describes the
-              worst lag observed on that object during a timespan equal to 1/60
-              of the selected time window. At 6 hours, for example, each point
-              represents the worst minute during a 6-minute span.
-            </Text>
-            <Text textStyle="text-small">
-              A percentile needs enough readings to differ from pMAX: about 100
-              for p99 and 1,000 for p99.9. Over 1 hour an object has 60, so its
-              p99 equals its pMAX. A scope with few objects displays this same
-              convergence in the Summary section.
-            </Text>
-            <Text textStyle="text-small">
-              The &ldquo;Now&rdquo; column in the tables and the
-              &ldquo;current&rdquo; option in the threshold menu display the
-              reading from the latest minute. The final point on the graph
-              displays the worst minute in the most recent timespan (e.g., 24
-              minutes at a 24 hour time window). Therefore, at longer time
-              windows, the last point on the graph can sit above the
-              &ldquo;Now&rdquo; reading in the table.
-            </Text>
-            <Text textStyle="text-small">
-              pMAX (in the table, as a threshold option and in the Summary)
-              updates once per minute. The graph and all percentiles refresh
-              once per timespan.
-            </Text>
-          </VStack>
-        )}
+        {selected && <FreshnessNotes />}
       </VStack>
     </MainContentContainer>
   );

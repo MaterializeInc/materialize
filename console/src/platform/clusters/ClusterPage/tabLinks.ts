@@ -13,6 +13,7 @@ import { REPLICA_SEARCH_PARAM } from "./useSelectedReplica";
 
 export const WORKERS_TAB_PATH = "workers";
 export const HYDRATION_TAB_PATH = "hydration";
+export const FRESHNESS_TAB_PATH = "freshness";
 
 /** The search string that selects `replicaName`, or none for all replicas. */
 export const replicaSearch = (replicaName: string | undefined) =>

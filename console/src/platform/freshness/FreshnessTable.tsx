@@ -155,13 +155,18 @@ function placementOf(
     : null;
 }
 
-/** Links to this page gathered by the object's placement. */
+/**
+ * Links to the Freshness page gathered by the object's placement, keeping the
+ * other controls.
+ */
 const PlacementCell = ({
   row,
   scope,
+  pathname,
 }: {
   row: FreshnessRow;
   scope: FreshnessScope;
+  pathname?: string;
 }) => {
   const [searchParams] = useSearchParams();
   const placement = placementOf(row, scope);
@@ -172,6 +177,7 @@ const PlacementCell = ({
     <TextLink
       as={RouterLink}
       to={{
+        pathname,
         search: withScope(
           searchParams,
           placement.scope,
@@ -187,7 +193,7 @@ const PlacementCell = ({
 
 const columnHelper = createColumnHelper<FreshnessRow>();
 
-const buildColumns = (scope: FreshnessScope) => [
+const buildColumns = (scope: FreshnessScope, placementPathname?: string) => [
   columnHelper.display({
     id: "swatch",
     header: () => <Box aria-label="Graph color" />,
@@ -210,7 +216,13 @@ const buildColumns = (scope: FreshnessScope) => [
     id: "placement",
     header: SCOPE_LABELS[scope === "cluster" ? "schema" : "cluster"].menu,
     sortingFn: sortingFunctions.nullsLast,
-    cell: (info) => <PlacementCell row={info.row.original} scope={scope} />,
+    cell: (info) => (
+      <PlacementCell
+        row={info.row.original}
+        scope={scope}
+        pathname={placementPathname}
+      />
+    ),
   }),
   columnHelper.accessor("objectType", {
     header: "Type",
@@ -257,17 +269,14 @@ const buildColumns = (scope: FreshnessScope) => [
   }),
 ];
 
-const COLUMNS = {
-  cluster: buildColumns("cluster"),
-  schema: buildColumns("schema"),
-};
-
 export interface FreshnessTableProps {
   rows: FreshnessRow[];
   /** What the page is gathered by, which decides the placement column. */
   scope: FreshnessScope;
   /** Names the rows in the pagination footer. */
   itemLabel?: string;
+  /** Where the placement links go. The current page when absent. */
+  placementPathname?: string;
 }
 
 /**
@@ -281,10 +290,17 @@ const FreshnessTableBase = ({
   rows,
   scope,
   itemLabel = "objects",
+  placementPathname,
 }: FreshnessTableProps) => {
+  // Memoized so a threshold drag does not hand the table new columns, which
+  // would rebuild every row.
+  const columns = React.useMemo(
+    () => buildColumns(scope, placementPathname),
+    [scope, placementPathname],
+  );
   const table = useUniversalTable({
     data: rows,
-    columns: COLUMNS[scope],
+    columns,
     // `buildFreshnessRows` orders worst first by `breachValue`, which is
     // whichever statistic the active predicate judges, so the incoming order
     // already follows the predicate.

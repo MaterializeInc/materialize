@@ -19,6 +19,7 @@ import { useAllClusters } from "~/store/allClusters";
 import { useSubscribeToAllObjectsCollection } from "~/store/allObjectsCollection";
 import { assert, pluralize } from "~/util";
 
+import { ClusterFreshness } from "./ClusterFreshness";
 import { ClusterMetrics } from "./ClusterMetrics";
 import { ClusterObjects } from "./ClusterObjects";
 import { CLUSTER_OBJECT_TYPES } from "./clusterObjectTypes";
@@ -30,6 +31,7 @@ import {
 } from "./Configuration/clusterConfigurationModel";
 import { ClusterHydration } from "./Hydration/ClusterHydration";
 import {
+  FRESHNESS_TAB_PATH,
   HYDRATION_TAB_PATH,
   replicaSearch,
   WORKERS_TAB_PATH,
@@ -49,6 +51,7 @@ const tabs = (replicaName: string | undefined): Tab[] => [
     label: "Hydration",
     href: `../${HYDRATION_TAB_PATH}${replicaSearch(replicaName)}`,
   },
+  { label: "Freshness", href: `../${FRESHNESS_TAB_PATH}` },
 ];
 
 // The configuration drawer's open section, in the URL so it survives a reload
@@ -187,6 +190,10 @@ const ClusterPage = () => {
         <Route
           path={HYDRATION_TAB_PATH}
           element={<ClusterHydration key={clusterName} />}
+        />
+        <Route
+          path={FRESHNESS_TAB_PATH}
+          element={<ClusterFreshness key={clusterName} />}
         />
         <Route
           path="replicas"
