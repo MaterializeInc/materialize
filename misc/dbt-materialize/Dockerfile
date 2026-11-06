@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
 # digest for security fixes.
 FROM python:3.14.8@sha256:455fc8bf2552c51738d27fde570c22bb0146d22f2e16e32a9baff8d2da94daf6
 
