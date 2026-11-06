@@ -868,9 +868,15 @@ where
                         None => std::future::pending().await,
                     }
                 } => {
-                    // Refresh AFTER the backoff, not at the upper from the old
-                    // mismatch. A peer can advance many times while we sleep.
-                    let upper = self.write_handle.fetch_recent_upper().await.clone();
+                    // Once a subscription protects our observed state, first
+                    // attempts rely on CAS to reject unseen peer writes. Initial
+                    // acquisition and retries still refresh. After contention,
+                    // do so AFTER backoff: peers can advance while we sleep.
+                    let upper = if attempts == 0 && self.subscription.is_some() {
+                        self.write_handle.shared_upper()
+                    } else {
+                        self.write_handle.fetch_recent_upper().await.clone()
+                    };
                     let Some(target) = upper.as_option().copied() else {
                         self.handle_shutdown(responders);
                         return ControlFlow::Break("upper is the empty antichain".to_string());
@@ -2005,15 +2011,24 @@ mod tests {
         peer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         reader: ReadHandle<SourceData, (), Timestamp, StorageDiff>,
         readers_opened: Arc<AtomicU64>,
+        registry: mz_ore::metrics::MetricsRegistry,
     }
 
     impl DifferentialFixture {
         async fn new(read_gate: Option<Arc<tokio::sync::Notify>>) -> Self {
-            use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+            use mz_persist_client::{Diagnostics, ShardId};
             use mz_persist_types::codec_impls::UnitSchema;
             use mz_repr::{RelationDesc, SqlScalarType};
 
-            let client = PersistClient::new_for_tests().await;
+            let registry = mz_ore::metrics::MetricsRegistry::new();
+            let client = mz_persist_client::cache::PersistClientCache::new(
+                mz_persist_client::cfg::PersistConfig::new_for_tests(),
+                &registry,
+                |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+            )
+            .open(mz_persist_client::PersistLocation::new_in_mem())
+            .await
+            .unwrap();
             let shard = ShardId::new();
             let schema = Arc::new(
                 RelationDesc::builder()
@@ -2089,6 +2104,7 @@ mod tests {
                 peer,
                 reader,
                 readers_opened,
+                registry,
             }
         }
     }
@@ -2201,11 +2217,35 @@ mod tests {
     async fn differential_peer_tick_does_not_ack_pending_data() {
         tokio::time::timeout(Duration::from_secs(30), async {
             let mut fixture = DifferentialFixture::new(None).await;
+            let registry = fixture.registry.clone();
+            let upper_reads = || {
+                registry
+                    .gather()
+                    .into_iter()
+                    .find(|family| family.name() == "mz_persist_cmd_fetch_upper_count")
+                    .expect("upper read metric")
+                    .get_metric()[0]
+                    .get_counter()
+                    .value()
+            };
+            // Establish the retained snapshot/listen before measuring warm
+            // attempts. Initial acquisition is still allowed to refresh.
             fixture
                 .peer
                 .compare_and_append(
                     Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
                     Antichain::from_elem(Timestamp::MIN),
+                    Antichain::from_elem(Timestamp::from(10)),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            refresh_test_writer(&mut fixture.task).await;
+            fixture
+                .peer
+                .compare_and_append(
+                    Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                    Antichain::from_elem(Timestamp::from(10)),
                     Antichain::from_elem(Timestamp::from(100)),
                 )
                 .await
@@ -2220,14 +2260,21 @@ mod tests {
                 }
                 100
             });
+            let before_tick = upper_reads();
             let task = mz_ore::task::spawn(|| "differential-writer-test", fixture.task.run());
             refreshed.notified().await;
+            assert_eq!(
+                upper_reads(),
+                before_tick,
+                "peer-supplied empty advancement needs no refresh"
+            );
             assert_eq!(
                 fixture.peer.fetch_recent_upper().await,
                 &Antichain::from_elem(Timestamp::from(100))
             );
 
             let row = Row::pack_slice(&[Datum::Int64(1)]);
+            let before_append = upper_reads();
             let (tx, rx) = oneshot::channel();
             fixture
                 .commands
@@ -2239,6 +2286,11 @@ mod tests {
                 ))
                 .unwrap();
             rx.await.unwrap().unwrap();
+            assert_eq!(
+                upper_reads(),
+                before_append,
+                "uncontended data append needs no refresh"
+            );
             let upper = *fixture.peer.fetch_recent_upper().await.as_option().unwrap();
             assert!(upper > Timestamp::from(100));
             let actual = fixture
