@@ -55,7 +55,6 @@ use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleMembership, RoleVars};
-use mz_sql::func::OP_IMPLS;
 use mz_sql::names::CommentObjectId;
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
@@ -612,21 +611,6 @@ impl Catalog {
                 shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
-
-            // Operators aren't stored in the catalog, but we would like them in
-            // introspection views.
-            for (op, func) in OP_IMPLS.iter() {
-                match func {
-                    mz_sql::func::Func::Scalar(impls) => {
-                        for imp in impls {
-                            builtin_table_updates.push(catalog.state.resolve_builtin_table_update(
-                                catalog.state.pack_op_update(op, imp.details(), Diff::ONE),
-                            ));
-                        }
-                    }
-                    _ => unreachable!("all operators must be scalar functions"),
-                }
-            }
 
             for ip in &catalog.state.egress_addresses {
                 builtin_table_updates.push(
