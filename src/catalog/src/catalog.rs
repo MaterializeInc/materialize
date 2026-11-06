@@ -214,9 +214,9 @@ pub struct OpenCommittedCatalog {
 
 #[async_trait::async_trait]
 impl mz_storage_client::controller::CollectionMetadataCertifier for CatalogUpperHandle {
-    async fn collection_metadata_at_current(
+    async fn collection_metadata_for_observations(
         &self,
-        ids: &BTreeSet<GlobalId>,
+        bindings: &BTreeSet<(GlobalId, mz_persist_client::ShardId)>,
     ) -> Result<
         BTreeMap<GlobalId, mz_storage_client::controller::CertifiedCollectionMetadata>,
         anyhow::Error,
@@ -225,7 +225,7 @@ impl mz_storage_client::controller::CollectionMetadataCertifier for CatalogUpper
             .storage
             .lock()
             .await
-            .collection_metadata_at_current(ids)
+            .collection_metadata_for_observations(bindings)
             .await?)
     }
 }
@@ -2133,6 +2133,42 @@ impl Catalog {
         &mut self,
     ) -> Result<Vec<ParsedStateUpdate>, DurableError> {
         self.sync_updates_inner(None).await
+    }
+
+    /// Applies the locally observed committed prefix, including fencing checks,
+    /// without first fetching newer consensus state. This is not operation-time
+    /// certification. Background followers must also drive [`Self::upper_frontiers`]
+    /// so missing notifications cannot leave their shared state stale indefinitely.
+    pub async fn sync_to_observed_updates(
+        &mut self,
+    ) -> Result<Vec<ParsedStateUpdate>, DurableError> {
+        let upper = self.storage().await.observed_upper();
+        self.sync_updates_through(upper).await
+    }
+
+    /// Observes catalog progress using Persist's notifications and fallback.
+    /// Polling this stream keeps shared progress available to
+    /// [`Self::sync_to_observed_updates`], but does not apply catalog contents or
+    /// certify freshness. The stream owns no catalog read protection.
+    pub async fn upper_frontiers(
+        &self,
+    ) -> Result<
+        impl futures::Stream<Item = timely::progress::Antichain<mz_repr::Timestamp>>
+        + Send
+        + 'static
+        + use<>,
+        mz_persist_client::error::InvalidUsage<mz_repr::Timestamp>,
+    > {
+        let shard = self.storage().await.shard_id();
+        self.diagnostic_config.persist_client
+            .upper_frontiers::<mz_storage_types::sources::SourceData, (), mz_repr::Timestamp, mz_storage_types::StorageDiff>(
+                shard,
+                mz_persist_client::Diagnostics {
+                    shard_name: "catalog".into(),
+                    handle_purpose: "catalog progress".into(),
+                },
+            )
+            .await
     }
 
     /// Apply a complete prefix through an exclusive upper. Already synchronized

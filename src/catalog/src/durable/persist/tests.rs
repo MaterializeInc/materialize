@@ -120,9 +120,32 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
     use mz_repr::GlobalId;
     use mz_storage_client::controller::StorageTxn;
 
-    let builder =
-        TestCatalogStateBuilder::new(mz_persist_client::PersistClient::new_for_tests().await)
-            .with_default_deploy_generation();
+    let registry = mz_ore::metrics::MetricsRegistry::new();
+    let mut cache = mz_persist_client::cache::PersistClientCache::new(
+        mz_persist_client::cfg::PersistConfig::new_for_tests(),
+        &registry,
+        |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+    );
+    let location = mz_persist_client::PersistLocation::new_in_mem();
+    let organization = uuid::Uuid::new_v4();
+    let builder = TestCatalogStateBuilder::new(
+        cache
+            .open(location.clone())
+            .await
+            .expect("collection certification test operation"),
+    )
+    .with_organization_id(organization)
+    .with_default_deploy_generation();
+    let upper_reads = || {
+        registry
+            .gather()
+            .into_iter()
+            .find(|family| family.name() == "mz_persist_cmd_fetch_upper_count")
+            .expect("upper read counter")
+            .get_metric()[0]
+            .get_counter()
+            .value()
+    };
     let mut writer = builder
         .clone()
         .unwrap_build()
@@ -149,12 +172,20 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
     let _ = txn.get_and_commit_op_updates();
     let ts = txn.upper();
     txn.commit(ts).await.expect("commit mappings");
-    let mut joiner = builder
-        .unwrap_build()
-        .await
-        .join()
-        .await
-        .expect("join catalog");
+    cache.clear_state_cache();
+    let mut joiner = TestCatalogStateBuilder::new(
+        cache
+            .open(location)
+            .await
+            .expect("collection certification test operation"),
+    )
+    .with_organization_id(organization)
+    .with_default_deploy_generation()
+    .unwrap_build()
+    .await
+    .join()
+    .await
+    .expect("join catalog");
     joiner.sync_to_current_updates().await.expect("drain join");
     assert_eq!(
         joiner
@@ -178,6 +209,20 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
         metadata[&dropped].compaction_bound, None,
         "missing is not completed"
     );
+    let bindings = mappings.iter().map(|(id, shard)| (*id, *shard)).collect();
+    let reads = upper_reads();
+    assert_eq!(
+        joiner
+            .collection_metadata_for_observations(&bindings)
+            .await
+            .expect("collection certification test operation"),
+        metadata
+    );
+    assert_eq!(
+        upper_reads(),
+        reads,
+        "matching observations need no fresh read"
+    );
     let cached_upper = joiner.current_upper().await;
 
     let mut txn = writer.transaction().await.expect("drop transaction");
@@ -188,6 +233,19 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
     let _ = txn.get_and_commit_op_updates();
     let ts = txn.upper();
     txn.commit(ts).await.expect("commit retirement");
+
+    // Cached positive facts are valid observations, not registration authority.
+    // Separate caches make the stale positive deliberate rather than relying on
+    // notification timing. The registration certificate below must still refresh.
+    let reads = upper_reads();
+    assert_eq!(
+        joiner
+            .collection_metadata_for_observations(&bindings)
+            .await
+            .expect("collection certification test operation"),
+        metadata
+    );
+    assert_eq!(upper_reads(), reads);
 
     // The fence can be satisfied by the cached prefix, even though a peer has
     // since removed a mapping. Certification must fetch the newer durable prefix.
@@ -220,6 +278,24 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
     let _ = txn.get_and_commit_op_updates();
     let ts = txn.upper();
     txn.commit(ts).await.expect("commit successor binding");
+    // Seeing a successor row after a cached absence must trigger certification.
+    // Include both incarnations of the same global ID, not just its newest row.
+    let successor_bindings = BTreeSet::from([
+        (dropped, mappings[&dropped]),
+        (dropped, successor),
+        (retained, mappings[&retained]),
+    ]);
+    let reads = upper_reads();
+    let observed = joiner
+        .collection_metadata_for_observations(&successor_bindings)
+        .await
+        .expect("collection certification test operation");
+    assert_eq!(
+        upper_reads(),
+        reads + 1.0,
+        "uncertain binding requires fresh certification"
+    );
+    assert_eq!(observed[&dropped].shard, successor);
     assert_eq!(
         joiner
             .collection_shards_at_current(&ids)
@@ -245,6 +321,88 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
     );
     joiner.expire().await;
     writer.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_conflict_catchup_consumes_reported_progress() {
+    for shared_cache in [false, true] {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let mut cache = PersistClientCache::new(
+            mz_persist_client::cfg::PersistConfig::new_for_tests(),
+            &registry,
+            |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+        );
+        let location = PersistLocation::new_in_mem();
+        let organization = Uuid::new_v4();
+        let mut writer = TestCatalogStateBuilder::new(
+            cache.open(location.clone()).await.expect("writer client"),
+        )
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .expect("writer");
+        writer
+            .sync_to_current_updates()
+            .await
+            .expect("drain bootstrap");
+        let mut txn = writer.transaction().await.expect("enable native joining");
+        txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+            .expect("native mode");
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts).await.expect("commit native mode");
+        if !shared_cache {
+            cache.clear_state_cache();
+        }
+        let mut peer =
+            TestCatalogStateBuilder::new(cache.open(location).await.expect("peer client"))
+                .with_organization_id(organization)
+                .with_default_deploy_generation()
+                .unwrap_build()
+                .await
+                .join()
+                .await
+                .expect("peer");
+        let previous = writer.synced_upper();
+        let advanced = previous.checked_add(10).expect("small test timestamp");
+        let target = advanced.step_forward();
+        peer.advance_upper(advanced).await.expect("peer advances");
+        let upper_reads = || {
+            registry
+                .gather()
+                .into_iter()
+                .find(|family| family.name() == "mz_persist_cmd_fetch_upper_count")
+                .expect("upper read counter")
+                .get_metric()[0]
+                .get_counter()
+                .value()
+        };
+        let reads = upper_reads();
+        assert!(
+            !writer
+                .try_advance_upper(target)
+                .await
+                .expect("definitive conflict")
+        );
+        assert!(writer.synced_upper() >= advanced);
+        assert_eq!(
+            upper_reads(),
+            reads,
+            "reported boundary needs no extra fetch"
+        );
+        assert!(
+            writer
+                .try_advance_upper(target)
+                .await
+                .expect("retry completes")
+        );
+        assert_eq!(upper_reads(), reads);
+        writer.expire().await;
+        peer.expire().await;
+    }
 }
 
 /// Test that the catalog forces users to upgrade one major version at a time.

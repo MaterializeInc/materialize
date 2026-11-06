@@ -706,15 +706,16 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         let res = res.expect("invalid usage");
 
         if let Err(e @ UpperMismatch { .. }) = res {
-            // Most likely we were fenced out.
-            // Sync to the current upper to detect that.
+            // The rejected append already supplies a durable boundary. Consume
+            // it to detect fencing without rereading the same progress. A later
+            // peer commit is handled by the caller's next validated attempt.
             let phase_started = Instant::now();
             debug!(
                 target: "mz_adapter::frontend_read_then_write",
                 phase = "cas_mismatch_sync",
                 "durable catalog phase start",
             );
-            let result = self.sync_to_current_upper().await;
+            let result = self.sync(antichain_to_timestamp(e.current.clone())).await;
             debug!(
                 target: "mz_adapter::frontend_read_then_write",
                 phase = "cas_mismatch_sync",
@@ -2733,6 +2734,36 @@ impl CatalogSnapshotReader {
 }
 
 impl PersistHandle<StateUpdateKind, CatalogStateInner> {
+    fn collection_metadata(
+        &self,
+        ids: &BTreeSet<GlobalId>,
+    ) -> BTreeMap<GlobalId, mz_storage_client::controller::CertifiedCollectionMetadata> {
+        ids.iter()
+            .filter_map(|id| {
+                self.update_applier
+                    .snapshot
+                    .storage_collection_metadata
+                    .get(&crate::durable::objects::StorageCollectionMetadataKey { id: *id })
+                    .map(|value| {
+                        (
+                            *id,
+                            mz_storage_client::controller::CertifiedCollectionMetadata {
+                                shard: value.shard,
+                                compaction_bound: self
+                                    .update_applier
+                                    .snapshot
+                                    .collection_compaction_bounds
+                                    .get(&crate::durable::objects::CollectionCompactionBoundKey {
+                                        id: *id,
+                                    })
+                                    .map(|bound| Antichain::from_iter(bound.frontier)),
+                            },
+                        )
+                    })
+            })
+            .collect()
+    }
+
     fn prewarming_namespace(&self) -> Option<String> {
         let own = self.fenceable_token.token().expect("opened identity");
         let active = self
@@ -2883,31 +2914,35 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             .into());
         }
         self.sync_to_current_upper().await?;
-        Ok(ids
+        Ok(self.collection_metadata(ids))
+    }
+
+    async fn collection_metadata_for_observations(
+        &mut self,
+        bindings: &BTreeSet<(GlobalId, ShardId)>,
+    ) -> Result<
+        BTreeMap<GlobalId, mz_storage_client::controller::CertifiedCollectionMetadata>,
+        CatalogError,
+    > {
+        self.validate_runtime()?;
+        if self.mode != Mode::Writable {
+            return Err(DurableCatalogError::NotWritable(
+                "observation certification requires a writable catalog".into(),
+            )
+            .into());
+        }
+        self.sync(self.observed_upper()).await?;
+        let ids = bindings.iter().map(|(id, _)| *id).collect();
+        let metadata = self.collection_metadata(&ids);
+        if bindings
             .iter()
-            .filter_map(|id| {
-                self.update_applier
-                    .snapshot
-                    .storage_collection_metadata
-                    .get(&crate::durable::objects::StorageCollectionMetadataKey { id: *id })
-                    .map(|value| {
-                        (
-                            *id,
-                            mz_storage_client::controller::CertifiedCollectionMetadata {
-                                shard: value.shard,
-                                compaction_bound: self
-                                    .update_applier
-                                    .snapshot
-                                    .collection_compaction_bounds
-                                    .get(&crate::durable::objects::CollectionCompactionBoundKey {
-                                        id: *id,
-                                    })
-                                    .map(|bound| Antichain::from_iter(bound.frontier)),
-                            },
-                        )
-                    })
-            })
-            .collect())
+            .all(|(id, shard)| metadata.get(id).is_some_and(|m| m.shard == *shard))
+        {
+            return Ok(metadata);
+        }
+        // The cached prefix may predate this exact binding's admission. A
+        // different shard under the same ID is not proof of its retirement.
+        self.collection_metadata_at_current(&ids).await
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -2981,6 +3016,15 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     async fn current_upper(&mut self) -> Timestamp {
         self.current_upper().await
+    }
+
+    fn observed_upper(&self) -> Timestamp {
+        match self.mode {
+            Mode::Writable | Mode::Readonly => {
+                antichain_to_timestamp(self.write_handle.shared_upper()).max(self.upper)
+            }
+            Mode::Savepoint => self.upper,
+        }
     }
 
     fn synced_upper(&self) -> Timestamp {

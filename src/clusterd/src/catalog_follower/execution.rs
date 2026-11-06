@@ -120,9 +120,22 @@ pub(super) struct ReplicaIo {
     hydration: SequentialHydration,
     config: mz_dyncfg::ConfigSet,
     catalog_catchup: Arc<tokio::sync::Notify>,
+    catalog_catchup_upper: Option<Timestamp>,
 }
 
 impl ReplicaIo {
+    pub fn take_catalog_catchup_upper(&mut self) -> Option<Timestamp> {
+        self.catalog_catchup_upper.take()
+    }
+
+    fn request_catalog_catchup(&mut self, upper: Timestamp) {
+        self.catalog_catchup_upper = Some(
+            self.catalog_catchup_upper
+                .map_or(upper, |old| old.max(upper)),
+        );
+        self.catalog_catchup.notify_one();
+    }
+
     pub async fn idle(&mut self, delay: Duration) {
         let catchup = Arc::clone(&self.catalog_catchup).notified_owned();
         self.wait(async {
@@ -158,17 +171,17 @@ impl ReplicaIo {
                     }
                 } => match response {
                     Ok(Some(ReplicaStorageResponse::Response(
-                        StorageResponse::CatalogCatchup(_),
+                        StorageResponse::CatalogCatchup(position),
                     ))) => {
-                        self.catalog_catchup.notify_one();
+                        self.request_catalog_catchup(position.upper);
                     }
                     Ok(Some(response)) => self.storage.as_mut().expect("storage endpoint").absorb(response),
                     result => mz_ore::halt!("replica storage progress lost: {result:?}"),
                 },
                 response = self.endpoint.recv() => match response {
                     Ok(Some(response)) => {
-                        if matches!(&response, ComputeResponse::CatalogCatchup(_)) {
-                            self.catalog_catchup.notify_one();
+                        if let ComputeResponse::CatalogCatchup(position) = response {
+                            self.request_catalog_catchup(position.upper);
                             continue;
                         }
                         for command in self.hydration.observe_response(&response, &self.config) {
@@ -318,6 +331,7 @@ impl ReplicaEnactment {
             hydration,
             config: mz_dyncfgs::all_dyncfgs(),
             catalog_catchup: Arc::new(tokio::sync::Notify::new()),
+            catalog_catchup_upper: None,
         };
         io.send(ComputeCommand::CreateInstance(Box::new(config)));
         let (protection, recovery_holds) =
@@ -563,7 +577,9 @@ impl ReplicaEnactment {
                 && plan
                     .imported_source_ids()
                     .chain(plan.persist_sink_ids())
-                    .all(|id| metadata.metadata.contains_key(&id))
+                    .all(|id| {
+                        metadata.metadata.contains_key(&id) && metadata.uppers.contains_key(&id)
+                    })
         }) {
             let plan = candidates.remove(position);
             ready.extend(plan.export_ids());
@@ -638,16 +654,13 @@ impl ReplicaEnactment {
             )
             .await?;
         self.pending_grants = grants.clone();
-        let uppers = self
-            .io
-            .wait(storage_metadata::uppers(persist, &metadata.metadata))
-            .await?;
+        let mut uppers = metadata.uppers.clone();
         // Worker-side Persist checks cover the asynchronous reader-open gap.
         let protected = storage
             .iter()
             .map(|id| (*id, grants[id].since().clone()))
             .collect();
-        let frontiers = uppers
+        let mut frontiers: BTreeMap<_, _> = uppers
             .iter()
             .map(|(id, upper)| {
                 let since = grants
@@ -727,18 +740,55 @@ impl ReplicaEnactment {
                 })
             })
             .collect();
-        as_of_selection::select(
-            &mut plans,
-            &policies,
-            &bounds,
-            &replacements,
-            &protected,
-            &frontiers,
-            &live,
-            mz_ore::now::SYSTEM_TIME().into(),
-            false,
-            true,
-        )?;
+        let now = mz_ore::now::SYSTEM_TIME().into();
+        let select = |plans: &mut [Plan], frontiers: &BTreeMap<_, _>| {
+            as_of_selection::select(
+                plans,
+                &policies,
+                &bounds,
+                &replacements,
+                &protected,
+                frontiers,
+                &live,
+                now,
+                false,
+                true,
+            )
+        };
+        if let Err(error) = select(&mut plans, &frontiers) {
+            if !matches!(
+                error,
+                as_of_selection::SelectionError::HardConstraint { .. }
+            ) {
+                return Err(error.into());
+            }
+            // A newly acquired grant can be beyond the observed output upper.
+            // Refresh only this installation batch before declaring its protected
+            // reconstruction bounds incompatible. Selection leaves plans unchanged
+            // on error, and refreshing progress does not replace read protection.
+            let needed: BTreeSet<_> = plans
+                .iter()
+                .flat_map(|p| p.imported_source_ids().chain(p.persist_sink_ids()))
+                .collect();
+            let metadata = metadata
+                .metadata
+                .iter()
+                .filter(|(id, _)| needed.contains(id))
+                .map(|(id, metadata)| (*id, metadata.clone()))
+                .collect();
+            let refreshed = self
+                .io
+                .wait(storage_metadata::uppers(persist, &metadata))
+                .await?;
+            for (id, upper) in refreshed {
+                frontiers
+                    .get_mut(&id)
+                    .expect("resolved progress")
+                    .write_frontier = upper.clone();
+                uppers.insert(id, upper);
+            }
+            select(&mut plans, &frontiers)?;
+        }
 
         // Written plans may refer to newer access paths. Catalog ID order is not
         // a topological order. Render producers before importing their traces.

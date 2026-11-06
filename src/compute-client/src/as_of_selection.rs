@@ -233,7 +233,9 @@ impl std::error::Error for SelectionError {}
 /// The pending dataflows must form a valid acyclic compute dependency graph.
 ///
 /// `storage_frontiers` contains actual observed frontiers for storage inputs and exports,
-/// captured after securing protection. Only `read_capabilities` and `write_frontier` are used.
+/// with read capabilities captured after securing protection. Only `read_capabilities` and
+/// `write_frontier` are used. Write progress may lag newly acquired protection, in which case
+/// a `HardConstraint` error can require refreshing progress before retrying selection.
 /// Omit missing collections, including compute-only exports. Missing exports impose no storage
 /// constraint. Every storage input, including inputs of pruned dataflows, must have both a
 /// protected since entry and observed frontiers.
@@ -1434,7 +1436,7 @@ mod tests {
             },
         )]);
         let id = "u1".parse().unwrap();
-        let storage_frontiers = BTreeMap::from([(
+        let mut storage_frontiers = BTreeMap::from([(
             id,
             CollectionFrontiers {
                 id,
@@ -1449,6 +1451,23 @@ mod tests {
             Err(SelectionError::HardConstraint { id: failed_id, .. }) if failed_id == id
         ));
         assert_eq!(dataflows[0].as_of, None);
+        assert_eq!(dataflows[1].as_of, Some(ts_to_frontier(7)));
+
+        // Progress can lag the acquired input hold. Refreshing it permits a
+        // retry without rebuilding plans or weakening their protection.
+        let unchanged = dataflows.clone();
+        storage_frontiers.get_mut(&id).unwrap().write_frontier = ts_to_frontier(100);
+        select_live(&mut dataflows, &live_inputs, &storage_frontiers).unwrap();
+        let as_of = dataflows[0].as_of.as_ref().unwrap();
+        assert!(PartialOrder::less_equal(&ts_to_frontier(20), as_of));
+        assert!(PartialOrder::less_equal(as_of, &ts_to_frontier(99)));
+        assert_eq!(dataflows[1].as_of, Some(ts_to_frontier(7)));
+
+        // A completed output requires no reconstruction, not a minimum-time read.
+        let mut dataflows = unchanged;
+        storage_frontiers.get_mut(&id).unwrap().write_frontier = Antichain::new();
+        select_live(&mut dataflows, &live_inputs, &storage_frontiers).unwrap();
+        assert_eq!(dataflows[0].as_of, Some(Antichain::new()));
         assert_eq!(dataflows[1].as_of, Some(ts_to_frontier(7)));
     }
 

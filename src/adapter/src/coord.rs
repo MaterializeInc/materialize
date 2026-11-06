@@ -5193,6 +5193,23 @@ impl Coordinator {
             let frontier_timer = tokio::time::sleep(Duration::from_secs(1));
             tokio::pin!(frontier_timer);
 
+            let catalog_progress = if self.controller.replica_owned_compute() {
+                let progress = self
+                    .catalog()
+                    .upper_frontiers()
+                    .await
+                    .expect("open native catalog progress watch");
+                Some(
+                    mz_ore::task::spawn(
+                        || "adapter catalog progress",
+                        futures::StreamExt::for_each(progress, |_| tokio::task::consume_budget()),
+                    )
+                    .abort_on_drop(),
+                )
+            } else {
+                None
+            };
+
             async fn trace_maintenance<T>(
                 phase: &'static str,
                 operation: impl std::future::Future<Output = T>,
@@ -5211,6 +5228,12 @@ impl Coordinator {
             }
 
             loop {
+                if catalog_progress
+                    .as_ref()
+                    .is_some_and(|watch| watch.is_finished())
+                {
+                    mz_ore::halt!("native catalog progress watch stopped");
+                }
                 let delay = self
                     .catalog()
                     .system_config()
@@ -5240,7 +5263,7 @@ impl Coordinator {
                             || !self.pending_compute_installations.is_empty() => {
                         if self.controller.replica_owned_compute() {
                             if let Err(error) = trace_maintenance(
-                                "subscription_refresh", self.refresh_catalog(None)
+                                "subscription_refresh", self.refresh_observed_catalog()
                             ).await {
                                 warn!(%error, "unable to follow committed native catalog state");
                             }

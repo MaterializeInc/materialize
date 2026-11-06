@@ -40,6 +40,197 @@ use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{Catalog, DebugAwsContext, Op};
 
 #[mz_ore::test(tokio::test)]
+async fn observed_catalog_progress_recovers_without_notifications() {
+    use futures::StreamExt;
+    use mz_persist_client::cache::PersistClientCache;
+    use std::time::Duration;
+
+    let registry = mz_ore::metrics::MetricsRegistry::new();
+    let mut cache = PersistClientCache::new(
+        mz_persist_client::cfg::PersistConfig::new_for_tests(),
+        &registry,
+        |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+    );
+    let upper_reads = || {
+        registry
+            .gather()
+            .into_iter()
+            .find(|family| family.name() == "mz_persist_cmd_fetch_upper_count")
+            .expect("upper read counter")
+            .get_metric()[0]
+            .get_counter()
+            .value()
+    };
+    let location = mz_persist_client::PersistLocation::new_in_mem();
+    let producer = cache
+        .open(location.clone())
+        .await
+        .expect("catalog progress test operation");
+    let organization = Uuid::new_v4();
+    let bootstrap = test_bootstrap_args();
+    let storage = crate::durable::TestCatalogStateBuilder::new(producer.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("catalog progress test operation");
+    let mut writer = Catalog::open_debug_catalog_inner(
+        producer.clone(),
+        storage,
+        mz_ore::now::SYSTEM_TIME.clone(),
+        Some(
+            format!("local-az1-{organization}-0")
+                .parse()
+                .expect("catalog progress test operation"),
+        ),
+        &mz_build_info::DUMMY_BUILD_INFO,
+        BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+        &bootstrap,
+        Some(false),
+        None,
+    )
+    .await
+    .expect("catalog progress test operation");
+
+    // A separate process-local cache, with no PubSub delivery.
+    cache.clear_state_cache();
+    let observer = cache
+        .open(location)
+        .await
+        .expect("catalog progress test operation");
+    let storage = crate::durable::TestCatalogStateBuilder::new(observer.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("catalog progress test operation");
+    let mut config = Catalog::diagnostic_state_config(&writer.diagnostic_config);
+    config.persist_client = observer;
+    let mut reader = Catalog::open_committed(config, storage)
+        .await
+        .expect("catalog progress test operation")
+        .catalog;
+    let ts = writer.current_upper().await;
+    writer
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![Op::CreateDatabase {
+                name: "peer_database".into(),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+            }],
+        )
+        .await
+        .expect("catalog progress test operation");
+    let committed = writer
+        .observed_position()
+        .expect("catalog progress test operation")
+        .upper;
+
+    let reads = upper_reads();
+    reader
+        .sync_to_observed_updates()
+        .await
+        .expect("catalog progress test operation");
+    assert_eq!(
+        upper_reads(),
+        reads,
+        "local following does not fetch fresh uppers"
+    );
+    assert!(reader.resolve_database("peer_database").is_err());
+
+    let mut progress = Box::pin(
+        reader
+            .upper_frontiers()
+            .await
+            .expect("catalog progress test operation"),
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while progress
+            .next()
+            .await
+            .expect("catalog progress test operation")
+            .less_than(&committed)
+        {}
+    })
+    .await
+    .expect("Persist fallback observes the peer commit");
+    let reads = upper_reads();
+    reader
+        .sync_to_observed_updates()
+        .await
+        .expect("catalog progress test operation");
+    assert_eq!(
+        upper_reads(),
+        reads,
+        "known progress needs no further upper read"
+    );
+    assert_eq!(
+        reader
+            .resolve_database("peer_database")
+            .expect("catalog progress test operation"),
+        writer
+            .resolve_database("peer_database")
+            .expect("catalog progress test operation")
+    );
+    assert!(
+        reader
+            .observed_position()
+            .expect("catalog progress test operation")
+            .upper
+            >= committed
+    );
+
+    let mut promoted = crate::durable::TestCatalogStateBuilder::new(producer)
+        .with_organization_id(organization)
+        .with_deploy_generation(1)
+        .unwrap_build()
+        .await
+        .open_for_promotion(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("catalog progress test operation");
+    assert!(
+        promoted
+            .retire_deployment(0)
+            .await
+            .expect("catalog progress test operation")
+    );
+    let retired = promoted.current_upper().await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while progress
+            .next()
+            .await
+            .expect("catalog progress test operation")
+            .less_than(&retired)
+        {}
+    })
+    .await
+    .expect("Persist fallback observes explicit retirement");
+    let reads = upper_reads();
+    assert!(matches!(
+        reader.sync_to_observed_updates().await,
+        Err(CatalogError::Durable(DurableCatalogError::Fence(
+            FenceError::DeploymentRetired { generation: 0 }
+        )))
+    ));
+    assert_eq!(
+        upper_reads(),
+        reads,
+        "cached following still validates fencing"
+    );
+    drop(progress);
+    reader.expire().await;
+    writer.expire().await;
+    promoted.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
 async fn prototype_native_plan_namespace_preserves_admission() {
     use crate::durable::TestCatalogStateBuilder;
     use mz_ore::now::SYSTEM_TIME;

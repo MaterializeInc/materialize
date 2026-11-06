@@ -531,7 +531,12 @@ impl Coordinator {
                 .client_protection_catalog
                 .as_mut()
                 .expect("checked above");
-            let ts = catalog.current_upper().await;
+            // This is only a timestamp lower bound. Transaction open validates
+            // the applied prefix and commit still allocates through the oracle.
+            let ts = catalog
+                .observed_position()
+                .expect("synchronized protection writer")
+                .upper;
             match catalog
                 .transact(
                     None,
@@ -1028,7 +1033,10 @@ impl Coordinator {
         let incarnation = client.protection.incarnation();
         // The pause check uses the synchronized prefix. Transaction-open
         // validation must reject a subsequent pause rather than refresh past it.
-        let ts = catalog.current_upper().await;
+        let ts = catalog
+            .observed_position()
+            .expect("synchronized protection writer")
+            .upper;
         let result = catalog
             .transact(
                 None,
@@ -1124,9 +1132,15 @@ impl Coordinator {
         let start = Instant::now();
         if !self.controller.read_only() && self.catalog().state().catalog_read_protection_enabled()
         {
-            // Sample against a freshly applied prefix, not the previous tick's
-            // state. Sampled bounds cannot absorb catch-up at transaction open.
-            self.refresh_catalog_for_write().await?;
+            // Apply available committed changes before sampling. Transaction-open
+            // validation and CAS reject a stale candidate rather than refreshing
+            // past the sampled prefix. Native following already repairs lost
+            // notifications through its retained Persist watch.
+            if self.controller.replica_owned_compute() {
+                self.refresh_observed_catalog().await?;
+            } else {
+                self.refresh_catalog_for_write().await?;
+            }
         }
         if self
             .catalog()

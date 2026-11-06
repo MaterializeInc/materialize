@@ -710,6 +710,13 @@ impl Coordinator {
         result
     }
 
+    /// Follows shared observed progress without an unconditional consensus read.
+    /// The native serving loop retains a Persist watch to repair missed notifications.
+    pub(super) async fn refresh_observed_catalog(&mut self) -> Result<(), AdapterError> {
+        let upper = self.catalog().storage().await.observed_upper();
+        self.refresh_catalog(Some(upper)).await
+    }
+
     /// Apply a requested committed prefix, or fetch current progress after a conflict.
     /// Structural changes are checked by the caller against its planning revision.
     pub(super) async fn refresh_catalog(

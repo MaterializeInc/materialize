@@ -434,10 +434,36 @@ pub(crate) async fn run(
     let mut pending_metadata = true;
     let mut compaction = compaction::Compaction::default();
     let mut storage_progress = storage_metadata::Progress::default();
+    let progress = catalog.upper_frontiers().await?;
+    let catalog_progress = mz_ore::task::spawn(
+        || "replica catalog progress",
+        futures::StreamExt::for_each(progress, |_| tokio::task::consume_budget()),
+    )
+    .abort_on_drop();
     loop {
+        anyhow::ensure!(
+            !catalog_progress.is_finished(),
+            "catalog progress watch stopped"
+        );
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
-        let updates = wait(&mut *execution, catalog.sync_to_current_updates()).await?;
+        let requested = execution
+            .as_mut()
+            .and_then(|execution| execution.io.take_catalog_catchup_upper());
+        let updates = wait(&mut *execution, async {
+            let mut updates = catalog.sync_to_observed_updates().await?;
+            // A request can prove newer catalog progress before notification
+            // delivery. Preserve prompt request-time catch-up, not idle polling.
+            if requested.is_some_and(|upper| {
+                catalog
+                    .observed_position()
+                    .is_none_or(|position| position.upper < upper)
+            }) {
+                updates.extend(catalog.sync_to_current_updates().await?);
+            }
+            Ok::<_, mz_catalog::durable::CatalogError>(updates)
+        })
+        .await?;
         let changed = !updates.is_empty();
         absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
         if let Some(execution) = &mut *execution {

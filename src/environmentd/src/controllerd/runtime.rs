@@ -92,8 +92,17 @@ pub async fn run(
     let mut observations = Observations::new()?;
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let progress = catalog.upper_frontiers().await?;
+    let mut catalog_progress = mz_ore::task::spawn(
+        || "controller catalog progress",
+        progress.for_each(|_| tokio::task::consume_budget()),
+    )
+    .abort_on_drop();
     loop {
         tokio::select! {
+            _ = &mut catalog_progress => {
+                anyhow::bail!("catalog progress watch stopped");
+            }
             _ = &mut replica_metrics.task => {
                 anyhow::bail!("replica metrics publisher stopped");
             }
@@ -128,7 +137,7 @@ pub async fn run(
                 let _ = command.response.send(result);
             }
             _ = interval.tick() => {
-                catalog.sync_to_current_updates().await?;
+                catalog.sync_to_observed_updates().await?;
                 let active = catalog.state().active_deployment_generation()
                     == Some(config.controller.deploy_generation);
                 if active && !was_active {

@@ -110,18 +110,30 @@ pub async fn reconcile_adapters(
     launch: &provisioning::AdapterProvisioningConfig,
     sizes: &std::collections::BTreeMap<String, provisioning::AdapterAllocation>,
 ) -> anyhow::Result<Vec<AdapterInventoryEntry>> {
-    // List before refreshing membership so a concurrent CREATE cannot look orphaned.
     let observed = orchestrator.list_services().await?;
-    catalog.sync_to_current_updates().await?;
+    catalog.sync_to_observed_updates().await?;
+    // Synchronization validates fencing. The admitted generation is immutable.
     anyhow::ensure!(
-        catalog.storage().await.get_deployment_generation().await? == launch.generation,
+        catalog.state().deployment_generation() == launch.generation,
         "adapter launch configuration belongs to a different deployment"
     );
     let mut inventory = desired_adapters(catalog, launch, sizes);
-    let desired: std::collections::BTreeSet<_> = inventory
+    let mut desired: std::collections::BTreeSet<_> = inventory
         .iter()
         .map(|entry| entry.service.clone())
         .collect();
+    if observed.iter().any(|service| {
+        service_in_generation(service, launch.generation) && !desired.contains(service)
+    }) {
+        // An unknown service can belong to an unseen CREATE. Certify absence
+        // after listing processes, then rebuild the inventory before deletion.
+        catalog.sync_to_current_updates().await?;
+        inventory = desired_adapters(catalog, launch, sizes);
+        desired = inventory
+            .iter()
+            .map(|entry| entry.service.clone())
+            .collect();
+    }
     for service in observed {
         if service_in_generation(&service, launch.generation) && !desired.contains(&service) {
             orchestrator.drop_service(&service)?;
@@ -183,6 +195,9 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod reconciliation_tests;
 
 /// Desired replica resources and backend observations. Launch arguments stay private.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -246,16 +261,28 @@ pub async fn reconcile_replicas(
 ) -> anyhow::Result<Vec<ReplicaInventoryEntry>> {
     use mz_controller::clusters::ReplicaServiceName;
     let observed = orchestrator.list_services().await?;
-    catalog.sync_to_current_updates().await?;
+    catalog.sync_to_observed_updates().await?;
+    // Synchronization validates fencing. The admitted generation is immutable.
     anyhow::ensure!(
-        catalog.storage().await.get_deployment_generation().await? == launch.deploy_generation,
+        catalog.state().deployment_generation() == launch.deploy_generation,
         "replica launch configuration belongs to a different deployment"
     );
     let mut desired = desired_replicas(catalog, launch.deploy_generation);
-    let live: std::collections::BTreeSet<_> =
+    let mut live: std::collections::BTreeSet<_> =
         desired.iter().map(|entry| entry.service.clone()).collect();
-    for service in observed {
-        let name: ReplicaServiceName = service.parse()?;
+    let observed = observed
+        .into_iter()
+        .map(|service| Ok((service.parse::<ReplicaServiceName>()?, service)))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    if observed.iter().any(|(name, service)| {
+        name.generation == launch.deploy_generation && !live.contains(service)
+    }) {
+        // Preserve a concurrent CREATE that was not in the observed prefix.
+        catalog.sync_to_current_updates().await?;
+        desired = desired_replicas(catalog, launch.deploy_generation);
+        live = desired.iter().map(|entry| entry.service.clone()).collect();
+    }
+    for (name, service) in observed {
         if name.generation == launch.deploy_generation && !live.contains(&service) {
             orchestrator.drop_service(&service)?;
         }

@@ -319,10 +319,13 @@ impl Output {
         samples: &Samples,
         now: &NowFn,
     ) -> Result<Option<Attempt>, PrepareError> {
+        // Production registers this exact introspection shard with the same
+        // StorageCollections cache before starting Output. Its retained upper
+        // watcher supplies notification-loss recovery, including when there are
+        // no new samples. No separate poll or watcher is needed here.
         let target = self
             .writer
-            .fetch_recent_upper()
-            .await
+            .shared_upper()
             .as_option()
             .copied()
             .ok_or(PrepareError::Closed)?;
@@ -413,19 +416,24 @@ impl Output {
                     .take(CERTIFICATION_BATCH)
                     .cloned()
                     .collect();
-            let ids: BTreeSet<_> = batch
+            let bindings: BTreeSet<_> = batch
                 .iter()
                 .filter(|key| self.observed.contains_key(*key))
-                .map(|key| key.0.parse().expect("native observation global id"))
+                .map(|key| {
+                    (
+                        key.0.parse().expect("native observation global id"),
+                        key.1.parse().expect("native observation shard id"),
+                    )
+                })
                 .collect();
             // Native observations only follow committed exact bindings, which
             // are never readmitted after deletion. Certifying AFTER consuming
             // this prefix therefore authorizes retracting its exact counts.
-            let current = if ids.is_empty() {
+            let current = if bindings.is_empty() {
                 BTreeMap::new()
             } else {
                 certifier
-                    .collection_metadata_at_current(&ids)
+                    .collection_metadata_for_observations(&bindings)
                     .await
                     .map_err(PrepareError::Certification)?
             };
@@ -629,14 +637,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl CollectionMetadataCertifier for Catalog {
-        async fn collection_metadata_at_current(
+        async fn collection_metadata_for_observations(
             &self,
-            ids: &BTreeSet<GlobalId>,
+            bindings: &BTreeSet<(GlobalId, ShardId)>,
         ) -> Result<
             BTreeMap<GlobalId, mz_storage_client::controller::CertifiedCollectionMetadata>,
             anyhow::Error,
         > {
             use std::sync::atomic::Ordering::SeqCst;
+            let ids: BTreeSet<_> = bindings.iter().map(|(id, _)| *id).collect();
             assert!(ids.len() <= CERTIFICATION_BATCH);
             self.calls.fetch_add(1, SeqCst);
             anyhow::ensure!(!self.fail.load(SeqCst), "catalog unavailable");
@@ -684,6 +693,24 @@ mod tests {
         if transactional {
             description.data_source = DataSource::Table;
         }
+        register_description(collections, id, shard, description).await;
+    }
+
+    async fn register_output(collections: &dyn StorageCollections, shard: ShardId) {
+        let (id, _, desc) = binding(shard);
+        let mut description = CollectionDescription::for_other(desc, None);
+        description.data_source = DataSource::Introspection(
+            mz_storage_client::controller::IntrospectionType::StorageFrontierObservations,
+        );
+        register_description(collections, id, shard, description).await;
+    }
+
+    async fn register_description(
+        collections: &dyn StorageCollections,
+        id: GlobalId,
+        shard: ShardId,
+        description: CollectionDescription,
+    ) {
         collections
             .create_collections_for_bootstrap(
                 &StorageMetadata {
@@ -1284,11 +1311,87 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn output_progress_uses_registered_watcher_without_notifications() {
+        for read_only in [false, true] {
+            let registry = mz_ore::metrics::MetricsRegistry::new();
+            let (controller, collections, persist, peer) =
+                crate::tests::test_controller_with_peer(true, read_only, registry.clone()).await;
+            // Lease heartbeats must not be the mechanism repairing this gap.
+            controller
+                .persist
+                .cfg()
+                .set_reader_lease_duration(Duration::from_secs(3600));
+            let shard = ShardId::new();
+            register_output(collections.as_ref(), shard).await;
+            let mut output = Output::open(&persist, binding(shard)).await;
+            publish(&mut output, &Samples::new()).await;
+            let initial = output.observed_upper;
+            let key = ("u1".into(), ShardId::new().to_string());
+            let sample = Observation {
+                read: at(0),
+                write: at(9),
+            };
+            let mut publisher = Output::open(&peer, binding(shard)).await;
+            publish(&mut publisher, &BTreeMap::from([(key.clone(), sample)])).await;
+            let advanced = publisher.observed_upper;
+            assert!(advanced > initial);
+            let (id, _, _) = binding(shard);
+            // Only the real StorageCollections watcher can repair the observer's
+            // separate cache here. No observer-side snapshot or fresh upper read.
+            sample_at(collections.as_ref(), id, shard, u64::from(advanced)).await;
+            let upper_reads = || {
+                registry
+                    .gather()
+                    .into_iter()
+                    .find(|family| family.name() == "mz_persist_cmd_fetch_upper_count")
+                    .expect("upper read counter")
+                    .get_metric()[0]
+                    .get_counter()
+                    .value()
+            };
+            let reads = upper_reads();
+            assert!(
+                output
+                    .prepare(&Samples::new(), &NowFn::from(|| 0))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(upper_reads(), reads, "preparation uses existing progress");
+            assert_eq!(output.observed_upper, advanced);
+            assert_eq!(output.observed[&key], BTreeMap::from([(sample, 1)]));
+
+            publisher
+                .writer
+                .compare_and_append(
+                    Vec::<Update>::new(),
+                    Antichain::from_elem(advanced),
+                    Antichain::new(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while collections.collection_write_frontier(id, shard) != Some(Antichain::new()) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("registered watcher observes completion");
+            assert!(matches!(
+                output.prepare(&Samples::new(), &NowFn::from(|| 0)).await,
+                Err(PrepareError::Closed)
+            ));
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn actor_samples_on_notification_and_stops_on_drop() {
         tokio::time::timeout(Duration::from_secs(30), async {
             let (_controller, collections, persist) =
                 crate::tests::test_controller(true, false).await;
             let shard = ShardId::new();
+            register_output(collections.as_ref(), shard).await;
             let data_shard = ShardId::new();
             let (mut writer, _lease) = data(&persist, data_shard).await;
             register(collections.as_ref(), GlobalId::User(1), data_shard, false).await;

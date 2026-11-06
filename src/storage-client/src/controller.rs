@@ -383,18 +383,20 @@ pub struct CertifiedCollectionMetadata {
     pub compaction_bound: Option<Antichain<Timestamp>>,
 }
 
-/// Certifies exact storage bindings against a freshly fetched catalog prefix.
+/// Certifies exact storage bindings for shared frontier observations.
 ///
-/// Retirement callers must observe shared rows before invoking this method.
+/// Callers must observe shared rows before invoking this method and pass their
+/// exact bindings. Matching bindings and bounds may come from a cached committed
+/// prefix. Absence or mismatch requires a prefix freshly fetched after this call.
 /// Native observations follow committed binding admission, and a deleted exact
 /// `(GlobalId, ShardId)` binding must never be readmitted. Under that contract,
 /// absence or a different shard certifies retirement of the observed binding.
-/// An error never authorizes deletion.
+/// An error never authorizes deletion. This does not authorize data writes or reads.
 #[async_trait]
 pub trait CollectionMetadataCertifier: Debug + Send + Sync {
-    async fn collection_metadata_at_current(
+    async fn collection_metadata_for_observations(
         &self,
-        ids: &BTreeSet<GlobalId>,
+        bindings: &BTreeSet<(GlobalId, ShardId)>,
     ) -> Result<BTreeMap<GlobalId, CertifiedCollectionMetadata>, anyhow::Error>;
 }
 

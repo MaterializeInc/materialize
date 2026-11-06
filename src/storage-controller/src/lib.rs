@@ -4382,15 +4382,32 @@ mod tests {
         read_only: bool,
     ) -> (Controller, Arc<StorageCollectionsImpl>, PersistClient) {
         let registry = MetricsRegistry::new();
+        let (controller, collections, persist, _peer) =
+            test_controller_with_peer(replica_owned, read_only, registry).await;
+        (controller, collections, persist)
+    }
+
+    pub(super) async fn test_controller_with_peer(
+        replica_owned: bool,
+        read_only: bool,
+        registry: MetricsRegistry,
+    ) -> (
+        Controller,
+        Arc<StorageCollectionsImpl>,
+        PersistClient,
+        PersistClient,
+    ) {
         let location = PersistLocation {
             blob_uri: "mem://".parse().unwrap(),
             consensus_uri: "mem://".parse().unwrap(),
         };
         let mut config = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         config.critical_downgrade_interval = Duration::ZERO;
-        let cache = Arc::new(PersistClientCache::new(config, &registry, |_, _| {
-            PubSubClientConnection::noop()
-        }));
+        let mut cache =
+            PersistClientCache::new(config, &registry, |_, _| PubSubClientConnection::noop());
+        let peer = cache.open(location.clone()).await.unwrap();
+        cache.clear_state_cache();
+        let cache = Arc::new(cache);
         let persist = cache.open(location.clone()).await.unwrap();
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let context = ConnectionContext::for_tests(secrets_reader);
@@ -4427,7 +4444,7 @@ mod tests {
             Arc::<StorageCollectionsImpl>::clone(&collections),
         )
         .await;
-        (controller, collections, persist)
+        (controller, collections, persist, peer)
     }
 
     #[mz_ore::test(tokio::test)]

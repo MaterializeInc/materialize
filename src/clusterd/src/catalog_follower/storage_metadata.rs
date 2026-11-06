@@ -278,7 +278,7 @@ pub(super) async fn resolve(
     Ok(result)
 }
 
-/// Captures durable progress after the caller has acquired installation grants.
+/// Refreshes progress for a reconstruction batch whose observed uppers conflict with its grants.
 pub(super) async fn uppers(
     persist: &PersistClient,
     metadata: &BTreeMap<GlobalId, CollectionMetadata>,

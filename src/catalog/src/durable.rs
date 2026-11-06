@@ -455,6 +455,18 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
         CatalogError,
     >;
 
+    /// Returns matching bindings and bounds from an observed committed prefix.
+    /// Certifies uncertain absence/mismatch freshly, after the caller has seen
+    /// the supplied rows. This is observation metadata, not registration or read
+    /// authority. Does not drain updates awaiting projection application.
+    async fn collection_metadata_for_observations(
+        &mut self,
+        bindings: &BTreeSet<(GlobalId, ShardId)>,
+    ) -> Result<
+        BTreeMap<GlobalId, mz_storage_client::controller::CertifiedCollectionMetadata>,
+        CatalogError,
+    >;
+
     /// Listen and return all updates that are currently in the catalog.
     ///
     /// IMPORTANT: This excludes updates to storage usage.
@@ -496,6 +508,12 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
 
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp;
+
+    /// The latest locally observed upper, without a consensus read. This need
+    /// not be synchronized or applied to a catalog projection. Callers needing
+    /// freshness must certify it separately. Long-lived observers must drive
+    /// Persist's notification and fallback path.
+    fn observed_upper(&self) -> Timestamp;
 
     /// The exclusive upper already synchronized by this handle, without remote I/O.
     ///
