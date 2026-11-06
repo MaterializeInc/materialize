@@ -78,10 +78,7 @@ impl ReduceElision {
                     .value::<UniqueKeys>()
                     .expect("UniqueKeys required");
 
-                if input_keys.iter().any(|keys| {
-                    keys.iter()
-                        .all(|k| group_key.iter().any(|gk| gk.as_column() == Some(*k)))
-                }) {
+                if input_keys.is_unique_on(group_key.iter().filter_map(|gk| gk.as_column())) {
                     let map_scalars = aggregates
                         .iter()
                         .map(|a| a.on_unique(input_type))
