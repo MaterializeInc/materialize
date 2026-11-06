@@ -13,6 +13,7 @@ use std::fmt::Debug;
 use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType, Row, RowArena};
 
 use crate::scalar::func::variadic::And;
+use crate::scalar::optimizable::OptimizableExpr;
 use crate::{
     BinaryFunc, Eval, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
     UnmaterializableFunc, VariadicFunc, func,
@@ -493,36 +494,16 @@ pub trait Interpreter {
     fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary;
 
     /// Evaluate an entire expression, by delegating to the fine-grained methods on [Interpreter].
-    fn expr(&self, expr: &MirScalarExpr) -> Self::Summary {
-        match expr {
-            MirScalarExpr::Column(id, _name) => self.column(*id),
-            MirScalarExpr::Literal(value, col_type) => self.literal(value, col_type),
-            MirScalarExpr::CallUnmaterializable(func) => self.unmaterializable(func),
-            MirScalarExpr::CallUnary { func, expr } => {
-                let expr_range = self.expr(expr);
-                self.unary(func, expr_range)
-            }
-            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let expr1_range = self.expr(expr1);
-                let expr2_range = self.expr(expr2);
-                self.binary(func, expr1_range, expr2_range)
-            }
-            MirScalarExpr::CallVariadic { func, exprs } => {
-                let exprs: Vec<_> = exprs.into_iter().map(|e| self.expr(e)).collect();
-                self.variadic(func, exprs)
-            }
-            MirScalarExpr::If { cond, then, els } => {
-                let cond_range = self.expr(cond);
-                let then_range = self.expr(then);
-                let els_range = self.expr(els);
-                self.cond(cond_range, then_range, els_range)
-            }
-        }
+    fn expr<X: Interpretable>(&self, expr: &X) -> Self::Summary {
+        expr.interpret(self)
     }
 
     /// Specifically, this evaluates the map and filters stages of an MFP: summarize each of the
     /// map expressions, then `and` together all of the filters.
-    fn mfp_filter(&self, mfp: &MapFilterProject) -> Self::Summary {
+    fn mfp_filter<X: Interpretable + OptimizableExpr>(
+        &self,
+        mfp: &MapFilterProject<X>,
+    ) -> Self::Summary {
         let mfp_eval = MfpEval::new(self, mfp.input_arity, &mfp.expressions);
         // NB: self should not be used after this point!
         let predicates = mfp
@@ -535,7 +516,10 @@ pub trait Interpreter {
 
     /// Similar to [Self::mfp_filter], but includes the additional temporal filters that have been
     /// broken out.
-    fn mfp_plan_filter(&self, plan: &MfpPlan) -> Self::Summary {
+    fn mfp_plan_filter<X: Interpretable + OptimizableExpr>(
+        &self,
+        plan: &MfpPlan<X>,
+    ) -> Self::Summary {
         let mfp_eval = MfpEval::new(self, plan.mfp.input_arity, &plan.mfp.expressions);
         // NB: self should not be used after this point!
         let mut results: Vec<_> = plan
@@ -559,6 +543,44 @@ pub trait Interpreter {
     }
 }
 
+/// A scalar expression an [Interpreter] can summarize.
+///
+/// Implemented by `MirScalarExpr`, and by the LIR scalar expression in
+/// `mz_compute_types`, so the interpreter runs over a plan in either form.
+pub trait Interpretable {
+    /// Summarize `self` by delegating each node to `interpreter`.
+    fn interpret<I: Interpreter + ?Sized>(&self, interpreter: &I) -> I::Summary;
+}
+
+impl Interpretable for MirScalarExpr {
+    fn interpret<I: Interpreter + ?Sized>(&self, interpreter: &I) -> I::Summary {
+        match self {
+            MirScalarExpr::Column(id, _name) => interpreter.column(*id),
+            MirScalarExpr::Literal(value, col_type) => interpreter.literal(value, col_type),
+            MirScalarExpr::CallUnmaterializable(func) => interpreter.unmaterializable(func),
+            MirScalarExpr::CallUnary { func, expr } => {
+                let expr_range = expr.interpret(interpreter);
+                interpreter.unary(func, expr_range)
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                let expr1_range = expr1.interpret(interpreter);
+                let expr2_range = expr2.interpret(interpreter);
+                interpreter.binary(func, expr1_range, expr2_range)
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                let exprs: Vec<_> = exprs.iter().map(|e| e.interpret(interpreter)).collect();
+                interpreter.variadic(func, exprs)
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                let cond_range = cond.interpret(interpreter);
+                let then_range = then.interpret(interpreter);
+                let els_range = els.interpret(interpreter);
+                interpreter.cond(cond_range, then_range, els_range)
+            }
+        }
+    }
+}
+
 /// Wrap another interpreter, but tack a few extra columns on at the end. An internal implementation
 /// detail of `eval_mfp` and `eval_mfp_plan`.
 pub(crate) struct MfpEval<'a, E: Interpreter + ?Sized> {
@@ -568,7 +590,11 @@ pub(crate) struct MfpEval<'a, E: Interpreter + ?Sized> {
 }
 
 impl<'a, E: Interpreter + ?Sized> MfpEval<'a, E> {
-    pub(crate) fn new(evaluator: &'a E, input_arity: usize, expressions: &[MirScalarExpr]) -> Self {
+    pub(crate) fn new<X: Interpretable>(
+        evaluator: &'a E,
+        input_arity: usize,
+        expressions: &[X],
+    ) -> Self {
         let mut mfp_eval = MfpEval {
             evaluator,
             input_arity,
@@ -1199,7 +1225,10 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     /// predicates and bounds, so the AND result misses the expression's
     /// `fallible` flag and persist filter pushdown can wrongly discard a part
     /// that actually produces error rows. See database-issues#9656.
-    fn mfp_filter(&self, mfp: &MapFilterProject) -> Self::Summary {
+    fn mfp_filter<X: Interpretable + OptimizableExpr>(
+        &self,
+        mfp: &MapFilterProject<X>,
+    ) -> Self::Summary {
         let mfp_eval = MfpEval::new(self, mfp.input_arity, &mfp.expressions);
         let predicates = mfp
             .predicates
@@ -1213,7 +1242,10 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         result
     }
 
-    fn mfp_plan_filter(&self, plan: &MfpPlan) -> Self::Summary {
+    fn mfp_plan_filter<X: Interpretable + OptimizableExpr>(
+        &self,
+        plan: &MfpPlan<X>,
+    ) -> Self::Summary {
         let mfp_eval = MfpEval::new(self, plan.mfp.input_arity, &plan.mfp.expressions);
         let mut results: Vec<_> = plan
             .mfp

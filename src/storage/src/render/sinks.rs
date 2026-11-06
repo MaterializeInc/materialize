@@ -16,6 +16,7 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::SpanOf;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
+use mz_expr::MfpPlan;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_row_spine::{ArcOrdValBatcher, ArcOrdValSpine};
@@ -73,7 +74,7 @@ pub(crate) fn render_sink<'scope>(
         let sink_render = get_sink_render_for(&sink.connection);
 
         let (ok_collection, err_collection, persist_tokens) =
-            persist_source::persist_source::<_, persist_source::RowVecBuilder<Timestamp>>(
+            persist_source::persist_source::<_, persist_source::RowVecBuilder<Timestamp>, _>(
                 scope,
                 sink.from,
                 Arc::clone(&storage_state.persist_clients),
@@ -83,7 +84,7 @@ pub(crate) fn render_sink<'scope>(
                 Some(sink.as_of.clone()),
                 snapshot_mode,
                 timely::progress::Antichain::new(),
-                None,
+                None::<&mut MfpPlan>,
                 None,
                 async {},
                 error_handler,
