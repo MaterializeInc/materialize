@@ -1614,8 +1614,8 @@ enum DdlInspection {
 impl DdlInspection {
     fn into_op(self) -> crate::catalog::Op {
         match self {
-            Self::CatalogResult(command) => crate::catalog::Op::CatalogResult(command),
-            Self::Description(command) => crate::catalog::Op::Description(command),
+            Self::CatalogResult(command) => crate::catalog::Op::Command(command),
+            Self::Description(command) => crate::catalog::Op::Command(command),
         }
     }
 }

@@ -2386,14 +2386,7 @@ impl Coordinator {
                         // Statements without replay require their original catalog revision.
                         if *revision != self.catalog().transient_revision()
                             && (*revision_fenced
-                                || !ops.iter().all(|op| {
-                                    matches!(
-                                        op,
-                                        catalog::Op::RenameCommand(_)
-                                            | catalog::Op::CatalogResult(_)
-                                            | catalog::Op::Description(_)
-                                    )
-                                }))
+                                || !ops.iter().all(|op| matches!(op, catalog::Op::Command(_))))
                         {
                             return Err(AdapterError::DDLTransactionRace);
                         }

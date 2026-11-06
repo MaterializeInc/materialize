@@ -27,6 +27,17 @@ use crate::catalog::{CatalogState, Op};
 use crate::session::SessionMeta;
 use crate::{AdapterError, AdapterNotice};
 
+/// A catalog command that rechecks its recorded outcome against the current state.
+pub trait CatalogCommand: std::fmt::Debug + Send + Sync {
+    /// Rechecks the command and returns its catalog writes in execution order.
+    ///
+    /// Validates against `state`, including authorization where applicable, and
+    /// rejects changes to the outcome recorded for the client.
+    /// The caller must apply all returned writes before executing the next command.
+    /// Commands that only validate an outcome return no writes.
+    fn execute(&self, state: &CatalogState) -> Result<Vec<Op>, AdapterError>;
+}
+
 /// A rename or swap command.
 #[derive(Debug)]
 pub struct RenameCommand {
@@ -86,12 +97,10 @@ impl RenameCommand {
     pub(crate) fn object_type(&self) -> ObjectType {
         self.outcome.object_type
     }
+}
 
-    /// Returns writes for `state` after rechecking planning and authorization.
-    ///
-    /// Rejects changes to the object type, whether the command is a no-op, or
-    /// the planning notices. The caller must apply the returned writes.
-    pub(super) fn execute(&self, state: &CatalogState) -> Result<Vec<Op>, AdapterError> {
+impl CatalogCommand for RenameCommand {
+    fn execute(&self, state: &CatalogState) -> Result<Vec<Op>, AdapterError> {
         let (plan, notices) = plan_command(state, &self.statement, &self.params, &self.session)?;
         let (ops, object_type) = rename_ops(&plan);
         let outcome = RenameOutcome {
@@ -174,17 +183,6 @@ impl CatalogResultCommand {
         Ok((command, plan))
     }
 
-    /// Rechecks planning and authorization and requires the recorded row and
-    /// notices.
-    pub(in crate::catalog) fn execute(&self, state: &CatalogState) -> Result<(), AdapterError> {
-        let (plan, notices) = plan_command(state, &self.statement, &self.params, &self.session)?;
-        if Self::result(&plan)? == self.row && notices == self.notices {
-            Ok(())
-        } else {
-            Err(AdapterError::DDLTransactionOutcomeChanged)
-        }
-    }
-
     /// Returns the row to send to the client, or an error for an unsupported
     /// plan.
     pub(crate) fn result(plan: &Plan) -> Result<mz_repr::Row, AdapterError> {
@@ -193,6 +191,17 @@ impl CatalogResultCommand {
             _ => Err(AdapterError::Unsupported(
                 "non-deterministic catalog result",
             )),
+        }
+    }
+}
+
+impl CatalogCommand for CatalogResultCommand {
+    fn execute(&self, state: &CatalogState) -> Result<Vec<Op>, AdapterError> {
+        let (plan, notices) = plan_command(state, &self.statement, &self.params, &self.session)?;
+        if Self::result(&plan)? == self.row && notices == self.notices {
+            Ok(Vec::new())
+        } else {
+            Err(AdapterError::DDLTransactionOutcomeChanged)
         }
     }
 }
@@ -229,16 +238,17 @@ impl DescriptionCommand {
             expected,
         }
     }
+}
 
-    /// Requires the statement to retain its recorded description in `state`.
-    pub(in crate::catalog) fn execute(&self, state: &CatalogState) -> Result<(), AdapterError> {
+impl CatalogCommand for DescriptionCommand {
+    fn execute(&self, state: &CatalogState) -> Result<Vec<Op>, AdapterError> {
         let (tx, _rx) = mpsc::unbounded_channel();
         let catalog = state.for_session_metadata(&self.session, tx);
         let (statement, _) = mz_sql::names::resolve(&catalog, self.statement.clone())?;
         let current =
             mz_sql::plan::describe(self.session.pcx(), &catalog, statement, &self.param_types)?;
         if current == self.expected {
-            Ok(())
+            Ok(Vec::new())
         } else {
             Err(AdapterError::DDLTransactionOutcomeChanged)
         }
