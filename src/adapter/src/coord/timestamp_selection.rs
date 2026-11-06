@@ -654,7 +654,7 @@ impl Coordinator {
     /// The caller must perform the `read_ts()` round-trip off the coordinator
     /// loop, in a spawned task. The oracle backing store can be slow, so doing
     /// the read inline would wedge every other session until it returns. See
-    /// `subscribe_linearize_timestamp` for a use of this helper.
+    /// `explain_timestamp_linearize_timestamp` for a use of this helper.
     pub(crate) fn linearized_read_ts_oracle(
         &self,
         session: &Session,

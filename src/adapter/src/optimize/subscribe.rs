@@ -116,6 +116,10 @@ impl Optimizer {
         self.sink_id
     }
 
+    pub fn config(&self) -> &OptimizerConfig {
+        &self.config
+    }
+
     /// Optimizes a subscribe over an already-lowered MIR expression, for
     /// callers that build their own MIR (such as the frontend read-then-write
     /// path, which applies the mutation in MIR).
