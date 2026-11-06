@@ -2004,7 +2004,13 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Table) => TABLE_ACL_MODE,
         SystemObjectType::Object(ObjectType::View) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::MaterializedView) => AclMode::SELECT,
-        SystemObjectType::Object(ObjectType::Assertion) => AclMode::SELECT,
+        // MVP: assertions are system-maintained objects with no user-grantable
+        // privileges (owner + superuser only). Violations are surfaced through
+        // mz_internal relations, not via SELECT on the assertion object itself.
+        // Fine-grained SELECT on violations is deferred to a later phase. This
+        // matches `plan_alter_default_privileges` in plan/statement/acl.rs, which
+        // reports that assertions do not have privileges.
+        SystemObjectType::Object(ObjectType::Assertion) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
@@ -2036,10 +2042,12 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
-        | ObjectType::Assertion
         | ObjectType::Source => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
-        ObjectType::Sink
+        // MVP: assertions have no user-grantable privileges (see
+        // `all_object_privileges` and plan/statement/acl.rs).
+        ObjectType::Assertion
+        | ObjectType::Sink
         | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
