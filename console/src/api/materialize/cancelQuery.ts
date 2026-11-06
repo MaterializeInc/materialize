@@ -10,7 +10,7 @@
 import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
-import { executeSqlV2 } from "~/api/materialize";
+import { executeSqlV2, rawNumber } from "~/api/materialize";
 
 import { queryBuilder } from "./db";
 import { assertAtLeastOneRow } from "./NoRowsError";
@@ -26,7 +26,7 @@ export function buildGetConnectionIdFromSessionIdQuery(sessionId: string) {
 export function buildCancelQuery(connectionId: string) {
   return sql<{
     pg_cancel_backend: boolean;
-  }>`SELECT pg_cancel_backend(${sql.raw(connectionId)})`;
+  }>`SELECT pg_cancel_backend(${rawNumber(connectionId)})`;
 }
 
 export type CancelQueryParams =

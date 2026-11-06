@@ -7833,6 +7833,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"eslint-plugin-no-unsanitized@npm:^4.1.5":
+  version: 4.1.5
+  resolution: "eslint-plugin-no-unsanitized@npm:4.1.5"
+  peerDependencies:
+    eslint: ^9 || ^10
+  checksum: 10c0/c3dc2636ec698d4e4b7bc5bb744e8bf24975dc513b5dc9aaf616df5a32392ae5f5eaed91050b8a647cfa1ec717edea6e870d0418887d62a8afa8f1f5fcc1ed0c
+  languageName: node
+  linkType: hard
+
 "eslint-plugin-prettier@npm:^5.5.7":
   version: 5.5.7
   resolution: "eslint-plugin-prettier@npm:5.5.7"
@@ -10728,6 +10737,7 @@ __metadata:
     eslint: "npm:^10.14.0"
     eslint-config-prettier: "npm:^10.1.8"
     eslint-plugin-jest-formatting: "npm:^3.1.0"
+    eslint-plugin-no-unsanitized: "npm:^4.1.5"
     eslint-plugin-prettier: "npm:^5.5.7"
     eslint-plugin-react: "npm:^7.37.5"
     eslint-plugin-react-hooks: "npm:^7.1.1"

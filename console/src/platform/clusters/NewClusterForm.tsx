@@ -26,6 +26,7 @@ import { useSegment } from "~/analytics/segment";
 import {
   CATALOG_SERVER_CLUSTER,
   queryBuilder,
+  rawNumber,
   useSqlLazy,
 } from "~/api/materialize";
 import { escapedLiteral as lit } from "~/api/materialize";
@@ -92,9 +93,9 @@ const NewClusterForm = () => {
     queryBuilder: ({ name, size, replicas }: FormState) => {
       const createClusterStatement = sql`CREATE CLUSTER ${sql.id(
         name,
-      )} SIZE = ${lit(size)}, REPLICATION FACTOR = ${sql.raw(
-        replicas.toString(),
-      )}`.compile(queryBuilder);
+      )} SIZE = ${lit(size)}, REPLICATION FACTOR = ${rawNumber(replicas)}`.compile(
+        queryBuilder,
+      );
       const selectClusterIdQuery = queryBuilder
         .selectFrom("mz_clusters")
         .where("name", "=", name)

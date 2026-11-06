@@ -15,14 +15,13 @@ import {
   executeSqlV2,
   IPostgresInterval,
   queryBuilder,
+  rawNumber,
 } from "~/api/materialize";
 import { buildSourceExportsQuery } from "~/api/materialize/expressionBuilders";
 
 import { MAINTAINED_OBJECT_TYPES } from "./constants";
 
-const MAINTAINED_OBJECT_TYPES_SQL = sql.raw(
-  MAINTAINED_OBJECT_TYPES.map((t) => `'${t}'`).join(", "),
-);
+const MAINTAINED_OBJECT_TYPES_SQL = sql.join(MAINTAINED_OBJECT_TYPES.map(lit));
 
 /** `mz_objects` reports a subsource as `source`. Needs `o` and `se` joined. */
 const EXPORT_OBJECT_TYPE_SQL = sql`CASE
@@ -67,8 +66,8 @@ const perObjectLagCteAtProbePeak = (
   lookbackMinutes: number,
   bucketSizeMs: number,
 ) => {
-  const lookback = sql.raw(`${lookbackMinutes}`);
-  const bucketMs = sql.raw(`${bucketSizeMs}`);
+  const lookback = rawNumber(lookbackMinutes);
+  const bucketMs = rawNumber(bucketSizeMs);
   // `DISTINCT ON (object_id)` picks the probe's peak-lag bucket;
   // `LIMIT` isn't reliable inside `WITH MUTUALLY RECURSIVE`. The
   // `::timestamptz` cast pins the CTE column type.
@@ -102,7 +101,7 @@ const perObjectLagCteAtProbePeak = (
  */
 const perObjectLagCteAtTime = (timestamp: Date, bucketSizeMs: number) => {
   const tsLit = sql.lit(timestamp.toISOString());
-  const bucketMs = sql.raw(`${bucketSizeMs}`);
+  const bucketMs = rawNumber(bucketSizeMs);
   return sql`per_object_lag(object_id text, lag interval) AS (
     SELECT DISTINCT ON (object_id) object_id, lag
     FROM mz_wallclock_global_lag_recent_history
@@ -138,7 +137,7 @@ const buildCriticalPathQuery = (
   lookbackMinutes: number,
   perObjectLag: RawBuilder<unknown>,
 ): CompiledQuery<CriticalPathRow> => {
-  const lookback = sql.raw(`${lookbackMinutes}`);
+  const lookback = rawNumber(lookbackMinutes);
   return sql<CriticalPathRow>`
 WITH MUTUALLY RECURSIVE
   -- mz_materialization_dependencies covers sinks (which read from MVs/sources)

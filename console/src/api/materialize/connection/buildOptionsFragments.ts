@@ -9,7 +9,12 @@
 
 import { sql } from "kysely";
 
-import { buildFullyQualifiedObjectName, escapedLiteral as lit } from "..";
+import {
+  buildFullyQualifiedObjectName,
+  escapedLiteral as lit,
+  rawKeyword,
+  rawNumber,
+} from "..";
 import { Secret, TextSecret } from "./types";
 
 /**
@@ -24,15 +29,15 @@ export function buildOptionsFragments(
     .map(([key, value]) => {
       // PORT is an integer and we shouldn't have quotations around it
       if (key === "PORT" && typeof value === "string") {
-        return sql`${sql.raw(key)} ${sql.raw(value)}`;
+        return sql`${rawKeyword(key)} ${rawNumber(value.trim())}`;
       }
 
       if (typeof value === "string") {
-        return sql`${sql.raw(key)} ${lit(value)}`;
+        return sql`${rawKeyword(key)} ${lit(value)}`;
       }
 
       if ("secretTextValue" in value!) {
-        return sql`${sql.raw(key)} ${lit(value.secretTextValue)}`;
+        return sql`${rawKeyword(key)} ${lit(value.secretTextValue)}`;
       }
 
       if ("secretName" in value!) {
@@ -41,7 +46,7 @@ export function buildOptionsFragments(
           databaseName: value.databaseName,
           schemaName: value.schemaName,
         });
-        return sql`${sql.raw(key)} SECRET ${secret}`;
+        return sql`${rawKeyword(key)} SECRET ${secret}`;
       }
 
       return null;

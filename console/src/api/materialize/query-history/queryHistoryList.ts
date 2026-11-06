@@ -15,7 +15,9 @@ import { z } from "zod";
 import {
   APPLICATION_NAME,
   escapedLiteral as lit,
+  rawKeyword,
   rawLimit,
+  rawNumber,
 } from "~/api/materialize";
 import { queryBuilder } from "~/api/materialize/db";
 import { executeSqlV2 } from "~/api/materialize/executeSqlV2";
@@ -400,7 +402,7 @@ export function buildQueryHistoryListQuery({
     qb = qb.where(
       (eb) => eb("mal.finished_at", "-", eb.ref("mal.began_at")),
       ">=",
-      sql<Date>`'${sql.raw(`${minDuration}`)} MILLISECONDS'`,
+      sql<Date>`'${rawNumber(minDuration)} MILLISECONDS'`,
     );
   }
 
@@ -408,7 +410,7 @@ export function buildQueryHistoryListQuery({
     qb = qb.where(
       (eb) => eb("mal.finished_at", "-", eb.ref("mal.began_at")),
       "<=",
-      sql<Date>`'${sql.raw(`${maxDuration}`)} MILLISECONDS'`,
+      sql<Date>`'${rawNumber(maxDuration)} MILLISECONDS'`,
     );
   }
 
@@ -427,7 +429,7 @@ export function buildQueryHistoryListQuery({
           return eb.ref("mal.result_size");
       }
     },
-    sql`${sql.raw(sortOrder)} NULLS LAST`,
+    sql`${rawKeyword(sortOrder)} NULLS LAST`,
   );
 
   return rawLimit(qb, LIST_LIMIT);

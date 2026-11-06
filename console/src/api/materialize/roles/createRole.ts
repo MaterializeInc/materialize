@@ -10,7 +10,10 @@
 import { QueryKey } from "@tanstack/react-query";
 import { CompiledQuery, sql } from "kysely";
 
-import { buildFullyQualifiedSchemaIdentifier } from "~/api/materialize";
+import {
+  buildFullyQualifiedSchemaIdentifier,
+  rawKeyword,
+} from "~/api/materialize";
 import { queryBuilder } from "~/api/materialize/db";
 import { executeSqlV2 } from "~/api/materialize/executeSqlV2";
 import {
@@ -53,7 +56,6 @@ export function buildPrivilegeGrantQuery({
   grant: CreateRoleFormState["privileges"][0];
   roleName: string;
 }): CompiledQuery {
-  const privilegeList = grant.privileges.join(", ");
   const objectTypeName =
     GRANT_SQL_OBJECT_TYPES[grant.objectType as ObjectTypeId];
 
@@ -65,7 +67,7 @@ export function buildPrivilegeGrantQuery({
       })
     : sql.id(grant.objectName);
 
-  return sql`GRANT ${sql.raw(privilegeList)} ON ${sql.raw(objectTypeName)} ${objectNameSql} TO ${sql.id(roleName)}`.compile(
+  return sql`GRANT ${sql.join(grant.privileges.map(rawKeyword))} ON ${rawKeyword(objectTypeName)} ${objectNameSql} TO ${sql.id(roleName)}`.compile(
     queryBuilder,
   );
 }

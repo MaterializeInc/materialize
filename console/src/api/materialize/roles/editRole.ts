@@ -10,7 +10,10 @@
 import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
-import { buildFullyQualifiedSchemaIdentifier } from "~/api/materialize";
+import {
+  buildFullyQualifiedSchemaIdentifier,
+  rawKeyword,
+} from "~/api/materialize";
 import { queryBuilder } from "~/api/materialize/db";
 import { executeSqlV2 } from "~/api/materialize/executeSqlV2";
 import {
@@ -61,7 +64,6 @@ export function buildRevokePrivilegeQuery({
   grant: PrivilegeGrant;
   roleName: string;
 }) {
-  const privilegeList = grant.privileges.join(", ");
   const objectTypeName =
     GRANT_SQL_OBJECT_TYPES[grant.objectType as ObjectTypeId];
 
@@ -73,7 +75,7 @@ export function buildRevokePrivilegeQuery({
       })
     : sql.id(grant.objectName);
 
-  return sql`REVOKE ${sql.raw(privilegeList)} ON ${sql.raw(objectTypeName)} ${objectNameSql} FROM ${sql.id(roleName)}`.compile(
+  return sql`REVOKE ${sql.join(grant.privileges.map(rawKeyword))} ON ${rawKeyword(objectTypeName)} ${objectNameSql} FROM ${sql.id(roleName)}`.compile(
     queryBuilder,
   );
 }

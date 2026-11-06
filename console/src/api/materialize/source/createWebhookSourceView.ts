@@ -15,10 +15,19 @@ import {
   escapedLiteral as lit,
   executeSqlV2,
   queryBuilder,
+  rawKeyword,
+  rawNumber,
 } from "~/api/materialize";
-import { isDate, isNumber, isObject } from "~/util";
+import { isDate, isObject } from "~/util";
 
 import { Source } from "./sourceList";
+
+// Not `isNumber`, which also accepts keys like "-1" or "1e3". Those are object
+// keys, and only the plain-digit indices from `handleArray` address arrays.
+const JSON_ARRAY_INDEX_REGEX = /^\d+$/;
+
+const isJsonArrayIndex = (key: string | number) =>
+  JSON_ARRAY_INDEX_REGEX.test(String(key));
 
 type ColumnDef = [
   // name
@@ -157,22 +166,22 @@ export function createWebhookSourceViewStatement(
       parents
         .slice(columnName ? 1 : 0, parents.length - 1)
         .forEach((parent) => {
-          path = !isNumber(parent)
-            ? sql`${path}->${lit(parent)}`
-            : sql`${path}->${sql.raw(parent.toString())}`;
+          path = !isJsonArrayIndex(parent)
+            ? sql`${path}->${lit(String(parent))}`
+            : sql`${path}->${rawNumber(parent)}`;
         });
 
       // Determine the final part of the path
-      const finalPart = !isNumber(name)
-        ? sql`${path}->>${lit(name)}`
-        : sql`${path}->${sql.raw(name.toString())}`;
+      const finalPart = !isJsonArrayIndex(name)
+        ? sql`${path}->>${lit(String(name))}`
+        : sql`${path}->${rawNumber(name)}`;
 
       // Wrap the final part in parentheses if casting is applied
       let sqlItem = cast
-        ? sql`(${finalPart})::${sql.raw(cast)}`
+        ? sql`(${finalPart})::${rawKeyword(cast)}`
         : sql`${finalPart}`;
       if (wrapping_function !== "") {
-        sqlItem = sql`${sql.raw(wrapping_function)}(${sqlItem})`;
+        sqlItem = sql`${rawKeyword(wrapping_function)}(${sqlItem})`;
       }
 
       // Construct column alias without redundant name appending
@@ -184,7 +193,7 @@ export function createWebhookSourceViewStatement(
   );
   const joined = sql.join(sqlParts, sql`,\n    `);
 
-  return sql`CREATE ${sql.raw(type)} ${fullyQualifiedViewName} AS
+  return sql`CREATE ${rawKeyword(type)} ${fullyQualifiedViewName} AS
   SELECT
     ${joined}
   FROM

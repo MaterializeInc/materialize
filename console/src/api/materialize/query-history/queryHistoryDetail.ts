@@ -10,6 +10,7 @@
 import { QueryKey } from "@tanstack/react-query";
 import { InferResult, sql } from "kysely";
 
+import { rawNumber } from "~/api/materialize";
 import { queryBuilder } from "~/api/materialize/db";
 import { executeSqlV2 } from "~/api/materialize/executeSqlV2";
 
@@ -94,7 +95,7 @@ export function buildStatementLifecycleQuery({
     .where(
       "occurred_at",
       ">=",
-      sql.raw<Date>(`now() - INTERVAL '${MAX_TIME_SPAN_HOURS} hours'`),
+      sql<Date>`now() - INTERVAL '${rawNumber(MAX_TIME_SPAN_HOURS)} hours'`,
     );
 }
 

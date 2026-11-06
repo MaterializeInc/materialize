@@ -466,7 +466,7 @@ describe("QueryHistoryDetail", () => {
           sessionId: MOCK_QUERY_INFO.sessionId,
         }),
         results: mapKyselyToTabular({
-          rows: [{ connection_id: "some-connection-id" }],
+          rows: [{ connection_id: "42" }],
           columns: [buildColumn({ name: "connection_id" })],
         }),
       }),
@@ -523,7 +523,7 @@ describe("QueryHistoryDetail", () => {
           sessionId: MOCK_QUERY_INFO.sessionId,
         }),
         results: mapKyselyToTabular({
-          rows: [{ connection_id: "some-connection-id" }],
+          rows: [{ connection_id: "42" }],
           columns: [buildColumn({ name: "connection_id" })],
         }),
       }),

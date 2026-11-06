@@ -12,6 +12,7 @@ import { sql } from "kysely";
 import {
   buildFullyQualifiedObjectName,
   escapedLiteral as lit,
+  rawKeyword,
 } from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/useConnectorClusters";
 import { Connection } from "~/api/materialize/connection/useConnections";
@@ -76,7 +77,7 @@ function createFormatSpecStatement(
     )}`;
   }
 
-  return sql`FORMAT ${sql.raw(format.toUpperCase())}${formatSpec}`;
+  return sql`FORMAT ${rawKeyword(format.toUpperCase())}${formatSpec}`;
 }
 
 const createKafkaSourceStatement = (params: CreateKafkaSourceParameters) => {
@@ -93,7 +94,7 @@ IN CLUSTER ${sql.id(params.cluster?.name)}
 FROM KAFKA CONNECTION ${connectionName} (TOPIC ${lit(params.topic)})
 KEY ${createFormatSpecStatement(params.keyFormat, params.formatConnection)}
 VALUE ${createFormatSpecStatement(params.valueFormat, params.formatConnection)}
-ENVELOPE ${sql.raw(params.envelope.toUpperCase())};`;
+ENVELOPE ${rawKeyword(params.envelope.toUpperCase())};`;
 };
 
 export default createKafkaSourceStatement;

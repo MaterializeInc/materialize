@@ -106,7 +106,7 @@ export function buildWhereConditions(expressions: Array<undefined | string>) {
 }
 
 /**
- * Adds a limit clause to the end of a query.
+ * Sets a query's limit clause.
  * Materialize does not support parameters in the limit clause currently, so we have to
  * hard code the limit value as a work around.
  * https://github.com/MaterializeInc/materialize/issues/19867
@@ -115,7 +115,36 @@ export function rawLimit<DB, TB extends keyof DB, O>(
   query: SelectQueryBuilder<DB, TB, O>,
   value: number,
 ) {
-  return query.modifyEnd(sql`limit ${sql.raw(value.toString())}`);
+  return query.limit(sql.lit(value));
+}
+
+const UNSIGNED_NUMBER_REGEX = /^\d+(\.\d+)?$/;
+const SQL_KEYWORD_REGEX = /^[A-Za-z_][A-Za-z0-9_ ]*$/;
+
+/**
+ * Inlines a non-negative number where SQL can't take a parameter. Throws unless
+ * the value renders as an unsigned decimal. Accepts strings because form inputs
+ * and the SQL API hand numbers back as strings.
+ */
+export function rawNumber(value: number | bigint | string) {
+  const text = String(value);
+  if (!UNSIGNED_NUMBER_REGEX.test(text)) {
+    throw new Error(`Expected a non-negative number, got "${text}"`);
+  }
+  // eslint-disable-next-line no-restricted-syntax -- validated above
+  return sql.raw<number>(text);
+}
+
+/**
+ * Inlines a SQL keyword such as an object type or sort order. Throws unless the
+ * value is only words and spaces, so it can't close a quote or end the statement.
+ */
+export function rawKeyword(value: string) {
+  if (!SQL_KEYWORD_REGEX.test(value)) {
+    throw new Error(`Expected a SQL keyword, got "${value}"`);
+  }
+  // eslint-disable-next-line no-restricted-syntax -- validated above
+  return sql.raw(value);
 }
 
 export function createNamespace(

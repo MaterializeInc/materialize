@@ -14,6 +14,7 @@ import js from "@eslint/js";
 import pluginQuery from "@tanstack/eslint-plugin-query";
 import { defineConfig } from "eslint/config";
 import jestFormatting from "eslint-plugin-jest-formatting";
+import noUnsanitized from "eslint-plugin-no-unsanitized";
 import prettierRecommended from "eslint-plugin-prettier/recommended";
 import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
@@ -25,6 +26,9 @@ import tseslint from "typescript-eslint";
 
 const subscribeOptionsMessage =
   "Declare subscribe options at module scope; an inline object restarts the SUBSCRIBE session on every render.";
+
+const sqlRawMessage =
+  "sql.raw splices its argument into the query unescaped. Use rawNumber or rawKeyword from ~/api/materialize, sql.id for identifiers, or escapedLiteral for strings.";
 
 export default defineConfig([
   includeIgnoreFile(
@@ -52,6 +56,7 @@ export default defineConfig([
   tseslint.configs.recommended,
   prettierRecommended,
   reactHooks.configs.flat.recommended,
+  noUnsanitized.configs.recommended,
   {
     ...react.configs.flat.recommended,
     // eslint-plugin-react still calls context methods that ESLint 10 removed
@@ -98,7 +103,16 @@ export default defineConfig([
             "CallExpression[callee.name='useGlobalSubscribeCollection'] > ObjectExpression",
           message: subscribeOptionsMessage,
         },
+        {
+          selector:
+            "CallExpression[callee.object.name='sql'][callee.property.name='raw']:not([arguments.0.type='Literal']):not([arguments.0.type='TemplateLiteral'][arguments.0.expressions.length=0])",
+          message: sqlRawMessage,
+        },
       ],
+      "no-eval": "error",
+      "no-implied-eval": "error",
+      "no-new-func": "error",
+      "react/no-danger": "error",
       "@typescript-eslint/no-shadow": "error",
       "@typescript-eslint/ban-ts-comment": "off",
       "@typescript-eslint/explicit-module-boundary-types": "off",
