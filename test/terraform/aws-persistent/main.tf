@@ -258,7 +258,7 @@ module "database" {
 
   name_prefix               = var.name_prefix
   postgres_version          = "15"
-  instance_class            = "db.t3.micro"
+  instance_class            = "db.t3.large"
   allocated_storage         = 20
   max_allocated_storage     = 100
   database_name             = "materialize"
