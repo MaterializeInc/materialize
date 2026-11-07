@@ -1628,7 +1628,8 @@ fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
             non_nulls: Diff::ZERO,
         },
         AggregateFunc::SumNumeric => Accum::Numeric {
-            accum: OrderedNumericAgg(NumericAgg::zero()),
+            integral: OrderedNumericAgg(NumericAgg::zero()),
+            fractional: OrderedNumericAgg(NumericAgg::zero()),
             pos_infs: Diff::ZERO,
             neg_infs: Diff::ZERO,
             nans: Diff::ZERO,
@@ -1774,23 +1775,32 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
         }
         AggregateFunc::SumNumeric => match datum {
             Datum::Numeric(n) => {
-                let (accum, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
+                let zero = NumericAgg::zero();
+                let (integral, fractional, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
                     if n.0.is_negative() {
-                        (NumericAgg::zero(), Diff::ZERO, Diff::ONE, Diff::ZERO)
+                        (zero, zero, Diff::ZERO, Diff::ONE, Diff::ZERO)
                     } else {
-                        (NumericAgg::zero(), Diff::ONE, Diff::ZERO, Diff::ZERO)
+                        (zero, zero, Diff::ONE, Diff::ZERO, Diff::ZERO)
                     }
                 } else if n.0.is_nan() {
-                    (NumericAgg::zero(), Diff::ZERO, Diff::ZERO, Diff::ONE)
+                    (zero, zero, Diff::ZERO, Diff::ZERO, Diff::ONE)
                 } else {
                     // Take a narrow decimal (datum) into a wide decimal
-                    // (aggregator).
+                    // (aggregator) and split it. `rem` truncates the quotient,
+                    // so the fractional part carries the sign of `n`.
                     let mut cx_agg = numeric::cx_agg();
-                    (cx_agg.to_width(n.0), Diff::ZERO, Diff::ZERO, Diff::ZERO)
+                    let mut integral = cx_agg.to_width(n.0);
+                    let mut fractional = integral;
+                    cx_agg.rem(&mut fractional, &NumericAgg::from(1));
+                    cx_agg.sub(&mut integral, &fractional);
+                    cx_agg.reduce(&mut integral);
+                    cx_agg.reduce(&mut fractional);
+                    (integral, fractional, Diff::ZERO, Diff::ZERO, Diff::ZERO)
                 };
 
                 Accum::Numeric {
-                    accum: OrderedNumericAgg(accum),
+                    integral: OrderedNumericAgg(integral),
+                    fractional: OrderedNumericAgg(fractional),
                     pos_infs,
                     neg_infs,
                     nans,
@@ -1798,7 +1808,8 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                 }
             }
             Datum::Null => Accum::Numeric {
-                accum: OrderedNumericAgg(NumericAgg::zero()),
+                integral: OrderedNumericAgg(NumericAgg::zero()),
+                fractional: OrderedNumericAgg(NumericAgg::zero()),
                 pos_infs: Diff::ZERO,
                 neg_infs: Diff::ZERO,
                 nans: Diff::ZERO,
@@ -1982,15 +1993,23 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
             (
                 AggregateFunc::SumNumeric,
                 Accum::Numeric {
-                    accum,
+                    integral,
+                    fractional,
                     pos_infs,
                     neg_infs,
                     nans,
                     non_nulls: _,
                 },
             ) => {
+                // This addition rounds only when the sum needs more than
+                // `NUMERIC_AGG_MAX_PRECISION` digits, which puts it far outside
+                // the datum's range, so the narrowing below yields an infinity
+                // either way.
+                let mut cx_agg = numeric::cx_agg();
+                let mut accum = integral.0;
+                cx_agg.add(&mut accum, &fractional.0);
                 let mut cx_datum = numeric::cx_datum();
-                let d = cx_datum.to_width(accum.0);
+                let d = cx_datum.to_width(accum);
                 // Take a wide decimal (aggregator) into a
                 // narrow decimal (datum). If this operation
                 // overflows the datum, this new value will be
@@ -2118,9 +2137,16 @@ enum Accum {
         non_nulls: Diff,
     },
     /// Accumulates arbitrary precision decimals.
+    ///
+    /// Non-special values accumulate as two independent sums, one of their
+    /// integral parts and one of their fractional parts. Each part stays exact
+    /// while the sum of a group's absolute diffs stays below 10^41.
     Numeric {
-        /// Accumulates non-special values
-        accum: OrderedNumericAgg,
+        /// Accumulates the integral parts of non-special values.
+        integral: OrderedNumericAgg,
+        /// Accumulates the fractional parts of non-special values, each with
+        /// the sign of its value.
+        fractional: OrderedNumericAgg,
         /// Counts +inf
         pos_infs: Diff,
         /// Counts -inf
@@ -2157,13 +2183,15 @@ impl IsZero for Accum {
                 non_nulls,
             } => months.is_zero() && days.is_zero() && micros.is_zero() && non_nulls.is_zero(),
             Accum::Numeric {
-                accum,
+                integral,
+                fractional,
                 pos_infs,
                 neg_infs,
                 nans,
                 non_nulls,
             } => {
-                accum.0.is_zero()
+                integral.0.is_zero()
+                    && fractional.0.is_zero()
                     && pos_infs.is_zero()
                     && neg_infs.is_zero()
                     && nans.is_zero()
@@ -2242,22 +2270,30 @@ impl Semigroup for Accum {
             }
             (
                 Accum::Numeric {
-                    accum,
+                    integral,
+                    fractional,
                     pos_infs,
                     neg_infs,
                     nans,
                     non_nulls,
                 },
                 Accum::Numeric {
-                    accum: other_accum,
+                    integral: other_integral,
+                    fractional: other_fractional,
                     pos_infs: other_pos_infs,
                     neg_infs: other_neg_infs,
                     nans: other_nans,
                     non_nulls: other_non_nulls,
                 },
             ) => {
+                // A single sum would hold a datum's 39 integral and 39
+                // fractional digits at once, leaving `NumericAgg` three digits
+                // of headroom. A thousand values near 10^39 plus one value with
+                // 39 fractional digits would then round. Split, each part
+                // needs only one side's digits.
                 let mut cx_agg = numeric::cx_agg();
-                cx_agg.add(&mut accum.0, &other_accum.0);
+                cx_agg.add(&mut integral.0, &other_integral.0);
+                cx_agg.add(&mut fractional.0, &other_fractional.0);
                 // `rounded` signals we have exceeded the aggregator's max
                 // precision, which means we've lost commutativity and
                 // associativity; nothing to be done here, so panic. For more
@@ -2282,7 +2318,8 @@ impl Semigroup for Accum {
                 // as 9e39+0e-39, which still exceeds the narrower context's
                 // precision. By doing the reduction, we can "reclaim" the 39
                 // digits of precision.
-                cx_agg.reduce(&mut accum.0);
+                cx_agg.reduce(&mut integral.0);
+                cx_agg.reduce(&mut fractional.0);
                 *pos_infs += other_pos_infs;
                 *neg_infs += other_neg_infs;
                 *nans += other_nans;
@@ -2339,18 +2376,22 @@ impl Multiply<Diff> for Accum {
                 non_nulls: non_nulls * factor,
             },
             Accum::Numeric {
-                accum,
+                integral,
+                fractional,
                 pos_infs,
                 neg_infs,
                 nans,
                 non_nulls,
             } => {
                 let mut cx = numeric::cx_agg();
-                let mut f = NumericAgg::from(factor.into_inner());
+                let f = NumericAgg::from(factor.into_inner());
                 // Unlike `plus_equals`, not necessary to reduce after this operation because `f` will
                 // always be an integer, i.e. we are never increasing the
                 // values' scale.
-                cx.mul(&mut f, &accum.0);
+                let mut integral_f = f;
+                cx.mul(&mut integral_f, &integral.0);
+                let mut fractional_f = f;
+                cx.mul(&mut fractional_f, &fractional.0);
                 // `rounded` signals we have exceeded the aggregator's max
                 // precision, which means we've lost commutativity and
                 // associativity; nothing to be done here, so panic. For more
@@ -2358,7 +2399,8 @@ impl Multiply<Diff> for Accum {
                 // http://speleotrove.com/decimal/dncont.html
                 assert!(!cx.status().rounded(), "Accum::Numeric multiply overflow");
                 Accum::Numeric {
-                    accum: OrderedNumericAgg(f),
+                    integral: OrderedNumericAgg(integral_f),
+                    fractional: OrderedNumericAgg(fractional_f),
                     pos_infs: pos_infs * factor,
                     neg_infs: neg_infs * factor,
                     nans: nans * factor,
