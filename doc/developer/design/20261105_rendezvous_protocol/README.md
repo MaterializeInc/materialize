@@ -5,6 +5,7 @@ It checks three rules that together let the registry keep identifying an incarna
 The safety clauses state that an import reads one writer's chain without missing updates, and that every reader is bound to its own incarnation.
 SMT proves the clauses inductive for all instance sizes, and an explicit-state check confirms them on a small instance.
 Deleting each guard the design relies on in turn reaches a violation, except the single-attach refusal, a backstop that is inert in the model, and the physical-meet bound, which needs a larger instance than the committed one (see the mutation table).
+The [interactive compute runtime design](../20261107_interactive_runtime.md) describes the system this model abstracts.
 
 ## Running
 
