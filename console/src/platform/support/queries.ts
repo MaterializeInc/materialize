@@ -126,20 +126,21 @@ export const supportTicketsQueryOptions = (owner: TicketOwner) =>
  */
 export function useSupportTickets() {
   const query = useInfiniteQuery(supportTicketsQueryOptions(useTicketOwner()));
-  const { hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
-  const { fetchNextPage } = query;
+  const { hasNextPage, isFetching, isFetchNextPageError } = query;
+  const { fetchNextPage, dataUpdatedAt } = query;
   const pages = query.data?.pages;
-  // A fast page can land without a render that shows it fetching, so the page
-  // count is what tells the effect that another page arrived.
-  const pageCount = pages?.length ?? 0;
+  // Wait for any fetch to finish, including a refresh of stale pages: by
+  // default `fetchNextPage` cancels it and pages on from the old cursor.
+  // `dataUpdatedAt` re-runs this after every fetch, since a fast one can land
+  // without a render that shows it fetching.
   React.useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
-      void fetchNextPage();
+    if (hasNextPage && !isFetching && !isFetchNextPageError) {
+      void fetchNextPage({ cancelRefetch: false });
     }
   }, [
-    pageCount,
+    dataUpdatedAt,
     hasNextPage,
-    isFetchingNextPage,
+    isFetching,
     isFetchNextPageError,
     fetchNextPage,
   ]);

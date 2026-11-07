@@ -19,6 +19,7 @@ import { SupportTicket, SupportTicketDetail } from "~/api/cloudGlobalApi";
 import { STATUSPAGE_URL } from "~/api/incident-io";
 import { Incident, StatusSummary } from "~/api/incident-io/types";
 import server from "~/api/mocks/server";
+import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
 import {
   HELP_CENTER_TICKETS_URL,
   HELP_CENTER_URL,
@@ -30,7 +31,7 @@ import { resetMessengerStateForTests, useIntercom } from "~/hooks/useIntercom";
 import { incidentIOQueryKeys } from "~/queries/incident-io";
 import { defaultRegionId, renderComponent } from "~/test/utils";
 
-import { supportTicketQueryKeys } from "./queries";
+import { supportTicketQueryKeys, supportTicketsQueryOptions } from "./queries";
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
 
 const mockFlags: Record<string, boolean> = vi.hoisted(() => ({}));
@@ -623,6 +624,51 @@ describe("SupportPage", () => {
         screen.queryByTestId("support-tickets-load-more-error"),
       ).not.toBeInTheDocument();
       expect(requests).toEqual({ first: 1, second: 4 });
+    });
+
+    it("finishes refreshing stale tickets before loading more pages", async () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retryDelay: 0 } },
+      });
+      // Hovering Help prefetched the first page over a minute ago.
+      queryClient.setQueryData(
+        supportTicketsQueryOptions({
+          userId: dummyValidUser.id,
+          organizationId: dummyValidUser.tenantId,
+        }).queryKey,
+        {
+          pages: [{ data: [buildTicket()], nextCursor: "page-2" }],
+          pageParams: [undefined],
+        },
+        { updatedAt: Date.now() - 120_000 },
+      );
+      server.use(
+        http.get(TICKETS_URL, ({ request }) =>
+          HttpResponse.json(
+            new URL(request.url).searchParams.get("cursor") === "page-2"
+              ? {
+                  data: [buildTicket({ id: "3", title: "Older ticket" })],
+                  nextCursor: null,
+                }
+              : {
+                  data: [
+                    buildTicket({ id: "7", title: "Sink is lagging" }),
+                    buildTicket(),
+                  ],
+                  nextCursor: "page-2",
+                },
+          ),
+        ),
+      );
+      await renderComponent(<SupportPageWithIntercom />, { queryClient });
+
+      // The refresh isn't cancelled, so the ticket opened since shows up.
+      expect(
+        await screen.findByRole("link", { name: "Sink is lagging" }),
+      ).toBeVisible();
+      expect(
+        await screen.findByRole("link", { name: "Older ticket" }),
+      ).toBeVisible();
     });
 
     it("keeps looking when a page has no visible tickets", async () => {
