@@ -2111,7 +2111,7 @@ impl CollectionState {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Tests of the inline index-peek driver, and the fixtures [`peek_scan`]'s tests share with it.
 #[cfg(test)]

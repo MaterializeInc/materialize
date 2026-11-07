@@ -79,7 +79,7 @@ fn row_iteration_limit_observes_updates_and_disabled_rows() {
     );
 }
 
-fn row(x: i64) -> Row {
+pub(crate) fn row(x: i64) -> Row {
     Row::pack_slice(&[Datum::Int64(x)])
 }
 
@@ -166,7 +166,7 @@ impl TestMetrics {
     }
 }
 
-fn make_peek(timestamp: Timestamp) -> Peek {
+pub(crate) fn make_peek(timestamp: Timestamp) -> Peek {
     let result_desc = RelationDesc::builder()
         .with_column("k", SqlScalarType::Int64.nullable(false))
         .with_column("v", SqlScalarType::Int64.nullable(false))
@@ -396,7 +396,7 @@ fn seek_fulfillment_compacted_past_errors() {
     assert_compacted_past_errors(shared, &metrics, "peer");
 }
 
-fn test_compute_instance_context() -> ComputeInstanceContext {
+pub(crate) fn test_compute_instance_context() -> ComputeInstanceContext {
     ComputeInstanceContext {
         scratch_directory: None,
         worker_core_affinity: false,
@@ -408,7 +408,7 @@ fn test_compute_instance_context() -> ComputeInstanceContext {
 /// Returns the runtime too so the caller keeps it alive for the cache's lifetime. The cache is
 /// an `Arc` (so `Send`) and can move into a timely worker closure, unlike the `Rc`-holding
 /// `ComputeState`, which must be built on the worker thread.
-fn test_persist_clients() -> (tokio::runtime::Runtime, Arc<PersistClientCache>) {
+pub(crate) fn test_persist_clients() -> (tokio::runtime::Runtime, Arc<PersistClientCache>) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let clients = {
         let _guard = runtime.enter();
@@ -458,7 +458,7 @@ fn activate<'a>(
 
 /// A maintenance publisher of a `(k, v)` index on the current worker, whose upper the test
 /// advances.
-struct LivePublisher {
+pub(crate) struct LivePublisher {
     oks_input: InputSession<Timestamp, (Row, Row), Diff>,
     errs_input: InputSession<Timestamp, DataflowErrorSer, Diff>,
     /// The trace lives as long as an agent does, and the point closes when it drops.
@@ -468,7 +468,11 @@ struct LivePublisher {
 
 impl LivePublisher {
     /// Publishes index `id` into `registry` from the current worker, with an upper at the minimum.
-    fn new(worker: &mut TimelyWorker, registry: &ArrangementSharingRegistry, id: GlobalId) -> Self {
+    pub(crate) fn new(
+        worker: &mut TimelyWorker,
+        registry: &ArrangementSharingRegistry,
+        id: GlobalId,
+    ) -> Self {
         let registry_in = registry.clone();
         worker.dataflow::<Timestamp, _, _>(move |scope| {
             let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
@@ -495,14 +499,14 @@ impl LivePublisher {
     }
 
     /// Inserts `rows` at the current input time.
-    fn insert(&mut self, rows: Vec<(Row, Row)>) {
+    pub(crate) fn insert(&mut self, rows: Vec<(Row, Row)>) {
         for (k, v) in rows {
             self.oks_input.update((k, v), Diff::ONE);
         }
     }
 
     /// Seals both halves up to `upper` and steps the worker until the published point has it.
-    fn seal_to(&mut self, worker: &mut TimelyWorker, upper: Timestamp) {
+    pub(crate) fn seal_to(&mut self, worker: &mut TimelyWorker, upper: Timestamp) {
         self.oks_input.advance_to(upper);
         self.oks_input.flush();
         self.errs_input.advance_to(upper);
@@ -525,7 +529,7 @@ fn two_int64_type() -> ReprRelationType {
 
 /// A maintained dataflow exporting index `index_id` on `on_id`, as the controller ships it. The
 /// interactive runtime does not render it, and records its exports as peers instead.
-fn maintained_index_dataflow(
+pub(crate) fn maintained_index_dataflow(
     index_id: GlobalId,
     on_id: GlobalId,
     as_of: Timestamp,
@@ -547,7 +551,7 @@ fn maintained_index_dataflow(
 }
 
 /// The rows of a peek response with their multiplicities, sorted.
-fn response_rows(response: &PeekResponse) -> Vec<(Row, usize)> {
+pub(crate) fn response_rows(response: &PeekResponse) -> Vec<(Row, usize)> {
     let PeekResponse::Rows(collections) = response else {
         panic!("expected rows, got {response:?}");
     };
@@ -565,12 +569,12 @@ fn response_rows(response: &PeekResponse) -> Vec<(Row, usize)> {
 }
 
 /// The row a [`make_peek`] response carries for the index entry `(row(k), row(v))`.
-fn peek_row(k: i64, v: i64) -> Row {
+pub(crate) fn peek_row(k: i64, v: i64) -> Row {
     Row::pack_slice(&[Datum::Int64(k), Datum::Int64(v)])
 }
 
 /// Takes the one peek response sent so far.
-fn expect_peek_response(
+pub(crate) fn expect_peek_response(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
 ) -> PeekResponse {
     match rx.try_recv() {
