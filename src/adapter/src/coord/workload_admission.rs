@@ -43,7 +43,6 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::User;
 
 use crate::AdapterError;
-use crate::active_compute_sink::ActiveComputeSink;
 use crate::coord::{Coordinator, catalog_serving};
 use crate::session::Session;
 
@@ -63,10 +62,7 @@ impl Coordinator {
             .filter(|sink| sink.cluster_id() == cluster_id)
             .filter_map(|sink| {
                 let conn_id = sink.connection_id()?;
-                Some((
-                    self.conn_user(conn_id),
-                    self.active_compute_sink_workload(sink),
-                ))
+                Some((self.conn_user(conn_id), sink.workload()))
             });
         let peeks = self
             .peek_registry
@@ -118,17 +114,6 @@ impl Coordinator {
             self.conn_user(conn_id),
             || action.to_string(),
         )
-    }
-
-    /// The workload class of a registered compute sink.
-    fn active_compute_sink_workload(&self, sink: &ActiveComputeSink) -> WorkloadClass {
-        match sink {
-            ActiveComputeSink::Subscribe(subscribe) => catalog_serving::subscribe_workload(
-                self.catalog().state(),
-                subscribe.depends_on.iter().copied(),
-            ),
-            ActiveComputeSink::CopyTo(_) => WorkloadClass::ComputeInteractive,
-        }
     }
 
     /// The user of `conn_id`, or `None` if the connection is gone. Work of a

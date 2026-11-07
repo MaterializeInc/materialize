@@ -9,7 +9,8 @@
 
 # Replica sizes can restrict the workload classes that their clusters run. The
 # mzcompose size map defines `scale=1,workers=1,ingest-only`, which allows only
-# ingest, and `scale=1,workers=1,no-ingest`, which allows everything else.
+# ingest, `scale=1,workers=1,no-ingest`, which allows everything else, and
+# `scale=1,workers=1,interactive-only`, which allows only compute_interactive.
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_auto_scaling_strategy = true
@@ -185,6 +186,25 @@ contains:cluster "burst" cannot host index "burst_idx" because its replica sizes
 1
 
 > CREATE MATERIALIZED VIEW mv IN CLUSTER empty AS SELECT * FROM t
+
+# UPDATE and DELETE are interactive, although they read through a subscribe.
+
+> CREATE CLUSTER interactive SIZE 'scale=1,workers=1,interactive-only'
+
+> CREATE TABLE rtw (a int)
+
+> SET cluster = interactive
+
+> INSERT INTO rtw VALUES (1), (2)
+
+> UPDATE rtw SET a = a + 10 WHERE a = 1
+
+> DELETE FROM rtw WHERE a = 2
+
+> SELECT * FROM rtw
+11
+
+> SET cluster = quickstart
 
 # `cluster_family_allowed_workloads` restricts every size of a family.
 

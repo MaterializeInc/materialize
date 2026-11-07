@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_catalog::memory::objects::CatalogItem;
+use mz_controller::clusters::WorkloadClass;
 use mz_repr::CatalogItemId;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::catalog::CatalogItemType;
@@ -34,7 +35,6 @@ use crate::coord::appends::{
     InternalWriteResponder, PendingWriteTxn, TableWriteCmd, TimestampedWriteRequest,
     UserWriteResponder, WriteResult, WriteTarget,
 };
-use crate::coord::catalog_serving;
 use crate::error::AdapterError;
 use mz_ore::soft_panic_or_log;
 
@@ -98,10 +98,7 @@ impl Coordinator {
                 }
                 if let Err(e) = self.ensure_cluster_allows_running_workload(
                     cluster_id,
-                    catalog_serving::subscribe_workload(
-                        self.catalog().state(),
-                        depends_on.iter().copied(),
-                    ),
+                    WorkloadClass::ComputeInteractive,
                     conn_id,
                     "run UPDATE or DELETE",
                 ) {
@@ -136,6 +133,7 @@ impl Coordinator {
             start_time,
             output: SubscribeOutput::Diffs,
             internal: true, // no mz_subscriptions row and no active-subscribes metric
+            workload: WorkloadClass::ComputeInteractive,
         };
         active_subscribe.initialize();
 
