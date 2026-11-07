@@ -16,19 +16,27 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use futures_util::future::{try_join, try_join_all};
 use google_cloud_gax::error::rpc::Code;
 use google_cloud_gax::options::RequestOptionsBuilder;
 use google_cloud_gax::paginator::ItemPaginator;
 use google_cloud_storage::client::{Storage, StorageControl};
+use google_cloud_storage::model_ext::ReadRange;
+use google_cloud_storage::read_object::ReadObjectResponse;
 use uuid::Uuid;
 
 use mz_ore::bytes::SegmentedBytes;
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 
 use crate::cfg::BlobKnobs;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
+
+/// The size of each concurrent range read in [GcsBlob::get], matching the
+/// part size S3 multipart uploads use.
+const GET_CHUNK_SIZE: u64 = 8 * 1024 * 1024;
 
 /// Configuration for opening a [GcsBlob]
 #[derive(Clone, Debug)]
@@ -221,25 +229,90 @@ impl GcsBlob {
 
     async fn get_inner(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let path = self.get_path(key);
+        let bucket = self.formatted_bucket_path();
 
+        // A single stream over one HTTP/1.1 connection is slow for large
+        // objects, so read in concurrent chunks. The first read also reports
+        // the object's size and generation. Later reads pin that generation,
+        // so a concurrent overwrite cannot mix two versions.
         self.metrics.get_part.inc();
-        let mut stream = match self
+        let first = match self
             .storage_client
-            .read_object(&self.formatted_bucket_path(), path)
+            .read_object(&bucket, &path)
+            .set_read_range(ReadRange::head(GET_CHUNK_SIZE))
             .send()
             .await
         {
             Ok(stream) => stream,
             Err(e) if is_not_found(&e) => return Ok(None),
+            // GCS rejects any range of an empty object.
+            Err(e) if is_range_not_satisfiable(&e) => return Ok(Some(SegmentedBytes::default())),
             Err(e) => return Err(self.error("ReadObject", e)),
         };
-        let size = usize::try_from(stream.object().size).context("GCS sent negative size value")?;
-        let mut buf: Vec<u8> = Vec::with_capacity(size);
+        let size = u64::try_from(first.object().size).context("GCS sent negative size value")?;
+        let generation = first.object().generation;
+        let crc32c = first.object().checksums.as_ref().and_then(|c| c.crc32c);
+
+        let rest = (GET_CHUNK_SIZE..size)
+            .step_by(usize::cast_from(GET_CHUNK_SIZE))
+            .map(|offset| {
+                let count = GET_CHUNK_SIZE.min(size - offset);
+                let read = self
+                    .storage_client
+                    .read_object(&bucket, &path)
+                    .set_generation(generation)
+                    .set_read_range(ReadRange::segment(offset, count));
+                async move {
+                    let stream = read.send().await.map_err(|e| self.error("ReadObject", e))?;
+                    self.read_body(stream, count).await
+                }
+            });
+        let (first, rest) = try_join(
+            self.read_body(first, GET_CHUNK_SIZE.min(size)),
+            try_join_all(rest),
+        )
+        .await?;
+
+        let mut segments = Vec::with_capacity(rest.len() + 1);
+        let mut fetched = 0;
+        let mut actual_crc32c = 0;
+        for (segment, crc) in std::iter::once(first).chain(rest) {
+            fetched += u64::cast_from(segment.len());
+            actual_crc32c = crc32c::crc32c_combine(actual_crc32c, crc, segment.len());
+            segments.push(segment);
+        }
+        if fetched != size {
+            return Err(anyhow!("GCS ReadObject {path} returned {fetched} of {size} bytes").into());
+        }
+        // The SDK skips checksum validation for range reads, so check the
+        // whole object's CRC32C from the first response's metadata.
+        if let Some(expected_crc32c) = crc32c {
+            if actual_crc32c != expected_crc32c {
+                return Err(anyhow!(
+                    "GCS ReadObject {path} checksum mismatch: expected crc32c {expected_crc32c:#010x}, got {actual_crc32c:#010x}"
+                )
+                .into());
+            }
+        }
+        Ok(Some(SegmentedBytes::from(segments)))
+    }
+
+    /// Collects a read into one allocation, presized to `capacity` bytes, and
+    /// returns it with its CRC32C.
+    async fn read_body(
+        &self,
+        mut stream: ReadObjectResponse,
+        capacity: u64,
+    ) -> Result<(Bytes, u32), ExternalError> {
+        let mut buf = BytesMut::with_capacity(usize::cast_from(capacity));
+        let mut crc = 0;
         while let Some(data) = stream.next().await {
             let data = data.map_err(|e| self.error("ReadObject", e))?;
-            buf.extend_from_slice(&data[..])
+            // Hashing as data arrives overlaps it with the transfer.
+            crc = crc32c::crc32c_append(crc, &data);
+            buf.extend_from_slice(&data);
         }
-        Ok(Some(SegmentedBytes::from(buf)))
+        Ok((buf.freeze(), crc))
     }
 
     async fn list_keys_and_metadata_inner(
@@ -433,6 +506,10 @@ fn is_not_found(e: &google_cloud_storage::Error) -> bool {
     e.status().is_some_and(|s| s.code == Code::NotFound) || e.http_status_code() == Some(404)
 }
 
+fn is_range_not_satisfiable(e: &google_cloud_storage::Error) -> bool {
+    e.http_status_code() == Some(416)
+}
+
 fn is_failed_precondition(e: &google_cloud_storage::Error) -> bool {
     e.status()
         .is_some_and(|s| s.code == Code::FailedPrecondition)
@@ -488,6 +565,150 @@ mod tests {
             Some(b"data".to_vec())
         );
         blob.delete("k").await?;
+        Ok(())
+    }
+
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    async fn gcs_blob_get_chunk_boundaries() -> Result<(), ExternalError> {
+        let Some(config) = GcsBlobConfig::new_for_test().await? else {
+            info!(
+                "{} env not set: skipping test that uses external service",
+                GcsBlobConfig::EXTERNAL_TESTS_GCS_BUCKET
+            );
+            return Ok(());
+        };
+        let blob = GcsBlob::open(config).await?;
+        let chunk = usize::cast_from(GET_CHUNK_SIZE);
+        for len in [0, 1, chunk - 1, chunk, chunk + 1, 3 * chunk - 5] {
+            let value: Vec<u8> = (0..len).map(|i| u8::try_from(i % 251).unwrap()).collect();
+            let key = format!("k{len}");
+            blob.set(&key, Bytes::from(value.clone())).await?;
+            let got = blob.get(&key).await?.map(|b| b.into_contiguous());
+            assert!(got.as_ref() == Some(&value), "mismatch for len {len}");
+            blob.delete(&key).await?;
+        }
+        Ok(())
+    }
+
+    /// Times 128 MiB gets and sets through a single-stream read, [GcsBlob],
+    /// and, when `MZ_PERSIST_BENCH_GCS_HMAC_ID` and
+    /// `MZ_PERSIST_BENCH_GCS_HMAC_SECRET` are set, [S3Blob] against GCS's S3
+    /// API with the HTTP pool. Run in the bucket's region, with
+    /// `--nocapture`, for meaningful numbers.
+    ///
+    /// [S3Blob]: crate::s3::S3Blob
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[ignore]
+    async fn gcs_blob_throughput() -> Result<(), ExternalError> {
+        use std::time::Instant;
+
+        use crate::cfg::BlobKnobs;
+        use crate::s3::{BlobHttpPool, S3Blob, S3BlobConfig};
+
+        const LEN: usize = 128 * 1024 * 1024;
+        const ITERS: usize = 10;
+
+        #[derive(Debug)]
+        struct BenchKnobs;
+        impl BlobKnobs for BenchKnobs {
+            fn operation_timeout(&self) -> Duration {
+                Duration::from_secs(120)
+            }
+            fn operation_attempt_timeout(&self) -> Duration {
+                Duration::from_secs(60)
+            }
+            fn connect_timeout(&self) -> Duration {
+                Duration::from_secs(5)
+            }
+            fn read_timeout(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+            fn is_cc_active(&self) -> bool {
+                false
+            }
+            fn http_pool(&self) -> BlobHttpPool {
+                BlobHttpPool::Gcs
+            }
+        }
+
+        async fn time<F: Future<Output = Result<(), ExternalError>>>(
+            name: &str,
+            mut op: impl FnMut() -> F,
+        ) -> Result<(), ExternalError> {
+            let mut elapsed = Vec::new();
+            for _ in 0..ITERS {
+                let start = Instant::now();
+                op().await?;
+                elapsed.push(start.elapsed());
+            }
+            elapsed.sort();
+            let median = elapsed[ITERS / 2];
+            let mib_s = 128.0 / median.as_secs_f64();
+            println!(
+                "{name:<24} median {median:>10.2?} ({mib_s:>5.0} MiB/s), min {:.2?}, max {:.2?}",
+                elapsed[0],
+                elapsed[ITERS - 1],
+            );
+            Ok(())
+        }
+
+        let config = GcsBlobConfig::new_for_test()
+            .await?
+            .expect("bucket env var must be set");
+        let bucket = config.bucket.clone();
+        let prefix = config.prefix.clone();
+        let gcs = GcsBlob::open(config).await?;
+        let value = Bytes::from(vec![7u8; LEN]);
+
+        time("gcs set", || gcs.set("bench", value.clone())).await?;
+        time("gcs get single stream", || async {
+            let stream = gcs
+                .storage_client
+                .read_object(&gcs.formatted_bucket_path(), gcs.get_path("bench"))
+                .send()
+                .await
+                .map_err(|e| gcs.error("ReadObject", e))?;
+            let (bytes, _) = gcs.read_body(stream, u64::cast_from(LEN)).await?;
+            assert_eq!(bytes.len(), LEN);
+            Ok(())
+        })
+        .await?;
+        time("gcs get", || async {
+            let bytes = gcs.get("bench").await?.expect("bench blob exists");
+            assert_eq!(bytes.len(), LEN);
+            Ok(())
+        })
+        .await?;
+        gcs.delete("bench").await?;
+
+        let (Ok(id), Ok(secret)) = (
+            std::env::var("MZ_PERSIST_BENCH_GCS_HMAC_ID"),
+            std::env::var("MZ_PERSIST_BENCH_GCS_HMAC_SECRET"),
+        ) else {
+            return Ok(());
+        };
+        let config = S3BlobConfig::new(
+            bucket,
+            prefix,
+            None,
+            Some("https://storage.googleapis.com".into()),
+            Some("auto".into()),
+            Some((id, secret)),
+            Box::new(BenchKnobs),
+            S3BlobMetrics::new(&MetricsRegistry::new()),
+        )
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+        let s3 = S3Blob::open(config).await?;
+        time("s3 set", || s3.set("bench", value.clone())).await?;
+        time("s3 get", || async {
+            let bytes = s3.get("bench").await?.expect("bench blob exists");
+            assert_eq!(bytes.len(), LEN);
+            Ok(())
+        })
+        .await?;
+        s3.delete("bench").await?;
         Ok(())
     }
 
