@@ -39,7 +39,7 @@ fn sequencer_all_workers_observe_one_order() {
             rx: storage_rx,
             activator_slot: Rc::clone(&activator_slot),
         };
-        let (compute_tx, rx) = render(worker, Some(lane_input));
+        let (compute_tx, rx) = render(worker, Some(lane_input), None);
 
         // Worker 0 broadcasts compute commands, as the sole connection to the compute
         // controller. Every worker injects its own uniquely tagged storage-internal commands.

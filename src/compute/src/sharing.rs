@@ -29,6 +29,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker;
 
 use crate::arrangement::manager::TraceBundle;
+use crate::reconcile_barrier::{ConnectionOrder, ReconcileBarrier};
 use crate::shared_trace::{Published, SharedErrsHandle, SharedOksHandle, adopt_trace};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
@@ -96,6 +97,11 @@ struct Inner {
 #[derive(Clone, Default)]
 pub struct ArrangementSharingRegistry {
     inner: Arc<Mutex<Inner>>,
+    /// The order of the process's controller connections, from which the command channel
+    /// sequencer assigns the barrier positions.
+    order: ConnectionOrder,
+    /// The barrier between the reconciliations of the two workers attached here.
+    barrier: ReconcileBarrier,
 }
 
 impl SharedIndexArrangement {
@@ -112,9 +118,26 @@ impl ArrangementSharingRegistry {
     }
 
     /// Creates one registry per local worker ordinal, for a process running `workers_per_process`
-    /// workers per runtime.
-    pub fn per_worker(workers_per_process: usize) -> Vec<Self> {
-        (0..workers_per_process).map(|_| Self::new()).collect()
+    /// workers per runtime. Their reconciliation barriers order connections by `order`, which the
+    /// process's command multiplexer records in.
+    pub fn per_worker(workers_per_process: usize, order: &ConnectionOrder) -> Vec<Self> {
+        (0..workers_per_process)
+            .map(|_| ArrangementSharingRegistry {
+                inner: Default::default(),
+                order: order.clone(),
+                barrier: Default::default(),
+            })
+            .collect()
+    }
+
+    /// The order of the process's controller connections.
+    pub(crate) fn connection_order(&self) -> &ConnectionOrder {
+        &self.order
+    }
+
+    /// The barrier between the reconciliations of the two workers attached here.
+    pub(crate) fn reconcile_barrier(&self) -> &ReconcileBarrier {
+        &self.barrier
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
