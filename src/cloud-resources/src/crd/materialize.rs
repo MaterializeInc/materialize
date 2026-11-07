@@ -310,6 +310,23 @@ pub mod v1alpha1 {
         /// The ConfigMap must contain a `system-params.json` key whose value
         /// is a valid JSON object containing valid system parameters.
         ///
+        /// A document without a `version` key is a flat map whose every key sets
+        /// a parameter for the whole environment. A document with `"version": 2`
+        /// holds the environment-wide values under `globalParameters` and may
+        /// scope parameters to clusters or replicas through `rules`: each rule
+        /// names a context kind, `cluster` or `replica`, the clauses selecting
+        /// the objects it matches, and the parameters to apply to them. For each
+        /// parameter the first matching rule wins. A version 2 document must
+        /// name the release it targets in `release`, equal to the first word of
+        /// `mz_version()`, such as `v26.46.1`. A document with a structural
+        /// defect anywhere, or for another release, is ignored as a whole,
+        /// leaving every current value and override in place. Before the
+        /// environment has synced its configuration once, such a document
+        /// stops `environmentd` from starting instead. The
+        /// `mz_parameter_frontend_file_status` and
+        /// `mz_parameter_frontend_file_last_applied_time_seconds` metrics report
+        /// whether and when the document was last applied.
+        ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
         /// Example ConfigMap:
@@ -317,7 +334,18 @@ pub mod v1alpha1 {
         /// data:
         ///   system-params.json: |
         ///     {
-        ///       "max_connections": 1000
+        ///       "version": 2,
+        ///       "release": "v26.46.1",
+        ///       "globalParameters": {"max_connections": 1000},
+        ///       "rules": [
+        ///         {
+        ///           "contextKind": "cluster",
+        ///           "clauses": [
+        ///             {"attribute": "cluster_name", "op": "in", "values": ["analytics"]}
+        ///           ],
+        ///           "parameters": {"enable_eager_delta_joins": true}
+        ///         }
+        ///       ]
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,
@@ -1673,6 +1701,23 @@ pub mod v1 {
         /// The ConfigMap must contain a `system-params.json` key whose value
         /// is a valid JSON object containing valid system parameters.
         ///
+        /// A document without a `version` key is a flat map whose every key sets
+        /// a parameter for the whole environment. A document with `"version": 2`
+        /// holds the environment-wide values under `globalParameters` and may
+        /// scope parameters to clusters or replicas through `rules`: each rule
+        /// names a context kind, `cluster` or `replica`, the clauses selecting
+        /// the objects it matches, and the parameters to apply to them. For each
+        /// parameter the first matching rule wins. A version 2 document must
+        /// name the release it targets in `release`, equal to the first word of
+        /// `mz_version()`, such as `v26.46.1`. A document with a structural
+        /// defect anywhere, or for another release, is ignored as a whole,
+        /// leaving every current value and override in place. Before the
+        /// environment has synced its configuration once, such a document
+        /// stops `environmentd` from starting instead. The
+        /// `mz_parameter_frontend_file_status` and
+        /// `mz_parameter_frontend_file_last_applied_time_seconds` metrics report
+        /// whether and when the document was last applied.
+        ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
         /// Example ConfigMap:
@@ -1680,7 +1725,18 @@ pub mod v1 {
         /// data:
         ///   system-params.json: |
         ///     {
-        ///       "max_connections": 1000
+        ///       "version": 2,
+        ///       "release": "v26.46.1",
+        ///       "globalParameters": {"max_connections": 1000},
+        ///       "rules": [
+        ///         {
+        ///           "contextKind": "cluster",
+        ///           "clauses": [
+        ///             {"attribute": "cluster_name", "op": "in", "values": ["analytics"]}
+        ///           ],
+        ///           "parameters": {"enable_eager_delta_joins": true}
+        ///         }
+        ///       ]
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,

@@ -503,7 +503,10 @@ impl Listeners {
                         &BUILD_INFO,
                         &config.metrics_registry,
                         config.launchdarkly_key_map,
-                        SystemParameterSyncClientConfig::File { path: f },
+                        SystemParameterSyncClientConfig::File {
+                            path: f,
+                            now_fn: config.now.clone(),
+                        },
                     ))
                 }
                 (Some(key), None) => Some(SystemParameterSyncConfig::new(
