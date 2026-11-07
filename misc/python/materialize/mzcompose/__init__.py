@@ -435,6 +435,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_compute_interactive_dataflows",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_upsert_v2",
             "false",
             ["true", "false"],
@@ -778,6 +783,8 @@ def get_default_system_parameters(
 UNINTERESTING_SYSTEM_PARAMETERS = [
     # Off by default so tests exercise the refusal to drop in-use indexes.
     "enable_drop_in_use_index",
+    # Off in tests until the suites' expectations cover two runtimes.
+    "enable_compute_interactive_runtime",
     "enable_mz_join_core",
     "linear_join_yielding",
     "column_chunk_compress_min_depth",

@@ -93,6 +93,43 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether to launch compute replicas with a second, interactive compute timely runtime.
+///
+/// With the flag on, a replica advertises an `interactive` port and gets an
+/// `--interactive-compute-timely-config` argument, its runtimes take the `Maintenance` and
+/// `Interactive` roles, maintenance publishes its index arrangements for the interactive runtime to
+/// read, and peeks route to the interactive runtime, as do peek dataflows unless
+/// [`ENABLE_COMPUTE_INTERACTIVE_DATAFLOWS`] is off.
+///
+/// Read when a replica is provisioned, so it is not a live toggle: a running replica keeps the
+/// layout it was launched with until it is next provisioned, which happens when it is created and
+/// when `environmentd` restarts. Replica-scoped, but resolved in `environmentd`, because the
+/// controller decides `ServiceConfig::ports` before the replica exists.
+///
+/// The interactive runtime installs no compute logging, so the peeks and peek dataflows it serves
+/// are missing from compute introspection.
+pub const ENABLE_COMPUTE_INTERACTIVE_RUNTIME: Config<bool> = Config::new(
+    "enable_compute_interactive_runtime",
+    false,
+    "Whether to launch compute replicas with a second, interactive compute timely runtime.",
+    ParameterScope::Replica,
+);
+
+/// Whether a replica with an interactive runtime renders peek dataflows there.
+///
+/// A peek dataflow can be arbitrarily expensive, and nothing bounds what it takes from the fast-path
+/// peeks the interactive runtime serves. With the flag off, the compute controller installs a peek
+/// dataflow as maintained work, which the maintenance runtime renders and publishes, and the
+/// interactive runtime serves its peek from the published index.
+///
+/// Read when a dataflow is created, so a change applies to dataflows created after it.
+pub const ENABLE_COMPUTE_INTERACTIVE_DATAFLOWS: Config<bool> = Config::new(
+    "enable_compute_interactive_dataflows",
+    true,
+    "Whether replicas with an interactive compute runtime render peek dataflows on it.",
+    ParameterScope::Environment,
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -106,4 +143,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_UNIFIED_CLUSTER)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
+        .add(&ENABLE_COMPUTE_INTERACTIVE_RUNTIME)
+        .add(&ENABLE_COMPUTE_INTERACTIVE_DATAFLOWS)
 }
