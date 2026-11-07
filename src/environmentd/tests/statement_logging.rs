@@ -823,6 +823,23 @@ fn test_statement_logging_subscribes() {
         let _ = client.execute("SUBSCRIBE TO (SELECT * FROM t)", &[]);
     });
 
+    // Force the running subscription to cross a logging flush before ending it.
+    // Completion must retract this in-progress row rather than an unflushed state.
+    let mut monitor = server.connect_internal(postgres::NoTls).unwrap();
+    let unfinished = "
+        SELECT count(*)
+        FROM mz_internal.mz_statement_execution_history e
+        JOIN mz_internal.mz_prepared_statement_history p ON e.prepared_statement_id = p.id
+        JOIN mz_internal.mz_sql_text s ON p.sql_hash = s.sql_hash
+        WHERE s.sql = 'SUBSCRIBE TO (SELECT * FROM t)' AND e.finished_at IS NULL";
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let count: i64 = monitor.query_one(unfinished, &[]).unwrap().get(0);
+            if count == 1 { Ok(()) } else { Err(count) }
+        })
+        .expect("the running subscription must be visible before cancellation");
+
     while !handle.is_finished() {
         thread::sleep(Duration::from_secs(1));
         cancel_token.cancel_query(postgres::NoTls).unwrap();
@@ -891,6 +908,10 @@ fn test_statement_logging_subscribes() {
     }
     assert_eq!(sl_subscribes[0].finished_status, "success");
     assert_eq!(sl_subscribes[1].finished_status, "canceled");
+    assert_eq!(
+        monitor.query_one(unfinished, &[]).unwrap().get::<_, i64>(0),
+        0
+    );
 }
 
 /// Test that we are sampling approximately 50% of statements.
