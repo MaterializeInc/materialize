@@ -28,8 +28,44 @@ Syntax element                | Description
 * `UPDATE` cannot be used inside [transactions](../begin).
 * `UPDATE` can reference [read-write tables](../create-table) but not
   [sources](../create-source) or read-only tables.
-* **Low performance.** While processing an `UPDATE` statement, Materialize cannot
-  process other `INSERT`, `UPDATE`, or `DELETE` statements.
+* **Concurrency.** `UPDATE` does not take a table-wide write lock. `UPDATE`,
+  `DELETE`, and `INSERT ... SELECT` run under optimistic concurrency control: a
+  bounded number run concurrently, so a long-running one can delay other such
+  statements (including on unrelated tables), and a statement that conflicts with
+  a concurrent write to the same table is retried automatically. Plain
+  `INSERT ... VALUES` is not blocked.
+* **Large updates.** A single `UPDATE` that matches a very large number of rows
+  can fail to complete within `statement_timeout`. See
+  [Large `UPDATE` statements](#large-update-statements).
+
+### Large `UPDATE` statements
+
+Materialize processes an `UPDATE` by reading every row the statement matches back
+through the cluster, so the work scales with the number of rows matched, not just
+the size of the table or the complexity of the `WHERE` clause.
+
+An `UPDATE` is bound by [`statement_timeout`](../set) (default 60 seconds): a
+statement that cannot finish within that window is cancelled, and a very large
+read-back can also disconnect the cluster replica before it completes. There is
+no fixed row or byte limit; how many rows you can update in a single statement
+depends on how wide those rows are and the size of the cluster. An
+`UPDATE ... RETURNING` is additionally subject to the `max_result_size`
+configuration parameter (default 1 GiB) on the rows it returns.
+
+To tell whether an `UPDATE` is at risk before running it, time the matching
+`SELECT`: an `UPDATE` does roughly the same work as selecting the rows it
+matches. If `SELECT * FROM <table> WHERE <condition>` does not return comfortably
+within `statement_timeout`, an `UPDATE` with the same `WHERE` clause will not
+complete either. An `UPDATE` that exceeds the timeout is cancelled and changes no
+rows (the statement is atomic), so it is safe to retry as smaller batches.
+
+If an `UPDATE` is too large to finish in one statement, split it into smaller
+statements that each match fewer rows, using a predicate on an
+[indexed](../create-index) column (for example, by key range). Raising
+`statement_timeout` or increasing the cluster size can help a moderately large
+`UPDATE` complete, but a very large read-back can still fail, so splitting the
+statement is the reliable approach. The same guidance applies to large
+[`DELETE`](../delete) statements.
 
 ## Privileges
 
