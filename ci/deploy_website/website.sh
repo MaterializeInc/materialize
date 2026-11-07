@@ -57,6 +57,8 @@ else
     hugo --gc --baseURL /docs --destination public/docs
     # Build skill docs to public/docs/markdown-docs/.
     hugo --gc --baseURL /docs --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination public/docs/markdown-docs
+    # Must run before hugo deploy; see the script's header.
+    ../../ci/deploy_website/publish-markdown-at-page-urls.sh public/docs /docs
 fi
 hugo deploy --maxDeletes -1
 
