@@ -100,7 +100,7 @@ class MetricSink(Check):
                 # coordinator installs on every replica labeled by name not id.
                 > SELECT count(DISTINCT labels -> 'sink') FROM mz_introspection.mz_cluster_prometheus_metrics
                   WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
-                    AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors', 'mz_metric_dataflow_elapsed', 'mz_metric_worker_parks')
+                    AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors', 'mz_metric_dataflow_elapsed', 'mz_metric_worker_parks', 'mz_metric_pending_peeks')
                 3
 
                 # The curated sinks come back too, re-installed from the static list
@@ -116,8 +116,8 @@ class MetricSink(Check):
                 # queries landed in v26.50.
                 >[version>=2605000] SELECT count(DISTINCT labels -> 'sink') FROM mz_introspection.mz_cluster_prometheus_metrics
                   WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
-                    AND labels -> 'sink' IN ('mz_metric_dataflow_elapsed', 'mz_metric_worker_parks')
-                2
+                    AND labels -> 'sink' IN ('mz_metric_dataflow_elapsed', 'mz_metric_worker_parks', 'mz_metric_pending_peeks')
+                3
 
                 > RESET cluster_replica
                 """))

@@ -122,8 +122,8 @@ macro_rules! dataflow_export_cte {
 ///
 /// Every family sums across workers, so a series carries no `worker_id`, and a multi-process replica
 /// reports one number per grouping key rather than one per process. The size and elapsed families
-/// emit one series per dataflow, the errors family one per export, and the park family one per
-/// replica.
+/// emit one series per dataflow, the errors family one per export, and the park and peek families
+/// one per replica.
 const CURATED: &[CuratedMetricSink] = &[
     CuratedMetricSink {
         name: "mz_metric_arrangement_sizes",
@@ -234,6 +234,18 @@ SELECT 'park_duration_seconds_total'::text AS metric_name, 'counter'::text AS me
        sum(slept_for_ns)::double precision / 1e9 AS value,
        'time workers spent parked, in seconds, rounded up per park'::text AS help
 FROM mz_introspection.mz_scheduling_parks_histogram_raw",
+    },
+    CuratedMetricSink {
+        name: "mz_metric_pending_peeks",
+        prefix: METRIC_SINK_CURATED_PREFIX_MARKER,
+        // A peek has a row on every worker that holds it, so count distinct peek ids. A global
+        // aggregate emits a row on empty input too, so an idle replica reads 0 rather than a gap.
+        source_sql: "
+SELECT 'pending_peeks'::text AS metric_name, 'gauge'::text AS metric_type,
+       NULL::map[text=>text] AS labels,
+       count(DISTINCT id)::double precision AS value,
+       'number of peeks the replica has not yet answered'::text AS help
+FROM mz_introspection.mz_active_peeks_per_worker",
     },
     CuratedMetricSink {
         name: "mz_metric_dataflow_errors",
