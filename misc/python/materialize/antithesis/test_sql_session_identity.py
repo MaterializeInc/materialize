@@ -11,7 +11,7 @@ import sqlite3
 
 import pytest
 
-pytest.importorskip("psycopg")
+psycopg = pytest.importorskip("psycopg")
 
 from materialize.antithesis import sql
 
@@ -32,3 +32,26 @@ def test_session_lookup_preserves_unsigned_connection_identity(connection_id):
         assert db.execute(
             f"SELECT id FROM sessions WHERE connection_id={expression}"
         ).fetchall() == [("original",)]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        'cannot drop index "ix6_t1": still depended upon by materialized view "a",'
+        ' materialized view "b"',
+        'cannot drop indexes "i1", "i2": still depended upon by index "j"',
+    ],
+)
+def test_drop_of_an_index_in_use_is_a_rejection(message):
+    c = sql.classify(psycopg.errors.DependentObjectsStillExist(message))
+    assert c.outcome is sql.Outcome.REJECTED
+    assert c.race is sql.CatalogRace.DEPENDED_UPON
+
+
+def test_other_dependent_objects_errors_stay_violations():
+    c = sql.classify(
+        psycopg.errors.DependentObjectsStillExist(
+            'role "r" cannot be dropped because some objects depend on it'
+        )
+    )
+    assert c.outcome is sql.Outcome.VIOLATION

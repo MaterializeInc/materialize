@@ -38,6 +38,10 @@ class Incomplete(Exception):
     pass
 
 
+SCHEMA_PREFIX = "upsert_recovery_r"
+"""Prefix of every fixture schema. Their tables hold decode errors on purpose."""
+
+
 @dataclass(frozen=True)
 class Fixture:
     number: int
@@ -45,7 +49,7 @@ class Fixture:
 
     @property
     def schema(self) -> str:
-        return f"upsert_recovery_r{self.number}_{self.token}"
+        return f"{SCHEMA_PREFIX}{self.number}_{self.token}"
 
     @property
     def topic(self) -> str:

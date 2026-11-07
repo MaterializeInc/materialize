@@ -27,7 +27,12 @@ import urllib3
 
 pytest.importorskip("antithesis")
 
-from materialize.antithesis import exit_evidence, observations, quiet
+from materialize.antithesis import (
+    exit_evidence,
+    observations,
+    quiet,
+    upsert_recovery_io,
+)
 from materialize.antithesis.drivers import canaries, recovery, resource_kills, rollouts
 
 
@@ -1543,3 +1548,21 @@ def test_interrupted_paced_ddl_releases_renewable_quiet(
     with pytest.raises(RuntimeError, match="interrupted"):
         rollouts.action_paced_ddl(Mock())
     assert events == ["held", "released"]
+
+
+def test_p7_never_targets_an_upsert_recovery_fixture() -> None:
+    fixture = (
+        "materialize",
+        f"{upsert_recovery_io.SCHEMA_PREFIX}3_abc",
+        "data",
+    )
+    conn = Mock()
+    conn.execute.return_value.fetchall.return_value = [fixture]
+    conn.execute.return_value.fetchone.return_value = (1,)
+    with pytest.raises(canaries.Skip):
+        canaries._p7(conn)
+    conn.execute.return_value.fetchall.return_value = [
+        fixture,
+        ("materialize", "kafka", "t"),
+    ]
+    assert canaries._p7(conn) == {"table": '"materialize"."kafka"."t"'}
