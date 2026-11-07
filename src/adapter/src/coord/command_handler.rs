@@ -1492,6 +1492,7 @@ impl Coordinator {
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
                     | Statement::CreateMaterializedView(_)
+                    | Statement::CreateAssertion(_)
                     | Statement::CreateRole(_)
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)

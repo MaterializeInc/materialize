@@ -800,7 +800,8 @@ pub fn show_columns<'a>(
         | ty @ CatalogItemType::Secret
         | ty @ CatalogItemType::Type
         | ty @ CatalogItemType::Sink
-        | ty @ CatalogItemType::MetricSink => {
+        | ty @ CatalogItemType::MetricSink
+        | ty @ CatalogItemType::Assertion => {
             sql_bail!("{full_name} is a {ty} and so does not have columns");
         }
     }

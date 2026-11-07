@@ -2537,6 +2537,7 @@ where
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
+            | ExecuteResponse::CreatedAssertion { .. }
             | ExecuteResponse::CreatedMetricSink { .. }
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }

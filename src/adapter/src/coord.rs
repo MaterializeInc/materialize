@@ -2806,7 +2806,10 @@ impl Coordinator {
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => {}
+                | CatalogItem::Secret(_)
+                // Stage 1 assertions ship no dataflow and no storage collection,
+                // so there is nothing to bootstrap.
+                | CatalogItem::Assertion(_) => {}
             }
         }
 
@@ -3389,7 +3392,9 @@ impl Coordinator {
                 | CatalogItem::Connection(_)
                 // Nothing to bootstrap: a metric sink has no storage collection, it publishes
                 // into the replica's metrics registry.
-                | CatalogItem::MetricSink(_) => (),
+                | CatalogItem::MetricSink(_)
+                // Stage 1 assertions have no storage collection.
+                | CatalogItem::Assertion(_) => (),
             }
         }
 
@@ -3898,7 +3903,9 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => (),
+                | CatalogItem::Connection(_)
+                // Stage 1 assertions ship no dataflow, so there is no plan to build.
+                | CatalogItem::Assertion(_) => (),
             }
         }
 
@@ -3931,7 +3938,9 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => continue,
+                | CatalogItem::Connection(_)
+                // Stage 1 assertions ship no dataflow, so there is no as-of to compute.
+                | CatalogItem::Assertion(_) => continue,
             };
             if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
                 catalog_ids.push(gid);

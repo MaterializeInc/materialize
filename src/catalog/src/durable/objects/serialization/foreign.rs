@@ -218,6 +218,7 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             CatalogItemType::Secret => proto::CatalogItemType::Secret,
             CatalogItemType::Connection => proto::CatalogItemType::Connection,
             CatalogItemType::MetricSink => proto::CatalogItemType::MetricSink,
+            CatalogItemType::Assertion => proto::CatalogItemType::Assertion,
         }
     }
 
@@ -234,6 +235,7 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             proto::CatalogItemType::Secret => CatalogItemType::Secret,
             proto::CatalogItemType::Connection => CatalogItemType::Connection,
             proto::CatalogItemType::MetricSink => CatalogItemType::MetricSink,
+            proto::CatalogItemType::Assertion => CatalogItemType::Assertion,
             proto::CatalogItemType::Unknown => {
                 return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"));
             }
@@ -262,6 +264,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             ObjectType::Func => proto::ObjectType::Func,
             ObjectType::NetworkPolicy => proto::ObjectType::NetworkPolicy,
             ObjectType::MetricSink => proto::ObjectType::MetricSink,
+            ObjectType::Assertion => proto::ObjectType::Assertion,
         }
     }
 
@@ -284,6 +287,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Func => Ok(ObjectType::Func),
             proto::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
             proto::ObjectType::MetricSink => Ok(ObjectType::MetricSink),
+            proto::ObjectType::Assertion => Ok(ObjectType::Assertion),
             proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
@@ -409,6 +413,9 @@ impl RustType<proto::CommentObject> for CommentObjectId {
             CommentObjectId::MetricSink(global_id) => {
                 proto::CommentObject::MetricSink(global_id.into_proto())
             }
+            CommentObjectId::Assertion(global_id) => {
+                proto::CommentObject::Assertion(global_id.into_proto())
+            }
             CommentObjectId::Index(global_id) => {
                 proto::CommentObject::Index(global_id.into_proto())
             }
@@ -457,6 +464,9 @@ impl RustType<proto::CommentObject> for CommentObjectId {
             proto::CommentObject::Sink(item_id) => CommentObjectId::Sink(item_id.into_rust()?),
             proto::CommentObject::MetricSink(item_id) => {
                 CommentObjectId::MetricSink(item_id.into_rust()?)
+            }
+            proto::CommentObject::Assertion(item_id) => {
+                CommentObjectId::Assertion(item_id.into_rust()?)
             }
             proto::CommentObject::Index(item_id) => CommentObjectId::Index(item_id.into_rust()?),
             proto::CommentObject::Func(item_id) => CommentObjectId::Func(item_id.into_rust()?),

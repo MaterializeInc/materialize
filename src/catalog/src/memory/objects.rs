@@ -865,6 +865,7 @@ pub enum CatalogItem {
     Secret(Secret),
     Connection(Connection),
     MetricSink(MetricSink),
+    Assertion(Assertion),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1645,6 +1646,42 @@ impl MetricSink {
     }
 }
 
+/// A declarative `CREATE ASSERTION`: a persisted statement of an invariant
+/// (`CHECK (<predicate>) ON <relation>`) over catalog objects.
+///
+/// Stage 1 is declaration-only: the assertion is a durable catalog object that
+/// records its violations query and dependencies, but ships no dataflow and
+/// allocates no storage collection. The violations dataflow and its queryable
+/// collection are deferred to Stage 2, so this item is neither a storage
+/// collection nor a compute object and carries no optimizer plans.
+#[derive(Debug, Clone, Serialize)]
+pub struct Assertion {
+    /// Parse-able SQL that is stored durably and defines this assertion.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this assertion from outside the catalog.
+    pub global_id: GlobalId,
+    /// Unoptimized high-level expression for the violations query, derived from
+    /// the desugared `SELECT * FROM <rel> WHERE NOT (<predicate>)`.
+    pub raw_expr: Arc<HirRelationExpr>,
+    /// Other catalog objects referenced by this assertion, determined at name
+    /// resolution.
+    pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this assertion.
+    pub dependencies: DependencyIds,
+    /// Cluster this assertion is bound to (where its dataflow will run once the
+    /// violations dataflow lands in Stage 2).
+    pub cluster_id: ClusterId,
+    /// If set, pin this assertion's dataflow to the specified replica.
+    pub target_replica: Option<ReplicaId>,
+}
+
+impl Assertion {
+    /// The [`GlobalId`] that refers to this assertion.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
     /// Parse-able SQL that defines this type.
@@ -1775,6 +1812,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => CatalogItemType::Secret,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
             CatalogItem::MetricSink(_) => CatalogItemType::MetricSink,
+            CatalogItem::Assertion(_) => CatalogItemType::Assertion,
         }
     }
 
@@ -1794,6 +1832,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
             CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
+            CatalogItem::Assertion(assertion) => assertion.global_id,
             CatalogItem::Table(table) => {
                 return itertools::Either::Left(table.collections.values().copied());
             }
@@ -1817,6 +1856,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
             CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
+            CatalogItem::Assertion(assertion) => assertion.global_id,
             CatalogItem::Table(table) => table.global_id_writes(),
         }
     }
@@ -1906,7 +1946,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => false,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => false,
         }
     }
 
@@ -1933,7 +1974,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
             | CatalogItem::Type(_)
-            | CatalogItem::MetricSink(_) => None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => None,
         }
     }
 
@@ -2001,6 +2043,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
             CatalogItem::MetricSink(metric_sink) => &metric_sink.resolved_ids,
+            CatalogItem::Assertion(assertion) => &assertion.resolved_ids,
         }
     }
 
@@ -2028,6 +2071,9 @@ impl CatalogItem {
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
             CatalogItem::MetricSink(_) => {}
+            CatalogItem::Assertion(assertion) => {
+                uses.extend(assertion.dependencies.0.iter().copied())
+            }
         }
         uses
     }
@@ -2055,7 +2101,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => BTreeSet::new(),
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => BTreeSet::new(),
         }
     }
 
@@ -2074,7 +2121,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => None,
         }
     }
 
@@ -2093,7 +2141,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => (),
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => (),
         }
     }
 
@@ -2118,7 +2167,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => {
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => {
                 unreachable!("only views, indexes, and tables can be temporary")
             }
         }
@@ -2205,6 +2255,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::MetricSink(i))
             }
+            CatalogItem::Assertion(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Assertion(i))
+            }
         }
     }
 
@@ -2280,6 +2335,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::MetricSink(i))
             }
+            CatalogItem::Assertion(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Assertion(i))
+            }
         }
     }
 
@@ -2346,6 +2406,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::MetricSink(i)
+            }
+            CatalogItem::Assertion(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Assertion(i)
             }
         }
     }
@@ -2525,7 +2590,8 @@ impl CatalogItem {
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
             | CatalogItem::Connection(Connection { create_sql, .. })
-            | CatalogItem::MetricSink(MetricSink { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::MetricSink(MetricSink { create_sql, .. })
+            | CatalogItem::Assertion(Assertion { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -2552,7 +2618,10 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::MetricSink(metric_sink) => Some(metric_sink.cluster_id),
-            CatalogItem::Table(_)
+            // Stage 1 assertions ship no dataflow, so they are not yet a
+            // compute object even though they are bound to a cluster.
+            CatalogItem::Assertion(_)
+            | CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -2590,7 +2659,9 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            // Stage 1 assertions ship no dataflow, so there is nothing to hydrate.
+            | CatalogItem::Assertion(_) => false,
         }
     }
 
@@ -2612,6 +2683,7 @@ impl CatalogItem {
                 | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
+            CatalogItem::Assertion(assertion) => Some(assertion.cluster_id),
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -2637,7 +2709,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => None,
         }
     }
 
@@ -2659,7 +2732,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => return None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => return None,
         };
         Some(cw)
     }
@@ -2684,7 +2758,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => return None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => return None,
         };
         Some(custom_logical_compaction_window.unwrap_or(CompactionWindow::Default))
     }
@@ -2705,7 +2780,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => false,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => false,
         }
     }
 
@@ -2763,6 +2839,7 @@ impl CatalogItem {
             ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::MetricSink(ms) => (ms.create_sql.clone(), ms.global_id, BTreeMap::new()),
+            CatalogItem::Assertion(a) => (a.create_sql.clone(), a.global_id, BTreeMap::new()),
         }
     }
 
@@ -2809,6 +2886,7 @@ impl CatalogItem {
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::MetricSink(ms) => (ms.create_sql, ms.global_id, BTreeMap::new()),
+            CatalogItem::Assertion(a) => (a.create_sql, a.global_id, BTreeMap::new()),
         }
     }
 
@@ -2828,6 +2906,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => return Some(secret.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
             CatalogItem::MetricSink(metric_sink) => return Some(metric_sink.global_id),
+            CatalogItem::Assertion(assertion) => return Some(assertion.global_id),
         };
         match version {
             RelationVersionSelector::Latest => collections.values().last().copied(),
@@ -3033,7 +3112,8 @@ impl CatalogEntry {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_) => None,
         }
     }
 
@@ -3168,6 +3248,7 @@ impl CatalogEntry {
             Type => CommentObjectId::Type(self.id),
             Secret => CommentObjectId::Secret(self.id),
             MetricSink => CommentObjectId::MetricSink(self.id),
+            Assertion => CommentObjectId::Assertion(self.id),
         }
     }
 }
@@ -4177,6 +4258,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::MetricSink(MetricSink { create_sql, .. }) => create_sql,
+            CatalogItem::Assertion(Assertion { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
         }

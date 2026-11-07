@@ -276,6 +276,12 @@ impl Coordinator {
                     self.sequence_create_materialized_view(ctx, plan, resolved_ids)
                         .await;
                 }
+                Plan::CreateAssertion(plan) => {
+                    let result = self
+                        .sequence_create_assertion(ctx.session(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(result);
+                }
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
                 }

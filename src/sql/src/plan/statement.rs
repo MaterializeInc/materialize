@@ -165,6 +165,7 @@ pub fn describe(
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
+        Statement::CreateAssertion(stmt) => ddl::describe_create_assertion(&scx, stmt)?,
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
@@ -370,6 +371,7 @@ pub fn plan(
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
+        Statement::CreateAssertion(stmt) => ddl::plan_create_assertion(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
@@ -1098,6 +1100,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateType(_) => DDL,
             Statement::CreateView(_) => DDL,
             Statement::CreateMaterializedView(_) => DDL,
+            Statement::CreateAssertion(_) => DDL,
             Statement::CreateNetworkPolicy(_) => DDL,
             Statement::DropObjects(_) => DDL,
             Statement::DropOwned(_) => DDL,

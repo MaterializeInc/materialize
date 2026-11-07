@@ -21,7 +21,8 @@ use mz_repr::{ColumnName, GlobalId, RelationVersion};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    AssertionDefinition, CreateAssertionStatement, CreateConnectionStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement,
     CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
     CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement,
     CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function,
@@ -448,6 +449,31 @@ pub fn create_statement(
                 }
             }
             *if_exists = IfExistsBehavior::Error;
+        }
+
+        Statement::CreateAssertion(CreateAssertionStatement {
+            if_not_exists,
+            name,
+            in_cluster: _,
+            definition,
+        }) => {
+            *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new();
+            match definition {
+                AssertionDefinition::OnCheck { on: _, check } => {
+                    normalizer.visit_expr_mut(check);
+                }
+                AssertionDefinition::Check(check) => {
+                    normalizer.visit_expr_mut(check);
+                }
+                AssertionDefinition::Query(query) => {
+                    normalizer.visit_query_mut(query);
+                }
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
+            }
+            *if_not_exists = false;
         }
 
         Statement::CreateIndex(CreateIndexStatement {

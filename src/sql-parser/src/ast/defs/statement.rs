@@ -56,6 +56,7 @@ pub enum Statement<T: AstInfo> {
     CreateMetricSink(CreateMetricSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
+    CreateAssertion(CreateAssertionStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
@@ -136,6 +137,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateMetricSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
+            Statement::CreateAssertion(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
@@ -226,6 +228,7 @@ impl StatementKind {
             | Self::CreateMetricSink
             | Self::CreateView
             | Self::CreateMaterializedView
+            | Self::CreateAssertion
             | Self::CreateTable
             | Self::CreateTableFromSource
             | Self::CreateIndex
@@ -325,6 +328,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateMetricSink => "create_metric_sink",
         StatementKind::CreateView => "create_view",
         StatementKind::CreateMaterializedView => "create_materialized_view",
+        StatementKind::CreateAssertion => "create_assertion",
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
@@ -1721,6 +1725,72 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
+
+/// `CREATE ASSERTION`
+///
+/// A named boolean data-integrity predicate that Materialize maintains
+/// incrementally. Violating rows are surfaced as a queryable, retractable
+/// collection rather than tainting the referenced objects. See the design doc
+/// "CREATE ASSERTION for Materialize".
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateAssertionStatement<T: AstInfo> {
+    pub if_not_exists: bool,
+    pub name: UnresolvedItemName,
+    pub in_cluster: Option<T::ClusterName>,
+    pub definition: AssertionDefinition<T>,
+}
+
+/// The body of a [`CreateAssertionStatement`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AssertionDefinition<T: AstInfo> {
+    /// `ON <rel> CHECK (<predicate>)` — the Phase 1 single-relation shorthand.
+    /// Violations are the rows of `<rel>` for which `<predicate>` is not true.
+    OnCheck { on: T::ItemName, check: Expr<T> },
+    /// `CHECK (<predicate>)` — general boolean predicate (e.g. `NOT EXISTS (...)`).
+    Check(Expr<T>),
+    /// `AS <query>` — violations are exactly the rows the query returns.
+    Query(Query<T>),
+}
+
+impl<T: AstInfo> AstDisplay for AssertionDefinition<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            AssertionDefinition::OnCheck { on, check } => {
+                f.write_str(" ON ");
+                f.write_node(on);
+                f.write_str(" CHECK (");
+                f.write_node(check);
+                f.write_str(")");
+            }
+            AssertionDefinition::Check(check) => {
+                f.write_str(" CHECK (");
+                f.write_node(check);
+                f.write_str(")");
+            }
+            AssertionDefinition::Query(query) => {
+                f.write_str(" AS ");
+                f.write_node(query);
+            }
+        }
+    }
+}
+impl_display_t!(AssertionDefinition);
+
+impl<T: AstInfo> AstDisplay for CreateAssertionStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE ASSERTION ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
+        }
+        f.write_node(&self.definition);
+    }
+}
+impl_display_t!(CreateAssertionStatement);
 
 /// `ALTER SET CLUSTER`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -4549,6 +4619,7 @@ pub enum ObjectType {
     Table,
     View,
     MaterializedView,
+    Assertion,
     Source,
     Sink,
     MetricSink,
@@ -4572,6 +4643,7 @@ impl ObjectType {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
+            | ObjectType::Assertion
             | ObjectType::Source
             | ObjectType::Sink
             | ObjectType::MetricSink
@@ -4597,6 +4669,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Table => "TABLE",
             ObjectType::View => "VIEW",
             ObjectType::MaterializedView => "MATERIALIZED VIEW",
+            ObjectType::Assertion => "ASSERTION",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
             ObjectType::MetricSink => "METRIC SINK",

@@ -1916,6 +1916,12 @@ feature_flags!(
     },
     // Actual feature flags
     {
+        name: enable_create_assertion,
+        desc: "CREATE ASSERTION",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_binary_date_bin,
         desc: "the binary version of date_bin function",
         default: false,

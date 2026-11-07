@@ -973,6 +973,8 @@ pub enum CatalogItemType {
     Connection,
     /// A metric sink.
     MetricSink,
+    /// An assertion.
+    Assertion,
 }
 
 impl CatalogItemType {
@@ -1007,6 +1009,7 @@ impl CatalogItemType {
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
             CatalogItemType::MetricSink => false,
+            CatalogItemType::Assertion => false,
         }
     }
 }
@@ -1025,6 +1028,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
             CatalogItemType::MetricSink => f.write_str("metric sink"),
+            CatalogItemType::Assertion => f.write_str("assertion"),
         }
     }
 }
@@ -1043,6 +1047,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
             CatalogItemType::MetricSink => ObjectType::MetricSink,
+            CatalogItemType::Assertion => ObjectType::Assertion,
         }
     }
 }
@@ -1061,6 +1066,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
             CatalogItemType::MetricSink => mz_audit_log::ObjectType::MetricSink,
+            CatalogItemType::Assertion => mz_audit_log::ObjectType::Assertion,
         }
     }
 }
@@ -1578,6 +1584,7 @@ pub enum ObjectType {
     Table,
     View,
     MaterializedView,
+    Assertion,
     Source,
     Sink,
     MetricSink,
@@ -1601,6 +1608,8 @@ impl ObjectType {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
+            // An assertion's violations collection is a queryable relation.
+            | ObjectType::Assertion
             | ObjectType::Source => true,
             ObjectType::Sink
             | ObjectType::MetricSink
@@ -1625,6 +1634,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Table => ObjectType::Table,
             mz_sql_parser::ast::ObjectType::View => ObjectType::View,
             mz_sql_parser::ast::ObjectType::MaterializedView => ObjectType::MaterializedView,
+            mz_sql_parser::ast::ObjectType::Assertion => ObjectType::Assertion,
             mz_sql_parser::ast::ObjectType::Source => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Subsource => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
@@ -1653,6 +1663,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Source(_) => ObjectType::Source,
             CommentObjectId::Sink(_) => ObjectType::Sink,
             CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
+            CommentObjectId::Assertion(_) => ObjectType::Assertion,
             CommentObjectId::Index(_) => ObjectType::Index,
             CommentObjectId::Func(_) => ObjectType::Func,
             CommentObjectId::Connection(_) => ObjectType::Connection,
@@ -1674,6 +1685,7 @@ impl Display for ObjectType {
             ObjectType::Table => "TABLE",
             ObjectType::View => "VIEW",
             ObjectType::MaterializedView => "MATERIALIZED VIEW",
+            ObjectType::Assertion => "ASSERTION",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
             ObjectType::MetricSink => "METRIC SINK",

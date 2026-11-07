@@ -328,8 +328,8 @@ pub(crate) fn validate_read_then_write_dependencies(
             DependencyPolicy::UserDml => match item_type {
                 typ @ (Func | View | MaterializedView) => id.is_user() || matches!(typ, Func),
                 Source | Secret | Connection => false,
-                // Cannot select from sinks or indexes.
-                Sink | MetricSink | Index => unreachable!(),
+                // Cannot select from sinks, indexes, or (in Stage 1) assertions.
+                Sink | MetricSink | Assertion | Index => unreachable!(),
                 Table => id.is_user() && is_writable_table,
                 Type => true,
             },

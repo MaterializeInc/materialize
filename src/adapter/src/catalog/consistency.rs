@@ -270,6 +270,7 @@ impl CatalogState {
                 | CommentObjectId::Source(item_id)
                 | CommentObjectId::Sink(item_id)
                 | CommentObjectId::MetricSink(item_id)
+                | CommentObjectId::Assertion(item_id)
                 | CommentObjectId::Index(item_id)
                 | CommentObjectId::Func(item_id)
                 | CommentObjectId::Connection(item_id)

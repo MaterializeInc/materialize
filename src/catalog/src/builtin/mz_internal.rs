@@ -3556,6 +3556,7 @@ SELECT
         WHEN obj ? 'MaterializedView' THEN mz_internal.parse_catalog_id(obj->'MaterializedView')
         WHEN obj ? 'Source'           THEN mz_internal.parse_catalog_id(obj->'Source')
         WHEN obj ? 'Sink'             THEN mz_internal.parse_catalog_id(obj->'Sink')
+        WHEN obj ? 'Assertion'        THEN mz_internal.parse_catalog_id(obj->'Assertion')
         WHEN obj ? 'Index'            THEN mz_internal.parse_catalog_id(obj->'Index')
         WHEN obj ? 'Func'             THEN mz_internal.parse_catalog_id(obj->'Func')
         WHEN obj ? 'Connection'       THEN mz_internal.parse_catalog_id(obj->'Connection')
@@ -3574,6 +3575,7 @@ SELECT
         WHEN obj ? 'MaterializedView' THEN 'materialized-view'
         WHEN obj ? 'Source'           THEN 'source'
         WHEN obj ? 'Sink'             THEN 'sink'
+        WHEN obj ? 'Assertion'        THEN 'assertion'
         WHEN obj ? 'Index'            THEN 'index'
         WHEN obj ? 'Func'             THEN 'func'
         WHEN obj ? 'Connection'       THEN 'connection'
