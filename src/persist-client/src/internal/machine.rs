@@ -294,12 +294,19 @@ where
         val_schema: &V::Schema,
     ) -> (Option<SchemaId>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, state, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, _cfg, state| {
+        let register = || {
+            self.apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, _cfg, state| {
                 state.register_schema::<K, V>(key_schema, val_schema)
             })
-            .await;
-        (state, maintenance)
+        };
+        let (_seqno, mut schema_id, mut maintenance) = register().await;
+        // `None` is a no-op that never reaches consensus, so our cached state
+        // may lack a schema another process added with `compare_and_evolve_schema`.
+        if schema_id.is_none() {
+            self.applier.fetch_and_update_state(None).await;
+            (_, schema_id, maintenance) = register().await;
+        }
+        (schema_id, maintenance)
     }
 
     pub async fn spine_exert(&self, fuel: usize) -> (Vec<CompactReq<T>>, RoutineMaintenance) {

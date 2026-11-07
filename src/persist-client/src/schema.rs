@@ -444,7 +444,7 @@ mod tests {
     use async_trait::async_trait;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::location::{
-        CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
+        Blob, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
     };
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -816,6 +816,79 @@ mod tests {
         );
         // Old check order returns ExpectedMismatch here; the fix returns Ok.
         assert_eq!(res, CaESchema::Ok(SchemaId(1)));
+    }
+
+    /// Regression test for PER-130.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn append_with_schema_evolved_by_other_process() {
+        let cfg = PersistConfig::new_for_tests();
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+        let blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let consensus: Arc<dyn Consensus> = Arc::new(MemConsensus::default());
+        // Separate state caches without PubSub, like two processes.
+        let new_process = || {
+            PersistClient::new(
+                cfg.clone(),
+                Arc::clone(&blob),
+                Arc::clone(&consensus),
+                Arc::clone(&metrics),
+                Arc::new(IsolatedRuntime::new_for_tests()),
+                Arc::new(StateCache::new_no_metrics()),
+                Arc::new(NoopPubSubSender),
+            )
+            .expect("client construction failed")
+        };
+        let (evolver, appender) = (new_process(), new_process());
+        let d = Diagnostics::for_tests();
+        let shard_id = ShardId::new();
+        let schema1 = StringsSchema(vec![false, true]);
+
+        // Keeps the appender's cached state alive, at schema 0.
+        let mut write0 = appender
+            .open_writer::<Strings, (), u64, i64>(
+                shard_id,
+                Arc::new(StringsSchema(vec![false])),
+                Arc::new(UnitSchema),
+                d.clone(),
+            )
+            .await
+            .unwrap();
+        write0.try_register_schema().await;
+
+        let res = evolver
+            .compare_and_evolve_schema::<Strings, (), u64, i64>(
+                shard_id,
+                SchemaId(0),
+                &schema1,
+                &UnitSchema,
+                d.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res, CaESchema::Ok(SchemaId(1)));
+
+        let mut write1 = appender
+            .open_writer::<Strings, (), u64, i64>(
+                shard_id,
+                Arc::new(schema1),
+                Arc::new(UnitSchema),
+                d.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(write1.schema_id(), None, "appender state should be stale");
+        write1
+            .compare_and_append_batch(
+                &mut [],
+                Antichain::from_elem(0),
+                Antichain::from_elem(1),
+                true,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(write1.schema_id(), Some(SchemaId(1)));
     }
 
     fn strings(xs: &[((Strings, ()), u64, i64)]) -> Vec<Vec<&str>> {
