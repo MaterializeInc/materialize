@@ -21,9 +21,10 @@ use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlScalarType};
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSinkOptionName, CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences,
-    ObjectType, ShowCreateClusterStatement, ShowCreateConnectionStatement,
-    ShowCreateMaterializedViewStatement, ShowCreateTypeStatement, ShowObjectType,
-    SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName, WithOptionValue,
+    ObjectType, ShowCreateAssertionStatement, ShowCreateClusterStatement,
+    ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowCreateTypeStatement,
+    ShowObjectType, SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName,
+    WithOptionValue,
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
@@ -47,7 +48,7 @@ use crate::plan::statement::{StatementContext, StatementDesc, dml};
 use crate::plan::{
     HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan, query, transform_ast,
 };
-use crate::session::vars::ENABLE_METRIC_SINK;
+use crate::session::vars::{ENABLE_CREATE_ASSERTION, ENABLE_METRIC_SINK};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -96,6 +97,29 @@ pub fn plan_show_create_materialized_view(
         CatalogItemType::MaterializedView,
         redacted,
     )
+}
+
+pub fn describe_show_create_assertion(
+    _: &StatementContext,
+    _: ShowCreateAssertionStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_assertion(
+    scx: &StatementContext,
+    ShowCreateAssertionStatement {
+        assertion_name,
+        redacted,
+    }: ShowCreateAssertionStatement<Aug>,
+) -> Result<ShowCreatePlan, PlanError> {
+    scx.require_feature_flag(&ENABLE_CREATE_ASSERTION)?;
+    plan_show_create_item(scx, &assertion_name, CatalogItemType::Assertion, redacted)
 }
 
 pub fn describe_show_create_table(
@@ -437,6 +461,9 @@ pub fn show_objects<'a>(
         ShowObjectType::MaterializedView { in_cluster } => {
             show_materialized_views(scx, from, in_cluster, filter)
         }
+        ShowObjectType::Assertion { in_cluster } => {
+            show_assertions(scx, from, in_cluster, filter)
+        }
         ShowObjectType::Index {
             in_cluster,
             on_object,
@@ -620,6 +647,31 @@ fn show_materialized_views<'a>(
     let projection = vec!["name", "cluster", "comment"];
 
     ShowSelect::new(scx, query, filter, None, Some(&projection))
+}
+
+fn show_assertions<'a>(
+    scx: &'a StatementContext<'a>,
+    from: Option<ResolvedSchemaName>,
+    in_cluster: Option<ResolvedClusterName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    scx.require_feature_flag(&ENABLE_CREATE_ASSERTION)?;
+    let schema_spec = scx.resolve_optional_schema(&from)?;
+    let mut where_clause = format!("assertions.schema_id = '{schema_spec}'");
+
+    if let Some(cluster) = in_cluster {
+        write!(where_clause, " AND assertions.cluster_id = '{}'", cluster.id)
+            .expect("write on string cannot fail");
+    }
+
+    let query = format!(
+        "SELECT assertions.name AS name, clusters.name AS cluster
+            FROM mz_internal.mz_assertions AS assertions
+            JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = assertions.cluster_id
+            WHERE {where_clause}"
+    );
+
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "cluster"]))
 }
 
 fn show_sinks<'a>(

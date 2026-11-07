@@ -16,6 +16,11 @@
 
 mode cockroach
 
+# `orders` must exist before the flag-off check so the test exercises the
+# feature gate itself, not name resolution (which runs before planning).
+statement ok
+CREATE TABLE orders (amount int, status text)
+
 # The feature is off by default.
 statement error CREATE ASSERTION is not available
 CREATE ASSERTION a ON orders CHECK (amount >= 0)
@@ -24,9 +29,6 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_create_assertion = true;
 ----
 COMPLETE 0
-
-statement ok
-CREATE TABLE orders (amount int, status text)
 
 statement ok
 CREATE ASSERTION a ON orders CHECK (amount >= 0)
@@ -66,6 +68,49 @@ CREATE ASSERTION IF NOT EXISTS a ON orders CHECK (amount >= 0)
 # An explicit cluster is accepted.
 statement ok
 CREATE ASSERTION b IN CLUSTER quickstart ON orders CHECK (status <> 'void')
+
+# --- Stage 2a: observability (SHOW + mz_assertions) ---
+
+# mz_internal.mz_assertions surfaces every declared assertion.
+query T
+SELECT name FROM mz_internal.mz_assertions ORDER BY name
+----
+a
+b
+
+# The definition column exposes the CHECK predicate parsed out of create_sql.
+query TB
+SELECT name, definition LIKE '%void%' FROM mz_internal.mz_assertions ORDER BY name
+----
+a  false
+b  true
+
+# Each assertion reports the cluster it is bound to.
+query TB
+SELECT name, cluster_id IS NOT NULL FROM mz_internal.mz_assertions ORDER BY name
+----
+a  true
+b  true
+
+# SHOW ASSERTIONS lists assertions with their bound cluster.
+query TT
+SHOW ASSERTIONS
+----
+a  quickstart
+b  quickstart
+
+# SHOW ASSERTIONS IN CLUSTER filters by cluster.
+query TT
+SHOW ASSERTIONS IN CLUSTER quickstart
+----
+a  quickstart
+b  quickstart
+
+# SHOW CREATE ASSERTION returns a clean, re-runnable create_sql.
+query T
+SELECT create_sql FROM (SHOW CREATE ASSERTION b)
+----
+CREATE ASSERTION materialize.public.b IN CLUSTER quickstart ON materialize.public.orders CHECK (status <> 'void');
 
 statement ok
 DROP ASSERTION a

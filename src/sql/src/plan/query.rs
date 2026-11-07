@@ -2086,6 +2086,10 @@ fn plan_set_expr(
                     show::plan_show_create_materialized_view(qcx.scx, stmt.clone())?,
                     show::describe_show_create_materialized_view(qcx.scx, stmt)?,
                 ),
+                ShowStatement::ShowCreateAssertion(stmt) => to_hirscope(
+                    show::plan_show_create_assertion(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_assertion(qcx.scx, stmt)?,
+                ),
                 ShowStatement::ShowCreateType(stmt) => to_hirscope(
                     show::plan_show_create_type(qcx.scx, stmt.clone())?,
                     show::describe_show_create_type(qcx.scx, stmt)?,

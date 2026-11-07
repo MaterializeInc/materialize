@@ -3745,6 +3745,9 @@ pub enum ShowObjectType<T: AstInfo> {
     MaterializedView {
         in_cluster: Option<T::ClusterName>,
     },
+    Assertion {
+        in_cluster: Option<T::ClusterName>,
+    },
     Index {
         in_cluster: Option<T::ClusterName>,
         on_object: Option<T::ItemName>,
@@ -3823,6 +3826,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Secret => "SECRETS",
             ShowObjectType::Connection => "CONNECTIONS",
             ShowObjectType::MaterializedView { .. } => "MATERIALIZED VIEWS",
+            ShowObjectType::Assertion { .. } => "ASSERTIONS",
             ShowObjectType::Index { .. } => "INDEXES",
             ShowObjectType::Database => "DATABASES",
             ShowObjectType::Schema { .. } => "SCHEMAS",
@@ -3853,6 +3857,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         // append IN CLUSTER clause
         match &self.object_type {
             ShowObjectType::MaterializedView { in_cluster }
+            | ShowObjectType::Assertion { in_cluster }
             | ShowObjectType::Index { in_cluster, .. }
             | ShowObjectType::Sink { in_cluster }
             | ShowObjectType::MetricSink { in_cluster }
@@ -3980,6 +3985,25 @@ impl<T: AstInfo> AstDisplay for ShowCreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(ShowCreateMaterializedViewStatement);
+
+/// `SHOW [REDACTED] CREATE ASSERTION <name>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateAssertionStatement<T: AstInfo> {
+    pub assertion_name: T::ItemName,
+    pub redacted: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateAssertionStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE ASSERTION ");
+        f.write_node(&self.assertion_name);
+    }
+}
+impl_display_t!(ShowCreateAssertionStatement);
 
 /// `SHOW [REDACTED] CREATE SOURCE <source>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -5713,6 +5737,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowColumns(ShowColumnsStatement<T>),
     ShowCreateView(ShowCreateViewStatement<T>),
     ShowCreateMaterializedView(ShowCreateMaterializedViewStatement<T>),
+    ShowCreateAssertion(ShowCreateAssertionStatement<T>),
     ShowCreateSource(ShowCreateSourceStatement<T>),
     ShowCreateTable(ShowCreateTableStatement<T>),
     ShowCreateSink(ShowCreateSinkStatement<T>),
@@ -5732,6 +5757,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowColumns(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateView(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateMaterializedView(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateAssertion(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateSource(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateTable(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),

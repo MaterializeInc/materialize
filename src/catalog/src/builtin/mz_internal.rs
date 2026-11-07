@@ -544,6 +544,84 @@ SELECT * FROM builtin_strategies",
     }
     });
 
+/// `mz_assertions` lists the Stage 1 `CREATE ASSERTION` catalog objects. Modeled
+/// on `mz_catalog.mz_materialized_views`: it reads each assertion's persisted
+/// `create_sql` out of `mz_catalog_raw` and surfaces the bound cluster and the
+/// `CHECK`/`AS` definition. There are no builtin assertions, so unlike
+/// `mz_materialized_views` it has no builtin-object union.
+pub static MZ_ASSERTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_assertions",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_ASSERTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("definition", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the assertion."),
+            ("oid", "A PostgreSQL-compatible OID for the assertion."),
+            (
+                "schema_id",
+                "The ID of the schema to which the assertion belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the assertion."),
+            (
+                "cluster_id",
+                "The ID of the cluster the assertion is bound to. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "definition",
+                "The assertion's `CHECK` predicate or `AS` query, as it appears in the assertion's `create_sql`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the assertion. Corresponds to `mz_roles.id`.",
+            ),
+            ("privileges", "The privileges belonging to the assertion."),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL definition,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'cluster_id' AS cluster_id,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'definition' AS definition,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE
+    data->>'kind' = 'Item' AND
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'assertion'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
 pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
         name: "mz_network_policies",

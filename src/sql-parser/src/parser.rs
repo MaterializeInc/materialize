@@ -8482,6 +8482,10 @@ impl<'a> Parser<'a> {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::MaterializedView { in_cluster }
                 }
+                ObjectType::Assertion => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::Assertion { in_cluster }
+                }
                 ObjectType::Index => {
                     let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
                         Some(self.parse_raw_name()?)
@@ -8503,10 +8507,7 @@ impl<'a> Parser<'a> {
                         on_object,
                     }
                 }
-                // SHOW ASSERTIONS is deferred to Phase 2; `parse_plural_object_type`
-                // does not yet produce `Assertion`, so this arm is currently
-                // unreachable but keeps the match exhaustive.
-                ObjectType::Func | ObjectType::Assertion => {
+                ObjectType::Func => {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
@@ -8548,6 +8549,13 @@ impl<'a> Parser<'a> {
             Ok(ShowStatement::ShowCreateMaterializedView(
                 ShowCreateMaterializedViewStatement {
                     materialized_view_name: self.parse_raw_name()?,
+                    redacted,
+                },
+            ))
+        } else if self.parse_keywords(&[CREATE, ASSERTION]) {
+            Ok(ShowStatement::ShowCreateAssertion(
+                ShowCreateAssertionStatement {
+                    assertion_name: self.parse_raw_name()?,
                     redacted,
                 },
             ))
@@ -10319,6 +10327,7 @@ impl<'a> Parser<'a> {
                 TABLES,
                 VIEWS,
                 MATERIALIZED,
+                ASSERTIONS,
                 SOURCES,
                 SINKS,
                 METRIC,
@@ -10345,6 +10354,7 @@ impl<'a> Parser<'a> {
                         return None;
                     }
                 }
+                ASSERTIONS => ObjectType::Assertion,
                 SOURCES => ObjectType::Source,
                 SINKS => ObjectType::Sink,
                 METRIC => {

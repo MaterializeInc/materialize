@@ -53,6 +53,7 @@ As
 Asc
 Assert
 Assertion
+Assertions
 Assume
 At
 Auction
