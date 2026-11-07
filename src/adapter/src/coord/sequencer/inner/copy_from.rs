@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use mz_adapter_types::connection::ConnectionId;
+use mz_controller::clusters::WorkloadClass;
 use mz_expr::Eval;
 use mz_ore::cast::CastInto;
 use mz_persist_client::Diagnostics;
@@ -262,6 +263,14 @@ impl Coordinator {
             }
         };
         let cluster_id = target_cluster.id;
+        if let Err(err) = self.ensure_cluster_allows_running_workload(
+            cluster_id,
+            WorkloadClass::Ingest,
+            ctx.session().conn_id(),
+            "run COPY FROM",
+        ) {
+            return ctx.retire(Err(err));
+        }
 
         // When we finish staging the Batches in Persist, we'll send a command
         // to the Coordinator.

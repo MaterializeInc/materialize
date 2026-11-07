@@ -110,6 +110,15 @@
       "dyncfg": false
     },
     {
+      "name": "cluster_family_allowed_workloads",
+      "typeName": "jsonb",
+      "default": "{}",
+      "description": "The workload classes that clusters using sizes of a family may run. A JSON object mapping family names to arrays of classes: ingest, sink, compute_maintained, compute_interactive, compute_introspection. Families not listed allow every class.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "cluster_multi_process_replica_az_affinity_weight",
       "typeName": "optional integer",
       "default": "100",
