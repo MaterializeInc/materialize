@@ -1144,6 +1144,9 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
             1,
             allowed_workloads=["sink", "compute_maintained", "compute_interactive"],
         ),
+        "scale=1,workers=1,interactive-only": replica_size(
+            1, 1, allowed_workloads=["compute_interactive"]
+        ),
         # Intentionally not following the naming scheme
         "free": replica_size(1, 1, disabled=True),
     }
