@@ -4517,6 +4517,98 @@ async fn test_serialized_ddl_cancel() {
     // pass very high durations to mz_sleep so that we aren't waiting for long.
 }
 
+// Test that cancelling the commit of an implicit transaction while it waits for the DDL lock
+// discards the transaction's variable changes.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_serialized_ddl_cancel_implicit_commit_discards_set_local() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start()
+        .await;
+    server
+        .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
+        .await;
+
+    let client1 = server.connect().await.unwrap();
+    let client2 = server.connect().await.unwrap();
+    let cancel1 = client1.cancel_token();
+    let cancel2 = client2.cancel_token();
+
+    // NOTE: This must use the simple query protocol. An extended-protocol query first sends Parse
+    // and Sync, and that Sync ends an empty transaction, which would discard leaked values before
+    // the SHOW runs.
+    async fn show_vars(client: &tokio_postgres::Client) -> Vec<String> {
+        client
+            .simple_query("SHOW transaction_isolation; SHOW application_name;")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|m| match m {
+                postgres::SimpleQueryMessage::Row(row) => Some(row.get(0).unwrap().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    client2
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    let before = show_vars(&client2).await;
+
+    // client1 holds the DDL lock while the view's optimization sleeps.
+    let handle1 = task::spawn(|| "test", async move {
+        client1
+            .batch_execute("CREATE VIEW v AS SELECT mz_unsafe.mz_sleep(5)")
+            .await
+    });
+    let handle2 = task::spawn(|| "test", async move {
+        // Encourage client1 to take the DDL lock first.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // A multi-statement query runs in an implicit transaction. The rename joins the
+        // transaction's DDL ops without taking the DDL lock, so only the closing commit waits for
+        // it.
+        let err = client2
+            .batch_execute(
+                "SET LOCAL transaction_isolation = 'serializable';
+                 SET application_name = 'canceled';
+                 ALTER TABLE t RENAME TO t2;",
+            )
+            .await
+            .unwrap_err();
+        (client2, err)
+    });
+    // A cancel that lands before the commit is queued has nothing to cancel, so retry until one
+    // lands while it waits.
+    let ((_, handle2), res) = Retry::default()
+        .clamp_backoff(Duration::from_millis(250))
+        .max_duration(Duration::from_secs(30))
+        .retry_async_with_state((cancel2, handle2), |_, (cancel2, handle2)| async move {
+            cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
+            let res = if handle2.is_finished() {
+                Ok(())
+            } else {
+                Err("pending commit not yet canceled".to_string())
+            };
+            ((cancel2, handle2), res)
+        })
+        .await;
+    res.unwrap();
+    let (client2, err) = handle2.await;
+    assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+
+    assert_eq!(
+        show_vars(&client2).await,
+        before,
+        "variable changes outlived their canceled transaction"
+    );
+
+    cancel1.cancel_query(tokio_postgres::NoTls).await.unwrap();
+    let _ = handle1.await;
+}
+
 // Regression test for SQL-232: `GRANT ALL ON TABLE <view>` must not emit the
 // non-applicable-privilege-types notice. The shorthand expands to the full
 // table privilege set for PostgreSQL compatibility, but the user did not

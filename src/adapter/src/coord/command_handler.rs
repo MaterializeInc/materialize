@@ -2044,7 +2044,8 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         let mut maybe_ctx = None;
-        // A COMMIT waiting for group commit or for its read to be linearized.
+        // A COMMIT waiting for group commit or for its read to be linearized, or an implicit
+        // transaction's commit or rollback waiting for the DDL lock.
         let mut maybe_commit_ctx = None;
 
         // Cancel all pending writes for this connection:
@@ -2100,7 +2101,11 @@ impl Coordinator {
                 .serialized_ddl
                 .remove(idx)
                 .expect("known to exist from call to `position` above");
-            maybe_ctx = Some(deferred.ctx);
+            if deferred.ends_implicit_transaction() {
+                maybe_commit_ctx = Some(deferred.ctx);
+            } else {
+                maybe_ctx = Some(deferred.ctx);
+            }
         }
 
         // Cancel reads waiting on being linearized. There is at most one linearized read per
@@ -2110,9 +2115,10 @@ impl Coordinator {
         }
 
         if let Some(ctx) = maybe_commit_ctx {
-            // The COMMIT already cleared the session's transaction status, so the transaction's
-            // `SET LOCAL` and staged variable values are the only transaction state left. Without
-            // ending them here they apply to the session's next transaction.
+            // The session's transaction status is cleared before the wait, or by the client when
+            // an implicit commit or rollback returns, so the transaction's `SET LOCAL` and staged
+            // variable values are the only transaction state left. Without ending them here they
+            // apply to the session's next transaction.
             //
             // NOTE: The error response cannot carry the changed parameters, so a reverted
             // parameter in the notify set is not announced to the client.
