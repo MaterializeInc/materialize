@@ -20,7 +20,7 @@ use mz_ore::cast::CastLossy;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
-use mz_repr::{Datum, Row, SqlScalarType};
+use mz_repr::{Datum, Diff, Row, SqlScalarType};
 
 use super::*;
 
@@ -354,34 +354,17 @@ async fn upload_with_bounds(
     lower: Timestamp,
     upper: Timestamp,
 ) -> StashUpload {
-    let client = clients
-        .open(PersistLocation::new_in_mem())
-        .await
-        .expect("the in-memory location opens");
-    let shard_id = ShardId::try_from(format!("s{}", Uuid::new_v4())).expect("can parse");
-    let relation_desc = result_desc();
-    let write_schemas: Schemas<SourceData, ()> = Schemas {
-        id: None,
-        key: Arc::new(relation_desc.clone()),
-        val: Arc::new(UnitSchema),
-    };
-    let batch_builder = client.batch_builder::<SourceData, (), Timestamp, i64>(
-        shard_id,
-        "peek_stash",
-        write_schemas,
+    StashUpload::open_range(
+        clients,
+        PersistLocation::new_in_mem(),
+        NO_RUN_MERGING,
+        stash_shard_id(Uuid::new_v4()),
+        result_desc(),
         Antichain::from_elem(lower),
-        Some(NO_RUN_MERGING),
-    );
-
-    StashUpload {
-        relation_desc,
-        shard_id,
-        batch_builder: Some(batch_builder),
-        upper: Antichain::from_elem(upper),
-        num_rows: 0,
-        wrote_parts: false,
-        runtime: Handle::current(),
-    }
+        Antichain::from_elem(upper),
+    )
+    .await
+    .expect("the in-memory location opens")
 }
 
 /// An upload that is dropped deletes the parts it had already written.
@@ -548,4 +531,121 @@ async fn a_rejected_batch_is_reported_rather_than_raised() {
         matches!(&rejection, Err(StashError::FinishBatch(error)) if error.to_string().contains("beyond the expected batch upper")),
         "persist must reject the batch and the upload must report it: {rejection:?}",
     );
+}
+
+/// A row of one `UInt64` column.
+fn row(value: u64) -> Row {
+    Row::pack_slice(&[Datum::UInt64(value)])
+}
+
+/// An upload over `[lower, upper)` that never merges runs.
+async fn open_range_upload(clients: &PersistClientCache, lower: u64, upper: u64) -> StashUpload {
+    StashUpload::open_range(
+        clients,
+        PersistLocation::new_in_mem(),
+        NO_RUN_MERGING,
+        stash_shard_id(Uuid::new_v4()),
+        result_desc(),
+        Antichain::from_elem(Timestamp::from(lower)),
+        Antichain::from_elem(Timestamp::from(upper)),
+    )
+    .await
+    .expect("the in-memory location opens")
+}
+
+/// A range upload keeps the times it is given and accepts retractions, where a peek upload
+/// collapses every row to one timestamp and rejects negative diffs.
+#[mz_ore::test(tokio::test)]
+async fn a_range_upload_keeps_times_and_retractions() {
+    let clients = PersistClientCache::new_no_metrics();
+    let mut upload = open_range_upload(&clients, 5, 10).await;
+
+    upload
+        .push_update(&row(1), Timestamp::from(5u64), Diff::from(1i64))
+        .await
+        .expect("persist takes the update");
+    upload
+        .push_update(&row(2), Timestamp::from(7u64), Diff::from(-2i64))
+        .await
+        .expect("persist takes the update");
+    let batch = upload
+        .finish_stashed()
+        .await
+        .expect("persist finishes the batch")
+        .expect("updates were pushed");
+
+    let mut client = clients
+        .open(PersistLocation::new_in_mem())
+        .await
+        .expect("the in-memory location opens");
+    let shard_id = batch.shard_id();
+    let read_schemas: Schemas<SourceData, ()> = Schemas {
+        id: None,
+        key: Arc::new(result_desc()),
+        val: Arc::new(UnitSchema),
+    };
+    let mut cursor = client
+        .read_batches_consolidated_from::<_, _, _, i64>(
+            shard_id,
+            Antichain::from_elem(Timestamp::from(5u64)),
+            read_schemas,
+            vec![batch],
+            |_stats| true,
+            *PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES.default(),
+        )
+        .await
+        .expect("range reads never fail on since");
+    let mut updates = Vec::new();
+    while let Some(chunk) = cursor.next().await {
+        for ((key, _val), time, diff) in chunk {
+            let value = key.0.expect("no errors").unpack_first().unwrap_uint64();
+            updates.push((value, u64::from(time), diff));
+        }
+    }
+    updates.sort();
+    for batch in cursor.into_lease() {
+        batch.delete().await;
+    }
+
+    assert_eq!(updates, vec![(1, 5, 1), (2, 7, -2)]);
+}
+
+/// A time at or beyond the upper is a rejection of the batch, reported as such.
+#[mz_ore::test(tokio::test)]
+async fn a_range_upload_rejects_a_time_outside_its_bounds() {
+    let clients = PersistClientCache::new_no_metrics();
+    let mut upload = open_range_upload(&clients, 5, 10).await;
+
+    upload
+        .push_update(&row(1), Timestamp::from(10u64), Diff::from(1i64))
+        .await
+        .expect("the write is checked against the lower only");
+    let rejection = upload.finish_stashed().await;
+
+    assert!(
+        matches!(&rejection, Err(StashError::FinishBatch(_))),
+        "persist must reject the batch and the upload must report it: {rejection:?}",
+    );
+}
+
+/// A range upload that never reaches `finish_stashed` deletes the parts it wrote.
+#[mz_ore::test(tokio::test)]
+async fn an_abandoned_range_upload_deletes_its_parts() {
+    let blob = CountedBlob::new();
+    let mut upload = open_range_upload(blob.clients(), 5, 10).await;
+
+    for value in 0..4 {
+        upload
+            .push_update(&row(value), Timestamp::from(6u64), Diff::from(1i64))
+            .await
+            .expect("persist takes the update");
+    }
+    blob.wait_until_something_is_written("an upload holding four updates")
+        .await;
+
+    drop(upload);
+
+    blob.wait_until_nothing_is_left("an abandoned range upload")
+        .await;
+    assert_eq!(blob.deletes_of_nothing(), 0);
 }
