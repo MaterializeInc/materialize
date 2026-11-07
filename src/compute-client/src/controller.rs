@@ -69,6 +69,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 use uuid::Uuid;
 
+use crate::controller::collection_owners::CollectionOwners;
 use crate::controller::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
     HydrationCheckBadTarget, InstanceExists, InstanceMissing, PeekError, ReadPolicyError,
@@ -82,6 +83,7 @@ use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 
+mod collection_owners;
 mod instance;
 mod introspection;
 mod replica;
@@ -228,6 +230,7 @@ impl PeekNotification {
 /// A controller for the compute layer.
 pub struct ComputeController {
     instances: BTreeMap<ComputeInstanceId, InstanceState>,
+    collection_owners: CollectionOwners,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
     /// `production` or `staging`).
@@ -349,6 +352,7 @@ impl ComputeController {
 
         Self {
             instances: BTreeMap::new(),
+            collection_owners: CollectionOwners::default(),
             instance_workload_classes,
             build_info,
             storage_collections,
@@ -452,6 +456,13 @@ impl ComputeController {
     ) -> Result<&Collection, CollectionLookupError> {
         match instance_id {
             Some(id) => Ok(self.instance(id)?.collection(collection_id)?),
+            None if collection_id.is_system() || collection_id.is_user() => {
+                let instance = self
+                    .collection_owners
+                    .get(collection_id)
+                    .ok_or(CollectionMissing(collection_id))?;
+                Ok(self.instance(instance)?.collection(collection_id)?)
+            }
             None => self
                 .instances
                 .values()
@@ -554,6 +565,7 @@ impl ComputeController {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
         let Self {
             instances,
+            collection_owners: _,
             instance_workload_classes,
             build_info: _,
             storage_collections: _,
@@ -637,6 +649,9 @@ impl ComputeController {
 
         let instance = InstanceState::new(client, collections);
         self.instances.insert(id, instance);
+        for collection_id in self.instances[&id].collections.keys() {
+            self.collection_owners.insert(*collection_id, id);
+        }
 
         self.instance_workload_classes
             .lock()
@@ -687,6 +702,9 @@ impl ComputeController {
     /// Panics if the identified `instance` still has active replicas.
     pub fn drop_instance(&mut self, id: ComputeInstanceId) {
         if let Some(instance) = self.instances.remove(&id) {
+            for collection_id in instance.collections.keys() {
+                self.remove_collection_owner(*collection_id, id);
+            }
             instance.call(|i| i.shutdown());
         }
 
@@ -998,7 +1016,7 @@ impl ComputeController {
             .determine_time_dependence(instance_id, &dataflow, &used_imports)
             .expect("must exist");
 
-        let instance = self.instance_mut(instance_id).expect("validated");
+        let instance = self.instances.get_mut(&instance_id).expect("validated");
 
         let mut shared_collection_state = BTreeMap::new();
         for id in dataflow.export_ids() {
@@ -1010,6 +1028,7 @@ impl ComputeController {
                 time_dependence: time_dependence.clone(),
             };
             instance.collections.insert(id, collection);
+            self.collection_owners.insert(id, instance_id);
             shared_collection_state.insert(id, shared);
         }
 
@@ -1046,9 +1065,26 @@ impl ComputeController {
             instance.collections.remove(id);
         }
 
-        instance.call(|i| i.drop_collections(collection_ids).expect("validated"));
+        for id in &collection_ids {
+            self.remove_collection_owner(*id, instance_id);
+        }
+        self.instance(instance_id)
+            .expect("validated")
+            .call(|i| i.drop_collections(collection_ids).expect("validated"));
 
         Ok(())
+    }
+
+    fn remove_collection_owner(&mut self, collection_id: GlobalId, instance_id: ComputeInstanceId) {
+        self.collection_owners
+            .remove(collection_id, instance_id, || {
+                self.instances.iter().find_map(|(id, instance)| {
+                    instance
+                        .collections
+                        .contains_key(&collection_id)
+                        .then_some(*id)
+                })
+            });
     }
 
     /// Initiate a peek request for the contents of the given collection at `timestamp`.
