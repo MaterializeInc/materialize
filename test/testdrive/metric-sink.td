@@ -105,7 +105,7 @@ true
 $ set-from-sql var=sink-id
 SELECT labels -> 'sink' FROM mz_introspection.mz_cluster_prometheus_metrics
 WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
-  AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors', 'mz_metric_dataflow_elapsed')
+  AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors', 'mz_metric_dataflow_elapsed', 'mz_metric_worker_parks')
 LIMIT 1
 
 # The companion gauges exist, are labeled with this sink's id, and read healthy
@@ -225,7 +225,7 @@ contains:still depended upon by metric sink "s"
 # `s_skip` is the only user sink here, but the curated sinks stamp this gauge too, so exclude them.
 > SELECT value FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_compute_metric_sink_skipped'
-    AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors', 'mz_metric_dataflow_elapsed')
+    AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors', 'mz_metric_dataflow_elapsed', 'mz_metric_worker_parks')
 2
 
 # Neither row publishes a series under the sink's metric name.
@@ -383,6 +383,22 @@ true
   WHERE metric_name = 'mz_metric_sink_curated_dataflow_elapsed_seconds_total'
     AND labels -> 'id' LIKE 't%'
 0
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_worker_parks'
+true
+
+> SELECT value = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_errors'
+    AND labels -> 'sink' = 'mz_metric_worker_parks'
+true
+
+# One unlabeled counter for the whole replica. Idle workers park, so it has grown by now.
+> SELECT value > 0, map_length(labels) = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_park_duration_seconds_total'
+    AND metric_type = 'counter'
+true true
 
 # The errors sink's HAVING drops zero-error exports, so a healthy cluster
 # publishes no error series.

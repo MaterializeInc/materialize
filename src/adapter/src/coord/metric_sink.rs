@@ -122,7 +122,8 @@ macro_rules! dataflow_export_cte {
 ///
 /// Every family sums across workers, so a series carries no `worker_id`, and a multi-process replica
 /// reports one number per grouping key rather than one per process. The size and elapsed families
-/// emit one series per dataflow, the errors family one per export.
+/// emit one series per dataflow, the errors family one per export, and the park family one per
+/// replica.
 const CURATED: &[CuratedMetricSink] = &[
     CuratedMetricSink {
         name: "mz_metric_arrangement_sizes",
@@ -221,6 +222,18 @@ FROM mz_introspection.mz_scheduling_elapsed_raw e
 JOIN roots ON e.id = roots.id AND e.worker_id = roots.worker_id
 GROUP BY roots.export_id"
         ),
+    },
+    CuratedMetricSink {
+        name: "mz_metric_worker_parks",
+        prefix: METRIC_SINK_CURATED_PREFIX_MARKER,
+        // Each raw row is one park, bucketed by `slept_for_ns` rounded up to a power of two
+        // (`mz_compute::logging::timely`), so the sum is an upper bound on the time parked.
+        source_sql: "
+SELECT 'park_duration_seconds_total'::text AS metric_name, 'counter'::text AS metric_type,
+       NULL::map[text=>text] AS labels,
+       sum(slept_for_ns)::double precision / 1e9 AS value,
+       'time workers spent parked, in seconds, rounded up per park'::text AS help
+FROM mz_introspection.mz_scheduling_parks_histogram_raw",
     },
     CuratedMetricSink {
         name: "mz_metric_dataflow_errors",
