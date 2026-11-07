@@ -554,12 +554,13 @@ impl Coordinator {
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
     ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
+        let workload = catalog_serving::subscribe_workload(
+            self.catalog().state(),
+            dependency_ids.iter().copied(),
+        );
         self.ensure_cluster_allows_running_workload(
             cluster_id,
-            catalog_serving::subscribe_workload(
-                self.catalog().state(),
-                dependency_ids.iter().copied(),
-            ),
+            workload,
             &conn_id,
             "run SUBSCRIBE",
         )?;
@@ -596,6 +597,7 @@ impl Coordinator {
             start_time: self.now(),
             output: plan.output,
             internal: false,
+            workload,
         };
         active_subscribe.initialize();
 

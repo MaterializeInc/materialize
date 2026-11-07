@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
+use mz_controller::clusters::WorkloadClass;
 use mz_controller_types::ClusterId;
 use mz_expr::row::RowCollection;
 use mz_expr::{RowComparator, compare_columns};
@@ -47,6 +48,14 @@ impl ActiveComputeSink {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => subscribe.cluster_id,
             ActiveComputeSink::CopyTo(copy_to) => copy_to.cluster_id,
+        }
+    }
+
+    /// Reports the workload class the sink runs on its cluster.
+    pub fn workload(&self) -> WorkloadClass {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => subscribe.workload,
+            ActiveComputeSink::CopyTo(_) => WorkloadClass::ComputeInteractive,
         }
     }
 
@@ -199,6 +208,9 @@ pub struct ActiveSubscribe {
     /// If true, this is an internal subscribe that should not appear in
     /// introspection tables like mz_subscriptions.
     pub internal: bool,
+    /// The workload class of the statement the subscribe implements, which
+    /// differs from its dependencies' class for read-then-write.
+    pub workload: WorkloadClass,
 }
 
 impl ActiveSubscribe {
