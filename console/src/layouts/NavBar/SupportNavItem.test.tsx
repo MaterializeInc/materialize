@@ -92,7 +92,7 @@ describe("SupportNavItem", () => {
     server.use(
       http.get("*/api/organization/support/tickets", () => {
         ticketRequests += 1;
-        return HttpResponse.json({ data: [], nextCursor: null });
+        return HttpResponse.json({ data: [], nextCursor: "page-2" });
       }),
     );
     const user = userEvent.setup();
@@ -103,6 +103,9 @@ describe("SupportNavItem", () => {
     await user.hover(link);
 
     await waitFor(() => expect(ticketRequests).toBe(1));
+    // Only the first page; the support page loads the rest.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ticketRequests).toBe(1);
   });
 
   it("shows a dot driven by the Messenger's unread count", async () => {

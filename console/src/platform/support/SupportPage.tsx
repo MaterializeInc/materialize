@@ -297,12 +297,19 @@ const SupportPage = () => {
   const intercomJwt = useCurrentIntercomJwt();
   const unreadCount = useIntercomUnreadCount();
   const preferIntercom = usePreferIntercom(intercomJwt);
-  const ticketsQuery = useSupportTickets();
+  const {
+    query: ticketsQuery,
+    tickets: loadedTickets,
+    isLoadingMore,
+    isLoadMoreError,
+    isTruncated,
+  } = useSupportTickets();
   // The ticket endpoints aren't deployed or configured everywhere yet. Until
   // they answer, "Open a ticket" uses the Messenger and the tickets card
-  // links to Help Center. A failed refetch keeps the tickets already loaded.
+  // links to Help Center. A failed refetch, or a failed later page, keeps the
+  // tickets already loaded.
   const areTicketsAvailable = ticketsQuery.data !== undefined;
-  const tickets = ticketsQuery.data?.tickets ?? [];
+  const tickets = loadedTickets ?? [];
   // 404 and 503 mean the endpoints aren't deployed or configured here, so the
   // card links to Help Center. Anything else is worth retrying.
   const isTicketsLoadError =
@@ -459,24 +466,55 @@ const SupportPage = () => {
                 )}
               </CardTitle>
               <CardContent>
-                {ticketsQuery.isPending ? (
+                {ticketsQuery.isPending ||
+                (tickets.length === 0 && isLoadingMore) ? (
                   <LoadingContainer minHeight="24" />
                 ) : areTicketsAvailable ? (
                   <VStack spacing="3" align="stretch">
                     <SupportTicketsTable
                       tickets={tickets}
+                      // Pages that didn't load may hold tickets, so don't
+                      // say there are none.
+                      isComplete={!isTruncated && !isLoadMoreError}
                       onSelect={(ticketId) =>
                         navigate(supportTicketPath(ticketId))
                       }
                     />
-                    {ticketsQuery.data?.isTruncated && (
+                    {isLoadingMore && (
+                      <Text
+                        textStyle="text-small"
+                        color={colors.foreground.secondary}
+                        data-testid="support-tickets-loading-more"
+                      >
+                        Loading more tickets…
+                      </Text>
+                    )}
+                    {isLoadMoreError && (
+                      <HStack spacing="3" flexWrap="wrap">
+                        <Text
+                          textStyle="text-small"
+                          color={colors.foreground.secondary}
+                          data-testid="support-tickets-load-more-error"
+                        >
+                          Some of your tickets couldn&apos;t be loaded.
+                        </Text>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => ticketsQuery.fetchNextPage()}
+                          isLoading={ticketsQuery.isFetchingNextPage}
+                        >
+                          Try again
+                        </Button>
+                      </HStack>
+                    )}
+                    {isTruncated && (
                       <Text
                         textStyle="text-small"
                         color={colors.foreground.secondary}
                         data-testid="support-tickets-truncated"
                       >
-                        Showing your {tickets.length} most recently updated
-                        tickets. Older ones are in{" "}
+                        Older tickets are in{" "}
                         <TextLink href={HELP_CENTER_TICKETS_URL} isExternal>
                           Help Center
                         </TextLink>

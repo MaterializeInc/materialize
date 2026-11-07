@@ -8,11 +8,13 @@
 // by the Apache License, Version 2.0.
 
 import {
-  queryOptions,
+  infiniteQueryOptions,
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import React from "react";
 
 import { buildGlobalQueryKey } from "~/api/buildQueryKeySchema";
 import {
@@ -85,47 +87,72 @@ const TICKETS_PAGE_SIZE = 50;
  */
 const MAX_TICKET_PAGES = 10;
 
-export type SupportTicketList = {
-  tickets: SupportTicket[];
-  /** More tickets exist than were loaded (see `MAX_TICKET_PAGES`). */
-  isTruncated: boolean;
-};
-
 /**
- * All of the signed-in user's tickets, so the table can filter and page
- * through them. Shared by the page and by the nav item, which prefetches it.
+ * The signed-in user's tickets, one API page per query page. Shared by the
+ * page and by the nav item, which prefetches the first page.
  *
  * The global API hides internal and unshared tickets after searching, so a
  * page can come back with fewer tickets, or none, while there are more pages.
  */
 export const supportTicketsQueryOptions = (owner: TicketOwner) =>
-  queryOptions({
+  infiniteQueryOptions({
     queryKey: supportTicketQueryKeys.list(owner),
-    queryFn: async ({ signal }): Promise<SupportTicketList> => {
-      const tickets: SupportTicket[] = [];
-      let cursor: string | undefined;
-      for (let page = 0; page < MAX_TICKET_PAGES; page++) {
-        const { data } = await listSupportTickets(
-          { cursor, limit: TICKETS_PAGE_SIZE },
-          { signal },
-        );
-        tickets.push(...data.data);
-        cursor = data.nextCursor ?? undefined;
-        if (!cursor) return { tickets, isTruncated: false };
-      }
-      return { tickets, isTruncated: true };
+    queryFn: async ({ pageParam, signal }) => {
+      const { data } = await listSupportTickets(
+        { cursor: pageParam, limit: TICKETS_PAGE_SIZE },
+        { signal },
+      );
+      return data;
     },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage, allPages) =>
+      allPages.length < MAX_TICKET_PAGES
+        ? (lastPage.nextCursor ?? undefined)
+        : undefined,
+    // Retries one page at a time, so a failed page doesn't refetch the rest.
     retry: retryTransientErrors,
     staleTime: TICKETS_STALE_TIME_MS,
   });
 
 /**
- * The signed-in user's tickets. While this errors, the page falls back to the
- * Messenger and Help Center links, so it works before the endpoints are
- * deployed.
+ * All of the signed-in user's tickets, so the table can filter and page
+ * through them. The first page shows as soon as it arrives; the rest load
+ * one after another until the cursor runs out or `MAX_TICKET_PAGES` is
+ * reached. A page that fails stops the loading, keeps what loaded, and can be
+ * retried with `query.fetchNextPage()`.
+ *
+ * While the first page errors, the page falls back to the Messenger and Help
+ * Center links, so it works before the endpoints are deployed.
  */
 export function useSupportTickets() {
-  return useQuery(supportTicketsQueryOptions(useTicketOwner()));
+  const query = useInfiniteQuery(supportTicketsQueryOptions(useTicketOwner()));
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
+  const { fetchNextPage } = query;
+  const pages = query.data?.pages;
+  // A fast page can land without a render that shows it fetching, so the page
+  // count is what tells the effect that another page arrived.
+  const pageCount = pages?.length ?? 0;
+  React.useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
+      void fetchNextPage();
+    }
+  }, [
+    pageCount,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    fetchNextPage,
+  ]);
+  return {
+    query,
+    tickets: pages?.flatMap((page) => page.data),
+    /** More pages are on their way. */
+    isLoadingMore: hasNextPage && !isFetchNextPageError,
+    /** A later page failed; the tickets before it are still listed. */
+    isLoadMoreError: isFetchNextPageError,
+    /** Stopped at `MAX_TICKET_PAGES` with more tickets left. */
+    isTruncated: !hasNextPage && Boolean(pages?.at(-1)?.nextCursor),
+  };
 }
 
 export function useSupportTicket(ticketId: string | null) {
@@ -155,7 +182,9 @@ export function useListedSupportTicket(
   const list = queryClient.getQueryData(
     supportTicketsQueryOptions(owner).queryKey,
   );
-  return list?.tickets.find((ticket) => ticket.id === ticketId);
+  return list?.pages
+    .flatMap((page) => page.data)
+    .find((ticket) => ticket.id === ticketId);
 }
 
 export function useCreateSupportTicket() {
@@ -171,11 +200,22 @@ export function useCreateSupportTicket() {
       // Intercom's ticket search takes a few seconds to include a new ticket,
       // so a refetch now would come back without it. Add it to the loaded
       // list instead, and refetch the next time the list is used.
-      queryClient.setQueryData(queryKey, (list) =>
-        !list || list.tickets.some(({ id }) => id === ticket.id)
-          ? list
-          : { ...list, tickets: [ticket, ...list.tickets] },
-      );
+      queryClient.setQueryData(queryKey, (list) => {
+        if (!list) return list;
+        const [first, ...rest] = list.pages;
+        if (
+          !first ||
+          list.pages.some((page) =>
+            page.data.some(({ id }) => id === ticket.id),
+          )
+        ) {
+          return list;
+        }
+        return {
+          ...list,
+          pages: [{ ...first, data: [ticket, ...first.data] }, ...rest],
+        };
+      });
       return queryClient.invalidateQueries({ queryKey, refetchType: "none" });
     },
   });

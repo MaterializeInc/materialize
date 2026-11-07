@@ -22,7 +22,6 @@ import {
   Tooltip,
   useTheme,
   VisuallyHidden,
-  VisuallyHiddenInput,
   VStack,
 } from "@chakra-ui/react";
 import { createColumnHelper, FilterFn } from "@tanstack/react-table";
@@ -47,6 +46,7 @@ import {
 
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { useListedSupportTicket, useSupportTicket } from "./queries";
+import { SegmentedControl, SegmentOption } from "./SegmentedControl";
 import {
   formatRelativeTime,
   htmlToParts,
@@ -203,64 +203,38 @@ const TicketStatusFilter = ({
   value: StatusFilter | undefined;
   onChange: (value: StatusFilter | undefined) => void;
 }) => {
-  const { colors } = useTheme<MaterializeTheme>();
   const selected = value ?? "all";
   return (
     <Box as="fieldset">
       <VisuallyHidden as="legend">Show tickets</VisuallyHidden>
-      <HStack
-        spacing="0"
-        width="fit-content"
-        borderWidth="1px"
-        borderColor={colors.border.secondary}
-        borderRadius="lg"
-        overflow="hidden"
-      >
-        {STATUS_FILTER_OPTIONS.map((option, index) => {
-          const isSelected = option.id === selected;
-          return (
-            <Box
-              key={option.id}
-              as="label"
-              display="inline-flex"
-              alignItems="center"
-              minHeight="8"
-              px="3"
-              cursor="pointer"
-              fontWeight="500"
-              textStyle="text-ui-med"
-              borderRightWidth={
-                index === STATUS_FILTER_OPTIONS.length - 1 ? "0" : "1px"
-              }
-              borderColor={colors.border.secondary}
-              bg={isSelected ? colors.accent.purple : colors.background.primary}
-              color={
-                isSelected
-                  ? colors.foreground.inverse
-                  : colors.foreground.primary
-              }
-              _focusWithin={{ boxShadow: "input.focus" }}
-            >
-              <VisuallyHiddenInput
-                type="radio"
-                name="support-ticket-status"
-                value={option.id}
-                checked={isSelected}
-                onChange={() =>
-                  onChange(option.id === "all" ? undefined : option.id)
-                }
-              />
-              {option.label}
-            </Box>
-          );
-        })}
-      </HStack>
+      <SegmentedControl>
+        {STATUS_FILTER_OPTIONS.map((option) => (
+          <SegmentOption
+            key={option.id}
+            size="sm"
+            value={option.id}
+            label={option.label}
+            isSelected={option.id === selected}
+            inputProps={{
+              name: "support-ticket-status",
+              checked: option.id === selected,
+              onChange: () =>
+                onChange(option.id === "all" ? undefined : option.id),
+            }}
+          />
+        ))}
+      </SegmentedControl>
     </Box>
   );
 };
 
 export interface SupportTicketsTableProps {
   tickets: SupportTicket[];
+  /**
+   * Every ticket loaded. When some pages didn't load, an empty list doesn't
+   * mean the user has no tickets.
+   */
+  isComplete: boolean;
   onSelect: (ticketId: string) => void;
 }
 
@@ -270,6 +244,7 @@ export interface SupportTicketsTableProps {
  */
 export const SupportTicketsTable = ({
   tickets,
+  isComplete,
   onSelect,
 }: SupportTicketsTableProps) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -291,7 +266,9 @@ export const SupportTicketsTable = ({
         color={colors.foreground.secondary}
         data-testid="support-tickets-empty"
       >
-        You haven&apos;t opened any tickets yet.
+        {isComplete
+          ? "You haven't opened any tickets yet."
+          : "No tickets to show."}
       </Text>
     );
   }
@@ -310,7 +287,6 @@ export const SupportTicketsTable = ({
         <UniversalTable
           table={table}
           onRowClick={(ticket) => onSelect(ticket.id)}
-          rowSx={{ "&:hover td": { bg: colors.background.secondary } }}
           data-testid="support-tickets-table"
         />
         <TablePagination table={table} itemLabel="tickets" />

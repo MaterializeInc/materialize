@@ -453,8 +453,82 @@ describe("SupportPage", () => {
 
       expect(
         await screen.findByTestId("support-tickets-truncated"),
-      ).toHaveTextContent("Showing your 10 most recently updated tickets");
+      ).toHaveTextContent("Older tickets are in Help Center");
       expect(requests).toBe(10);
+    });
+
+    it("doesn't say there are no tickets when ten pages come back empty", async () => {
+      let requests = 0;
+      server.use(
+        http.get(TICKETS_URL, () => {
+          requests += 1;
+          return HttpResponse.json({
+            data: [],
+            nextCursor: `page-${requests + 1}`,
+          });
+        }),
+      );
+      await renderComponent(<SupportPageWithIntercom />);
+
+      expect(
+        await screen.findByTestId("support-tickets-truncated"),
+      ).toBeVisible();
+      expect(requests).toBe(10);
+      expect(screen.getByTestId("support-tickets-empty")).toHaveTextContent(
+        "No tickets to show.",
+      );
+      expect(
+        screen.queryByText(/You haven't opened any tickets yet/),
+      ).not.toBeInTheDocument();
+    });
+
+    it("keeps the loaded tickets when a later page fails", async () => {
+      const requests: Record<string, number> = { first: 0, second: 0 };
+      let isFailing = true;
+      server.use(
+        http.get(TICKETS_URL, ({ request }) => {
+          const cursor = new URL(request.url).searchParams.get("cursor");
+          if (cursor !== "page-2") {
+            requests.first += 1;
+            return HttpResponse.json({
+              data: [buildTicket()],
+              nextCursor: "page-2",
+            });
+          }
+          requests.second += 1;
+          return isFailing
+            ? HttpResponse.json({}, { status: 500 })
+            : HttpResponse.json({
+                data: [buildTicket({ id: "7", title: "Sink is lagging" })],
+                nextCursor: null,
+              });
+        }),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retryDelay: 0 } },
+      });
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />, { queryClient });
+
+      expect(
+        await screen.findByTestId("support-tickets-load-more-error"),
+      ).toHaveTextContent("Some of your tickets couldn't be loaded.");
+      expect(
+        screen.getByRole("link", { name: "Replica keeps restarting" }),
+      ).toBeVisible();
+      // Only the failed page is retried, not the pages before it.
+      expect(requests).toEqual({ first: 1, second: 3 });
+
+      isFailing = false;
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+
+      expect(
+        await screen.findByRole("link", { name: "Sink is lagging" }),
+      ).toBeVisible();
+      expect(
+        screen.queryByTestId("support-tickets-load-more-error"),
+      ).not.toBeInTheDocument();
+      expect(requests).toEqual({ first: 1, second: 4 });
     });
 
     it("keeps looking when a page has no visible tickets", async () => {

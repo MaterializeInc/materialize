@@ -57,6 +57,7 @@ import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { useCreateSupportTicket } from "./queries";
 
 type CreateTicketMutation = ReturnType<typeof useCreateSupportTicket>;
+import { SegmentedControl, SegmentOption } from "./SegmentedControl";
 import {
   buildCreateTicketRequest,
   ENVIRONMENT_OPTIONS,
@@ -133,42 +134,6 @@ const SeverityCard = ({
 };
 
 /** One button of a segmented control, backed by a native radio input. */
-const SegmentOption = ({
-  registration,
-  value,
-  label,
-  isSelected,
-  isLast,
-}: {
-  registration: UseFormRegisterReturn<"environmentType">;
-  value: string;
-  label: string;
-  isSelected: boolean;
-  isLast: boolean;
-}) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  return (
-    <Box
-      as="label"
-      display="inline-flex"
-      alignItems="center"
-      minHeight="9"
-      px="3.5"
-      cursor="pointer"
-      fontWeight="500"
-      textStyle="text-ui-med"
-      borderRightWidth={isLast ? "0" : "1px"}
-      borderColor={colors.border.secondary}
-      bg={isSelected ? colors.accent.purple : colors.background.primary}
-      color={isSelected ? colors.foreground.inverse : colors.foreground.primary}
-      _focusWithin={{ boxShadow: "input.focus" }}
-    >
-      <VisuallyHiddenInput type="radio" value={value} {...registration} />
-      {label}
-    </Box>
-  );
-};
-
 type TicketDetails = { label: string; value: React.ReactNode }[];
 
 const NewTicketForm = ({
@@ -311,24 +276,17 @@ const NewTicketForm = ({
 
           <Box as="fieldset">
             <FieldLabel>Environment</FieldLabel>
-            <Flex
-              width="fit-content"
-              borderWidth="1px"
-              borderColor={colors.border.secondary}
-              borderRadius="lg"
-              overflow="hidden"
-            >
-              {ENVIRONMENT_OPTIONS.map((option, index) => (
+            <SegmentedControl>
+              {ENVIRONMENT_OPTIONS.map((option) => (
                 <SegmentOption
                   key={option.value}
-                  registration={environmentField}
+                  inputProps={environmentField}
                   value={option.value}
                   label={option.label}
                   isSelected={environmentType === option.value}
-                  isLast={index === ENVIRONMENT_OPTIONS.length - 1}
                 />
               ))}
-            </Flex>
+            </SegmentedControl>
           </Box>
 
           <FormControl isRequired isInvalid={!!errors.title}>
