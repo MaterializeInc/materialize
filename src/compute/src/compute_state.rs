@@ -77,7 +77,8 @@ use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
-use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
+use crate::sharing::ArrangementSharingRegistry;
 
 mod error_scan;
 mod peek_budget;
@@ -217,6 +218,8 @@ pub struct ComputeState {
     /// A process-global cache of shared persist batch writers. This allows
     /// coalescing writes across local workers without explicit exchanges.
     pub persist_batches: SharedBatches,
+    /// Publishes this runtime's indexes for its peer runtime, if that runtime reads them.
+    pub(crate) publisher: Option<ArrangementSharingRegistry>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -308,8 +311,10 @@ impl ComputeState {
 
     /// Construct a new `ComputeState`.
     pub fn new(
+        role: ComputeRuntimeRole,
         persist_clients: Arc<PersistClientCache>,
         persist_batches: SharedBatches,
+        sharing_registry: ArrangementSharingRegistry,
         txns_ctx: TxnsContext,
         metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
@@ -335,6 +340,10 @@ impl ComputeState {
             compute_logger: None,
             persist_clients,
             persist_batches,
+            publisher: role.publishes_indexes().then(|| {
+                sharing_registry.attach_publisher();
+                sharing_registry.clone()
+            }),
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -1030,6 +1039,7 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.metrics.for_logging(),
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
+            self.compute_state.publisher.clone(),
         );
 
         let dataflow_index = Rc::new(dataflow_index);
