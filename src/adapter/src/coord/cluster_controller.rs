@@ -985,13 +985,15 @@ impl Coordinator {
         } else {
             Some(&shape.availability_zones.0)
         };
+        // The shape's size comes from the cluster's config, which was validated
+        // when set, so a size disabled since then stays usable.
         let location = self.catalog().concretize_replica_location(
             location,
             &self
                 .catalog()
                 .get_role_allowed_cluster_sizes(&Some(owner_id)),
             azs,
-            false,
+            true,
         )?;
 
         let config = mz_controller::clusters::ReplicaConfig {
