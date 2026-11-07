@@ -1702,8 +1702,8 @@ where
                         .map(|(id, x)| (id, K::decode_schema(&x.key)))
                         .collect::<Vec<_>>()
                 );
-                // Until we implement persist schema changes, only allow at most
-                // one registered schema.
+                // This state may predate the schema's registration, see
+                // `Machine::register_schema`.
                 Break(NoOpStateTransition(None))
             }
         }
