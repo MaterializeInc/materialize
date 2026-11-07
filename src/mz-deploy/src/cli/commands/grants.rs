@@ -327,6 +327,7 @@ pub fn stale_grant_revocations(
             privileges: PrivilegeSpecification::Privileges(vec![privilege]),
             target: target.clone(),
             roles: vec![Ident::new_unchecked(grant.grantee.clone())],
+            using_index: None,
         });
     }
     revocations

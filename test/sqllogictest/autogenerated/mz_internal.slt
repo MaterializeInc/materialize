@@ -542,6 +542,14 @@ address  text  The␠address␠the␠rule␠will␠take␠action␠on.
 direction  text  The␠direction␠of␠traffic␠the␠rule␠applies␠to.␠`ingress`␠is␠the␠only␠supported␠direction.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_index_scoped_privileges' ORDER BY position
+----
+index_id  text  The␠ID␠of␠the␠index␠that␠reads␠are␠restricted␠to.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`.
+on_id  text  The␠ID␠of␠the␠relation␠the␠role␠may␠read.␠Corresponds␠to␠`mz_catalog.mz_relations.id`.
+grantor  text  The␠role␠that␠granted␠the␠privilege.␠Corresponds␠to␠`mz_catalog.mz_roles.id`.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.␠Corresponds␠to␠`mz_catalog.mz_roles.id`,␠or␠`p`␠for␠`PUBLIC`.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_privileges' ORDER BY position
 ----
 grantor  text  The␠role␠that␠granted␠the␠privilege.
@@ -577,6 +585,17 @@ schema  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠o
 object_type  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠of␠type␠`object_type`.
 grantee  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠to␠`grantee`.
 privilege_type  text  They␠type␠of␠privilege␠to␠be␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_index_scoped_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+database  text  The␠name␠of␠the␠database␠containing␠the␠relation.
+schema  text  The␠name␠of␠the␠schema␠containing␠the␠relation.
+name  text  The␠name␠of␠the␠relation␠the␠role␠may␠read.
+index  text  The␠name␠of␠the␠index␠that␠reads␠are␠restricted␠to.
+cluster  text  The␠name␠of␠the␠cluster␠that␠maintains␠the␠index.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_object_privileges' ORDER BY position
@@ -850,6 +869,7 @@ mz_global_frontiers
 mz_history_retention_strategies
 mz_hydration_statuses
 mz_index_advice
+mz_index_scoped_privileges
 mz_internal_cluster_replicas
 mz_kafka_source_tables
 mz_license_keys
@@ -909,6 +929,7 @@ mz_show_connections
 mz_show_database_privileges
 mz_show_databases
 mz_show_default_privileges
+mz_show_index_scoped_privileges
 mz_show_indexes
 mz_show_materialized_views
 mz_show_my_cluster_privileges
