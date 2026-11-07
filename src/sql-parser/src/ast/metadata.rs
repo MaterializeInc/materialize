@@ -107,23 +107,25 @@ impl RawItemName {
     }
 }
 
+/// Writes an ID so it reparses in a bracketed reference.
+fn write_bracketed_id<W: fmt::Write>(f: &mut AstFormatter<W>, id: &str) {
+    let ident = Ident::new_unchecked(id);
+    // Bracketed IDs require an identifier token, so even non-reserved keywords
+    // need quoting. Keep ordinary IDs bare in the stable mode used by pg_get_viewdef.
+    if ident.has_only_bare_chars() && ident.as_keyword().is_none() {
+        f.write_str(id);
+    } else {
+        f.write_str(ident.to_ast_string_stable());
+    }
+}
+
 impl AstDisplay for RawItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             RawItemName::Name(o) => f.write_node(o),
             RawItemName::Id(id, o, v) => {
-                // `id` is parsed from an identifier token (`[<id> AS …]`), so a
-                // crafted id with spaces/keywords must be quoted to reparse as a
-                // single identifier. A normal global id like `u1` is printed
-                // bare in every mode — including the stable mode `pg_get_viewdef`
-                // renders in, which would otherwise force-quote it.
                 f.write_str("[");
-                let id = Ident::new_unchecked(id.clone());
-                if id.can_be_printed_bare() {
-                    f.write_str(id.as_str());
-                } else {
-                    f.write_node(&id);
-                }
+                write_bracketed_id(f, id);
                 f.write_str(" AS ");
                 f.write_node(o);
                 if let Some(v) = v {
@@ -162,7 +164,9 @@ impl AstDisplay for RawClusterName {
         match self {
             RawClusterName::Unresolved(id) => f.write_node(id),
             RawClusterName::Resolved(id) => {
-                f.write_str(format!("[{}]", id));
+                f.write_str("[");
+                write_bracketed_id(f, id);
+                f.write_str("]");
             }
         }
     }
@@ -194,7 +198,9 @@ impl AstDisplay for RawNetworkPolicyName {
         match self {
             RawNetworkPolicyName::Unresolved(id) => f.write_node(id),
             RawNetworkPolicyName::Resolved(id) => {
-                f.write_str(format!("[{}]", id));
+                f.write_str("[");
+                write_bracketed_id(f, id);
+                f.write_str("]");
             }
         }
     }

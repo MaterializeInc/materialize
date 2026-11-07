@@ -19,6 +19,51 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::parser::{parse_expr, parse_statements};
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // slow: every keyword in each bracketed id position
+fn bracketed_id_roundtrip_audit() {
+    let templates = [
+        "SELECT * FROM [%id% AS db.public.t VERSION 1]",
+        "SELECT [%id% AS db.public.f](1)",
+        "SELECT 'a'::[%id% AS db.public.ty]",
+        "CREATE INDEX i IN CLUSTER [%id%] ON t (a)",
+        "COMMENT ON NETWORK POLICY [%id%] IS 'x'",
+    ];
+    let ids = KEYWORDS
+        .values()
+        .map(|kw| kw.as_str().to_lowercase())
+        .chain(
+            [
+                "u1",
+                "1",
+                "001",
+                "1.5",
+                "1e2",
+                "with space",
+                "a\"b",
+                "Mixed",
+                "ü1",
+            ]
+            .map(str::to_owned),
+        );
+    for id in ids {
+        let quoted = format!("\"{}\"", id.replace('"', "\"\""));
+        for template in templates {
+            let sql = template.replace("%id%", &quoted);
+            let original = parse_statements(&sql).expect("original parses");
+            for printed in [
+                original[0].ast.to_ast_string_simple(),
+                original[0].ast.to_ast_string_stable(),
+            ] {
+                let reparsed = parse_statements(&printed)
+                    .unwrap_or_else(|e| panic!("could not reparse {printed:?}: {e}"));
+                assert_eq!(reparsed.len(), 1, "{printed}");
+                assert_eq!(original[0].ast, reparsed[0].ast, "{sql} -> {printed}");
+            }
+        }
+    }
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow: ~519 keywords x N templates
 fn keyword_identifier_roundtrip_audit() {
     // `%k%` is replaced by each keyword as a bare identifier, in the positions
