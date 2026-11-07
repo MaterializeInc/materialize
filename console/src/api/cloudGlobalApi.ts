@@ -36,6 +36,18 @@ export type DailyCostBreakdown =
   components["schemas"]["DailyCostBreakdownResponse"];
 export type Marketplace = components["schemas"]["Marketplace"];
 export type IntercomJwtResponse = components["schemas"]["IntercomJwtResponse"];
+export type SupportTicket = components["schemas"]["SupportTicket"];
+export type CreatedSupportTicket =
+  components["schemas"]["CreatedSupportTicket"];
+export type SupportTicketDetail = components["schemas"]["SupportTicketDetail"];
+export type SupportTicketMessage =
+  components["schemas"]["SupportTicketMessage"];
+export type SupportTicketSeverity =
+  components["schemas"]["SupportTicketSeverity"];
+export type SupportTicketEnvironmentType =
+  components["schemas"]["SupportTicketEnvironmentType"];
+export type CreateSupportTicketRequest =
+  components["schemas"]["CreateSupportTicketRequest"];
 export type CreateLicenseKeyRequest =
   components["schemas"]["CreateLicenseKeyRequest"];
 export type CreateLicenseKeyResponse =
@@ -234,6 +246,62 @@ export async function issueIntercomJwt(
     {
       signal: requestOptions?.signal,
       headers,
+      ...options,
+    },
+  );
+  return handleOpenApiResponseWithBody(data, response);
+}
+
+export async function listSupportTickets(
+  { cursor, limit }: { cursor?: string; limit?: number } = {},
+  requestOptions: OpenApiRequestOptions = {},
+) {
+  const { headers, ...options } = requestOptions;
+  const { data, response } = await getClient().GET(
+    "/api/organization/support/tickets",
+    {
+      params: {
+        query: {
+          ...(cursor ? { cursor } : {}),
+          ...(limit ? { limit } : {}),
+        },
+      },
+      signal: requestOptions?.signal,
+      headers,
+      ...options,
+    },
+  );
+  return handleOpenApiResponseWithBody(data, response);
+}
+
+export async function getSupportTicket(
+  ticketId: string,
+  requestOptions: OpenApiRequestOptions = {},
+) {
+  const { headers, ...options } = requestOptions;
+  const { data, response } = await getClient().GET(
+    "/api/organization/support/tickets/{ticket_id}",
+    {
+      params: { path: { ticket_id: ticketId } },
+      signal: requestOptions?.signal,
+      headers,
+      ...options,
+    },
+  );
+  return handleOpenApiResponseWithBody(data, response);
+}
+
+export async function createSupportTicket(
+  ticket: CreateSupportTicketRequest,
+  requestOptions: OpenApiRequestOptions = {},
+) {
+  const { headers, ...options } = requestOptions;
+  const { data, response } = await getClient().POST(
+    "/api/organization/support/tickets",
+    {
+      signal: requestOptions?.signal,
+      headers,
+      body: ticket,
       ...options,
     },
   );
