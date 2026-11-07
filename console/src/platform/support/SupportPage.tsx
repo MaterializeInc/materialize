@@ -476,6 +476,7 @@ const SupportPage = () => {
                       // Pages that didn't load may hold tickets, so don't
                       // say there are none.
                       isComplete={!isTruncated && !isLoadMoreError}
+                      isLoadingMore={isLoadingMore}
                       onSelect={(ticketId) =>
                         navigate(supportTicketPath(ticketId))
                       }

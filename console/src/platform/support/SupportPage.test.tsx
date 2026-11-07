@@ -482,6 +482,69 @@ describe("SupportPage", () => {
       ).not.toBeInTheDocument();
     });
 
+    it.each([
+      { secondPage: [buildTicket({ id: "7", title: "Sink is lagging" })] },
+      { secondPage: [] },
+    ])(
+      "waits for later pages before saying no tickets match ($secondPage.length open on page 2)",
+      async ({ secondPage }) => {
+        let releaseSecondPage = () => {};
+        const secondPageHeld = new Promise<void>((resolve) => {
+          releaseSecondPage = resolve;
+        });
+        server.use(
+          http.get(TICKETS_URL, async ({ request }) => {
+            if (new URL(request.url).searchParams.get("cursor") !== "page-2") {
+              return HttpResponse.json({
+                data: [
+                  buildTicket({
+                    id: "9",
+                    title: "RBAC for a dbt service account",
+                    open: false,
+                    state: "Resolved",
+                    stateCategory: "resolved",
+                  }),
+                ],
+                nextCursor: "page-2",
+              });
+            }
+            await secondPageHeld;
+            return HttpResponse.json({ data: secondPage, nextCursor: null });
+          }),
+        );
+        await renderComponent(<SupportPageWithIntercom />);
+
+        // Only a resolved ticket so far, hidden by the Open filter.
+        expect(
+          await screen.findByTestId("support-tickets-loading-more"),
+        ).toBeVisible();
+        expect(screen.getByRole("radio", { name: "Open" })).toBeChecked();
+        expect(
+          screen.queryByTestId("support-tickets-none-match"),
+        ).not.toBeInTheDocument();
+
+        releaseSecondPage();
+
+        await waitFor(() =>
+          expect(
+            screen.queryByTestId("support-tickets-loading-more"),
+          ).not.toBeInTheDocument(),
+        );
+        if (secondPage.length > 0) {
+          expect(
+            screen.getByRole("link", { name: "Sink is lagging" }),
+          ).toBeVisible();
+          expect(
+            screen.queryByTestId("support-tickets-none-match"),
+          ).not.toBeInTheDocument();
+        } else {
+          expect(
+            screen.getByTestId("support-tickets-none-match"),
+          ).toHaveTextContent("No open tickets.");
+        }
+      },
+    );
+
     it("keeps the loaded tickets when a later page fails", async () => {
       const requests: Record<string, number> = { first: 0, second: 0 };
       let isFailing = true;
