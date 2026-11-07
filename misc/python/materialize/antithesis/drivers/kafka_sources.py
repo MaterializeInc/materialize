@@ -608,7 +608,8 @@ def _read_topic(
     """Records at offsets `[0, upto[p])` per partition, and the high watermarks.
 
     `None` if the topic lost its head (low watermark above zero), holds fewer
-    records than `upto` claims, or could not be read in time.
+    records than `upto` claims, or could not be read in time or with the broker
+    unreachable.
     """
     consumer = Consumer(
         {
@@ -663,6 +664,11 @@ def _read_topic(
             if offset >= upto[p] - 1:
                 pending.discard(p)
         return (out, highs) if not pending else None
+    except KafkaException as e:
+        if e.args[0].fatal():
+            raise
+        log(f"read-back of {topic} failed: {e}")
+        return None
     finally:
         consumer.close()
 

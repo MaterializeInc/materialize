@@ -53,7 +53,14 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     always_or_unreachable as always,
 )
 
-from materialize.antithesis import ddl_hold, quiet, sql, state, telemetry
+from materialize.antithesis import (
+    ddl_hold,
+    quiet,
+    sql,
+    state,
+    telemetry,
+    upsert_recovery_io,
+)
 from materialize.antithesis.drivers import counters, history
 from materialize.antithesis.drivers.sources_common import (
     SOURCE_ERROR_MARKERS,
@@ -199,13 +206,17 @@ def _p6(conn: psycopg.Connection) -> dict[str, Any]:
 
 
 def _p7(conn: psycopg.Connection) -> dict[str, Any]:
-    targets = conn.execute(
-        "SELECT d.name, s.name, t.name FROM mz_catalog.mz_tables t"
-        " JOIN mz_catalog.mz_sources src ON t.source_id = src.id"
-        " JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id"
-        " JOIN mz_catalog.mz_databases d ON s.database_id = d.id"
-        " WHERE src.type IN ('kafka', 'postgres', 'mysql')"
-    ).fetchall()
+    targets = [
+        (database, schema, table)
+        for database, schema, table in conn.execute(
+            "SELECT d.name, s.name, t.name FROM mz_catalog.mz_tables t"
+            " JOIN mz_catalog.mz_sources src ON t.source_id = src.id"
+            " JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id"
+            " JOIN mz_catalog.mz_databases d ON s.database_id = d.id"
+            " WHERE src.type IN ('kafka', 'postgres', 'mysql')"
+        ).fetchall()
+        if not schema.startswith(upsert_recovery_io.SCHEMA_PREFIX)
+    ]
     replicas = conn.execute(
         "SELECT count(*) FROM mz_catalog.mz_cluster_replicas r"
         " JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id WHERE c.name = %s",
