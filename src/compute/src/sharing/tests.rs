@@ -1485,3 +1485,88 @@ fn stale_as_of_import_over_merged_chain_matches_direct() {
         "flat_map_ok over a merged chain read at a stale as_of diverged from the published rows"
     );
 }
+
+/// Renders a dataflow on `worker` that arranges empty `oks` and `errs` and publishes them under
+/// `id` at `as_of`, as one incarnation of a maintained index. Returns the dataflow's index, the
+/// publication, and agents that keep the traces alive until dropped.
+fn render_incarnation(
+    worker: &mut timely::worker::Worker,
+    registry: &ArrangementSharingRegistry,
+    id: GlobalId,
+    as_of: &Antichain<Timestamp>,
+) -> (usize, PublishToken, impl Sized) {
+    let index = worker.next_dataflow_index();
+    let (token, keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+        let oks = oks_collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("oks");
+        let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
+        let errs = KeyCollection::from(errs_collection)
+            .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("errs");
+        let token = registry.publish(id, as_of, scope.worker(), &oks.trace, &errs.trace);
+        (
+            token,
+            (oks.trace.clone(), errs.trace.clone(), oks_input, errs_input),
+        )
+    });
+    for _ in 0..10 {
+        worker.step();
+    }
+    (index, token, keep)
+}
+
+/// A reconnect recreates an index at the same `as_of`, which both runtimes reconcile. Until the
+/// maintenance runtime dropped the old incarnation, the registry key finds the old incarnation's
+/// live slot, so a peer bound then would read that incarnation and, once it drops, its frozen
+/// chain. The barrier holds the interactive runtime back until the drop, after which the peer binds
+/// a fresh slot that the new incarnation publishes into.
+#[mz_ore::test]
+fn the_reconcile_barrier_keeps_a_new_peer_off_the_old_incarnation() {
+    use crate::reconcile_barrier::BarrierSide;
+
+    let registry = ArrangementSharingRegistry::new();
+    let position = 0;
+    let id = GlobalId::User(1);
+    timely::execute_directly(move |worker| {
+        let as_of = as_of_min();
+        let barrier = registry.reconcile_barrier().clone();
+        let (old_dataflow, old_token, old_keep) = render_incarnation(worker, &registry, id, &as_of);
+        let old = ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("published");
+
+        // The interactive runtime has nothing to drop and arrives first.
+        barrier.arrive(BarrierSide::Interactive, position);
+        assert!(
+            !barrier.passable(BarrierSide::Interactive, position),
+            "the interactive runtime passes before maintenance dropped the old incarnation"
+        );
+        assert!(
+            Arc::ptr_eq(&registry.get_or_create(id, &as_of), &old),
+            "before the drop, the key finds the old incarnation's slot"
+        );
+
+        // Maintenance drops the old incarnation and arrives.
+        drop((old_token, old_keep));
+        worker.drop_dataflow(old_dataflow);
+        barrier.arrive(BarrierSide::Maintenance, position);
+        assert!(old.is_frozen());
+        assert!(barrier.passable(BarrierSide::Interactive, position));
+        assert!(barrier.passable(BarrierSide::Maintenance, position));
+
+        // Both create. The peer binds a fresh slot, and the new incarnation publishes into it.
+        let _peer = registry.peer_bundle(id, &as_of);
+        let fresh = ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("bound");
+        assert!(
+            !Arc::ptr_eq(&fresh, &old),
+            "the new peer binds the old slot"
+        );
+        let (_new_dataflow, _new_token, _new_keep) =
+            render_incarnation(worker, &registry, id, &as_of);
+        assert!(
+            Arc::ptr_eq(
+                &ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("published"),
+                &fresh
+            ),
+            "the new incarnation publishes into the peer's slot"
+        );
+        drop(old);
+    });
+}
