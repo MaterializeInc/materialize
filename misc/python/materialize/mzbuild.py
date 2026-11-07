@@ -1547,7 +1547,7 @@ class DependencySet:
         )
 
         def build_dep(dep):
-            end_time = time.time() + 600
+            end_time = time.time() + 1200
             while True:
                 if time.time() > end_time:
                     raise TimeoutError(

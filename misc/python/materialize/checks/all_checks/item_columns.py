@@ -96,10 +96,11 @@ class ItemColumns(Check):
         numeric_type_mod = (
             2555947 if self.current_version < MzVersion.parse_mz("v26.31.0-dev") else -1
         )
-        # Before v26.50, a table column without a default reported the string NULL.
+        # Before v26.51 (#40508), a table column without a default reported the
+        # string NULL.
         no_default = (
             "NULL"
-            if self.current_version < MzVersion.parse_mz("v26.50.0-dev")
+            if self.current_version < MzVersion.parse_mz("v26.51.0-dev")
             else "<null>"
         )
         return Testdrive(dedent("""
