@@ -5962,6 +5962,32 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_index_scoped_privileges";
+----
+mz_internal.mz_index_scoped_privileges:
+  →Fused with Child Map/Filter/Project
+    Project: #1..=#4
+    Filter: (#5{privilege_type} = "SELECT")
+      →Table Function mz_aclexplode(parse_catalog_privileges(((#0{data} -> "value") -> "privileges")))
+        →Differential Join %1:mz_indexes[#0{id}] » %0:mz_catalog_raw[parse_catalog_id(((#0{data} -> "key") -> "gid"))]
+          after %0:
+            Project: #8, #0, #3
+            Filter: like["u%"](#0{id})
+          →Arrange (parse_catalog_id(((#0{data} -> "key") -> "gid")))
+            →Read mz_internal.mz_catalog_raw
+          →Arranged mz_catalog.mz_indexes
+
+Source mz_internal.mz_catalog_raw
+  filter=(like["u%"](parse_catalog_id(((#0{data} -> "key") -> "gid"))) AND ("Item" = (#0{data} ->> "kind")))
+
+Used Indexes:
+  - mz_catalog.mz_indexes_ind (differential join)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_internal_cluster_replicas";
 ----
 mz_internal.mz_internal_cluster_replicas:
@@ -12323,6 +12349,195 @@ Used Indexes:
   - mz_catalog.mz_roles_ind (*** full scan ***)
   - mz_catalog.mz_databases_ind (*** full scan ***)
   - mz_catalog.mz_schemas_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_show_index_scoped_privileges";
+----
+Explained Query:
+  →With
+    cte l0 =
+      →One-Shot Delta Join [%0:mz_index_scoped_privileges » %2:mz_indexes[#0{id}] » %1[#0{id}]]
+        →Unarranged Raw Stream
+          →Stream mz_internal.mz_index_scoped_privileges
+        →Arrange (#0{id})
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #1, #0, #3
+                →Arranged mz_catalog.mz_tables
+                  Key: (#2{schema_id})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2, #3
+                →Arranged mz_catalog.mz_sources
+                  Key: (#0{id})
+            →Fused with Child Map/Filter/Project
+              Project: #1, #0, #3
+                →Arranged mz_catalog.mz_views
+                  Key: (#2{schema_id})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2, #3
+                →Arranged mz_catalog.mz_materialized_views
+                  Key: (#0{id})
+        →Arranged mz_catalog.mz_indexes
+    cte l1 =
+      →Fused with Child Map/Filter/Project
+        Filter: NOT(like["s%"](#1{grantee}))
+          →Read l0
+    cte l2 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2, #6
+        Map: true
+          →Arranged mz_catalog.mz_roles
+            Key: (#0{id})
+  →Return
+    →One-Shot Delta Join [%0:l1 » %1[#0] » %2[#0] » %3[#0] » %4[#0] » %5[#0]]
+      path %0:
+        after %1:
+          Project: #1..=#5, #8
+          Map: case when (#7) IS NULL then null else #6 end
+        after %2:
+          Project: #1..=#5, #8
+          Map: case when (#7) IS NULL then null else #6 end
+        after %3:
+          Project: #1..=#5, #8
+          Map: case when (#0{grantee} = "p") then "PUBLIC" else case when (#7) IS NULL then null else #6 end end
+        after %4:
+          Project: #1, #2, #6, #8, #3..=#5, #9
+          Map: case when (#8) IS NULL then null else #7 end
+        after %5:
+          Project: #6, #7, #11, #8, #1, #2, #5
+          Map: case when (#10) IS NULL then null else #9 end
+      →Unarranged Raw Stream
+        →Stream l1
+      →Arrange (#0)
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #0, #1, #11
+            Map: true
+              →Arranged mz_catalog.mz_clusters
+                Key: (#0{id})
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                          →Arranged mz_catalog.mz_clusters
+                            Key: (#0{id})
+                    →Unarranged Raw Stream
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #5
+                            →Read l0
+      →Arrange (#0)
+        →Union
+          →Stream l2
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                          →Arranged mz_catalog.mz_roles
+                            Key: (#0{id})
+                    →Unarranged Raw Stream
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #0
+                            →Read l0
+      →Arrange (#0)
+        →Union
+          →Fused with Child Map/Filter/Project
+            Filter: NOT(like["s%"](#0))
+              →Read l2
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                        Filter: NOT(like["s%"](#0))
+                          →Arranged mz_catalog.mz_roles
+                            Key: (#0{id})
+                    →Unarranged Raw Stream
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #1
+                            →Read l1
+      →Arrange (#0) (case when (#3) IS NULL then null else #1 end)
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #1, #0, #3, #6
+            Map: true
+              →Arranged mz_catalog.mz_schemas
+                Key: (#2{database_id})
+          →Map/Filter/Project
+            Project: #0..=#3
+            Map: null, null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #1
+                          →Arranged mz_catalog.mz_schemas
+                            Key: (#2{database_id})
+                    →Unarranged Raw Stream
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #2
+                            →Read l0
+      →Arrange (#0)
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #1, #0, #5
+            Map: true
+              →Arranged mz_catalog.mz_databases
+                Key: (#2{name})
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #1
+                          →Arranged mz_catalog.mz_databases
+                            Key: (#2{name})
+                    →Unarranged Raw Stream
+                      →Distinct GroupAggregate
+                        →Union
+                          →Fused with Child Map/Filter/Project
+                            Project: #0
+                              →Arranged mz_catalog.mz_schemas
+                                Key: (#2{database_id})
+                          →Constant (1 row)
+
+Source mz_internal.mz_index_scoped_privileges
+
+Used Indexes:
+  - mz_catalog.mz_clusters_ind (*** full scan ***)
+  - mz_catalog.mz_indexes_ind (delta join lookup)
+  - mz_catalog.mz_roles_ind (*** full scan ***)
+  - mz_catalog.mz_sources_ind (*** full scan ***)
+  - mz_catalog.mz_materialized_views_ind (*** full scan ***)
+  - mz_catalog.mz_databases_ind (*** full scan ***)
+  - mz_catalog.mz_schemas_ind (*** full scan ***)
+  - mz_catalog.mz_tables_ind (*** full scan ***)
+  - mz_catalog.mz_views_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 

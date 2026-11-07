@@ -564,4 +564,3 @@ COMPLETE 0
 query TT
 SELECT name, index FROM mz_internal.mz_show_index_scoped_privileges WHERE grantee = 'alice' ORDER BY index
 ----
-

@@ -1892,7 +1892,7 @@ fn generate_read_privileges(
 /// Like [`generate_read_privileges`], for a one-off query that `role_id` runs:
 /// `SELECT`, `SUBSCRIBE`, and `COPY TO`.
 ///
-/// A relation the role may read only through an index (see [`index_routes`])
+/// A relation the role may read only through an index (see `index_routes`)
 /// needs no `SELECT` on the relation itself. The caller must then run
 /// [`check_index_routed_reads`] on the optimized plan, because RBAC alone
 /// cannot tell whether the optimizer reads the relation through that index.
@@ -2137,14 +2137,14 @@ fn index_routes(
 }
 
 /// Checks that an optimized query reads each relation that the session's role
-/// may read only through an index (see [`index_routes`]) through indexes the
+/// may read only through an index (see `index_routes`) through indexes the
 /// role was granted it through, and never through another index or the
 /// relation's storage collection.
 ///
 /// `depends_on` holds the relations the query names, which are the ones RBAC
 /// checked. `source_imports` and `index_imports` are the optimized plan's
 /// reads. Every path that executes a plan authorized by
-/// [`generate_query_read_privileges`] must call this before executing it.
+/// `generate_query_read_privileges` must call this before executing it.
 pub fn check_index_routed_reads(
     catalog: &impl SessionCatalog,
     session: &dyn SessionMetadata,
