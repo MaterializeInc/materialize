@@ -290,11 +290,17 @@ impl SystemDependencies {
             replica_introspection: false,
         };
         for gid in depends_on {
-            let id = state.get_entry_by_global_id(&gid).id();
-            let schema = state.get_entry(&id).name().qualifiers.schema_spec;
             dependencies.any = true;
+            // Running work can outlive a dependency dropped concurrently. A
+            // missing dependency counts as a user object, the most restricted.
+            let Some(entry) = state.try_get_entry_by_global_id(&gid) else {
+                dependencies.only_system = false;
+                continue;
+            };
+            let schema = entry.name().qualifiers.schema_spec;
             dependencies.only_system &= state.is_system_schema_specifier(schema);
-            dependencies.replica_introspection |= !state.introspection_dependencies(id).is_empty();
+            dependencies.replica_introspection |=
+                !state.introspection_dependencies(entry.id()).is_empty();
         }
         dependencies
     }
@@ -303,6 +309,18 @@ impl SystemDependencies {
     /// its target cluster.
     fn only_replica_introspection(&self) -> bool {
         self.only_system && self.replica_introspection
+    }
+}
+
+/// The workload class of a one-off query that depends on `depends_on`.
+pub fn peek_workload(
+    state: &CatalogState,
+    depends_on: impl IntoIterator<Item = GlobalId>,
+) -> WorkloadClass {
+    if SystemDependencies::of(state, depends_on).only_replica_introspection() {
+        WorkloadClass::ComputeIntrospection
+    } else {
+        WorkloadClass::ComputeInteractive
     }
 }
 
@@ -325,15 +343,11 @@ pub fn subscribe_workload(
 /// restricted cluster without being classified.
 pub fn plan_workload(state: &CatalogState, plan: &Plan) -> Option<(WorkloadClass, &'static str)> {
     match plan {
-        Plan::Select(plan)
-            if SystemDependencies::of(state, plan.source.depends_on())
-                .only_replica_introspection() =>
-        {
-            Some((WorkloadClass::ComputeIntrospection, "run SELECT"))
-        }
-        Plan::Select(_) | Plan::ShowColumns(_) => {
-            Some((WorkloadClass::ComputeInteractive, "run SELECT"))
-        }
+        Plan::Select(plan) => Some((
+            peek_workload(state, plan.source.depends_on()),
+            "run SELECT",
+        )),
+        Plan::ShowColumns(_) => Some((WorkloadClass::ComputeInteractive, "run SELECT")),
         Plan::CopyTo(_) => Some((WorkloadClass::ComputeInteractive, "run COPY TO")),
         Plan::ReadThenWrite(_) => Some((WorkloadClass::ComputeInteractive, "run UPDATE or DELETE")),
         // NOTE: Whether an INSERT reads on the cluster is only known after

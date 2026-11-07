@@ -246,6 +246,7 @@ mod metric_sink;
 mod privatelink_status;
 mod sql;
 mod validity;
+mod workload_admission;
 
 /// Boxes a coordinator dispatcher while bounding its inline state.
 fn box_dispatcher<'a, F>(future: F) -> LocalBoxFuture<'a, ()>
