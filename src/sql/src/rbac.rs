@@ -1891,6 +1891,7 @@ fn generate_read_privileges_inner(
                 }
                 CatalogItemType::Sink
                 | CatalogItemType::MetricSink
+                | CatalogItemType::Assertion
                 | CatalogItemType::Index
                 | CatalogItemType::Func => {}
             }

@@ -704,6 +704,8 @@ pub enum ExecuteResponse {
     CreatedClusterReplica,
     /// The requested index was created.
     CreatedIndex,
+    /// The requested assertion was created.
+    CreatedAssertion,
     /// The requested metric sink was created.
     CreatedMetricSink,
     /// The requested introspection subscribe was created.
@@ -886,6 +888,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedClusterReplica)
             }
             ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
+            ExecuteResponseKind::CreatedAssertion => Ok(ExecuteResponse::CreatedAssertion),
             ExecuteResponseKind::CreatedMetricSink => Ok(ExecuteResponse::CreatedMetricSink),
             ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
             ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
@@ -951,6 +954,7 @@ impl ExecuteResponse {
             CreatedCluster { .. } => Some("CREATE CLUSTER".into()),
             CreatedClusterReplica { .. } => Some("CREATE CLUSTER REPLICA".into()),
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
+            CreatedAssertion { .. } => Some("CREATE ASSERTION".into()),
             CreatedMetricSink { .. } => Some("CREATE METRIC SINK".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
@@ -1050,9 +1054,7 @@ impl ExecuteResponse {
             CreateTable => &[CreatedTable],
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
-            // Prototype: CREATE ASSERTION is rejected at sequence time and never
-            // produces a success response.
-            CreateAssertion => &[],
+            CreateAssertion => &[CreatedAssertion],
             CreateIndex => &[CreatedIndex],
             CreateMetricSink => &[CreatedMetricSink],
             CreateType => &[CreatedType],

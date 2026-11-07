@@ -1700,7 +1700,8 @@ impl Coordinator {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::MetricSink(_) => {
+                    | CatalogItem::MetricSink(_)
+                    | CatalogItem::Assertion(_) => {
                         // Other item types don't have connection dependencies
                         // that need updating.
                     }
@@ -1939,6 +1940,9 @@ impl CatalogImplication {
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
+                // Stage 1 assertions have no storage/compute controller
+                // implications: no storage collection, no dataflow.
+                CatalogItem::Assertion(_) => {}
             },
             ParsedStateUpdateKind::Cluster {
                 durable_cluster: _,

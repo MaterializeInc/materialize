@@ -973,6 +973,8 @@ pub enum CatalogItemType {
     Connection,
     /// A metric sink.
     MetricSink,
+    /// An assertion.
+    Assertion,
 }
 
 impl CatalogItemType {
@@ -1007,6 +1009,7 @@ impl CatalogItemType {
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
             CatalogItemType::MetricSink => false,
+            CatalogItemType::Assertion => false,
         }
     }
 }
@@ -1025,6 +1028,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
             CatalogItemType::MetricSink => f.write_str("metric sink"),
+            CatalogItemType::Assertion => f.write_str("assertion"),
         }
     }
 }
@@ -1043,6 +1047,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
             CatalogItemType::MetricSink => ObjectType::MetricSink,
+            CatalogItemType::Assertion => ObjectType::Assertion,
         }
     }
 }
@@ -1061,6 +1066,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
             CatalogItemType::MetricSink => mz_audit_log::ObjectType::MetricSink,
+            CatalogItemType::Assertion => mz_audit_log::ObjectType::Assertion,
         }
     }
 }
@@ -1657,6 +1663,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Source(_) => ObjectType::Source,
             CommentObjectId::Sink(_) => ObjectType::Sink,
             CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
+            CommentObjectId::Assertion(_) => ObjectType::Assertion,
             CommentObjectId::Index(_) => ObjectType::Index,
             CommentObjectId::Func(_) => ObjectType::Func,
             CommentObjectId::Connection(_) => ObjectType::Connection,

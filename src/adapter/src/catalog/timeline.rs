@@ -94,6 +94,7 @@ impl Catalog {
                         CatalogItem::View(_)
                         | CatalogItem::Sink(_)
                         | CatalogItem::MetricSink(_)
+                        | CatalogItem::Assertion(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
@@ -232,6 +233,7 @@ impl Catalog {
                     }
                     CatalogItem::Sink(_)
                     | CatalogItem::MetricSink(_)
+                    | CatalogItem::Assertion(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)

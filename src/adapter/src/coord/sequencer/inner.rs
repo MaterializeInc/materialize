@@ -125,6 +125,7 @@ type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
 
 mod cluster;
 mod copy_from;
+mod create_assertion;
 mod create_index;
 mod create_materialized_view;
 mod create_metric_sink;

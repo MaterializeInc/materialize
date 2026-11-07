@@ -1727,6 +1727,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         // Unreachable by construction: `COMMENT ON METRIC SINK` is rejected at parse, so no
         // metric-sink comment id is ever built. The arm exists only for exhaustiveness.
         CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
+        CommentObjectId::Assertion(_) => ObjectType::Assertion,
         CommentObjectId::Index(_) => ObjectType::Index,
         CommentObjectId::Func(_) => ObjectType::Func,
         CommentObjectId::Connection(_) => ObjectType::Connection,
@@ -1769,11 +1770,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
-            // Prototype: CREATE ASSERTION is rejected at sequence time, so an
-            // assertion is never created and never produces an audit event.
-            mz_sql::catalog::ObjectType::Assertion => {
-                unreachable!("CREATE ASSERTION is not supported; no Assertion is ever audit-logged")
-            }
+            mz_sql::catalog::ObjectType::Assertion => ObjectType::Assertion,
         },
         SystemObjectType::System => ObjectType::System,
     }

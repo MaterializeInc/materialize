@@ -906,7 +906,9 @@ impl Catalog {
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
                     | CatalogItem::Connection(_)
-                    | CatalogItem::MetricSink(_) => {}
+                    | CatalogItem::MetricSink(_)
+                    // Stage 1 assertions store no locally-optimized expression.
+                    | CatalogItem::Assertion(_) => {}
                 }
             }
         }
@@ -1729,7 +1731,10 @@ impl Catalog {
                     | CatalogItem::Connection(_)
                     // Metric sinks write to the replica's metrics registry, never to persist,
                     // so there is no storage collection to create.
-                    | CatalogItem::MetricSink(_) => (),
+                    | CatalogItem::MetricSink(_)
+                    // Stage 1 assertions declare an invariant but ship no dataflow and
+                    // allocate no storage collection.
+                    | CatalogItem::Assertion(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -1914,7 +1919,8 @@ impl Catalog {
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::MetricSink(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
+                        | CatalogItem::MetricSink(_)
+                        | CatalogItem::Assertion(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
                             id: id.to_string(),
                             name,
                         }),

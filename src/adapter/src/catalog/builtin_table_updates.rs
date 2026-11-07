@@ -170,7 +170,10 @@ impl CatalogState {
             | CatalogItem::Index(_)
             | CatalogItem::Log(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::MetricSink(_) => vec![],
+            | CatalogItem::MetricSink(_)
+            // Stage 1 assertions have no dedicated builtin-table row; they are
+            // read out of mz_catalog_raw via create_sql.
+            | CatalogItem::Assertion(_) => vec![],
             // Connection details (mz_kafka_connections, mz_ssh_tunnel_connections,
             // mz_aws_connections, mz_aws_privatelink_connections) are now derived
             // from the persisted create_sql by materialized views over

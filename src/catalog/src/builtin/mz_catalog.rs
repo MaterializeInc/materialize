@@ -3288,6 +3288,7 @@ SELECT
         WHEN '17' THEN 'continual-task'
         WHEN '18' THEN 'network-policy'
         WHEN '19' THEN 'metric-sink'
+        WHEN '20' THEN 'assertion'
     END                                                                     AS object_type,
     mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
     e->'user'->>'inner'                                                     AS \"user\",
@@ -4157,6 +4158,10 @@ mod tests {
             match proto {
                 ProtoObjectType::Unknown => None,
                 ProtoObjectType::MetricSink => None,
+                // Assertions have no user-grantable privileges, so `ON
+                // ASSERTIONS` is rejected before a default-privilege key is
+                // ever built; the CASE deliberately has no arm for it.
+                ProtoObjectType::Assertion => None,
                 ProtoObjectType::Table => Some(SqlObjectType::Table),
                 ProtoObjectType::View => Some(SqlObjectType::View),
                 ProtoObjectType::MaterializedView => Some(SqlObjectType::MaterializedView),
@@ -4199,6 +4204,7 @@ mod tests {
             ProtoObjectType::Func,
             ProtoObjectType::NetworkPolicy,
             ProtoObjectType::MetricSink,
+            ProtoObjectType::Assertion,
         ];
 
         let sql = MZ_DEFAULT_PRIVILEGES.sql;
