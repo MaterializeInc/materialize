@@ -89,6 +89,7 @@ mod sequential_hydration;
 
 pub mod error;
 pub mod instance_client;
+pub mod peek_lifecycle;
 pub use instance_client::InstanceClient;
 
 pub(crate) type StorageCollections =
@@ -1080,6 +1081,7 @@ impl ComputeController {
                 read_hold,
                 target_replica,
                 peek_response_tx,
+                None,
             )
             .expect("validated")
         });
