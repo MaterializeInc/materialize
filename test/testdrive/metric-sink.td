@@ -266,6 +266,21 @@ true
     AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
 true
 
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_capacity_bytes'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_allocations'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_count'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
 # The attributable path, on the index's own catalog id rather than any `u%` label:
 # an index is a dataflow export, so its arrangement bytes carry its id.
 $ set-from-sql var=arr-idx-id
@@ -273,6 +288,12 @@ SELECT id FROM mz_catalog.mz_indexes WHERE name = 'arr_idx'
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+    AND labels -> 'id' = '${arr-idx-id}'
+true
+
+# The count is of arrangements, not records: the two-row index holds at least one.
+> SELECT value >= 1 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_count'
     AND labels -> 'id' = '${arr-idx-id}'
 true
 

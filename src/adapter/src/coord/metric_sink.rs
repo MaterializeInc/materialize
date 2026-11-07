@@ -120,7 +120,10 @@ const CURATED: &[CuratedMetricSink] = &[
         // arrangements go unreported, so these families sum below what the replica holds.
         //
         // `f` joins each raw log separately to reuse its `(operator_id, worker_id)` index
-        // (`LogVariant::index_by`). One union would arrange all three logs' rows afresh.
+        // (`LogVariant::index_by`). One union would arrange all five logs' rows afresh.
+        //
+        // `arrangement_count` counts the distinct operators in `rec`, so an arrangement that
+        // holds no records is not counted.
         source_sql: "
 WITH ex AS (
     SELECT dataflow_id, min(export_id) AS export_id
@@ -133,14 +136,26 @@ oe AS (
     FROM mz_introspection.mz_dataflow_addresses_per_worker a
     JOIN ex ON ex.dataflow_id = a.address[1]
 ),
+rec AS (
+    SELECT oe.export_id, r.operator_id
+    FROM mz_introspection.mz_arrangement_records_raw r
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
+),
 f AS (
     SELECT 'arrangement_size_bytes'::text AS metric_name, oe.export_id
     FROM mz_introspection.mz_arrangement_heap_size_raw r
     JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
     UNION ALL
-    SELECT 'arrangement_records'::text, oe.export_id
-    FROM mz_introspection.mz_arrangement_records_raw r
+    SELECT 'arrangement_capacity_bytes'::text, oe.export_id
+    FROM mz_introspection.mz_arrangement_heap_capacity_raw r
     JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
+    UNION ALL
+    SELECT 'arrangement_allocations'::text, oe.export_id
+    FROM mz_introspection.mz_arrangement_heap_allocations_raw r
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
+    UNION ALL
+    SELECT 'arrangement_records'::text, export_id
+    FROM rec
     UNION ALL
     SELECT 'arrangement_batches'::text, oe.export_id
     FROM mz_introspection.mz_arrangement_batches_raw r
@@ -151,11 +166,19 @@ SELECT metric_name, 'gauge'::text AS metric_type,
        count(*)::double precision AS value,
        CASE metric_name
            WHEN 'arrangement_size_bytes' THEN 'arrangement heap size in bytes'
+           WHEN 'arrangement_capacity_bytes' THEN 'arrangement heap capacity in bytes'
+           WHEN 'arrangement_allocations' THEN 'number of allocations in arrangement heaps'
            WHEN 'arrangement_records' THEN 'number of records in arrangement heaps'
            WHEN 'arrangement_batches' THEN 'number of batches in arrangements'
        END AS help
 FROM f
-GROUP BY metric_name, export_id",
+GROUP BY metric_name, export_id
+UNION ALL
+SELECT 'arrangement_count'::text, 'gauge'::text,
+       map_build(LIST[ROW('id', export_id)])::map[text=>text],
+       count(DISTINCT operator_id)::double precision, 'number of arrangements'::text
+FROM rec
+GROUP BY export_id",
     },
     CuratedMetricSink {
         name: "mz_metric_dataflow_errors",
