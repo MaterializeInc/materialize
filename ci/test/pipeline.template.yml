@@ -44,6 +44,21 @@ steps:
         agents:
           queue: l-builder-linux-aarch64
 
+      - id: build-x86_64-antithesis
+        label: ":rust: Build x86_64 (Antithesis)"
+        command: bin/ci-builder run stable ci/test/build-antithesis.sh
+        inputs:
+          - "*"
+        depends_on: []
+        timeout_in_minutes: 180
+        agents:
+          queue: l-builder-linux-x86_64
+        # Runs only on PRs labeled `ci-antithesis`, see `apply_antithesis_label`.
+        env:
+          CI_ANTITHESIS: 1
+        coverage: skip
+        sanitizer: skip
+
       - id: build-x86_64-no-lto
         label: ":rust: Build x86_64 (no LTO)"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build

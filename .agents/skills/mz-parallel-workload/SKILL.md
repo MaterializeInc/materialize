@@ -10,7 +10,7 @@ description: >
 
 # Extending Parallel Workload
 
-The parallel-workload framework stress-tests Materialize by running random SQL actions concurrently across multiple threads. It catches **panics and unexpected query errors** - it does not verify result correctness.
+The parallel-workload framework stress-tests Materialize by running random SQL actions concurrently across multiple threads. Most actions catch **panics and unexpected query errors**. Selected actions also check independent correctness invariants, and `catalog_transactions.py` checks catalog transaction outcomes, object identities, dependencies, and forced overlap.
 
 ## When to Use This Framework
 
@@ -25,6 +25,13 @@ Add coverage here when a bug manifests as:
 2. Each worker randomly selects actions from its list using **weighted random choice** and executes them in a loop until the runtime expires.
 3. If an action raises a `QueryError`, the worker checks `action.errors_to_ignore(exe)`. If the error matches, it's logged and ignored. If not, the **test fails**.
 4. All threads share a `Database` object that tracks created objects (tables, views, clusters, etc.) with thread-safe locking.
+5. Workers separately count successful actions, skips, and ignored errors. The final coverage check diagnoses actions that never succeed. An accepted error is not successful coverage.
+
+For explicit DDL transaction semantics, consult `catalog_transactions.py`.
+Its multi-statement rename and schema-swap cases check commits and rollbacks
+against concurrent changes. Its `hammer` uses barriers to put an acknowledged
+autocommit change inside every open transaction, instead of relying on worker
+count alone to establish overlap.
 
 ## Adding a New Action
 

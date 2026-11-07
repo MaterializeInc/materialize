@@ -2839,11 +2839,7 @@ class ReadOnlyTransactionAction(Action):
 
 
 class DDLTransactionAction(Action):
-    """A DDL statement inside an explicit `BEGIN`/`COMMIT`. Materialize allows
-    only a single statement in a DDL transaction, so the value over autocommit
-    DDL is the open commit window: racing concurrent DDL against it exercises
-    the "another session modified the catalog while this DDL transaction was
-    open" serialization path."""
+    """Create a table in an explicit transaction while other workers change the catalog."""
 
     def applicable(self, exe: Executor) -> bool:
         return exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly)

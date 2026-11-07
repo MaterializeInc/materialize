@@ -13,6 +13,8 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+ci/test/install-antithesis-sdk.sh
+
 RESULT=0
 { stdbuf --output=L --error=L bin/doc --document-private-items |& tee run.log; } || RESULT=$?
 
