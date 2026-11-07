@@ -51,8 +51,8 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowChunkedBatcher,
-    RowRowColumnarBatcher, RowRowColumnationBatcher, RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrSpine, ImportedErrEnter, ImportedRowRowEnter, RowRowAgent,
+    RowRowChunkedBatcher, RowRowColumnarBatcher, RowRowColumnationBatcher, RowRowSpine,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -220,14 +220,15 @@ pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
         Arranged<'scope, RowRowAgent<T, Diff>>,
         Arranged<'scope, ErrAgent<T, Diff>>,
     ),
-    /// An imported trace from outside the dataflow.
+    /// An imported trace from outside the dataflow, maintained by this runtime or published by the
+    /// process's other compute runtime.
     ///
     /// The `GlobalId` identifier exists so that exports of this same trace
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>,
-        Arranged<'scope, ErrEnter<mz_repr::Timestamp, T>>,
+        Arranged<'scope, ImportedRowRowEnter<T>>,
+        Arranged<'scope, ImportedErrEnter<T>>,
     ),
 }
 
