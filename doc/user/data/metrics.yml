@@ -1119,6 +1119,24 @@ metrics:
   - response_type
   source: src/compute-client/src/metrics.rs
   visibility: internal
+- name: mz_compute_shared_arrangement_held_count
+  help: >-
+    How many of the shared arrangements this worker publishes are kept from logical
+    compaction by the importing runtime or a reader. Frozen arrangements are not
+    counted.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_shared_arrangement_hold_gap_ms
+  help: >-
+    The largest gap, over the shared arrangements this worker publishes, between
+    the logical compaction frontier its own handles allow and the one readers let it
+    apply, in timestamp units. Physical holds and frozen arrangements are not measured.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_connection_status
   help: Count of completed network connections, by status
   labels:

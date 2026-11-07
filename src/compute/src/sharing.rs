@@ -295,6 +295,50 @@ impl ArrangementSharingRegistry {
         Some(slot.oks.logical_holds())
     }
 
+    /// How far the readers' holds keep the publishing runtime from compacting, over every
+    /// arrangement published here, `oks` and `errs` alike.
+    ///
+    /// Returns the largest gap between an arrangement's requested and applied logical compaction
+    /// frontiers, and how many arrangements have any gap at all. The gap is in timestamp units,
+    /// milliseconds for an index in the epoch-millisecond timeline. Every published id is a point
+    /// of its own, so a trace published under several ids, as a re-export's is, counts once per
+    /// id. A point whose requested frontier is empty is counted as held but contributes no gap:
+    /// its collection is being dropped and has no finite frontier left to subtract from.
+    ///
+    /// Only logical compaction is measured. Physical holds and the batches a reader's chain pins
+    /// are not.
+    ///
+    /// NOTE: A frozen slot is skipped, which is a blind spot. Its writer closed, so its points
+    /// stopped publishing frontiers and its gap cannot be measured, but its trace lives on while a
+    /// same-thread agent holds it, for example a dataflow importing the index, and the readers'
+    /// holds on the frozen points still hold that trace back.
+    ///
+    /// Takes the registry lock and up to four point locks per live slot. The caller throttles it.
+    pub(crate) fn hold_gaps(&self) -> (u64, usize) {
+        let inner = self.lock();
+        let mut max_gap = 0;
+        let mut held = 0;
+        let live = inner.map.values().filter_map(Weak::upgrade);
+        for slot in live.filter(|slot| !slot.is_frozen()) {
+            for (applied, requested) in
+                [slot.oks.logical_frontiers(), slot.errs.logical_frontiers()]
+            {
+                match (applied.as_option(), requested.as_option()) {
+                    (Some(applied), Some(requested)) => {
+                        let gap = u64::from(*requested).saturating_sub(u64::from(*applied));
+                        if gap > 0 {
+                            held += 1;
+                            max_gap = max_gap.max(gap);
+                        }
+                    }
+                    (Some(_), None) => held += 1,
+                    _ => {}
+                }
+            }
+        }
+        (max_gap, held)
+    }
+
     /// Attaches the current thread as the worker that publishes here.
     ///
     /// Worker `i` of each runtime holds registry `i`, and both sides must be a single worker. Two
