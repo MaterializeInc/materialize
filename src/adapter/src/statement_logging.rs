@@ -57,9 +57,7 @@ impl StatementLifecycleEvent {
     }
 }
 
-/// Contains all the information necessary to generate the initial
-/// entry in `mz_statement_execution_history`. We need to keep this
-/// around in order to modify the entry later once the statement finishes executing.
+/// Fields captured when constructing a statement execution's admission row.
 #[derive(Clone, Debug)]
 pub struct StatementBeganExecutionRecord {
     pub id: Uuid,
@@ -80,6 +78,62 @@ pub struct StatementBeganExecutionRecord {
     /// The kind of statement being executed, if known. Used to redact
     /// `error_message` for kinds that can carry secret material.
     pub kind: Option<StatementKind>,
+}
+
+impl StatementBeganExecutionRecord {
+    /// Consumes this record and its matching packed admission row.
+    pub(crate) fn into_metadata(self, admission_row: Row) -> StatementExecutionMetadata {
+        StatementExecutionMetadata {
+            id: self.id,
+            began_at: self.began_at,
+            cluster_id: self.cluster_id,
+            cluster_name: self.cluster_name,
+            execution_timestamp: self.execution_timestamp,
+            transient_index_id: self.transient_index_id,
+            kind: self.kind,
+            admission_row,
+        }
+    }
+}
+
+/// Execution metadata backed by its admission row. Only cluster selection,
+/// timestamp and transient index remain separately mutable.
+#[derive(Clone, Debug)]
+pub struct StatementExecutionMetadata {
+    pub(crate) id: Uuid,
+    pub(crate) began_at: EpochMillis,
+    pub(crate) cluster_id: Option<ClusterId>,
+    pub(crate) cluster_name: Option<String>,
+    pub(crate) execution_timestamp: Option<EpochMillis>,
+    pub(crate) transient_index_id: Option<GlobalId>,
+    pub(crate) kind: Option<StatementKind>,
+    admission_row: Row,
+}
+
+impl StatementExecutionMetadata {
+    pub(crate) fn pack_into(&self, packer: &mut RowPacker) {
+        let cluster = self.cluster_id.map(|id| id.to_string());
+        let transient_index = self.transient_index_id.map(|id| id.to_string());
+        // Column order follows pack_statement_execution_inner. The final six
+        // completion columns are supplied by the caller.
+        for (column, datum) in self.admission_row.iter().take(15).enumerate() {
+            packer.push(match column {
+                3 => cluster.as_deref().into(),
+                5 => self.cluster_name.as_deref().into(),
+                9 => self.execution_timestamp.into(),
+                11 => transient_index.as_deref().into(),
+                _ => datum,
+            });
+        }
+    }
+
+    pub(crate) fn pack_began_update(&self) -> Row {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        self.pack_into(&mut packer);
+        packer.extend([Datum::Null; 6]);
+        row
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -876,9 +930,7 @@ pub enum FrontendStatementLoggingEvent {
     /// Statement execution began, possibly with an associated prepared statement
     /// if this is the first time the prepared statement is being logged
     BeganExecution {
-        record: StatementBeganExecutionRecord,
-        /// `mz_statement_execution_history`
-        mseh_update: Row,
+        record: StatementExecutionMetadata,
         prepared_statement: Option<PreparedStatementEvent>,
     },
     /// Statement execution ended
