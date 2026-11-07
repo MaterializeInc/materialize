@@ -46,6 +46,12 @@ where
         }
     }
 
+    /// Whether the trace that attached to this point has closed or dropped. A frozen point never
+    /// publishes again and refuses another trace.
+    pub(crate) fn is_frozen(&self) -> bool {
+        self.shared.is_frozen()
+    }
+
     /// Hands out a `Clone + Send` handle to the published arrangement.
     ///
     /// The handle registers a logical hold at the current published `since`, so the arrangement
