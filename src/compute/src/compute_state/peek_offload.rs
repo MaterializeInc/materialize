@@ -209,6 +209,24 @@ pub struct OffloadedPeek {
     /// stops at its next cancellation check, and the scan, the cursors it holds, and the permit
     /// that admitted it drop there.
     _abort_handle: AbortOnDropHandle<()>,
+    /// Where an answer left unread in `result` is deleted from.
+    stash: Option<StashTarget>,
+}
+
+impl Drop for OffloadedPeek {
+    fn drop(&mut self) {
+        // Closed before the check, so that an answer sent after it fails to send, and the walk
+        // deletes it instead, see `deliver`.
+        self.result.close();
+        let Ok((response, _elapsed)) = self.result.try_recv() else {
+            return;
+        };
+        match &self.stash {
+            Some(stash) => stash.discard(response),
+            // Only a walk with a target can answer with a stashed response.
+            None => drop(response),
+        }
+    }
 }
 
 impl OffloadedPeek {
@@ -231,6 +249,7 @@ impl OffloadedPeek {
         worker: Thread,
     ) -> Self {
         let (mut result_tx, result_rx) = oneshot::channel();
+        let own_stash = stash.clone();
         permits.resize(config.permit_fraction.get());
 
         let peek_uuid = peek.uuid;
@@ -239,9 +258,8 @@ impl OffloadedPeek {
         // at it at all.
         let order_by: Arc<[ColumnOrder]> = peek.finishing.order_by.as_slice().into();
 
-        let task_handle = mz_ore::task::spawn(
-            || format!("peek_offload::walk({peek_uuid})"),
-            async move {
+        let task_handle =
+            mz_ore::task::spawn(|| format!("peek_offload::walk({peek_uuid})"), async move {
                 // Wall clock from the hand-off rather than the walk's own time. The wait for a
                 // permit is in here, because that is what the peek's latency is made of.
                 let start = Instant::now();
@@ -261,8 +279,15 @@ impl OffloadedPeek {
                     _permit: permit,
                     result_tx,
                 };
-                let (state, response) =
-                    Self::walk(state, peek_uuid, stash, &config, &metrics, order_by).await;
+                let (state, response) = Self::walk(
+                    state,
+                    peek_uuid,
+                    stash.as_ref(),
+                    &config,
+                    &metrics,
+                    order_by,
+                )
+                .await;
                 let Some(response) = response else {
                     return;
                 };
@@ -275,30 +300,26 @@ impl OffloadedPeek {
                     metrics.walked_to_stash();
                 }
 
-                match result_tx.send((response, start.elapsed())) {
-                    Ok(()) => {}
-                    // TODO: a dropped stashed response leaves its parts in blob storage. The
-                    // upload's own cleanup cannot reach them, because a finished batch belongs to
-                    // the response rather than to the upload, and rebuilding a deletable batch
-                    // from what the response carries needs a `WriteHandle` this task does not
-                    // hold. A reader-side sweep or persist's own garbage collection covers it.
-                    Err((_response, elapsed)) => {
-                        debug!(duration = ?elapsed, "dropping result for cancelled peek {peek_uuid}")
-                    }
-                }
+                deliver(
+                    result_tx,
+                    response,
+                    start.elapsed(),
+                    stash.as_ref(),
+                    peek_uuid,
+                );
 
                 // Unparked rather than activated: the sweep polls this peek anyway, and a
                 // root-path activation would also mark the worker's dataflows schedulable. An
                 // unpark landing before the park is remembered, so the wake cannot be missed.
                 worker.unpark();
-            },
-        );
+            });
 
         Self {
             peek,
             result: result_rx,
             span: tracing::Span::current(),
             _abort_handle: task_handle.abort_on_drop(),
+            stash: own_stash,
         }
     }
 
@@ -308,7 +329,7 @@ impl OffloadedPeek {
     async fn walk(
         mut state: WalkState,
         peek_uuid: Uuid,
-        stash: Option<StashTarget>,
+        stash: Option<&StashTarget>,
         config: &OffloadConfig,
         metrics: &PeekWalkMetrics,
         order_by: Arc<[ColumnOrder]>,
@@ -378,7 +399,7 @@ impl OffloadedPeek {
                     // `step_until_blocked` returns a suspension only with a batch, and a scan that
                     // has one makes no progress until it is taken.
                     if let Some(batch) = scan.take_batch() {
-                        let Some(stash) = &stash else {
+                        let Some(stash) = stash else {
                             // Only an eligible scan fills a batch, and eligibility is what gave
                             // this walk its target, so this is a defect at the offload site.
                             // Answered as well as logged, because the walk has stopped either way.
@@ -466,6 +487,30 @@ impl WalkState {
                 // Out of fuel with nothing to hand over: a cancellation check, not a stop.
                 ScanOutcome::Suspended if !self.scan.batch_ready() => {}
                 outcome => return (self, Some(outcome)),
+            }
+        }
+    }
+}
+
+/// Answers the peek `peek_uuid` with `response` through `result_tx`.
+///
+/// A peek cancelled before the answer arrives has dropped its receiver, and the batches a stashed
+/// answer names are then deleted through `stash`.
+fn deliver(
+    result_tx: oneshot::Sender<(PeekResponse, Duration)>,
+    response: PeekResponse,
+    elapsed: Duration,
+    stash: Option<&StashTarget>,
+    peek_uuid: Uuid,
+) {
+    match result_tx.send((response, elapsed)) {
+        Ok(()) => {}
+        Err((response, elapsed)) => {
+            debug!(duration = ?elapsed, "dropping result for cancelled peek {peek_uuid}");
+            match stash {
+                Some(stash) => stash.discard(response),
+                // Only a walk with a target can answer with a stashed response.
+                None => drop(response),
             }
         }
     }
