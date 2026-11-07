@@ -1077,10 +1077,16 @@ def prune(host: str, db: sqlite3.Connection, table: Table) -> None:
     with sql.connection(host, statement_timeout_ms=STATEMENT_TIMEOUT_MS) as conn:
         names = live_names(conn)
         deps = [d for d in load_dependents(db, table.name) if d.name in names]
-        for d in deps[: max(0, len(deps) - MAX_DEPENDENTS + 1)]:
+        excess = len(deps) - MAX_DEPENDENTS + 1
+        # An index stays while a newer index or MV reads from it, so a rejected
+        # drop moves on to the next oldest dependent.
+        for d in deps:
+            if excess <= 0:
+                break
             if run_ddl(conn, d.drop_statement(), DDL_FAMILY) == "ok":
                 with db:
                     db.execute("DELETE FROM dependents WHERE name = ?", (d.name,))
+                excess -= 1
 
 
 def churn(host: str, db: sqlite3.Connection, table: Table) -> None:

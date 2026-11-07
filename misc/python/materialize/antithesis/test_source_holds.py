@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import ExitStack
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -78,3 +80,42 @@ def test_postgres_reexports_wait_for_ddl_hold(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(postgres_sources, "_exports", lambda *args: [])
     postgres_sources._maintain_exports(Mock(), "host", Mock(), Mock(), 0)
     create.assert_not_called()
+
+
+@pytest.mark.parametrize("fatal", [False, True])
+def test_kafka_source_read_back_skips_an_unreachable_broker(
+    monkeypatch: pytest.MonkeyPatch, fatal: bool
+) -> None:
+    error = kafka_sources.KafkaException(
+        kafka_sources.KafkaError(
+            kafka_sources.KafkaError._ALL_BROKERS_DOWN, fatal=fatal
+        )
+    )
+    consumer = Mock()
+    consumer.get_watermark_offsets.side_effect = error
+    monkeypatch.setattr(kafka_sources, "Consumer", lambda config: consumer)
+    read = lambda: kafka_sources._read_topic("broker", "topic", {0: 3}, Deadline(10))
+    if fatal:
+        with pytest.raises(kafka_sources.KafkaException):
+            read()
+    else:
+        assert read() is None
+    consumer.close.assert_called_once()
+
+
+def test_kafka_sink_check_runs_only_in_a_free_slot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        kafka_sinks.Endpoints, "from_env", lambda: Mock(state_dir=tmp_path)
+    )
+    checks = Mock(return_value=0)
+    monkeypatch.setattr(kafka_sinks, "_check_in_slot", checks)
+    with ExitStack() as held:
+        for slot in range(kafka_sinks.CHECK_SLOTS):
+            lock = tmp_path / f"kafka-sink-check-slot{slot}.lock"
+            assert held.enter_context(kafka_sinks.exclusive(str(lock)))
+        assert kafka_sinks.check_main() == 0
+        checks.assert_not_called()
+    assert kafka_sinks.check_main() == 0
+    checks.assert_called_once()

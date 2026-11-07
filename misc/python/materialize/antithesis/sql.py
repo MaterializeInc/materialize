@@ -127,6 +127,15 @@ REJECTED_TEMPLATES: dict[str, list[tuple[re.Pattern[str], CatalogRace | None]]] 
     # A prepared statement whose result type changed under DDL, as in
     # Postgres. psycopg prepares a statement after it runs a few times.
     "0A000": [(re.compile(r"^cached plan must not change result type"), None)],
+    # `AdapterError::IndexInUse`: a materialized view, an index, or a metric
+    # sink reads from the index. The XX000 twin from `PlanError` is in
+    # `CATALOG_RACE_TEMPLATES`.
+    "2BP01": [
+        (
+            re.compile(r"^cannot drop index(es)? .*: still depended upon by "),
+            CatalogRace.DEPENDED_UPON,
+        )
+    ],
     # `AdapterError::CollectionUnreadable`: a read hold with an empty since,
     # because an input was dropped while the query was sequenced.
     "P0002": [

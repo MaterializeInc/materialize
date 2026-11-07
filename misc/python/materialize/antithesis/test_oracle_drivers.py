@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from collections import Counter
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
@@ -25,7 +25,12 @@ from kubernetes import client
 
 from materialize.antithesis import ivm_model as model
 from materialize.antithesis import quiet
-from materialize.antithesis.drivers import ivm, pod_restarts, read_paths
+from materialize.antithesis.drivers import (
+    ivm,
+    pod_restarts,
+    read_paths,
+    schema_evolution,
+)
 
 
 @pytest.fixture
@@ -370,3 +375,36 @@ def test_final_ivm_does_not_accept_an_empty_union(
     conn.execute.return_value.fetchall.return_value = []
     monkeypatch.setattr(ivm, "_connect", lambda *args, **kwargs: conn)
     assert not ivm._final_snapshot("host")
+
+
+def test_schema_evolution_prune_moves_past_a_rejected_drop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps = [
+        schema_evolution.Dependent(f"d{i}", "t1", "table_index", "c", None, None, None)
+        for i in range(schema_evolution.MAX_DEPENDENTS + 2)
+    ]
+
+    @contextmanager
+    def connection(host, **kwargs):
+        yield Mock()
+
+    dropped = []
+
+    def run_ddl(conn, statement, family):
+        if statement.endswith(".d0"):
+            return "rejected"
+        dropped.append(statement)
+        return "ok"
+
+    monkeypatch.setattr(schema_evolution.sql, "connection", connection)
+    monkeypatch.setattr(
+        schema_evolution, "live_names", lambda conn: {d.name for d in deps}
+    )
+    monkeypatch.setattr(schema_evolution, "load_dependents", lambda db, tbl: deps)
+    monkeypatch.setattr(schema_evolution, "run_ddl", run_ddl)
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE dependents (name TEXT)")
+    schema_evolution.prune("host", db, SimpleNamespace(name="t1"))  # type: ignore[arg-type]
+    excess = len(deps) - schema_evolution.MAX_DEPENDENTS + 1
+    assert dropped == [d.drop_statement() for d in deps[1 : 1 + excess]]

@@ -73,6 +73,7 @@ from kubernetes import client  # type: ignore
 from materialize.antithesis import ddl_hold, sql, state, telemetry
 from materialize.antithesis import sink_oracle as oracle
 from materialize.antithesis.drivers import configure
+from materialize.antithesis.drivers.access_control import exclusive
 from materialize.antithesis.drivers.sources_common import (
     LAZY_SETUP_BUDGET_S,
     RETAIN_HISTORY_CHOICES,
@@ -121,6 +122,11 @@ SEED_ROWS = 8
 DRIVER_BUDGET_S = 60.0
 DRIVER_MAX_OPS = 200
 CHECK_BUDGET_S = 150.0
+# Test Composer starts `anytime_kafka_sink_check` without a concurrency bound,
+# and under a long network partition each invocation lives for minutes. A run
+# accumulated 76 at once, 6.6 GB of RSS on a 9.9 GB VM, and failed `Peak
+# memory usage`. Later invocations exit while every slot is held.
+CHECK_SLOTS = 2
 # How long a check polls the progress topic for a frontier past the writes
 # acknowledged before it started. Sinks commit about once per second.
 MODEL_WAIT_S = 20.0
@@ -1249,6 +1255,17 @@ def _check(
 
 def check_main() -> int:
     endpoints = Endpoints.from_env()
+    endpoints.state_dir.mkdir(parents=True, exist_ok=True)
+    for slot in range(CHECK_SLOTS):
+        lock = endpoints.state_dir / f"kafka-sink-check-slot{slot}.lock"
+        with exclusive(str(lock)) as held:
+            if held:
+                return _check_in_slot(endpoints)
+    log("every check slot is busy")
+    return 0
+
+
+def _check_in_slot(endpoints: Endpoints) -> int:
     db = open_state()
     try:
         host = mz_host()
