@@ -545,6 +545,37 @@ describe("SupportPage", () => {
       },
     );
 
+    it("doesn't say no tickets match when a later page fails", async () => {
+      server.use(
+        http.get(TICKETS_URL, ({ request }) =>
+          new URL(request.url).searchParams.get("cursor") === "page-2"
+            ? HttpResponse.json({}, { status: 500 })
+            : HttpResponse.json({
+                data: [
+                  buildTicket({
+                    open: false,
+                    state: "Resolved",
+                    stateCategory: "resolved",
+                  }),
+                ],
+                nextCursor: "page-2",
+              }),
+        ),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retryDelay: 0 } },
+      });
+      await renderComponent(<SupportPageWithIntercom />, { queryClient });
+
+      expect(
+        await screen.findByTestId("support-tickets-load-more-error"),
+      ).toBeVisible();
+      expect(screen.getByRole("radio", { name: "Open" })).toBeChecked();
+      expect(
+        screen.queryByTestId("support-tickets-none-match"),
+      ).not.toBeInTheDocument();
+    });
+
     it("keeps the loaded tickets when a later page fails", async () => {
       const requests: Record<string, number> = { first: 0, second: 0 };
       let isFailing = true;

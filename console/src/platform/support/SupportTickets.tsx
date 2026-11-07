@@ -235,8 +235,11 @@ export interface SupportTicketsTableProps {
    * mean the user has no tickets.
    */
   isComplete: boolean;
-  /** More pages are on their way, so a filter with no matches may get some. */
-  isLoadingMore: boolean;
+  /**
+   * Some pages are still loading or failed to load, so a filter with no
+   * matches yet may have some.
+   */
+  isPartial: boolean;
   onSelect: (ticketId: string) => void;
 }
 
@@ -247,7 +250,7 @@ export interface SupportTicketsTableProps {
 export const SupportTicketsTable = ({
   tickets,
   isComplete,
-  isLoadingMore,
+  isPartial,
   onSelect,
 }: SupportTicketsTableProps) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -294,7 +297,7 @@ export const SupportTicketsTable = ({
         />
         <TablePagination table={table} itemLabel="tickets" />
       </Box>
-      {shownCount === 0 && !isLoadingMore && (
+      {shownCount === 0 && !isPartial && (
         <Text
           textStyle="text-small"
           color={colors.foreground.secondary}
