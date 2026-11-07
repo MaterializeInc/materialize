@@ -35,6 +35,10 @@
 //! and [`Agent`] traits mirror the signatures proposed in
 //! TimelyDataflow/differential-dataflow#959.
 //!
+//! Unlike upstream's, the agent can [publish](TraceAgent::publish) its trace to readers on other
+//! threads, and its trace box and writer then mirror every mutation into the publication. See
+//! [`crate::shared_trace`].
+//!
 //! NOTE: The submodules are copies, not dependencies. Bumping differential-dataflow does not
 //! update them, so review upstream's `operators/arrange/{agent,writer,arrangement}.rs`,
 //! `operators/reduce.rs` and `operators/cursor/reduce.rs` on every bump and re-derive the copies
@@ -42,7 +46,8 @@
 //! against a rustfmt-formatted upstream. Every intentional deviation carries a `Not upstream:`
 //! comment.
 //!
-//! TODO: Drop these copies once differential's arranging operators accept an agent factory.
+//! TODO: Drop the copies of the operators, `arrangement` and `reduce`, once differential's arranging
+//! operators accept an agent factory. `agent` and `writer` stay, since they carry the publication.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -56,6 +61,7 @@ use timely::dataflow::Scope;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::{Antichain, Stamp, Timestamp};
 use timely::scheduling::Activator;
+use trace_box::TraceBox;
 
 mod agent;
 mod arrangement;
@@ -72,6 +78,28 @@ pub use writer::TraceWriter;
 type BatchQueue<Tr> = VecDeque<TraceReplayInstruction<Tr>>;
 type TraceAgentQueueReader<Tr> = Rc<(Activator, RefCell<BatchQueue<Tr>>)>;
 type TraceAgentQueueWriter<Tr> = Weak<(Activator, RefCell<BatchQueue<Tr>>)>;
+
+/// Observes a trace's spans without keeping the trace alive.
+pub struct TraceObserver<Tr: TraceReader> {
+    trace: Weak<RefCell<TraceBox<Tr>>>,
+}
+
+impl<Tr: TraceReader> TraceObserver<Tr> {
+    fn new(trace: Weak<RefCell<TraceBox<Tr>>>) -> Self {
+        TraceObserver { trace }
+    }
+
+    /// Calls `f` on every span of the trace, and returns `false` if the trace is gone.
+    pub fn map_spans<F: FnMut(&Span<Tr::Time, Tr::Batch>)>(&self, f: F) -> bool {
+        match self.trace.upgrade() {
+            Some(trace) => {
+                trace.borrow().trace().map_spans(f);
+                true
+            }
+            None => false,
+        }
+    }
+}
 
 /// The write endpoint an arranging operator feeds.
 ///
