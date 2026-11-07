@@ -10,12 +10,12 @@
 //! Tests of the inline index-peek driver, and the fixtures a peek scan is tested over.
 
 use differential_dataflow::batcher::Extract;
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::{Batcher, Description, Span, Trace};
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, RelationDesc, SqlScalarType};
 use mz_row_spine::{RowRowBatcher, RowRowSpine};
+use mz_timely_util::arrange_agent::TraceAgent;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::Stamp;
 

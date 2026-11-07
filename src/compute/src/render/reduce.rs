@@ -21,7 +21,7 @@ use differential_dataflow::columnar::layout::Coltainer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchValOwn};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
@@ -44,6 +44,7 @@ use mz_row_spine::{
     DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher,
     RowValBuilder,
 };
+use mz_timely_util::arrange_agent::TraceAgent;
 use mz_timely_util::operator::CollectionExt;
 use num_traits::Float;
 use serde::{Deserialize, Serialize};

@@ -19,7 +19,7 @@ use columnar::{Columnar, Index};
 use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
@@ -39,6 +39,7 @@ use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
 use mz_row_spine::{
     DatumContainer, DatumSeq, RowBatcher, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
+use mz_timely_util::arrange_agent::TraceAgent;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
