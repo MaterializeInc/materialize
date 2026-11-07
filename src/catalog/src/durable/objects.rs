@@ -1656,6 +1656,7 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
     };
 
     match next_token {
+        Some("ASSERTION") => CatalogItemType::Assertion,
         Some("TABLE") => CatalogItemType::Table,
         Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
         Some("SINK") => CatalogItemType::Sink,
