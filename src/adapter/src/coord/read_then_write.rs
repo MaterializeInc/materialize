@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_catalog::memory::objects::CatalogItem;
+use mz_controller::clusters::WorkloadClass;
 use mz_repr::CatalogItemId;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::catalog::CatalogItemType;
@@ -95,6 +96,15 @@ impl Coordinator {
                     let _ = response_tx.send(Err(AdapterError::Canceled));
                     return;
                 }
+                if let Err(e) = self.ensure_cluster_allows_running_workload(
+                    cluster_id,
+                    WorkloadClass::ComputeInteractive,
+                    conn_id,
+                    "run UPDATE or DELETE",
+                ) {
+                    let _ = response_tx.send(Err(e));
+                    return;
+                }
             }
             // Background work has no connection to lose.
             ActiveSubscribeOwner::Background => {}
@@ -123,6 +133,7 @@ impl Coordinator {
             start_time,
             output: SubscribeOutput::Diffs,
             internal: true, // no mz_subscriptions row and no active-subscribes metric
+            workload: WorkloadClass::ComputeInteractive,
         };
         active_subscribe.initialize();
 

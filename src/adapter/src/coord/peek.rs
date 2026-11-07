@@ -27,6 +27,7 @@ use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
+use mz_controller::clusters::WorkloadClass;
 use mz_controller_types::ClusterId;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
@@ -57,6 +58,7 @@ use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::catalog::Catalog;
+use crate::coord::catalog_serving;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
 use crate::peek_client::CoordinatorClient;
@@ -778,6 +780,13 @@ impl crate::coord::Coordinator {
             return ret;
         }
 
+        self.ensure_cluster_allows_running_workload(
+            compute_instance,
+            catalog_serving::peek_workload(self.catalog().state(), source_ids.iter().copied()),
+            &conn_id,
+            "run SELECT",
+        )?;
+
         let timestamp = determination.timestamp_context.timestamp_or_default();
         if let Some(id) = ctx_extra.contents() {
             self.set_statement_execution_timestamp(id, timestamp)
@@ -1465,6 +1474,16 @@ impl crate::coord::Coordinator {
                         e: AdapterError| {
             let _ = tx.send(Err(e));
         };
+
+        if let Err(e) = self.ensure_cluster_allows_running_workload(
+            compute_instance,
+            WorkloadClass::ComputeInteractive,
+            &conn_id,
+            "run COPY TO",
+        ) {
+            send_err(tx, e);
+            return;
+        }
 
         // Install watch sets for statement lifecycle logging if enabled.
         // If this fails, we just send the error back. The frontend will handle logging

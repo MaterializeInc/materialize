@@ -37,6 +37,7 @@ use crate::active_compute_sink::{
 };
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::catalog_serving;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
@@ -553,6 +554,17 @@ impl Coordinator {
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
     ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
+        let workload = catalog_serving::subscribe_workload(
+            self.catalog().state(),
+            dependency_ids.iter().copied(),
+        );
+        self.ensure_cluster_allows_running_workload(
+            cluster_id,
+            workload,
+            &conn_id,
+            "run SUBSCRIBE",
+        )?;
+
         let sink_id = df_desc.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel::<PeekResponseUnary>();
@@ -585,6 +597,7 @@ impl Coordinator {
             start_time: self.now(),
             output: plan.output,
             internal: false,
+            workload,
         };
         active_subscribe.initialize();
 

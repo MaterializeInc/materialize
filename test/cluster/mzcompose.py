@@ -5173,6 +5173,149 @@ def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None
         ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
 
 
+def workflow_test_workload_restrictions_running_work(c: Composition) -> None:
+    """Workload restrictions must cover running work that no catalog object
+    binds to the cluster: a subscribe, a pending peek, and a COPY FROM
+    ingestion. The controllers replay such work onto every replica a cluster
+    gains. So replica admission must count registered work, and work that
+    passed its check before a replica was admitted must recheck the cluster
+    when it registers.
+    """
+
+    def start(
+        statements: list[str], outcome: list[str], pid: list[int] | None = None
+    ) -> PropagatingThread:
+        def run() -> None:
+            try:
+                with c.sql_cursor() as cur:
+                    cur.execute("SET cluster = c")
+                    if pid is not None:
+                        cur.execute("SELECT pg_backend_pid()")
+                        row = cur.fetchone()
+                        assert row is not None
+                        pid.append(row[0])
+                    for statement in statements:
+                        cur.execute(statement.encode())
+                    outcome.append("ok")
+            except Exception as e:
+                outcome.append(f"error: {e}")
+
+        thread = PropagatingThread(target=run)
+        thread.start()
+        return thread
+
+    def assert_add_replica_fails(cur: Cursor, size: str, expected: str) -> None:
+        try:
+            cur.execute(f"CREATE CLUSTER REPLICA c.extra SIZE '{size}'".encode())
+        except psycopg.Error as e:
+            assert expected in str(e), f"unexpected error: {e}"
+        else:
+            raise AssertionError(f"adding a {size} replica should have failed")
+
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", "toxiproxy", Service("testdrive", idle=True))
+        c.sql(
+            "ALTER SYSTEM SET storage_enforce_external_addresses = false",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("""
+            CREATE TABLE t (a int);
+            INSERT INTO t VALUES (1);
+            CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+            """)
+
+        # A subscribe sequenced before an ingest-only replica is admitted
+        # must fail when it dispatches.
+        failpoint = "subscribe_before_dispatch"
+        outcome: list[str] = []
+        with c.sql_cursor() as control:
+            control.execute(f"SET failpoints = '{failpoint}=pause'".encode())
+            subscriber = start(
+                [
+                    "BEGIN",
+                    "DECLARE sub CURSOR FOR SUBSCRIBE t",
+                    "FETCH ALL sub WITH (timeout = '1s')",
+                ],
+                outcome,
+            )
+            # The subscribe stays parked until the failpoint is turned off, so
+            # this only has to outlast its sequencing.
+            time.sleep(5)
+            # The parked subscribe is not registered, so admission allows this.
+            control.execute(
+                b"CREATE CLUSTER REPLICA c.ingest SIZE 'scale=1,workers=1,ingest-only'"
+            )
+            control.execute(f"SET failpoints = '{failpoint}=off'".encode())
+        subscriber.join(timeout=60)
+        assert outcome and (
+            "cannot run SUBSCRIBE because its replica sizes do not allow"
+            " compute_maintained workloads" in outcome[0]
+        ), f"expected the subscribe to be rejected at dispatch, got: {outcome}"
+        c.sql("DROP CLUSTER REPLICA c.ingest")
+
+        with c.sql_cursor() as control:
+            # A pending peek blocks an ingest-only replica. The future AS OF
+            # holds the peek open until the table's frontier reaches it.
+            outcome = []
+            as_of = int(time.time() * 1000) + 20_000
+            peeker = start([f"SELECT * FROM t AS OF {as_of}"], outcome)
+            time.sleep(5)
+            assert_add_replica_fails(
+                control,
+                "scale=1,workers=1,ingest-only",
+                "does not allow compute_interactive workloads",
+            )
+            peeker.join(timeout=60)
+            assert outcome == ["ok"], f"peek failed: {outcome}"
+
+            # A running COPY FROM blocks a replica that does not allow ingest.
+            # The timeout toxic holds the HTTP request open without a response.
+            c.testdrive(dedent("""
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "http_hang",
+                  "listen": "0.0.0.0:2102",
+                  "upstream": "materialized:6876",
+                  "enabled": true
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/http_hang/toxics content-type=application/json
+                {
+                  "name": "hang",
+                  "type": "timeout",
+                  "attributes": {"timeout": 0}
+                }
+                """))
+            outcome = []
+            copier_pid: list[int] = []
+            copier = start(
+                ["COPY INTO t FROM 'http://toxiproxy:2102/t.csv' (FORMAT CSV)"],
+                outcome,
+                copier_pid,
+            )
+            time.sleep(5)
+            assert_add_replica_fails(
+                control,
+                "scale=1,workers=1,no-ingest",
+                "does not allow ingest workloads",
+            )
+            control.execute(f"SELECT pg_cancel_backend({copier_pid[0]})".encode())
+            copier.join(timeout=60)
+            assert outcome and "canceling statement" in (
+                outcome[0]
+            ), f"expected the hung COPY FROM to be canceled, got: {outcome}"
+
+            # With the work finished, both sizes are admitted, so the failures
+            # above came from the running work.
+            control.execute(
+                b"CREATE CLUSTER REPLICA c.ingest SIZE 'scale=1,workers=1,ingest-only'"
+            )
+            control.execute(
+                b"CREATE CLUSTER REPLICA c.no_ingest SIZE 'scale=1,workers=1,no-ingest'"
+            )
+
+
 def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
     """A read-then-write that reports zero rows must not retire before the write
     that emptied its selection is readable through the timestamp oracle.

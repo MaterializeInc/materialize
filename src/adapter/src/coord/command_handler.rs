@@ -72,6 +72,7 @@ use crate::command::{
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
 };
 use crate::coord::appends::{PendingWriteTxn, UserWriteResponder, WriteResult};
+use crate::coord::catalog_serving;
 use crate::coord::peek::PendingPeek;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
@@ -2334,6 +2335,16 @@ impl Coordinator {
         watch_set: Option<WatchSetCreation>,
         tx: oneshot::Sender<Result<(), AdapterError>>,
     ) {
+        if let Err(e) = self.ensure_cluster_allows_running_workload(
+            cluster_id,
+            catalog_serving::peek_workload(self.catalog().state(), depends_on.iter().copied()),
+            &conn_id,
+            "run SELECT",
+        ) {
+            let _ = tx.send(Err(e));
+            return;
+        }
+
         let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
