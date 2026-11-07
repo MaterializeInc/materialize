@@ -131,7 +131,9 @@ impl Coordinator {
         let result = self
             .catalog_transact_with_ddl_transaction(
                 &mut ctx,
-                vec![Op::RenameCommand(Arc::clone(&command))],
+                vec![Op::Command(Arc::<catalog::command::RenameCommand>::clone(
+                    &command,
+                ))],
                 |_, _| Box::pin(async {}),
             )
             .await;
@@ -384,14 +386,10 @@ impl Coordinator {
         // Statements without replay require their original catalog revision.
         if self.catalog().transient_revision() != *txn_revision
             && (*revision_fenced
-                || !txn_ops.iter().chain(&ops).all(|op| {
-                    matches!(
-                        op,
-                        catalog::Op::RenameCommand(_)
-                            | catalog::Op::CatalogResult(_)
-                            | catalog::Op::Description(_)
-                    )
-                }))
+                || !txn_ops
+                    .iter()
+                    .chain(&ops)
+                    .all(|op| matches!(op, catalog::Op::Command(_))))
         {
             self.metrics
                 .catalog_transact_seconds
@@ -1471,9 +1469,7 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
-                | Op::RenameCommand(_)
-                | Op::CatalogResult(_)
-                | Op::Description(_)
+                | Op::Command(_)
                 | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
