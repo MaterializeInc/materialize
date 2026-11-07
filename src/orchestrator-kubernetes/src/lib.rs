@@ -952,7 +952,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             ..Default::default()
         };
         if let Some(service_affinity) = &self.config.service_affinity {
-            affinity.merge_from(serde_json::from_str(service_affinity)?);
+            merge_service_affinity(&mut affinity, serde_json::from_str(service_affinity)?);
         }
 
         let container_name = image
@@ -1873,9 +1873,81 @@ fn topology_spread_min_domains(
     if soft || az_pinned { None } else { min_domains }
 }
 
+/// Adds the configured service affinity to the affinity generated for a
+/// service. Pod (anti-)affinity terms are appended: `merge_from` replaces these
+/// lists, which would drop the generated replica anti-affinity. Node affinity
+/// keeps `merge_from` semantics, since its required terms are ORed.
+fn merge_service_affinity(affinity: &mut Affinity, mut configured: Affinity) {
+    fn append<T>(into: &mut Option<Vec<T>>, from: Option<Vec<T>>) {
+        if let Some(from) = from {
+            into.get_or_insert_default().extend(from);
+        }
+    }
+    if let Some(configured) = configured.pod_anti_affinity.take() {
+        let generated = affinity.pod_anti_affinity.get_or_insert_default();
+        append(
+            &mut generated.required_during_scheduling_ignored_during_execution,
+            configured.required_during_scheduling_ignored_during_execution,
+        );
+        append(
+            &mut generated.preferred_during_scheduling_ignored_during_execution,
+            configured.preferred_during_scheduling_ignored_during_execution,
+        );
+    }
+    if let Some(configured) = configured.pod_affinity.take() {
+        let generated = affinity.pod_affinity.get_or_insert_default();
+        append(
+            &mut generated.required_during_scheduling_ignored_during_execution,
+            configured.required_during_scheduling_ignored_during_execution,
+        );
+        append(
+            &mut generated.preferred_during_scheduling_ignored_during_execution,
+            configured.preferred_during_scheduling_ignored_during_execution,
+        );
+    }
+    affinity.merge_from(configured);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn service_affinity_appends_pod_anti_affinity() {
+        let term = |key: &str| PodAffinityTerm {
+            label_selector: Some(LabelSelector {
+                match_labels: Some(BTreeMap::from([(key.to_string(), "x".to_string())])),
+                ..Default::default()
+            }),
+            topology_key: "kubernetes.io/hostname".to_string(),
+            ..Default::default()
+        };
+        let mut affinity = Affinity {
+            pod_anti_affinity: Some(PodAntiAffinity {
+                required_during_scheduling_ignored_during_execution: Some(vec![term("replica")]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let configured: Affinity = serde_json::from_value(serde_json::json!({
+            "podAntiAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": [{
+                    "labelSelector": {"matchLabels": {"tenant": "x"}},
+                    "topologyKey": "kubernetes.io/hostname",
+                }],
+            },
+        }))
+        .unwrap();
+
+        merge_service_affinity(&mut affinity, configured);
+
+        let required = affinity
+            .pod_anti_affinity
+            .unwrap()
+            .required_during_scheduling_ignored_during_execution
+            .unwrap();
+        assert_eq!(required, vec![term("replica"), term("tenant")]);
+    }
 
     #[mz_ore::test]
     fn topology_spread_min_domains_suppression() {
