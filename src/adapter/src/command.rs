@@ -353,11 +353,14 @@ pub enum Command {
         tx: oneshot::Sender<Option<(ConnectionId, RoleId)>>,
     },
 
-    /// Installs dependency watches for a sampled frontend peek.
+    /// Observes dependency readiness for a sampled frontend peek. Query validity
+    /// is checked separately by frontend peek registration and compute.
     InstallFrontendPeekWatchSets {
         conn_id: ConnectionId,
         watch_set: WatchSetCreation,
-        tx: oneshot::Sender<Result<(), AdapterError>>,
+        /// Bounds queued observations per frontend while permitting query execution
+        /// to overlap installation. Released after the coordinator handles it.
+        permit: tokio::sync::OwnedSemaphorePermit,
     },
 
     /// Generate a timestamp explanation, or fail with `ConcurrentDependencyDrop`
