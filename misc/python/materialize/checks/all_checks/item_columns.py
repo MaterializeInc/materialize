@@ -81,10 +81,16 @@ class ItemColumns(Check):
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_alter_table_add_column = true
 
+                # Before v26.51 (PER-130), an index on the altered table can
+                # panic a replica that already reads it via
+                # item_columns_middle_mv. Indexing the old version yields the
+                # same index columns.
+                >[version<2605100] CREATE INDEX item_columns_final_idx ON item_columns_middle_table (b, a)
+
                 > ALTER TABLE item_columns_middle_table ADD COLUMN c text
                 > INSERT INTO item_columns_middle_table VALUES (2, LIST[2], 'c')
                 > CREATE VIEW item_columns_final_view AS SELECT * FROM item_columns_middle_table
-                > CREATE INDEX item_columns_final_idx ON item_columns_middle_table (b, a)
+                >[version>=2605100] CREATE INDEX item_columns_final_idx ON item_columns_middle_table (b, a)
 
                 > COMMENT ON COLUMN item_columns_middle_table.c IS 'middle_table c'
                 """,
