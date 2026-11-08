@@ -40,6 +40,11 @@
     // Symlinks to ci/builder/requirements*.txt.
     "misc/python/requirements*.txt"
   ],
+  "pip-compile": {
+    // Matches the compiled output. Renovate reads the source files and the
+    // compile command from its header.
+    "managerFilePatterns": ["/^misc/dbt-materialize/requirements\\.txt$/"]
+  },
   "labels": ["A-dependencies"],
   "timezone": "Etc/UTC",
   "schedule": ["* 22-23 * * 0", "* 0-1 * * 1"],
@@ -72,6 +77,15 @@
       "matchDatasources": ["docker"],
       "matchPackageNames": ["materialize/**"],
       "enabled": false
+    },
+    {
+      // Renovate reads Docker release timestamps only from Docker Hub. Without
+      // one, the preset's minimumReleaseAgeBehaviour=timestamp-optional skips
+      // the age check anyway, and warns about it under "Repository problems"
+      // on every run.
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/^([^/]*[.:][^/]*|localhost)\\//", "!docker.io/**"],
+      "minimumReleaseAge": null
     },
     {
       // Renovate learns stage names only from `FROM x AS name`, so a stage
@@ -119,9 +133,18 @@
       "separateMajorMinor": false
     },
     {
-      "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621", "pip-compile"],
       "matchFileNames": ["misc/dbt-materialize/*"],
       "additionalBranchPrefix": "dbt-"
+    },
+    {
+      // pip_requirements also matches the compiled requirements.txt. It would
+      // bump each pin on its own, past the caps that dbt's packages declare,
+      // and pip then fails to install the result. pip-compile updates that file
+      // through the resolver instead.
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": ["misc/dbt-materialize/requirements.txt"],
+      "enabled": false
     },
     {
       "matchManagers": ["dockerfile"],
@@ -204,6 +227,11 @@
       "matchFileNames": ["console/package.json"],
       "additionalBranchPrefix": "console-"
     },
+    {
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "matchFileNames": ["!console/**"],
+      "additionalBranchPrefix": ""
+    },
     // These rules use the branch prefixes assigned by the scope rules above.
     {
       "matchJsonata": ["additionalBranchPrefix in ['dbt-', 'java-driver-', 'csharp-driver-', 'js-driver-', 'python-drivers-', 'ruby-driver-', 'docs-widgets-']"],
@@ -215,7 +243,7 @@
     },
     {
       "matchJsonata": [
-        "additionalBranchPrefix in ['cargo-wasm-', 'cargo-sdk-', 'dbt-', 'docker-', 'github-actions-', 'python-tools-', 'python-drivers-', 'lang-tests-', 'docs-widgets-', 'vscode-', 'console-e2e-', 'dataflow-visualizer-']"
+        "additionalBranchPrefix in ['cargo-wasm-', 'cargo-sdk-', 'dbt-', 'docker-', 'github-actions-', 'python-tools-', 'python-drivers-', 'lang-tests-', 'vscode-', 'console-e2e-', 'dataflow-visualizer-']"
       ],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "{{replace '-$' '' additionalBranchPrefix}} simple",
@@ -225,6 +253,11 @@
       "matchJsonata": ["additionalBranchPrefix in ['dbt-', 'lang-tests-', 'vscode-']"],
       "matchUpdateTypes": ["major"],
       "groupName": "{{replace '-$' '' additionalBranchPrefix}} dependencies"
+    },
+    {
+      "matchJsonata": ["additionalBranchPrefix = 'docs-widgets-'"],
+      "groupName": "docs-widgets dependencies",
+      "separateMajorMinor": false
     },
     {
       "matchJsonata": ["additionalBranchPrefix in ['docker-', 'github-actions-']"],
