@@ -1278,3 +1278,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17146  mz_current_storage_frontiers
 17147  mz_frontiers
 17148  mz_catalog_deployment_authority
+17149  mz_current_replica_frontiers_ind
+17150  mz_current_storage_frontiers_ind

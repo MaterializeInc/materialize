@@ -89,72 +89,50 @@ mz_catalog.mz_cluster_replica_frontiers_ind:
 mz_catalog.mz_cluster_replica_frontiers:
   →With
     cte l0 =
-      →Fused with Child Map/Filter/Project
-        Project: ()
-        Filter: #1{catalog_read_protection_enabled}
-          →Read mz_internal.mz_catalog_deployment_authority
+      →Read mz_internal.mz_catalog_deployment_authority
     cte l1 =
-      →Consolidating Union
-        →Negate Diffs
-          →Stream l0
-        →Constant (1 row)
-    cte l2 =
-      →Differential Cross Join %0:mz_subscriptions_raw[×] » %1[×]
+      →Arrange (empty key)
+        →Stream l0
+  →Return
+    →Union
+      →Differential Cross Join %0:mz_cluster_replica_frontiers_raw[×] » %1[×]
         →Arrange (empty key)
-          →Read mz_internal.mz_subscriptions_raw
+          →Read mz_internal.mz_cluster_replica_frontiers_raw
         →Arrange (empty key)
+          →Consolidating Union
+            →Negate Diffs
+              →Stream l0
+            →Constant (1 row)
+      →Differential Cross Join %1:l1[×] » %0:mz_current_replica_frontiers[×]
+        →Arrange (empty key)
+          →Fused with Child Map/Filter/Project
+            Project: #0, #1, #5
+            Filter: #4{write_known}
+              →Arranged mz_internal.mz_current_replica_frontiers
+                Key: (#0{object_id})
+        →Arranged l1
+      →Delta Cross Join [%0:mz_current_storage_frontiers[×] » %4:l1[×] » %2:mz_object_global_ids[#1{object_id}] » %1[#0{id}] » %3:mz_cluster_replicas[#1{cluster_id}]] [%1[#0{id}] » %4:l1[×] » %2:mz_object_global_ids[#0{id}] » %0:mz_current_storage_frontiers[#0{object_id}] » %3:mz_cluster_replicas[#1{cluster_id}]] [%2:mz_object_global_ids[#0{id}] » %4:l1[×] » %0:mz_current_storage_frontiers[#0{object_id}] » %1[#0{id}] » %3:mz_cluster_replicas[#1{cluster_id}]] [%3:mz_cluster_replicas[#1{cluster_id}] » %4:l1[×] » %1[#1{cluster_id}] » %2:mz_object_global_ids[#0{id}] » %0:mz_current_storage_frontiers[#0{object_id}]] [%4:l1[×] » %0:mz_current_storage_frontiers[×] » %2:mz_object_global_ids[#1{object_id}] » %1[#0{id}] » %3:mz_cluster_replicas[#1{cluster_id}]]
+        →Arrange (empty key) (#0{object_id})
+          →Fused with Child Map/Filter/Project
+            Project: #0, #4
+            Filter: #3{write_known}
+              →Arranged mz_internal.mz_current_storage_frontiers
+                Key: (#0{object_id})
+        →Arrange (#0{id}) (#1{cluster_id})
           →Union
             →Fused with Child Map/Filter/Project
-              Project: #2
-              Filter: #1{catalog_read_protection_enabled}
-              Map: true
-                →Read mz_internal.mz_catalog_deployment_authority
-            →Fused with Child Map/Filter/Project
-              Project: #0
-              Map: false
-                →Read l1
-    cte l3 =
-      →Distinct GroupAggregate
-        →Fused with Child Map/Filter/Project
-          Project: #2
-            →Read l2
-    cte l4 =
-      →Differential Join %0[#0{id}] » %1:mz_object_global_ids[#0{id}]
-        →Arrange (#0{id})
-          →Union
-            →Fused with Child Map/Filter/Project
-              Project: #0, #4, #8..=#10
-              Map: true, true, null
-                →Arranged mz_catalog.mz_indexes
-                  Key: (#0{id})
-            →Fused with Child Map/Filter/Project
-              Project: #0, #5, #7..=#9
-              Map: true, true, null
-                →Arranged mz_internal.mz_metric_sinks
-                  Key: (#0{id})
-            →Fused with Child Map/Filter/Project
-              Project: #0, #4, #11, #12, #10
-              Map: (parse_catalog_create_sql(#8{create_sql}) ->> "replica_name"), false, true
-                →Arranged mz_catalog.mz_materialized_views
-                  Key: (#0{id})
-            →Fused with Child Map/Filter/Project
-              Project: #0, #10, #15..=#17
+              Project: #0, #10
               Filter: (#10{cluster_id}) IS NOT NULL
-              Map: false, false, null
                 →Arranged mz_catalog.mz_sources
                   Key: (#0{id})
             →Fused with Child Map/Filter/Project
-              Project: #0, #11, #15..=#17
-              Map: false, false, null
+              Project: #0, #11
                 →Arranged mz_catalog.mz_sinks
                   Key: (#0{id})
             →Differential Join %1:mz_sources[#0{id}] » %0:mz_tables[#1{source_id}]
               after %0:
                 Project: #15, #10
                 Filter: (#10{cluster_id}) IS NOT NULL
-              Final closure:
-                Project: #0..=#4
-                Map: false, false, null
               →Arrange (#1{source_id})
                 →Fused with Child Map/Filter/Project
                   Project: #1, #8
@@ -162,204 +140,30 @@ mz_catalog.mz_cluster_replica_frontiers:
                     →Arranged mz_catalog.mz_tables
                       Key: (#2{schema_id})
               →Arranged mz_catalog.mz_sources
-        →Arrange (#0{id})
+        →Arrange (#0{id}) (#1{object_id})
           →Stream mz_internal.mz_object_global_ids
-    cte l5 =
-      →Distinct GroupAggregate
-        →Fused with Child Map/Filter/Project
-          Project: #0, #5
-            →Read l4
-    cte l6 =
-      →Arranged mz_internal.mz_catalog_shared
-    cte l7 =
-      →Differential Join %1[#0] » %0:l6[(#0{data} ->> "kind")]
-        →Arranged l6
-        →Arrange (#0)
-          →Constant (1 row)
-    cte l8 =
-      →Differential Join %1[#0{id}] » %0:l5[#0{id}]
-        after %0:
-          Project: #0, #2
-          Filter: (#2{global_id} != #1{global_id})
-        →Arrange (#0{id})
-          →Arranged l5
-        →Arrange (#0{id})
-          →Map/Filter/Project
-            Project: #0, #1
-              →Non-monotonic TopK
-                Group By #0
-                Order By #2 desc nulls_first
-                Limit 1
-                →Union
-                  →Fused with Child Map/Filter/Project
-                    Project: #2..=#4
-                    Filter: (#1) IS NOT NULL
-                    Map: ((#0{data} -> "key") -> "gid"), parse_catalog_id(#1), parse_catalog_id(((#0{data} -> "value") -> "global_id")), 0
-                      →Read l7
-                  →Fused with Child Map/Filter/Project
-                    Project: #0, #3, #4
-                    Map: parse_catalog_id((#2{version} -> "global_id")), coalesce(uint8_to_numeric(text_to_uint8(((#2{version} -> "version") ->> "value"))), 0)
-                      →Table Function jsonb_array_elements(#1{extra_versions})
-                        →Fused with Child Map/Filter/Project
-                          Project: #2, #3
-                          Filter: (#1) IS NOT NULL
-                          Map: ((#0{data} -> "key") -> "gid"), parse_catalog_id(#1), ((#0{data} -> "value") -> "extra_versions")
-                            →Read l7
-    cte l9 =
-      →Differential Join %1[#0] » %0:l6[(#0{data} ->> "kind")]
-        →Arranged l6
-        →Arrange (#0)
-          →Constant (1 row)
-    cte l10 =
-      →Union
-        →Differential Join %0:l4[#0, #5] » %1[#0, #1]
-          after %1:
-            Project: #1, #2, #4, #5
-            Filter: (#3{compute_global} OR NOT(#4{replica_owned}) OR NOT(#6))
-          →Arrange (#0, #5)
-            →Stream l4
-          →Arrange (#0, #1)
-            →Union
-              →Fused with Child Map/Filter/Project
-                Project: #0..=#2
-                Map: true
-                  →Read l8
-              →Map/Filter/Project
-                Project: #0..=#2
-                Map: false
-                  →Consolidating Union
-                    →Negate Diffs
-                      →Stream l8
-                    →Unarranged Raw Stream
-                      →Arranged l5
-        →Differential Join %1[#0] » %0:l2[#2]
-          after %0:
-            Project: #2, #3
-            Filter: (#1 OR (NOT(#4) AND (#0{client_incarnation}) IS NULL))
-          Final closure:
-            Project: #0..=#3
-            Map: true, null
-          →Arrange (#2)
-            →Stream l2
-          →Arrange (#0)
-            →Union
-              →Differential Join %0:l3[#0] » %1[#0]
-                after %1:
-                  Filter: (#0{client_incarnation}) IS NOT NULL
-                Final closure:
-                  Project: #0, #1
-                  Map: true
-                →Arranged l3
-                →Distinct GroupAggregate
-                  Key:
-                    Project: #1
-                    Map: text_to_uint8(((#0{data} -> "key") ->> "id"))
-                  →Fused with Child Map/Filter/Project
-                    Filter: (((#0{data} -> "key") ->> "id")) IS NOT NULL AND ((((#0{data} -> "value") -> "realization") -> "Adapter")) IS NOT NULL
-                      →Read l9
-              →Fused with Child Map/Filter/Project
-                Project: #0, #1
-                Filter: (#0) IS NULL
-                Map: false
-                  →Arranged l3
-                    Key: (#0)
-    cte l11 =
-      →Differential Join %3:mz_catalog_deployment_authority[#0] » %0:mz_replica_frontier_observations[#2{deployment_generation}] » %2:mz_cluster_replicas[#0{id}] » %1:l10[#0{object_id}, #1{cluster_id}]
-        after %1:
-          Project: #0, #2..=#6
-          Filter: ((#8{replica_name}) IS NULL OR (#8{replica_name} = #7{name}))
-        →Arrange (#2{deployment_generation})
-          →Read mz_internal.mz_replica_frontier_observations
-        →Arrange (#0{object_id}, #1{cluster_id})
-          →Fused with Child Map/Filter/Project
-            Project: #0, #1, #3
-            Filter: #2{replica_owned}
-              →Read l10
-        →Arranged mz_catalog.mz_cluster_replicas
-        →Arrange (#0)
-          →Fused with Child Map/Filter/Project
-            Project: #0
-            Filter: (#0) IS NOT NULL
-              →Read mz_internal.mz_catalog_deployment_authority
-    cte l12 =
-      →Arrange (empty key)
-        →Stream l0
-  →Return
-    →Union
-      →Differential Cross Join %0:mz_cluster_replica_frontiers_raw[×] » %1:l1[×]
-        →Arrange (empty key)
-          →Read mz_internal.mz_cluster_replica_frontiers_raw
-        →Arrange (empty key)
-          →Stream l1
-      →Delta Cross Join [%0:l11[×] » %1[#0..=#2] » %2:l12[×]] [%1[#0..=#2] » %2:l12[×] » %0:l11[#1..=#3]] [%2:l12[×] » %0:l11[×] » %1[#0..=#2]]
-        →Arrange (empty key) (#1..=#3)
-          →Fused with Child Map/Filter/Project
-            Project: #0..=#3, #5
-            Filter: #4{write_known}
-              →Read l11
-        →Distinct GroupAggregate
-          →Differential Join %1:l9[parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0)] » %0[#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation})]
-            →Arrange (#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation}))
-              →Distinct GroupAggregate
-                →Fused with Child Map/Filter/Project
-                  Project: #1..=#3
-                    →Read l11
-            →Arrange (parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0))
-              →Fused with Child Map/Filter/Project
-                Filter: (((#0{data} -> "key") ->> "id")) IS NOT NULL AND ((((#0{data} -> "value") -> "realization") -> "Replica")) IS NOT NULL
-                  →Read l9
-        →Arranged l12
-      →Delta Cross Join [%0:mz_storage_frontier_observations[×] » %2[#0, #1] » %1[#0] » %5:l12[×] » %3:l10[#0{object_id}] » %4:mz_cluster_replicas[#1{cluster_id}]] [%1[#0] » %5:l12[×] » %0:mz_storage_frontier_observations[#0] » %2[#0, #1] » %3:l10[#0{object_id}] » %4:mz_cluster_replicas[#1{cluster_id}]] [%2[#0, #1] » %1[#0] » %5:l12[×] » %0:mz_storage_frontier_observations[#0, #1] » %3:l10[#0{object_id}] » %4:mz_cluster_replicas[#1{cluster_id}]] [%3:l10[#0{object_id}] » %1[#0] » %5:l12[×] » %0:mz_storage_frontier_observations[#0] » %2[#0, #1] » %4:mz_cluster_replicas[#1{cluster_id}]] [%4:mz_cluster_replicas[#1{cluster_id}] » %5:l12[×] » %3:l10[#1{cluster_id}] » %1[#0] » %0:mz_storage_frontier_observations[#0] » %2[#0, #1]] [%5:l12[×] » %0:mz_storage_frontier_observations[×] » %2[#0, #1] » %1[#0] » %3:l10[#0{object_id}] » %4:mz_cluster_replicas[#1{cluster_id}]]
-        →Arrange (empty key) (#0) (#0, #1)
-          →Read mz_internal.mz_storage_frontier_observations
-        →Distinct GroupAggregate
-          →Fused with Child Map/Filter/Project
-            Project: #1
-              →Read mz_internal.mz_object_global_ids
-        →Distinct GroupAggregate
-          Key:
-            Project: #1, #2
-            Map: parse_catalog_id(((#0{data} -> "key") -> "id")), ((#0{data} -> "value") ->> "shard")
-          →Differential Join %1[#0] » %0:l6[(#0{data} ->> "kind")]
-            after %0:
-              Project: #1
-              Filter: (((#1{data} -> "key") -> "id")) IS NOT NULL AND (((#1{data} -> "value") ->> "shard")) IS NOT NULL
-            →Arranged l6
-            →Arrange (#0)
-              →Constant (1 row)
-        →Arrange (#0{object_id}) (#1{cluster_id})
-          →Fused with Child Map/Filter/Project
-            Project: #0, #1
-            Filter: NOT(#2{replica_owned})
-              →Read l10
         →Arrange (#1{cluster_id})
           →Fused with Child Map/Filter/Project
             Project: #0, #2
               →Arranged mz_catalog.mz_cluster_replicas
                 Key: (#0{id})
-        →Arranged l12
+        →Arranged l1
 
-Source mz_internal.mz_subscriptions_raw
-  project=(#0, #2, #5)
+Source mz_internal.mz_catalog_deployment_authority
+  project=()
+  filter=(#1{catalog_read_protection_enabled})
 Source mz_internal.mz_object_global_ids
-Source mz_internal.mz_replica_frontier_observations
-  project=(#0..=#3, #6, #7)
-Source mz_internal.mz_storage_frontier_observations
-  project=(#0, #1, #5)
-  filter=(#4{write_known})
 Source mz_internal.mz_cluster_replica_frontiers_raw
   project=(#0..=#2)
   filter=((#3{deployment_generation}) IS NULL)
 
 Used Indexes:
-  - mz_internal.mz_catalog_shared_ind (lookup)
-  - mz_catalog.mz_indexes_ind (*** full scan ***)
   - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
   - mz_catalog.mz_sinks_ind (*** full scan ***)
-  - mz_internal.mz_metric_sinks_ind (*** full scan ***)
-  - mz_catalog.mz_materialized_views_ind (*** full scan ***)
-  - mz_catalog.mz_cluster_replicas_ind (*** full scan ***, differential join)
+  - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
   - mz_catalog.mz_tables_ind (*** full scan ***)
+  - mz_internal.mz_current_replica_frontiers_ind (*** full scan ***)
+  - mz_internal.mz_current_storage_frontiers_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -1705,25 +1509,15 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN INDEX "mz_internal"."mz_frontiers_ind";
+EXPLAIN INDEX "mz_internal"."mz_current_replica_frontiers_ind";
 ----
-mz_internal.mz_frontiers_ind:
+mz_internal.mz_current_replica_frontiers_ind:
   →Arrange (#0{object_id})
-    →Stream mz_internal.mz_frontiers
+    →Stream mz_internal.mz_current_replica_frontiers
 
-mz_internal.mz_frontiers:
+mz_internal.mz_current_replica_frontiers:
   →With
     cte l0 =
-      →Fused with Child Map/Filter/Project
-        Project: ()
-        Filter: #1{catalog_read_protection_enabled}
-          →Read mz_internal.mz_catalog_deployment_authority
-    cte l1 =
-      →Consolidating Union
-        →Negate Diffs
-          →Stream l0
-        →Constant (1 row)
-    cte l2 =
       →Differential Cross Join %0:mz_subscriptions_raw[×] » %1[×]
         →Arrange (empty key)
           →Read mz_internal.mz_subscriptions_raw
@@ -1734,16 +1528,22 @@ mz_internal.mz_frontiers:
               Filter: #1{catalog_read_protection_enabled}
               Map: true
                 →Read mz_internal.mz_catalog_deployment_authority
-            →Fused with Child Map/Filter/Project
+            →Map/Filter/Project
               Project: #0
               Map: false
-                →Read l1
-    cte l3 =
+                →Consolidating Union
+                  →Negate Diffs
+                    →Fused with Child Map/Filter/Project
+                      Project: ()
+                      Filter: #1{catalog_read_protection_enabled}
+                        →Read mz_internal.mz_catalog_deployment_authority
+                  →Constant (1 row)
+    cte l1 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
           Project: #2
-            →Read l2
-    cte l4 =
+            →Read l0
+    cte l2 =
       →Differential Join %0[#0{id}] » %1:mz_object_global_ids[#0{id}]
         →Arrange (#0{id})
           →Union
@@ -1789,25 +1589,25 @@ mz_internal.mz_frontiers:
               →Arranged mz_catalog.mz_sources
         →Arrange (#0{id})
           →Stream mz_internal.mz_object_global_ids
-    cte l5 =
+    cte l3 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
           Project: #0, #5
-            →Read l4
-    cte l6 =
+            →Read l2
+    cte l4 =
       →Arranged mz_internal.mz_catalog_shared
-    cte l7 =
-      →Differential Join %1[#0] » %0:l6[(#0{data} ->> "kind")]
-        →Arranged l6
+    cte l5 =
+      →Differential Join %1[#0] » %0:l4[(#0{data} ->> "kind")]
+        →Arranged l4
         →Arrange (#0)
           →Constant (1 row)
-    cte l8 =
-      →Differential Join %1[#0{id}] » %0:l5[#0{id}]
+    cte l6 =
+      →Differential Join %1[#0{id}] » %0:l3[#0{id}]
         after %0:
           Project: #0, #2
           Filter: (#2{global_id} != #1{global_id})
         →Arrange (#0{id})
-          →Arranged l5
+          →Arranged l3
         →Arrange (#0{id})
           →Map/Filter/Project
             Project: #0, #1
@@ -1820,7 +1620,7 @@ mz_internal.mz_frontiers:
                     Project: #2..=#4
                     Filter: (#1) IS NOT NULL
                     Map: ((#0{data} -> "key") -> "gid"), parse_catalog_id(#1), parse_catalog_id(((#0{data} -> "value") -> "global_id")), 0
-                      →Read l7
+                      →Read l5
                   →Fused with Child Map/Filter/Project
                     Project: #0, #3, #4
                     Map: parse_catalog_id((#2{version} -> "global_id")), coalesce(uint8_to_numeric(text_to_uint8(((#2{version} -> "version") ->> "value"))), 0)
@@ -1829,13 +1629,13 @@ mz_internal.mz_frontiers:
                           Project: #2, #3
                           Filter: (#1) IS NOT NULL
                           Map: ((#0{data} -> "key") -> "gid"), parse_catalog_id(#1), ((#0{data} -> "value") -> "extra_versions")
-                            →Read l7
-    cte l9 =
-      →Differential Join %1[#0] » %0:l6[(#0{data} ->> "kind")]
-        →Arranged l6
+                            →Read l5
+    cte l7 =
+      →Differential Join %1[#0] » %0:l4[(#0{data} ->> "kind")]
+        →Arranged l4
         →Arrange (#0)
           →Constant (1 row)
-    cte l10 =
+    cte l8 =
       →Differential Join %3:mz_catalog_deployment_authority[#0] » %0:mz_replica_frontier_observations[#2{deployment_generation}] » %2:mz_cluster_replicas[#0{id}] » %1[#0{object_id}, #1{cluster_id}]
         after %1:
           Project: #0, #2..=#8, #10
@@ -1844,7 +1644,7 @@ mz_internal.mz_frontiers:
           →Stream mz_internal.mz_replica_frontier_observations
         →Arrange (#0{object_id}, #1{cluster_id})
           →Union
-            →Differential Join %0:l4[#0, #4] » %1[#0, #1]
+            →Differential Join %0:l2[#0, #4] » %1[#0, #1]
               after %1:
                 Project: #1..=#4
                 Filter: (#3{compute_global} OR NOT(#5))
@@ -1852,22 +1652,22 @@ mz_internal.mz_frontiers:
                 →Fused with Child Map/Filter/Project
                   Project: #0..=#2, #4, #5
                   Filter: #3{replica_owned}
-                    →Read l4
+                    →Read l2
               →Arrange (#0, #1)
                 →Union
                   →Fused with Child Map/Filter/Project
                     Project: #0..=#2
                     Map: true
-                      →Read l8
+                      →Read l6
                   →Map/Filter/Project
                     Project: #0..=#2
                     Map: false
                       →Consolidating Union
                         →Negate Diffs
-                          →Stream l8
+                          →Stream l6
                         →Unarranged Raw Stream
-                          →Arranged l5
-            →Differential Join %1[#0] » %0:l2[#2]
+                          →Arranged l3
+            →Differential Join %1[#0] » %0:l0[#2]
               after %0:
                 Project: #2, #3
                 Filter: (#1 OR (NOT(#4) AND (#0{client_incarnation}) IS NULL))
@@ -1875,28 +1675,28 @@ mz_internal.mz_frontiers:
                 Project: #0..=#3
                 Map: true, null
               →Arrange (#2)
-                →Stream l2
+                →Stream l0
               →Arrange (#0)
                 →Union
-                  →Differential Join %0:l3[#0] » %1[#0]
+                  →Differential Join %0:l1[#0] » %1[#0]
                     after %1:
                       Filter: (#0{client_incarnation}) IS NOT NULL
                     Final closure:
                       Project: #0, #1
                       Map: true
-                    →Arranged l3
+                    →Arranged l1
                     →Distinct GroupAggregate
                       Key:
                         Project: #1
                         Map: text_to_uint8(((#0{data} -> "key") ->> "id"))
                       →Fused with Child Map/Filter/Project
                         Filter: (((#0{data} -> "key") ->> "id")) IS NOT NULL AND ((((#0{data} -> "value") -> "realization") -> "Adapter")) IS NOT NULL
-                          →Read l9
+                          →Read l7
                   →Fused with Child Map/Filter/Project
                     Project: #0, #1
                     Filter: (#0) IS NULL
                     Map: false
-                      →Arranged l3
+                      →Arranged l1
                         Key: (#0)
         →Arranged mz_catalog.mz_cluster_replicas
         →Arrange (#0)
@@ -1904,80 +1704,26 @@ mz_internal.mz_frontiers:
             Project: #0
             Filter: (#0) IS NOT NULL
               →Read mz_internal.mz_catalog_deployment_authority
-    cte l11 =
-      →Arrange (empty key)
-        →Stream l0
-    cte l12 =
-      →Delta Cross Join [%0:l10[×] » %1[#0..=#2] » %2:l11[×]] [%1[#0..=#2] » %2:l11[×] » %0:l10[#1..=#3]] [%2:l11[×] » %0:l10[×] » %1[#0..=#2]]
-        →Arrange (empty key) (#1..=#3)
-          →Fused with Child Map/Filter/Project
-            Project: #0..=#7
-            Filter: #8{compute_global}
-              →Read l10
-        →Distinct GroupAggregate
-          →Differential Join %1:l9[parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0)] » %0[#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation})]
-            →Arrange (#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation}))
-              →Distinct GroupAggregate
-                →Fused with Child Map/Filter/Project
-                  Project: #1..=#3
-                    →Read l10
-            →Arrange (parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0))
-              →Fused with Child Map/Filter/Project
-                Filter: (((#0{data} -> "key") ->> "id")) IS NOT NULL AND ((((#0{data} -> "value") -> "realization") -> "Replica")) IS NOT NULL
-                  →Read l9
-        →Arranged l11
   →Return
-    →Union
-      →Differential Cross Join %0:mz_frontiers_raw[×] » %1:l1[×]
-        →Arrange (empty key)
-          →Stream mz_internal.mz_frontiers_raw
-        →Arrange (empty key)
-          →Stream l1
-      →Delta Cross Join [%0:mz_storage_frontier_observations[×] » %2[#0, #1] » %1[#0] » %3:l11[×]] [%1[#0] » %3:l11[×] » %0:mz_storage_frontier_observations[#0] » %2[#0, #1]] [%2[#0, #1] » %1[#0] » %3:l11[×] » %0:mz_storage_frontier_observations[#0, #1]] [%3:l11[×] » %0:mz_storage_frontier_observations[×] » %2[#0, #1] » %1[#0]]
-        →Arrange (empty key) (#0) (#0, #1)
-          →Read mz_internal.mz_storage_frontier_observations
-        →Distinct GroupAggregate
-          →Fused with Child Map/Filter/Project
-            Project: #1
-              →Read mz_internal.mz_object_global_ids
-        →Distinct GroupAggregate
-          Key:
-            Project: #1, #2
-            Map: parse_catalog_id(((#0{data} -> "key") -> "id")), ((#0{data} -> "value") ->> "shard")
-          →Differential Join %1[#0] » %0:l6[(#0{data} ->> "kind")]
-            after %0:
-              Project: #1
-              Filter: (((#1{data} -> "key") -> "id")) IS NOT NULL AND (((#1{data} -> "value") ->> "shard")) IS NOT NULL
-            →Arranged l6
-            →Arrange (#0)
-              →Constant (1 row)
-        →Arranged l11
-      →Differential Join %1[#0] » %0[#0]
-        after %0:
-          Project: #0, #4, #6
-          Filter: (#2 > 0) AND (#3 > 0)
-          Map: case when (#1 > 0) then null else #5 end
-        →Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
-          Aggregations: min, max
-          Key:
-            Project: #0
-          →Stream l12
-        →Accumulable GroupAggregate
-          Simple aggregates: sum(boolean_to_integer((#2{write_known} AND (#3{write_frontier}) IS NULL))), sum(boolean_to_integer(#1{read_known})), sum(boolean_to_integer(#2{write_known}))
-          Key:
-            Project: #0
-          →Fused with Child Map/Filter/Project
-            Project: #0, #1, #3, #4
-              →Read l12
+    →Differential Join %1[#0..=#2] » %0:l8[#1..=#3]
+      →Arrange (#1..=#3)
+        →Stream l8
+      →Distinct GroupAggregate
+        →Differential Join %1:l7[parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0)] » %0[#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation})]
+          →Arrange (#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation}))
+            →Distinct GroupAggregate
+              →Fused with Child Map/Filter/Project
+                Project: #1..=#3
+                  →Read l8
+          →Arrange (parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0))
+            →Fused with Child Map/Filter/Project
+              Filter: (((#0{data} -> "key") ->> "id")) IS NOT NULL AND ((((#0{data} -> "value") -> "realization") -> "Replica")) IS NOT NULL
+                →Read l7
 
 Source mz_internal.mz_subscriptions_raw
   project=(#0, #2, #5)
 Source mz_internal.mz_object_global_ids
 Source mz_internal.mz_replica_frontier_observations
-Source mz_internal.mz_storage_frontier_observations
-  project=(#0, #1, #3, #5)
-  filter=(#2{read_known} AND #4{write_known})
-Source mz_internal.mz_frontiers_raw
 
 Used Indexes:
   - mz_internal.mz_catalog_shared_ind (lookup)
@@ -1988,6 +1734,114 @@ Used Indexes:
   - mz_catalog.mz_materialized_views_ind (*** full scan ***)
   - mz_catalog.mz_cluster_replicas_ind (differential join)
   - mz_catalog.mz_tables_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN INDEX "mz_internal"."mz_current_storage_frontiers_ind";
+----
+mz_internal.mz_current_storage_frontiers_ind:
+  →Arrange (#0{object_id})
+    →Stream mz_internal.mz_current_storage_frontiers
+
+mz_internal.mz_current_storage_frontiers:
+  →Delta Join [%0:mz_storage_frontier_observations[#0] » %2[#0, #1] » %1[#0]] [%1[#0] » %0:mz_storage_frontier_observations[#0] » %2[#0, #1]] [%2[#0, #1] » %1[#0] » %0:mz_storage_frontier_observations[#0, #1]]
+    →Arrange (#0) (#0, #1)
+      →Stream mz_internal.mz_storage_frontier_observations
+    →Distinct GroupAggregate
+      →Read mz_internal.mz_object_global_ids
+    →Distinct GroupAggregate
+      Key:
+        Project: #1, #2
+        Map: parse_catalog_id(((#0{data} -> "key") -> "id")), ((#0{data} -> "value") ->> "shard")
+      →Differential Join %1[#0] » %0:mz_catalog_shared[(#0{data} ->> "kind")]
+        after %0:
+          Project: #1
+          Filter: (((#1{data} -> "key") -> "id")) IS NOT NULL AND (((#1{data} -> "value") ->> "shard")) IS NOT NULL
+        →Arranged mz_internal.mz_catalog_shared
+        →Arrange (#0)
+          →Constant (1 row)
+
+Source mz_internal.mz_object_global_ids
+  project=(#1)
+Source mz_internal.mz_storage_frontier_observations
+
+Used Indexes:
+  - mz_internal.mz_catalog_shared_ind (lookup)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN INDEX "mz_internal"."mz_frontiers_ind";
+----
+mz_internal.mz_frontiers_ind:
+  →Arrange (#0{object_id})
+    →Stream mz_internal.mz_frontiers
+
+mz_internal.mz_frontiers:
+  →With
+    cte l0 =
+      →Read mz_internal.mz_catalog_deployment_authority
+    cte l1 =
+      →Arrange (empty key)
+        →Stream l0
+    cte l2 =
+      →Differential Cross Join %1:l1[×] » %0:mz_current_replica_frontiers[×]
+        →Arrange (empty key)
+          →Fused with Child Map/Filter/Project
+            Project: #0, #2..=#5
+            Filter: #6{compute_global}
+              →Arranged mz_internal.mz_current_replica_frontiers
+                Key: (#0{object_id})
+        →Arranged l1
+  →Return
+    →Union
+      →Differential Cross Join %0:mz_frontiers_raw[×] » %1[×]
+        →Arrange (empty key)
+          →Stream mz_internal.mz_frontiers_raw
+        →Arrange (empty key)
+          →Consolidating Union
+            →Negate Diffs
+              →Stream l0
+            →Constant (1 row)
+      →Differential Cross Join %1:l1[×] » %0:mz_current_storage_frontiers[×]
+        →Arrange (empty key)
+          →Fused with Child Map/Filter/Project
+            Project: #0, #2, #4
+            Filter: #1{read_known} AND #3{write_known}
+              →Arranged mz_internal.mz_current_storage_frontiers
+                Key: (#0{object_id})
+        →Arranged l1
+      →Differential Join %1[#0] » %0[#0]
+        after %0:
+          Project: #0, #4, #6
+          Filter: (#2 > 0) AND (#3 > 0)
+          Map: case when (#1 > 0) then null else #5 end
+        →Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
+          Aggregations: min, max
+          Key:
+            Project: #0
+          →Stream l2
+        →Accumulable GroupAggregate
+          Simple aggregates: sum(boolean_to_integer((#2{write_known} AND (#3{write_frontier}) IS NULL))), sum(boolean_to_integer(#1{read_known})), sum(boolean_to_integer(#2{write_known}))
+          Key:
+            Project: #0
+          →Fused with Child Map/Filter/Project
+            Project: #0, #1, #3, #4
+              →Read l2
+
+Source mz_internal.mz_catalog_deployment_authority
+  project=()
+  filter=(#1{catalog_read_protection_enabled})
+Source mz_internal.mz_frontiers_raw
+
+Used Indexes:
+  - mz_internal.mz_current_replica_frontiers_ind (*** full scan ***)
+  - mz_internal.mz_current_storage_frontiers_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -6075,7 +5929,7 @@ mz_catalog.mz_indexes:
             Project: #2, #0, #1, #3, #4, #7, #5, #6
             Map: "s1"
         →Arrange (#1{name}) (#2{on_schema}, #3{on_name})
-          →Constant (83 rows)
+          →Constant (85 rows)
         →Arrange (empty key) (#1{name})
           →Fused with Child Map/Filter/Project
             Project: #3, #2
@@ -7377,7 +7231,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1133 rows)
+            →Constant (1135 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -10371,224 +10225,12 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_current_replica_frontiers";
 ----
-Explained Query:
-  →With
-    cte l0 =
-      →Differential Cross Join %0:mz_subscriptions_raw[×] » %1[×]
-        →Arrange (empty key)
-          →Read mz_internal.mz_subscriptions_raw
-        →Arrange (empty key)
-          →Union
-            →Fused with Child Map/Filter/Project
-              Project: #2
-              Filter: #1{catalog_read_protection_enabled}
-              Map: true
-                →Read mz_internal.mz_catalog_deployment_authority
-            →Map/Filter/Project
-              Project: #0
-              Map: false
-                →Consolidating Union
-                  →Negate Diffs
-                    →Fused with Child Map/Filter/Project
-                      Project: ()
-                      Filter: #1{catalog_read_protection_enabled}
-                        →Read mz_internal.mz_catalog_deployment_authority
-                  →Constant (1 row)
-    cte l1 =
-      →Distinct GroupAggregate
-        →Fused with Child Map/Filter/Project
-          Project: #2
-            →Read l0
-    cte l2 =
-      →Differential Join %0[#0{id}] » %1:mz_object_global_ids[#0{id}]
-        →Arrange (#0{id})
-          →Union
-            →Fused with Child Map/Filter/Project
-              Project: #0, #4, #8..=#10
-              Map: true, true, null
-                →Arranged mz_catalog.mz_indexes
-                  Key: (#0{id})
-            →Fused with Child Map/Filter/Project
-              Project: #0, #5, #7..=#9
-              Map: true, true, null
-                →Arranged mz_internal.mz_metric_sinks
-                  Key: (#0{id})
-            →Fused with Child Map/Filter/Project
-              Project: #0, #4, #11, #12, #10
-              Map: (parse_catalog_create_sql(#8{create_sql}) ->> "replica_name"), false, true
-                →Arranged mz_catalog.mz_materialized_views
-                  Key: (#0{id})
-            →Fused with Child Map/Filter/Project
-              Project: #0, #10, #15..=#17
-              Filter: (#10{cluster_id}) IS NOT NULL
-              Map: false, false, null
-                →Arranged mz_catalog.mz_sources
-                  Key: (#0{id})
-            →Fused with Child Map/Filter/Project
-              Project: #0, #11, #15..=#17
-              Map: false, false, null
-                →Arranged mz_catalog.mz_sinks
-                  Key: (#0{id})
-            →Differential Join %1:mz_sources[#0{id}] » %0:mz_tables[#1{source_id}]
-              after %0:
-                Project: #15, #10
-                Filter: (#10{cluster_id}) IS NOT NULL
-              Final closure:
-                Project: #0..=#4
-                Map: false, false, null
-              →Arrange (#1{source_id})
-                →Fused with Child Map/Filter/Project
-                  Project: #1, #8
-                  Filter: (#8{source_id}) IS NOT NULL
-                    →Arranged mz_catalog.mz_tables
-                      Key: (#2{schema_id})
-              →Arranged mz_catalog.mz_sources
-        →Arrange (#0{id})
-          →Stream mz_internal.mz_object_global_ids
-    cte l3 =
-      →Distinct GroupAggregate
-        →Fused with Child Map/Filter/Project
-          Project: #0, #5
-            →Read l2
-    cte l4 =
-      →Arranged mz_internal.mz_catalog_shared
-    cte l5 =
-      →Differential Join %1[#0] » %0:l4[(#0{data} ->> "kind")]
-        →Arranged l4
-        →Arrange (#0)
-          →Constant (1 row)
-    cte l6 =
-      →Differential Join %1[#0{id}] » %0:l3[#0{id}]
-        after %0:
-          Project: #0, #2
-          Filter: (#2{global_id} != #1{global_id})
-        →Arrange (#0{id})
-          →Arranged l3
-        →Arrange (#0{id})
-          →Map/Filter/Project
-            Project: #0, #1
-              →Consolidating Monotonic Top1
-                Group By #0
-                Order By #2 desc nulls_first
-                →Union
-                  →Fused with Child Map/Filter/Project
-                    Project: #2..=#4
-                    Filter: (#1) IS NOT NULL
-                    Map: ((#0{data} -> "key") -> "gid"), parse_catalog_id(#1), parse_catalog_id(((#0{data} -> "value") -> "global_id")), 0
-                      →Read l5
-                  →Fused with Child Map/Filter/Project
-                    Project: #0, #3, #4
-                    Map: parse_catalog_id((#2{version} -> "global_id")), coalesce(uint8_to_numeric(text_to_uint8(((#2{version} -> "version") ->> "value"))), 0)
-                      →Table Function jsonb_array_elements(#1{extra_versions})
-                        →Fused with Child Map/Filter/Project
-                          Project: #2, #3
-                          Filter: (#1) IS NOT NULL
-                          Map: ((#0{data} -> "key") -> "gid"), parse_catalog_id(#1), ((#0{data} -> "value") -> "extra_versions")
-                            →Read l5
-    cte l7 =
-      →Differential Join %1[#0] » %0:l4[(#0{data} ->> "kind")]
-        →Arranged l4
-        →Arrange (#0)
-          →Constant (1 row)
-    cte l8 =
-      →Differential Join %3:mz_catalog_deployment_authority[#0] » %0:mz_replica_frontier_observations[#2{deployment_generation}] » %2:mz_cluster_replicas[#0{id}] » %1[#0{object_id}, #1{cluster_id}]
-        after %1:
-          Project: #0, #2..=#8, #10
-          Filter: ((#11{replica_name}) IS NULL OR (#11{replica_name} = #9{name}))
-        →Arrange (#2{deployment_generation})
-          →Stream mz_internal.mz_replica_frontier_observations
-        →Arrange (#0{object_id}, #1{cluster_id})
-          →Union
-            →Differential Join %0:l2[#0, #4] » %1[#0, #1]
-              after %1:
-                Project: #1..=#4
-                Filter: (#3{compute_global} OR NOT(#5))
-              →Arrange (#0, #4)
-                →Fused with Child Map/Filter/Project
-                  Project: #0..=#2, #4, #5
-                  Filter: #3{replica_owned}
-                    →Read l2
-              →Arrange (#0, #1)
-                →Union
-                  →Fused with Child Map/Filter/Project
-                    Project: #0..=#2
-                    Map: true
-                      →Read l6
-                  →Map/Filter/Project
-                    Project: #0..=#2
-                    Map: false
-                      →Consolidating Union
-                        →Negate Diffs
-                          →Stream l6
-                        →Unarranged Raw Stream
-                          →Arranged l3
-            →Differential Join %1[#0] » %0:l0[#2]
-              after %0:
-                Project: #2, #3
-                Filter: (#1 OR (NOT(#4) AND (#0{client_incarnation}) IS NULL))
-              Final closure:
-                Project: #0..=#3
-                Map: true, null
-              →Arrange (#2)
-                →Stream l0
-              →Arrange (#0)
-                →Union
-                  →Differential Join %0:l1[#0] » %1[#0]
-                    after %1:
-                      Filter: (#0{client_incarnation}) IS NOT NULL
-                    Final closure:
-                      Project: #0, #1
-                      Map: true
-                    →Arranged l1
-                    →Distinct GroupAggregate
-                      Key:
-                        Project: #1
-                        Map: text_to_uint8(((#0{data} -> "key") ->> "id"))
-                      →Fused with Child Map/Filter/Project
-                        Filter: (((#0{data} -> "key") ->> "id")) IS NOT NULL AND ((((#0{data} -> "value") -> "realization") -> "Adapter")) IS NOT NULL
-                          →Read l7
-                  →Fused with Child Map/Filter/Project
-                    Project: #0, #1
-                    Filter: (#0) IS NULL
-                    Map: false
-                      →Arranged l1
-                        Key: (#0)
-        →Arranged mz_catalog.mz_cluster_replicas
-        →Arrange (#0)
-          →Fused with Child Map/Filter/Project
-            Project: #0
-            Filter: (#0) IS NOT NULL
-              →Read mz_internal.mz_catalog_deployment_authority
-  →Return
-    →Differential Join %1[#0..=#2] » %0:l8[#1..=#3]
-      →Arrange (#1..=#3)
-        →Stream l8
-      →Distinct GroupAggregate
-        →Differential Join %1:l7[parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0)] » %0[#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation})]
-          →Arrange (#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation}))
-            →Distinct GroupAggregate
-              →Fused with Child Map/Filter/Project
-                Project: #1..=#3
-                  →Read l8
-          →Arrange (parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0))
-            →Fused with Child Map/Filter/Project
-              Filter: (((#0{data} -> "key") ->> "id")) IS NOT NULL AND ((((#0{data} -> "value") -> "realization") -> "Replica")) IS NOT NULL
-                →Read l7
-
-Source mz_internal.mz_subscriptions_raw
-  project=(#0, #2, #5)
-Source mz_internal.mz_object_global_ids
-Source mz_internal.mz_replica_frontier_observations
+Explained Query (fast path):
+  →Map/Filter/Project
+    →Indexed mz_internal.mz_current_replica_frontiers (using mz_internal.mz_current_replica_frontiers_ind)
 
 Used Indexes:
-  - mz_internal.mz_catalog_shared_ind (lookup)
-  - mz_catalog.mz_indexes_ind (*** full scan ***)
-  - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
-  - mz_catalog.mz_sinks_ind (*** full scan ***)
-  - mz_internal.mz_metric_sinks_ind (*** full scan ***)
-  - mz_catalog.mz_materialized_views_ind (*** full scan ***)
-  - mz_catalog.mz_cluster_replicas_ind (differential join)
-  - mz_catalog.mz_tables_ind (*** full scan ***)
+  - mz_internal.mz_current_replica_frontiers_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -10597,30 +10239,12 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_current_storage_frontiers";
 ----
-Explained Query:
-  →One-Shot Delta Join [%0:mz_storage_frontier_observations » %2[#0, #1] » %1[#0]]
-    →Unarranged Raw Stream
-      →Stream mz_internal.mz_storage_frontier_observations
-    →Distinct GroupAggregate
-      →Read mz_internal.mz_object_global_ids
-    →Distinct GroupAggregate
-      Key:
-        Project: #1, #2
-        Map: parse_catalog_id(((#0{data} -> "key") -> "id")), ((#0{data} -> "value") ->> "shard")
-      →Differential Join %1[#0] » %0:mz_catalog_shared[(#0{data} ->> "kind")]
-        after %0:
-          Project: #1
-          Filter: (((#1{data} -> "key") -> "id")) IS NOT NULL AND (((#1{data} -> "value") ->> "shard")) IS NOT NULL
-        →Arranged mz_internal.mz_catalog_shared
-        →Arrange (#0)
-          →Constant (1 row)
-
-Source mz_internal.mz_object_global_ids
-  project=(#1)
-Source mz_internal.mz_storage_frontier_observations
+Explained Query (fast path):
+  →Map/Filter/Project
+    →Indexed mz_internal.mz_current_storage_frontiers (using mz_internal.mz_current_storage_frontiers_ind)
 
 Used Indexes:
-  - mz_internal.mz_catalog_shared_ind (lookup)
+  - mz_internal.mz_current_storage_frontiers_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -12557,7 +12181,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1133 rows)
+            →Constant (1135 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3

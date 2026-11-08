@@ -10130,6 +10130,27 @@ ON mz_internal.mz_object_graph_edges (object_id)",
     is_retained_metrics_object: false,
 };
 
+// Share validated observations between the public frontier indexes. These
+// arrangements do not request metrics-history retention from their catalog
+// inputs. The deployment authority remains durable.
+pub const MZ_CURRENT_REPLICA_FRONTIERS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_current_replica_frontiers_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CURRENT_REPLICA_FRONTIERS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_current_replica_frontiers (object_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CURRENT_STORAGE_FRONTIERS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_current_storage_frontiers_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CURRENT_STORAGE_FRONTIERS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_current_storage_frontiers (object_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_FRONTIERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_frontiers_ind",
     schema: MZ_INTERNAL_SCHEMA,

@@ -329,6 +329,8 @@ mz_connections_ind                                          mz_connections      
 mz_console_cluster_utilization_overview_24h_ind             mz_console_cluster_utilization_overview_24h  mz_catalog_server    {cluster_id}                                ""
 mz_console_cluster_utilization_overview_3h_ind              mz_console_cluster_utilization_overview_3h   mz_catalog_server    {cluster_id}                                ""
 mz_console_cluster_utilization_overview_ind                 mz_console_cluster_utilization_overview      mz_catalog_server    {cluster_id}                                ""
+mz_current_replica_frontiers_ind mz_current_replica_frontiers mz_catalog_server {object_id} ""
+mz_current_storage_frontiers_ind mz_current_storage_frontiers mz_catalog_server {object_id} ""
 mz_databases_ind                                            mz_databases                                 mz_catalog_server    {name}                                      ""
 mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_catalog_server    {id,worker_id}                              ""
 mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_catalog_server    {id,worker_id}                              ""

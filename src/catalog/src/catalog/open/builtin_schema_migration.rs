@@ -505,6 +505,20 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_replacements",
         ),
+        // Shared frontier indexes change the inlined builtin index inventory
+        // and dependency edges in these materialized views.
+        MigrationStep::replacement(
+            "26.46.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.46.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_object_dependencies",
+        ),
     ]
 });
 

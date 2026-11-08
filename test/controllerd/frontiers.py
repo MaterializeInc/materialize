@@ -10,10 +10,13 @@ Run with bin/pyactivate against an existing local controller, for example:
   bin/pyactivate test/controllerd/frontiers.py --controller http://127.0.0.1:6882
 
 Requires catalog read protection already enabled, a usable compute cluster, and
-Linux pidfds plus permission to inspect/signal the managed adapter processes.
+Linux pidfds plus permission to inspect/signal the managed adapter processes
+(and the catalog replica when opted in).
 SQL uses the internal listener as mz_system to inspect catalog shard authority.
-The controller API currently has no restart operation. Only the newly created
-adapter is signaled. No configuration is changed outside this script's sessions.
+The controller API currently has no restart operation. By default, only the newly
+created adapter is signaled. --restart-catalog-replica also signals the single
+catalog replica to check frontier read holds across shared-index reconstruction.
+No configuration is changed outside this script's sessions.
 Timeouts allow development builds. Polling phases use --timeout deadlines, with
 up to one in-flight sample beyond the deadline. --operation-timeout bounds SQL
 statements server-side and HTTP requests. A sample issues three SQL statements.
@@ -82,6 +85,49 @@ def at_least(old, new):
     if new_time is None:
         return True
     return old_time is not None and new_time >= old_time
+
+
+def check_shared_frontier_inputs(conn):
+    """Check stored execution plans, not hypothetical replanning of the views."""
+    shared = {
+        "mz_internal.mz_current_replica_frontiers_ind",
+        "mz_internal.mz_current_storage_frontiers_ind",
+    }
+    sources = conn.execute("""
+        SELECT g.global_id
+        FROM mz_internal.mz_object_global_ids g
+        JOIN mz_catalog.mz_objects o ON o.id = g.id
+        JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
+        WHERE s.name = 'mz_internal' AND o.name IN (
+            'mz_replica_frontier_observations', 'mz_storage_frontier_observations')
+        """).fetchall()
+    assert len(sources) == 2 and all(gid.startswith("s") for (gid,) in sources)
+    source_ids = {int(gid[1:]) for (gid,) in sources}
+    for index in (
+        "mz_internal.mz_frontiers_ind",
+        "mz_catalog.mz_cluster_replica_frontiers_ind",
+    ):
+        plan = conn.execute(f"EXPLAIN PHYSICAL PLAN FOR INDEX {index}").fetchone()[0]
+        used_indexes = {
+            line.strip().split()[1]
+            for line in plan.partition("Used Indexes:\n")[2].splitlines()
+            if line.strip().startswith("- ")
+        }
+        assert shared <= used_indexes, (index, "missing shared inputs", used_indexes)
+        # Text EXPLAIN omits identity source operators. JSON retains all imports.
+        raw = conn.execute(
+            f"EXPLAIN PHYSICAL PLAN AS JSON FOR INDEX {index}"
+        ).fetchone()[0]
+        direct_sources = {
+            source["id"]["System"]
+            for source in json.loads(raw)["sources"]
+            if "System" in source["id"]
+        }
+        assert not source_ids & direct_sources, (
+            index,
+            "duplicate source imports",
+            direct_sources,
+        )
 
 
 def identities(conn, schema):
@@ -283,11 +329,54 @@ def alive(process):
         return False
 
 
+def catalog_replica_process(cluster_id, replica_id, inventory, missing_ok=False):
+    """Identify one single-process catalog replica, never another deployment."""
+    replicas = [r for r in inventory["replicas"] if r["cluster_id"] == cluster_id]
+    assert len(replicas) == 1, "requires one catalog replica in inventory"
+    replica = replicas[0]
+    assert replica["cluster_name"] == "mz_catalog_server"
+    assert replica["replica_id"] == replica_id
+    assert replica["generation"] == inventory["generation"]
+    assert (
+        replica["resources"]["allocation"]["scale"] == 1
+    ), "requires a single-process catalog replica"
+    required = {
+        "--environment-id": inventory["environment_id"],
+        "--catalog-cluster-id": cluster_id,
+        "--catalog-replica-id": replica_id,
+        "--catalog-deploy-generation": str(inventory["generation"]),
+    }
+    matches = []
+    for process in psutil.process_iter():
+        try:
+            if Path(process.exe()).name != "clusterd":
+                continue
+            command = process.cmdline()
+            if all(
+                [arg for arg in command if arg.startswith(flag + "=")]
+                == [f"{flag}={value}"]
+                for flag, value in required.items()
+            ) and alive(process):
+                matches.append(process)
+        except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
+            continue
+    assert len(matches) <= 1, "multiple matching catalog replica processes"
+    if not matches and missing_ok:
+        return None
+    assert matches, "cannot safely identify the catalog replica process"
+    return matches[0]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--controller", required=True)
     parser.add_argument("--adapter", default="a1", help="existing adapter name (or ID)")
     parser.add_argument("--cluster", default="quickstart")
+    parser.add_argument(
+        "--restart-catalog-replica",
+        action="store_true",
+        help="also TERM the single catalog replica while retaining frontier read holds",
+    )
     parser.add_argument("--timeout", type=int, default=180, help="seconds per phase")
     parser.add_argument(
         "--operation-timeout",
@@ -354,7 +443,8 @@ def main():
                     flush=True,
                 )
                 return value
-            stop.wait(0.5)
+            # Catalog recovery polling runs after the publisher's stop is set.
+            time.sleep(0.5)
         raise TimeoutError(f"{label}: no completion within {args.timeout}s")
 
     def progressed(before):
@@ -387,6 +477,7 @@ def main():
         ).fetchone() == (
             True,
         ), "requires native catalog read protection already enabled"
+        check_shared_frontier_inputs(owner)
         created_schema = True
         owner.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
         table = sql.Identifier(schema, "input")
@@ -475,6 +566,7 @@ def main():
         )
         assert peer["generation"] == inventory["generation"]
         peer_conn = connect(peer, args.operation_timeout, args.cluster)
+        check_shared_frontier_inputs(peer_conn)
         peer_observer = Observer(peer_conn, "peer-before-restart", schema, objects)
         target = status()["checkpoint"]
         wait(
@@ -518,6 +610,7 @@ def main():
         replacement = adapter_process(peer, inventory)
         assert (replacement.pid, replacement.create_time()) != (process.pid, birth)
         peer_conn = connect(peer, args.operation_timeout, args.cluster)
+        check_shared_frontier_inputs(peer_conn)
         peer_observer = Observer(peer_conn, "peer-after-restart", schema, objects)
         target = status()["checkpoint"]
         wait(
@@ -539,6 +632,122 @@ def main():
         )
         peer_id = None
         peer_attempted = False
+        if args.restart_catalog_replica:
+            stop.set()
+            worker.join(timeout=4 * args.operation_timeout + 10)
+            assert not worker.is_alive(), "survivor publisher did not stop"
+            status()
+            with (
+                connect(
+                    survivor, args.operation_timeout, "mz_catalog_server"
+                ) as retained,
+                connect(survivor, args.operation_timeout, "mz_catalog_server") as probe,
+            ):
+                replicas = probe.execute("""
+                    SELECT c.id, r.id
+                    FROM mz_catalog.mz_clusters c
+                    JOIN mz_catalog.mz_cluster_replicas r ON r.cluster_id = c.id
+                    WHERE c.name = 'mz_catalog_server'
+                    """).fetchall()
+                assert len(replicas) == 1, "requires one catalog replica in SQL"
+                cluster_id, replica_id = replicas[0]
+
+                def catalog_process(missing_ok=False):
+                    current = api("/api/inventory")
+                    assert all(
+                        current[key] == inventory[key]
+                        for key in ("environment_id", "generation")
+                    ), "controller deployment changed"
+                    return catalog_replica_process(
+                        cluster_id, replica_id, current, missing_ok
+                    )
+
+                def public_rows(conn):
+                    # One statement reads both public indexes at one timestamp.
+                    return conn.execute(
+                        """
+                        SELECT 'global', object_id, NULL::text AS replica_id,
+                               read_frontier::text, write_frontier::text
+                        FROM mz_internal.mz_frontiers
+                        WHERE object_id = ANY(%s::text[])
+                        UNION ALL
+                        SELECT 'replica', object_id, replica_id,
+                               NULL::text, write_frontier::text
+                        FROM mz_catalog.mz_cluster_replica_frontiers
+                        WHERE object_id = ANY(%s::text[])
+                        ORDER BY 1, 2, 3
+                        """,
+                        ([gid for _, gid, _ in objects],) * 2,
+                    ).fetchall()
+
+                def complete(rows):
+                    return {row[1] for row in rows if row[0] == "global"} == {
+                        gid for _, gid, _ in objects
+                    } and {gid for name, gid, _ in objects if name != "input"} <= {
+                        row[1] for row in rows if row[0] == "replica"
+                    }
+
+                def public_ready(_):
+                    try:
+                        return complete(public_rows(probe))
+                    except psycopg.errors.QueryCanceled:
+                        # Only the autocommit probe may time out during recovery.
+                        # Never catch a failed read in the retained transaction.
+                        return False
+
+                wait("catalog public frontier rows ready", public_ready)
+                # Cover both bounded recovery polls and their in-flight operations.
+                # This is session-local and does not affect other benchmark clients.
+                retained.execute(
+                    "SET idle_in_transaction_session_timeout = "
+                    f"'{3 * args.timeout + 10 * args.operation_timeout}s'"
+                )
+                with retained.transaction():
+                    before_rows = public_rows(retained)
+                    assert complete(before_rows), (
+                        "missing global or per-replica frontiers before restart",
+                        before_rows,
+                    )
+                    process = catalog_process()
+                    birth = process.create_time()
+                    fd = os.pidfd_open(process.pid)
+                    try:
+                        verified = catalog_process()
+                        assert (
+                            verified.pid == process.pid
+                            and verified.create_time() == birth
+                            and alive(process)
+                        ), "catalog replica process changed before TERM"
+                        signal.pidfd_send_signal(fd, signal.SIGTERM)
+                    finally:
+                        os.close(fd)
+
+                    def catalog_restarted(_):
+                        if alive(process):
+                            return None
+                        replacement = catalog_process(missing_ok=True)
+                        if replacement is None:
+                            return None
+                        assert (replacement.pid, replacement.create_time()) != (
+                            process.pid,
+                            birth,
+                        ), "catalog replica process was not replaced"
+                        return replacement if alive(replacement) else None
+
+                    catalog_replacement = wait(
+                        "distinct live catalog replica replacement", catalog_restarted
+                    )
+                    wait("catalog public frontiers recovered", public_ready)
+                    assert alive(catalog_replacement), "catalog replacement exited"
+                    # This is the same transaction, not a fresh timestamp or a
+                    # retried read. Reconstruction must preserve both read holds.
+                    after_rows = public_rows(retained)
+                    assert after_rows == before_rows, (
+                        "retained public frontiers changed across reconstruction",
+                        before_rows,
+                        after_rows,
+                    )
+                    checks.append("retained global/per-replica frontiers unchanged")
         print(
             json.dumps(
                 {
