@@ -30,7 +30,7 @@ the Business Source License, use of this software will be governed
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
-      <version>42.7.12</version>
+      <version>42.7.14</version>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
