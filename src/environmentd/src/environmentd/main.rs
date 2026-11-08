@@ -671,6 +671,12 @@ pub fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args) {
+        if err
+            .downcast_ref::<mz_adapter::AdapterError>()
+            .is_some_and(|e| e.is_epoch_fence())
+        {
+            mz_ore::antithesis::expect_panic();
+        }
         panic!("environmentd: fatal: {}", err.display_with_causes());
     }
 }

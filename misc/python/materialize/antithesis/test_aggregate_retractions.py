@@ -428,10 +428,7 @@ def test_unexpected_product_error_in_cleanup_is_reported_not_allowlisted(
     assert db.execute("SELECT count(*) FROM poison_intents").fetchone() == (1,)
 
 
-@pytest.mark.parametrize("blocked_fixture", ("aggregate", "upsert"))
-def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(
-    monkeypatch, blocked_fixture
-):
+def _recovery_with_passing_checks(monkeypatch) -> tuple[recovery.Recovery, list[str]]:
     check = recovery.Recovery.__new__(recovery.Recovery)
     check.host = "host"
     check.env = Mock()
@@ -441,7 +438,7 @@ def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(
     check.restarts_lock = threading.Lock()
     check.restarts = Mock(started=time.monotonic() - 1000)
     check.sampling_done = threading.Event()
-    observed = []
+    observed: list[str] = []
 
     def good(name):
         def execute():
@@ -457,24 +454,15 @@ def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(
         "reconfigurations_settled",
         "hung_alters",
         "no_crash_loop",
+        "cleanup_aggregate_fixtures",
+        "cleanup_upsert_fixtures",
+        "hydrated",
+        "frontiers_advance",
+        "collections_readable",
     ):
         setattr(check, name, good(name))
-    for fixture in ("aggregate", "upsert"):
-
-        def cleanup(fixture=fixture):
-            observed.append(f"cleanup_{fixture}")
-            return fixture != blocked_fixture, {"owner_still_active": True}
-
-        setattr(check, f"cleanup_{fixture}_fixtures", cleanup)
-    check.hydrated = Mock(side_effect=AssertionError("poison hydration checked"))
-    check.frontiers_advance = Mock(
-        side_effect=AssertionError("poison frontier checked")
-    )
-    check.collections_readable = Mock(
-        side_effect=AssertionError("poison readability checked")
-    )
     check.restart_and_compare = Mock(
-        side_effect=AssertionError("poison restart snapshot checked")
+        side_effect=lambda: observed.append("restart_and_compare")
     )
     check.drain_replacements = Mock()
     check.retry_ledger = Mock()
@@ -495,6 +483,31 @@ def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(
     monkeypatch.setattr(recovery.lifecycle, "open_state", Mock())
     monkeypatch.setattr(recovery.lifecycle, "check_readable", Mock())
     monkeypatch.setattr(recovery.rng, "random", lambda: 0)
+    return check, observed
+
+
+@pytest.mark.parametrize("blocked_fixture", ("aggregate", "upsert"))
+def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(
+    monkeypatch, blocked_fixture
+):
+    check, observed = _recovery_with_passing_checks(monkeypatch)
+    for fixture in ("aggregate", "upsert"):
+
+        def cleanup(fixture=fixture):
+            observed.append(f"cleanup_{fixture}")
+            return fixture != blocked_fixture, {"owner_still_active": True}
+
+        setattr(check, f"cleanup_{fixture}_fixtures", cleanup)
+    check.hydrated = Mock(side_effect=AssertionError("poison hydration checked"))
+    check.frontiers_advance = Mock(
+        side_effect=AssertionError("poison frontier checked")
+    )
+    check.collections_readable = Mock(
+        side_effect=AssertionError("poison readability checked")
+    )
+    check.restart_and_compare = Mock(
+        side_effect=AssertionError("poison restart snapshot checked")
+    )
     assert check.run() == 0
     assert "reconfigurations_settled" in observed
     assert "hung_alters" in observed
@@ -510,3 +523,9 @@ def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(
     check.collections_readable.assert_not_called()
     check.restart_and_compare.assert_not_called()
     assert check.sampling_done.is_set()
+
+
+def test_recovery_restarts_pods_before_the_crash_loop_window(monkeypatch):
+    check, observed = _recovery_with_passing_checks(monkeypatch)
+    assert check.run() == 0
+    assert observed.index("restart_and_compare") < observed.index("no_crash_loop")
