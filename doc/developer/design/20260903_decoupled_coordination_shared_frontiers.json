@@ -1,0 +1,1252 @@
+{
+  "measurements": {
+    "main": {
+      "run": "/home/ubuntu/.local/share/aj/m3-evidence/backend-load-attribution/main-audit-1793998684",
+      "counter_rates": {
+        "blob_delete": {
+          "succeeded_count": 4.300984892992727,
+          "failed_count": 0.0,
+          "bytes_count": 82526.61516767717,
+          "events": 4.300984892992727
+        },
+        "blob_get": {
+          "succeeded_count": 2.276280177128839,
+          "failed_count": 0.0,
+          "bytes_count": 27616.225128805756,
+          "events": 2.276280177128839
+        },
+        "blob_set": {
+          "succeeded_count": 4.554086883834227,
+          "failed_count": 0.0,
+          "bytes_count": 97298.46408016483,
+          "events": 4.554086883834227
+        },
+        "consensus_cas": {
+          "succeeded_count": 83.0306899408887,
+          "failed_count": 0.0,
+          "bytes_count": 49075.145918986214,
+          "events": 83.0306899408887
+        }
+      },
+      "reconciled_checks": 160,
+      "cores": 0.6521019339622376,
+      "pss_end_bytes": 1400601600.0,
+      "roles": {
+        "environmentd": {
+          "cores": 0.28270826678683914,
+          "pss_end_bytes": 592134144.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 3.4001310537273914,
+              "failed_count": 0.0,
+              "bytes_count": 61828.38891095597
+            },
+            "blob_get": {
+              "succeeded_count": 0.1498592172873066,
+              "failed_count": 0.0,
+              "bytes_count": 9996.051504406372
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 3.568303538663662,
+              "failed_count": 0.0,
+              "bytes_count": 64261.8087080018
+            },
+            "consensus_cas": {
+              "succeeded_count": 30.676088437179423,
+              "failed_count": 0.0,
+              "bytes_count": 18922.101448622336
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016650973632285418,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 1.4752761938825283,
+              "failed_count": 0.0,
+              "bytes_count": 60266.936418320125
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.2231230466726246,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-s1-s1": {
+          "cores": 0.015430491098800318,
+          "pss_end_bytes": 98896384.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_get": {
+              "succeeded_count": 0.019981911468862606,
+              "failed_count": 0.0,
+              "bytes_count": 137.1383552593527
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_cas": {
+              "succeeded_count": 0.054951136213021674,
+              "failed_count": 0.0,
+              "bytes_count": 14.846793061879868
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016651694002632576,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.014986706603814043,
+              "failed_count": 0.0,
+              "bytes_count": 314.9518647374186
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-s2-s2": {
+          "cores": 0.3216613344652606,
+          "pss_end_bytes": 507039232.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 0.9008538393241965,
+              "failed_count": 0.0,
+              "bytes_count": 20698.22625781341
+            },
+            "blob_get": {
+              "succeeded_count": 2.066475522092265,
+              "failed_count": 0.0,
+              "bytes_count": 17208.759342239606
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 0.9857833449753327,
+              "failed_count": 0.0,
+              "bytes_count": 33036.65536758053
+            },
+            "consensus_cas": {
+              "succeeded_count": 52.21972295285684,
+              "failed_count": 0.0,
+              "bytes_count": 30116.902014074367
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016651697943771845,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 2.0681581018137942,
+              "failed_count": 0.0,
+              "bytes_count": 78961.5911770268
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.4112968749678909,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-s3-s3": {
+          "cores": 0.015195937698543181,
+          "pss_end_bytes": 102362112.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_get": {
+              "succeeded_count": 0.01998188708818445,
+              "failed_count": 0.0,
+              "bytes_count": 137.13790773515814
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_cas": {
+              "succeeded_count": 0.038298800376187214,
+              "failed_count": 0.0,
+              "bytes_count": 10.155848340349998
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016651680489467642,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.009991008293680586,
+              "failed_count": 0.0,
+              "bytes_count": 274.1299740032906
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.0016651032993584038,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-u1-u1": {
+          "cores": 0.017105903912794374,
+          "pss_end_bytes": 100169728.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_get": {
+              "succeeded_count": 0.019981639235065185,
+              "failed_count": 0.0,
+              "bytes_count": 137.1380220603509
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_cas": {
+              "succeeded_count": 0.04162861294883127,
+              "failed_count": 0.0,
+              "bytes_count": 11.139814082931938
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016651429860117375,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.038298326976807795,
+              "failed_count": 0.0,
+              "bytes_count": 182.57081256642488
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        }
+      }
+    },
+    "before": {
+      "run": "/home/ubuntu/.local/share/aj/m3-evidence/shared-frontier-inputs/prechange/native-before-verified-1794141291",
+      "counter_rates": {
+        "blob_delete": {
+          "succeeded_count": 8.741667946165592,
+          "failed_count": 0.0,
+          "bytes_count": 263503.14451497264,
+          "events": 8.741667946165592
+        },
+        "blob_get": {
+          "succeeded_count": 14.092315705956805,
+          "failed_count": 0.0,
+          "bytes_count": 334049.9897915907,
+          "events": 14.092315705956805
+        },
+        "blob_set": {
+          "succeeded_count": 9.539101403300814,
+          "failed_count": 0.0,
+          "bytes_count": 286852.8881500463,
+          "events": 9.539101403300814
+        },
+        "consensus_cas": {
+          "succeeded_count": 119.76138549341678,
+          "failed_count": 0.009988504309128435,
+          "bytes_count": 81084.40369379758,
+          "events": 119.77137399772592
+        }
+      },
+      "reconciled_checks": 192,
+      "cores": 1.2950504915339551,
+      "pss_end_bytes": 3075214848.0,
+      "roles": {
+        "controllerd": {
+          "cores": 0.025938183990439425,
+          "pss_end_bytes": 447872000.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_get": {
+              "succeeded_count": 0.5094227225852652,
+              "failed_count": 0.0,
+              "bytes_count": 28301.64756379158
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 0.014982961330746966,
+              "failed_count": 0.0,
+              "bytes_count": 693.3317885370053
+            },
+            "consensus_cas": {
+              "succeeded_count": 0.1198641700200624,
+              "failed_count": 0.0,
+              "bytes_count": 137.5572297111235
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016647801391675335,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.054938044201332775,
+              "failed_count": 0.0,
+              "bytes_count": 310.1950468703868
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "pubsubd": {
+          "cores": 0.034344231997794114,
+          "pss_end_bytes": 39719936.0,
+          "external": {}
+        },
+        "replica-s1-s1": {
+          "cores": 0.08025933881376077,
+          "pss_end_bytes": 346737152.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 1.9011824321067148,
+              "failed_count": 0.0,
+              "bytes_count": 43491.33027346775
+            },
+            "blob_get": {
+              "succeeded_count": 1.2302729882640975,
+              "failed_count": 0.0,
+              "bytes_count": 46914.4003565188
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 1.3334903858306615,
+              "failed_count": 0.0,
+              "bytes_count": 23717.930506316297
+            },
+            "consensus_cas": {
+              "succeeded_count": 1.4566848013419473,
+              "failed_count": 0.001664841011952063,
+              "bytes_count": 2838.106121538046
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016647813342463295,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.21309284627141045,
+              "failed_count": 0.0,
+              "bytes_count": 12845.234684359923
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.019977376010955956,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-s2-s2": {
+          "cores": 0.7244271890121019,
+          "pss_end_bytes": 918681088.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 1.7929743302902863,
+              "failed_count": 0.0,
+              "bytes_count": 36780.583232610385
+            },
+            "blob_get": {
+              "succeeded_count": 9.484245708533585,
+              "failed_count": 0.0,
+              "bytes_count": 146714.2451386663
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 3.45108978996507,
+              "failed_count": 0.0,
+              "bytes_count": 133497.88882951922
+            },
+            "consensus_cas": {
+              "succeeded_count": 78.63584047099627,
+              "failed_count": 0.004994159831806771,
+              "bytes_count": 50297.238835177
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016647790694953035,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 6.186311454172904,
+              "failed_count": 0.0,
+              "bytes_count": 122299.35402403597
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.5876662428995658,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-s3-s3": {
+          "cores": 0.06403332190051517,
+          "pss_end_bytes": 328905216.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 0.1981023502739411,
+              "failed_count": 0.0,
+              "bytes_count": 32141.025636454517
+            },
+            "blob_get": {
+              "succeeded_count": 1.1636740811350332,
+              "failed_count": 0.0,
+              "bytes_count": 37928.990610293724
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 1.3434727680034484,
+              "failed_count": 0.0,
+              "bytes_count": 22142.61011934195
+            },
+            "consensus_cas": {
+              "succeeded_count": 1.4317055933318192,
+              "failed_count": 0.0,
+              "bytes_count": 2729.868626887527
+            },
+            "consensus_head": {
+              "succeeded_count": 0.01664773945734673,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.24472312659196538,
+              "failed_count": 0.0,
+              "bytes_count": 7143.7512135849
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.004994128041637109,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-u1-u1": {
+          "cores": 0.08717507128071539,
+          "pss_end_bytes": 358501376.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 1.7996388179490213,
+              "failed_count": 0.0,
+              "bytes_count": 14579.566862955686
+            },
+            "blob_get": {
+              "succeeded_count": 1.2452355134614659,
+              "failed_count": 0.0,
+              "bytes_count": 37202.92336669738
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 1.3850745178553054,
+              "failed_count": 0.0,
+              "bytes_count": 21500.432779682902
+            },
+            "consensus_cas": {
+              "succeeded_count": 1.5199197708602754,
+              "failed_count": 0.0016647918485132081,
+              "bytes_count": 2696.118718410321
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016647528387213197,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.2613660786498715,
+              "failed_count": 0.0,
+              "bytes_count": 12766.602186494943
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.018312710333645288,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "adapterd": {
+          "cores": 0.2788731545386284,
+          "pss_end_bytes": 634798080.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 3.049770016490329,
+              "failed_count": 0.0,
+              "bytes_count": 136510.63850737497
+            },
+            "blob_get": {
+              "succeeded_count": 0.4594646952906634,
+              "failed_count": 0.0,
+              "bytes_count": 36987.782805941446
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 2.0109909813350484,
+              "failed_count": 0.0,
+              "bytes_count": 85300.69416518006
+            },
+            "consensus_cas": {
+              "succeeded_count": 36.59737070819149,
+              "failed_count": 0.0016647116210596546,
+              "bytes_count": 22385.51417614019
+            },
+            "consensus_head": {
+              "succeeded_count": 0.0166472750209002,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 1.9194305399322773,
+              "failed_count": 0.0,
+              "bytes_count": 79917.49872640421
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.26802098490722,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        }
+      }
+    },
+    "after": {
+      "run": "/home/ubuntu/.local/share/aj/m3-evidence/shared-frontier-inputs/postchange/native-after-1794143937",
+      "counter_rates": {
+        "blob_delete": {
+          "succeeded_count": 8.668700532881259,
+          "failed_count": 0.0,
+          "bytes_count": 255484.00414338356,
+          "events": 8.668700532881259
+        },
+        "blob_get": {
+          "succeeded_count": 10.050408518900955,
+          "failed_count": 0.0,
+          "bytes_count": 305541.3024286639,
+          "events": 10.050408518900955
+        },
+        "blob_set": {
+          "succeeded_count": 9.584328720062535,
+          "failed_count": 0.0,
+          "bytes_count": 293507.7738573814,
+          "events": 9.584328720062535
+        },
+        "consensus_cas": {
+          "succeeded_count": 120.86700794611137,
+          "failed_count": 0.00998883537355914,
+          "bytes_count": 81932.61450943255,
+          "events": 120.87699678148495
+        }
+      },
+      "reconciled_checks": 192,
+      "cores": 1.2508789201721124,
+      "pss_end_bytes": 3082178560.0,
+      "roles": {
+        "controllerd": {
+          "cores": 0.025251677163889034,
+          "pss_end_bytes": 425724928.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_get": {
+              "succeeded_count": 0.5127428145272117,
+              "failed_count": 0.0,
+              "bytes_count": 27112.402140692247
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 0.014982688513580124,
+              "failed_count": 0.0,
+              "bytes_count": 971.8985788858145
+            },
+            "consensus_cas": {
+              "succeeded_count": 0.1231915359268343,
+              "failed_count": 0.0,
+              "bytes_count": 137.7344679537917
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016647490538477666,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.05327218160732764,
+              "failed_count": 0.0,
+              "bytes_count": 392.5818835463311
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "pubsubd": {
+          "cores": 0.03421032617269559,
+          "pss_end_bytes": 39447552.0,
+          "external": {}
+        },
+        "replica-s1-s1": {
+          "cores": 0.06177283361439414,
+          "pss_end_bytes": 322328064.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 0.07158515270662696,
+              "failed_count": 0.0,
+              "bytes_count": 280.5884201455732
+            },
+            "blob_get": {
+              "succeeded_count": 1.3018512272843434,
+              "failed_count": 0.0,
+              "bytes_count": 34583.213315604844
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 1.411727117170884,
+              "failed_count": 0.0,
+              "bytes_count": 20534.782424763656
+            },
+            "consensus_cas": {
+              "succeeded_count": 1.4916356140466576,
+              "failed_count": 0.003329545437684069,
+              "bytes_count": 3004.192359118524
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016647727188420343,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.28634135286231305,
+              "failed_count": 0.0,
+              "bytes_count": 3891.213403134267
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-s2-s2": {
+          "cores": 0.7123887062491352,
+          "pss_end_bytes": 925670400.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 3.8805454055868758,
+              "failed_count": 0.0,
+              "bytes_count": 66335.28079208155
+            },
+            "blob_get": {
+              "succeeded_count": 5.418912104280487,
+              "failed_count": 0.0,
+              "bytes_count": 101372.09239990804
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 3.4244800257565986,
+              "failed_count": 0.0,
+              "bytes_count": 108221.35345920108
+            },
+            "consensus_cas": {
+              "succeeded_count": 79.65547867171847,
+              "failed_count": 0.0016648939286843126,
+              "bytes_count": 50999.30734082192
+            },
+            "consensus_head": {
+              "succeeded_count": 0.01664795833073766,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 5.137594078138111,
+              "failed_count": 0.0,
+              "bytes_count": 130601.66220061504
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.625963037044515,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-s3-s3": {
+          "cores": 0.07426456129731492,
+          "pss_end_bytes": 344277504.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 2.019510794140691,
+              "failed_count": 0.0,
+              "bytes_count": 31165.430495963265
+            },
+            "blob_get": {
+              "succeeded_count": 1.1803577867950588,
+              "failed_count": 0.0,
+              "bytes_count": 39078.24856394176
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 1.355165583607512,
+              "failed_count": 0.0,
+              "bytes_count": 25318.34366390037
+            },
+            "consensus_cas": {
+              "succeeded_count": 1.4533897720526223,
+              "failed_count": 0.0033294998047644904,
+              "bytes_count": 2910.993135224335
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016648229432073863,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.21642683653530997,
+              "failed_count": 0.0,
+              "bytes_count": 8579.447965982037
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.021643501710772582,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "replica-u1-u1": {
+          "cores": 0.06719830074510008,
+          "pss_end_bytes": 398180352.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 0.10155837129521021,
+              "failed_count": 0.0,
+              "bytes_count": 8154.945229144152
+            },
+            "blob_get": {
+              "succeeded_count": 1.1370900396380983,
+              "failed_count": 0.0,
+              "bytes_count": 48234.22690447475
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 1.3501902175090863,
+              "failed_count": 0.0,
+              "bytes_count": 31823.072923655174
+            },
+            "consensus_cas": {
+              "succeeded_count": 1.5066855089898756,
+              "failed_count": 0.0016648962031496181,
+              "bytes_count": 2505.9484786103963
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016648466869968695,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 0.2480629981371303,
+              "failed_count": 0.0,
+              "bytes_count": 5424.1406766733635
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.0016648962031496181,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        },
+        "adapterd": {
+          "cores": 0.27579251492958334,
+          "pss_end_bytes": 626549760.0,
+          "external": {
+            "blob_delete": {
+              "succeeded_count": 2.595500807466575,
+              "failed_count": 0.0,
+              "bytes_count": 149547.75914085872
+            },
+            "blob_get": {
+              "succeeded_count": 0.49945454552526175,
+              "failed_count": 0.0,
+              "bytes_count": 55161.11907358763
+            },
+            "blob_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "blob_set": {
+              "succeeded_count": 2.0277830864398494,
+              "failed_count": 0.0,
+              "bytes_count": 106638.32275575888
+            },
+            "consensus_cas": {
+              "succeeded_count": 36.636626818825754,
+              "failed_count": 0.0,
+              "bytes_count": 22374.438712573883
+            },
+            "consensus_head": {
+              "succeeded_count": 0.016648474172786542,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_list_keys": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "consensus_scan": {
+              "succeeded_count": 1.61823393198651,
+              "failed_count": 0.0,
+              "bytes_count": 82963.09098046605
+            },
+            "consensus_truncate": {
+              "succeeded_count": 0.27803010597858857,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            },
+            "restore": {
+              "succeeded_count": 0.0,
+              "failed_count": 0.0,
+              "bytes_count": 0.0
+            }
+          }
+        }
+      }
+    }
+  },
+  "frontier_duplicate_gets": {
+    "before": [
+      {
+        "role": "replica-s2-s2",
+        "object": "mz_internal.mz_replica_frontier_observations",
+        "calls": 3761,
+        "unique_keys": 1970,
+        "bytes": 15918248,
+        "repeat_calls": 1791,
+        "close_repeats": 1791,
+        "close_repeat_bytes": 6381353,
+        "cross_reader": 1791,
+        "delete_between": 0
+      },
+      {
+        "role": "replica-s2-s2",
+        "object": "mz_internal.mz_storage_frontier_observations",
+        "calls": 1321,
+        "unique_keys": 661,
+        "bytes": 10573547,
+        "repeat_calls": 660,
+        "close_repeats": 660,
+        "close_repeat_bytes": 5284477,
+        "cross_reader": 660,
+        "delete_between": 0
+      }
+    ],
+    "after": [
+      {
+        "role": "replica-s2-s2",
+        "object": "mz_internal.mz_replica_frontier_observations",
+        "calls": 1976,
+        "unique_keys": 1976,
+        "bytes": 10451531,
+        "repeat_calls": 0
+      },
+      {
+        "role": "replica-s2-s2",
+        "object": "mz_internal.mz_storage_frontier_observations",
+        "calls": 663,
+        "unique_keys": 663,
+        "bytes": 5305841,
+        "repeat_calls": 0
+      }
+    ]
+  },
+  "raw_catalog_load": {
+    "before": {
+      "consensus_cas/append empty": {
+        "calls_per_second": 1.0604314666569088,
+        "bytes_per_second": 600.0460684949076
+      },
+      "blob_set/upload": {
+        "calls_per_second": 0.492769934107804,
+        "bytes_per_second": 25465.435576567637
+      },
+      "consensus_cas/append data": {
+        "calls_per_second": 0.5010929057503869,
+        "bytes_per_second": 895.3211727036577
+      },
+      "blob_get/source fetch": {
+        "calls_per_second": 0.8656854705920504,
+        "bytes_per_second": 44704.87435941303
+      },
+      "blob_get/row fetch": {
+        "calls_per_second": 2.069301713745243,
+        "bytes_per_second": 122867.75236028651
+      },
+      "blob_set/compaction": {
+        "calls_per_second": 0.23306614462635228,
+        "bytes_per_second": 121827.14976639861
+      },
+      "consensus_cas/compaction": {
+        "calls_per_second": 0.23306614462635228,
+        "bytes_per_second": 811.405635645064
+      },
+      "consensus_cas/reader maintenance": {
+        "calls_per_second": 0.24638447890797635,
+        "bytes_per_second": 71.38998804689373
+      },
+      "blob_get/compaction": {
+        "calls_per_second": 0.16481187108492729,
+        "bytes_per_second": 99013.47383944443
+      },
+      "blob_get/gc": {
+        "calls_per_second": 0.014982469056035095,
+        "bytes_per_second": 2337.223297766638
+      },
+      "blob_delete/gc": {
+        "calls_per_second": 0.7424685346023767,
+        "bytes_per_second": 154660.6215612641
+      },
+      "consensus_cas/gc": {
+        "calls_per_second": 0.014982537127362361,
+        "bytes_per_second": 2.1624803648190407
+      },
+      "consensus_cas/compaction scheduling": {
+        "calls_per_second": 0.016647801394266165,
+        "bytes_per_second": 9.317782769494924
+      },
+      "blob_delete/batch cleanup": {
+        "calls_per_second": 0.01498324515217253,
+        "bytes_per_second": 893.6563260879544
+      },
+      "blob_set/rollup maintenance": {
+        "calls_per_second": 0.014982647625258314,
+        "bytes_per_second": 2355.3081025130473
+      },
+      "consensus_cas/rollup maintenance": {
+        "calls_per_second": 0.014982647625258314,
+        "bytes_per_second": 2.2890154046416282
+      }
+    },
+    "after": {
+      "blob_get/source fetch": {
+        "calls_per_second": 0.8873370620175438,
+        "bytes_per_second": 45568.33272599661
+      },
+      "blob_get/row fetch": {
+        "calls_per_second": 2.0893316244421034,
+        "bytes_per_second": 119230.88623467053
+      },
+      "consensus_cas/append empty": {
+        "calls_per_second": 1.0838156156550265,
+        "bytes_per_second": 613.8342091674234
+      },
+      "blob_set/upload": {
+        "calls_per_second": 0.49778059061978946,
+        "bytes_per_second": 25631.8954287213
+      },
+      "consensus_cas/append data": {
+        "calls_per_second": 0.5177588188948123,
+        "bytes_per_second": 932.5530707983976
+      },
+      "blob_set/rollup maintenance": {
+        "calls_per_second": 0.016648436338138492,
+        "bytes_per_second": 2641.950999520182
+      },
+      "consensus_cas/rollup maintenance": {
+        "calls_per_second": 0.016648436338138492,
+        "bytes_per_second": 2.5405515773369514
+      },
+      "consensus_cas/reader maintenance": {
+        "calls_per_second": 0.2513870373674562,
+        "bytes_per_second": 75.39945661520362
+      },
+      "blob_set/compaction": {
+        "calls_per_second": 0.2513877295917015,
+        "bytes_per_second": 128992.86013964878
+      },
+      "consensus_cas/compaction": {
+        "calls_per_second": 0.25305242810606665,
+        "bytes_per_second": 842.3090442557166
+      },
+      "blob_get/compaction": {
+        "calls_per_second": 0.1881251208645197,
+        "bytes_per_second": 94940.09161416827
+      },
+      "blob_delete/batch cleanup": {
+        "calls_per_second": 0.018313202068387425,
+        "bytes_per_second": 1315.2876515844605
+      },
+      "consensus_cas/compaction scheduling": {
+        "calls_per_second": 0.016647490540177952,
+        "bytes_per_second": 8.473513675185119
+      },
+      "blob_get/gc": {
+        "calls_per_second": 0.01664826078563991,
+        "bytes_per_second": 2632.1203098498777
+      },
+      "blob_delete/gc": {
+        "calls_per_second": 0.7508435112843944,
+        "bytes_per_second": 143814.2376229089
+      },
+      "consensus_cas/gc": {
+        "calls_per_second": 0.016648418569469386,
+        "bytes_per_second": 2.3008118104035287
+      },
+      "blob_delete/compaction cleanup": {
+        "calls_per_second": 0.0033297947368183117,
+        "bytes_per_second": 1095.6139764397476
+      }
+    }
+  }
+}

@@ -12,11 +12,12 @@ or a general sampling framework.
 ## Backend writes and blob consumption
 
 The [backend attribution](20260903_decoupled_coordination_backend_load.md)
-reconciles CAS/blob calls and bytes against actual events. Prioritize shared
-frontier inputs or validated intermediates: two indexes independently fetch the
-same cold observation parts. A separate retained dependency MV lacks a common
-source predicate. Do not redirect its history through the unretained shared
-catalog arrangement.
+reconciles CAS/blob calls and bytes against actual events. The
+[shared frontier repair](20260903_decoupled_coordination_shared_frontiers.md)
+removed duplicate observation-source reads and reduced total GETs by 28.7%.
+The catalog journal and progress fanout remain. A separate retained dependency
+MV lacks a common source predicate. Do not redirect its history through the
+unretained shared catalog arrangement.
 
 Most CAS excess is empty completeness fanout into 50 durable catalog outputs.
 Output coalescing needs a latency budget, not slower read-protection publication.

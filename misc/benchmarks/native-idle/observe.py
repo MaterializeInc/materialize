@@ -46,7 +46,7 @@ parser.add_argument("--plan-diagnostics", action="store_true")
 parser.add_argument(
     "--frontier-lifecycle",
     action="store_true",
-    help="run the native frontier lifecycle check after the idle windows",
+    help="run native frontier lifecycle and catalog recovery checks after the idle windows",
 )
 parser.add_argument("--system-parameter", action="append", default=[])
 args = parser.parse_args()
@@ -67,7 +67,8 @@ RUN.mkdir()
 state = RUN / "state"
 state.mkdir()
 (state / "scratch").mkdir()
-binaries = E / "artifacts" / args.kind
+# /proc reports resolved executable paths, including directory symlinks.
+binaries = (E / "artifacts" / args.kind).resolve(strict=True)
 container = "aj-idle-" + RUN.name
 process = None
 docker_attempted = False
@@ -620,12 +621,10 @@ try:
                 settings["catalog_read_protection_publish_interval"] == "10 s"
             ), settings
         assert settings["persist_shard_metrics"] == "both", settings
-        save(
-            "clusters.json",
-            c.execute(
-                "SELECT c.id,c.name,r.id,r.name,r.size FROM mz_catalog.mz_clusters c LEFT JOIN mz_catalog.mz_cluster_replicas r ON r.cluster_id=c.id ORDER BY c.id,r.id"
-            ).fetchall(),
-        )
+        clusters = c.execute(
+            "SELECT c.id,c.name,r.id,r.name,r.size FROM mz_catalog.mz_clusters c LEFT JOIN mz_catalog.mz_cluster_replicas r ON r.cluster_id=c.id ORDER BY c.id,r.id"
+        ).fetchall()
+        save("clusters.json", clusters)
         cursor = c.execute("SELECT * FROM mz_internal.mz_storage_shards")
         save(
             "shards.json",
@@ -643,6 +642,20 @@ try:
     discover()
     sample(args.warmup, "warmup", pg_group)
     discover()
+    expected_roles = (
+        {"controllerd", "adapterd", "pubsubd"}
+        if args.kind == "native"
+        else {"environmentd"}
+    ) | {
+        f"replica-{cluster}-{replica}"
+        for cluster, _, replica, _, _ in clusters
+        if replica is not None
+    }
+    assert expected_roles == endpoints.keys(), (
+        "incomplete process discovery",
+        expected_roles,
+        set(endpoints),
+    )
     capture("steady-0", pg_group)
     for i in range(args.windows):
         sample(args.window, f"steady-{i+1}", pg_group)
@@ -710,7 +723,13 @@ try:
         (RUN / "frontiers.py").write_bytes(check.read_bytes())
         with (RUN / "frontier-lifecycle.log").open("w") as log:
             subprocess.run(
-                [str(ROOT / "bin/pyactivate"), str(check), "--controller", control],
+                [
+                    str(ROOT / "bin/pyactivate"),
+                    str(check),
+                    "--controller",
+                    control,
+                    "--restart-catalog-replica",
+                ],
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 check=True,
@@ -733,19 +752,34 @@ try:
                 "sink-implementation.json",
                 c.execute("SHOW enable_compute_sync_mv_sink").fetchone(),
             )
-            for kind, name in [
+            plans = [
                 ("INDEX", "mz_internal.mz_catalog_shared_ind"),
                 ("MATERIALIZED VIEW", "mz_internal.mz_catalog_deployment_authority"),
                 ("MATERIALIZED VIEW", "mz_internal.mz_object_dependencies"),
                 ("INDEX", "mz_internal.mz_frontiers_ind"),
                 ("INDEX", "mz_catalog.mz_cluster_replica_frontiers_ind"),
-            ]:
+            ]
+            # Keep this diagnostic usable with pre-sharing comparison binaries.
+            plans.extend(
+                ("INDEX", f"mz_internal.{name}")
+                for (name,) in c.execute(
+                    "SELECT name FROM mz_catalog.mz_indexes "
+                    "WHERE name IN ('mz_current_replica_frontiers_ind', "
+                    "'mz_current_storage_frontiers_ind') ORDER BY name"
+                ).fetchall()
+            )
+            for kind, name in plans:
                 for stage in ("OPTIMIZED", "PHYSICAL"):
                     query = f"EXPLAIN {stage} PLAN FOR {kind} {name}"
                     save(
                         f"plan-{name}-{stage.lower()}.json",
                         {"query": query, "rows": c.execute(query).fetchall()},
                     )
+                query = f"EXPLAIN PHYSICAL PLAN AS JSON FOR {kind} {name}"
+                save(
+                    f"plan-{name}-physical-json.json",
+                    {"query": query, "rows": c.execute(query).fetchall()},
+                )
     result["status"] = "passed"
 except BaseException as error:
     result.update(status="failed", error=repr(error))

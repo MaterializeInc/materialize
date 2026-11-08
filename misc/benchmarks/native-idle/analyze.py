@@ -174,6 +174,8 @@ def analyze(run):
         assert span > 0
         first = {p["role"]: p for p in points[0]["processes"]}
         last = {p["role"]: p for p in points[-1]["processes"]}
+        if not first or not last:
+            raise ValueError(("empty process inventory", run, label))
         assert first.keys() == last.keys()
         start_t = load(run / (previous + "-metrics-timing.json"))
         end_t = load(run / (label + "-metrics-timing.json"))

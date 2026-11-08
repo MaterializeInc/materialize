@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from analyze import metrics, operation_rates
+from analyze import analyze, metrics, operation_rates
 from analyze_scans import analyze as analyze_scans
 from analyze_scans import parse, scan_count, summarize
 from analyze_scheduling import COLUMNS, reduce
@@ -31,6 +31,53 @@ def key(suffix, op="consensus_scan"):
 
 
 class CounterReduction(unittest.TestCase):
+    def test_empty_process_inventory_is_not_zero_load(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+
+            def save(name, value):
+                (run / name).write_text(json.dumps(value))
+
+            save(
+                "result.json",
+                {"status": "passed", "kind": "native", "arguments": {"windows": 1}},
+            )
+            save("processes.json", [])
+            points = []
+            for t in range(2):
+                points.append(
+                    {
+                        "time": t,
+                        "phase": "steady-1",
+                        "processes": [],
+                        "available_memory": 1,
+                        "postgres_cgroup": {
+                            "cpu.stat": "usage_usec 0",
+                            "memory.current": "0",
+                        },
+                    }
+                )
+                save(f"steady-{t}-metrics-timing.json", {})
+                save(f"steady-{t}-memory.json", [])
+                save(
+                    f"steady-{t}-postgres.json",
+                    {
+                        "database": [{"stats_reset": "unchanged"}],
+                        "wal": [{"stats_reset": "unchanged"}],
+                        "tables": [],
+                        "table_io": [],
+                        "timing": {
+                            k: {"end": t}
+                            for k in ("database", "wal", "tables", "table_io")
+                        },
+                    },
+                )
+            (run / "usage.jsonl").write_text(
+                "".join(json.dumps(p) + "\n" for p in points)
+            )
+            with self.assertRaisesRegex(ValueError, "empty process inventory"):
+                analyze(run)
+
     def test_rust_counter_names_rates_and_completion_latency(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "metrics.gz"
