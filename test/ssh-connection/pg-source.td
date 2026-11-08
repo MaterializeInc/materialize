@@ -29,6 +29,26 @@ contains: HOST specified more than once
     SSH TUNNEL thancred
   );
 
+# The route owner can use the fixed connection without authority to redirect
+# its password, including before there is an active source.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_rbac_checks = true;
+ALTER SECRET pgpass OWNER TO mz_system;
+CREATE ROLE route_validator_${testdrive.seed} LOGIN PASSWORD 'validatorpass';
+GRANT USAGE ON SCHEMA materialize.public TO route_validator_${testdrive.seed};
+GRANT USAGE ON CONNECTION pg TO route_validator_${testdrive.seed};
+
+! ALTER CONNECTION thancred SET (HOST 'redirected.invalid') WITH (VALIDATE = false)
+contains:permission denied for SECRET "materialize.public.pgpass"
+
+! ALTER CONNECTION thancred SET (HOST 'redirected.invalid') WITH (VALIDATE = true)
+contains:permission denied for SECRET "materialize.public.pgpass"
+
+$ postgres-connect name=route_validator url=postgres://route_validator_${testdrive.seed}:validatorpass@${testdrive.materialize-sql-addr}
+
+$ postgres-execute connection=route_validator
+VALIDATE CONNECTION pg;
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -55,6 +75,12 @@ true
 > SELECT f1 FROM t1;
 1
 
+! ALTER CONNECTION thancred SET (HOST 'redirected.invalid') WITH (VALIDATE = false)
+contains:permission denied for SECRET "materialize.public.pgpass"
+
+$ postgres-execute connection=route_validator
+VALIDATE CONNECTION pg;
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES (1), (2);
 
@@ -62,3 +88,17 @@ INSERT INTO t1 VALUES (1), (2);
 1
 1
 2
+
+# Granting secret access permits route administration with an active dependent.
+$ postgres-execute connection=mz_system
+GRANT USAGE ON SECRET pgpass TO materialize;
+
+> ALTER CONNECTION thancred SET (HOST 'ssh-bastion-host') WITH (VALIDATE = true)
+
+> SELECT f1 FROM t1 ORDER BY f1 ASC;
+1
+1
+2
+
+$ postgres-execute connection=mz_system
+ALTER SECRET pgpass OWNER TO materialize;
