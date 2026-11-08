@@ -65,9 +65,10 @@ locals {
   }
 
   database_config = {
-    tier      = "db-custom-2-4096"
-    database  = { name = "materialize", charset = "UTF8", collation = "en_US.UTF8" }
-    user_name = "materialize"
+    tier           = "db-custom-2-4096"
+    database_flags = [{ name = "max_connections", value = "500" }]
+    database       = { name = "materialize", charset = "UTF8", collation = "en_US.UTF8" }
+    user_name      = "materialize"
   }
 
   local_ssd_count = 1
@@ -182,7 +183,8 @@ module "database" {
   prefix     = var.name_prefix
   network_id = module.networking.network_id
 
-  tier = local.database_config.tier
+  tier           = local.database_config.tier
+  database_flags = local.database_config.database_flags
 
   random_instance_name = true
 
