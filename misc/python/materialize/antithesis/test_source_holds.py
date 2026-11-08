@@ -12,6 +12,7 @@ from __future__ import annotations
 import sqlite3
 from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -119,3 +120,52 @@ def test_kafka_sink_check_runs_only_in_a_free_slot(
         checks.assert_not_called()
     assert kafka_sinks.check_main() == 0
     checks.assert_called_once()
+
+
+def test_kafka_sink_read_covers_open_transactions_below_the_high_watermark(
+    monkeypatch,
+) -> None:
+    # While a transaction is open, a read_committed watermark query returns
+    # the last stable offset (1), not the high watermark (3).
+    values = [b"committed", b"in open transaction", b"after it"]
+
+    class Consumer:
+        def __init__(self, config: dict) -> None:
+            self.committed = config["isolation.level"] == "read_committed"
+            self.next = 0
+
+        def list_topics(self, topic: str, timeout: float) -> SimpleNamespace:
+            meta = SimpleNamespace(error=None, partitions={0: None})
+            return SimpleNamespace(topics={topic: meta})
+
+        def get_watermark_offsets(self, tp, timeout: float) -> tuple[int, int]:
+            return (0, 1 if self.committed else len(values))
+
+        def assign(self, tps: list) -> None:
+            self.next = tps[0].offset
+
+        def poll(self, timeout: float) -> Mock | None:
+            if self.next >= len(values):
+                return None
+            offset = self.next
+            self.next += 1
+            return Mock(
+                error=Mock(return_value=None),
+                partition=Mock(return_value=0),
+                offset=Mock(return_value=offset),
+                key=Mock(return_value=None),
+                value=Mock(return_value=values[offset]),
+                headers=Mock(return_value=[]),
+            )
+
+        def position(self, tps: list) -> list:
+            return [kafka_sinks.TopicPartition(tps[0].topic, 0, self.next)]
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(kafka_sinks, "Consumer", Consumer)
+    read = kafka_sinks.read_topic("broker", "topic", Deadline(10))
+    assert read is not None
+    assert [value for *_, value, _ in read.messages] == values
+    assert read.highs == {0: len(values)}

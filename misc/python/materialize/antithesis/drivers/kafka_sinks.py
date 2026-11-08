@@ -660,25 +660,35 @@ def read_topic(
     missing, lost its head, shrank, or could not be read in time.
     """
     start = after.highs if after is not None else {}
+    config = {
+        "bootstrap.servers": broker,
+        "group.id": "antithesis-sink-check",
+        "enable.auto.commit": False,
+        "enable.partition.eof": True,
+        "auto.offset.reset": "earliest",
+    }
+    # A `read_committed` consumer's watermark query returns the last stable
+    # offset, which stops below any open transaction. The broker writes a
+    # transaction's commit markers to each partition separately, so a read
+    # bounded by it can miss a progress record whose transaction a data topic
+    # read already showed committed. The sink's own progress search takes its
+    # bound from a `read_uncommitted` client for the same reason.
+    marks = Consumer({**config, "isolation.level": "read_uncommitted"})
     consumer = Consumer(
         {
-            "bootstrap.servers": broker,
-            "group.id": "antithesis-sink-check",
-            "enable.auto.commit": False,
-            "enable.partition.eof": True,
-            "auto.offset.reset": "earliest",
+            **config,
             "isolation.level": "read_committed" if committed else "read_uncommitted",
         }
     )
     try:
-        md = consumer.list_topics(topic, timeout=CONSUMER_TIMEOUT_S)
+        md = marks.list_topics(topic, timeout=CONSUMER_TIMEOUT_S)
         meta = md.topics.get(topic)
         if meta is None or meta.error is not None or not meta.partitions:
             log(f"{topic}: no metadata ({meta.error if meta else 'missing'})")
             return None
         highs: dict[int, int] = {}
         for p in sorted(meta.partitions):
-            low, high = consumer.get_watermark_offsets(
+            low, high = marks.get_watermark_offsets(
                 TopicPartition(topic, p), timeout=CONSUMER_TIMEOUT_S
             )
             if low > 0 or high < start.get(p, 0):
@@ -721,6 +731,7 @@ def read_topic(
         log(f"{topic}: read failed: {e}")
         return None
     finally:
+        marks.close()
         consumer.close()
 
 
