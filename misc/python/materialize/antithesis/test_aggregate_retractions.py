@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import time
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock
 
 import psycopg
@@ -436,7 +436,10 @@ def _recovery_with_passing_checks(monkeypatch) -> tuple[recovery.Recovery, list[
     check.mode = "test"
     check.timings = {}
     check.restarts_lock = threading.Lock()
-    check.restarts = Mock(started=time.monotonic() - 1000)
+    check.restarts = Mock(
+        started=time.monotonic() - 1000, persisting=Mock(return_value={})
+    )
+    check.latest = []
     check.sampling_done = threading.Event()
     observed: list[str] = []
 
@@ -516,8 +519,8 @@ def test_incomplete_fixture_cleanup_preserves_independent_recovery_checks(
     assert "no_crash_loop" in observed
     assert "cleanup_aggregate" in observed
     assert "cleanup_upsert" in observed
-    check.retry_ledger.assert_called_once()
-    check.drain_replacements.assert_called_once()
+    cast(Mock, check.retry_ledger).assert_called_once()
+    cast(Mock, check.drain_replacements).assert_called_once()
     check.hydrated.assert_not_called()
     check.frontiers_advance.assert_not_called()
     check.collections_readable.assert_not_called()

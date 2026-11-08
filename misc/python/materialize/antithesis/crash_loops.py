@@ -20,6 +20,14 @@ Kubernetes keeps only a container's last termination, so restarts between
 two samples are unobserved. They are attributed the class of the termination
 seen at the sample that revealed them, which is exact when sampling is faster
 than the kubelet's minimum restart backoff (10 s).
+
+The kubelet delays each restart of a crashed container by a backoff that
+doubles up to 300 s, so a loop's crashes can be minutes apart. The recovery
+check deletes a pod that waits out that backoff (`Tracker.reset`), and the
+replacement pod, which a StatefulSet creates under the same name, inherits the
+restart history. A container persists in a loop when it crashes
+`PERSISTING_CRASHES` times, each within the window of the previous crash: two
+crashes then a quiet window is still a container that settled.
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ from typing import Any
 
 CRASH_CLASSES = frozenset({"halt", "panic"})
 LOOP_MIN_CRASHES = 2
+PERSISTING_CRASHES = 3
 
 
 @dataclass(frozen=True)
@@ -67,19 +76,39 @@ class Tracker:
         self.started: float | None = None
         self.last_sample: float | None = None
         self.containers: dict[tuple[str, str], _History] = {}
+        # Histories of reset pods by container name, until a replacement
+        # inherits them. A reset pod's later samples are ignored.
+        self.reset_pending: dict[str, _History] = {}
+        self.retired: set[tuple[str, str]] = set()
+
+    def reset(self, key: tuple[str, str]) -> None:
+        """Record that the check deleted this container's pod to skip its
+        restart backoff. The history stays live until the next new pod with
+        the same container name inherits it."""
+        h = self.containers.pop(key, None)
+        if h is not None:
+            self.retired.add(key)
+            self.reset_pending[h.name] = h
 
     def observe(self, now: float, samples: list[Sample]) -> None:
         if self.started is None:
             self.started = now
         self.last_sample = now
         for s in samples:
+            if s.key in self.retired:
+                continue
             h = self.containers.get(s.key)
             if h is None:
-                # Restarts before the first sample predate the window.
-                self.containers[s.key] = _History(
-                    s.name, now, s.restart_count, now, s.deleting, s.waiting_reason
-                )
-                continue
+                h = self.reset_pending.pop(s.name, None)
+                if h is None:
+                    # Restarts before the first sample predate the window.
+                    self.containers[s.key] = _History(
+                        s.name, now, s.restart_count, now, s.deleting, s.waiting_reason
+                    )
+                    continue
+                # Every restart of the replacement followed the reset.
+                h.restart_count = 0
+                self.containers[s.key] = h
             if s.restart_count > h.restart_count:
                 h.restarts.append(
                     {
@@ -107,9 +136,10 @@ class Tracker:
     def _live_crashes(
         self, now: float
     ) -> Iterator[tuple[_History, list[tuple[float, int]]]]:
-        for h in self.containers.values():
-            if h.last_seen < now or h.deleting:
-                continue
+        live = [
+            h for h in self.containers.values() if h.last_seen >= now and not h.deleting
+        ]
+        for h in live + list(self.reset_pending.values()):
             yield h, [
                 (r["observed_at"], r["restarts"])
                 for r in h.restarts
@@ -155,6 +185,32 @@ class Tracker:
                 "waiting_reason": h.waiting_reason,
                 "history": [
                     {**r, "observed_at": round(r["observed_at"] - now, 1)}
+                    for r in h.restarts
+                ],
+            }
+        return result
+
+    def persisting(self, window_s: float, since: float) -> dict[str, dict[str, Any]]:
+        """Live containers that crashed `PERSISTING_CRASHES` times since
+        `since`, each crash within `window_s` of the previous one."""
+        if self.last_sample is None:
+            return {}
+        result = {}
+        for h, crashes in self._live_crashes(self.last_sample):
+            times = sorted(at for at, n in crashes if at >= since for _ in range(n))
+            chain = 1
+            for prev, at in zip(times, times[1:]):
+                chain = chain + 1 if at - prev <= window_s else 1
+                if chain >= PERSISTING_CRASHES:
+                    break
+            if chain < PERSISTING_CRASHES:
+                continue
+            result[h.name] = {
+                "crashes_since": len(times),
+                "restart_count": h.restart_count,
+                "waiting_reason": h.waiting_reason,
+                "history": [
+                    {**r, "observed_at": round(r["observed_at"] - self.last_sample, 1)}
                     for r in h.restarts
                 ],
             }
