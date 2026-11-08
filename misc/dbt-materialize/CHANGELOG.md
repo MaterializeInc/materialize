@@ -7,6 +7,10 @@
   ownership hints now quote the cluster or schema name, and the CREATECLUSTER
   hint quotes the role.
 
+* Fix `refresh_interval` configs that set both `at` and `at_creation`. The
+  two options were rendered without a comma between them, so creating the
+  materialized view failed with `Expected right parenthesis, found REFRESH`.
+
 ## 1.9.12 - 2026-11-03
 
 * Fix the deployment timestamp in the schema comment `deploy_promote` leaves
