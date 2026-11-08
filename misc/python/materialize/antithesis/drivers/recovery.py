@@ -2021,6 +2021,16 @@ class Recovery:
             self.details(info=info),
         )
 
+        # The crash-loop check below needs a crash-free window of
+        # `CRASHLOOP_WINDOW_S`, which few timelines outlive, so the restart
+        # comparison runs first. Deleted pods are not crashes, and the window
+        # then also covers the restarted pods.
+        if collections_ready and rng.random() < RESTART_COMPARE_P:
+            try:
+                self.restart_and_compare()
+            except (psycopg.Error, OSError, ApiException) as e:
+                log(f"restart comparison aborted: {e}")
+
         try:
             record_terminations(self.db, observe_pods(self.env))
         except (ApiException, OSError) as e:
@@ -2057,11 +2067,6 @@ class Recovery:
             self.details(window_s=CRASHLOOP_WINDOW_S, took_s=took),
         )
 
-        if collections_ready and rng.random() < RESTART_COMPARE_P:
-            try:
-                self.restart_and_compare()
-            except (psycopg.Error, OSError, ApiException) as e:
-                log(f"restart comparison aborted: {e}")
         return 0
 
 
