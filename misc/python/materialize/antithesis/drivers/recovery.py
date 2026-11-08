@@ -104,11 +104,21 @@ CR_BUDGET_S = CHECK_BUDGET_S + rollouts.T_ROLLOUT_SECONDS
 WEDGE_FACTOR = 3
 POLL_S = 5
 # A crash loop must show `crash_loops.LOOP_MIN_CRASHES` (2) crashes within
-# this window. The kubelet's restart backoff caps at 300 s, so a loop that
-# halts during boot crashes about every 300 s plus one boot; two such cycles
-# fit.
-CRASHLOOP_WINDOW_S = 720
+# this window. The kubelet delays a crashed container's restart by up to 300 s,
+# so the check deletes pods that wait out that backoff (`reset_backoff`), and a
+# container that crashes during boot crashes again within two samples, one pod
+# recreation and one boot. Hydration after faults stopped took at most 83 s in
+# the 49 sampled recoveries of a 16-hour run, so the window covers a crash at
+# the end of hydration. A loop whose crash comes later in a container's life
+# goes unseen. The window bounds how often the check decides at all: of the
+# 563 recoveries that reached it in that run, 44% ran another 120 s and 8%
+# another 300 s.
+CRASHLOOP_WINDOW_S = 120
 CRASHLOOP_SAMPLE_S = 5
+# Backoff resets per container. A persisting loop needs at most three: one for
+# a backoff that began before the crash-loop check, and one after each of the
+# next two crashes.
+CRASHLOOP_RESET_LIMIT = 3
 # Log lines of a crashed container that name the cause, shown in details.
 EXIT_LOG_MARKERS = ("halting process:", "panicked at")
 EXIT_LOG_TAIL = 200
@@ -1320,6 +1330,8 @@ class Recovery:
         self.restarts = crash_loops.Tracker()
         self.restarts_lock = threading.Lock()
         self.containers: dict[str, ContainerObservation] = {}
+        self.latest: list[ContainerObservation] = []
+        self.backoff_resets: Counter[str] = Counter()
         self.sampling_done = threading.Event()
         threading.Thread(
             target=self.sample_restarts, name="crash-loop-sampler", daemon=True
@@ -1663,7 +1675,11 @@ class Recovery:
                         crash_loops.Sample(
                             key=(o.pod_uid, o.container),
                             name=name,
-                            restart_count=o.termination_count,
+                            # A container waiting out its restart backoff has
+                            # not counted its last termination yet. Count it now
+                            # rather than at the restart, up to 300 s later.
+                            restart_count=o.termination_count
+                            + int(o.waiting_reason == "CrashLoopBackOff"),
                             exit_class=(
                                 classify_exit(o.exit_code, o.reason)
                                 if o.exit_code is not None
@@ -1677,7 +1693,79 @@ class Recovery:
                     )
                 with self.restarts_lock:
                     self.restarts.observe(time.monotonic(), samples)
+                    self.latest = observations
             self.sampling_done.wait(CRASHLOOP_SAMPLE_S)
+
+    def reset_backoff(self) -> None:
+        """Delete every environmentd and clusterd pod whose container waits
+        out a restart backoff after a crash, so its StatefulSet replaces it at
+        once."""
+        from materialize.antithesis.drivers.pod_restarts import delete_recorded
+
+        with self.restarts_lock:
+            latest = self.latest
+        for o in latest:
+            name = f"{o.role}/{o.pod}/{o.container}"
+            if (
+                o.waiting_reason != "CrashLoopBackOff"
+                or o.exit_code is None
+                or classify_exit(o.exit_code, o.reason) not in crash_loops.CRASH_CLASSES
+                or o.deleting
+                or o.role not in (ROLE_ENVIRONMENTD, ROLE_CLUSTERD)
+                or self.backoff_resets[name] >= CRASHLOOP_RESET_LIMIT
+            ):
+                continue
+            try:
+                acked = delete_recorded(
+                    rollouts.Kube(self.env),
+                    origin="recovery",
+                    role=o.role,
+                    namespace=o.namespace,
+                    pod=o.pod,
+                    uid=o.pod_uid,
+                    grace=None,
+                    reason="crash_loop_backoff_reset",
+                )
+            except rollouts.TRANSIENT_ERRORS as e:
+                log(f"cannot reset the restart backoff of {name}: {e}")
+                continue
+            if not acked:
+                continue
+            self.backoff_resets[name] += 1
+            with self.restarts_lock:
+                self.restarts.reset((o.pod_uid, o.container))
+                # The deleted pod stays listed until the next sample.
+                self.latest = [x for x in self.latest if x.pod_uid != o.pod_uid]
+            reachable(
+                "recovery reset the restart backoff of a crashed Materialize container",
+                {"container": name, "resets": self.backoff_resets[name]},
+            )
+
+    def crash_loop_verdict(self, budget_s: float) -> tuple[bool, Any, float]:
+        """Poll until no live container crashed for a window, a container
+        persists in a loop, or `budget_s` runs out.
+
+        Returns (passed, details, seconds taken)."""
+        start = time.monotonic()
+        while True:
+            self.reset_backoff()
+            with self.restarts_lock:
+                persisting = self.restarts.persisting(CRASHLOOP_WINDOW_S, start)
+            elapsed = time.monotonic() - start
+            if persisting:
+                for name, info in persisting.items():
+                    info["exit_log"] = self.exit_log_lines(name)
+                log(f"crash loop: persisting after {elapsed:.0f}s: {persisting}")
+                return False, {"persisting": persisting}, elapsed
+            ok, info = self.no_crash_loop()
+            if ok:
+                log(f"crash loop: passed after {elapsed:.0f}s")
+                return True, info, elapsed
+            if elapsed >= budget_s:
+                ok, info = self.crash_loops()
+                log(f"crash loop: budget ran out after {elapsed:.0f}s: {info}")
+                return ok, info, elapsed
+            time.sleep(POLL_S)
 
     def exit_log_lines(self, name: str) -> list[str]:
         """Halt and panic lines from the previous run of a container, best effort."""
@@ -2022,9 +2110,9 @@ class Recovery:
         )
 
         # The crash-loop check below needs a crash-free window of
-        # `CRASHLOOP_WINDOW_S`, which few timelines outlive, so the restart
-        # comparison runs first. Deleted pods are not crashes, and the window
-        # then also covers the restarted pods.
+        # `CRASHLOOP_WINDOW_S`, which many timelines do not outlive, so the
+        # restart comparison runs first. Deleted pods are not crashes, and the
+        # window then also covers the restarted pods.
         if collections_ready and rng.random() < RESTART_COMPARE_P:
             try:
                 self.restart_and_compare()
@@ -2044,16 +2132,13 @@ class Recovery:
         sampled_s = time.monotonic() - started if started is not None else 0.0
         coverage_wait = max(0.0, CRASHLOOP_WINDOW_S - sampled_s)
         # A loop of at most one window crashes in every window, so a pass needs
-        # a crash-free window, not just one below the loop threshold. `poll`
-        # passes at the first such sample. A single crash late in the budget is
-        # not a loop, which the two-crash definition decides once it runs out.
-        ok, info, took = poll(
-            coverage_wait + CRASHLOOP_WINDOW_S * WEDGE_FACTOR,
-            self.no_crash_loop,
-            "crash loop",
+        # a crash-free window, not just one below the loop threshold. A single
+        # crash late in the budget is not a loop, which the two-crash
+        # definition decides once it runs out. Persisting loops fail before
+        # that, counting only crashes after every earlier check passed.
+        ok, info, took = self.crash_loop_verdict(
+            coverage_wait + CRASHLOOP_WINDOW_S * WEDGE_FACTOR
         )
-        if not ok:
-            ok, info = self.crash_loops()
         took = max(0.0, took - coverage_wait)
         self.sampling_done.set()
         always(
