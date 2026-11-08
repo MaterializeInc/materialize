@@ -266,6 +266,72 @@ def test_reader_lease_exit_has_an_explanation_without_accepting_unknown_codes(
     )
 
 
+def panic_frame(location: str, message: str, code: int = 134) -> str:
+    """A termination record as `src/ore/src/halt_evidence.rs` frames it."""
+    loc, msg = location.encode(), message.encode()
+    return (
+        f"MZHALT1 0 {code} 1794126164332733492 {len(loc)} {len(msg)} "
+        f"{loc.hex()} {msg.hex()} END\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "termination_message,expected",
+    [
+        (
+            panic_frame(
+                "src/persist-client/src/write.rs:746:21",
+                "fetching a schema id should only fail when the shard is tombstoned",
+            ),
+            "unreachable:An upgrade-base Materialize process panicked appending to a shard whose schema another process evolved (known: PER-130)",
+        ),
+        (
+            panic_frame(
+                "src/environmentd/src/environmentd/main.rs:670:9",
+                "environmentd: fatal: current catalog epoch 5 fenced by new catalog epoch 6",
+            ),
+            "reachable:An upgrade-base Materialize process panicked by design",
+        ),
+        (
+            panic_frame("src/compute/src/render.rs:1:1", "index out of bounds"),
+            "unreachable:An upgrade-base Materialize process panicked",
+        ),
+        # A process that reports its own panics records none.
+        (None, None),
+        (panic_frame("src/x.rs:1:1", "a halt", code=166), None),
+    ],
+)
+def test_recorded_upgrade_base_panics_are_asserted_once(
+    halt_capture: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    termination_message: str | None,
+    expected: str | None,
+) -> None:
+    reported: list[str] = []
+    monkeypatch.setattr(
+        recovery,
+        "unreachable",
+        lambda message, details: reported.append(f"unreachable:{message}"),
+    )
+    monkeypatch.setattr(
+        recovery,
+        "reachable",
+        lambda message, details: reported.append(f"reachable:{message}"),
+    )
+    observed = replace(
+        halt_capture.observation,
+        exit_code=134,
+        signal=None,
+        termination_message=termination_message,
+    )
+
+    assert recovery.record_terminations(halt_capture.db, [observed]) == 1
+    assert recovery.record_terminations(halt_capture.db, [observed]) == 0
+
+    panics = [r for r in reported if "upgrade-base" in r]
+    assert panics == ([expected] if expected else [])
+
+
 def test_explaining_reader_lease_expiration_does_not_allowlist_native_exit() -> None:
     prop = {
         "name": "No unexpected container exits: container: clusterd, namespace: mz , exit code: 168",
