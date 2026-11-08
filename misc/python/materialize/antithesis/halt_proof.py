@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Read complete process halt records from a Kubernetes termination message."""
+"""Read complete process halt and panic records from a Kubernetes termination message."""
 
 from __future__ import annotations
 
@@ -17,9 +17,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 MAX_BYTES = 4096
+HALT_CODE = 166
+# Upgrade-base builds record a panic under the exit status of the abort that
+# follows it (`materialize.antithesis.images`).
+PANIC_CODE = 134
 _DECIMAL = r"(?:0|[1-9][0-9]*)"
 _FRAME = re.compile(
-    rf"MZHALT1 ({_DECIMAL}) 166 ({_DECIMAL}) ({_DECIMAL}) ({_DECIMAL}) "
+    rf"MZHALT1 ({_DECIMAL}) ({_DECIMAL}) ({_DECIMAL}) ({_DECIMAL}) ({_DECIMAL}) "
     r"([0-9a-f]+) ([0-9a-f]+) END\n"
 )
 
@@ -65,8 +69,9 @@ def validate_lifetime(
             raise ValueError("halt record is outside its container lifetime")
 
 
-def parse(text: str) -> HaltProof:
-    """Reject truncated, malformed, or conflicting termination records."""
+def parse(text: str, code: int = HALT_CODE) -> HaltProof:
+    """Reject truncated, malformed, or conflicting termination records, and
+    records with another code."""
     try:
         if not text or len(text.encode("ascii")) >= MAX_BYTES:
             raise ValueError("halt termination message is empty or oversized")
@@ -77,7 +82,9 @@ def parse(text: str) -> HaltProof:
         match = _FRAME.fullmatch(line)
         if match is None or int(match[1]) != sequence:
             raise ValueError("halt termination frames are incomplete or unordered")
-        stamp, location_size, message_size = map(int, match.group(2, 3, 4))
+        if int(match[2]) != code:
+            raise ValueError(f"termination record has code {match[2]}, not {code}")
+        stamp, location_size, message_size = map(int, match.group(3, 4, 5))
         if (
             stamp >= 2**128
             or not 0 < location_size <= MAX_BYTES
@@ -85,8 +92,8 @@ def parse(text: str) -> HaltProof:
         ):
             raise ValueError("halt termination field is outside its range")
         try:
-            location_bytes = bytes.fromhex(match[5])
-            message_bytes = bytes.fromhex(match[6])
+            location_bytes = bytes.fromhex(match[6])
+            message_bytes = bytes.fromhex(match[7])
             if (len(location_bytes), len(message_bytes)) != (
                 location_size,
                 message_size,

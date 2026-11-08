@@ -58,8 +58,9 @@ from typing import Any
 
 import psycopg
 import requests
-from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
+from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]  # pyright: ignore[reportMissingModuleSource]
     always_or_unreachable,
+    unreachable,
 )
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
     always_or_unreachable as always,
@@ -440,6 +441,7 @@ class ContainerObservation:
     waiting_reason: str | None
     deleting: bool = False
     current_terminated: bool = False
+    termination_message: str | None = None
 
     @property
     def termination_count(self) -> int:
@@ -492,6 +494,7 @@ def _pod_observations(
                 waiting_reason=waiting.reason if waiting else None,
                 deleting=metadata.deletion_timestamp is not None,
                 current_terminated=current is not None,
+                termination_message=getattr(term, "message", None),
             )
         )
     return result
@@ -1057,6 +1060,46 @@ def record_halt_evidence(
             )
 
 
+# Messages of upgrade-base panics that later releases mark as designed with
+# `mz_ore::antithesis::expect_panic` or classify as an epoch fence: a newer
+# process fenced the catalog (boot and runtime wording), a fetch found its blob
+# deleted after the leasing reader expired, and the operator-requested 0dt
+# catch-up timeout.
+DESIGNED_BASE_PANICS = (
+    "fenced by new catalog epoch",
+    "Fence(Epoch {",
+    "has been expired out of state",
+    "not caught up within",
+)
+PER_130_LOCATION = "src/persist-client/src/write.rs:"
+PER_130_MESSAGE = "fetching a schema id should only fail when the shard is tombstoned"
+
+
+def report_recorded_panic(o: ContainerObservation, details: dict[str, Any]) -> None:
+    """Assert on a panic recorded in the termination message.
+
+    Only upgrade-base builds record panics there (`materialize.antithesis.images`):
+    they predate the in-process panic hook that reports to Antithesis. A panic
+    without a record was reported by its own process.
+    """
+    try:
+        proof = halt_proof.parse(o.termination_message or "", halt_proof.PANIC_CODE)
+    except ValueError:
+        return
+    details = {**details, "location": proof.location, "message": proof.message}
+    if any(m in proof.message for m in DESIGNED_BASE_PANICS):
+        reachable("An upgrade-base Materialize process panicked by design", details)
+    elif proof.location.startswith(PER_130_LOCATION) and proof.message.startswith(
+        PER_130_MESSAGE
+    ):
+        unreachable(
+            "An upgrade-base Materialize process panicked appending to a shard whose schema another process evolved (known: PER-130)",
+            details,
+        )
+    else:
+        unreachable("An upgrade-base Materialize process panicked", details)
+
+
 def record_terminations(
     db: sqlite3.Connection,
     observations: list[ContainerObservation],
@@ -1118,9 +1161,11 @@ def record_terminations(
         # Whether a panic is a bug is decided in the process, by the panic
         # hook (some panics are designed, such as a fetch after losing a
         # persist lease). An exit code cannot tell the two apart, so this side
-        # only records that the path was reached.
+        # only records that the path was reached, unless the process could not
+        # report and recorded the panic instead.
         if cls == "panic":
             reachable("a Materialize pod exited by panic or abort", details)
+            report_recorded_panic(o, details)
         always_or_unreachable(
             cls != "unknown",
             "every Materialize pod exit code has an explanation",

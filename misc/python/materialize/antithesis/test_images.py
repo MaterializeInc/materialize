@@ -44,9 +44,21 @@ def test_upgrade_base_cache_changes_with_recorder_and_overlay(
     assert images.upgrade_base_tag(version) not in (original, recorder_changed)
 
 
+def release_panic_hook(directory: Path) -> Path:
+    panic = directory / "src" / "ore" / "src" / "panic.rs"
+    panic.parent.mkdir(parents=True, exist_ok=True)
+    panic.write_text(
+        "pub fn install_enhanced_handler() {\n"
+        + images.UPGRADE_BASE_ORIGINAL_PANIC
+        + '        eprintln!("{location}: {msg}");\n}\n'
+    )
+    return panic
+
+
 def test_upgrade_base_patch_preserves_unrelated_release_code(tmp_path: Path) -> None:
     process = tmp_path / "src" / "ore" / "src" / "process.rs"
     process.parent.mkdir(parents=True)
+    release_panic_hook(tmp_path)
     original = (
         "pub const RELEASE_MARKER: i32 = 168;\n"
         + images.UPGRADE_BASE_ORIGINAL_HALT
@@ -84,9 +96,43 @@ def test_upgrade_base_patch_rejects_unreviewed_source(
     else:
         text += "\npub fn record_halt() {}"
     process.write_text(text)
+    release_panic_hook(tmp_path)
     with pytest.raises(ValueError, match="unsupported halt macro"):
         images.patch_upgrade_base_halt_proof(tmp_path)
     assert process.read_text() == text
+
+
+def test_upgrade_base_patch_records_panics_after_their_location(
+    tmp_path: Path,
+) -> None:
+    process = tmp_path / "src" / "ore" / "src" / "process.rs"
+    process.parent.mkdir(parents=True)
+    process.write_text(images.UPGRADE_BASE_ORIGINAL_HALT)
+    panic = release_panic_hook(tmp_path)
+    original = panic.read_text()
+    assert images.patch_upgrade_base_halt_proof(tmp_path)
+    patched = panic.read_text()
+    assert (
+        patched.replace(
+            images.UPGRADE_BASE_RECORDED_PANIC, images.UPGRADE_BASE_ORIGINAL_PANIC
+        )
+        == original
+    )
+    record = patched.index("crate::process::record_halt(134, &location, msg);")
+    assert patched.index("let location =") < record < patched.index("eprintln!")
+
+
+def test_upgrade_base_patch_rejects_an_unreviewed_panic_hook(tmp_path: Path) -> None:
+    process = tmp_path / "src" / "ore" / "src" / "process.rs"
+    process.parent.mkdir(parents=True)
+    process.write_text(images.UPGRADE_BASE_ORIGINAL_HALT)
+    panic = release_panic_hook(tmp_path)
+    panic.write_text(panic.read_text().replace("<unknown>", "<somewhere>"))
+    hook = panic.read_text()
+    with pytest.raises(ValueError, match="unsupported panic hook"):
+        images.patch_upgrade_base_halt_proof(tmp_path)
+    assert process.read_text() == images.UPGRADE_BASE_ORIGINAL_HALT
+    assert panic.read_text() == hook
 
 
 def test_upgrade_base_patch_leaves_a_release_with_its_own_recorder_unchanged(
@@ -143,6 +189,7 @@ def test_upgrade_base_build_binds_both_image_fingerprints_to_the_proof(
             process = worktree / "src" / "ore" / "src" / "process.rs"
             process.parent.mkdir(parents=True)
             process.write_text(images.UPGRADE_BASE_ORIGINAL_HALT)
+            release_panic_hook(worktree)
             for name in images.UPGRADE_BASE_IMAGES:
                 dockerfile = worktree / "src" / name / "ci" / "Dockerfile"
                 dockerfile.parent.mkdir(parents=True)

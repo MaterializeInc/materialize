@@ -19,8 +19,10 @@ environment starts on. The published release images seed AWS-LC from CPU
 jitter, which aborts on Antithesis's deterministic CPU, so `build_upgrade_base`
 rebuilds them from the release tag with `rustc_flags.antithesis_env`. A release
 cut before the Antithesis flavor existed gets only the halt recorder patched in
-and carries no coverage instrumentation. A later release builds its own
-Antithesis flavor, which records halts itself.
+and carries no coverage instrumentation. Its panic hook also records the panic
+through that recorder, since such a release cannot report panics to Antithesis
+itself. A later release builds its own Antithesis flavor, which records halts
+and reports panics itself.
 
 `python -m materialize.antithesis.images --registry R --commit C` acquires the
 images, pushes them to `R/<name>:<target_tag(C)>`, and prints the references as
@@ -95,12 +97,27 @@ pub fn record_halt(code: i32, location: &str, message: &str) {
 """
 
 
+UPGRADE_BASE_ORIGINAL_PANIC = r"""        let location = if let Some(loc) = panic_info.location() {
+            loc.to_string()
+        } else {
+            "<unknown>".to_string()
+        };
+"""
+UPGRADE_BASE_RECORDED_PANIC = (
+    UPGRADE_BASE_ORIGINAL_PANIC + r"""        #[cfg(feature = "process")]
+        crate::process::record_halt(134, &location, msg);
+"""
+)
+
+
 def upgrade_base_patch_digest() -> str:
     sources = [
         HALT_EVIDENCE_SOURCE.read_text(),
         UPGRADE_BASE_ORIGINAL_HALT,
         UPGRADE_BASE_RECORDED_HALT,
         UPGRADE_BASE_RECORDER,
+        UPGRADE_BASE_ORIGINAL_PANIC,
+        UPGRADE_BASE_RECORDED_PANIC,
         UPGRADE_BASE_LABEL,
     ]
     return hashlib.sha256("\0".join(sources).encode()).hexdigest()[:16]
@@ -115,7 +132,8 @@ def _halt_macro_records(source: str) -> bool:
 
 
 def patch_upgrade_base_halt_proof(worktree: Path) -> bool:
-    """Add only the halt recorder to the freshly checked-out release source.
+    """Add only the halt recorder, and its call from the panic hook, to the
+    freshly checked-out release source.
 
     Returns False, leaving the source unchanged, for a release whose `halt!`
     already records halts. Its recorder is active only in its own Antithesis
@@ -130,9 +148,16 @@ def patch_upgrade_base_halt_proof(worktree: Path) -> bool:
         or "pub fn record_halt(" in original
     ):
         raise ValueError("upgrade-base process.rs has an unsupported halt macro")
+    panic_path = worktree / "src" / "ore" / "src" / "panic.rs"
+    panic_source = panic_path.read_text()
+    if panic_source.count(UPGRADE_BASE_ORIGINAL_PANIC) != 1:
+        raise ValueError("upgrade-base panic.rs has an unsupported panic hook")
     recorded = original.replace(UPGRADE_BASE_ORIGINAL_HALT, UPGRADE_BASE_RECORDED_HALT)
     path.write_text(
         recorded + "\n" + UPGRADE_BASE_RECORDER % HALT_EVIDENCE_SOURCE.read_text()
+    )
+    panic_path.write_text(
+        panic_source.replace(UPGRADE_BASE_ORIGINAL_PANIC, UPGRADE_BASE_RECORDED_PANIC)
     )
     return True
 

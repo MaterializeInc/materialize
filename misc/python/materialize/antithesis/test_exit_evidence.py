@@ -483,3 +483,12 @@ def test_policy_reader_decodes_rust_escaped_newlines(tmp_path: Path) -> None:
     assert evidence.load_halt_rules(source) == (
         evidence.HaltRule(("one", "two"), "first second"),
     )
+
+
+def test_termination_records_parse_only_under_their_own_code() -> None:
+    loc, msg = b"src/x.rs:1:2", b"boom"
+    panic = f"MZHALT1 0 134 1794126164332733492 {len(loc)} {len(msg)} {loc.hex()} {msg.hex()} END\n"
+    proof = halt_proof.parse(panic, halt_proof.PANIC_CODE)
+    assert (proof.location, proof.message) == ("src/x.rs:1:2", "boom")
+    with pytest.raises(ValueError, match="code 134"):
+        halt_proof.parse(panic)
