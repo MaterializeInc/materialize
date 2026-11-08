@@ -69,19 +69,24 @@ the operator could ping the above-described machine with `ping chbench`.
 
 #### SSH access
 
-SSH access to the instances is provided by [EC2 instance connect]. If you
-specify a custom AMI, you need to make sure it's an AMI that supports EC2
-instance connect.
+Scratch instances accept no inbound connections. `bin/scratch` reaches them by
+tunnelling SSH through [AWS Systems Manager Session Manager][session-manager],
+and authorizes a short-lived key for each connection with [EC2 Instance
+Connect]. You need the AWS CLI and the Session Manager plugin installed locally:
+
+```
+brew install awscli session-manager-plugin
+```
+
+A custom AMI must run the SSM agent and support EC2 Instance Connect. Ubuntu's
+AWS images do both. A custom `--instance-profile` must allow the SSM agent to
+register, for example via the `AmazonSSMManagedInstanceCore` policy.
 
 To SSH to an instance:
 
 ```
 bin/scratch ssh INSTANCE-ID
 ```
-
-If you need to, you can install and use the `mssh` command provided by the
-underlying [EC2 connect CLI] directly, but it's usually much easier to go
-through `bin/scratch ssh`.
 
 To make remote ports available locally:
 
@@ -97,9 +102,15 @@ To use:
 1. Create a scratch instance: `bin/scratch create remote-dev`
 2. Log in with `bin/scratch ssh INSTANCE-ID`
 3. Append a local ssh public key (should be a file like `~/.ssh/id_ed25519.pub` on your laptop) to the `.ssh/authorized_keys` file on the remote instance. If you want to push code to github, you must also install a private key on the instance, in which case it *must* have a passphrase (so that no one is able to impersonate you should they gain access to the EC2 instance).
-4. From your laptop, ensure ssh works and the fingerprint is correct: `ssh ubuntu@INSTANCE-IP-ADDRESS`
-5. Open VS Code on your laptop, and open `Remote-SSH: Connect to Host...` from the command palatte.
-6. Click to add a new ssh host and enter `ssh ubuntu@INSTANCE-IP-ADDRESS` and add it to your local ssh config.
+4. Add an entry to `~/.ssh/config` on your laptop that tunnels through Session Manager:
+   ```
+   Host i-*
+       User ubuntu
+       ProxyCommand aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p
+   ```
+   Then check that `ssh INSTANCE-ID` works and the fingerprint is correct.
+5. Open VS Code on your laptop, and open `Remote-SSH: Connect to Host...` from the command palette.
+6. Enter `INSTANCE-ID` as the host.
 7. Click `Connect` in the `Host added!` dialog.
 8. Open the `materialize` folder (which is automatically created by the scratch command), then `Reopen in Container` from the dialog.
 
@@ -231,4 +242,4 @@ will be unknown to Prometheus.)
 ```
 
 [EC2 instance connect]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Connect-using-EC2-Instance-Connect.html
-[ec2instanceconnectcli]: https://github.com/aws/aws-ec2-instance-connect-cli
+[session-manager]: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html
