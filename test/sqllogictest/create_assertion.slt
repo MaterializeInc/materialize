@@ -1,0 +1,127 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# CREATE ASSERTION: Stage 1 (declaration-only) catalog create/drop.
+#
+# Stage 1 persists an assertion as a real catalog object but ships no violations
+# dataflow and allocates no storage collection. We therefore observe the catalog
+# object through name-collision semantics (create/drop round-trips) rather than
+# through a queryable violations relation, which lands in Stage 2.
+
+mode cockroach
+
+# `orders` must exist before the flag-off check so the test exercises the
+# feature gate itself, not name resolution (which runs before planning).
+statement ok
+CREATE TABLE orders (amount int, status text)
+
+# The feature is off by default.
+statement error CREATE ASSERTION is not available
+CREATE ASSERTION a ON orders CHECK (amount >= 0)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_create_assertion = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE ASSERTION a ON orders CHECK (amount >= 0)
+
+# The assertion is a real, persisted catalog object: a name collision proves the
+# entry exists.
+statement error already exists
+CREATE ASSERTION a ON orders CHECK (amount >= 0)
+
+# Declaration-only: the base table is never tainted by a violating row.
+statement ok
+INSERT INTO orders VALUES (-5, 'void')
+
+query IT
+SELECT amount, status FROM orders
+----
+-5  void
+
+# DROP removes the catalog object.
+statement ok
+DROP ASSERTION a
+
+# After the drop the name is free again, proving the entry was removed.
+statement ok
+CREATE ASSERTION a ON orders CHECK (amount >= 0)
+
+statement ok
+DROP ASSERTION a
+
+# IF NOT EXISTS is a no-op when the assertion already exists.
+statement ok
+CREATE ASSERTION IF NOT EXISTS a ON orders CHECK (amount >= 0)
+
+statement ok
+CREATE ASSERTION IF NOT EXISTS a ON orders CHECK (amount >= 0)
+
+# An explicit cluster is accepted.
+statement ok
+CREATE ASSERTION b IN CLUSTER quickstart ON orders CHECK (status <> 'void')
+
+# --- Stage 2a: observability (SHOW + mz_assertions) ---
+
+# mz_internal.mz_assertions surfaces every declared assertion.
+query T
+SELECT name FROM mz_internal.mz_assertions ORDER BY name
+----
+a
+b
+
+# The definition column exposes the CHECK predicate parsed out of create_sql.
+query TB
+SELECT name, definition LIKE '%void%' FROM mz_internal.mz_assertions ORDER BY name
+----
+a  false
+b  true
+
+# Each assertion reports the cluster it is bound to.
+query TB
+SELECT name, cluster_id IS NOT NULL FROM mz_internal.mz_assertions ORDER BY name
+----
+a  true
+b  true
+
+# SHOW ASSERTIONS lists assertions with their bound cluster.
+query TT
+SHOW ASSERTIONS
+----
+a  quickstart
+b  quickstart
+
+# SHOW ASSERTIONS IN CLUSTER filters by cluster.
+query TT
+SHOW ASSERTIONS IN CLUSTER quickstart
+----
+a  quickstart
+b  quickstart
+
+# SHOW CREATE ASSERTION returns a clean, re-runnable create_sql.
+query T
+SELECT create_sql FROM (SHOW CREATE ASSERTION b)
+----
+CREATE ASSERTION materialize.public.b IN CLUSTER quickstart ON materialize.public.orders CHECK (status <> 'void');
+
+statement ok
+DROP ASSERTION a
+
+statement ok
+DROP ASSERTION b
+
+statement ok
+DROP TABLE orders
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_create_assertion = false;
+----
+COMPLETE 0

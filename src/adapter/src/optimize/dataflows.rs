@@ -369,6 +369,7 @@ impl<'a> DataflowBuilder<'a> {
                     }
                     CatalogItem::Sink(_)
                     | CatalogItem::MetricSink(_)
+                    | CatalogItem::Assertion(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
@@ -554,6 +555,7 @@ impl<'a> DataflowBuilder<'a> {
                 | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)
                 | CatalogItem::MetricSink(_)
+                | CatalogItem::Assertion(_)
                 | CatalogItem::Func(_) => Ok(false),
             }
         })?;

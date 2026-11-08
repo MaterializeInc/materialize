@@ -165,6 +165,7 @@ pub fn describe(
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
+        Statement::CreateAssertion(stmt) => ddl::describe_create_assertion(&scx, stmt)?,
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
@@ -210,6 +211,9 @@ pub fn describe(
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::describe_show_create_materialized_view(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateAssertion(stmt)) => {
+            show::describe_show_create_assertion(&scx, stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
             show::describe_show_create_type(&scx, stmt)?
@@ -370,6 +374,7 @@ pub fn plan(
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
+        Statement::CreateAssertion(stmt) => ddl::plan_create_assertion(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
@@ -429,6 +434,9 @@ pub fn plan(
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::plan_show_create_materialized_view(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateAssertion(stmt)) => {
+            show::plan_show_create_assertion(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
             show::plan_show_create_type(scx, stmt).map(Plan::ShowCreate)
@@ -1098,6 +1106,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateType(_) => DDL,
             Statement::CreateView(_) => DDL,
             Statement::CreateMaterializedView(_) => DDL,
+            Statement::CreateAssertion(_) => DDL,
             Statement::CreateNetworkPolicy(_) => DDL,
             Statement::DropObjects(_) => DDL,
             Statement::DropOwned(_) => DDL,
@@ -1136,6 +1145,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::ShowCreateTable(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateView(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateMaterializedView(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateAssertion(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateType(_)) => Show,
             Statement::Show(ShowStatement::ShowObjects(_)) => Show,
 

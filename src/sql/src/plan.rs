@@ -151,6 +151,7 @@ pub enum Plan {
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
+    CreateAssertion(CreateAssertionPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
     CreateMetricSink(CreateMetricSinkPlan),
@@ -283,6 +284,7 @@ impl Plan {
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
+            StatementKind::CreateAssertion => &[PlanKind::CreateAssertion],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
@@ -356,6 +358,7 @@ impl Plan {
             Plan::CreateTable(_) => "create table",
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
+            Plan::CreateAssertion(_) => "create assertion",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateMetricSink(_) => "create metric sink",
             Plan::CreateType(_) => "create type",
@@ -367,6 +370,7 @@ impl Plan {
                 ObjectType::Table => "drop table",
                 ObjectType::View => "drop view",
                 ObjectType::MaterializedView => "drop materialized view",
+                ObjectType::Assertion => "drop assertion",
                 ObjectType::Source => "drop source",
                 ObjectType::Sink => "drop sink",
                 ObjectType::MetricSink => "drop metric sink",
@@ -408,6 +412,7 @@ impl Plan {
                 ObjectType::Table => "alter table",
                 ObjectType::View => "alter view",
                 ObjectType::MaterializedView => "alter materialized view",
+                ObjectType::Assertion => "alter assertion",
                 ObjectType::Source => "alter source",
                 ObjectType::Sink => "alter sink",
                 ObjectType::MetricSink => "alter metric sink",
@@ -444,6 +449,7 @@ impl Plan {
                 ObjectType::Table => "alter table owner",
                 ObjectType::View => "alter view owner",
                 ObjectType::MaterializedView => "alter materialized view owner",
+                ObjectType::Assertion => "alter assertion owner",
                 ObjectType::Source => "alter source owner",
                 ObjectType::Sink => "alter sink owner",
                 ObjectType::MetricSink => "alter metric sink owner",
@@ -800,6 +806,13 @@ pub struct CreateMaterializedViewPlan {
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
     pub ambiguous_columns: bool,
+}
+
+#[derive(Debug)]
+pub struct CreateAssertionPlan {
+    pub name: QualifiedItemName,
+    pub assertion: Assertion,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1985,6 +1998,29 @@ pub struct MaterializedView {
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
     pub as_of: Option<Timestamp>,
+}
+
+/// A planned `CREATE ASSERTION`. Structurally a constrained materialized view
+/// whose maintained collection is the set of *violating* rows: the assertion
+/// desugars to the query `SELECT * FROM <rel> WHERE NOT (<predicate>)` (Phase 1
+/// `ON ... CHECK` form). Violations are surfaced as retractable data and never
+/// taint the referenced objects. See the "CREATE ASSERTION" design doc.
+#[derive(Clone, Debug)]
+pub struct Assertion {
+    /// Parse-able SQL that is stored durably and defines this assertion.
+    pub create_sql: String,
+    /// Unoptimized high-level expression for the violations query, planned from
+    /// the desugared `SELECT * FROM <rel> WHERE NOT (<predicate>)`.
+    pub expr: HirRelationExpr,
+    /// All catalog objects referenced by the violations query.
+    pub dependencies: DependencyIds,
+    /// Columns of the violations collection (the shape of a violating row).
+    pub column_names: Vec<ColumnName>,
+    /// Cluster this assertion's dataflow will be installed on.
+    pub cluster_id: ClusterId,
+    /// If set, only install this assertion's dataflow on the specified replica.
+    pub target_replica: Option<ReplicaId>,
+    pub compaction_window: Option<CompactionWindow>,
 }
 
 #[derive(Clone, Debug)]

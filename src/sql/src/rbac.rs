@@ -754,6 +754,35 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateAssertion(plan::CreateAssertionPlan {
+            name,
+            assertion,
+            if_not_exists: _,
+        }) => {
+            // Creating an assertion requires CREATE on the containing schema,
+            // CREATE on the target cluster, and SELECT on every referenced
+            // relation (the assertion reads those relations to maintain its
+            // violations collection).
+            let mut privileges = vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                (
+                    SystemObjectId::Object(assertion.cluster_id.into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+            ];
+            let items = assertion.dependencies.0.iter().copied();
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
+            RbacRequirements {
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,
@@ -1862,6 +1891,7 @@ fn generate_read_privileges_inner(
                 }
                 CatalogItemType::Sink
                 | CatalogItemType::MetricSink
+                | CatalogItemType::Assertion
                 | CatalogItemType::Index
                 | CatalogItemType::Func => {}
             }
@@ -1975,6 +2005,13 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Table) => TABLE_ACL_MODE,
         SystemObjectType::Object(ObjectType::View) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::MaterializedView) => AclMode::SELECT,
+        // MVP: assertions are system-maintained objects with no user-grantable
+        // privileges (owner + superuser only). Violations are surfaced through
+        // mz_internal relations, not via SELECT on the assertion object itself.
+        // Fine-grained SELECT on violations is deferred to a later phase. This
+        // matches `plan_alter_default_privileges` in plan/statement/acl.rs, which
+        // reports that assertions do not have privileges.
+        SystemObjectType::Object(ObjectType::Assertion) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
@@ -2008,7 +2045,10 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::MaterializedView
         | ObjectType::Source => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
-        ObjectType::Sink
+        // MVP: assertions have no user-grantable privileges (see
+        // `all_object_privileges` and plan/statement/acl.rs).
+        ObjectType::Assertion
+        | ObjectType::Sink
         | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role

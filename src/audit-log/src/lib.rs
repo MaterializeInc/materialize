@@ -149,6 +149,7 @@ serde_plain::derive_display_from_serialize!(EventType);
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum ObjectType {
+    Assertion,
     Cluster,
     ClusterReplica,
     Connection,
@@ -173,6 +174,7 @@ pub enum ObjectType {
 impl ObjectType {
     pub fn as_title_case(&self) -> &'static str {
         match self {
+            ObjectType::Assertion => "Assertion",
             ObjectType::Cluster => "Cluster",
             ObjectType::ClusterReplica => "Cluster Replica",
             ObjectType::Connection => "Connection",

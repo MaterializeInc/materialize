@@ -398,6 +398,12 @@ pub(crate) async fn initialize(
             ObjectType::Schema => mz_audit_log::ObjectType::Schema,
             ObjectType::Func => mz_audit_log::ObjectType::Func,
             ObjectType::NetworkPolicy => mz_audit_log::ObjectType::NetworkPolicy,
+            // CREATE ASSERTION is a stubbed prototype; assertions are never
+            // created, so they never appear in the hardcoded default-privileges
+            // list this match iterates over.
+            ObjectType::Assertion => {
+                unreachable!("CREATE ASSERTION is not supported; no Assertion has default privileges")
+            }
         };
         audit_events.push((
             mz_audit_log::EventType::Grant,

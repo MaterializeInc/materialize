@@ -30,10 +30,10 @@ use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
-    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    Assertion, CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica,
+    CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    MetricSink, NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences,
+    Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
@@ -74,9 +74,9 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    CreateAssertionPlan, CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateMetricSinkPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -624,7 +624,10 @@ impl CatalogState {
                 | CatalogItem::Source(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => (),
+                | CatalogItem::Secret(_)
+                // Stage 1 assertions ship no dataflow, so they contribute no
+                // introspection dependencies.
+                | CatalogItem::Assertion(_) => (),
             }
         }
 
@@ -1814,6 +1817,29 @@ impl CatalogState {
                     dataflow_metainfo: None,
                 })
             }
+            Plan::CreateAssertion(CreateAssertionPlan { assertion, .. }) => {
+                // Stage 1: an assertion is a declaration-only catalog object.
+                // We keep the unoptimized violations query (HIR) and the
+                // dependencies it references, but do not optimize it or render a
+                // dataflow; that is deferred to Stage 2.
+                let raw_expr = Arc::new(assertion.expr);
+                // Resolve all item dependencies from the HIR expression, matching
+                // how views/materialized views derive theirs.
+                let dependencies = raw_expr
+                    .depends_on()
+                    .into_iter()
+                    .map(|gid| self.get_entry_by_global_id(&gid).id())
+                    .collect();
+                CatalogItem::Assertion(Assertion {
+                    create_sql: assertion.create_sql,
+                    global_id,
+                    raw_expr,
+                    resolved_ids,
+                    dependencies: DependencyIds(dependencies),
+                    cluster_id: assertion.cluster_id,
+                    target_replica: assertion.target_replica,
+                })
+            }
             Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
@@ -2195,6 +2221,7 @@ impl CatalogState {
             | CatalogItemType::Source
             | CatalogItemType::Sink
             | CatalogItemType::MetricSink
+            | CatalogItemType::Assertion
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
@@ -3023,6 +3050,7 @@ impl CatalogState {
             | CommentObjectId::Source(id)
             | CommentObjectId::Sink(id)
             | CommentObjectId::MetricSink(id)
+            | CommentObjectId::Assertion(id)
             | CommentObjectId::Index(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
@@ -3053,6 +3081,7 @@ impl CatalogState {
             | CommentObjectId::Source(id)
             | CommentObjectId::Sink(id)
             | CommentObjectId::MetricSink(id)
+            | CommentObjectId::Assertion(id)
             | CommentObjectId::Index(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)

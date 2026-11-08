@@ -1233,6 +1233,7 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::Source(item_id)
             | CommentObjectId::Sink(item_id)
             | CommentObjectId::MetricSink(item_id)
+            | CommentObjectId::Assertion(item_id)
             | CommentObjectId::Index(item_id)
             | CommentObjectId::Func(item_id)
             | CommentObjectId::Connection(item_id)
@@ -1294,6 +1295,7 @@ pub enum CommentObjectId {
     Source(CatalogItemId),
     Sink(CatalogItemId),
     MetricSink(CatalogItemId),
+    Assertion(CatalogItemId),
     Index(CatalogItemId),
     Func(CatalogItemId),
     Connection(CatalogItemId),

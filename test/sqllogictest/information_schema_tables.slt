@@ -277,6 +277,10 @@ mz_aggregates
 BASE TABLE
 materialize
 mz_internal
+mz_assertions
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_aws_connections
 MATERIALIZED VIEW
 materialize

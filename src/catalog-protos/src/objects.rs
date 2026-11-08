@@ -517,6 +517,7 @@ pub enum CommentObject {
     Source(CatalogItemId),
     Sink(CatalogItemId),
     MetricSink(CatalogItemId),
+    Assertion(CatalogItemId),
     Index(CatalogItemId),
     Func(CatalogItemId),
     Connection(CatalogItemId),
@@ -2023,6 +2024,7 @@ pub mod audit_log_event_v1 {
         ContinualTask = 17,
         NetworkPolicy = 18,
         MetricSink = 19,
+        Assertion = 20,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2353,6 +2355,7 @@ pub enum CatalogItemType {
     Secret = 9,
     Connection = 10,
     MetricSink = 11,
+    Assertion = 12,
 }
 
 #[derive(
@@ -2388,4 +2391,5 @@ pub enum ObjectType {
     Func = 15,
     NetworkPolicy = 17,
     MetricSink = 18,
+    Assertion = 19,
 }

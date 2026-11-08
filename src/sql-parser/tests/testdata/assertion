@@ -1,0 +1,73 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# CREATE ASSERTION: Phase 1 grammar round-trip tests.
+
+parse-statement
+CREATE ASSERTION a ON orders CHECK (amount >= 0)
+----
+CREATE ASSERTION a ON orders CHECK (amount >= 0)
+=>
+CreateAssertion(CreateAssertionStatement { if_not_exists: false, name: UnresolvedItemName([Ident("a")]), in_cluster: None, definition: OnCheck { on: Name(UnresolvedItemName([Ident("orders")])), check: Op { op: Op { namespace: None, op: ">=" }, expr1: Identifier([Ident("amount")]), expr2: Some(Value(Number("0"))) } } })
+
+parse-statement
+CREATE ASSERTION IF NOT EXISTS a ON orders CHECK (amount >= 0)
+----
+CREATE ASSERTION IF NOT EXISTS a ON orders CHECK (amount >= 0)
+=>
+CreateAssertion(CreateAssertionStatement { if_not_exists: true, name: UnresolvedItemName([Ident("a")]), in_cluster: None, definition: OnCheck { on: Name(UnresolvedItemName([Ident("orders")])), check: Op { op: Op { namespace: None, op: ">=" }, expr1: Identifier([Ident("amount")]), expr2: Some(Value(Number("0"))) } } })
+
+parse-statement
+CREATE ASSERTION a IN CLUSTER c ON orders CHECK (amount >= 0)
+----
+CREATE ASSERTION a IN CLUSTER c ON orders CHECK (amount >= 0)
+=>
+CreateAssertion(CreateAssertionStatement { if_not_exists: false, name: UnresolvedItemName([Ident("a")]), in_cluster: Some(Unresolved(Ident("c"))), definition: OnCheck { on: Name(UnresolvedItemName([Ident("orders")])), check: Op { op: Op { namespace: None, op: ">=" }, expr1: Identifier([Ident("amount")]), expr2: Some(Value(Number("0"))) } } })
+
+parse-statement
+CREATE ASSERTION myschema.a IN CLUSTER c ON myschema.orders CHECK (amount >= 0 AND status <> 'void')
+----
+CREATE ASSERTION myschema.a IN CLUSTER c ON myschema.orders CHECK (amount >= 0 AND status <> 'void')
+=>
+CreateAssertion(CreateAssertionStatement { if_not_exists: false, name: UnresolvedItemName([Ident("myschema"), Ident("a")]), in_cluster: Some(Unresolved(Ident("c"))), definition: OnCheck { on: Name(UnresolvedItemName([Ident("myschema"), Ident("orders")])), check: And { left: Op { op: Op { namespace: None, op: ">=" }, expr1: Identifier([Ident("amount")]), expr2: Some(Value(Number("0"))) }, right: Op { op: Op { namespace: None, op: "<>" }, expr1: Identifier([Ident("status")]), expr2: Some(Value(String("void"))) } } } })
+
+parse-statement
+CREATE ASSERTION a CHECK (NOT EXISTS (SELECT 1 FROM orders WHERE amount < 0))
+----
+CREATE ASSERTION a CHECK (NOT EXISTS (SELECT 1 FROM orders WHERE amount < 0))
+=>
+CreateAssertion(CreateAssertionStatement { if_not_exists: false, name: UnresolvedItemName([Ident("a")]), in_cluster: None, definition: Check(Not { expr: Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("orders")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: None, op: "<" }, expr1: Identifier([Ident("amount")]), expr2: Some(Value(Number("0"))) }), group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }) }) })
+
+parse-statement
+CREATE ASSERTION feed_ok AS SELECT id FROM feed WHERE checksum <> expected
+----
+CREATE ASSERTION feed_ok AS SELECT id FROM feed WHERE checksum <> expected
+=>
+CreateAssertion(CreateAssertionStatement { if_not_exists: false, name: UnresolvedItemName([Ident("feed_ok")]), in_cluster: None, definition: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("id")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("feed")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: None, op: "<>" }, expr1: Identifier([Ident("checksum")]), expr2: Some(Identifier([Ident("expected")])) }), group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }) })
+
+parse-statement
+DROP ASSERTION a
+----
+DROP ASSERTION a
+=>
+DropObjects(DropObjectsStatement { object_type: Assertion, if_exists: false, names: [Item(UnresolvedItemName([Ident("a")]))], cascade: false })
+
+parse-statement
+DROP ASSERTION IF EXISTS a, b
+----
+DROP ASSERTION IF EXISTS a, b
+=>
+DropObjects(DropObjectsStatement { object_type: Assertion, if_exists: true, names: [Item(UnresolvedItemName([Ident("a")])), Item(UnresolvedItemName([Ident("b")]))], cascade: false })
+
+parse-statement
+CREATE ASSERTION a
+----
+error: Expected ON, CHECK, or AS, found EOF
+CREATE ASSERTION a
+                  ^

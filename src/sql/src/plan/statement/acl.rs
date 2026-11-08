@@ -673,6 +673,8 @@ pub fn plan_alter_default_privileges(
         | ObjectType::MetricSink
         | ObjectType::ClusterReplica
         | ObjectType::Role
+        // Assertion default privileges are deferred to Phase 3.
+        | ObjectType::Assertion
         | ObjectType::Func => {
             sql_bail!("{object_type}S do not have privileges")
         }

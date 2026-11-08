@@ -229,6 +229,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedCluster
             | ExecuteResponse::CreatedClusterReplica
             | ExecuteResponse::CreatedIndex
+            | ExecuteResponse::CreatedAssertion
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMetricSink
             | ExecuteResponse::CreatedSecret

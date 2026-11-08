@@ -75,6 +75,9 @@ impl RustType<proto::audit_log_event_v1::EventType> for EventType {
 impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectType {
     fn into_proto(&self) -> proto::audit_log_event_v1::ObjectType {
         match self {
+            mz_audit_log::ObjectType::Assertion => {
+                proto::audit_log_event_v1::ObjectType::Assertion
+            }
             mz_audit_log::ObjectType::Cluster => proto::audit_log_event_v1::ObjectType::Cluster,
             mz_audit_log::ObjectType::ClusterReplica => {
                 proto::audit_log_event_v1::ObjectType::ClusterReplica
@@ -111,6 +114,9 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectTyp
 
     fn from_proto(proto: proto::audit_log_event_v1::ObjectType) -> Result<Self, TryFromProtoError> {
         match proto {
+            proto::audit_log_event_v1::ObjectType::Assertion => {
+                Ok(mz_audit_log::ObjectType::Assertion)
+            }
             proto::audit_log_event_v1::ObjectType::Cluster => Ok(mz_audit_log::ObjectType::Cluster),
             proto::audit_log_event_v1::ObjectType::ClusterReplica => {
                 Ok(mz_audit_log::ObjectType::ClusterReplica)

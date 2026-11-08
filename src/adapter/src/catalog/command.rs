@@ -136,6 +136,7 @@ impl CatalogResultCommand {
         match show {
             ShowStatement::ShowCreateView(_)
             | ShowStatement::ShowCreateMaterializedView(_)
+            | ShowStatement::ShowCreateAssertion(_)
             | ShowStatement::ShowCreateSource(_)
             | ShowStatement::ShowCreateTable(_)
             | ShowStatement::ShowCreateSink(_)

@@ -354,6 +354,23 @@ GRANT USAGE ON TABLE foo TO joe
 =>
 GrantPrivileges(GrantPrivilegesStatement { privileges: Privileges([USAGE]), target: Object { object_type: Table, object_spec_inner: Objects { names: [Item(UnresolvedItemName([Ident("foo")]))] } }, roles: [Ident("joe")] })
 
+# `ASSERTION` is a keyword, but an object literally named `assertion` with no
+# explicit object-type keyword must still parse as a table name (regression
+# guard for the GRANT/REVOKE parse path).
+parse-statement
+GRANT SELECT ON assertion TO alice
+----
+GRANT SELECT ON TABLE assertion TO alice
+=>
+GrantPrivileges(GrantPrivilegesStatement { privileges: Privileges([SELECT]), target: Object { object_type: Table, object_spec_inner: Objects { names: [Item(UnresolvedItemName([Ident("assertion")]))] } }, roles: [Ident("alice")] })
+
+parse-statement
+REVOKE SELECT ON assertion FROM alice
+----
+REVOKE SELECT ON TABLE assertion FROM alice
+=>
+RevokePrivileges(RevokePrivilegesStatement { privileges: Privileges([SELECT]), target: Object { object_type: Table, object_spec_inner: Objects { names: [Item(UnresolvedItemName([Ident("assertion")]))] } }, roles: [Ident("alice")] })
+
 parse-statement
 GRANT USAGE ON SINK foo TO joe
 ----

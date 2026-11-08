@@ -736,6 +736,7 @@ async fn upgrade_check(
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
             | CatalogItem::MetricSink(_)
+            | CatalogItem::Assertion(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
