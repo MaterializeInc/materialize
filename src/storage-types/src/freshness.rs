@@ -10,8 +10,10 @@
 //! Wall-clock staleness histograms of collections, bucketed exponentially.
 
 mod histogram;
+mod reflected;
 
 pub use histogram::BucketScheme;
+pub use reflected::reflected_time;
 
 #[cfg(test)]
 mod tests;
