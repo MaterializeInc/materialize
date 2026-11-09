@@ -74,6 +74,20 @@ lg_tbl      true  true
 refresh_mv  true  true
 tbl         true  true
 
+# A new table starts with the txns upper from the environment's boot, and a new
+# source with no frontier, but neither was stale before its creation. So no
+# row, including those of the first period, is in a bucket whose lower bound
+# is an hour or more.
+> SELECT o.name, bool_and(pow(2, (h.bucket - 1)::float8 / h.buckets_per_octave::float8) < 3600000)
+  FROM mz_internal.mz_wallclock_global_freshness_histogram h
+  JOIN mz_internal.mz_object_global_ids g ON g.global_id = h.object_id
+  JOIN mz_objects o ON o.id = g.id
+  WHERE o.name IN ('tbl', 'lg', 'lg_tbl')
+  GROUP BY o.name
+lg      true
+lg_tbl  true
+tbl     true
+
 # Every period after the first is one minute long and aligned to the minute.
 > SELECT DISTINCT
     o.name,
