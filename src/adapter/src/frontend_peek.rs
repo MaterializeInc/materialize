@@ -353,6 +353,13 @@ impl PeekClient {
             }
         };
 
+        // EXPLAIN ANALYZE lowers to a SELECT over introspection. Classify the
+        // original statement before either retained-analysis or ordinary planning.
+        let explain_analyze = matches!(
+            stmt.as_ref(),
+            Statement::ExplainAnalyzeObject(_) | Statement::ExplainAnalyzeCluster(_)
+        );
+
         // # From handle_execute_inner
 
         let mut prepared_execution = None;
@@ -1393,6 +1400,15 @@ impl PeekClient {
                 // The typ here was generated from the HIR SQL type and simply stored in LIR.
                 let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
 
+                if !explain_analyze {
+                    crate::query_policy::check_query_policies(
+                        &catalog,
+                        session,
+                        target_cluster_id,
+                        &peek_plan,
+                    )?;
+                }
+
                 coord::sequencer::emit_optimizer_notices(
                     &*catalog,
                     session,
@@ -1567,6 +1583,12 @@ impl PeekClient {
                 df_meta,
                 optimization_finished_at: _optimization_finished_at,
             } => {
+                crate::query_policy::check_query_policies(
+                    &catalog,
+                    session,
+                    target_cluster_id,
+                    &df_desc,
+                )?;
                 cancel_safety.delegate_side_effect();
                 session.require_coordinator_completion();
                 if df_desc.as_of.as_ref().expect("as of set") == &df_desc.until {
@@ -1615,6 +1637,13 @@ impl PeekClient {
             } => {
                 cancel_safety.delegate_side_effect();
                 let (df_desc, df_meta) = global_lir_plan.unapply();
+
+                crate::query_policy::check_query_policies(
+                    &catalog,
+                    session,
+                    target_cluster_id,
+                    &df_desc,
+                )?;
 
                 coord::sequencer::emit_optimizer_notices(
                     &*catalog,

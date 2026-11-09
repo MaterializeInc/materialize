@@ -34,19 +34,15 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument, soft_panic_or_log};
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
-    Row, Timestamp,
-};
+use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{
-    AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, CreateSourceOptionName,
-    CreateSubsourceOption, CreateSubsourceOptionName, SqlServerConfigOption,
+    AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, SqlServerConfigOption,
     SqlServerConfigOptionName,
 };
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
@@ -81,9 +77,8 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName,
-    MySqlConfigOption, PgConfigOption, PgConfigOptionName, Statement, TransactionMode,
-    WithOptionValue,
+    ConnectionOption, ConnectionOptionName, CreateSourceConnection, MySqlConfigOption,
+    PgConfigOption, PgConfigOptionName, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
@@ -411,25 +406,14 @@ impl Coordinator {
         global_id: GlobalId,
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let catalog = self.catalog().for_session(session);
-        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
-
-        let (plan, _sql_impl_ids) = self.plan_statement(
-            session,
-            Statement::CreateSubsource(subsource_stmt),
+        catalog::command::plan_subsource(
+            &catalog,
+            session.pcx(),
             params,
-            &resolved_ids,
-        )?;
-        let plan = match plan {
-            Plan::CreateSource(plan) => plan,
-            _ => unreachable!(),
-        };
-        Ok(CreateSourcePlanBundle {
+            subsource_stmt,
             item_id,
             global_id,
-            plan,
-            resolved_ids,
-            available_source_references: None,
-        })
+        )
     }
 
     /// Prepares an `ALTER SOURCE...ADD SUBSOURCE`.
@@ -519,115 +503,53 @@ impl Coordinator {
         &mut self,
         ctx: &ExecuteContext,
         params: Params,
-        progress_stmt: Option<CreateSubsourceStatement<Aug>>,
-        mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
+        create_progress_subsource: bool,
+        source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
         available_source_references: plan::SourceReferences,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
+        use catalog::command::source::{SourcePlanning, plan_create_source};
 
-        // 1. First plan the progress subsource, if any.
-        if let Some(progress_stmt) = progress_stmt {
-            // The primary source depends on this subsource because the primary
-            // source needs to know its shard ID, and the easiest way of
-            // guaranteeing that the shard ID is discoverable is to create this
-            // collection first.
-            assert_none!(progress_stmt.of_source);
-            let (item_id, global_id) = self.allocate_user_id().await?;
-            let progress_plan =
-                self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
-            let progress_full_name = self
-                .catalog()
-                .for_session(ctx.session())
-                .resolve_full_name(&progress_plan.plan.name);
-            let progress_subsource = ResolvedItemName::Item {
-                id: progress_plan.item_id,
-                qualifiers: progress_plan.plan.name.qualifiers.clone(),
-                full_name: progress_full_name,
-                print_id: true,
-                version: RelationVersionSelector::Latest,
+        let purified = mz_sql::pure::PurifiedStatement::PurifiedCreateSource {
+            create_progress_subsource,
+            create_source_stmt: source_stmt,
+            subsources,
+            available_source_references,
+        };
+        let session = ctx.session().meta();
+        let mut ids = BTreeMap::new();
+        loop {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let result = {
+                let session_catalog = self.catalog().for_session(ctx.session());
+                let catalog = session_catalog.state().for_session_metadata(&session, tx);
+                plan_create_source(&catalog, session.pcx(), &params, purified.clone(), &ids)
             };
-
-            create_source_plans.push(progress_plan);
-
-            source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
+            let mut notices = Vec::new();
+            while let Ok(notice) = rx.try_recv() {
+                notices.push(notice);
+            }
+            match result {
+                Ok(SourcePlanning::NeedsIds(keys)) => {
+                    let allocated = match self.allocate_user_ids(u64::cast_from(keys.len())).await {
+                        Ok(ids) => ids,
+                        Err(error) => {
+                            ctx.session().add_notices(notices);
+                            return Err(error);
+                        }
+                    };
+                    ids.extend(keys.into_iter().zip_eq(allocated));
+                }
+                Ok(SourcePlanning::Ready(plans)) => {
+                    ctx.session().add_notices(notices);
+                    return Ok((Plan::CreateSources(plans), ResolvedIds::empty()));
+                }
+                Err(error) => {
+                    ctx.session().add_notices(notices);
+                    return Err(error);
+                }
+            }
         }
-
-        let catalog = self.catalog().for_session(ctx.session());
-        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
-
-        let propagated_with_options: Vec<_> = source_stmt
-            .with_options
-            .iter()
-            .filter_map(|opt| match opt.name {
-                CreateSourceOptionName::TimestampInterval => None,
-                CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
-                    name: CreateSubsourceOptionName::RetainHistory,
-                    value: opt.value.clone(),
-                }),
-            })
-            .collect();
-
-        // 2. Then plan the main source.
-        let source_plan = match self.plan_statement(
-            ctx.session(),
-            Statement::CreateSource(source_stmt),
-            &params,
-            &resolved_ids,
-        )? {
-            (Plan::CreateSource(plan), _sql_impl_ids) => plan,
-            (p, _) => unreachable!("s must be CreateSourcePlan but got {:?}", p),
-        };
-
-        let (item_id, global_id) = self.allocate_user_id().await?;
-
-        let source_full_name = self
-            .catalog()
-            .for_session(ctx.session())
-            .resolve_full_name(&source_plan.name);
-        let of_source = ResolvedItemName::Item {
-            id: item_id,
-            qualifiers: source_plan.name.qualifiers.clone(),
-            full_name: source_full_name,
-            print_id: true,
-            version: RelationVersionSelector::Latest,
-        };
-
-        // Generate subsource statements
-        let session_catalog = self.catalog().for_session(ctx.session());
-        let conn_catalog = session_catalog.for_system_session();
-        let pcx = plan::PlanContext::zero();
-        let scx = StatementContext::new(Some(&pcx), &conn_catalog);
-
-        let mut subsource_stmts = generate_subsource_statements(&scx, of_source, subsources)?;
-
-        for subsource_stmt in subsource_stmts.iter_mut() {
-            subsource_stmt
-                .with_options
-                .extend(propagated_with_options.iter().cloned())
-        }
-
-        create_source_plans.push(CreateSourcePlanBundle {
-            item_id,
-            global_id,
-            plan: source_plan,
-            resolved_ids: resolved_ids.clone(),
-            available_source_references: Some(available_source_references),
-        });
-
-        // 3. Finally, plan all the subsources
-        let ids = self
-            .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
-            .await?;
-        for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
-            let plan = self.plan_subsource(ctx.session(), &params, stmt, item_id, global_id)?;
-            create_source_plans.push(plan);
-        }
-
-        Ok((
-            Plan::CreateSources(create_source_plans),
-            ResolvedIds::empty(),
-        ))
     }
 
     #[instrument]
@@ -658,11 +580,8 @@ impl Coordinator {
 
         match transact_result {
             Ok(()) => {
-                // Warn about any new source that runs on only one replica but
-                // landed on a cluster that has more than one. The source's
-                // name is passed along explicitly: in a DDL transaction the
-                // creation is only staged at this point, so the source is not
-                // yet visible in the catalog.
+                // Speculative names belong to the transaction's catalog. Their
+                // schema or cluster can disappear before commit validation.
                 for (_item_id, name, source) in &sources {
                     let cluster_id = match &source.data_source {
                         DataSourceDesc::Ingestion { desc, cluster_id }
@@ -671,8 +590,16 @@ impl Coordinator {
                         } if desc.connection.prefers_single_replica() => cluster_id,
                         _ => continue,
                     };
-                    let cluster = self.catalog().get_cluster(*cluster_id);
-                    self.notify_single_replica_sources(ctx.session(), cluster, Some(name));
+                    let Some(cluster) = self.catalog().try_get_cluster(*cluster_id) else {
+                        continue;
+                    };
+                    let state = ctx
+                        .session()
+                        .transaction()
+                        .catalog_state()
+                        .unwrap_or_else(|| self.catalog().state());
+                    let name = state.resolve_full_name(name, None);
+                    self.notify_single_replica_sources(ctx.session(), cluster, Some(&name));
                 }
                 Ok(ExecuteResponse::CreatedSource)
             }
@@ -991,6 +918,40 @@ impl Coordinator {
     }
 
     #[instrument]
+    pub(super) async fn sequence_create_query_policy(
+        &mut self,
+        session: &Session,
+        plan::CreateQueryPolicyPlan { name, mode, rules }: plan::CreateQueryPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::CreateQueryPolicy {
+            name,
+            mode,
+            rules,
+            owner_id: *session.current_role_id(),
+        };
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::CreatedQueryPolicy)
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_query_policy(
+        &mut self,
+        session: &Session,
+        plan::AlterQueryPolicyPlan {
+            id,
+            name: _,
+            mode,
+            rules,
+        }: plan::AlterQueryPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::AlterQueryPolicy { id, mode, rules };
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::AlteredObject(ObjectType::QueryPolicy))
+    }
+
+    #[instrument]
     pub(super) async fn sequence_create_network_policy(
         &mut self,
         session: &Session,
@@ -1044,76 +1005,20 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        let conn_id = if table.temporary {
-            Some(ctx.session().conn_id())
-        } else {
-            None
-        };
         let (table_id, global_id) = self.allocate_user_id().await?;
-        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
-
-        let data_source = match table.data_source {
-            plan::TableDataSource::TableWrites { defaults } => {
-                TableDataSource::TableWrites { defaults }
-            }
-            plan::TableDataSource::DataSource {
-                desc: data_source_plan,
-                timeline,
-            } => match data_source_plan {
-                plan::DataSourceDesc::IngestionExport {
-                    ingestion_id,
-                    external_reference,
-                    details,
-                    data_config,
-                } => TableDataSource::DataSource {
-                    desc: DataSourceDesc::IngestionExport {
-                        ingestion_id,
-                        external_reference,
-                        details,
-                        data_config,
-                    },
-                    timeline,
-                },
-                plan::DataSourceDesc::Webhook {
-                    validate_using,
-                    body_format,
-                    headers,
-                    cluster_id,
-                } => TableDataSource::DataSource {
-                    desc: DataSourceDesc::Webhook {
-                        validate_using,
-                        body_format,
-                        headers,
-                        cluster_id: cluster_id.expect("Webhook Tables must have cluster_id set"),
-                    },
-                    timeline,
-                },
-                o => {
-                    unreachable!("CREATE TABLE data source got {:?}", o)
-                }
-            },
-        };
-
-        let is_webhook = if let TableDataSource::DataSource {
-            desc: DataSourceDesc::Webhook { .. },
-            timeline: _,
-        } = &data_source
-        {
-            true
-        } else {
-            false
-        };
-
-        let table = Table {
-            create_sql: Some(table.create_sql),
-            desc: table.desc,
-            collections,
-            conn_id: conn_id.cloned(),
+        let table = Table::from_plan(
+            table,
+            global_id,
+            ctx.session().conn_id().clone(),
             resolved_ids,
-            custom_logical_compaction_window: table.compaction_window,
-            is_retained_metrics_object: false,
-            data_source,
-        };
+        );
+        let is_webhook = matches!(
+            &table.data_source,
+            TableDataSource::DataSource {
+                desc: DataSourceDesc::Webhook { .. },
+                ..
+            }
+        );
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
             name: name.clone(),
@@ -1312,6 +1217,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         plan::DropObjectsPlan {
+            cascade,
             drop_ids,
             object_type,
             referenced_ids,
@@ -1354,7 +1260,7 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
-        } = self.sequence_drop_common(ctx.session(), drop_ids)?;
+        } = self.sequence_drop_common(ctx.session(), drop_ids, cascade)?;
 
         self.catalog_transact_with_context(None, Some(ctx), ops)
             .await?;
@@ -1511,6 +1417,23 @@ impl Coordinator {
                 }
             }
         }
+        for policy in catalog.get_query_policies() {
+            let id = SystemObjectId::Object(ObjectId::QueryPolicy(policy.id()));
+            if let Some(role_name) = dropped_roles.get(&policy.owner_id()) {
+                let object_description = ErrorMessageObjectDescription::from_sys_id(&id, &catalog);
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("owner of {object_description}"));
+            }
+            privilege_check(
+                policy.privileges(),
+                dropped_roles,
+                &mut dependent_objects,
+                &id,
+                &catalog,
+            );
+        }
         privilege_check(
             self.catalog().system_privileges(),
             dropped_roles,
@@ -1615,7 +1538,7 @@ impl Coordinator {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
-        } = self.sequence_drop_common(session, plan.drop_ids)?;
+        } = self.sequence_drop_common(session, plan.drop_ids, plan.cascade)?;
 
         let ops = privilege_revoke_ops
             .chain(default_privilege_revoke_ops)
@@ -1814,6 +1737,7 @@ impl Coordinator {
         &self,
         session: &Session,
         ids: Vec<ObjectId>,
+        cascade: bool,
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
@@ -1947,11 +1871,13 @@ impl Coordinator {
                     variant: UpdatePrivilegeVariant::Revoke,
                 },
             ))
-            .chain(iter::once(catalog::Op::DropObjects(
-                ids.into_iter()
+            .chain(iter::once(catalog::Op::DropObjects {
+                objects: ids
+                    .into_iter()
                     .map(DropObjectInfo::manual_drop_from_object_id)
                     .collect(),
-            )))
+                cascade,
+            }))
             .collect();
 
         Ok(DropOps {
@@ -2729,6 +2655,7 @@ impl Coordinator {
         // Get the attributes and variables from the role, as they currently are.
         let mut attributes: RoleAttributesRaw = role.attributes().clone().into();
         let mut vars = role.vars().clone();
+        let mut query_policy = self.catalog().get_role(&id).vars.query_policy;
 
         // Whether to set the password to NULL. This is a special case since the existing
         // password is not stored in the role attributes.
@@ -2736,6 +2663,7 @@ impl Coordinator {
 
         // Apply our updates.
         match option {
+            PlannedAlterRoleOption::QueryPolicy(policy) => query_policy = policy,
             PlannedAlterRoleOption::Attributes(attrs) => {
                 self.validate_role_attributes(&attrs.clone().into())?;
 
@@ -2825,7 +2753,10 @@ impl Coordinator {
             name,
             attributes,
             nopassword,
-            vars: RoleVars { map: vars },
+            vars: RoleVars {
+                map: vars,
+                query_policy,
+            },
         };
         let response = self
             .catalog_transact(Some(session), vec![op])

@@ -558,6 +558,15 @@ fn generate_rbac_requirements(
                 }
             }
         }
+        Plan::CreateQueryPolicy(plan::CreateQueryPolicyPlan { .. }) => RbacRequirements {
+            privileges: vec![(
+                SystemObjectId::System,
+                AclMode::CREATE_QUERY_POLICY,
+                role_id,
+            )],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::CreateNetworkPolicy(plan::CreateNetworkPolicyPlan { .. }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::System,
@@ -572,11 +581,22 @@ fn generate_rbac_requirements(
             variant: _,
             workload_class: _,
             if_not_exists: _,
-        }) => RbacRequirements {
-            privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+            query_policy,
+        }) => {
+            let mut privileges = vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)];
+            if let Some(id) = query_policy {
+                privileges.push((
+                    SystemObjectId::Object(ObjectId::QueryPolicy(*id)),
+                    AclMode::USAGE,
+                    role_id,
+                ));
+            }
+            RbacRequirements {
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateClusterReplica(plan::CreateClusterReplicaPlan {
             cluster_id,
             name: _,
@@ -835,6 +855,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::DropObjects(plan::DropObjectsPlan {
+            cascade: _,
             referenced_ids,
             drop_ids: _,
             object_type,
@@ -869,7 +890,8 @@ fn generate_rbac_requirements(
                         ObjectId::Cluster(_)
                         | ObjectId::Database(_)
                         | ObjectId::Role(_)
-                        | ObjectId::NetworkPolicy(_) => None,
+                        | ObjectId::NetworkPolicy(_)
+                        | ObjectId::QueryPolicy(_) => None,
                     })
                     .collect()
             };
@@ -881,6 +903,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::DropOwned(plan::DropOwnedPlan {
+            cascade: _,
             role_ids,
             drop_ids: _,
             privilege_revokes: _,
@@ -902,7 +925,8 @@ fn generate_rbac_requirements(
                 | ObjectId::ClusterReplica(_)
                 | ObjectId::Database(_)
                 | ObjectId::Role(_)
-                | ObjectId::NetworkPolicy(_) => None,
+                | ObjectId::NetworkPolicy(_)
+                | ObjectId::QueryPolicy(_) => None,
             };
             let privileges = match container_id {
                 Some(id) => vec![(id, AclMode::USAGE, role_id)],
@@ -1169,13 +1193,54 @@ fn generate_rbac_requirements(
         Plan::AlterCluster(plan::AlterClusterPlan {
             id,
             name: _,
-            options: _,
+            options,
             strategy: _,
-        }) => RbacRequirements {
-            ownership: vec![ObjectId::Cluster(*id)],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+        }) => {
+            use plan::AlterOptionParameter::{Reset, Set, Unchanged};
+            // New cluster options must explicitly participate in this ownership exemption.
+            let attachment_only = matches!(
+                options,
+                plan::PlanClusterOption {
+                    availability_zones: Unchanged,
+                    introspection_debugging: Unchanged,
+                    introspection_interval: Unchanged,
+                    arrangement_compression: Unchanged,
+                    managed: Unchanged,
+                    replicas: Unchanged,
+                    replication_factor: Unchanged,
+                    size: Unchanged,
+                    schedule: Unchanged,
+                    workload_class: Unchanged,
+                    auto_scaling_strategy: Unchanged,
+                    query_policy: Set(_) | Reset,
+                }
+            );
+            let mut privileges = Vec::new();
+            if !matches!(options.query_policy, Unchanged) {
+                privileges.push((
+                    SystemObjectId::Object(ObjectId::Cluster(*id)),
+                    AclMode::CREATE,
+                    role_id,
+                ));
+            }
+            if let Set(Some(policy)) = options.query_policy {
+                privileges.push((
+                    SystemObjectId::Object(ObjectId::QueryPolicy(policy)),
+                    AclMode::USAGE,
+                    role_id,
+                ));
+            }
+            RbacRequirements {
+                ownership: if attachment_only {
+                    vec![]
+                } else {
+                    vec![ObjectId::Cluster(*id)]
+                },
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::AlterSetCluster(plan::AlterSetClusterPlan { id, set_cluster }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             privileges: vec![(
@@ -1340,6 +1405,20 @@ fn generate_rbac_requirements(
             name: _,
             option,
         }) => match option {
+            plan::PlannedAlterRoleOption::QueryPolicy(policy) => {
+                let mut privileges = vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)];
+                if let Some(id) = policy {
+                    privileges.push((
+                        SystemObjectId::Object(ObjectId::QueryPolicy(*id)),
+                        AclMode::USAGE,
+                        role_id,
+                    ));
+                }
+                RbacRequirements {
+                    privileges,
+                    ..Default::default()
+                }
+            }
             // Only superusers can alter the superuserness of a role.
             plan::PlannedAlterRoleOption::Attributes(attributes)
                 if attributes.superuser.is_some() =>
@@ -1429,7 +1508,8 @@ fn generate_rbac_requirements(
                 ObjectId::Cluster(_)
                 | ObjectId::Database(_)
                 | ObjectId::Role(_)
-                | ObjectId::NetworkPolicy(_) => Vec::new(),
+                | ObjectId::NetworkPolicy(_)
+                | ObjectId::QueryPolicy(_) => Vec::new(),
             };
             RbacRequirements {
                 role_membership: BTreeSet::from([*new_owner]),
@@ -1448,6 +1528,10 @@ fn generate_rbac_requirements(
         ) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id), ObjectId::Item(*replacement_id)],
             item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
+        Plan::AlterQueryPolicy(plan::AlterQueryPolicyPlan { id, .. }) => RbacRequirements {
+            ownership: vec![ObjectId::QueryPolicy(*id)],
             ..Default::default()
         },
         Plan::AlterNetworkPolicy(plan::AlterNetworkPolicyPlan { id, .. }) => RbacRequirements {
@@ -1569,7 +1653,8 @@ fn generate_rbac_requirements(
                         ObjectId::Cluster(_)
                         | ObjectId::Database(_)
                         | ObjectId::Role(_)
-                        | ObjectId::NetworkPolicy(_) => {}
+                        | ObjectId::NetworkPolicy(_)
+                        | ObjectId::QueryPolicy(_) => {}
                     },
                     SystemObjectId::System => {}
                 }
@@ -1779,6 +1864,10 @@ fn ownership_err(
                     ObjectType::NetworkPolicy,
                     catalog.get_network_policy(&id).name().to_string(),
                 ),
+                ObjectId::QueryPolicy(id) => (
+                    ObjectType::QueryPolicy,
+                    catalog.get_query_policy(&id).name().to_string(),
+                ),
                 ObjectId::Role(_) => unreachable!("roles have no owner"),
             })
             .collect();
@@ -1968,7 +2057,8 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
     const ALL_SYSTEM_PRIVILEGES: AclMode = AclMode::CREATE_ROLE
         .union(AclMode::CREATE_DB)
         .union(AclMode::CREATE_CLUSTER)
-        .union(AclMode::CREATE_NETWORK_POLICY);
+        .union(AclMode::CREATE_NETWORK_POLICY)
+        .union(AclMode::CREATE_QUERY_POLICY);
 
     const EMPTY_ACL_MODE: AclMode = AclMode::empty();
     match object_type {
@@ -1985,6 +2075,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::ClusterReplica) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Secret) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::NetworkPolicy) => AclMode::USAGE,
+        SystemObjectType::Object(ObjectType::QueryPolicy) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Connection) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
@@ -2018,7 +2109,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => AclMode::empty(),
+        | ObjectType::NetworkPolicy
+        | ObjectType::QueryPolicy => AclMode::empty(),
     }
 }
 

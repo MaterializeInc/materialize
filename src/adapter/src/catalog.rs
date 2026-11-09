@@ -45,7 +45,7 @@ use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpr
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
-    NetworkPolicy, Role, RoleAuth, Schema,
+    NetworkPolicy, QueryPolicy, Role, RoleAuth, Schema,
 };
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -61,6 +61,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector, SqlScalarType,
@@ -109,6 +110,7 @@ use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 mod builtin_table_updates;
 pub(crate) mod command;
 pub(crate) mod consistency;
+mod limits;
 mod migrate;
 
 mod apply;
@@ -1266,7 +1268,7 @@ impl Catalog {
     }
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
-        &self.state.cluster_replica_sizes
+        self.state.cluster_replica_sizes()
     }
 
     /// Returns the privileges of an object by its ID.
@@ -1286,6 +1288,7 @@ impl Catalog {
                 ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
                 ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
                 ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(*id).privileges()),
+                ObjectId::QueryPolicy(id) => Some(&self.state.get_query_policy(id).privileges),
             },
             SystemObjectId::System => Some(&self.state.system_privileges),
         }
@@ -1338,37 +1341,31 @@ impl Catalog {
     }
 
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.state.entry_by_id.values()
+        self.state.entries()
     }
 
     pub fn user_connections(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_connection() && entry.id().is_user())
+        self.state.user_connections()
     }
 
     pub fn user_tables(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_table() && entry.id().is_user())
+        self.state.user_tables()
     }
 
     pub fn user_sources(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_source() && entry.id().is_user())
+        self.state.user_sources()
     }
 
     pub fn user_sinks(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_sink() && entry.id().is_user())
+        self.state.user_sinks()
     }
 
     pub fn user_materialized_views(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_materialized_view() && entry.id().is_user())
+        self.state.user_materialized_views()
     }
 
     pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_secret() && entry.id().is_user())
+        self.state.user_secrets()
     }
 
     pub fn get_network_policy(&self, network_policy_id: NetworkPolicyId) -> &NetworkPolicy {
@@ -1379,8 +1376,12 @@ impl Catalog {
         self.state.try_get_network_policy_by_name(name)
     }
 
+    pub fn get_query_policy(&self, id: QueryPolicyId) -> &QueryPolicy {
+        self.state.get_query_policy(&id)
+    }
+
     pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
-        self.state.clusters_by_id.values()
+        self.state.clusters()
     }
 
     pub fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -1392,7 +1393,7 @@ impl Catalog {
     }
 
     pub fn user_clusters(&self) -> impl Iterator<Item = &Cluster> {
-        self.clusters().filter(|cluster| cluster.id.is_user())
+        self.state.user_clusters()
     }
 
     pub fn get_cluster_replica(
@@ -1412,27 +1413,23 @@ impl Catalog {
     }
 
     pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
-        self.user_clusters()
-            .flat_map(|cluster| cluster.user_replicas())
+        self.state.user_cluster_replicas()
     }
 
     pub fn databases(&self) -> impl Iterator<Item = &Database> {
-        self.state.database_by_id.values()
+        self.state.databases()
     }
 
     pub fn user_roles(&self) -> impl Iterator<Item = &Role> {
-        self.state
-            .roles_by_id
-            .values()
-            .filter(|role| role.is_user())
+        self.state.user_roles()
     }
 
     pub fn user_network_policies(&self) -> impl Iterator<Item = &NetworkPolicy> {
-        self.state
-            .network_policies_by_id
-            .iter()
-            .filter(|(id, _)| id.is_user())
-            .map(|(_, policy)| policy)
+        self.state.user_network_policies()
+    }
+
+    pub fn user_query_policies(&self) -> impl Iterator<Item = &QueryPolicy> {
+        self.state.user_query_policies()
     }
 
     pub fn system_privileges(&self) -> &PrivilegeMap {
@@ -1554,6 +1551,15 @@ impl Catalog {
             }
             ObjectId::NetworkPolicy(network_policy_id) => {
                 self.ensure_not_reserved_network_policy(network_policy_id)
+            }
+            ObjectId::QueryPolicy(id) => {
+                if id.is_builtin() {
+                    Err(Error::new(ErrorKind::ReservedQueryPolicyName(
+                        self.state.get_query_policy(id).name.clone(),
+                    )))
+                } else {
+                    Ok(())
+                }
             }
         }
     }
@@ -1739,6 +1745,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Cluster(_) => ObjectType::Cluster,
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
         CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
+        CommentObjectId::QueryPolicy(_) => ObjectType::QueryPolicy,
     }
 }
 
@@ -1770,6 +1777,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            mz_sql::catalog::ObjectType::QueryPolicy => ObjectType::QueryPolicy,
         },
         SystemObjectType::System => ObjectType::System,
     }
@@ -2158,6 +2166,28 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
+    fn resolve_query_policy(
+        &self,
+        name: &str,
+    ) -> Result<&dyn mz_sql::catalog::CatalogQueryPolicy, SqlCatalogError> {
+        Ok(self
+            .state
+            .try_get_query_policy_by_name(name)
+            .ok_or_else(|| SqlCatalogError::UnknownQueryPolicy(name.into()))?)
+    }
+
+    fn get_query_policy(&self, id: &QueryPolicyId) -> &dyn mz_sql::catalog::CatalogQueryPolicy {
+        self.state.get_query_policy(id)
+    }
+
+    fn get_query_policies(&self) -> Vec<&dyn mz_sql::catalog::CatalogQueryPolicy> {
+        self.state
+            .query_policies_by_id
+            .values()
+            .map(|policy| -> &dyn mz_sql::catalog::CatalogQueryPolicy { policy })
+            .collect()
+    }
+
     fn resolve_cluster(
         &self,
         cluster_name: Option<&str>,
@@ -2415,6 +2445,9 @@ impl SessionCatalog for ConnCatalog<'_> {
             SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
                 Some(self.get_network_policy(id).privileges())
             }
+            SystemObjectId::Object(ObjectId::QueryPolicy(id)) => {
+                Some(&self.state.get_query_policy(id).privileges)
+            }
             SystemObjectId::Object(ObjectId::ClusterReplica(_))
             | SystemObjectId::Object(ObjectId::Role(_)) => None,
         }
@@ -2529,6 +2562,9 @@ impl SessionCatalog for ConnCatalog<'_> {
             .map_or(false, |a| a.is_cc)
     }
 }
+
+#[cfg(test)]
+mod source_preparation_tests;
 
 #[cfg(test)]
 mod try_cast_tests;

@@ -174,6 +174,7 @@ fn describe_inner(
         Statement::AlterSystemResetAll(stmt) => ddl::describe_alter_system_reset_all(&scx, stmt)?,
         Statement::AlterTableAddColumn(stmt) => ddl::describe_alter_table_add_column(&scx, stmt)?,
         Statement::AlterNetworkPolicy(stmt) => ddl::describe_alter_network_policy(&scx, stmt)?,
+        Statement::AlterQueryPolicy(_) => StatementDesc::new(None),
         Statement::Comment(stmt) => ddl::describe_comment(&scx, stmt)?,
         Statement::CreateCluster(stmt) => ddl::describe_create_cluster(&scx, stmt)?,
         Statement::CreateClusterReplica(stmt) => ddl::describe_create_cluster_replica(&scx, stmt)?,
@@ -198,6 +199,7 @@ fn describe_inner(
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
+        Statement::CreateQueryPolicy(_) => StatementDesc::new(None),
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
 
@@ -478,6 +480,7 @@ pub fn plan(
         Statement::AlterSystemResetAll(stmt) => ddl::plan_alter_system_reset_all(scx, stmt),
         Statement::AlterTableAddColumn(stmt) => ddl::plan_alter_table_add_column(scx, stmt),
         Statement::AlterNetworkPolicy(stmt) => ddl::plan_alter_network_policy(scx, stmt),
+        Statement::AlterQueryPolicy(stmt) => ddl::plan_alter_query_policy(scx, stmt),
         Statement::Comment(stmt) => ddl::plan_comment(scx, stmt),
         Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
         Statement::CreateClusterReplica(stmt) => ddl::plan_create_cluster_replica(scx, stmt),
@@ -498,6 +501,7 @@ pub fn plan(
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
+        Statement::CreateQueryPolicy(stmt) => ddl::plan_create_query_policy(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
 
@@ -1196,6 +1200,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::AlterObjectRename(_) => DDL,
             Statement::AlterObjectSwap(_) => DDL,
             Statement::AlterNetworkPolicy(_) => DDL,
+            Statement::AlterQueryPolicy(_) => DDL,
             Statement::AlterRetainHistory(_) => DDL,
             Statement::AlterRole(_) => DDL,
             Statement::AlterSecret(_) => DDL,
@@ -1226,6 +1231,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateView(_) => DDL,
             Statement::CreateMaterializedView(_) => DDL,
             Statement::CreateNetworkPolicy(_) => DDL,
+            Statement::CreateQueryPolicy(_) => DDL,
             Statement::DropObjects(_) => DDL,
             Statement::DropOwned(_) => DDL,
 

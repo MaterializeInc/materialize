@@ -94,3 +94,9 @@ rows:
     Abbreviation: "`P`"
     Applies to: |
       - `SYSTEM`
+
+  - Privilege: "**CREATEQUERYPOLICY**"
+    Description: Permission to create query policies.
+    Abbreviation: "`Q`"
+    Applies to: |
+      - `SYSTEM`

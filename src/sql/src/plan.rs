@@ -44,6 +44,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
@@ -153,6 +154,7 @@ pub enum Plan {
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
+    CreateQueryPolicy(CreateQueryPolicyPlan),
     CreateIndex(CreateIndexPlan),
     CreateMetricSink(CreateMetricSinkPlan),
     CreateType(CreateTypePlan),
@@ -203,6 +205,7 @@ pub enum Plan {
     AlterTableAddColumn(AlterTablePlan),
     AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementPlan),
     AlterNetworkPolicy(AlterNetworkPolicyPlan),
+    AlterQueryPolicy(AlterQueryPolicyPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -246,6 +249,7 @@ impl Plan {
             ],
             StatementKind::AlterRole => &[PlanKind::AlterRole],
             StatementKind::AlterNetworkPolicy => &[PlanKind::AlterNetworkPolicy],
+            StatementKind::AlterQueryPolicy => &[PlanKind::AlterQueryPolicy, PlanKind::AlterOwner],
             StatementKind::AlterSecret => &[PlanKind::AlterNoop, PlanKind::AlterSecret],
             StatementKind::AlterSetCluster => &[PlanKind::AlterNoop, PlanKind::AlterSetCluster],
             StatementKind::AlterSink => &[PlanKind::AlterNoop, PlanKind::AlterSink],
@@ -283,6 +287,7 @@ impl Plan {
             StatementKind::CreateDatabase => &[PlanKind::CreateDatabase],
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
+            StatementKind::CreateQueryPolicy => &[PlanKind::CreateQueryPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
@@ -361,6 +366,7 @@ impl Plan {
             Plan::CreateMetricSink(_) => "create metric sink",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
+            Plan::CreateQueryPolicy(_) => "create query policy",
             Plan::Comment(_) => "comment",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
@@ -382,6 +388,7 @@ impl Plan {
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
                 ObjectType::NetworkPolicy => "drop network policy",
+                ObjectType::QueryPolicy => "drop query policy",
             },
             Plan::DropOwned(_) => "drop owned",
             Plan::EmptyQuery => "do nothing",
@@ -423,6 +430,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
                 ObjectType::NetworkPolicy => "alter network policy",
+                ObjectType::QueryPolicy => "alter query policy",
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
@@ -441,6 +449,7 @@ impl Plan {
             Plan::AlterSystemResetAll(_) => "alter system",
             Plan::AlterRole(_) => "alter role",
             Plan::AlterNetworkPolicy(_) => "alter network policy",
+            Plan::AlterQueryPolicy(_) => "alter query policy",
             Plan::AlterOwner(plan) => match plan.object_type {
                 ObjectType::Table => "alter table owner",
                 ObjectType::View => "alter view owner",
@@ -459,6 +468,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
                 ObjectType::NetworkPolicy => "alter network policy owner",
+                ObjectType::QueryPolicy => "alter query policy owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
             Plan::AlterMaterializedViewApplyReplacement(_) => {
@@ -580,6 +590,7 @@ pub struct CreateClusterPlan {
     pub variant: CreateClusterVariant,
     pub workload_class: Option<String>,
     pub if_not_exists: bool,
+    pub query_policy: Option<QueryPolicyId>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -804,6 +815,21 @@ pub struct CreateMaterializedViewPlan {
 }
 
 #[derive(Debug, Clone)]
+pub struct CreateQueryPolicyPlan {
+    pub name: String,
+    pub mode: QueryPolicyMode,
+    pub rules: Vec<QueryPolicyRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlterQueryPolicyPlan {
+    pub id: QueryPolicyId,
+    pub name: String,
+    pub mode: QueryPolicyMode,
+    pub rules: Vec<QueryPolicyRule>,
+}
+
+#[derive(Debug, Clone)]
 pub struct CreateNetworkPolicyPlan {
     pub name: String,
     pub rules: Vec<NetworkPolicyRule>,
@@ -838,6 +864,7 @@ pub struct CreateTypePlan {
 
 #[derive(Debug)]
 pub struct DropObjectsPlan {
+    pub cascade: bool,
     /// The IDs of only the objects directly referenced in the `DROP` statement.
     pub referenced_ids: Vec<ObjectId>,
     /// All object IDs to drop. Includes `referenced_ids` and all descendants.
@@ -849,6 +876,7 @@ pub struct DropObjectsPlan {
 
 #[derive(Debug)]
 pub struct DropOwnedPlan {
+    pub cascade: bool,
     /// The role IDs that own the objects.
     pub role_ids: Vec<RoleId>,
     /// All object IDs to drop.
@@ -1842,6 +1870,80 @@ impl ConnectionDetails {
     }
 }
 
+/// Query policy behavior when a rule matches an admitted query plan.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
+pub enum QueryPolicyMode {
+    #[default]
+    Warn,
+    Enforce,
+}
+
+impl std::fmt::Display for QueryPolicyMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Warn => "warn",
+            Self::Enforce => "enforce",
+        })
+    }
+}
+
+/// The plan features supported by `metric = 'query_plan_includes'`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
+pub enum QueryPlanFeature {
+    TemporaryDataflow,
+    StorageRead,
+}
+
+impl std::fmt::Display for QueryPlanFeature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::TemporaryDataflow => "temporary_dataflow",
+            Self::StorageRead => "storage_read",
+        })
+    }
+}
+
+/// A validated query-policy rule. Its action is reject and its metric is
+/// query_plan_includes. Unsupported actions and metrics cannot reach admission.
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
+pub struct QueryPolicyRule {
+    pub name: String,
+    pub value: QueryPlanFeature,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub struct NetworkPolicyRule {
     pub name: String,
@@ -2174,6 +2276,7 @@ pub struct PlanClusterOption {
     /// The autoscaling policy block. `Set(None)` disables autoscaling (an empty
     /// `AUTO SCALING STRATEGY = ()` or `RESET (AUTO SCALING STRATEGY)`).
     pub auto_scaling_strategy: AlterOptionParameter<Option<AutoScalingStrategy>>,
+    pub query_policy: AlterOptionParameter<Option<QueryPolicyId>>,
 }
 
 impl Default for PlanClusterOption {
@@ -2190,6 +2293,7 @@ impl Default for PlanClusterOption {
             schedule: AlterOptionParameter::Unchanged,
             workload_class: AlterOptionParameter::Unchanged,
             auto_scaling_strategy: AlterOptionParameter::Unchanged,
+            query_policy: AlterOptionParameter::Unchanged,
         }
     }
 }

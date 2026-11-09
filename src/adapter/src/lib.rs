@@ -49,6 +49,7 @@ mod frontend_transaction;
 mod notice;
 mod optimize;
 mod peek_registry;
+mod query_policy;
 mod util;
 
 pub mod catalog;

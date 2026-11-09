@@ -97,6 +97,9 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectTyp
             mz_audit_log::ObjectType::NetworkPolicy => {
                 proto::audit_log_event_v1::ObjectType::NetworkPolicy
             }
+            mz_audit_log::ObjectType::QueryPolicy => {
+                proto::audit_log_event_v1::ObjectType::QueryPolicy
+            }
             mz_audit_log::ObjectType::Role => proto::audit_log_event_v1::ObjectType::Role,
             mz_audit_log::ObjectType::Secret => proto::audit_log_event_v1::ObjectType::Secret,
             mz_audit_log::ObjectType::Schema => proto::audit_log_event_v1::ObjectType::Schema,
@@ -134,6 +137,9 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectTyp
             }
             proto::audit_log_event_v1::ObjectType::NetworkPolicy => {
                 Ok(mz_audit_log::ObjectType::NetworkPolicy)
+            }
+            proto::audit_log_event_v1::ObjectType::QueryPolicy => {
+                Ok(mz_audit_log::ObjectType::QueryPolicy)
             }
             proto::audit_log_event_v1::ObjectType::Role => Ok(mz_audit_log::ObjectType::Role),
             proto::audit_log_event_v1::ObjectType::Secret => Ok(mz_audit_log::ObjectType::Secret),

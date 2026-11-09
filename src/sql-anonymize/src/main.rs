@@ -704,6 +704,7 @@ impl<'ast> VisitMut<'ast, Raw> for Anonymizer<'_> {
         match node {
             UnresolvedObjectName::Cluster(i)
             | UnresolvedObjectName::Role(i)
+            | UnresolvedObjectName::QueryPolicy(i)
             | UnresolvedObjectName::NetworkPolicy(i) => self.rename_ident(i),
             UnresolvedObjectName::Database(n) => self.rename_ident(&mut n.0),
             UnresolvedObjectName::Schema(n) => self.rename_idents(&mut n.0),
@@ -869,6 +870,7 @@ impl<'ast> Visit<'ast, Raw> for GlobalNameCollector<'_> {
         match node {
             UnresolvedObjectName::Cluster(i)
             | UnresolvedObjectName::Role(i)
+            | UnresolvedObjectName::QueryPolicy(i)
             | UnresolvedObjectName::NetworkPolicy(i) => self.add(i),
             UnresolvedObjectName::Database(n) => self.add(&n.0),
             UnresolvedObjectName::Schema(n) => self.add_idents(&n.0),

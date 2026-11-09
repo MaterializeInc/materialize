@@ -1412,7 +1412,9 @@ impl Coordinator {
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
                         if !ctx.session().transaction().is_ddl() {
-                            let state = self.catalog().for_session(ctx.session()).state().clone();
+                            // Preparation can yield before the first dry run. Capture both
+                            // baselines now so unrelated commits cannot mix their contents.
+                            let (state, snapshot) = self.catalog().ddl_transaction_snapshot().await;
                             let revision = self.catalog().transient_revision();
 
                             // Initialize our transaction with a set of empty ops, or return an error
@@ -1424,7 +1426,7 @@ impl Coordinator {
                                 revision,
                                 revision_fenced: false,
                                 side_effects: vec![],
-                                snapshot: None,
+                                snapshot: Some(snapshot),
                             }) {
                                 return ctx.retire(Err(err));
                             }
@@ -1475,6 +1477,7 @@ impl Coordinator {
                     | Statement::AlterSystemSet(_)
                     | Statement::AlterTableAddColumn(_)
                     | Statement::AlterNetworkPolicy(_)
+                    | Statement::AlterQueryPolicy(_)
                     | Statement::CreateCluster(_)
                     | Statement::CreateClusterReplica(_)
                     | Statement::CreateConnection(_)
@@ -1492,6 +1495,7 @@ impl Coordinator {
                     | Statement::CreateView(_)
                     | Statement::CreateWebhookSource(_)
                     | Statement::CreateNetworkPolicy(_)
+                    | Statement::CreateQueryPolicy(_)
                     | Statement::Delete(_)
                     | Statement::DropObjects(_)
                     | Statement::DropOwned(_)

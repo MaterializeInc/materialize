@@ -40,6 +40,7 @@ pub mod global_id;
 pub mod namespaces;
 pub mod network_policy_id;
 pub mod optimize;
+pub mod query_policy_id;
 pub mod refresh_schedule;
 pub mod role_id;
 pub mod stats;
