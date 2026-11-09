@@ -1747,6 +1747,148 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         ), f"settled replica episodes overlap pre-restart history: {replica_settled}"
 
 
+def workflow_wallclock_freshness_restart(c: Composition) -> None:
+    """Freshness histogram periods across an environmentd restart.
+
+    Recordings resume at the controller's start, so the period open at the
+    kill and the downtime are a hole. The progress view shows one gap per
+    recording, at most one period plus the downtime long. The periods after it
+    are contiguous, and each full one holds exactly one minute of wall-clock
+    time.
+    """
+    names = ["freshness_tbl", "freshness_lg", "freshness_lg_tbl", "freshness_idx"]
+    name_list = ", ".join(f"'{name}'" for name in names)
+    period = 60
+    downtime = 70
+
+    def periods() -> dict[tuple[str, str | None], list[tuple[datetime, datetime, int]]]:
+        """The `(start, end, total)` of every period, per object and replica
+        (`None` for the global histogram)."""
+        rows = c.sql_query(f"""
+            WITH h AS (
+                SELECT object_id, NULL::text AS replica_id,
+                       period_start, period_end, count
+                FROM mz_internal.mz_wallclock_global_freshness_histogram
+                UNION ALL
+                SELECT object_id, replica_id, period_start, period_end, count
+                FROM mz_internal.mz_wallclock_replica_freshness_histogram
+            )
+            SELECT o.name, h.replica_id,
+                   h.period_start, h.period_end, sum(h.count)::bigint
+            FROM h
+            JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+            JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+            WHERE o.name IN ({name_list})
+            GROUP BY o.name, h.replica_id, h.period_start, h.period_end
+            ORDER BY o.name, h.replica_id, h.period_start""")
+        result: dict[tuple[str, str | None], list[tuple[datetime, datetime, int]]] = {}
+        for name, replica_id, start, end, total in rows:
+            result.setdefault((name, replica_id), []).append((start, end, int(total)))
+        return result
+
+    def wait_covered_until(at_least: str) -> None:
+        """Waits until the global and the replica histograms of every object
+        are covered until `at_least`."""
+        deadline = time.time() + 600
+        rows: list = []
+        while time.time() < deadline:
+            rows = c.sql_query(f"""
+                SELECT o.name, p.replica_id IS NULL, p.covered_until >= '{at_least}'::timestamptz
+                FROM mz_internal.mz_wallclock_freshness_progress AS p
+                JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = p.object_id
+                JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+                WHERE o.name IN ({name_list})""")
+            covered = {(name, is_global) for name, is_global, done in rows if done}
+            # Only the index runs on a replica.
+            expected = {(name, True) for name in names} | {("freshness_idx", False)}
+            if covered >= expected:
+                return
+            time.sleep(1)
+        raise UIError(f"freshness not covered until {at_least}: {rows}")
+
+    def minute_after(ts: str, minutes: int) -> str:
+        return c.sql_query(
+            f"SELECT (date_trunc('minute', '{ts}'::timestamptz) + INTERVAL '{minutes} minutes')::text"
+        )[0][0]
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_wallclock_freshness_recording": "true",
+                "enable_wallclock_freshness_reporting": "true",
+                "wallclock_freshness_period_interval": "1min",
+            },
+            sanity_restart=False,
+        )
+    ):
+        c.up("materialized")
+        c.sql(dedent("""\
+            CREATE CLUSTER freshness_storage SIZE 'scale=1,workers=1';
+            CREATE CLUSTER freshness_compute SIZE 'scale=1,workers=1';
+            CREATE TABLE freshness_tbl (a int);
+            CREATE SOURCE freshness_lg
+                IN CLUSTER freshness_storage
+                FROM LOAD GENERATOR COUNTER (TICK INTERVAL '100ms')
+                WITH (TIMESTAMP INTERVAL '1s');
+            CREATE TABLE freshness_lg_tbl FROM SOURCE freshness_lg;
+            CREATE INDEX freshness_idx
+                IN CLUSTER freshness_compute ON freshness_lg_tbl (counter);
+            """))
+        # Two closed periods: the partial first one and a full one, so every
+        # recording has emitted a period end before the restart.
+        created = c.sql_query("SELECT now()::text")[0][0]
+        wait_covered_until(minute_after(created, 2))
+
+        c.kill("materialized")
+        killed = time.time()
+        time.sleep(downtime)
+        c.up("materialized")
+        outage = time.time() - killed
+
+        # The period that contains the restart and the next one closed.
+        restarted = c.sql_query("SELECT now()::text")[0][0]
+        wait_covered_until(minute_after(restarted, 2))
+
+        recorded = periods()
+        assert {key for key in recorded if key[1] is None} == {
+            (name, None) for name in names
+        }, f"unexpected recordings: {recorded}"
+        assert any(
+            key[1] is not None and key[0] == "freshness_idx" for key in recorded
+        ), f"no replica recording of the index: {recorded}"
+
+        for key, value in recorded.items():
+            # The first period of a recording starts at its creation and may be
+            # partial, and the first period after the restart starts at the
+            # controller's start. Every period in between is full and aligned.
+            gaps = [
+                (prev[1], cur[0])
+                for prev, cur in zip(value, value[1:])
+                if prev[1] != cur[0]
+            ]
+            assert len(gaps) <= 1, f"{key}: more than one gap: {gaps}"
+            for end, start in gaps:
+                assert (
+                    0 < (start - end).total_seconds() <= period + outage
+                ), f"{key}: gap {end} to {start} exceeds one period plus the downtime"
+            # Every period of a recording is contiguous with its successor
+            # except across the gap, and a period that starts on a minute
+            # boundary and ends on the next one is full.
+            for start, end, total in value:
+                if (end - start).total_seconds() == period:
+                    assert total == period * 1000, f"{key}: {start} sums to {total}"
+            # After the restart, periods follow each other without a hole.
+            if gaps:
+                after = [p for p in value if p[0] >= gaps[0][1]]
+                assert all(
+                    prev[1] == cur[0] for prev, cur in zip(after, after[1:])
+                ), f"{key}: periods after the restart not contiguous: {after}"
+            else:
+                raise UIError(f"{key}: no gap across the restart: {value}")
+    c.down(destroy_volumes=True)
+
+
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":
