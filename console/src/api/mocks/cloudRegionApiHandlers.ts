@@ -9,10 +9,10 @@
 
 import { http, HttpResponse } from "msw";
 
-import { Region, RegionInfo } from "~/api/cloudRegionApi";
+import { Region, RegionInfo } from "~/api/cloudGlobalApi";
 
 export default [
-  http.get("*/api/region", () => {
+  http.get("*/api/region/:cloudProvider/:region", () => {
     return new HttpResponse(null, { status: 204 });
   }),
 ];
@@ -22,7 +22,7 @@ export const buildPendingRegionResponse = (
   regionInfo?: RegionInfo,
   status = 202,
 ) =>
-  http.get("*/api/region", () => {
+  http.get("*/api/region/:cloudProvider/:region", () => {
     const response: Region = {
       regionInfo,
       regionState,
@@ -33,7 +33,7 @@ export const buildEnabledRegionReponse = (
   regionInfo: Partial<RegionInfo> = {},
   status = 200,
 ) =>
-  http.get("*/api/region", () => {
+  http.get("*/api/region/:cloudProvider/:region", () => {
     const response: Region = {
       regionInfo: {
         sqlAddress:
@@ -54,11 +54,11 @@ export const buildServerErrorRegionResponse = (
   error = "Server error",
   status = 500,
 ) =>
-  http.get("*/api/region", () => {
+  http.get("*/api/region/:cloudProvider/:region", () => {
     return HttpResponse.text(error, { status });
   });
 
 export const buildNetworkErrorRegionResponse = () =>
-  http.get("*/api/region", () => {
+  http.get("*/api/region/:cloudProvider/:region", () => {
     return HttpResponse.error();
   });

@@ -19,7 +19,7 @@ import React from "react";
 import { gte as semverGte, parse as semverParse, SemVer } from "semver";
 
 import { buildGlobalQueryKey } from "~/api/buildQueryKeySchema";
-import { getRegion, RegionInfo } from "~/api/cloudRegionApi";
+import { getRegion, RegionInfo } from "~/api/cloudGlobalApi";
 import {
   CATALOG_SERVER_CLUSTER,
   executeSql,
@@ -129,6 +129,8 @@ export interface CreatingEnvironment {
 
 /** Represents an environment that is known to exist. */
 export interface EnabledEnvironment extends RegionInfo {
+  sqlAddress: string;
+  httpAddress: string;
   state: "enabled";
   status: EnvironmentStatus;
   errors: EnvironmentError[];
@@ -204,7 +206,10 @@ export const fetchEnvironmentsWithHealth = async ({
       },
       async () => {
         try {
-          const { data: regionResult } = await getRegion(region.regionApiUrl);
+          const { data: regionResult } = await getRegion(
+            region.provider,
+            region.region,
+          );
           const regionInfo =
             "regionInfo" in regionResult && regionResult.regionInfo;
           const regionState =
@@ -228,13 +233,25 @@ export const fetchEnvironmentsWithHealth = async ({
             result.set(regionId, envResult);
           }
           if (regionInfo) {
-            const envResult: EnabledEnvironment = {
-              ...regionInfo,
-              state: "enabled",
-              status: { health: "pending", errors: [] },
-              errors: [],
-            };
-            result.set(regionId, envResult);
+            const { sqlAddress, httpAddress } = regionInfo;
+            if (sqlAddress && httpAddress) {
+              const envResult: EnabledEnvironment = {
+                ...regionInfo,
+                sqlAddress,
+                httpAddress,
+                state: "enabled",
+                status: { health: "pending", errors: [] },
+                errors: [],
+              };
+              result.set(regionId, envResult);
+            } else {
+              // The global API omits addresses for BYOC environments, and the
+              // console can't connect without them.
+              result.set(regionId, {
+                state: "unknown",
+                errors: [{ message: "Region has no connection details" }],
+              });
+            }
           }
         } catch (error) {
           if (isApiError(error) && error.status === 404) {

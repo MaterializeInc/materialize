@@ -401,6 +401,28 @@ describe("store/environments", () => {
       });
     });
 
+    it("reports enabled regions without connection details as unknown", async () => {
+      server.use(
+        buildEnabledRegionReponse({
+          sqlAddress: undefined,
+          httpAddress: undefined,
+        }),
+      );
+      const store = getStore();
+      renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
+        wrapper: Wrapper,
+      });
+      let environments: EnvironmentsWithHealth | undefined;
+      await waitFor(() => {
+        environments = store.get(environmentsWithHealth);
+        expect(environments).toBeTruthy();
+      });
+      expect(environments?.get("aws/us-east-1")).toEqual({
+        state: "unknown",
+        errors: [{ message: "Region has no connection details" }],
+      });
+    });
+
     it("correctly reports crashed environments", async () => {
       server.use(
         buildEnabledRegionReponse(),
