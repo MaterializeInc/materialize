@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.memory_sampler import MemorySampler
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
@@ -44,6 +45,18 @@ class Executor:
     def DockerMemClusterd(self) -> int:
         raise NotImplementedError
 
+    def MemPeakWindowStart(self) -> None:
+        raise NotImplementedError
+
+    def DockerMemPeakMz(self, current: int) -> int:
+        raise NotImplementedError
+
+    def DockerMemPeakClusterd(self, current: int) -> int:
+        raise NotImplementedError
+
+    def MemPeakStop(self) -> None:
+        raise NotImplementedError
+
 
 class Docker(Executor):
     def __init__(
@@ -57,6 +70,8 @@ class Docker(Executor):
         self._seed = seed
         self._materialized = materialized
         self._clusterd = clusterd
+        self._mem_sampler_mz = MemorySampler(composition, "materialized")
+        self._mem_sampler_clusterd = MemorySampler(composition, "clusterd")
 
     def RestartMzClusterd(self) -> None:
         self._composition.kill("materialized")
@@ -92,6 +107,20 @@ class Docker(Executor):
 
     def DockerMemClusterd(self) -> int:
         return self._composition.mem("clusterd")
+
+    def MemPeakWindowStart(self) -> None:
+        self._mem_sampler_mz.start_window()
+        self._mem_sampler_clusterd.start_window()
+
+    def DockerMemPeakMz(self, current: int) -> int:
+        return self._mem_sampler_mz.window_peak(current)
+
+    def DockerMemPeakClusterd(self, current: int) -> int:
+        return self._mem_sampler_clusterd.window_peak(current)
+
+    def MemPeakStop(self) -> None:
+        self._mem_sampler_mz.stop()
+        self._mem_sampler_clusterd.stop()
 
 
 class MzCloud(Executor):
