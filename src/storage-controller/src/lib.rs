@@ -3991,6 +3991,27 @@ where
                 let mut lags = BTreeMap::new();
                 for frontiers in &all_frontiers {
                     let id = frontiers.id;
+                    // The compute controller records the collections it writes, among them
+                    // materialized views, so this controller tracks their staleness only to report
+                    // it. Their freshness dependence appears once the compute controller creates
+                    // their dataflow, and `StorageCollections` observes them from then on.
+                    // TODO: The dependence is captured once, so a later change of an existing
+                    // materialized view's dependence is not picked up.
+                    if this
+                        .collections
+                        .get(&id)
+                        .is_some_and(|c| matches!(c.data_source, DataSource::Other))
+                        && !id.is_transient()
+                        && !states.contains(&id)
+                        && let Ok(Some(dependence)) =
+                            this.storage_collections.determine_freshness_dependence(id)
+                    {
+                        // The frontiers were read under the lock, so `StorageCollections` observes
+                        // every later advance.
+                        let state =
+                            FreshnessState::new(dependence, now, &frontiers.write_frontier, None);
+                        states.insert_reporting_only(id, state);
+                    }
                     if let Some(state) = states.get_mut(&id) {
                         let today = frontier_lag(&this.wallclock_lag, &frontiers.write_frontier);
                         let lag = reported_wallclock_lag(reporting, Some(state), now, today);
@@ -4011,35 +4032,13 @@ where
                 continue;
             };
 
-            // The compute controller records the collections it writes, among them materialized
-            // views, so this controller tracks their staleness only to report it. Their freshness
-            // dependence appears once the compute controller creates their dataflow.
-            if matches!(collection.data_source, DataSource::Other) && !id.is_transient() {
-                if collection.reporting_freshness.is_none()
-                    && let Ok(Some(dependence)) =
-                        self.storage_collections.determine_freshness_dependence(id)
-                {
-                    let state =
-                        FreshnessState::new(dependence, now, &frontiers.write_frontier, None);
-                    collection.reporting_freshness = Some(state);
-                }
-                if let Some(state) = &mut collection.reporting_freshness {
-                    let rows = state.observe(now, &frontiers.write_frontier, None);
-                    mz_ore::soft_assert_or_log!(rows.is_empty(), "reporting-only state recorded");
-                }
-            }
-
             let collection_unreadable =
                 PartialOrder::less_equal(&frontiers.write_frontier, &frontiers.read_capabilities);
             let today = frontier_lag(&self.wallclock_lag, &frontiers.write_frontier);
             let reported = match unreported_lags.remove(&id) {
                 Some(lag) => lag,
                 None => {
-                    let state = collection
-                        .freshness
-                        .as_mut()
-                        .or(collection.reporting_freshness.as_mut());
-                    reported_wallclock_lag(reporting, state, now, today)
+                    reported_wallclock_lag(reporting, collection.freshness.as_mut(), now, today)
                 }
             };
             let (lag, histogram_lag) = if collection_unreadable {
@@ -4328,10 +4327,6 @@ struct CollectionState {
     /// staleness is not tracked for this collection. The states of other collections are in
     /// [`UnreportedFreshness`].
     freshness: Option<FreshnessState>,
-    /// The staleness state of the write frontier of a collection that another controller writes
-    /// and records, only for the reported wallclock lag. It is always driven without a recorder
-    /// configuration, so it never records.
-    reporting_freshness: Option<FreshnessState>,
 }
 
 impl CollectionState {
@@ -4357,7 +4352,6 @@ impl CollectionState {
             wallclock_lag_histogram_stash,
             wallclock_lag_metrics,
             freshness: None,
-            reporting_freshness: None,
         }
     }
 }
