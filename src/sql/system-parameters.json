@@ -1814,6 +1814,24 @@
       "dyncfg": false
     },
     {
+      "name": "enable_wallclock_freshness_recording",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Record wallclock freshness histograms in `WallclockFreshnessHistogram` and `ReplicaWallclockFreshnessHistogram` introspection.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_wallclock_freshness_reporting",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Report wallclock staleness as the worst case of samples in milliseconds.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "enable_will_distinct_propagation",
       "typeName": "boolean",
       "default": "on",
@@ -4512,6 +4530,33 @@
       "scope": "environment",
       "userVisible": false,
       "dyncfg": false
+    },
+    {
+      "name": "wallclock_freshness_buckets_per_octave",
+      "typeName": "unsigned integer",
+      "default": "4",
+      "description": "The number of histogram buckets per power of two of staleness. Must be a power of two.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "wallclock_freshness_histogram_retention_interval",
+      "typeName": "duration",
+      "default": "30 d",
+      "description": "The interval of time to keep when truncating the wallclock freshness histograms.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "wallclock_freshness_period_interval",
+      "typeName": "duration",
+      "default": "1 min",
+      "description": "The period interval of histograms in wallclock freshness introspection.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
     },
     {
       "name": "wallclock_global_lag_histogram_retention_interval",
