@@ -54,6 +54,7 @@ use mz_secrets_cli::SecretsReaderCliArgs;
 use mz_storage_client::controller::{
     IntrospectionType, StorageController, StorageMetadata, StorageTxn,
 };
+use mz_storage_client::freshness::UnreportedFreshness;
 use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
@@ -690,7 +691,7 @@ impl Controller {
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
-        let (write_frontier_tx, write_frontier_rx) = mpsc::unbounded_channel();
+        let unreported_freshness = Arc::new(UnreportedFreshness::default());
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
             Arc::clone(&config.persist_clients),
@@ -701,7 +702,7 @@ impl Controller {
             read_only,
             config.connection_context.clone(),
             storage_txn,
-            write_frontier_tx,
+            Arc::clone(&unreported_freshness),
         )
         .await;
 
@@ -720,7 +721,7 @@ impl Controller {
             config.connection_context,
             storage_txn,
             Arc::clone(&collections_ctl),
-            write_frontier_rx,
+            unreported_freshness,
         )
         .await;
 
