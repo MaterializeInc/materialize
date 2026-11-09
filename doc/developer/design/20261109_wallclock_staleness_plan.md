@@ -19,6 +19,7 @@
 * Bucket k covers staleness in (2^((k - 1) / b), 2^(k / b)] ms, and staleness of at most 1 ms is bucket 0.
 * Rows carry `measure = 'end_to_end'` only.
 * Count unit is milliseconds of wall-clock time. Every full period of a recording sums to the period length.
+* Instants are `mz_repr::Timestamp` (milliseconds since the Unix epoch) in every Rust interface, never a bare `u64`. Spans such as staleness and period length are `std::time::Duration`. Only the per-bucket count is a plain `u64` of milliseconds, because it becomes a diff. SQL columns stay `timestamp with time zone`, which holds milliseconds exactly.
 * Staleness is `now.saturating_sub(reflected)`, never negative.
 * No `as` conversions (`mz_ore::cast::CastFrom`/`CastLossy`), no `std::collections::HashMap`, no `unsafe`.
 * Large test modules in `<module>/tests.rs` with `#[cfg(test)] mod tests;`.
@@ -45,7 +46,7 @@
 - Modify: `src/storage-types/src/lib.rs`
 
 **Interfaces:**
-- Produces: `pub struct BucketScheme` with `new(per_octave: u32) -> Option<Self>`, `per_octave(&self) -> u32`, `bucket(&self, staleness_ms: u64) -> i32`, `upper_bound_ms(&self, k: i32) -> f64`.
+- Produces: `pub struct BucketScheme` with `new(per_octave: u32) -> Option<Self>`, `per_octave(&self) -> u32`, `bucket(&self, staleness: Duration) -> i32` (whole milliseconds, rounded up), `upper_bound_ms(&self, k: i32) -> f64`.
 
 - [ ] **Step 1:** Port `BucketScheme` from `8b83a7e33e:src/storage-types/src/freshness/histogram.rs` without `add_span`/`add_span_with`, and its tests from `8b83a7e33e:src/storage-types/src/freshness/tests.rs` (`bucket_*`). Rename "latency" to "staleness" in docs.
 - [ ] **Step 2:** Add a test `bucket_bounds_are_inclusive_above`: for b in [1, 2, 4, 8] and k in 1..=64, `bucket(floor(upper_bound_ms(k))) == k` where that bound is an integer above 1, and `bucket(0) == 0`, `bucket(1) == 0`, `bucket(2) == b`.
@@ -60,7 +61,7 @@
 
 **Interfaces:**
 - Consumes: `TimeDependence` from `src/storage-types/src/time_dependence.rs` (unchanged).
-- Produces: `pub fn reflected_time(dependence: &TimeDependence, frontier: Timestamp) -> Option<u64>`.
+- Produces: `pub fn reflected_time(dependence: &TimeDependence, frontier: Timestamp) -> Option<Timestamp>`.
 
 Semantics from the spec: `None` if `frontier` is 0, or if a schedule has no refresh at or before its bound. Otherwise `reflected_at(dependence, frontier - 1)`, where a node first rounds the bound down to `last_refresh_at_or_before(schedule, bound)` if it has a schedule, and then returns the bound if `dependence` is empty, else the minimum over children at the rounded bound.
 
@@ -78,12 +79,12 @@ Semantics from the spec: `None` if `frontier` is 0, or if a schedule has no refr
 **Interfaces:**
 - Consumes: `BucketScheme`.
 - Produces:
-  - `pub struct RecorderConfig { pub scheme: BucketScheme, pub period_ms: u64, pub retention_ms: u64 }`
-  - `pub struct PeriodRow { pub period_start_ms: u64, pub period_end_ms: u64, pub buckets_per_octave: u32, pub bucket: i32, pub count: u64 }`
-  - `pub struct StalenessRecorder` with `new(start_ms: u64, reflected_ms: u64) -> Self`, `observe(&mut self, now_ms: u64, reflected_ms: u64, config: &RecorderConfig) -> Vec<PeriodRow>`, `tick(&mut self, now_ms: u64, config: &RecorderConfig) -> Vec<PeriodRow>`, `finish(&mut self, now_ms: u64, config: &RecorderConfig) -> Vec<PeriodRow>`.
-  - `pub struct StalenessReporter` with `new(start_ms: u64, reflected_ms: u64) -> Self`, `observe(&mut self, now_ms: u64, reflected_ms: u64)`, `read(&mut self, now_ms: u64) -> u64`.
+  - `pub struct RecorderConfig { pub scheme: BucketScheme, pub period: Duration, pub retention: Duration }`
+  - `pub struct PeriodRow { pub period_start: Timestamp, pub period_end: Timestamp, pub buckets_per_octave: u32, pub bucket: i32, pub count_ms: u64 }`
+  - `pub struct StalenessRecorder` with `new(start: Timestamp, reflected: Timestamp) -> Self`, `observe(&mut self, now: Timestamp, reflected: Timestamp, config: &RecorderConfig) -> Vec<PeriodRow>`, `tick(&mut self, now: Timestamp, config: &RecorderConfig) -> Vec<PeriodRow>`, `finish(&mut self, now: Timestamp, config: &RecorderConfig) -> Vec<PeriodRow>`.
+  - `pub struct StalenessReporter` with `new(start: Timestamp, reflected: Timestamp) -> Self`, `observe(&mut self, now: Timestamp, reflected: Timestamp)`, `read(&mut self, now: Timestamp) -> Duration`.
 
-Recorder semantics: it holds the open sample's start `a` and reflected time `r`, and one open period of bucket counts. `observe` closes the sample at `now` and starts the next one with the new `r`. `tick` closes the sample at the last period boundary at or before `now`, if one was passed, and continues it from there with the same `r`. A sample `[a, b)` is split at period boundaries, and each part `[x, y)` adds `y - x` to the bucket of `y.saturating_sub(r)`. Periods are half-open on the grid of `period_ms` from epoch, except that the first period starts at `start_ms` and a period-length change cuts the open period at the current sample's end. A period's rows are returned once `now` reaches its end. `now <= a` drops the sample and sets `a = now`. `finish` closes the sample at `now` and returns the partial period. Port the period bookkeeping (grid, cut, ordering assert) from `PeriodBook` in `8b83a7e33e:src/storage-types/src/freshness/period.rs`, without `CATCH_UP_MS`, `DAY_MS` and the arrival high-water mark.
+Recorder semantics: it holds the open sample's start `a` and reflected time `r`, and one open period of bucket counts. `observe` closes the sample at `now` and starts the next one with the new `r`. `tick` closes the sample at the last period boundary at or before `now`, if one was passed, and continues it from there with the same `r`. A sample `[a, b)` is split at period boundaries, and each part `[x, y)` adds `y - x` to the bucket of `y.saturating_sub(r)`. Periods are half-open on the grid of `period` from the epoch, except that the first period starts at `start` and a period-length change cuts the open period at the current sample's end. A period's rows are returned once `now` reaches its end. `now <= a` drops the sample and sets `a = now`. `finish` closes the sample at `now` and returns the partial period. Port the period bookkeeping (grid, cut, ordering assert) from `PeriodBook` in `8b83a7e33e:src/storage-types/src/freshness/period.rs`, without `CATCH_UP_MS`, `DAY_MS` and the arrival high-water mark.
 
 Reporter semantics: `read` returns the maximum of the worst cases of samples closed since the last `read`, the worst case of the last closed sample, and `now - r`, then resets the first.
 
@@ -92,9 +93,9 @@ Reporter semantics: `read` returns the maximum of the worst cases of samples clo
   - `stall_charges_each_period_at_its_end`: `r` fixed at 0, ticks at 60000, 120000, 180000. Rows are 60000 ms each in `bucket(60000)`, `bucket(120000)`, `bucket(180000)`.
   - `frontier_ahead_of_clock_reads_zero`: `r = now + 500`, the count lands in bucket 0.
   - `clock_steps_back_drops_sample`: observe at 1000, then 900, then 2000. The total count is `2000 - 900`.
-  - `period_change_cuts_open_period`: switch `period_ms` from 60000 to 10000 at 30000. Rows `[0, 30000)`, then `[30000, 40000)`, `[40000, 50000)`, and no overlap.
+  - `period_change_cuts_open_period`: switch `period` from 60 s to 10 s at 30000. Rows `[0, 30000)`, then `[30000, 40000)`, `[40000, 50000)`, and no overlap.
   - `finish_emits_partial_period`: finish at 30000 gives one period `[0, 30000)` summing to 30000, and later calls return nothing.
-  - Proptest `mass_is_conserved`: random sequences of observe, tick and clock values. The emitted counts per full period equal `period_ms`, and the total equals the finish time minus the start, minus dropped backwards steps.
+  - Proptest `mass_is_conserved`: random sequences of observe, tick and clock values. The emitted counts per full period equal the period in milliseconds, and the total equals the finish time minus the start, minus dropped backwards steps.
   - `reporter_keeps_peak_between_reads`: two samples with worst cases 1200 and 1050 between reads, `read` returns 1200, the next `read` without samples returns `max(1050, now - r)`.
 - [ ] **Step 2:** Run, expect FAIL. Implement. Run `cargo nextest run -p mz-storage-types freshness`, expect PASS.
 - [ ] **Step 3:** Commit `storage-types: record and report wall-clock staleness`.
@@ -144,9 +145,9 @@ The freshness dependence equals the time dependence except that `LoadGenerator(_
 - Produces:
   - `pub fn recorder_config(dyncfg: &ConfigSet) -> Option<RecorderConfig>` (`None` when recording is off, ported from the old l.683 without `interval_ms`).
   - `pub fn pack_rows(rows: Vec<PeriodRow>, collection_id: GlobalId, replica_id: Option<ReplicaId>, labels: &BTreeMap<&'static str, String>) -> Vec<(Row, Diff)>`, ported from the old l.706 with `measure` fixed to `"end_to_end"`.
-  - `pub struct FreshnessState` with `new(dependence: TimeDependence, start_ms: u64, frontier: &Antichain<Timestamp>, config: Option<&RecorderConfig>) -> Self`, `observe(&mut self, now_ms: u64, frontier: &Antichain<Timestamp>, config: Option<&RecorderConfig>) -> Vec<PeriodRow>`, `tick(&mut self, now_ms: u64, config: Option<&RecorderConfig>) -> Vec<PeriodRow>`, `finish(&mut self, now_ms: u64, config: Option<&RecorderConfig>) -> Vec<PeriodRow>`, `reported_lag_ms(&mut self, now_ms: u64) -> u64`.
+  - `pub struct FreshnessState` with `new(dependence: TimeDependence, start: Timestamp, frontier: &Antichain<Timestamp>, config: Option<&RecorderConfig>) -> Self`, `observe(&mut self, now: Timestamp, frontier: &Antichain<Timestamp>, config: Option<&RecorderConfig>) -> Vec<PeriodRow>`, `tick(&mut self, now: Timestamp, config: Option<&RecorderConfig>) -> Vec<PeriodRow>`, `finish(&mut self, now: Timestamp, config: Option<&RecorderConfig>) -> Vec<PeriodRow>`, `reported_lag(&mut self, now: Timestamp) -> Duration`.
 
-`FreshnessState` always keeps a reporter and keeps a recorder only while `config` is `Some`. A recorder is created at the first call with `Some` config, starting at `start_ms` on the first call and at `now_ms` on later ones, and dropped at the first call with `None`. `reflected_time` returning `None` maps to the recording's start. An empty frontier calls `finish` and stops recording, and the reporter reads 0 from then on.
+`FreshnessState` always keeps a reporter and keeps a recorder only while `config` is `Some`. A recorder is created at the first call with `Some` config, starting at `start` on the first call and at `now` on later ones, and dropped at the first call with `None`. `reflected_time` returning `None` maps to the recording's start. An empty frontier calls `finish` and stops recording, and the reporter reads 0 from then on.
 
 - [ ] **Step 1:** Write tests: `flag_off_then_on_restarts_at_now` (Review Focus 4), `empty_frontier_finishes_once`, `refresh_view_reads_last_refresh`, `pack_rows_layout` (column order of both descs, count as diff).
 - [ ] **Step 2:** Run, expect FAIL, implement, run `cargo nextest run -p mz-storage-client freshness`, expect PASS.
@@ -160,13 +161,13 @@ The freshness dependence equals the time dependence except that `LoadGenerator(_
 
 **Interfaces:**
 - Consumes: `FreshnessState`, `recorder_config`, `pack_rows`, `get_freshness_dependence`.
-- Produces: `CollectionState::freshness: Option<FreshnessState>` (global), `ReplicaCollectionState::freshness: Option<FreshnessState>`, `boot_ms: u64` on `ComputeController` passed to `Instance::new`.
+- Produces: `CollectionState::freshness: Option<FreshnessState>` (global), `ReplicaCollectionState::freshness: Option<FreshnessState>`, `boot: Timestamp` on `ComputeController` passed to `Instance::new`.
 
 Wiring, with the old locations as guides (`8b83a7e33e:src/compute-client/src/controller/instance.rs`):
 * Global observe in `maybe_update_global_write_frontier` (old l.2189), replica observe in `handle_frontiers_response` (old l.2596).
 * A new tick over all states in `maintain`, after the config refresh, delivering rows.
 * Rows are packed with `pack_rows` and delivered by a `deliver_freshness_rows` that picks the introspection type by `replica_id` (old l.2329).
-* Start time: `boot_ms` for collections added before `initialized`, `now` after. Recording off while `read_only`. Transient collections are skipped.
+* Start time: `boot` for collections added before `initialized`, `now` after. Recording off while `read_only`. Transient collections are skipped.
 * Drop: `finish` in `drop_collections`. Replica removal: `finish` for that replica's states. Rehydration: non-log states carry over, log states finish and start again at `now`.
 * Log collections: no global state, per-replica states only, started at replica creation.
 
@@ -184,7 +185,7 @@ Wiring, with the old locations as guides (`8b83a7e33e:src/compute-client/src/con
 **Interfaces:**
 - Consumes: `FreshnessState`, `recorder_config`, `pack_rows`, `determine_freshness_dependence`.
 
-Wiring, with `8b83a7e33e:src/storage-controller/src/lib.rs` as guide: observe in `update_write_frontier` (old l.3051-3103). Collections without a cluster (`CollectionStateExtra::None`, tables and storage-managed collections) observe in `refresh_wallclock_lag` (old l.3974). Tick in the same periodic path as `refresh_wallclock_lag`. Append through `append_freshness_updates` (old l.3209). Start at `boot_ms` before initialization, at creation after. Finish in `drop_sources_unvalidated` and `drop_sinks_unvalidated`. Only the storage controller writes global rows of storage-owned collections, and materialized views stay with compute.
+Wiring, with `8b83a7e33e:src/storage-controller/src/lib.rs` as guide: observe in `update_write_frontier` (old l.3051-3103). Collections without a cluster (`CollectionStateExtra::None`, tables and storage-managed collections) observe in `refresh_wallclock_lag` (old l.3974). Tick in the same periodic path as `refresh_wallclock_lag`. Append through `append_freshness_updates` (old l.3209). Start at `boot` before initialization, at creation after. Finish in `drop_sources_unvalidated` and `drop_sinks_unvalidated`. Only the storage controller writes global rows of storage-owned collections, and materialized views stay with compute.
 
 - [ ] **Step 1:** Write tests in the storage controller's test module where one exists, otherwise cover it in Task 10's testdrive: a table's rows sum to 60000 per full period.
 - [ ] **Step 2:** Implement, run `CARGO_INCREMENTAL=0 cargo check -p mz-storage-controller --all-targets`, then the tests.
@@ -199,9 +200,9 @@ Wiring, with `8b83a7e33e:src/storage-controller/src/lib.rs` as guide: observe in
 - Test: `src/storage-client/src/freshness/tests.rs`, `test/testdrive/wallclock-lag.td`
 
 **Interfaces:**
-- Consumes: `FreshnessState::reported_lag_ms`.
+- Consumes: `FreshnessState::reported_lag`.
 
-Port the `WallclockLag::Millis(u64)` change with `from_duration`, `histogram_bucket` and `metric_seconds` from old commit `e4b15cdf56` and its tests. Under the reporting flag, `refresh_wallclock_lag` in both controllers uses `reported_lag_ms(now)` for the per-minute history and the Prometheus metric. The existing global histogram keeps its 1 Hz frontier lag. With the flag off every value is as today.
+Port the `WallclockLag::Millis(u64)` change with `from_duration`, `histogram_bucket` and `metric_seconds` from old commit `e4b15cdf56` and its tests. Under the reporting flag, `refresh_wallclock_lag` in both controllers uses `reported_lag(now)` for the per-minute history and the Prometheus metric. The existing global histogram keeps its 1 Hz frontier lag. With the flag off every value is as today.
 
 - [ ] **Step 1:** Write tests: `reporting_off_is_unchanged`, `reporting_on_reads_sample_peak` (a 1 s source reads about 1 s, not a sawtooth).
 - [ ] **Step 2:** Run, expect FAIL, implement, expect PASS. Update `test/testdrive/wallclock-lag.td` from its old version: REFRESH EVERY views read up to their period under the flag.
