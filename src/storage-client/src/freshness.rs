@@ -95,19 +95,18 @@ fn timestamp(t: Timestamp) -> Option<CheckedTimestamp<DateTime<Utc>>> {
 /// The wall-clock staleness of one frontier of a collection, the global one or a replica's.
 ///
 /// It always reports staleness, and records histograms while it is passed a recorder
-/// configuration. A frontier that reflects no time yet reflects the start. Once the frontier
-/// is empty, or after [`FreshnessState::finish`], the state is complete: it records nothing
-/// more and reports zero staleness.
+/// configuration. A frontier that reflects no time yet reflects the start of the reporter
+/// or recording it feeds. Once the frontier is empty, or after [`FreshnessState::finish`], the
+/// state is complete: it records nothing more and reports zero staleness.
 #[derive(Debug)]
 pub struct FreshnessState {
     dependence: TimeDependence,
     start: Timestamp,
-    /// The reflected time of the latest frontier.
-    reflected: Timestamp,
+    /// The reflected time of the latest frontier, `None` if it reflects no time.
+    reflected: Option<Timestamp>,
     reporter: StalenessReporter,
-    recorder: Option<StalenessRecorder>,
-    /// Whether a recorder was ever created.
-    recorded: bool,
+    /// The recorder and the time it started.
+    recorder: Option<(Timestamp, StalenessRecorder)>,
     complete: bool,
 }
 
@@ -120,14 +119,13 @@ impl FreshnessState {
         frontier: &Antichain<Timestamp>,
         config: Option<&RecorderConfig>,
     ) -> Self {
-        let reflected = reflect(&dependence, start, frontier);
+        let reflected = reflect(&dependence, frontier);
         let mut state = FreshnessState {
             dependence,
             start,
             reflected,
-            reporter: StalenessReporter::new(start, reflected),
+            reporter: StalenessReporter::new(start, reflected.unwrap_or(start)),
             recorder: None,
-            recorded: false,
             complete: frontier.is_empty(),
         };
         state.apply_config(start, config);
@@ -148,10 +146,13 @@ impl FreshnessState {
             return Vec::new();
         }
         self.apply_config(now, config);
-        self.reflected = reflect(&self.dependence, self.start, frontier);
-        self.reporter.observe(now, self.reflected);
+        self.reflected = reflect(&self.dependence, frontier);
+        self.reporter
+            .observe(now, self.reflected.unwrap_or(self.start));
         match (&mut self.recorder, config) {
-            (Some(recorder), Some(config)) => recorder.observe(now, self.reflected, config),
+            (Some((start, recorder)), Some(config)) => {
+                recorder.observe(now, self.reflected.unwrap_or(*start), config)
+            }
             _ => Vec::new(),
         }
     }
@@ -163,7 +164,7 @@ impl FreshnessState {
         }
         self.apply_config(now, config);
         match (&mut self.recorder, config) {
-            (Some(recorder), Some(config)) => recorder.tick(now, config),
+            (Some((_, recorder)), Some(config)) => recorder.tick(now, config),
             _ => Vec::new(),
         }
     }
@@ -177,7 +178,7 @@ impl FreshnessState {
         self.apply_config(now, config);
         self.complete = true;
         match (self.recorder.take(), config) {
-            (Some(mut recorder), Some(config)) => recorder.finish(now, config),
+            (Some((_, mut recorder)), Some(config)) => recorder.finish(now, config),
             _ => Vec::new(),
         }
     }
@@ -196,12 +197,11 @@ impl FreshnessState {
             return;
         }
         match (&self.recorder, config) {
+            // A recorder created after construction starts at `now`, so that no sample spans
+            // time the flag was off.
             (None, Some(_)) => {
-                // A recorder that is turned on again starts at `now`, so that no sample spans
-                // the time it was off.
-                let start = if self.recorded { now } else { self.start };
-                self.recorder = Some(StalenessRecorder::new(start, self.reflected));
-                self.recorded = true;
+                let recorder = StalenessRecorder::new(now, self.reflected.unwrap_or(now));
+                self.recorder = Some((now, recorder));
             }
             // The flag was turned off, so the open period is dropped without writing it.
             (Some(_), None) => self.recorder = None,
@@ -210,16 +210,11 @@ impl FreshnessState {
     }
 }
 
-/// The reflected time of `frontier`, or `start` if it reflects no time.
-fn reflect(
-    dependence: &TimeDependence,
-    start: Timestamp,
-    frontier: &Antichain<Timestamp>,
-) -> Timestamp {
+/// The reflected time of `frontier`, `None` if it reflects no time.
+fn reflect(dependence: &TimeDependence, frontier: &Antichain<Timestamp>) -> Option<Timestamp> {
     frontier
         .as_option()
         .and_then(|frontier| reflected_time(dependence, *frontier))
-        .unwrap_or(start)
 }
 
 #[cfg(test)]
