@@ -310,6 +310,14 @@ pub trait StorageCollections: Debug + Sync {
         id: GlobalId,
     ) -> Result<Option<TimeDependence>, TimeDependenceError>;
 
+    /// Get the freshness dependence for a storage collection, which equals its time dependence
+    /// except that load generators follow wall clock. Returns no value if unknown or if the
+    /// object isn't managed by storage.
+    fn determine_freshness_dependence(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError>;
+
     /// Returns the state of [`StorageCollections`] formatted as JSON.
     fn dump(&self) -> Result<serde_json::Value, anyhow::Error>;
 }
@@ -2008,41 +2016,26 @@ impl StorageCollections for StorageCollectionsImpl {
                 };
 
                 // Determine the time dependence of the collection.
-                let time_dependence = {
-                    use DataSource::*;
-                    if let Some(timeline) = &description.timeline
-                        && *timeline != Timeline::EpochMilliseconds
-                    {
-                        // Only the epoch timeline follows wall-clock.
-                        None
-                    } else {
-                        match &description.data_source {
-                            Ingestion(ingestion) => {
-                                use GenericSourceConnection::*;
-                                match ingestion.desc.connection {
-                                    // Kafka, Postgres, MySql, and SQL Server sources all
-                                    // follow wall clock.
-                                    Kafka(_) | Postgres(_) | MySql(_) | SqlServer(_) => {
-                                        Some(TimeDependence::default())
-                                    }
-                                    // Load generators not further specified.
-                                    LoadGenerator(_) => None,
-                                }
-                            }
-                            IngestionExport { ingestion_id, .. } => {
-                                let c = self_collections.get(ingestion_id).expect("known to exist");
-                                c.time_dependence.clone()
-                            }
-                            // Introspection, other, progress, table, and webhook sources follow wall clock.
-                            Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
-                                Some(TimeDependence::default())
-                            }
-                            // Materialized views, etc, aren't managed by storage.
-                            Other => None,
-                            Sink { .. } => None,
-                        }
-                    }
-                };
+                let timeline = description.timeline.as_ref();
+                let time_dependence = data_source_dependence(
+                    timeline,
+                    &description.data_source,
+                    // Load generators not further specified.
+                    None,
+                    |id| {
+                        let c = self_collections.get(&id).expect("known to exist");
+                        c.time_dependence.clone()
+                    },
+                );
+                let freshness_dependence = data_source_dependence(
+                    timeline,
+                    &description.data_source,
+                    Some(TimeDependence::default()),
+                    |id| {
+                        let c = self_collections.get(&id).expect("known to exist");
+                        c.freshness_dependence.clone()
+                    },
+                );
 
                 let ingestion_remap_collection_id = match &description.data_source {
                     DataSource::Ingestion(desc) => Some(desc.remap_collection_id),
@@ -2052,6 +2045,7 @@ impl StorageCollections for StorageCollectionsImpl {
                 let mut collection_state = CollectionState::new(
                     description.primary,
                     time_dependence,
+                    freshness_dependence,
                     ingestion_remap_collection_id,
                     initial_since,
                     write_frontier.clone(),
@@ -2284,6 +2278,7 @@ impl StorageCollections for StorageCollectionsImpl {
             let collection_state = CollectionState::new(
                 None,
                 existing.time_dependence.clone(),
+                existing.freshness_dependence.clone(),
                 existing.ingestion_remap_collection_id.clone(),
                 implied_capability,
                 write_frontier,
@@ -2476,6 +2471,16 @@ impl StorageCollections for StorageCollectionsImpl {
         Ok(state.time_dependence.clone())
     }
 
+    fn determine_freshness_dependence(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+        use TimeDependenceError::CollectionMissing;
+        let collections = self.collections.lock().expect("lock poisoned");
+        let state = collections.get(&id).ok_or(CollectionMissing(id))?;
+        Ok(state.freshness_dependence.clone())
+    }
+
     fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
         let Self {
@@ -2646,6 +2651,45 @@ impl SinceHandleWrapper {
     }
 }
 
+/// Returns how the frontier of a collection with the given `timeline` and `data_source` follows
+/// wall-clock time.
+///
+/// `load_generator` is the dependence of load generator ingestions. An ingestion export has the
+/// dependence that `ingestion` returns for its ingestion's ID.
+fn data_source_dependence(
+    timeline: Option<&Timeline>,
+    data_source: &DataSource,
+    load_generator: Option<TimeDependence>,
+    ingestion: impl FnOnce(GlobalId) -> Option<TimeDependence>,
+) -> Option<TimeDependence> {
+    use DataSource::*;
+    if let Some(timeline) = timeline
+        && *timeline != Timeline::EpochMilliseconds
+    {
+        // Only the epoch timeline follows wall-clock.
+        return None;
+    }
+    match data_source {
+        Ingestion(ingestion) => {
+            use GenericSourceConnection::*;
+            match ingestion.desc.connection {
+                // Kafka, Postgres, MySql, and SQL Server sources all
+                // follow wall clock.
+                Kafka(_) | Postgres(_) | MySql(_) | SqlServer(_) => Some(TimeDependence::default()),
+                LoadGenerator(_) => load_generator,
+            }
+        }
+        IngestionExport { ingestion_id, .. } => ingestion(*ingestion_id),
+        // Introspection, other, progress, table, and webhook sources follow wall clock.
+        Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
+            Some(TimeDependence::default())
+        }
+        // Materialized views, etc, aren't managed by storage.
+        Other => None,
+        Sink { .. } => None,
+    }
+}
+
 /// State maintained about individual collections.
 #[derive(Debug, Clone)]
 struct CollectionState {
@@ -2659,6 +2703,8 @@ struct CollectionState {
 
     /// Description of how this collection's frontier follows time.
     time_dependence: Option<TimeDependence>,
+    /// The dependence [`StorageCollections::determine_freshness_dependence`] reports.
+    freshness_dependence: Option<TimeDependence>,
     /// The ID of the source remap/progress collection, if this is an ingestion.
     ingestion_remap_collection_id: Option<GlobalId>,
 
@@ -2692,6 +2738,7 @@ impl CollectionState {
     pub fn new(
         primary: Option<GlobalId>,
         time_dependence: Option<TimeDependence>,
+        freshness_dependence: Option<TimeDependence>,
         ingestion_remap_collection_id: Option<GlobalId>,
         since: Antichain<Timestamp>,
         write_frontier: Antichain<Timestamp>,
@@ -2703,6 +2750,7 @@ impl CollectionState {
         Self {
             primary,
             time_dependence,
+            freshness_dependence,
             ingestion_remap_collection_id,
             read_capabilities,
             implied_capability: since.clone(),
@@ -3409,6 +3457,131 @@ mod tests {
 
         assert_eq!(referenced_shards, BTreeSet::from([active_shard]));
         assert_eq!(finalizable_shards, BTreeSet::from([dropped_shard]));
+    }
+
+    fn ingestion(connection: GenericSourceConnection) -> DataSource {
+        DataSource::Ingestion(mz_storage_types::sources::IngestionDescription {
+            desc: mz_storage_types::sources::SourceDesc {
+                connection,
+                timestamp_interval: Duration::from_secs(1),
+            },
+            source_exports: BTreeMap::new(),
+            instance_id: mz_storage_types::instances::StorageInstanceId::system(0)
+                .expect("0 is a valid ID"),
+            remap_collection_id: GlobalId::User(2),
+            remap_metadata: (),
+        })
+    }
+
+    fn load_generator() -> DataSource {
+        use mz_storage_types::sources::load_generator::{
+            LoadGenerator, LoadGeneratorSourceConnection,
+        };
+        ingestion(GenericSourceConnection::LoadGenerator(
+            LoadGeneratorSourceConnection {
+                load_generator: LoadGenerator::Counter {
+                    max_cardinality: None,
+                },
+                tick_micros: None,
+                as_of: 0,
+                up_to: u64::MAX,
+            },
+        ))
+    }
+
+    fn kafka() -> DataSource {
+        use mz_repr::CatalogItemId;
+        use mz_storage_types::connections::{KafkaConnection, Tunnel};
+        use mz_storage_types::sources::KafkaSourceConnection;
+        ingestion(GenericSourceConnection::Kafka(KafkaSourceConnection {
+            connection: KafkaConnection {
+                brokers: Default::default(),
+                default_tunnel: Tunnel::Direct,
+                progress_topic: Default::default(),
+                progress_topic_options: Default::default(),
+                options: Default::default(),
+                tls: Default::default(),
+                sasl: Default::default(),
+            },
+            connection_id: CatalogItemId::User(1),
+            topic: "topic".into(),
+            start_offsets: Default::default(),
+            group_id_prefix: None,
+            metadata_columns: Vec::new(),
+            topic_metadata_refresh_interval: Duration::from_secs(1),
+        }))
+    }
+
+    fn ingestion_export(ingestion_id: GlobalId) -> DataSource {
+        use mz_storage_types::sources::{SourceExportDataConfig, SourceExportDetails};
+        DataSource::IngestionExport {
+            ingestion_id,
+            details: SourceExportDetails::None,
+            data_config: SourceExportDataConfig {
+                encoding: None,
+                envelope: SourceEnvelope::None(mz_storage_types::sources::envelope::NoneEnvelope {
+                    key_envelope: mz_storage_types::sources::envelope::KeyEnvelope::None,
+                    key_arity: 0,
+                }),
+            },
+        }
+    }
+
+    /// Returns the time and the freshness dependence of a collection whose ingestion, if it is an
+    /// ingestion export, has the given dependences.
+    fn dependences(
+        timeline: Option<&Timeline>,
+        data_source: &DataSource,
+        ingestion: (Option<TimeDependence>, Option<TimeDependence>),
+    ) -> (Option<TimeDependence>, Option<TimeDependence>) {
+        let (ingestion_time, ingestion_freshness) = ingestion;
+        let time = data_source_dependence(timeline, data_source, None, |_| ingestion_time.clone());
+        let freshness = data_source_dependence(
+            timeline,
+            data_source,
+            Some(TimeDependence::default()),
+            |_| ingestion_freshness.clone(),
+        );
+        (time, freshness)
+    }
+
+    #[mz_ore::test]
+    fn freshness_dependence_counts_load_generators_as_wall_clock() {
+        let epoch = Some(&Timeline::EpochMilliseconds);
+        assert_eq!(
+            dependences(epoch, &load_generator(), (None, None)),
+            (None, Some(TimeDependence::default())),
+        );
+    }
+
+    #[mz_ore::test]
+    fn freshness_dependence_of_kafka_equals_time_dependence() {
+        let epoch = Some(&Timeline::EpochMilliseconds);
+        let wall_clock = Some(TimeDependence::default());
+        assert_eq!(
+            dependences(epoch, &kafka(), (None, None)),
+            (wall_clock.clone(), wall_clock),
+        );
+    }
+
+    #[mz_ore::test]
+    fn freshness_dependence_of_ingestion_export_is_inherited() {
+        let epoch = Some(&Timeline::EpochMilliseconds);
+        let export = ingestion_export(GlobalId::User(1));
+        let wall_clock = Some(TimeDependence::default());
+        assert_eq!(
+            dependences(epoch, &export, (None, wall_clock.clone())),
+            (None, wall_clock),
+        );
+    }
+
+    #[mz_ore::test]
+    fn freshness_dependence_outside_epoch_timeline_is_unknown() {
+        let user = Timeline::User("user".into());
+        assert_eq!(
+            dependences(Some(&user), &load_generator(), (None, None)),
+            (None, None),
+        );
     }
 
     #[mz_ore::test(tokio::test)]

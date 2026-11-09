@@ -91,6 +91,9 @@ pub mod error;
 pub mod instance_client;
 pub use instance_client::InstanceClient;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) type StorageCollections =
     Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
@@ -974,6 +977,9 @@ impl ComputeController {
         let time_dependence = self
             .determine_time_dependence(instance_id, &dataflow, &used_imports)
             .expect("must exist");
+        let freshness_dependence = self
+            .determine_freshness_dependence(instance_id, &dataflow, &used_imports)
+            .expect("must exist");
 
         let instance = self.instance_mut(instance_id).expect("validated");
 
@@ -985,6 +991,7 @@ impl ComputeController {
                 compute_dependencies: dataflow.imported_index_ids().collect(),
                 shared: shared.clone(),
                 time_dependence: time_dependence.clone(),
+                freshness_dependence: freshness_dependence.clone(),
             };
             instance.collections.insert(id, collection);
             shared_collection_state.insert(id, shared);
@@ -1174,42 +1181,71 @@ impl ComputeController {
         dataflow: &mz_compute_types::dataflows::LirDataflowDescription,
         used_imports: &BTreeSet<GlobalId>,
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+        self.determine_dependence(
+            instance_id,
+            dataflow,
+            used_imports,
+            InstanceState::get_time_dependence,
+            |id| self.storage_collections.determine_time_dependence(id),
+        )
+    }
+
+    /// Determines the freshness dependence of a dataflow's exports, which equals their time
+    /// dependence except that load generators follow wall clock.
+    ///
+    /// Merges the freshness dependences of the imports in `used_imports` like
+    /// [`Self::determine_time_dependence`] merges their time dependences.
+    fn determine_freshness_dependence(
+        &self,
+        instance_id: ComputeInstanceId,
+        dataflow: &mz_compute_types::dataflows::LirDataflowDescription,
+        used_imports: &BTreeSet<GlobalId>,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+        self.determine_dependence(
+            instance_id,
+            dataflow,
+            used_imports,
+            InstanceState::get_freshness_dependence,
+            |id| self.storage_collections.determine_freshness_dependence(id),
+        )
+    }
+
+    /// Merges the dependences of a dataflow's used imports, looking up compute collections with
+    /// `of_compute` and storage collections with `of_storage`.
+    fn determine_dependence(
+        &self,
+        instance_id: ComputeInstanceId,
+        dataflow: &mz_compute_types::dataflows::LirDataflowDescription,
+        used_imports: &BTreeSet<GlobalId>,
+        of_compute: fn(
+            &InstanceState,
+            GlobalId,
+        ) -> Result<Option<TimeDependence>, CollectionMissing>,
+        of_storage: impl Fn(GlobalId) -> Result<Option<TimeDependence>, TimeDependenceError>,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError> {
         let instance = self
             .instance(instance_id)
             .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
-        let mut time_dependencies = Vec::new();
-
-        for id in dataflow
-            .imported_index_ids()
-            .filter(|id| used_imports.contains(id))
-        {
-            let dependence = instance
-                .get_time_dependence(id)
-                .map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
-            time_dependencies.push(dependence);
-        }
-
-        'source: for id in dataflow
-            .imported_source_ids()
-            .filter(|id| used_imports.contains(id))
-        {
-            // We first check whether the id is backed by a compute object, in which case we use
-            // the time dependence we know. This is true for storage sinks.
-            for instance in self.instances.values() {
-                if let Ok(dependence) = instance.get_time_dependence(id) {
-                    time_dependencies.push(dependence);
-                    continue 'source;
+        merge_import_dependences(
+            dataflow,
+            used_imports,
+            |id| {
+                of_compute(instance, id)
+                    .map_err(|err| TimeDependenceError::CollectionMissing(err.0))
+            },
+            |id| {
+                // We first check whether the id is backed by a compute object, in which case we use
+                // the dependence we know. This is true for storage sinks.
+                for instance in self.instances.values() {
+                    if let Ok(dependence) = of_compute(instance, id) {
+                        return Ok(dependence);
+                    }
                 }
-            }
 
-            // Not a compute object: Consult the storage collections controller.
-            time_dependencies.push(self.storage_collections.determine_time_dependence(id)?);
-        }
-
-        Ok(TimeDependence::merge(
-            time_dependencies,
-            dataflow.refresh_schedule.as_ref(),
-        ))
+                // Not a compute object: Consult the storage collections controller.
+                of_storage(id)
+            },
+        )
     }
 
     /// Processes the work queued by [`ComputeController::ready`].
@@ -1312,6 +1348,35 @@ impl ComputeController {
     }
 }
 
+/// Merges the dependences of the imports of `dataflow` in `used_imports` with the dataflow's
+/// refresh schedule, see [`TimeDependence::merge`].
+///
+/// `of_index` and `of_source` look up the dependence of an imported index and source.
+fn merge_import_dependences(
+    dataflow: &mz_compute_types::dataflows::LirDataflowDescription,
+    used_imports: &BTreeSet<GlobalId>,
+    of_index: impl Fn(GlobalId) -> Result<Option<TimeDependence>, TimeDependenceError>,
+    of_source: impl Fn(GlobalId) -> Result<Option<TimeDependence>, TimeDependenceError>,
+) -> Result<Option<TimeDependence>, TimeDependenceError> {
+    let mut dependences = Vec::new();
+    for id in dataflow
+        .imported_index_ids()
+        .filter(|id| used_imports.contains(id))
+    {
+        dependences.push(of_index(id)?);
+    }
+    for id in dataflow
+        .imported_source_ids()
+        .filter(|id| used_imports.contains(id))
+    {
+        dependences.push(of_source(id)?);
+    }
+    Ok(TimeDependence::merge(
+        dependences,
+        dataflow.refresh_schedule.as_ref(),
+    ))
+}
+
 #[derive(Debug)]
 struct InstanceState {
     client: InstanceClient,
@@ -1390,6 +1455,14 @@ impl InstanceState {
         Ok(self.collection(id)?.time_dependence.clone())
     }
 
+    /// Return the stored freshness dependence for a collection.
+    fn get_freshness_dependence(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, CollectionMissing> {
+        Ok(self.collection(id)?.freshness_dependence.clone())
+    }
+
     /// Returns the [`InstanceState`] formatted as JSON.
     pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
@@ -1423,6 +1496,9 @@ struct Collection {
     /// The computed time dependence for this collection. None indicates no specific information,
     /// a value describes how the collection relates to wall-clock time.
     time_dependence: Option<TimeDependence>,
+    /// The computed freshness dependence for this collection, see
+    /// [`ComputeController::determine_freshness_dependence`].
+    freshness_dependence: Option<TimeDependence>,
 }
 
 impl Collection {
@@ -1433,6 +1509,7 @@ impl Collection {
             compute_dependencies: Default::default(),
             shared: SharedCollectionState::new(as_of),
             time_dependence: Some(TimeDependence::default()),
+            freshness_dependence: Some(TimeDependence::default()),
         }
     }
 
