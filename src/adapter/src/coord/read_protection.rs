@@ -173,15 +173,6 @@ enum ReadProtectionPublication<'a> {
     Bootstrap(&'a mut BootstrapBuiltinTableUpdates),
 }
 
-impl ReadProtectionPublication<'_> {
-    fn catalog<'a>(&self, coord: &'a Coordinator) -> &'a crate::catalog::Catalog {
-        match self {
-            Self::Runtime => coord.client_read_catalog(),
-            Self::Bootstrap(_) => coord.catalog(),
-        }
-    }
-}
-
 impl Coordinator {
     pub(super) async fn start_client_read_protection(
         &mut self,
@@ -246,9 +237,7 @@ impl Coordinator {
         // Other requests and maintenance can change the catalog during the
         // wait. Rebuild the requested scope before using even a cached grant.
         let prepared = client
-            .prepare_read(self.client_read_catalog(), &request.bundle, |_| {
-                Ok(request.read_ts)
-            })
+            .prepare_read(self.catalog(), &request.bundle, |_| Ok(request.read_ts))
             .await?;
         request.upper.get_or_insert_with(|| prepared.upper.clone());
         if canceled() {
@@ -270,7 +259,7 @@ impl Coordinator {
             Err(error) => {
                 if is_read_protection_conflict(&error)
                     || prepared
-                        .retry_publication(&client, self.client_read_catalog(), &error)
+                        .retry_publication(&client, self.catalog(), &error)
                         .await?
                         .is_some()
                 {
@@ -434,42 +423,13 @@ impl Coordinator {
         }
     }
 
-    pub(super) fn client_read_catalog(&self) -> &crate::catalog::Catalog {
-        self.client_protection_catalog
-            .as_ref()
-            .unwrap_or_else(|| self.catalog())
-    }
-
-    /// Client metadata is live even when SQL uses a prewarming savepoint. This
-    /// writer validates its own projection but does not enact maintained objects.
     async fn transact_client_protection(&mut self, op: Op) -> Result<Vec<u64>, AdapterError> {
         self.transact_client_protection_inner(op, false)
             .await
             .map(|result| result.incarnations)
     }
 
-    pub(super) async fn sync_client_protection_catalog(&mut self) -> Result<(), AdapterError> {
-        let catalog = self
-            .client_protection_catalog
-            .as_mut()
-            .expect("private client protection writer exists");
-        if let Err(error) = catalog.sync_to_current_updates().await {
-            if matches!(
-                &error,
-                mz_catalog::durable::CatalogError::Durable(
-                    mz_catalog::durable::DurableCatalogError::Fence(_)
-                )
-            ) {
-                mz_ore::halt!("this deployment has been fenced out: {error}");
-            }
-            return Err(error.into());
-        }
-        self.validate_query_client_execution();
-        Ok(())
-    }
-
-    /// Only the live protection catalog can establish execution retirement.
-    /// A SQL prewarming snapshot may predate this execution's registration.
+    /// Checks execution retirement against the applied main-catalog prefix.
     pub(super) fn validate_query_client_execution(&self) {
         if let Some(client) = &self.query_client {
             self.validate_client_execution(client);
@@ -478,7 +438,7 @@ impl Coordinator {
 
     fn validate_client_execution(&self, client: &QueryClient) {
         if !self
-            .client_read_catalog()
+            .catalog()
             .state()
             .client_incarnations()
             .contains_key(&client.protection.incarnation())
@@ -517,58 +477,11 @@ impl Coordinator {
                 | Op::UpdateClientReadRequirements { .. }
                 | Op::GrantClientReadRequirements { .. }
         ));
-        if self.client_protection_catalog.is_none() {
-            if once {
-                return self.catalog_transact_once(vec![op]).await;
-            }
-            return self
-                .catalog_transact_with_results(None, None, vec![op])
-                .await;
-        }
-        loop {
-            self.sync_client_protection_catalog().await?;
-            let catalog = self
-                .client_protection_catalog
-                .as_mut()
-                .expect("checked above");
-            // This is only a timestamp lower bound. Transaction open validates
-            // the applied prefix and commit still allocates through the oracle.
-            let ts = catalog
-                .observed_position()
-                .expect("synchronized protection writer")
-                .upper;
-            match catalog
-                .transact(
-                    None,
-                    Some(&mut self.controller.storage_collections),
-                    ts,
-                    None,
-                    vec![op.clone()],
-                )
+        if once {
+            self.catalog_transact_once(vec![op]).await
+        } else {
+            self.catalog_transact_with_results(None, None, vec![op])
                 .await
-            {
-                Ok(result) => {
-                    return Ok(ClientProtectionResult {
-                        incarnations: result.created_client_incarnations,
-                        grants: result.granted_client_read_requirements,
-                    });
-                }
-                Err(error)
-                    if matches!(&error, AdapterError::Catalog(error) if matches!(
-                        &error.kind,
-                        mz_catalog::memory::error::ErrorKind::Durable(
-                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
-                        )
-                    )) =>
-                {
-                    if once {
-                        self.sync_client_protection_catalog().await?;
-                        return Err(error);
-                    }
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
         }
     }
 
@@ -628,19 +541,12 @@ impl Coordinator {
         let client = match prepared {
             Some(client) => {
                 // Serving adopts the bootstrap execution, never replaces it.
-                if self.client_protection_catalog.is_some() {
-                    self.sync_client_protection_catalog().await?;
-                } else {
-                    self.refresh_catalog(None).await?;
-                }
+                self.refresh_catalog(None).await?;
                 self.validate_client_execution(&client);
                 client
             }
             None => {
-                let expected = Self::adapter_execution_predecessor(
-                    self.client_read_catalog(),
-                    self.adapter_id,
-                );
+                let expected = Self::adapter_execution_predecessor(self.catalog(), self.adapter_id);
                 let incarnation = self
                     .transact_client_protection(Op::CreateClientIncarnation {
                         realization: mz_catalog::durable::objects::ClientRealization::Adapter(
@@ -651,7 +557,7 @@ impl Coordinator {
                     .await?
                     .into_element();
                 let requirements = self
-                    .client_read_catalog()
+                    .catalog()
                     .state()
                     .client_read_requirements()
                     .iter()
@@ -732,7 +638,7 @@ impl Coordinator {
             .collect();
         let mut first_error = None;
         for (timeline, mut ids, oracle) in pending {
-            retain_live(self.client_read_catalog(), &mut ids);
+            retain_live(self.catalog(), &mut ids);
             let Some(state) = self.global_timelines.get(&timeline) else {
                 continue;
             };
@@ -743,7 +649,7 @@ impl Coordinator {
                 // Admission, not installation, authorizes persisted index holds.
                 // Replica-local logs still use their observed trace readiness.
                 ids.retain(|id| {
-                    self.client_read_catalog()
+                    self.catalog()
                         .state()
                         .collection_compaction_bounds()
                         .get(id)
@@ -766,7 +672,7 @@ impl Coordinator {
                     .map(|(holds, _)| holds)
                 } else {
                     match client
-                        .prepare_read(self.client_read_catalog(), &ready, |_| Ok(Some(read_ts)))
+                        .prepare_read(self.catalog(), &ready, |_| Ok(Some(read_ts)))
                         .await
                     {
                         Ok(prepared) => {
@@ -786,7 +692,7 @@ impl Coordinator {
                         // Publication can consume a peer drop. In-flight IDs were
                         // not in timeline state for its cleanup, so recheck them
                         // before installing a window or restoring pending work.
-                        retain_live(self.client_read_catalog(), &mut ready);
+                        retain_live(self.catalog(), &mut ready);
                         // Index tokens keep their derived leaf protection. Do not
                         // insert a second direct leaf token already in the window.
                         let mut holds = holds.subset(&ready);
@@ -809,7 +715,7 @@ impl Coordinator {
                     }
                 }
             }
-            retain_live(self.client_read_catalog(), &mut ids);
+            retain_live(self.catalog(), &mut ids);
             if let Some(state) = self.global_timelines.get_mut(&timeline) {
                 state.pending_read_holds.extend(&ids);
             }
@@ -822,7 +728,7 @@ impl Coordinator {
             && self.global_timelines.values().all(|state| {
                 state.pending_read_holds.iter().all(|id| {
                     !self
-                        .client_read_catalog()
+                        .catalog()
                         .state()
                         .collection_compaction_bounds()
                         .get(&id)
@@ -888,8 +794,8 @@ impl Coordinator {
         mut publication: ReadProtectionPublication<'_>,
     ) -> Result<(crate::ReadHolds, Antichain<Timestamp>), AdapterError> {
         let incarnation = client.protection.incarnation();
-        if !publication
-            .catalog(self)
+        if !self
+            .catalog()
             .state()
             .client_incarnations()
             .contains_key(&incarnation)
@@ -897,7 +803,7 @@ impl Coordinator {
             mz_ore::halt!("adapter execution was superseded or retired");
         }
         let mut prepared = client
-            .prepare_read(publication.catalog(self), &bundle, timestamp)
+            .prepare_read(self.catalog(), &bundle, timestamp)
             .await?;
         // Timestamp selection is FnOnce. Contention may change the obtainable
         // floor, but must not change the request or the upper that selected it.
@@ -910,7 +816,7 @@ impl Coordinator {
                 Ok(holds) => return Ok((holds, upper)),
                 Err(error) => {
                     if let Some(fresh) = prepared
-                        .retry_publication(&client, publication.catalog(self), &error)
+                        .retry_publication(&client, self.catalog(), &error)
                         .await?
                     {
                         prepared = fresh;
@@ -934,8 +840,8 @@ impl Coordinator {
         once: bool,
     ) -> Result<ReadHolds, AdapterError> {
         let incarnation = client.protection.incarnation();
-        if !publication
-            .catalog(self)
+        if !self
+            .catalog()
             .state()
             .client_incarnations()
             .contains_key(&incarnation)
@@ -953,8 +859,8 @@ impl Coordinator {
         {
             return Ok(holds);
         }
-        let extra = publication
-            .catalog(self)
+        let extra = self
+            .catalog()
             .state()
             .expand_client_read_requirements(incarnation, prepared.frontiers.clone())?;
         let requirements = client.protection.prepare_grant_publication(extra);
@@ -985,8 +891,8 @@ impl Coordinator {
             ),
             Err(_) => client.protection.finish_publication(false),
         }
-        if !publication
-            .catalog(self)
+        if !self
+            .catalog()
             .state()
             .client_incarnations()
             .contains_key(&incarnation)
@@ -1005,71 +911,6 @@ impl Coordinator {
             .ok_or_else(|| {
                 AdapterError::internal("query read protection", "published scope was not acquired")
             })
-    }
-
-    /// Attempts one publication of the changed client aggregate.
-    async fn publish_client_read_protection(&mut self) -> Result<(), AdapterError> {
-        let Some(client) = self.query_client.clone() else {
-            return Ok(());
-        };
-        let Some(requirements) = client.protection.prepare_updates_if_needed() else {
-            return Ok(());
-        };
-        if let Err(error) = self.sync_client_protection_catalog().await {
-            client.protection.finish_publication(false);
-            return Err(error);
-        }
-        let catalog = self
-            .client_protection_catalog
-            .as_mut()
-            .expect("prewarming publication");
-        if catalog
-            .system_config()
-            .unsafe_pause_catalog_read_protection_publication()
-        {
-            client.protection.finish_publication(false);
-            return Ok(());
-        }
-        let incarnation = client.protection.incarnation();
-        // The pause check uses the synchronized prefix. Transaction-open
-        // validation must reject a subsequent pause rather than refresh past it.
-        let ts = catalog
-            .observed_position()
-            .expect("synchronized protection writer")
-            .upper;
-        let result = catalog
-            .transact(
-                None,
-                Some(&mut self.controller.storage_collections),
-                ts,
-                None,
-                vec![Op::UpdateClientReadRequirements {
-                    incarnation,
-                    requirements,
-                }],
-            )
-            .await;
-        // Definitive failure releases only the pending barrier, not committed
-        // protection. No barrier survives the timer owner's yield between attempts.
-        client.protection.finish_publication(result.is_ok());
-        if matches!(&result, Err(AdapterError::Catalog(error)) if matches!(
-            &error.kind,
-            mz_catalog::memory::error::ErrorKind::Durable(
-                mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
-            )
-        )) {
-            self.sync_client_protection_catalog().await?;
-        }
-        if !self
-            .client_read_catalog()
-            .state()
-            .client_incarnations()
-            .contains_key(&incarnation)
-        {
-            mz_ore::halt!("adapter execution was superseded or retired");
-        }
-        result?;
-        Ok(())
     }
 
     /// Restores published compute bounds before installing clusters and dataflows.
@@ -1094,41 +935,11 @@ impl Coordinator {
                 .apply_compaction_bound(id, bound)
                 .map_err(|error| AdapterError::Unstructured(error.into()))?;
         }
-        self.sync_compute_read_protection().await
-    }
-
-    /// Delivers changed published bounds to compute lifetimes in the local catalog.
-    pub(super) async fn sync_compute_read_protection(&mut self) -> Result<(), AdapterError> {
-        if self.controller.replica_owned_compute() {
-            return Ok(());
-        }
-        let Some(subscriber) = &mut self.compaction_bound_subscriber else {
-            return Ok(());
-        };
-        let changed = subscriber.sync().await?;
-        for (id, bound) in changed {
-            if !self
-                .catalog()
-                .try_get_entry_by_global_id(&id)
-                .is_some_and(|entry| matches!(entry.item(), CatalogItem::Index(_)))
-            {
-                continue;
-            }
-            self.controller
-                .compute
-                .apply_compaction_bound(id, bound)
-                .map_err(|error| AdapterError::Unstructured(error.into()))?;
-        }
         Ok(())
     }
 
     /// Publishes changed client protection, recovery progress and permitted bounds atomically.
     pub(super) async fn publish_read_protection(&mut self) -> Result<(), AdapterError> {
-        // A prewarming adapter can have a separate protection catalog, while its
-        // main catalog cannot publish shared bounds.
-        if self.client_protection_catalog.is_some() {
-            return self.publish_client_read_protection().await;
-        }
         let start = Instant::now();
         if !self.controller.read_only() && self.catalog().state().catalog_read_protection_enabled()
         {
@@ -1209,7 +1020,7 @@ impl Coordinator {
             // definitive failure retains committed protection for the next sample.
             client.protection.finish_publication(result.is_ok());
             if !self
-                .client_read_catalog()
+                .catalog()
                 .state()
                 .client_incarnations()
                 .contains_key(&client.protection.incarnation())

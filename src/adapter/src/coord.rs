@@ -195,7 +195,6 @@ use crate::coord::appends::{
     PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
-use crate::coord::compaction_bound_subscriber::CompactionBoundSubscriber;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedMetricSink};
@@ -239,7 +238,6 @@ pub mod catalog_implications;
 mod catalog_reads;
 mod caught_up;
 mod command_handler;
-mod compaction_bound_subscriber;
 mod ddl;
 pub(crate) mod group_sync;
 mod hydration_history;
@@ -1452,8 +1450,6 @@ pub struct Config {
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: std::num::NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
-    pub client_protection_storage: Option<Box<dyn mz_catalog::durable::DurableCatalogState>>,
-    pub compaction_bound_subscriber: Option<Box<dyn mz_catalog::durable::DurableCatalogState>>,
     pub timestamp_oracle_config: Option<TimestampOracleConfig>,
     /// Clock for timestamp allocation and policy checks, shared with catalog writers.
     pub timestamp_oracle_now: NowFn,
@@ -2212,11 +2208,9 @@ pub struct Coordinator {
     /// read their catalog as long as needed. In the future we would like this
     /// to be a pTVC, but for now this is sufficient.
     catalog: Arc<Catalog>,
-    compaction_bound_subscriber: Option<CompactionBoundSubscriber>,
     /// Changed records retained until publication succeeds, including failed attempts.
     read_protection_pending: BTreeSet<GlobalId>,
     query_client: Option<Arc<crate::query_client::QueryClient>>,
-    client_protection_catalog: Option<Catalog>,
     // Flattened predecessor grants stay separate from ordinary timeline tokens.
     recovery_read_holds: Option<crate::query_client::read_protection::RecoveryReadHolds>,
     query_persist_location: mz_persist_types::PersistLocation,
@@ -4983,22 +4977,13 @@ impl Coordinator {
             }
         }
 
-        self.sync_compute_read_protection().await?;
-        let mut index_bounds: BTreeMap<_, _> = self
+        let index_bounds: BTreeMap<_, _> = self
             .catalog()
             .state()
             .collection_compaction_bounds()
             .iter()
             .map(|(&id, bound)| (id, bound.clone()))
             .collect();
-        if let Some(subscriber) = &self.compaction_bound_subscriber {
-            index_bounds.extend(
-                subscriber
-                    .bounds()
-                    .iter()
-                    .map(|(&id, bound)| (id, bound.clone())),
-            );
-        }
         let read_ts = self.get_local_read_ts().await;
         let read_holds = as_of_selection::run(
             &mut dataflows,
@@ -5210,10 +5195,9 @@ impl Coordinator {
                     biased;
 
                     // Polling a pinned Sleep is cancellation-safe. Following committed permission
-                    // does not depend on the savepoint's publication setting.
+                    // is independent of the publication cadence.
                     _ = subscription_timer.as_mut(),
-                        if self.compaction_bound_subscriber.is_some()
-                            || self.query_client.is_some()
+                        if self.query_client.is_some()
                             || self.controller.replica_owned_compute()
                             || !self.pending_compute_installations.is_empty() => {
                         if self.controller.replica_owned_compute() {
@@ -5228,11 +5212,7 @@ impl Coordinator {
                                 warn!(%error, "unable to realize declared replicas");
                             }
                         }
-                        if self.client_protection_catalog.is_some() {
-                            if let Err(error) = self.sync_client_protection_catalog().await {
-                                warn!(%error, "unable to follow adapter execution state");
-                            }
-                        } else if !self.controller.replica_owned_compute()
+                        if !self.controller.replica_owned_compute()
                             && self.query_client.is_some()
                         {
                             if let Err(error) = self.refresh_catalog(None).await {
@@ -5242,11 +5222,6 @@ impl Coordinator {
                         trace_maintenance(
                             "subscription_install", self.install_pending_compute_collections()
                         ).await;
-                        if let Err(error) = trace_maintenance(
-                            "subscription_protection", self.sync_compute_read_protection()
-                        ).await {
-                            warn!(%error, "unable to follow catalog read protection");
-                        }
                         subscription_timer.set(tokio::time::sleep(mz_catalog::retry::periodic_delay(
                             CATALOG_SUBSCRIPTION_INTERVAL,
                         )));
@@ -5474,10 +5449,6 @@ impl Coordinator {
             if let Some(sweep) = self.retired_rows_sweep.take() {
                 sweep.abort_and_wait().await;
             }
-            if let Some(subscriber) = self.compaction_bound_subscriber.take() {
-                subscriber.expire().await;
-            }
-
             // Try and cleanup as a best effort. There may be some async tasks out there holding a
             // reference that prevents us from cleaning up.
             if let Some(catalog) = Arc::into_inner(self.catalog) {
@@ -6007,7 +5978,7 @@ impl Coordinator {
             "global_timelines": global_timelines,
             "query_read_protection": query_read_protection,
             "recovery_read_holds": format!("{:?}", self.recovery_read_holds),
-            "read_protection_catalog_position": format!("{:?}", self.client_read_catalog().observed_position()),
+            "read_protection_catalog_position": format!("{:?}", self.catalog().observed_position()),
             "active_conns": active_conns,
             "txn_read_holds": txn_read_holds,
             "pending_peeks": pending_peeks,
@@ -6261,8 +6232,6 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         mut storage,
-        client_protection_storage,
-        compaction_bound_subscriber,
         timestamp_oracle_config,
         timestamp_oracle_now,
         unsafe_mode,
@@ -6627,10 +6596,6 @@ pub fn serve(
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
 
-                let client_protection_catalog = client_protection_storage.map(|storage| {
-                    handle.block_on(catalog.writer_projection(storage))
-                        .unwrap_or_terminate("failed to acquire client protection projection")
-                });
                 let (table_write_handle, txns_metrics) = handle.block_on(
                     catalog.initialize_table_writer(
                         persist_client.clone(), &controller_config.metrics_registry,
@@ -6677,11 +6642,8 @@ pub fn serve(
                     adapter_storage,
                     storage_configuration,
                     catalog,
-                    compaction_bound_subscriber: compaction_bound_subscriber
-                        .map(CompactionBoundSubscriber::new),
                     read_protection_pending: BTreeSet::new(),
                     query_client: None,
-                    client_protection_catalog,
                     recovery_read_holds: None,
                     query_persist_location,
                     query_orchestrator,

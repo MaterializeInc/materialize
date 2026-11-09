@@ -774,8 +774,6 @@ impl Listeners {
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
-            client_protection_storage: None,
-            compaction_bound_subscriber: None,
             timestamp_oracle_config: Some(oracle_config),
             timestamp_oracle_now,
             unsafe_mode: config.unsafe_mode,

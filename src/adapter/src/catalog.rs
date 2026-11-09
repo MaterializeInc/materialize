@@ -202,12 +202,6 @@ impl Catalog {
     ) -> Result<InitializeStateResult, AdapterError> {
         Ok(CoreCatalog::initialize_state(config, storage).await?)
     }
-    pub(crate) async fn writer_projection(
-        &self,
-        storage: Box<dyn DurableCatalogState>,
-    ) -> Result<Self, AdapterError> {
-        Ok(Self(self.0.writer_projection(storage).await?))
-    }
     pub(crate) async fn current_upper_if_in_sync(&self) -> Result<Timestamp, AdapterError> {
         Ok(self.0.current_upper_if_in_sync().await?)
     }

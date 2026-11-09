@@ -1551,19 +1551,6 @@ impl Catalog {
         .await?)
     }
 
-    /// Reconstructs a joined writer's own committed projection without bootstrap
-    /// or sharing revision notifications with the serving SQL catalog.
-    pub async fn writer_projection(
-        &self,
-        storage: Box<dyn DurableCatalogState>,
-    ) -> Result<Self, CatalogError> {
-        let mut config = Self::diagnostic_state_config(&self.diagnostic_config);
-        config.system_parameter_defaults = self.state.system_config().defaults();
-        Self::open_committed(config, storage)
-            .await
-            .map(|opened| opened.catalog)
-    }
-
     /// Opens an independent projection of an initialized, same-version catalog.
     ///
     /// `storage` must be an already joined handle whose initial updates have not

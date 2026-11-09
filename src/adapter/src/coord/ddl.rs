@@ -738,15 +738,11 @@ impl Coordinator {
             .apply_next_committed_transaction(&mut prefix)
             .await
         {
-            if self.client_protection_catalog.is_none() {
-                self.validate_query_client_execution();
-            }
+            self.validate_query_client_execution();
             self.apply_caught_up_catalog_updates(updates).await;
         }
         self.catalog_mut().finish_committed_prefix(prefix);
-        if self.client_protection_catalog.is_none() {
-            self.validate_query_client_execution();
-        }
+        self.validate_query_client_execution();
         Ok(())
     }
 

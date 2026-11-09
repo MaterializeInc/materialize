@@ -2311,11 +2311,7 @@ impl Coordinator {
 
         if self.catalog().state().catalog_read_protection_enabled() {
             let client = self.query_client.clone().ok_or(AdapterError::ReadOnly)?;
-            let catalog = self
-                .client_protection_catalog
-                .as_ref()
-                .map(|catalog| Arc::new(catalog.clone()))
-                .unwrap_or_else(|| self.owned_catalog());
+            let catalog = self.owned_catalog();
             let config = self.storage_configuration.clone();
             // A grant miss sends a command back to this coordinator. Return the
             // request future before acquiring protection so the loop can serve it.
