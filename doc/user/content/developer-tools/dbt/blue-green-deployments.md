@@ -200,7 +200,7 @@ environment before cutting over.
     definition of their upstream dependencies. If the swap fails, it is rolled
     back and production is left unchanged, so you can re-run the operation.
     Tagging the schemas and cutting over sinks happen after the swap commits,
-    which the `Tagging schema` log line marks. If the operation fails after
+    which the `Swap committed` log line marks. If the operation fails after
     that line, do **not** re-run it, because a second run swaps the previous
     version back into production. Instead, run it with
     `--args '{dry_run: true}'` to print the `ALTER SINK` statements, and run

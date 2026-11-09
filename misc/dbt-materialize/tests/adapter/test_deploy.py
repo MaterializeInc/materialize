@@ -1763,6 +1763,12 @@ class TestDeployPromoteRetry:
         assert "Promoting deployment for target" in log_output, log_output
         assert "Swapping schemas prod and prod_dbt_deploy" in log_output, log_output
         assert "Swapping clusters prod and prod_dbt_deploy" in log_output, log_output
+        # The docs point users at this line to tell whether the swap committed.
+        assert (
+            log_output.index("Swapping clusters")
+            < log_output.index("Swap committed")
+            < log_output.index("Tagging schema")
+        ), log_output
         # No retries should have happened on the happy path.
         assert "Retrying atomic swap" not in log_output, log_output
 

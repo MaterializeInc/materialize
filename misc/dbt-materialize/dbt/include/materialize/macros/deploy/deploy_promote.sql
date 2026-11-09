@@ -113,6 +113,9 @@
         {% endif %}
 
         {% if adapter.try_atomic_swap(swap_sql) %}
+            {# NOTE: the docs tell users not to re-run once this is logged, so it
+               must stay the first output after the commit. #}
+            {{ log("Swap committed", info=True) }}
             {% if attempt > 0 %}
                 {{ log("Atomic swap succeeded on attempt " ~ (attempt + 1), info=True) }}
             {% endif %}
