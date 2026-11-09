@@ -66,13 +66,12 @@ impl IoTimeout {
             return poll;
         }
 
-        let Some(deadline) = deadline else {
-            return Poll::Pending;
-        };
-        self.deadline = Some(deadline);
-        if self.poll_expired(cx, deadline) {
-            self.deadline = None;
-            return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
+        if let Some(deadline) = deadline {
+            if self.poll_expired(cx, deadline) {
+                self.deadline = None;
+                return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
+            }
+            self.deadline = Some(deadline);
         }
         Poll::Pending
     }
