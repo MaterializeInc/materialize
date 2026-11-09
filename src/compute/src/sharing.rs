@@ -35,6 +35,13 @@ use crate::reconcile_barrier::{ConnectionOrder, ReconcileBarrier};
 use crate::shared_trace::{Published, SharedErrsHandle, SharedOksHandle, adopt_trace};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
+/// The number of the command that created an incarnation of a collection.
+///
+/// A `CreateDataflow` creates the incarnations of its exports, and `CreateInstance` those of the
+/// logging indexes. An incarnation a reconnect retains keeps its number, so together with its
+/// `GlobalId` the number names one incarnation on both runtimes of a process.
+pub(crate) type CreationNumber = CommandNumber;
+
 /// The published `oks`/`errs` arrangements of one maintained index on one worker.
 ///
 /// An index's `oks` is always a `RowRowSpine` and its `errs` always an `ErrSpine`. Holding the

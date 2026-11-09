@@ -64,6 +64,7 @@ use tracing::{Level, debug, error, info, span, trace, warn};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::command_channel::CommandNumber;
 use crate::command_progress::MaintenanceProgress;
 use crate::compute_state::peek_budget::InlineBudget;
 use crate::compute_state::peek_metrics::{IndexPeekMetrics, PeekWalkMetrics};
@@ -80,7 +81,7 @@ use crate::placement::Placement;
 use crate::process_globals::ProcessGlobals;
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
-use crate::sharing::ArrangementSharingRegistry;
+use crate::sharing::{ArrangementSharingRegistry, CreationNumber};
 
 mod error_scan;
 mod peek_budget;
@@ -231,6 +232,8 @@ pub struct ComputeState {
     process_globals: ProcessGlobals,
     /// The dataflow classes this runtime renders.
     placement: Placement,
+    /// See [`ComputeRuntimeRole::derives_creation_numbers`].
+    derives_creation_numbers: bool,
     /// Reads the indexes the process's other runtime publishes, if that runtime publishes them.
     peer_traces: Option<ArrangementSharingRegistry>,
     /// Collections a dataflow placed on the process's other runtime exports.
@@ -239,7 +242,9 @@ pub struct ComputeState {
     /// collection reports its frontiers, and a second report would race it. On a runtime that
     /// reads its peer's indexes, a peer index also has a shared trace in `traces`, whose logical
     /// compaction is this runtime's hold on it.
-    pub(crate) peers: BTreeSet<GlobalId>,
+    ///
+    /// Each peer maps to the creation number of its incarnation.
+    pub(crate) peers: BTreeMap<GlobalId, CreationNumber>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -321,6 +326,13 @@ pub struct ComputeState {
 }
 
 impl ComputeState {
+    /// The creation number of the incarnations a command numbered `number` creates, `None` on a
+    /// runtime that does not derive them.
+    fn creation(&self, number: Option<CommandNumber>) -> Option<CreationNumber> {
+        self.derives_creation_numbers
+            .then(|| number.expect("the sequencer numbers every command but peeks"))
+    }
+
     /// Whether a peek is waiting on nothing but its next turn in the sweep.
     ///
     /// Read by the worker loop before it parks. The sweep that serves such a peek runs on the same
@@ -363,6 +375,7 @@ impl ComputeState {
             persist_batches,
             process_globals: role.process_globals(),
             placement: role.placement(),
+            derives_creation_numbers: role.derives_creation_numbers(),
             peer_traces: role.reads_peer_indexes().then(|| {
                 sharing_registry.attach_reader();
                 sharing_registry.clone()
@@ -513,8 +526,10 @@ impl SinkToken {
 
 impl<'a> ActiveComputeState<'a> {
     /// Entrypoint for applying a compute command.
+    ///
+    /// `number` is the command's number from the command sequencer, if it has one.
     #[mz_ore::instrument(level = "debug")]
-    pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
+    pub fn handle_compute_command(&mut self, cmd: ComputeCommand, number: Option<CommandNumber>) {
         use ComputeCommand::*;
 
         self.compute_state.command_history.push(cmd.clone());
@@ -529,10 +544,16 @@ impl<'a> ActiveComputeState<'a> {
 
         match cmd {
             Hello { .. } => panic!("Hello must be captured before"),
-            CreateInstance(instance_config) => self.handle_create_instance(*instance_config),
+            CreateInstance(instance_config) => {
+                let creation = self.compute_state.creation(number);
+                self.handle_create_instance(*instance_config, creation)
+            }
             InitializationComplete => (),
             UpdateConfiguration(params) => self.handle_update_configuration(*params),
-            CreateDataflow(dataflow) => self.handle_create_dataflow(*dataflow),
+            CreateDataflow(dataflow) => {
+                let creation = self.compute_state.creation(number);
+                self.handle_create_dataflow(*dataflow, creation)
+            }
             Schedule(id) => self.handle_schedule(id),
             AllowCompaction { id, frontier } => self.handle_allow_compaction(id, frontier),
             Peek(peek) => {
@@ -548,7 +569,7 @@ impl<'a> ActiveComputeState<'a> {
         timer.observe_duration();
     }
 
-    fn handle_create_instance(&mut self, config: InstanceConfig) {
+    fn handle_create_instance(&mut self, config: InstanceConfig, creation: Option<CreationNumber>) {
         // Seed the worker configuration with the controller's snapshot before applying it, so
         // create-time setup observes controller-synced values rather than dyncfg defaults. The
         // same values arrive again in the following `UpdateConfiguration`, which applies globally
@@ -579,11 +600,11 @@ impl<'a> ActiveComputeState<'a> {
             .placement
             .renders(DataflowClass::Maintained)
         {
-            self.initialize_logging(config.logging);
+            self.initialize_logging(config.logging, creation);
         } else {
             let index_ids: Vec<_> = config.logging.index_logs.values().copied().collect();
             let minimum = Antichain::from_elem(Timestamp::MIN);
-            self.record_peers(index_ids.clone().into_iter(), index_ids, &minimum);
+            self.record_peers(index_ids.clone().into_iter(), index_ids, &minimum, creation);
         }
 
         self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
@@ -623,16 +644,20 @@ impl<'a> ActiveComputeState<'a> {
         self.compute_state.apply_worker_config();
     }
 
-    fn handle_create_dataflow(&mut self, dataflow: RenderDataflowDescription<CollectionMetadata>) {
+    fn handle_create_dataflow(
+        &mut self,
+        dataflow: RenderDataflowDescription<CollectionMetadata>,
+        creation: Option<CreationNumber>,
+    ) {
         // A dataflow of a class this runtime does not render is the other runtime's, and this
         // runtime records its exports as peers. Placement comes first, before anything allocates a
         // dataflow index, so such a dataflow builds nothing here.
         if self.compute_state.placement.renders(dataflow.class) {
-            self.render_dataflow(dataflow);
+            self.render_dataflow(dataflow, creation);
         } else {
             let as_of = dataflow.as_of.clone().expect("dataflow has an as_of");
             let index_ids: Vec<_> = dataflow.index_exports.keys().copied().collect();
-            self.record_peers(dataflow.export_ids(), index_ids, &as_of);
+            self.record_peers(dataflow.export_ids(), index_ids, &as_of, creation);
         }
     }
 
@@ -643,9 +668,11 @@ impl<'a> ActiveComputeState<'a> {
         export_ids: impl Iterator<Item = GlobalId>,
         index_ids: impl IntoIterator<Item = GlobalId>,
         as_of: &Antichain<Timestamp>,
+        creation: Option<CreationNumber>,
     ) {
+        let creation = creation.expect("a runtime with peers derives creation numbers");
         for id in export_ids {
-            let fresh = self.compute_state.peers.insert(id);
+            let fresh = self.compute_state.peers.insert(id, creation).is_none();
             mz_ore::soft_assert_or_log!(fresh, "peer collection {id} recorded twice");
         }
         if let Some(registry) = &self.compute_state.peer_traces {
@@ -656,7 +683,11 @@ impl<'a> ActiveComputeState<'a> {
         }
     }
 
-    fn render_dataflow(&mut self, dataflow: RenderDataflowDescription<CollectionMetadata>) {
+    fn render_dataflow(
+        &mut self,
+        dataflow: RenderDataflowDescription<CollectionMetadata>,
+        creation: Option<CreationNumber>,
+    ) {
         let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
 
@@ -726,6 +757,7 @@ impl<'a> ActiveComputeState<'a> {
                 Rc::clone(&dataflow_index),
                 is_subscribe_or_copy,
                 as_of.clone(),
+                creation,
                 metrics,
             );
 
@@ -769,6 +801,7 @@ impl<'a> ActiveComputeState<'a> {
             start_signal,
             until,
             dataflow_expiration,
+            creation,
         );
     }
 
@@ -782,7 +815,7 @@ impl<'a> ActiveComputeState<'a> {
         // A peer's dataflow runs on the other runtime, so its `Schedule` changes nothing here.
         mz_ore::soft_assert_or_log!(
             self.compute_state.collections.contains_key(&id)
-                || self.compute_state.peers.contains(&id),
+                || self.compute_state.peers.contains_key(&id),
             "schedule for unknown collection {id}"
         );
         let suspension_token = self.compute_state.suspended_collections.remove(&id);
@@ -799,7 +832,7 @@ impl<'a> ActiveComputeState<'a> {
         // An empty frontier means there are no more valid times to read, so the collection goes.
         // For a peer, compaction moves this runtime's hold on the other runtime's publication.
         let hosted = self.compute_state.collections.contains_key(&id);
-        let peer = self.compute_state.peers.contains(&id);
+        let peer = self.compute_state.peers.contains_key(&id);
         match (hosted, peer, frontier.is_empty()) {
             (true, _, true) => self.drop_collection(id),
             (false, true, true) => {
@@ -886,7 +919,7 @@ impl<'a> ActiveComputeState<'a> {
         // A peer's writes happen on the other runtime.
         if let Some(collection) = self.compute_state.collections.get_mut(&id) {
             collection.allow_writes();
-        } else if !self.compute_state.peers.contains(&id) {
+        } else if !self.compute_state.peers.contains_key(&id) {
             soft_panic_or_log!("allow writes for unknown collection {id}");
         }
     }
@@ -931,7 +964,9 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
-    pub fn initialize_logging(&mut self, config: LoggingConfig) {
+    ///
+    /// `creation` is the creation number of the logging indexes' incarnations.
+    pub fn initialize_logging(&mut self, config: LoggingConfig, creation: Option<CreationNumber>) {
         if self.compute_state.compute_logger.is_some() {
             panic!("dataflow server has already initialized logging");
         }
@@ -948,6 +983,7 @@ impl<'a> ActiveComputeState<'a> {
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
             self.compute_state.publisher.clone(),
+            creation,
         );
 
         let dataflow_index = Rc::new(dataflow_index);
@@ -967,6 +1003,7 @@ impl<'a> ActiveComputeState<'a> {
                 Rc::clone(&dataflow_index),
                 is_subscribe_or_copy,
                 as_of,
+                creation,
                 metrics,
             );
 
@@ -2012,6 +2049,9 @@ pub struct CollectionState {
     ///
     /// Used to determine hydration status.
     as_of: Antichain<Timestamp>,
+    /// The creation number of the collection's incarnation, `None` on a `Solo` runtime.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) creation: Option<CreationNumber>,
 
     /// A token that should be dropped when this collection is dropped to clean up associated
     /// sink state.
@@ -2054,6 +2094,7 @@ impl CollectionState {
         dataflow_index: Rc<usize>,
         is_subscribe_or_copy: bool,
         as_of: Antichain<Timestamp>,
+        creation: Option<CreationNumber>,
         metrics: CollectionMetrics,
     ) -> Self {
         // We always initialize as read_only=true. Only when we're explicitly
@@ -2065,6 +2106,7 @@ impl CollectionState {
             dataflow_index,
             is_subscribe_or_copy,
             as_of,
+            creation,
             sink_token: None,
             sink_write_frontier: None,
             input_probes: Default::default(),

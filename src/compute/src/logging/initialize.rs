@@ -37,13 +37,16 @@ use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::metrics::LoggingMetrics;
 use crate::render::errors::DataflowErrorSer;
-use crate::sharing::ArrangementSharingRegistry;
+use crate::sharing::{ArrangementSharingRegistry, CreationNumber};
 use crate::typedefs::ErrBatcher;
 
 /// Initialize logging dataflows.
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
+///
+/// `creation` is the creation number of the logging indexes' incarnations, `None` on a runtime that
+/// does not derive creation numbers.
 pub fn initialize(
     worker: &mut timely::worker::Worker,
     config: &LoggingConfig,
@@ -52,6 +55,7 @@ pub fn initialize(
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
     publisher: Option<ArrangementSharingRegistry>,
+    creation: Option<CreationNumber>,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -79,6 +83,7 @@ pub fn initialize(
         worker_config,
         workers_per_process,
         publisher,
+        creation,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -120,6 +125,9 @@ struct LoggingContext<'a> {
     workers_per_process: usize,
     /// Publishes the logging indexes for the peer runtime, if that runtime reads them.
     publisher: Option<ArrangementSharingRegistry>,
+    /// The creation number of the logging indexes' incarnations.
+    #[expect(dead_code)]
+    creation: Option<CreationNumber>,
 }
 
 pub(crate) struct LoggingTraces {
