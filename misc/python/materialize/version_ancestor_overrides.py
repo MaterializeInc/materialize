@@ -32,6 +32,7 @@ def get_ancestor_overrides_for_performance_regressions(
         "MySqlInitialLoad",
         "MySqlInitialLoadMultiWorkerSampled",
         "MySqlInitialLoadMultiWorkerSingleTable",
+        "MySqlStreaming",
     ):
         # PR#40206 (storage: read the MySQL replication stream during a snapshot)
         # delays snapshot visibility by up to the 2s
