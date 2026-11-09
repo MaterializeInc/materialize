@@ -1,10 +1,10 @@
-agate==1.9.1
+agate==1.14.2
 annotated-types==0.8.0
 attrs==26.1.0
 babel==2.18.0
 certifi==2026.10.23
 charset-normalizer==3.5.2
-click==8.5.0
+click==8.5.1
 colorama==0.4.6
 daff==1.4.2
 dbt-adapters==1.24.5
@@ -14,7 +14,7 @@ dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
 dbt-postgres==1.11.0
 dbt-protos==1.0.615
-dbt-semantic-interfaces==0.9.0
+dbt-semantic-interfaces==0.10.5
 dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git@f6ee73c42f1d34132ed489defb9eb9ef83221256#subdirectory=dbt-tests-adapter
 deepdiff==8.6.2
 freezegun==1.5.5
@@ -27,14 +27,14 @@ jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 leather==0.4.1
 MarkupSafe==3.0.4
-mashumaro==3.17
+mashumaro==3.23
 more-itertools==10.8.0
 msgpack==1.2.4
 networkx==3.7
 orderly-set==5.5.0
 packaging==26.3
 parsedatetime==2.6
-pathspec==1.0.4
+pathspec==1.1.1
 pluggy==1.7.0
 protobuf==6.33.6
 psycopg2-binary==2.9.13
