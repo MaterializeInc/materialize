@@ -25,7 +25,7 @@ use super::provisioning::{AdapterAllocation, AdapterProvisioningConfig};
 /// Reconciles committed process inventory and serves catalog administration.
 /// Replica-set policy, SQL execution and shared maintenance remain in the children.
 pub async fn run(
-    config: crate::Config,
+    mut config: crate::Config,
     adapter_launch: AdapterProvisioningConfig,
     adapter_sizes: BTreeMap<String, AdapterAllocation>,
     adapter_plan_build: String,
@@ -44,7 +44,7 @@ pub async fn run(
         "development adapter plan namespace requires the build metadata from adapterd --version"
     );
     let listener = tokio::net::TcpListener::bind(http_listen_addr).await?;
-    let (mut catalog, oracle) = super::open_catalog(&config, &adapter_sizes).await?;
+    let (mut catalog, oracle) = super::open_catalog(&mut config, &adapter_sizes).await?;
     let mut was_active =
         catalog.state().active_deployment_generation() == Some(config.controller.deploy_generation);
     let persist = config
@@ -130,7 +130,7 @@ pub async fn run(
                     &mut catalog,
                     &adapter_launch,
                     &adapter_sizes,
-                    &observations,
+                    &mut observations,
                     pubsub.as_ref(),
                     command.action,
                 ).await;
@@ -213,7 +213,9 @@ async fn administer(
     catalog: &mut Catalog,
     launch: &AdapterProvisioningConfig,
     sizes: &BTreeMap<String, AdapterAllocation>,
-    observations: &Observations,
+    // Probes are Send but not Sync. Exclusive borrowing keeps this sequential
+    // controller operation movable between executor threads across awaits.
+    observations: &mut Observations,
     pubsub: Option<&super::pubsub::ManagedPubsub>,
     action: Action,
 ) -> Result<Value, ApiError> {

@@ -378,7 +378,8 @@ impl Observations {
     }
 
     pub(super) async fn publish(
-        &self,
+        // The controller owns the Send-only probes exclusively across awaits.
+        &mut self,
         catalog: &mut Catalog,
         launch: &AdapterProvisioningConfig,
         sizes: &BTreeMap<String, AdapterAllocation>,

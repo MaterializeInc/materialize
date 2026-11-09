@@ -39,6 +39,7 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_dyncfg::ConfigUpdates;
 use mz_license_keys::ValidatedLicenseKey;
+use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::CastLossy;
@@ -54,7 +55,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{
     CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig, SHARD_METRICS, ShardMetricsExport,
 };
-use mz_persist_client::rpc::PersistGrpcPubSubServer;
+use mz_persist_client::rpc::{PersistGrpcPubSubServer, PubSubClientConnection};
 use mz_postgres_util::{
     Sql, batch_execute as pg_batch_execute, execute as pg_execute, query_one as pg_query_one, sql,
 };
@@ -97,6 +98,8 @@ use tungstenite::{Message, WebSocket};
 use crate::{
     CatalogConfig, FronteggAuthenticator, SqlListenerConfig, WebSocketAuth, WebSocketResponse,
 };
+
+mod hosted_adapters;
 
 pub static KAFKA_ADDRS: LazyLock<String> =
     LazyLock::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -323,6 +326,19 @@ impl Default for TestHarness {
 }
 
 impl TestHarness {
+    /// Start the default adapter in an existing test deployment, without
+    /// reinitializing metadata or replacing the replica process owner.
+    /// Use the same harness configuration that created the deployment.
+    /// This restarts coordinator/listener state, not the process-wide Persist cache.
+    pub async fn start_in(self, deployment: Arc<TestDeployment>) -> TestServer {
+        Listeners::new(&self)
+            .await
+            .expect("test listeners")
+            .serve_in(self, mz_server_core::cert_reload_never_reload(), deployment)
+            .await
+            .expect("join test deployment")
+    }
+
     /// Starts a test [`TestServer`], panicking if the server could not be started.
     ///
     /// For cases when startup might fail, see [`TestHarness::try_start`].
@@ -812,7 +828,213 @@ impl Listeners {
         config: TestHarness,
         tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
-        let (data_directory, temp_dir) = match config.data_directory {
+        let deployment = TestDeployment::start(&config).await?;
+        self.serve_in(config, tls_reload_certs, deployment).await
+    }
+
+    async fn serve_in(
+        self,
+        config: TestHarness,
+        tls_reload_certs: ReloadTrigger,
+        deployment: Arc<TestDeployment>,
+    ) -> Result<TestServer, anyhow::Error> {
+        let resources = &deployment.resources;
+        anyhow::ensure!(
+            config.environment_id == resources.environment_id
+                && config.deploy_generation == resources.generation
+                && config.seed == resources.seed
+                && config.code_version == resources.code_version,
+            "adapter must join its test deployment's environment and generation"
+        );
+        let adapter_id = mz_catalog::durable::DEFAULT_ADAPTER_ID;
+        let service =
+            crate::controllerd::provisioning::service_name(adapter_id, config.deploy_generation);
+        let mut exit = deployment.exit.clone();
+        anyhow::ensure!(
+            exit.borrow().is_none(),
+            "test controller exited: {:?}",
+            *exit.borrow()
+        );
+        let lease = tokio::select! {
+            result = resources.hosted.claim(&service) => result?,
+            _ = exit.changed() => anyhow::bail!("test controller exited: {:?}", *exit.borrow()),
+        };
+        let metrics_registry = config
+            .metrics_registry
+            .clone()
+            .unwrap_or_else(MetricsRegistry::new);
+        let persist_clients = Arc::clone(&resources.adapter_persist_clients);
+        let tracing_handle = if config.enable_tracing {
+            let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
+                service_name: "environmentd",
+                stderr_log: StderrLogConfig {
+                    format: StderrLogFormat::Json,
+                    filter: EnvFilter::default(),
+                },
+                opentelemetry: Some(OpenTelemetryConfig {
+                    endpoint: "http://fake_address_for_testing:8080".to_string(),
+                    headers: http::HeaderMap::new(),
+                    filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
+                    resource: opentelemetry_sdk::resource::Resource::builder().build(),
+                    max_batch_queue_size: 2048,
+                    max_export_batch_size: 512,
+                    max_concurrent_exports: 1,
+                    batch_scheduled_delay: Duration::from_millis(5000),
+                    max_export_timeout: Duration::from_secs(30),
+                }),
+                tokio_console: None,
+                sentry: None,
+                build_version: crate::BUILD_INFO.version,
+                build_sha: crate::BUILD_INFO.sha,
+                registry: metrics_registry.clone(),
+                capture: config.capture.clone(),
+            };
+            mz_ore::tracing::configure(config).await?
+        } else {
+            TracingHandle::disabled()
+        };
+        let host_name = format!(
+            "localhost:{}",
+            self.inner.http["external"].handle.local_addr.port()
+        );
+        let ports = self
+            .inner
+            .sql
+            .iter()
+            .enumerate()
+            .map(|(i, (_, listener))| (format!("sql-{i}"), listener.handle.local_addr.to_string()))
+            .chain(
+                self.inner
+                    .http
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, listener))| {
+                        (format!("http-{i}"), listener.handle.local_addr.to_string())
+                    }),
+            )
+            .collect();
+        let server_config = resources.config(
+            config,
+            Some(adapter_id),
+            tls_reload_certs,
+            Some(host_name),
+            metrics_registry.clone(),
+            Arc::clone(&persist_clients),
+            tracing_handle,
+        );
+        // Bootstrap starts a coordinator thread and is not cancellation-safe.
+        // Only the earlier service claim can race controller failure.
+        let inner = self.inner.serve(server_config).await?;
+        anyhow::ensure!(
+            exit.has_changed().is_ok() && exit.borrow().is_none(),
+            "test controller exited: {:?}",
+            *exit.borrow()
+        );
+        lease.attach(ports)?;
+        Ok(TestServer {
+            inner,
+            _lease: lease,
+            metrics_registry,
+            persist_clients,
+            persist_location: resources.persist_location.clone(),
+            environment_id: resources.environment_id.clone(),
+            timestamp_oracle_url: resources.timestamp_oracle_url.clone(),
+            timestamp_oracle_now: resources.timestamp_oracle_now.clone(),
+            deployment,
+        })
+    }
+}
+
+/// A test-owned native deployment, independent of its hosted adapter's lifetime.
+///
+/// Retain this handle to restart only an adapter with [`TestHarness::start_in`].
+/// The creating Tokio runtime must outlive the deployment. Local hooks and
+/// failpoints also affect controller code because both roles share the test process.
+/// Real process-death and supervision tests use the subprocess controller fixtures.
+/// Normal teardown drains process-backend deletion before releasing directories.
+/// During unwinding, teardown is abort-only and relies on runtime shutdown.
+pub struct TestDeployment {
+    controller: Option<task::AbortOnDropHandle<()>>,
+    exit: tokio::sync::watch::Receiver<Option<String>>,
+    pubsub: Option<task::AbortOnDropHandle<()>>,
+    runtime: tokio::runtime::Handle,
+    resources: Arc<TestDeploymentResources>,
+}
+
+impl Drop for TestDeployment {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        let controller = self.controller.take();
+        let pubsub = self.pubsub.take();
+        let backend = Arc::clone(&self.resources.secrets_controller);
+        let generation = self.resources.generation;
+        // A clone of the harness can restart in the same runtime immediately
+        // after this drop. Stop the old reconciler before it can race that start.
+        // block_in_place keeps even a single-worker runtime available to drain
+        // the controller and the process backend's queued deletions.
+        tokio::task::block_in_place(|| {
+            self.runtime.block_on(async move {
+                if let Some(controller) = controller {
+                    controller.abort_and_wait().await;
+                }
+                let replicas = backend.namespace("cluster");
+                for id in replicas.list_services().await.expect("list test replicas") {
+                    // The backend lists the entire environment, including
+                    // compatible peers. This fixture owns only its deployment.
+                    let Ok(service) = id.parse::<mz_controller::clusters::ReplicaServiceName>()
+                    else {
+                        continue;
+                    };
+                    if service.generation != generation {
+                        continue;
+                    }
+                    replicas
+                        .drop_service(&id)
+                        .expect("queue test replica deletion");
+                }
+                replicas
+                    .flush()
+                    .await
+                    .expect("drain test replica deletions");
+                if let Some(pubsub) = pubsub {
+                    pubsub.abort_and_wait().await;
+                }
+            })
+        });
+    }
+}
+
+struct TestDeploymentResources {
+    orchestrator: Arc<hosted_adapters::HostedOrchestrator>,
+    hosted: Arc<hosted_adapters::HostedAdapters>,
+    secrets_controller: Arc<ProcessOrchestrator>,
+    // Hosted adapter restarts share their process cache. Full process-loss
+    // behavior is covered by the subprocess fixtures, not this hosted backend.
+    adapter_persist_clients: Arc<PersistClientCache>,
+    persist_location: PersistLocation,
+    timestamp_oracle_url: mz_ore::url::SensitiveUrl,
+    timestamp_oracle_now: NowFn,
+    pubsub_url: String,
+    environment_id: EnvironmentId,
+    generation: u64,
+    code_version: semver::Version,
+    seed: u32,
+    data_directory: PathBuf,
+    _temp_dir: Option<TempDir>,
+    _scratch_dir: TempDir,
+    _timestamp_oracle_clock: Option<Arc<TimestampOracleClock>>,
+}
+
+impl TestDeployment {
+    async fn start(config: &TestHarness) -> Result<Arc<Self>, anyhow::Error> {
+        let runtime = tokio::runtime::Handle::current();
+        anyhow::ensure!(
+            runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread,
+            "test deployments require a multi-thread Tokio runtime for process teardown"
+        );
+        let (data_directory, temp_dir) = match config.data_directory.clone() {
             None => {
                 // If no data directory is provided, we create a temporary
                 // directory. The temporary directory is cleaned up when the
@@ -858,7 +1080,6 @@ impl Listeners {
                     .expect("invalid timestamp oracle URI"),
             )
         };
-        let metrics_registry = config.metrics_registry.unwrap_or_else(MetricsRegistry::new);
         let orchestrator = ProcessOrchestrator::new(ProcessOrchestratorConfig {
             image_dir: env::current_exe()?
                 .parent()
@@ -889,209 +1110,253 @@ impl Listeners {
         })
         .await?;
         let orchestrator = Arc::new(orchestrator);
-        // Messing with the clock causes persist to expire leases, causing hangs and
-        // panics. Is it possible/desirable to put this back somehow?
-        let persist_now = SYSTEM_TIME.clone();
-        let dyncfgs = mz_dyncfgs::all_dyncfgs();
-
-        let mut updates = ConfigUpdates::default();
-        // Tune down the number of connections to make this all work a little easier
-        // with local postgres.
-        updates.add(&CONSENSUS_CONNECTION_POOL_MAX_SIZE, 1);
-        updates.apply(&dyncfgs);
-
-        let mut persist_cfg = PersistConfig::new(&crate::BUILD_INFO, persist_now.clone(), dyncfgs);
-        persist_cfg.build_version = config.code_version;
-        // Stress persist more by writing rollups frequently
-        persist_cfg.set_rollup_threshold(5);
-
-        let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_cfg, &metrics_registry);
-        let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
-        let persist_pubsub_tcp_listener =
-            TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-                .await
-                .expect("pubsub addr binding");
-        let persist_pubsub_server_port = persist_pubsub_tcp_listener
-            .local_addr()
-            .expect("pubsub addr has local addr")
-            .port();
-
-        // Spawn the persist pub-sub server.
-        mz_ore::task::spawn(|| "persist_pubsub_server", async move {
-            persist_pubsub_server
-                .serve_with_stream(TcpListenerStream::new(persist_pubsub_tcp_listener))
-                .await
-                .expect("success")
-        });
-        let persist_clients =
-            PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client);
-        let persist_clients = Arc::new(persist_clients);
-        let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
-
         let secrets_controller = Arc::clone(&orchestrator);
-        let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let fallback = Arc::new(TracingOrchestrator::new(
+            orchestrator,
+            config.orchestrator_tracing_cli_args.clone(),
+        ));
+        let hosted = Arc::new(hosted_adapters::HostedAdapters::new());
+        let orchestrator = Arc::new(hosted_adapters::HostedOrchestrator::new(
+            fallback,
+            Arc::clone(&hosted),
+        ));
+        let relay_config = fixture_persist_config(config);
+        let relay = PersistGrpcPubSubServer::new(&relay_config, &MetricsRegistry::new());
+        // Separate role caches keep catalog format installation independent.
+        // Same-process connections have no detached reconnect loop to outlive
+        // the fixture when its relay stops.
+        let controller_registry = MetricsRegistry::new();
+        let controller_clients = fixture_persist_clients(
+            config,
+            &controller_registry,
+            relay.new_same_process_connection(),
+        );
+        let adapter_clients = fixture_persist_clients(
+            config,
+            &MetricsRegistry::new(),
+            relay.new_same_process_connection(),
+        );
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let pubsub_url = format!("http://{}", listener.local_addr()?);
+        let timestamp_oracle_now = match &config.timestamp_oracle_clock {
+            Some(clock) => mz_timestamp_oracle::fixture_clock::open(clock.path.clone())?,
+            None => config.now.clone(),
+        };
+        let resources = Arc::new(TestDeploymentResources {
+            orchestrator,
+            hosted,
+            secrets_controller,
+            adapter_persist_clients: adapter_clients,
+            persist_location: PersistLocation {
+                blob_uri: format!("file://{}/persist/blob", data_directory.display()).parse()?,
+                consensus_uri,
+            },
+            timestamp_oracle_url,
+            timestamp_oracle_now,
+            pubsub_url,
+            environment_id: config.environment_id.clone(),
+            generation: config.deploy_generation,
+            code_version: config.code_version.clone(),
+            seed: config.seed,
+            data_directory,
+            _temp_dir: temp_dir,
+            _scratch_dir: scratch_dir,
+            _timestamp_oracle_clock: config.timestamp_oracle_clock.clone(),
+        });
+        let pubsub = task::spawn(|| "test deployment pubsub", async move {
+            relay
+                .serve_with_stream(TcpListenerStream::new(listener))
+                .await
+                .expect("test pubsub server");
+        })
+        .abort_on_drop();
+        // Controller and adapter catalogs register identical metric families and
+        // install format policy independently. Neither shares the other's cache.
+        let controller_config = resources.config(
+            config.clone(),
+            None,
+            mz_server_core::cert_reload_never_reload(),
+            None,
+            controller_registry,
+            controller_clients,
+            TracingHandle::disabled(),
+        );
+        let launch = crate::controllerd::provisioning::AdapterProvisioningConfig {
+            image: "adapterd".into(),
+            init_container_image: None,
+            args: vec![],
+            listeners: config.listeners_config.clone(),
+            generation: config.deploy_generation,
+        };
+        let sizes = btreemap! {
+            mz_catalog::durable::DEFAULT_ADAPTER_SIZE.to_owned() =>
+                crate::controllerd::provisioning::AdapterAllocation {
+                    cpu_limit: mz_orchestrator::CpuLimit::from_millicpus(1000),
+                    memory_limit: mz_orchestrator::MemoryLimit("4GiB".parse().expect("valid fixture size")),
+                }
+        };
+        let plan_build =
+            mz_catalog::catalog::Catalog::expression_build_version(&crate::BUILD_INFO).to_string();
+        let (exited, exit) = tokio::sync::watch::channel(None);
+        let keep_resources = Arc::clone(&resources);
+        let controller = task::spawn(|| "test deployment controller", async move {
+            let _resources = keep_resources;
+            let result = crate::controllerd::run(
+                controller_config,
+                launch,
+                sizes,
+                plan_build,
+                SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+                None,
+            )
+            .await;
+            let _ = exited.send(Some(match result {
+                Ok(()) => "controller stopped".into(),
+                Err(error) => format!("{error:#}"),
+            }));
+        })
+        .abort_on_drop();
+        Ok(Arc::new(Self {
+            controller: Some(controller),
+            exit,
+            pubsub: Some(pubsub),
+            runtime,
+            resources,
+        }))
+    }
+}
+
+fn fixture_persist_config(config: &TestHarness) -> PersistConfig {
+    // Mock SQL clocks must not expire Persist leases.
+    let dyncfgs = mz_dyncfgs::all_dyncfgs();
+    let mut updates = ConfigUpdates::default();
+    updates.add(&CONSENSUS_CONNECTION_POOL_MAX_SIZE, 1);
+    updates.apply(&dyncfgs);
+    let mut persist = PersistConfig::new(&crate::BUILD_INFO, SYSTEM_TIME.clone(), dyncfgs);
+    persist.build_version = config.code_version.clone();
+    persist.set_rollup_threshold(5);
+    persist
+}
+
+fn fixture_persist_clients(
+    config: &TestHarness,
+    registry: &MetricsRegistry,
+    connection: PubSubClientConnection,
+) -> Arc<PersistClientCache> {
+    Arc::new(PersistClientCache::new(
+        fixture_persist_config(config),
+        registry,
+        |_, _| connection,
+    ))
+}
+
+impl TestDeploymentResources {
+    fn config(
+        &self,
+        config: TestHarness,
+        joined_adapter_id: Option<mz_repr::AdapterId>,
+        tls_reload_certs: ReloadTrigger,
+        host_name: Option<String>,
+        metrics_registry: MetricsRegistry,
+        persist_clients: Arc<PersistClientCache>,
+        tracing_handle: TracingHandle,
+    ) -> crate::Config {
+        let mut connection_context = ConnectionContext::for_tests(self.secrets_controller.reader());
         connection_context.environment_id = config.environment_id.to_string();
         if !config.aws_connection_context {
             connection_context.aws_external_id_prefix = None;
             connection_context.aws_connection_role_arn = None;
         }
-        let orchestrator = Arc::new(TracingOrchestrator::new(
-            orchestrator,
-            config.orchestrator_tracing_cli_args,
-        ));
-        let tracing_handle = if config.enable_tracing {
-            let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
-                service_name: "environmentd",
-                stderr_log: StderrLogConfig {
-                    format: StderrLogFormat::Json,
-                    filter: EnvFilter::default(),
-                },
-                opentelemetry: Some(OpenTelemetryConfig {
-                    endpoint: "http://fake_address_for_testing:8080".to_string(),
-                    headers: http::HeaderMap::new(),
-                    filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
-                    resource: opentelemetry_sdk::resource::Resource::builder().build(),
-                    max_batch_queue_size: 2048,
-                    max_export_batch_size: 512,
-                    max_concurrent_exports: 1,
-                    batch_scheduled_delay: Duration::from_millis(5000),
-                    max_export_timeout: Duration::from_secs(30),
-                }),
-                tokio_console: None,
-                sentry: None,
-                build_version: crate::BUILD_INFO.version,
-                build_sha: crate::BUILD_INFO.sha,
-                registry: metrics_registry.clone(),
-                capture: config.capture,
-            };
-            mz_ore::tracing::configure(config).await?
-        } else {
-            TracingHandle::disabled()
-        };
-        let host_name = format!(
-            "localhost:{}",
-            self.inner.http["external"].handle.local_addr.port()
-        );
-        let catalog_config = CatalogConfig {
-            persist_clients: Arc::clone(&persist_clients),
-            metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
-        };
-        let persist_location = PersistLocation {
-            blob_uri: format!("file://{}/persist/blob", data_directory.display())
-                .parse()
-                .expect("invalid blob URI"),
-            consensus_uri,
-        };
-        let environment_id = config.environment_id.clone();
-
-        let timestamp_oracle_clock_file = config
-            .timestamp_oracle_clock
-            .as_ref()
-            .map(|clock| clock.path.clone());
-        let timestamp_oracle_now = match &timestamp_oracle_clock_file {
-            Some(path) => mz_timestamp_oracle::fixture_clock::open(path.clone())?,
-            None => config.now.clone(),
-        };
-        let inner = self
-            .inner
-            .serve(crate::Config {
-                adapter_size_names: Default::default(),
-                joined_adapter_id: None,
-                catalog_config,
-                timestamp_oracle_url: Some(timestamp_oracle_url.clone()),
-                controller: ControllerConfig {
-                    manage_replica_processes: true,
-                    timestamp_oracle_url: Some(timestamp_oracle_url.clone()),
-                    timestamp_oracle_clock_file,
-                    build_info: &crate::BUILD_INFO,
-                    orchestrator,
-                    clusterd_image: "clusterd".into(),
-                    init_container_image: None,
-                    deploy_generation: config.deploy_generation,
-                    persist_location: persist_location.clone(),
-                    persist_clients: Arc::clone(&persist_clients),
-                    now: config.now.clone(),
-                    metrics_registry: metrics_registry.clone(),
-                    persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
-                    secrets_args: mz_secrets_cli::SecretsReaderCliArgs {
-                        secrets_reader: mz_secrets_cli::SecretsControllerKind::LocalFile,
-                        secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
-                        secrets_reader_kubernetes_context: None,
-                        secrets_reader_aws_prefix: None,
-                        secrets_reader_name_prefix: None,
-                    },
-                    connection_context,
-                    replica_http_locator: Default::default(),
-                },
-                secrets_controller,
-                cloud_resource_controller: None,
-                system_dyncfgs,
-                tls: config.tls,
-                frontegg: config.frontegg,
-                frontegg_oauth_issuer_url: None,
-                unsafe_mode: config.unsafe_mode,
-                all_features: false,
-                metrics_registry: metrics_registry.clone(),
+        crate::Config {
+            adapter_size_names: [mz_catalog::durable::DEFAULT_ADAPTER_SIZE.to_owned()].into(),
+            joined_adapter_id,
+            catalog_config: CatalogConfig {
+                persist_clients: Arc::clone(&persist_clients),
+                metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
+            },
+            timestamp_oracle_url: Some(self.timestamp_oracle_url.clone()),
+            controller: ControllerConfig {
+                manage_replica_processes: false,
+                timestamp_oracle_url: Some(self.timestamp_oracle_url.clone()),
+                timestamp_oracle_clock_file: self
+                    ._timestamp_oracle_clock
+                    .as_ref()
+                    .map(|clock| clock.path.clone()),
+                build_info: &crate::BUILD_INFO,
+                orchestrator: self.orchestrator.clone(),
+                clusterd_image: "clusterd".into(),
+                init_container_image: None,
+                deploy_generation: config.deploy_generation,
+                persist_location: self.persist_location.clone(),
+                persist_clients: Arc::clone(&persist_clients),
                 now: config.now.clone(),
-                environment_id: config.environment_id,
-                cors_allowed_origin: AllowOrigin::list([]),
-                cors_allowed_origin_list: Vec::new(),
-                cluster_replica_sizes: config.cluster_replica_sizes,
-                bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
-                bootstrap_default_cluster_replication_factor: config
-                    .default_cluster_replication_factor,
-                bootstrap_builtin_system_cluster_config: config.builtin_system_cluster_config,
-                bootstrap_builtin_catalog_server_cluster_config: config
-                    .builtin_catalog_server_cluster_config,
-                bootstrap_builtin_probe_cluster_config: config.builtin_probe_cluster_config,
-                bootstrap_builtin_support_cluster_config: config.builtin_support_cluster_config,
-                bootstrap_builtin_analytics_cluster_config: config.builtin_analytics_cluster_config,
-                system_parameter_defaults: config.system_parameter_defaults,
-                availability_zones: Default::default(),
-                tracing_handle,
-                storage_usage_collection_interval: config.storage_usage_collection_interval,
-                storage_usage_retention_period: config.storage_usage_retention_period,
-                segment_api_key: None,
-                segment_client_side: false,
-                test_only_dummy_segment_client: false,
-                egress_addresses: vec![],
-                aws_account_id: None,
-                aws_privatelink_availability_zones: None,
-                launchdarkly_sdk_key: None,
-                launchdarkly_base_uri: None,
-                launchdarkly_key_map: Default::default(),
-                config_sync_file_path: None,
-                config_sync_timeout: Duration::from_secs(30),
-                config_sync_loop_interval: None,
-                bootstrap_role: config.bootstrap_role,
-                http_host_name: Some(host_name),
-                internal_console_redirect_url: config.internal_console_redirect_url,
-                tls_reload_certs,
-                helm_chart_version: None,
-                license_key: ValidatedLicenseKey::for_tests(),
-                external_login_password_mz_system: config.external_login_password_mz_system,
-                force_builtin_schema_migration: config.force_builtin_schema_migration,
-            })
-            .await?;
-
-        Ok(TestServer {
-            inner,
-            metrics_registry,
-            persist_clients,
-            persist_location,
-            environment_id,
-            timestamp_oracle_url,
-            timestamp_oracle_now,
-            _temp_dir: temp_dir,
-            _scratch_dir: scratch_dir,
-            _timestamp_oracle_clock: config.timestamp_oracle_clock,
-        })
+                metrics_registry: metrics_registry.clone(),
+                persist_pubsub_url: self.pubsub_url.clone(),
+                secrets_args: mz_secrets_cli::SecretsReaderCliArgs {
+                    secrets_reader: mz_secrets_cli::SecretsControllerKind::LocalFile,
+                    secrets_reader_local_file_dir: Some(self.data_directory.join("secrets")),
+                    secrets_reader_kubernetes_context: None,
+                    secrets_reader_aws_prefix: None,
+                    secrets_reader_name_prefix: None,
+                },
+                connection_context,
+                replica_http_locator: Default::default(),
+            },
+            secrets_controller: self.secrets_controller.clone(),
+            cloud_resource_controller: None,
+            system_dyncfgs: Arc::clone(&persist_clients.cfg().configs),
+            tls: config.tls,
+            frontegg: config.frontegg,
+            frontegg_oauth_issuer_url: None,
+            unsafe_mode: config.unsafe_mode,
+            all_features: false,
+            metrics_registry: metrics_registry.clone(),
+            now: config.now.clone(),
+            environment_id: config.environment_id,
+            cors_allowed_origin: AllowOrigin::list([]),
+            cors_allowed_origin_list: Vec::new(),
+            cluster_replica_sizes: config.cluster_replica_sizes,
+            bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
+            bootstrap_default_cluster_replication_factor: config.default_cluster_replication_factor,
+            bootstrap_builtin_system_cluster_config: config.builtin_system_cluster_config,
+            bootstrap_builtin_catalog_server_cluster_config: config
+                .builtin_catalog_server_cluster_config,
+            bootstrap_builtin_probe_cluster_config: config.builtin_probe_cluster_config,
+            bootstrap_builtin_support_cluster_config: config.builtin_support_cluster_config,
+            bootstrap_builtin_analytics_cluster_config: config.builtin_analytics_cluster_config,
+            system_parameter_defaults: config.system_parameter_defaults,
+            availability_zones: Default::default(),
+            tracing_handle,
+            storage_usage_collection_interval: config.storage_usage_collection_interval,
+            storage_usage_retention_period: config.storage_usage_retention_period,
+            segment_api_key: None,
+            segment_client_side: false,
+            test_only_dummy_segment_client: false,
+            egress_addresses: vec![],
+            aws_account_id: None,
+            aws_privatelink_availability_zones: None,
+            launchdarkly_sdk_key: None,
+            launchdarkly_base_uri: None,
+            launchdarkly_key_map: Default::default(),
+            config_sync_file_path: None,
+            config_sync_timeout: Duration::from_secs(30),
+            config_sync_loop_interval: None,
+            bootstrap_role: config.bootstrap_role,
+            http_host_name: host_name,
+            internal_console_redirect_url: config.internal_console_redirect_url,
+            tls_reload_certs,
+            helm_chart_version: None,
+            license_key: ValidatedLicenseKey::for_tests(),
+            external_login_password_mz_system: config.external_login_password_mz_system,
+            force_builtin_schema_migration: config.force_builtin_schema_migration,
+        }
     }
 }
 
 /// A running instance of `environmentd`.
 pub struct TestServer {
     pub inner: crate::Server,
+    _lease: hosted_adapters::HostedLease,
     pub metrics_registry: MetricsRegistry,
     /// Connection identity for fixture peers of this server's durable catalog.
     pub persist_clients: Arc<PersistClientCache>,
@@ -1099,13 +1364,15 @@ pub struct TestServer {
     pub environment_id: EnvironmentId,
     timestamp_oracle_url: mz_ore::url::SensitiveUrl,
     timestamp_oracle_now: NowFn,
-    /// The `TempDir`s are saved to prevent them from being dropped, and thus cleaned up too early.
-    _temp_dir: Option<TempDir>,
-    _scratch_dir: TempDir,
-    _timestamp_oracle_clock: Option<Arc<TimestampOracleClock>>,
+    deployment: Arc<TestDeployment>,
 }
 
 impl TestServer {
+    /// Retain the deployment while replacing only its adapter.
+    pub fn deployment(&self) -> Arc<TestDeployment> {
+        Arc::clone(&self.deployment)
+    }
+
     /// Open an independent handle to the fixture's shared timestamp namespace.
     pub async fn timestamp_oracle(
         &self,

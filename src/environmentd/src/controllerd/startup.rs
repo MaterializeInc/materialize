@@ -22,8 +22,10 @@ use mz_repr::Timestamp;
 /// must pair same-build children and preserve deployment configuration. Explicitly
 /// pending controller initialization resumes before child launch. Unmarked existing
 /// environments remain join-only. Admission never promotes or retires a peer.
+/// Configuration is borrowed exclusively because its listener hooks are Send,
+/// not Sync, and initialization can move between executor threads across awaits.
 pub async fn open_catalog(
-    config: &crate::Config,
+    config: &mut crate::Config,
     adapter_sizes: &std::collections::BTreeMap<String, super::provisioning::AdapterAllocation>,
 ) -> anyhow::Result<(
     Catalog,

@@ -11,7 +11,6 @@
 
 #![recursion_limit = "256"]
 
-use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::io::{Read as _, Write as _};
@@ -71,6 +70,93 @@ use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message, Utf8Bytes};
 use uuid::Uuid;
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // requires replica processes
+#[allow(clippy::disallowed_methods)]
+async fn test_adapter_restart_preserves_native_execution() {
+    let harness = test_util::TestHarness::default();
+    let server = harness.clone().start().await;
+    let deployment = server.deployment();
+    let client = server.connect().internal().await.unwrap();
+    for statement in [
+        "CREATE TABLE restart_input (n int)",
+        "INSERT INTO restart_input VALUES (1)",
+        "CREATE MATERIALIZED VIEW restart_output AS SELECT * FROM restart_input",
+    ] {
+        client.batch_execute(statement).await.unwrap();
+    }
+    assert_eq!(
+        client
+            .query_one("SELECT n FROM restart_output", &[])
+            .await
+            .unwrap()
+            .get::<_, i32>(0),
+        1
+    );
+    let executions = "SELECT mz_internal.parse_catalog_id(data->'value'->'realization'->'Replica'), \
+        data::text FROM mz_internal.mz_catalog_shared \
+        WHERE data->>'kind' = 'ClientIncarnation' \
+          AND data->'value'->'realization'->'Replica' IS NOT NULL ORDER BY 1";
+    let expected: Vec<String> = client
+        .query(
+            "SELECT id FROM mz_catalog.mz_cluster_replicas ORDER BY id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(!expected.is_empty());
+    let before = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry_async(|_| async {
+            let rows: Vec<(String, String)> = client
+                .query(executions, &[])
+                .await?
+                .iter()
+                .map(|row| (row.get(0), row.get(1)))
+                .collect();
+            anyhow::ensure!(
+                rows.iter().map(|(id, _)| id).eq(expected.iter()),
+                "not every declared replica has registered its execution"
+            );
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await
+        .unwrap();
+    drop(client);
+    drop(server);
+
+    // Keep the controller, relay and replicas alive while the adapter alone is
+    // absent. A new adapter must join, not initialize or reinstall maintained work.
+    let server = harness.start_in(deployment).await;
+    let client = server.connect().internal().await.unwrap();
+    let after: Vec<(String, String)> = client
+        .query(executions, &[])
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(
+        before, after,
+        "adapter restart replaced a replica execution"
+    );
+    client
+        .execute("INSERT INTO restart_input VALUES (2)", &[])
+        .await
+        .unwrap();
+    let rows: Vec<i32> = client
+        .query("SELECT n FROM restart_output ORDER BY n", &[])
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(rows, [1, 2]);
+}
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // too slow
@@ -2832,6 +2918,17 @@ async fn test_leader_promotion_mixed_code_version() {
     let server_this = harness.clone().start().await;
     let client_this = server_this.connect().await.unwrap();
     client_this.simple_query("SELECT 1").await.unwrap();
+    for statement in [
+        "CREATE TABLE peer_input (n int)",
+        "INSERT INTO peer_input VALUES (1)",
+        "CREATE MATERIALIZED VIEW peer_output AS SELECT * FROM peer_input",
+    ] {
+        client_this.batch_execute(statement).await.unwrap();
+    }
+    client_this
+        .query_one("SELECT n FROM peer_output", &[])
+        .await
+        .unwrap();
 
     // Simulate a rolling upgrade and wait for the preflight checks.
     let listeners_next = test_util::Listeners::new(&harness).await.unwrap();
@@ -2840,7 +2937,7 @@ async fn test_leader_promotion_mixed_code_version() {
         .clone()
         .with_deploy_generation(2)
         .with_code_version(next_version.clone());
-    let _server_next = mz_ore::task::spawn(|| "next version", async move {
+    let server_next = mz_ore::task::spawn(|| "next version", async move {
         listeners_next.serve(config_next).await.unwrap()
     })
     .abort_on_drop();
@@ -2871,9 +2968,95 @@ async fn test_leader_promotion_mixed_code_version() {
         })
         .await
         .unwrap();
-    // The next_version preflight checks shouldn't fence out the this_version
-    // server.
-    client_this.simple_query("SELECT 1").await.unwrap();
+    // Both admitted deployments remain full writers during prewarming.
+    let server_next = server_next.await;
+    let client_next = server_next.connect().await.unwrap();
+    client_this
+        .execute("INSERT INTO peer_input VALUES (2)", &[])
+        .await
+        .unwrap();
+    client_next
+        .execute("INSERT INTO peer_input VALUES (3)", &[])
+        .await
+        .unwrap();
+    let rows = client_next
+        .query("SELECT n FROM peer_output ORDER BY n", &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.get::<_, i32>(0))
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+
+    // Candidate readiness does not prove that every incumbent replica has
+    // registered. Compare a complete baseline so late registration is not
+    // mistaken for replacement during teardown.
+    let executions = "SELECT mz_internal.parse_catalog_id(data->'value'->'realization'->'Replica'), \
+        data::text FROM mz_internal.mz_catalog_shared \
+        WHERE data->>'kind' = 'ClientIncarnation' \
+          AND data->'value'->'realization'->'Replica' IS NOT NULL \
+          AND data->'value'->>'deployment_generation' = '1' ORDER BY 1";
+    let observer = server_this.connect().internal().await.unwrap();
+    let expected: Vec<String> = observer
+        .query(
+            "SELECT id FROM mz_catalog.mz_cluster_replicas ORDER BY id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(!expected.is_empty());
+    let before = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry_async(|_| async {
+            let rows: Vec<(String, String)> = observer
+                .query(executions, &[])
+                .await?
+                .iter()
+                .map(|row| (row.get(0), row.get(1)))
+                .collect();
+            anyhow::ensure!(
+                rows.iter().map(|(id, _)| id).eq(expected.iter()),
+                "not every incumbent replica has registered its execution"
+            );
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await
+        .unwrap();
+    drop(client_next);
+    drop(server_next);
+    client_this
+        .execute("INSERT INTO peer_input VALUES (4)", &[])
+        .await
+        .unwrap();
+    let rows = tokio::time::timeout(
+        Duration::from_secs(30),
+        client_this.query("SELECT n FROM peer_output ORDER BY n", &[]),
+    )
+    .await
+    .expect("surviving deployment stopped making progress")
+    .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.get::<_, i32>(0))
+            .collect::<Vec<_>>(),
+        [1, 2, 3, 4]
+    );
+    let after: Vec<(String, String)> = observer
+        .query(executions, &[])
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(
+        before, after,
+        "stopping a candidate replaced a peer execution"
+    );
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
@@ -2934,189 +3117,81 @@ async fn test_caught_up_reads_do_not_block_coordinator() {
     );
 }
 
-/// The migrated builtin MVs that the 0dt hydration tests read.
-///
-/// `mz_clusters` is the interesting one: it joins the `mz_cluster_replica_size_internal` builtin
-/// table, whose replacement shard is written once at bootstrap and thereafter only kept moving by
-/// `read_only_mode_table_worker`.
-const FORCED_BUILTIN_MIGRATION_MVS: &[&str] =
-    &["mz_catalog.mz_databases", "mz_catalog.mz_clusters"];
-
-/// How long a single read of a migrated builtin MV may take before it counts as unreadable.
-const MIGRATED_BUILTIN_MV_READ_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// Reads every MV in [`FORCED_BUILTIN_MIGRATION_MVS`], reporting whether all of them returned rows.
-///
-/// Each read gets its own connection, dropped on timeout so the session ends and takes the peek
-/// with it. `statement_timeout` bounds INSERT/UPDATE/DELETE, not a `SELECT` waiting on a frontier,
-/// so it would leave the poll loop hanging on an unwritten replacement shard.
+/// Native deployments share builtin identities and reject forced replacement
+/// rather than prewarming private replacement shards. Test rejection both before
+/// initialization and alongside a serving deployment. Compatible candidate
+/// readiness is covered by `test_leader_promotion_mixed_code_version`.
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+#[cfg_attr(miri, ignore)] // requires replica processes
 #[allow(clippy::disallowed_methods)]
-async fn migrated_builtin_mvs_readable(server: &test_util::TestServer) -> bool {
-    for relation in FORCED_BUILTIN_MIGRATION_MVS {
-        let client = server.connect().await.unwrap();
-        let query = format!("SELECT count(*) FROM {relation}");
-        let read = tokio::time::timeout(
-            MIGRATED_BUILTIN_MV_READ_TIMEOUT,
-            client.query_one(&query, &[]),
-        );
-        match read.await {
-            Ok(Ok(row)) => {
-                let count: i64 = row.get(0);
-                if count == 0 {
-                    tracing::info!("`{query}` returned 0 rows");
-                    return false;
-                }
-            }
-            Ok(Err(err)) => {
-                tracing::info!("`{query}` errored: {err}");
-                return false;
-            }
-            Err(_) => {
-                tracing::info!(
-                    "`{query}` did not return within {MIGRATED_BUILTIN_MV_READ_TIMEOUT:?}"
-                );
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// Boots a leader deployment plus a read-only deployment whose builtins were force-migrated by
-/// shard replacement, and reports whether the migrated builtin MVs had become readable by the time
-/// the read-only deployment first said `ReadyToPromote`.
-///
-/// Status and readability are polled in the same loop on purpose. Reading the MVs only *after*
-/// observing `ReadyToPromote` proves nothing about ordering: a peek against an unwritten
-/// replacement shard blocks, but so does a peek against an MV that is merely late.
-#[allow(clippy::disallowed_methods)]
-async fn migrated_builtin_mvs_readable_at_ready_to_promote(hydrate_migrated_mvs: bool) -> bool {
+async fn test_native_deployments_reject_forced_builtin_migrations() {
     let tmpdir = TempDir::new().unwrap();
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
-        .with_deploy_generation(1)
-        // Builtin schema migrations are unsupported in protected mode. Initialize unprotected
-        // from the first startup because the mode is latched at environment creation.
-        .with_system_parameter_default(
-            "enable_catalog_read_protection".to_string(),
-            "false".to_string(),
-        )
-        // Tick often, and tolerate far less lag than production, so the test finishes quickly and
-        // actually exercises the gate. The allowed lag has to stay *below* the stability period: a
-        // frozen collection looks caught up for as long as the tolerance lasts, so it must fall
-        // out of tolerance before an uninterrupted streak can complete.
-        .with_system_parameter_default(
-            "0dt_deployment_hydration_check_interval".to_string(),
-            "1s".to_string(),
-        )
-        .with_system_parameter_default(
-            "with_0dt_caught_up_check_allowed_lag".to_string(),
-            "5s".to_string(),
-        )
-        .with_system_parameter_default(
-            "with_0dt_caught_up_check_stability_period".to_string(),
-            "10s".to_string(),
-        )
-        .with_system_parameter_default(
-            "enable_0dt_hydrate_migrated_builtin_mvs".to_string(),
-            hydrate_migrated_mvs.to_string(),
-        );
-
-    // The leader deployment.
-    let server_leader = harness.clone().start().await;
-    let client_leader = server_leader.connect().await.unwrap();
-    client_leader.simple_query("SELECT 1").await.unwrap();
-
-    // The new deployment, booting read-only. Forcing the `replacement` mechanism gives every
-    // builtin storage collection a fresh shard, which is what a release carrying a
-    // `MigrationStep::replacement` does for the collections it names.
-    let server_new = harness
+        .with_deploy_generation(1);
+    let error = harness
         .clone()
+        .with_force_builtin_schema_migration("replacement")
+        .try_start()
+        .await
+        .err()
+        .expect("forced initialization must fail");
+    assert!(format!("{error:#}").contains("controller startup does not support forced migrations"));
+
+    // Rejection must not leave a partial initialization that prevents startup.
+    let server = harness.clone().start().await;
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute("CREATE TABLE migration_input (n int)")
+        .await
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO migration_input VALUES (1)")
+        .await
+        .unwrap();
+    let before: String = client
+        .query_one(
+            "SELECT id FROM mz_catalog.mz_clusters WHERE name = 'quickstart'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    let error = harness
         .with_deploy_generation(2)
         .with_force_builtin_schema_migration("replacement")
-        .start()
-        .await;
-
-    let status_url = Url::parse(&format!(
-        "http://{}/api/leader/status",
-        server_new.internal_http_local_addr()
-    ))
-    .unwrap();
-
-    // Readability is monotonic, so latching the first `true` can only understate how early the MVs
-    // hydrated, never overstate it, and a readable-mid-tick race can't fail the test spuriously.
-    // The budget stays inside nextest's 240s kill for this package, so a gate that never opens
-    // fails the assertion rather than timing the test out.
-    let mvs_readable = Cell::new(false);
-    Retry::default()
-        .max_duration(Duration::from_secs(120))
-        .retry_async(|_state| {
-            let status_url = status_url.clone();
-            let server_new = &server_new;
-            let mvs_readable = &mvs_readable;
-            async move {
-                if !mvs_readable.get() {
-                    mvs_readable.set(migrated_builtin_mvs_readable(server_new).await);
-                }
-
-                let res = reqwest::Client::new().get(status_url).send().await.unwrap();
-                assert_eq!(res.status(), StatusCode::OK);
-                let response = res.text().await.unwrap();
-                tracing::info!(
-                    mvs_readable = mvs_readable.get(),
-                    "leader status of the new deployment: {response}"
-                );
-                assert_ne!(response, r#"{"status":"IsLeader"}"#);
-                if response == r#"{"status":"ReadyToPromote"}"# {
-                    Ok(())
-                } else {
-                    Err(())
-                }
-            }
-        })
+        .try_start()
         .await
-        .expect("new deployment never reported ReadyToPromote");
-
-    // NOTE: we never promote. Cut-over `halt!`s the process, taking the test with it.
-    mvs_readable.get()
-}
-
-/// Regression test for builtin MVs migrated by shard replacement: they must be hydrated by the
-/// time the read-only deployment reports `ReadyToPromote`.
-///
-/// A replacement migration hands the new deployment a fresh shard that no other environment
-/// writes. Leave the MV's dataflow read-only and that shard stays empty, so the MV and everything
-/// downstream of it drop out of the 0dt caught-up gate and then all hydrate at once at cut-over.
-///
-/// Reaching `ReadyToPromote` at all is the other half of the assertion. Write-enabling puts these
-/// MVs back *into* the gate, so anything they cannot catch up to now blocks promotion instead of
-/// being waved through.
-///
-/// NOTE: this covers the ordering, not the gate's lag comparison. Forcing `replacement` replaces
-/// `mz_cluster_replica_frontiers` too, and the gate reads its "live" frontiers out of that
-/// collection, so here it compares this deployment against itself.
-#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-#[cfg_attr(miri, ignore)] // too slow
-async fn test_0dt_migrated_builtin_mv_hydrates_before_promotion() {
-    assert!(
-        migrated_builtin_mvs_readable_at_ready_to_promote(true).await,
-        "migrated builtin MVs were not readable when the new deployment reported ReadyToPromote"
+        .err()
+        .expect("forced candidate migration must fail");
+    assert!(format!("{error:#}").contains("controller startup does not support forced migrations"));
+    client
+        .batch_execute("INSERT INTO migration_input VALUES (2)")
+        .await
+        .unwrap();
+    let rows = client
+        .query("SELECT n FROM migration_input ORDER BY n", &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.get::<_, i32>(0))
+            .collect::<Vec<_>>(),
+        [1, 2]
     );
-}
-
-/// The break-glass half of [`test_0dt_migrated_builtin_mv_hydrates_before_promotion`]: with
-/// `enable_0dt_hydrate_migrated_builtin_mvs` off, the migrated MVs are excluded from the caught-up
-/// gate again, so the deployment reports `ReadyToPromote` with them still unhydrated.
-///
-/// The two tests differ only in the flag, so a change that reaches `ReadyToPromote` without
-/// hydrating cannot pass both.
-#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-#[cfg_attr(miri, ignore)] // too slow
-async fn test_0dt_migrated_builtin_mv_flag_off_promotes_unhydrated() {
-    assert!(
-        !migrated_builtin_mvs_readable_at_ready_to_promote(false).await,
-        "migrated builtin MVs hydrated even with enable_0dt_hydrate_migrated_builtin_mvs off"
+    let after: String = client
+        .query_one(
+            "SELECT id FROM mz_catalog.mz_clusters WHERE name = 'quickstart'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        before, after,
+        "rejected candidate changed the quickstart cluster identity"
     );
 }
 
