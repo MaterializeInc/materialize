@@ -60,14 +60,16 @@ pub const ENABLE_WALLCLOCK_FRESHNESS_RECORDING: Config<bool> = Config::new(
 pub const WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE: Config<u32> = Config::new(
     "wallclock_freshness_buckets_per_octave",
     4,
-    "The number of histogram buckets per power of two of staleness. Must be a power of two.",
+    "The number of histogram buckets per power of two of staleness. Must be a power of two \
+    of at most 256, other values count as the default.",
     ParameterScope::Environment,
 );
 
 pub const WALLCLOCK_FRESHNESS_PERIOD_INTERVAL: Config<Duration> = Config::new(
     "wallclock_freshness_period_interval",
     Duration::from_secs(60),
-    "The period interval of histograms in wallclock freshness introspection.",
+    "The period interval of histograms in wallclock freshness introspection. Intervals below \
+    1 s count as 1 s.",
     ParameterScope::Environment,
 );
 

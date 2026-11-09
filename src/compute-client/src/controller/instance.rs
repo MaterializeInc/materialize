@@ -39,8 +39,11 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
+use mz_storage_client::freshness::{FreshnessState, pack_rows, recorder_config};
+use mz_storage_types::freshness::{PeriodRow, RecorderConfig};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::time_dependence::TimeDependence;
 use thiserror::Error;
 use timely::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -204,6 +207,8 @@ pub(super) struct Instance {
     wallclock_lag: WallclockLagFn<Timestamp>,
     /// The last time wallclock lag introspection was recorded.
     wallclock_lag_last_recorded: DateTime<Utc>,
+    /// The wall-clock time the controller started at.
+    boot: Timestamp,
 
     /// Sender for updates to collection read holds.
     ///
@@ -286,7 +291,20 @@ impl Instance {
         initial_as_of: Option<Antichain<Timestamp>>,
         refresh_schedule: Option<RefreshSchedule>,
         target_replica: Option<ReplicaId>,
+        freshness_dependence: Option<TimeDependence>,
     ) {
+        let freshness_config = self.freshness_config();
+        let freshness_start = self.freshness_start();
+        let new_freshness = |frontier: &Antichain<Timestamp>| {
+            new_freshness_state(
+                id,
+                freshness_dependence.as_ref(),
+                freshness_start,
+                frontier,
+                freshness_config.as_ref(),
+            )
+        };
+
         // Add global collection state.
         let dependency_ids: Vec<GlobalId> = compute_dependencies
             .keys()
@@ -312,6 +330,8 @@ impl Instance {
             introspection,
         );
         state.target_replica = target_replica;
+        state.freshness = new_freshness(&as_of);
+        state.freshness_dependence = freshness_dependence.clone();
         // If the collection is write-only, clear its read policy to reflect that.
         if write_only {
             state.read_policy = None;
@@ -326,7 +346,12 @@ impl Instance {
             if target_replica.is_some_and(|id| id != replica.id) {
                 continue;
             }
-            replica.add_collection(id, as_of.clone(), replica_input_read_holds.clone());
+            replica.add_collection(
+                id,
+                as_of.clone(),
+                replica_input_read_holds.clone(),
+                new_freshness(&as_of),
+            );
         }
     }
 
@@ -340,6 +365,11 @@ impl Instance {
         self.collections.remove(&id);
     }
 
+    /// Adds the state of replica `id`.
+    ///
+    /// The staleness states of its collections are taken from `freshness`, and observe the
+    /// replica's initial write frontiers at `freshness_start`. The missing ones start at
+    /// `freshness_start`. Dropped collections get no staleness state.
     fn add_replica_state(
         &mut self,
         id: ReplicaId,
@@ -347,7 +377,11 @@ impl Instance {
         config: ReplicaConfig,
         epoch: u64,
         dyncfg_override: ConfigUpdates,
+        freshness_start: Timestamp,
+        mut freshness: BTreeMap<GlobalId, FreshnessState>,
     ) -> Result<(), read_holds::ReadHoldIssuerHungUp> {
+        let freshness_config = self.freshness_config();
+        let mut freshness_rows = Vec::new();
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
         let metrics = self.metrics.for_replica(id);
@@ -409,10 +443,29 @@ impl Instance {
                 break;
             }
 
-            replica.add_collection(*collection_id, as_of, input_read_holds);
+            // A dropped collection's recordings ended at the drop.
+            let freshness = match freshness.remove(collection_id) {
+                _ if collection.dropped => None,
+                // The new replica restarts from `as_of`, which can be below the frontier the
+                // carried state reflects, and its readers see that regression.
+                Some(mut state) => {
+                    let rows = state.observe(freshness_start, &as_of, freshness_config.as_ref());
+                    freshness_rows.push((*collection_id, Some(id), rows));
+                    Some(state)
+                }
+                None => new_freshness_state(
+                    *collection_id,
+                    collection.freshness_dependence.as_ref(),
+                    freshness_start,
+                    &as_of,
+                    freshness_config.as_ref(),
+                ),
+            };
+            replica.add_collection(*collection_id, as_of, input_read_holds, freshness);
         }
 
         self.replicas.insert(id, replica);
+        self.deliver_freshness_rows(freshness_rows);
 
         match shutdown_input {
             Some(input_id) => Err(read_holds::ReadHoldIssuerHungUp(input_id)),
@@ -548,10 +601,7 @@ impl Instance {
 
         let now_ms = (self.now)();
         let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
-        let histogram_labels = match &self.workload_class {
-            Some(wc) => [("workload_class", wc.clone())].into(),
-            None => BTreeMap::new(),
-        };
+        let histogram_labels = self.histogram_labels();
 
         // For collections that sink into storage, we need to ask the storage controller to know
         // whether they're currently readable.
@@ -704,6 +754,116 @@ impl Instance {
         }
 
         self.wallclock_lag_last_recorded = now_trunc;
+    }
+
+    /// The labels of wallclock lag and staleness histogram rows.
+    fn histogram_labels(&self) -> BTreeMap<&'static str, String> {
+        match &self.workload_class {
+            Some(wc) => [("workload_class", wc.clone())].into(),
+            None => BTreeMap::new(),
+        }
+    }
+
+    /// The current wall-clock time.
+    fn now_ts(&self) -> Timestamp {
+        Timestamp::from((self.now)())
+    }
+
+    /// The staleness recorder configuration, `None` while recording is off.
+    fn freshness_config(&self) -> Option<RecorderConfig> {
+        // A read-only instance belongs to a generation that is not the leader yet. The leader
+        // writes the histograms, so a second writer would count the same time twice.
+        // NOTE: `read_only` never changes, because a promoted process halts and reboots as the
+        // leader (see `environmentd::deployment::preflight`). Promoting in place would leave
+        // recording off until the next restart.
+        if self.read_only {
+            return None;
+        }
+        recorder_config(&self.dyncfg)
+    }
+
+    /// The time at which staleness states created now start.
+    fn freshness_start(&self) -> Timestamp {
+        // Collections installed before initialization completes existed before the restart, so
+        // their recordings start when the controller started, however long bootstrap takes.
+        if self.initialized {
+            self.now_ts()
+        } else {
+            self.boot
+        }
+    }
+
+    /// Records the replica write frontier of collection `id` on `replica_id` in its staleness
+    /// state.
+    fn observe_replica_freshness(&mut self, id: GlobalId, replica_id: ReplicaId) {
+        let freshness_config = self.freshness_config();
+        let now = self.now_ts();
+        let rows = self
+            .replicas
+            .get_mut(&replica_id)
+            .and_then(|replica| replica.collections.get_mut(&id))
+            .and_then(|collection| {
+                let state = collection.freshness.as_mut()?;
+                Some(state.observe(now, &collection.write_frontier, freshness_config.as_ref()))
+            });
+        if let Some(rows) = rows {
+            self.deliver_freshness_rows(vec![(id, Some(replica_id), rows)]);
+        }
+    }
+
+    /// Closes the staleness periods that ended by now, and delivers their rows.
+    fn tick_freshness(&mut self) {
+        let freshness_config = self.freshness_config();
+        let now = self.now_ts();
+        let mut freshness_rows = Vec::new();
+        for (id, collection) in &mut self.collections {
+            if let Some(state) = &mut collection.freshness {
+                let rows = state.tick(now, freshness_config.as_ref());
+                freshness_rows.push((*id, None, rows));
+            }
+        }
+        for (replica_id, replica) in &mut self.replicas {
+            for (id, collection) in &mut replica.collections {
+                if let Some(state) = &mut collection.freshness {
+                    let rows = state.tick(now, freshness_config.as_ref());
+                    freshness_rows.push((*id, Some(*replica_id), rows));
+                }
+            }
+        }
+        self.deliver_freshness_rows(freshness_rows);
+    }
+
+    /// Delivers staleness histogram rows, each with its collection and its replica, or `None`
+    /// for the global histogram.
+    fn deliver_freshness_rows(
+        &self,
+        freshness_rows: Vec<(GlobalId, Option<ReplicaId>, Vec<PeriodRow>)>,
+    ) {
+        let labels = self.histogram_labels();
+        let mut global_updates = Vec::new();
+        let mut replica_updates = Vec::new();
+        for (id, replica_id, rows) in freshness_rows {
+            if rows.is_empty() {
+                continue;
+            }
+            let updates = pack_rows(rows, id, replica_id, &labels);
+            match replica_id {
+                None => global_updates.extend(updates),
+                Some(_) => replica_updates.extend(updates),
+            }
+        }
+        if !global_updates.is_empty() {
+            self.deliver_introspection_updates(
+                IntrospectionType::WallclockFreshnessHistogram,
+                global_updates,
+            );
+        }
+        if !replica_updates.is_empty() {
+            self.deliver_introspection_updates(
+                IntrospectionType::ReplicaWallclockFreshnessHistogram,
+                replica_updates,
+            );
+        }
     }
 
     /// Returns `true` if the given collection is hydrated on at least one
@@ -891,6 +1051,7 @@ impl Instance {
             now: _,
             wallclock_lag: _,
             wallclock_lag_last_recorded,
+            boot,
             read_hold_tx: _,
             replica_tx: _,
             replica_rx: _,
@@ -925,6 +1086,7 @@ impl Instance {
             "subscribes": subscribes,
             "copy_tos": copy_tos,
             "wallclock_lag_last_recorded": wallclock_lag_last_recorded,
+            "boot": boot.to_string(),
         }))
     }
 
@@ -945,6 +1107,7 @@ impl Instance {
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState)>,
         metrics: InstanceMetrics,
         now: NowFn,
+        boot: Timestamp,
         wallclock_lag: WallclockLagFn<Timestamp>,
         dyncfg: Arc<ConfigSet>,
         command_rx: mpsc::UnboundedReceiver<Command>,
@@ -996,6 +1159,7 @@ impl Instance {
             now,
             wallclock_lag,
             wallclock_lag_last_recorded: now_dt,
+            boot,
             read_hold_tx,
             replica_tx,
             replica_rx,
@@ -1235,9 +1399,31 @@ impl Instance {
     pub fn add_replica(
         &mut self,
         id: ReplicaId,
+        config: ReplicaConfig,
+        epoch: Option<u64>,
+        dyncfg_override: ConfigUpdates,
+    ) -> Result<(), ReplicaExists> {
+        let freshness_start = self.freshness_start();
+        self.add_replica_with_freshness(
+            id,
+            config,
+            epoch,
+            dyncfg_override,
+            freshness_start,
+            BTreeMap::new(),
+        )
+    }
+
+    /// Like [`Instance::add_replica`], with the staleness states of
+    /// [`Instance::add_replica_state`].
+    fn add_replica_with_freshness(
+        &mut self,
+        id: ReplicaId,
         mut config: ReplicaConfig,
         epoch: Option<u64>,
         dyncfg_override: ConfigUpdates,
+        freshness_start: Timestamp,
+        freshness: BTreeMap<GlobalId, FreshnessState>,
     ) -> Result<(), ReplicaExists> {
         if self.replica_exists(id) {
             return Err(ReplicaExists(id));
@@ -1289,7 +1475,15 @@ impl Instance {
 
         // Add replica to tracked state.
         if self
-            .add_replica_state(id, client, config, epoch, dyncfg_override)
+            .add_replica_state(
+                id,
+                client,
+                config,
+                epoch,
+                dyncfg_override,
+                freshness_start,
+                freshness,
+            )
             .is_err()
         {
             // A storage read hold issuer hung up, which only happens during process shutdown.
@@ -1306,7 +1500,24 @@ impl Instance {
     /// Remove an existing instance replica, by ID.
     #[mz_ore::instrument(level = "debug")]
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        let replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
+        let now = self.now_ts();
+        self.remove_replica_at(id, now)
+    }
+
+    /// Like [`Instance::remove_replica`], ending the replica's staleness recordings at `now`.
+    fn remove_replica_at(&mut self, id: ReplicaId, now: Timestamp) -> Result<(), ReplicaMissing> {
+        let mut replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
+
+        // The replica's staleness recordings end with it.
+        let freshness_config = self.freshness_config();
+        let mut freshness_rows = Vec::new();
+        for (collection_id, collection) in &mut replica.collections {
+            if let Some(state) = &mut collection.freshness {
+                let rows = state.finish(now, freshness_config.as_ref());
+                freshness_rows.push((*collection_id, Some(id), rows));
+            }
+        }
+        self.deliver_freshness_rows(freshness_rows);
 
         // Before dropping the replica state (and the contained input read holds), log read holds
         // that are the last line of defense against compaction of a dataflow's storage inputs. If
@@ -1390,14 +1601,38 @@ impl Instance {
         let epoch = replica.epoch + 1;
         let dyncfg_override = replica.dyncfg_override.clone();
 
+        // The rehydrated replica serves the same collections, so their staleness recordings
+        // continue. A log collection starts fresh logs, so `remove_replica_at` ends its
+        // recordings and new ones start at the same instant.
+        let collections = &self.collections;
+        let replica = self.replicas.get_mut(&id).expect("replica must exist");
+        let freshness: BTreeMap<_, _> = replica
+            .collections
+            .iter_mut()
+            .filter(|(collection_id, _)| {
+                collections
+                    .get(collection_id)
+                    .is_some_and(|c| !c.log_collection)
+            })
+            .filter_map(|(collection_id, c)| Some((*collection_id, c.freshness.take()?)))
+            .collect();
+        let now = self.now_ts();
+
         // NOTE: Between `remove_replica` and `add_replica` the replica map can be empty while the
         // replica process is still running its dataflows. Nothing on this path may treat that as
         // a cluster without replicas, in particular `forward_implied_capabilities`. Forwarding
         // advances the input read holds of a dataflow that has not hydrated past its as-of, and
         // the replica keeps that dataflow at the old as-of when it reconciles. If its persist
         // reader has not registered yet, the import halts with "cannot serve requested as_of".
-        self.remove_replica(id).expect("replica must exist");
-        let result = self.add_replica(id, config, Some(epoch), dyncfg_override);
+        self.remove_replica_at(id, now).expect("replica must exist");
+        let result = self.add_replica_with_freshness(
+            id,
+            config,
+            Some(epoch),
+            dyncfg_override,
+            now,
+            freshness,
+        );
 
         match result {
             Ok(()) => (),
@@ -1428,6 +1663,7 @@ impl Instance {
         import_read_holds: Vec<ReadHold>,
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState>,
         target_replica: Option<ReplicaId>,
+        freshness_dependence: Option<TimeDependence>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
@@ -1506,6 +1742,7 @@ impl Instance {
                 dataflow.initial_storage_as_of.clone(),
                 dataflow.refresh_schedule.clone(),
                 target_replica,
+                freshness_dependence.clone(),
             );
 
             // If the export is a storage sink, we can advance its write frontier to the write
@@ -1739,8 +1976,17 @@ impl Instance {
     /// reclaimed.
     #[mz_ore::instrument(level = "debug")]
     pub fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), CollectionMissing> {
+        let freshness_config = self.freshness_config();
+        let now = self.now_ts();
         for id in &ids {
             let collection = self.collection_mut(*id)?;
+
+            // A dropped collection's staleness recordings end at the drop.
+            let mut freshness_rows = Vec::new();
+            if let Some(state) = &mut collection.freshness {
+                let rows = state.finish(now, freshness_config.as_ref());
+                freshness_rows.push((*id, None, rows));
+            }
 
             // Mark the collection as dropped to allow it to be removed from the controller state.
             collection.dropped = true;
@@ -1749,6 +1995,18 @@ impl Instance {
             // interested in the collection anymore.
             collection.implied_read_hold.release();
             collection.warmup_read_hold.release();
+
+            for (replica_id, replica) in &mut self.replicas {
+                let state = replica
+                    .collections
+                    .get_mut(id)
+                    .and_then(|c| c.freshness.as_mut());
+                if let Some(state) = state {
+                    let rows = state.finish(now, freshness_config.as_ref());
+                    freshness_rows.push((*id, Some(*replica_id), rows));
+                }
+            }
+            self.deliver_freshness_rows(freshness_rows);
 
             // If the collection is a subscribe, stop tracking it. This ensures that the controller
             // ceases to produce `SubscribeResponse`s for this subscribe.
@@ -1943,6 +2201,17 @@ impl Instance {
         };
         let _ = collection.implied_read_hold.try_downgrade(new_since);
 
+        let freshness_config = self.freshness_config();
+        let now = self.now_ts();
+        let collection = self.expect_collection_mut(id);
+        let rows = collection
+            .freshness
+            .as_mut()
+            .map(|state| state.observe(now, &new_frontier, freshness_config.as_ref()));
+        if let Some(rows) = rows {
+            self.deliver_freshness_rows(vec![(id, None, rows)]);
+        }
+
         // Report the frontier advancement.
         self.deliver_response(ComputeControllerResponse::FrontierUpper {
             id,
@@ -2107,6 +2376,7 @@ impl Instance {
         }
         if let Some(new_frontier) = frontiers.write_frontier {
             replica_collection.update_write_frontier(new_frontier.clone());
+            self.observe_replica_freshness(id, replica_id);
             self.maybe_update_global_write_frontier(id, new_frontier);
         }
     }
@@ -2504,6 +2774,7 @@ impl Instance {
         self.update_frontier_introspection();
         self.refresh_state_metrics();
         self.refresh_wallclock_lag();
+        self.tick_freshness();
     }
 }
 
@@ -2585,6 +2856,13 @@ struct CollectionState {
             Diff,
         >,
     >,
+
+    /// The freshness dependence of this collection, see
+    /// [`crate::controller::ComputeController::determine_freshness_dependence`].
+    freshness_dependence: Option<TimeDependence>,
+    /// The staleness state of the global write frontier, `None` if staleness is not tracked for
+    /// this collection.
+    freshness: Option<FreshnessState>,
 }
 
 impl CollectionState {
@@ -2641,6 +2919,8 @@ impl CollectionState {
             compute_dependencies,
             introspection,
             wallclock_lag_histogram_stash,
+            freshness_dependence: None,
+            freshness: None,
         }
     }
 
@@ -2673,6 +2953,9 @@ impl CollectionState {
         state.log_collection = true;
         // Log collections are created and scheduled implicitly as part of replica initialization.
         state.scheduled = true;
+        // Log collections advance with the replica's wall clock. Their contents differ between
+        // replicas, so their staleness is only tracked per replica.
+        state.freshness_dependence = Some(TimeDependence::default());
         state
     }
 
@@ -3164,6 +3447,7 @@ impl ReplicaState {
         id: GlobalId,
         as_of: Antichain<Timestamp>,
         input_read_holds: Vec<ReadHold>,
+        freshness: Option<FreshnessState>,
     ) {
         let metrics = self.metrics.for_collection(id);
         let introspection = ReplicaCollectionIntrospection::new(
@@ -3181,6 +3465,7 @@ impl ReplicaState {
         if id.is_transient() {
             state.wallclock_lag_max = None;
         }
+        state.freshness = freshness;
 
         if let Some(previous) = self.collections.insert(id, state) {
             panic!("attempt to add a collection with existing ID {id} (previous={previous:?}");
@@ -3283,6 +3568,9 @@ struct ReplicaCollectionState {
     ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
     wallclock_lag_max: Option<WallclockLag>,
+    /// The staleness state of the replica write frontier, `None` if staleness is not tracked
+    /// for this collection.
+    freshness: Option<FreshnessState>,
 }
 
 impl ReplicaCollectionState {
@@ -3301,6 +3589,7 @@ impl ReplicaCollectionState {
             introspection,
             input_read_holds,
             wallclock_lag_max: Some(WallclockLag::MIN),
+            freshness: None,
         }
     }
 
@@ -3513,317 +3802,24 @@ where
     result
 }
 
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-
-    use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
-    use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
-    use mz_persist_types::PersistLocation;
-    use mz_repr::{GlobalId, Timestamp};
-    use timely::progress::Antichain;
-    use tokio::sync::mpsc;
-
-    use crate::protocol::command::{ComputeCommand, InstanceConfig};
-
-    use super::{
-        CollectionReadiness, Instance, ReplicaCollectionIntrospection, ReplicaCollectionState,
-        ReplicaId, classify_collection_readiness,
-    };
-
-    fn ac(ts: u64) -> Antichain<Timestamp> {
-        Antichain::from_elem(Timestamp::new(ts))
+/// The staleness state of collection `id` with freshness `dependence`, `None` if its staleness
+/// is not tracked.
+fn new_freshness_state(
+    id: GlobalId,
+    dependence: Option<&TimeDependence>,
+    start: Timestamp,
+    frontier: &Antichain<Timestamp>,
+    config: Option<&RecorderConfig>,
+) -> Option<FreshnessState> {
+    // Transient collections are short-lived and numerous, so tracking them would bloat the
+    // histograms, as for the wallclock lag introspection.
+    if id.is_transient() {
+        return None;
     }
-
-    fn state(id: ReplicaId, as_of: u64, write: u64, output: u64) -> ReplicaCollectionState {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let introspection =
-            ReplicaCollectionIntrospection::new(id, GlobalId::User(1), tx, ac(as_of));
-        let mut state = ReplicaCollectionState::new(None, ac(as_of), introspection, Vec::new());
-        state.update_write_frontier(ac(write));
-        state.update_output_frontier(ac(output));
-        state
-    }
-
-    fn classify(
-        replicas: &[(ReplicaId, ReplicaCollectionState)],
-        targets: &[ReplicaId],
-        references: &[ReplicaId],
-        lag: Option<Timestamp>,
-    ) -> CollectionReadiness {
-        classify_collection_readiness(
-            replicas.iter().map(|(id, state)| (*id, state)),
-            &targets.iter().copied().collect::<BTreeSet<_>>(),
-            &references.iter().copied().collect::<BTreeSet<_>>(),
-            lag,
-        )
-    }
-
-    const LAG: Option<Timestamp> = Some(Timestamp::new(60));
-
-    /// The regression the lag gate exists for: a pending replica whose dataflow
-    /// has produced its first output past the as-of, and so reports hydrated,
-    /// while its output frontier is still far behind the outgoing replica.
-    #[mz_ore::test]
-    fn shared_write_does_not_hide_output_lag() {
-        let reference = ReplicaId::User(1);
-        let target = ReplicaId::User(2);
-        let mut replicas = vec![
-            (reference, state(reference, 100, 10_000, 10_000)),
-            // The shared MV write frontier is caught up, but this replica has
-            // only just produced its first output past the as-of.
-            (target, state(target, 100, 10_000, 101)),
-        ];
-        assert_eq!(
-            classify(&replicas, &[target], &[reference], LAG),
-            CollectionReadiness::Lagging { lag: Some(9_899) },
-        );
-        replicas[1].1.update_output_frontier(ac(9_940));
-        assert_eq!(
-            classify(&replicas, &[target], &[reference], LAG),
-            CollectionReadiness::Ready,
-        );
-    }
-
-    #[mz_ore::test]
-    fn refresh_writes_ahead_of_outputs_is_ready() {
-        let reference = ReplicaId::User(1);
-        let target = ReplicaId::User(2);
-        let replicas = vec![
-            (reference, state(reference, 100, 20_000, 10_000)),
-            (target, state(target, 100, 20_000, 10_000)),
-        ];
-        assert_eq!(
-            classify(&replicas, &[target], &[reference], LAG),
-            CollectionReadiness::Ready,
-        );
-    }
-
-    #[mz_ore::test]
-    fn furthest_reference_and_bystander_exclusion() {
-        let trailing = ReplicaId::User(1);
-        let ahead = ReplicaId::User(2);
-        let target = ReplicaId::User(3);
-        let bystander = ReplicaId::User(4);
-        let replicas = vec![
-            (trailing, state(trailing, 100, 9_000, 9_000)),
-            (ahead, state(ahead, 100, 10_000, 10_000)),
-            (target, state(target, 100, 8_990, 8_990)),
-            (bystander, state(bystander, 100, 1_000_000, 1_000_000)),
-        ];
-        assert_eq!(
-            classify(&replicas, &[target], &[trailing], LAG),
-            CollectionReadiness::Ready,
-        );
-        assert_eq!(
-            classify(&replicas, &[target], &[trailing, ahead], LAG),
-            CollectionReadiness::Lagging { lag: Some(1_010) },
-        );
-    }
-
-    #[mz_ore::test]
-    fn one_ready_target_suffices() {
-        let reference = ReplicaId::User(1);
-        let unhydrated = ReplicaId::User(2);
-        let lagging = ReplicaId::User(3);
-        let ready = ReplicaId::User(4);
-        let replicas = vec![
-            (reference, state(reference, 100, 10_000, 10_000)),
-            // This replica is within the lag allowance but has not advanced
-            // past its own as-of. It cannot supply progress for the hydrated,
-            // lagging replica below.
-            (unhydrated, state(unhydrated, 10_000, 10_000, 10_000)),
-            (lagging, state(lagging, 100, 1_000, 1_000)),
-            (ready, state(ready, 100, 9_990, 9_990)),
-        ];
-        assert_eq!(
-            classify(&replicas, &[unhydrated, lagging, ready], &[reference], LAG),
-            CollectionReadiness::Ready,
-        );
-        assert_eq!(
-            classify(&replicas, &[unhydrated, lagging], &[reference], LAG),
-            CollectionReadiness::Lagging { lag: Some(9_000) },
-        );
-    }
-
-    #[mz_ore::test]
-    fn no_lag_gate_is_hydration_only() {
-        let reference = ReplicaId::User(1);
-        let target = ReplicaId::User(2);
-        let replicas = vec![
-            (reference, state(reference, 100, 10_000, 10_000)),
-            (target, state(target, 100, 101, 101)),
-        ];
-        assert_eq!(
-            classify(&replicas, &[target], &[reference], None),
-            CollectionReadiness::Ready,
-        );
-        let unhydrated = vec![(target, state(target, 100, 100, 100))];
-        assert_eq!(
-            classify(&unhydrated, &[target], &[], None),
-            CollectionReadiness::Unhydrated,
-        );
-    }
-
-    #[mz_ore::test]
-    fn lag_reports_the_closest_hydrated_target() {
-        let reference = ReplicaId::User(1);
-        let far = ReplicaId::User(2);
-        let close = ReplicaId::User(3);
-        let mut replicas = vec![
-            (reference, state(reference, 100, 10_000, 10_000)),
-            (far, state(far, 100, 1_000, 1_000)),
-            (close, state(close, 100, 9_000, 9_000)),
-        ];
-        for _ in 0..2 {
-            assert_eq!(
-                classify(&replicas, &[far, close], &[reference], LAG),
-                CollectionReadiness::Lagging { lag: Some(1_000) },
-            );
-            replicas.reverse();
-        }
-    }
-
-    #[mz_ore::test]
-    fn completed_reference_requires_completed_target() {
-        let reference = ReplicaId::User(1);
-        let target = ReplicaId::User(2);
-        let mut replicas = vec![
-            (reference, state(reference, 100, 1_000, 1_000)),
-            (target, state(target, 100, 1_000, 1_000)),
-        ];
-        replicas[0].1.update_output_frontier(Antichain::new());
-        assert_eq!(
-            classify(&replicas, &[target], &[reference], Some(Timestamp::new(0))),
-            CollectionReadiness::Lagging { lag: None },
-        );
-        replicas[1].1.update_output_frontier(Antichain::new());
-        assert_eq!(
-            classify(&replicas, &[target], &[reference], Some(Timestamp::new(0))),
-            CollectionReadiness::Ready,
-        );
-    }
-
-    #[mz_ore::test]
-    fn no_reference_means_nothing_to_regress() {
-        let target = ReplicaId::User(1);
-        let replicas = vec![(target, state(target, 100, 5_000, 5_000))];
-        assert_eq!(
-            classify(&replicas, &[target], &[], Some(Timestamp::new(0))),
-            CollectionReadiness::Ready,
-        );
-        assert_eq!(
-            classify(&replicas, &[target], &[target], Some(Timestamp::new(0))),
-            CollectionReadiness::Ready,
-        );
-    }
-
-    #[mz_ore::test]
-    fn no_targets_is_unhydrated() {
-        let reference = ReplicaId::User(1);
-        let replicas = vec![(reference, state(reference, 100, 10_000, 10_000))];
-        assert_eq!(
-            classify(&replicas, &[], &[reference], LAG),
-            CollectionReadiness::Unhydrated,
-        );
-    }
-
-    fn create_instance_command() -> ComputeCommand {
-        ComputeCommand::CreateInstance(Box::new(InstanceConfig {
-            logging: Default::default(),
-            expiration_offset: None,
-            peek_stash_persist_location: PersistLocation::new_in_mem(),
-            arrangement_dictionary_compression: false,
-            initial_config: Default::default(),
-        }))
-    }
-
-    fn initial_config(cmd: &ComputeCommand) -> &ConfigUpdates {
-        match cmd {
-            ComputeCommand::CreateInstance(config) => &config.initial_config,
-            other => panic!("expected CreateInstance, got {other:?}"),
-        }
-    }
-
-    /// `CreateInstance` is specialized with a full snapshot of the instance-wide dyncfg, so the
-    /// replica seeds its worker config at create time rather than waiting for the first
-    /// `UpdateConfiguration`. This is the regression guard for create-time setup observing dyncfg
-    /// defaults.
-    #[mz_ore::test]
-    fn create_instance_snapshots_instance_wide_dyncfg() {
-        let dyncfg = ConfigSet::default()
-            .add(&ENABLE_COLUMN_PAGED_BATCHER)
-            .add(&ENABLE_MZ_JOIN_CORE);
-        let mut updates = ConfigUpdates::default();
-        updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
-        updates.add(&ENABLE_MZ_JOIN_CORE, false);
-        updates.apply(&dyncfg);
-
-        // A replica without an override sees exactly the instance-wide values.
-        let cmd = Instance::specialize_command_for_replica(
-            create_instance_command(),
-            &ConfigUpdates::default(),
-            &dyncfg,
-        );
-        let snapshot = initial_config(&cmd);
-        assert_eq!(
-            snapshot.updates.get(ENABLE_COLUMN_PAGED_BATCHER.name()),
-            Some(&ConfigVal::Bool(true)),
-        );
-        assert_eq!(
-            snapshot.updates.get(ENABLE_MZ_JOIN_CORE.name()),
-            Some(&ConfigVal::Bool(false)),
-        );
-    }
-
-    /// A replica-scoped override beats the instance-wide value in the create-time snapshot, so a
-    /// create-time-frozen scoped flag reaches the replica with its override applied.
-    #[mz_ore::test]
-    fn create_instance_snapshot_applies_replica_override() {
-        let dyncfg = ConfigSet::default().add(&ENABLE_COLUMN_PAGED_BATCHER);
-        let mut updates = ConfigUpdates::default();
-        updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
-        updates.apply(&dyncfg);
-
-        let mut override_updates = ConfigUpdates::default();
-        override_updates.add(&ENABLE_COLUMN_PAGED_BATCHER, false);
-
-        let cmd = Instance::specialize_command_for_replica(
-            create_instance_command(),
-            &override_updates,
-            &dyncfg,
-        );
-        assert_eq!(
-            initial_config(&cmd)
-                .updates
-                .get(ENABLE_COLUMN_PAGED_BATCHER.name()),
-            Some(&ConfigVal::Bool(false)),
-            "replica override should win over the instance-wide value",
-        );
-    }
-
-    /// `UpdateConfiguration` continues to merge the replica's override into the update.
-    #[mz_ore::test]
-    fn update_configuration_merges_replica_override() {
-        let dyncfg = ConfigSet::default().add(&ENABLE_COLUMN_PAGED_BATCHER);
-
-        let mut override_updates = ConfigUpdates::default();
-        override_updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
-
-        let cmd = Instance::specialize_command_for_replica(
-            ComputeCommand::UpdateConfiguration(Box::new(Default::default())),
-            &override_updates,
-            &dyncfg,
-        );
-        match cmd {
-            ComputeCommand::UpdateConfiguration(params) => assert_eq!(
-                params
-                    .dyncfg_updates
-                    .updates
-                    .get(ENABLE_COLUMN_PAGED_BATCHER.name()),
-                Some(&ConfigVal::Bool(true)),
-            ),
-            other => panic!("expected UpdateConfiguration, got {other:?}"),
-        }
-    }
+    // A collection without a dependence does not follow wall-clock time.
+    let dependence = dependence?.clone();
+    Some(FreshnessState::new(dependence, start, frontier, config))
 }
+
+#[cfg(test)]
+mod tests;
