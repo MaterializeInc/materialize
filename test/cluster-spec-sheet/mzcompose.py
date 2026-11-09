@@ -42,7 +42,6 @@ from materialize.cluster_spec_sheet_qps import (
     validate_qps_result,
 )
 from materialize.mz_env_util import print_environment_id
-from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -116,11 +115,27 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 }
 
 
+QPS_POLICY_MODE = os.environ["CI_QPS_POLICY_MODE"]
+assert QPS_POLICY_MODE in ("control", "off", "enabled")
+QPS_RUNTIME_DEFAULTS = {
+    "enable_prepared_query_reuse": "true",
+    "enable_prepared_query_templates": "true",
+    "enable_frontend_transaction_completion": "true",
+}
+if QPS_POLICY_MODE != "control":
+    QPS_RUNTIME_DEFAULTS.update(
+        enable_query_policies=str(QPS_POLICY_MODE == "enabled").lower(),
+        enable_query_policy_enforcement=str(QPS_POLICY_MODE == "enabled").lower(),
+    )
+
+MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS.update(QPS_RUNTIME_DEFAULTS)
+
+
 @functools.cache
 def staging_version() -> str:
     # Cached: the version cannot change within a run, and `parse_cargo` shells
     # out to cargo, whose failure must not surface inside a region retry loop.
-    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+    return os.environ["CI_QPS_BENCH_VERSION"]
 
 
 SERVICES = [
@@ -1951,7 +1966,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 )
                 runner.run_query(f"SET cluster = '{cluster}'")
                 runner.run_query("SELECT * FROM qps_gen_view")
-            runner.run_query("SET cluster = 'c'")
+            self.prepare_policy_contract(runner, size)
             # Keep the default-logging series intact, then repeat on the same
             # clusters with sampling disabled in every benchmark connection.
             for disable_statement_logging in (False, True):
@@ -1969,6 +1984,78 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
             for i in range(1, self.options.clusters):
                 runner.run_query(f"DROP CLUSTER IF EXISTS qps_{i} CASCADE")
+            if QPS_POLICY_MODE == "enabled":
+                runner.run_query("ALTER CLUSTER c RESET (QUERY POLICY)")
+                runner.run_query("DROP QUERY POLICY bench_indexed_reads")
+            runner.run_query("DROP TABLE IF EXISTS bench_policy_probe")
+            runner.run_query("DROP CLUSTER IF EXISTS bench_observer CASCADE")
+
+    def prepare_policy_contract(self, runner: ScenarioRunner, size: str) -> None:
+        # Telemetry aggregates need a cluster outside the policy. Keep its cost
+        # identical in all three arms and exclude it from hot-query routing.
+        runner.run_query(
+            f"CREATE CLUSTER bench_observer SIZE '{size}', REPLICATION FACTOR 1"
+        )
+        runner.run_query("CREATE TABLE bench_policy_probe (x int)")
+        runner.run_query("INSERT INTO bench_policy_probe VALUES (1)")
+        if QPS_POLICY_MODE == "enabled":
+            runner.run_query("""CREATE QUERY POLICY bench_indexed_reads (
+                MODE = 'enforce', RULES (
+                    no_dataflow (action='reject', metric='query_plan_includes', value='temporary_dataflow'),
+                    no_storage (action='reject', metric='query_plan_includes', value='storage_read')
+                ))""")
+            for i in range(self.options.clusters):
+                cluster = "c" if i == 0 else f"qps_{i}"
+                runner.run_query(
+                    f"ALTER CLUSTER {cluster} SET (QUERY POLICY = bench_indexed_reads)"
+                )
+        runner.run_query("SET cluster = 'c'")
+        assert runner.run_query(
+            "SELECT * FROM qps_gen_view WHERE x = 5", fetch=True
+        ) == [(5,)]
+        rejection = None
+        try:
+            rows = runner.run_query(
+                "SELECT * FROM bench_policy_probe", fetch=True, retries=0
+            )
+        except psycopg.Error as error:
+            if QPS_POLICY_MODE != "enabled" or error.sqlstate != "53000":
+                raise
+            rejection = error.sqlstate
+        else:
+            assert (
+                QPS_POLICY_MODE != "enabled"
+            ), "Attached policy did not reject an unindexed query"
+            assert rows == [(1,)]
+        if QPS_POLICY_MODE == "enabled":
+            runner.run_query("EXPLAIN ANALYZE CLUSTER MEMORY", fetch=True)
+        runner.run_query("SET cluster = 'bench_observer'")
+        attachments = None
+        if QPS_POLICY_MODE != "control":
+            rows = runner.run_query(
+                """SELECT count(*) FROM mz_internal.mz_query_policy_attachments a
+                JOIN mz_internal.mz_query_policies p ON a.policy_id = p.id
+                WHERE p.name = 'bench_indexed_reads'""",
+                fetch=True,
+            )
+            assert rows is not None
+            attachments = rows[0][0]
+            assert attachments == (
+                self.options.clusters if QPS_POLICY_MODE == "enabled" else 0
+            )
+        print(
+            json.dumps(
+                {
+                    "policy_contract": {
+                        "mode": QPS_POLICY_MODE,
+                        "envd_cpus": runner.envd_cpus,
+                        "indexed_read_allowed": True,
+                        "unindexed_rejection": rejection,
+                        "attached_clusters": attachments,
+                    }
+                }
+            )
+        )
 
     def measure(
         self,
@@ -1994,6 +2081,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             ]
             flags[params_index] = urlencode(params, doseq=True)
         config = self.options.config(flags, concurrency, protocol)
+        config["policy_compatible_preflight"] = QPS_POLICY_MODE == "enabled"
         result = pgbench.run(config, runner.target.composition)
         validate_qps_result(result, concurrency, protocol)
         if (
@@ -2034,6 +2122,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 "Docker query replicas share environmentd's container quota; this is not an isolated adapter benchmark"
             )
         result.update(
+            policy_mode=QPS_POLICY_MODE,
             replica_cpu_peak_percent=replica_cpu,
             replica_cpu_samples=replica_samples,
             warnings=warnings,
@@ -3415,12 +3504,8 @@ class EnvdCpuSweep(Scenario):
         self._workload.run(runner)
 
     def teardown(self, runner: ScenarioRunner) -> None:
-        if isinstance(runner.target, CloudTarget):
-            print("--- Resetting Cloud environmentd CPUs to the default")
-            # Recreating rather than enabling on top of the existing region keeps the
-            # region out of the read-only limbo that a 0dt rollover would put it in, so
-            # whatever runs after this scenario finds a usable region.
-            cloud_recreate_region_with_envd_cpus(runner.target, 2)
+        # This private QPS job deletes its region via --cleanup after reporting.
+        pass
 
 
 class EnvdObjectsSweep(Scenario):
@@ -3550,6 +3635,11 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
             staging_version(),
         ]
 
+    if target.is_staging:
+        args.extend(
+            f"--environmentd-extra-arg=--system-parameter-default={name}={value}"
+            for name, value in QPS_RUNTIME_DEFAULTS.items()
+        )
     target.composition.run("mz", "region", "enable", *args, rm=True)
 
 
@@ -4168,8 +4258,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             # columns are silently dropped on upload (CSV writer uses
             # extrasaction="ignore"); to recover them, consult the artifact
             # CSV directly.
-            for stream in streams.values():
-                stream.spec.upload(composition, stream.path, not test_failed)
+            print("Private PR comparison: skipping analytics database upload")
 
             assert not test_failed
 

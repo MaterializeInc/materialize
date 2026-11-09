@@ -239,6 +239,21 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 for key, value in config["libpq_envs"][i].items()
             )
         )
+        if config.get("policy_compatible_preflight"):
+            # Aggregating the indexed query would require a temporary dataflow
+            # and be rejected by the policy under test. Count the returned rows
+            # in the driver, keeping the measured statement unchanged.
+            preflight_args = [
+                "-c",
+                "SELECT current_setting('cluster'), current_setting('statement_logging_sample_rate')::float",
+                "-c",
+                config["query"],
+            ]
+        else:
+            preflight_args = [
+                "-c",
+                f"SELECT current_setting('cluster'), current_setting('statement_logging_sample_rate')::float, count(*) FROM ({config['query']}) q",
+            ]
         preflight = subprocess.run(
             command(
                 i,
@@ -246,14 +261,17 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 "-XAt",
                 "-v",
                 "ON_ERROR_STOP=1",
-                "-c",
-                f"SELECT current_setting('cluster'), current_setting('statement_logging_sample_rate')::float, count(*) FROM ({config['query']}) q",
+                *preflight_args,
             ),
             capture_output=True,
             text=True,
             timeout=config["query_timeout_seconds"] + 10,
         )
-        fields = preflight.stdout.strip().split("|")
+        if config.get("policy_compatible_preflight"):
+            lines = preflight.stdout.strip().splitlines()
+            fields = lines[0].split("|") + [str(len(lines) - 1)] if lines else []
+        else:
+            fields = preflight.stdout.strip().split("|")
         if preflight.returncode or len(fields) != 3:
             print(preflight.stdout, preflight.stderr, file=sys.stderr)
             raise ValueError(f"cluster {i}: routing/row-count preflight failed")
