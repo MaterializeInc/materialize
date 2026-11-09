@@ -78,8 +78,8 @@ pub static MZ_CATALOG_SHARED_IND: LazyLock<BuiltinIndex> = LazyLock::new(|| Buil
 /// The history needed to select public deployment observations, isolated from
 /// the catalog journal. Retaining this durable output does not retain its inputs
 /// before the materialized view's recovery frontier.
-pub static MZ_CATALOG_DEPLOYMENT_AUTHORITY: LazyLock<BuiltinMaterializedView> = LazyLock::new(
-    || BuiltinMaterializedView {
+pub static MZ_CATALOG_DEPLOYMENT_AUTHORITY: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_catalog_deployment_authority",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::MV_MZ_CATALOG_DEPLOYMENT_AUTHORITY_OID,
@@ -101,11 +101,9 @@ pub static MZ_CATALOG_DEPLOYMENT_AUTHORITY: LazyLock<BuiltinMaterializedView> = 
             ),
             (
                 "catalog_read_protection_enabled",
-                "Whether catalog read protection is enabled. Legacy observations have no deployment qualifier.",
+                "Whether catalog read protection is enabled.",
             ),
         ]),
-        // Keep protection mode independent of generation nullability. In legacy
-        // mode some catalog projections still select the active generation.
         sql: "
 IN CLUSTER mz_catalog_server
 WITH (ASSERT NOT NULL catalog_read_protection_enabled) AS
@@ -121,8 +119,7 @@ WHERE data->>'kind' = 'FenceToken'
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
-    },
-);
+    });
 
 // Unknown and completed frontiers are distinct: NULL means empty only when
 // *_known is true.
@@ -1449,10 +1446,9 @@ SELECT
     occurred_at as updated_at
 FROM mz_internal.mz_cluster_replica_status_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
-WHERE deployment_generation IS NOT DISTINCT FROM (
+WHERE deployment_generation = (
         SELECT active_deployment_generation
         FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
     )
 ORDER BY replica_id, process_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
@@ -2378,10 +2374,6 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
     ]),
     sql: "
 WITH
-    protected AS (
-        SELECT 1 FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
-    ),
     object_placement AS (
         SELECT id, cluster_id FROM mz_catalog.mz_sources
         UNION ALL
@@ -2391,18 +2383,11 @@ WITH
     -- Native current health is independent of retained history. Catalog placement
     -- supplies paused state even when a lifecycle-history publication was lost.
     uniform_statuses AS (
-        SELECT h.source_id, COALESCE(h.replica_id, '<source>') AS replica_id,
-               h.occurred_at, h.status, h.error, h.details
-        FROM mz_internal.mz_source_status_history h
-        WHERE h.deployment_generation IS NULL
-          AND NOT EXISTS (SELECT 1 FROM protected)
-        UNION ALL
         SELECT c.id AS source_id, c.replica_id, c.occurred_at, c.status, c.error, c.details
         FROM mz_internal.mz_storage_statuses_raw c
         JOIN object_placement p ON p.id = c.id
         JOIN mz_catalog.mz_cluster_replicas r ON r.id = c.replica_id AND r.cluster_id = p.cluster_id
-        WHERE EXISTS (SELECT 1 FROM protected)
-          AND c.deployment_generation = (
+        WHERE c.deployment_generation = (
               SELECT active_deployment_generation
               FROM mz_internal.mz_catalog_deployment_authority
           )
@@ -2417,38 +2402,23 @@ WITH
                'paused' AS status, NULL::text AS error,
                jsonb_build_object('hints', jsonb_build_array('There is currently no replica running this source')) AS details
         FROM object_placement p
-        WHERE EXISTS (SELECT 1 FROM protected)
-          AND p.cluster_id IS NOT NULL
+        WHERE p.cluster_id IS NOT NULL
           AND NOT EXISTS (
               SELECT 1 FROM mz_catalog.mz_cluster_replicas r WHERE r.cluster_id = p.cluster_id
           )
     ),
-    -- For getting the latest events, we first determine the latest per-replica
-    -- events here and then apply precedence rules below.
-    --
-    -- We ignore per-replica events from replicas that no longer exist. A dropped
-    -- replica's last reported status is stale: without this filter a defunct
-    -- replica's lingering 'running' can outrank (see precedence below) a live
-    -- replica's 'stalled', hiding a genuinely broken source. We always retain
-    -- source-global events ('<source>' is the sentinel for replica_id NULL)
-    -- and 'paused' events. A per-replica 'paused' is only written when the
-    -- replica is dropped, so it is a terminal drop marker, not a stale report.
+    -- Select the latest current observation per live replica before applying
+    -- precedence across replicas. Catalog placement supplies the paused row.
     latest_per_replica_events AS
     (
         SELECT DISTINCT ON (source_id, replica_id)
             occurred_at, source_id, replica_id, status, error, details
         FROM uniform_statuses
-        WHERE replica_id = '<source>'
-            OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
-            OR status = 'paused'
         ORDER BY source_id, replica_id, occurred_at DESC
     ),
-    -- We have a precedence list that determines the overall status in case
-    -- there is differing per-replica (including source-global) statuses. If
-    -- there is no 'dropped' status, and any replica reports 'running', the
-    -- overall status is 'running' even if there might be some replica that has
-    -- errors or is paused. Precedence ties are broken by recency, so a dropped
-    -- replica's 'paused' wins over an older source-global 'paused'.
+    -- A 'dropped' status takes precedence. Otherwise, any live replica's
+    -- 'running' status wins over errors or paused state on other replicas.
+    -- Precedence ties are broken by recency.
     latest_events AS
     (
        SELECT DISTINCT ON (source_id)
@@ -2551,7 +2521,7 @@ SELECT
             type = 'webhook' OR
             type = 'progress'
         THEN 'running'
-        ELSE COALESCE(status, CASE WHEN EXISTS (SELECT 1 FROM protected) THEN 'unknown' ELSE 'created' END)
+        ELSE COALESCE(status, 'unknown')
     END AS status,
     error,
     details
@@ -2697,28 +2667,17 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
     ]),
     sql: "
 WITH
-    protected AS (
-        SELECT 1 FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
-    ),
     object_placement AS (
         SELECT id, cluster_id FROM mz_catalog.mz_sinks
     ),
     -- Native current health is independent of retained history. Catalog placement
     -- supplies paused state even when a lifecycle-history publication was lost.
     uniform_statuses AS (
-        SELECT h.sink_id, COALESCE(h.replica_id, '<sink>') AS replica_id,
-               h.occurred_at, h.status, h.error, h.details
-        FROM mz_internal.mz_sink_status_history h
-        WHERE h.deployment_generation IS NULL
-          AND NOT EXISTS (SELECT 1 FROM protected)
-        UNION ALL
         SELECT c.id AS sink_id, c.replica_id, c.occurred_at, c.status, c.error, c.details
         FROM mz_internal.mz_storage_statuses_raw c
         JOIN object_placement p ON p.id = c.id
         JOIN mz_catalog.mz_cluster_replicas r ON r.id = c.replica_id AND r.cluster_id = p.cluster_id
-        WHERE EXISTS (SELECT 1 FROM protected)
-          AND c.deployment_generation = (
+        WHERE c.deployment_generation = (
               SELECT active_deployment_generation
               FROM mz_internal.mz_catalog_deployment_authority
           )
@@ -2733,38 +2692,23 @@ WITH
                'paused' AS status, NULL::text AS error,
                jsonb_build_object('hints', jsonb_build_array('There is currently no replica running this sink')) AS details
         FROM object_placement p
-        WHERE EXISTS (SELECT 1 FROM protected)
-          AND p.cluster_id IS NOT NULL
+        WHERE p.cluster_id IS NOT NULL
           AND NOT EXISTS (
               SELECT 1 FROM mz_catalog.mz_cluster_replicas r WHERE r.cluster_id = p.cluster_id
           )
     ),
-    -- For getting the latest events, we first determine the latest per-replica
--- events here and then apply precedence rules below.
---
--- We ignore per-replica events from replicas that no longer exist. A dropped
--- replica's last reported status is stale: without this filter a defunct
--- replica's lingering 'running' can outrank (see precedence below) a live
--- replica's 'stalled', hiding a genuinely broken sink. We always retain
--- sink-global events ('<sink>' is the sentinel for replica_id NULL)
--- and 'paused' events. A per-replica 'paused' is only written when the
--- replica is dropped, so it is a terminal drop marker, not a stale report.
+-- Select the latest current observation per live replica before applying
+-- precedence across replicas. Catalog placement supplies the paused row.
 latest_per_replica_events AS
 (
     SELECT DISTINCT ON (sink_id, replica_id)
         occurred_at, sink_id, replica_id, status, error, details
     FROM uniform_statuses
-    WHERE replica_id = '<sink>'
-        OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
-        OR status = 'paused'
     ORDER BY sink_id, replica_id, occurred_at DESC
 ),
--- We have a precedence list that determines the overall status in case
--- there is differing per-replica (including sink-global) statuses. If
--- there is no 'dropped' status, and any replica reports 'running', the
--- overall status is 'running' even if there might be some replica that has
--- errors or is paused. Precedence ties are broken by recency, so a dropped
--- replica's 'paused' wins over an older sink-global 'paused'.
+-- A 'dropped' status takes precedence. Otherwise, any live replica's
+-- 'running' status wins over errors or paused state on other replicas.
+-- Precedence ties are broken by recency.
 latest_events AS
 (
     SELECT DISTINCT ON (sink_id)
@@ -2789,7 +2733,7 @@ SELECT
     name,
     mz_sinks.type,
     occurred_at as last_status_change_at,
-    coalesce(status, CASE WHEN EXISTS (SELECT 1 FROM protected) THEN 'unknown' ELSE 'created' END) as status,
+    coalesce(status, 'unknown') as status,
     error,
     details
 FROM mz_catalog.mz_sinks
@@ -3108,10 +3052,9 @@ SELECT
     swap_bytes
 FROM mz_internal.mz_cluster_replica_metrics_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
-WHERE deployment_generation IS NOT DISTINCT FROM (
+WHERE deployment_generation = (
         SELECT active_deployment_generation
         FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
     )
 ORDER BY replica_id, process_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
@@ -3695,16 +3638,13 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
     sql: "
 SELECT id, session_id, cluster_id, created_at, referenced_object_ids
 FROM mz_internal.mz_subscriptions_raw AS runtime
-WHERE (client_incarnation IS NULL AND NOT EXISTS (
-           SELECT 1 FROM mz_internal.mz_catalog_deployment_authority
-           WHERE catalog_read_protection_enabled
-       ))
-   OR EXISTS (
-           SELECT 1 FROM mz_internal.mz_catalog_shared
-           WHERE data->>'kind' = 'ClientIncarnation'
-             AND (data->'key'->>'id')::uint8 = runtime.client_incarnation
-             AND data->'value'->'realization'->'Adapter' IS NOT NULL
-       )",
+-- Live adapter incarnations remain visible across admitted deployments.
+WHERE EXISTS (
+    SELECT 1 FROM mz_internal.mz_catalog_shared
+    WHERE data->>'kind' = 'ClientIncarnation'
+      AND (data->'key'->>'id')::uint8 = runtime.client_incarnation
+      AND data->'value'->'realization'->'Adapter' IS NOT NULL
+)",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "subscription",
@@ -3795,16 +3735,13 @@ pub static MZ_SESSIONS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     sql: "
 SELECT id, connection_id, role_id, client_ip, connected_at
 FROM mz_internal.mz_sessions_raw AS runtime
-WHERE (client_incarnation IS NULL AND NOT EXISTS (
-           SELECT 1 FROM mz_internal.mz_catalog_deployment_authority
-           WHERE catalog_read_protection_enabled
-       ))
-   OR EXISTS (
-           SELECT 1 FROM mz_internal.mz_catalog_shared
-           WHERE data->>'kind' = 'ClientIncarnation'
-             AND (data->'key'->>'id')::uint8 = runtime.client_incarnation
-             AND data->'value'->'realization'->'Adapter' IS NOT NULL
-       )",
+-- Live adapter incarnations remain visible across admitted deployments.
+WHERE EXISTS (
+    SELECT 1 FROM mz_internal.mz_catalog_shared
+    WHERE data->>'kind' = 'ClientIncarnation'
+      AND (data->'key'->>'id')::uint8 = runtime.client_incarnation
+      AND data->'value'->'realization'->'Adapter' IS NOT NULL
+)",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "active_session",
@@ -5612,14 +5549,13 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinView> =
             .finish(),
         column_comments: BTreeMap::new(),
         // Public observations follow shared catalog authority, not the querying
-        // process's deployment. Legacy execution has no deployment qualifier.
+        // process's deployment.
         sql: "
 SELECT replica_id, object_id, count
 FROM mz_internal.mz_compute_error_counts_by_deployment
-WHERE deployment_generation IS NOT DISTINCT FROM (
+WHERE deployment_generation = (
         SELECT active_deployment_generation
         FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
     )",
         access: vec![PUBLIC_SELECT],
         ontology: None,
@@ -5660,16 +5596,15 @@ pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinView> = LazyLock::new(|| 
         .finish(),
     column_comments: BTreeMap::new(),
     // Public observations follow shared catalog authority, not the querying
-    // process's deployment. Legacy execution has no deployment qualifier.
+    // process's deployment.
     // One catalog input lets its authority predicate reach the source. Retained
     // metrics must not replay unrelated catalog updates through logical backpressure.
     sql: "
 SELECT replica_id, object_id, time_ns
 FROM mz_internal.mz_compute_hydration_times_raw
-WHERE deployment_generation IS NOT DISTINCT FROM (
+WHERE deployment_generation = (
         SELECT active_deployment_generation
         FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
     )",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -5763,14 +5698,13 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinView> = LazyLock
             ),
         ]),
         // Public observations follow shared catalog authority, not the querying
-        // process's deployment. Legacy execution has no deployment qualifier.
+        // process's deployment.
         sql: "
 SELECT replica_id, object_id, size
 FROM mz_internal.mz_object_arrangement_sizes_raw
-WHERE deployment_generation IS NOT DISTINCT FROM (
+WHERE deployment_generation = (
         SELECT active_deployment_generation
         FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
     )",
         access: vec![PUBLIC_SELECT],
         ontology: None,
@@ -6232,14 +6166,13 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyL
             ("hydrated", "Whether the node is hydrated on the replica."),
         ]),
         // Public observations follow shared catalog authority, not the querying
-        // process's deployment. Legacy execution has no deployment qualifier.
+        // process's deployment.
         sql: "
 SELECT replica_id, object_id, physical_plan_node_id, hydrated
 FROM mz_internal.mz_compute_operator_hydration_statuses_raw
-WHERE deployment_generation IS NOT DISTINCT FROM (
+WHERE deployment_generation = (
         SELECT active_deployment_generation
         FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
     )",
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
@@ -9823,14 +9756,14 @@ SELECT id, replica_id, messages_received, bytes_received, updates_staged,
        offset_known, offset_committed
 FROM mz_internal.mz_source_statistics_with_history
 WHERE length(id) > 0
-  AND deployment_generation IS NOT DISTINCT FROM CASE
-      WHEN replica_id IS NULL THEN NULL
-      ELSE (
-        SELECT active_deployment_generation
-        FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
-      )
-  END",
+  -- Webhook statistics belong to the shared, replica-free partition.
+  AND (
+      (replica_id IS NULL AND deployment_generation IS NULL)
+      OR (replica_id IS NOT NULL AND deployment_generation = (
+          SELECT active_deployment_generation
+          FROM mz_internal.mz_catalog_deployment_authority
+      ))
+  )",
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "source_statistics",
@@ -9928,10 +9861,9 @@ SELECT
     SUM(bytes_staged)::uint8 AS bytes_staged,
     SUM(bytes_committed)::uint8 AS bytes_committed
 FROM mz_internal.mz_sink_statistics_raw
-WHERE deployment_generation IS NOT DISTINCT FROM (
+WHERE deployment_generation = (
         SELECT active_deployment_generation
         FROM mz_internal.mz_catalog_deployment_authority
-        WHERE catalog_read_protection_enabled
     )
 GROUP BY id, replica_id",
     access: vec![PUBLIC_SELECT],
