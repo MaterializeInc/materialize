@@ -15,13 +15,17 @@ contexts.
 
 import argparse
 import os
+from contextlib import ExitStack
 from enum import Enum
+from unittest import SkipTest
 
 from materialize import buildkite
+from materialize.checks.actions import Action
 from materialize.checks.all_checks import *  # noqa: F403
 from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
 from materialize.checks.features import Features
+from materialize.checks.mzcompose_actions import StartClusterdCompute, StartMz
 from materialize.checks.scenarios import *  # noqa: F403
 from materialize.checks.scenarios import Scenario, SystemVarChange
 from materialize.checks.scenarios_backup_restore import *  # noqa: F403
@@ -47,6 +51,7 @@ from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
+from materialize.ui import UIError
 from materialize.util import all_subclasses
 
 TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
@@ -208,6 +213,25 @@ def setup(c: Composition, external_blob_store: bool) -> None:
     # runtime `kafka-configs` call is needed here.
 
 
+def check_native_upgrade_boundary(actions: list[Action]) -> None:
+    # These action tags select published monolithic images. None selects the
+    # local native build, including builds changed by BumpVersion. This is image
+    # provenance, not a SQL-version compatibility threshold.
+    starts = [
+        action
+        for action in actions
+        if isinstance(action, (StartMz, StartClusterdCompute))
+    ]
+    released = sorted({str(action.tag) for action in starts if action.tag is not None})
+    if released and any(action.tag is None for action in starts):
+        raise SkipTest(
+            "Unsupported: pre-native published images "
+            + ", ".join(released)
+            + " and local native controllerd/adapterd share an upgrade path. "
+            "No catalog conversion or reset workaround."
+        )
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # c.silent = True
     parser.add_argument(
@@ -296,30 +320,33 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ), f"--system-param '{param}' should be the format <key>=<val>"
             additional_system_parameter_defaults[x[0]] = x[1]
 
-    with c.override(
-        *create_mzs(
-            features.azurite_enabled(),
-            args.default_replication_factor,
-            additional_system_parameter_defaults,
-            external_blob_store=args.external_blob_store,
-            external_metadata_store=args.external_metadata_store,
-        )
-    ):
-        executor_class = (
-            MzcomposeExecutorParallel
-            if args.execution_mode is ExecutionMode.PARALLEL
-            else MzcomposeExecutor
-        )
+    executor_class = (
+        MzcomposeExecutorParallel
+        if args.execution_mode is ExecutionMode.PARALLEL
+        else MzcomposeExecutor
+    )
 
+    with ExitStack() as overrides:
         ran_scenario = False
 
         def reset_environment() -> None:
-            # Scenarios (and checks in oneatatime mode) expect a fresh
-            # environment, so wipe all state, including the metadata and blob
-            # stores, before every run but the first.
+            # Defer workflow-level acquisition and service resets until the plan
+            # is accepted. The local CLI may acquire initial images before dispatch.
             nonlocal ran_scenario
             if ran_scenario:
                 c.down(destroy_volumes=True, sanity_restart_mz=False)
+            else:
+                overrides.enter_context(
+                    c.override(
+                        *create_mzs(
+                            features.azurite_enabled(),
+                            args.default_replication_factor,
+                            additional_system_parameter_defaults,
+                            external_blob_store=args.external_blob_store,
+                            external_metadata_store=args.external_metadata_store,
+                        )
+                    )
+                )
             ran_scenario = True
             setup(c, args.external_blob_store)
 
@@ -328,38 +355,39 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 scenario_class, Scenario
             ), f"{scenario_class} is not a Scenario. Maybe you meant to specify a Check via --check ?"
 
-            print(f"Testing scenario {scenario_class}...")
-
-            execution_mode = args.execution_mode
-
-            if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
-                reset_environment()
-                scenario = scenario_class(
-                    checks=checks,
-                    executor=executor_class(composition=c),
-                    features=features,
-                    seed=args.seed,
-                    additional_system_parameter_defaults=additional_system_parameter_defaults,
-                    default_replication_factor=args.default_replication_factor,
-                )
-                scenario.run()
-            elif execution_mode is ExecutionMode.ONEATATIME:
-                for check in checks:
-                    print(
-                        f"Running individual check {check}, scenario {scenario_class}"
-                    )
-                    c.override_current_testcase_name(
-                        f"Check '{check}' with scenario '{scenario_class}'"
-                    )
-                    reset_environment()
+            batches = (
+                [[check] for check in checks]
+                if args.execution_mode is ExecutionMode.ONEATATIME
+                else [checks]
+            )
+            for selected_checks in batches:
+                case_name = scenario_class.__name__
+                if args.execution_mode is ExecutionMode.ONEATATIME:
+                    case_name += f"/{selected_checks[0].__name__}"
+                with c.test_case(case_name):
                     scenario = scenario_class(
-                        checks=[check],
+                        checks=selected_checks,
                         executor=executor_class(composition=c),
                         features=features,
                         seed=args.seed,
                         additional_system_parameter_defaults=additional_system_parameter_defaults,
                         default_replication_factor=args.default_replication_factor,
                     )
-                    scenario.run()
-            else:
-                raise RuntimeError(f"Unsupported execution mode: {execution_mode}")
+                    actions = scenario.actions()
+                    check_native_upgrade_boundary(actions)
+                    reset_environment()
+                    scenario.run(actions)
+                errors = c.test_results[case_name].errors
+                if errors:
+                    for error in errors:
+                        location = error.location_as_file_name()
+                        if location and error.line_number is not None:
+                            location += f":{error.line_number}"
+                        error.test_case_name_override = (
+                            f"{case_name}/{location}" if location else case_name
+                        )
+                    # A failed parallel check can leave other checks running, and
+                    # a failed version-bump scenario can leave source mutations.
+                    # Preserve fail-fast behavior instead of resetting underneath
+                    # that work or running another case against changed sources.
+                    raise UIError(f"Platform scenario {case_name} failed")

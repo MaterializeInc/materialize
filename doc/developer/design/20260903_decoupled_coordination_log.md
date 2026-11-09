@@ -9,65 +9,50 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Convert the remaining upgrade and multi-generation harness assumptions, then
-remove the remaining combined bootstrap and controller execution alternatives.
-Apply explicit unsupported-case reporting to the remaining platform scenarios
-before released-to-native workflows start or reset services. The legacy-upgrade
-composition now reports historical cases as skipped and retains current-source
-creation/check scripts. Its native shared-relay topology and promotion/retirement
-behavior still need conversion and real runtime verification. Keep compatible-native
-coexistence, promotion and explicit retirement as separate runtime coverage.
+Finish unsupported-boundary reporting for incident-1007, final preflight checks
+and old-checkout CI triggers before they change deployment state. Do not add
+conversion or reset workarounds. Preserve old-only cases and classify actual
+artifact provenance, not SQL version thresholds.
 
-The current all-in-one entrypoint now starts controllerd. The actual environmentd
-binary rejects before startup, and the CLI no longer hosts an inline relay.
-A fresh debug container verified SQL/HTTP/authentication, retained process
-identities and a surviving SQL session through controller restart, adapter-only
-recovery, and table/MV contents through whole-container restart. All verification
-resources were removed. Details and limits:
-`~/.local/share/aj/m3-evidence/native-only/container-runtime/verification.md`.
-The earlier container audit incorrectly called port6881 HTTP. It is SASL SQL.
-Relay diagnostics now default to6883 in this image.
+Then convert native multi-generation harnesses to shared relay topology and
+explicit retirement. Verify compatible writers before and after promotion,
+warmed replicas and surviving deployments. Current-source script selection is
+preserved, but its multi-container runtime remains unverified. Remove remaining
+combined bootstrap and controller execution alternatives afterwards.
 
-Rust and SLT fixtures now use the real controller and join-only hosted adapters.
-Adapter restart and candidate teardown preserve peer execution identities.
-Native observation selectors and their regenerated plans are committed.
-Targeted runtime, schema/plan, authentication, tracing, reset and retained-status
-checks passed. Native listener lifecycle/adoption and launcher checks also
-passed, with review findings resolved. See `native-bind-review.md`,
-`native-bind-reviewed-green.log` and `native-bind-reviewed-check.log` in the
-same evidence directory.
+## Current cleanup outcome
 
-The user approved reporting pre-native-to-native upgrades explicitly unsupported.
-Do not implement conversion or reset workarounds. Keep old-only coverage and
-compatible-native coexistence/promotion/retirement coverage distinct. Classify
-unsupported cases before starting or resetting services. Exact workflow and
-reporting boundaries are in `~/.local/share/aj/m3-evidence/native-only/upgrade-boundary-classification.md`.
-Skip results now reach normal or supplementary JUnit reports and a collected,
-redacted Buildkite annotation. Real failures still fail the workflow. Targeted
-reporting and adjacent launcher/CI tests passed, with independent review. Evidence:
-`unsupported-reporting-review.md` and `unsupported-reporting-combined.log` in that
-directory. These mocked workflow tests are not native-upgrade runtime evidence.
+Native frontier publishers and SQL selectors, controller-backed Rust/SLT fixtures,
+and the controller-managed container entrypoint are committed and reviewed.
+Targeted SQL/schema, authentication, retained-status and lifecycle checks passed.
+Fresh debug-container checks covered SQL/HTTP, controller and adapter recovery,
+retained process identities, surviving sessions and persisted table/MV contents.
+This was a cached image with current binaries and entrypoint mounted, not a rebuilt
+image or broad CI. Port6881 is SASL SQL, not HTTP. Relay diagnostics use6883.
 
-The legacy frontier slice is committed and independently reviewed. Targeted Rust
-and catalog SQL checks passed. A fresh debug deployment preserved SQL progress
-through peer join/restart/removal and retained frontier observations through a
-catalog-replica restart. Managed processes were stopped afterwards. The affected
-source-enumeration block in `catalog.td` passed, not the full Kafka-dependent file.
+Historical legacy-upgrade cases and mixed pre-native/native platform plans now
+produce explicit skipped results before workflow startup/reset. Old-only and
+all-native plans remain selected. Prepared randomized plans execute once.
+Skips continue, failures remain fail-fast, and SQL errors retain scenario/source
+identity. Reporting tests, a real blocked parallel-worker test and a real CLI
+invocation in CI mode passed. The local CLI still eagerly acquires initial images
+before workflow dispatch. Its probe timed out during pulls, without starting
+services. Newly pulled unused image tags were removed.
 
-`bin/environmentd` now reports the unsupported launcher before touching state.
-Launcher tests and formatting checks pass. Broader native-only serving,
-controller execution, introspection and harness conversion remains unfinished.
+Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
+- `container-runtime/verification.md`, `native-bind-review.md`,
+  `native-bind-reviewed-green.log`, `native-bind-reviewed-check.log`.
+- `unsupported-reporting-review.md`, `unsupported-reporting-combined.log`.
+- `platform-boundary-followup.md`, `platform-boundary-combined.log`,
+  `platform-cli/` for actual CLI output, JUnit and cleanup evidence.
+- `upgrade-boundary-classification.md` for remaining workflow boundaries.
+  Its original claim that legacy-upgrade already had named cases was incorrect.
+- `controller-alternatives.md`, `frontier-review.md`, `harness-decision.md`,
+  `native-frontiers.log`, and `work-notes.md` for implementation/evidence pointers.
 
-Essential worker/evidence pointers:
-`~/.local/share/aj/m3-evidence/native-only/work-notes.md`, `frontier-review.md`,
-`harness-decision.md`, `controller-alternatives.md`, and `native-frontiers.log`.
 All owned verification services are stopped. Recreate isolated prerequisites
-before runtime checks. Current cache cleanup retained built binaries and the
-newest incremental session for each feature variant.
-Pre/post-cleanup builtin schemas are incompatible
-and admission rejects that pairing. Use matching post-cleanup schemas for the
-version demonstration.
-
+before runtime checks. Pre/post-cleanup builtin schemas are incompatible, so use
+matching post-cleanup schemas for native version demonstrations.
 The prior [publication comparison](20260903_decoupled_coordination_publication_interval.md)
 remains the load baseline, not a performance claim for this cleanup.
 

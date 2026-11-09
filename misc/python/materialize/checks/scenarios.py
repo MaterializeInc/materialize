@@ -95,8 +95,10 @@ class Scenario:
     def base_version(self) -> MzVersion:
         return self._base_version
 
-    def run(self) -> None:
-        actions = self.actions()
+    def run(self, actions: list[Action] | None = None) -> None:
+        # Callers that validate a randomized plan must execute that same plan.
+        # Copy it because the implicit setup actions below are execution details.
+        actions = list(self.actions() if actions is None else actions)
         # Configure implicitly for cloud scenarios
         if not isinstance(actions[0], StartMz):
             actions.insert(0, ConfigureMz(self))

@@ -9,7 +9,9 @@
 
 import argparse
 import importlib.util
+import threading
 import xml.etree.ElementTree as ET
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import cast
 from unittest import SkipTest
@@ -21,6 +23,7 @@ from materialize import MZ_ROOT, mzbuild
 from materialize.cli.mzcompose import RunCommand
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.test_result import FailedTestExecutionError
 from materialize.ui import UIError
 
 
@@ -209,3 +212,311 @@ def test_current_source_preserves_creation_and_validation_scripts(legacy_upgrade
     assert [
         arg for arg in create.args if arg.startswith(("--seed=", "--temp-dir="))
     ] == [arg for arg in check.args if arg.startswith(("--seed=", "--temp-dir="))]
+
+
+@pytest.fixture
+def platform_checks(composition, monkeypatch):
+    path = MZ_ROOT / "test/platform-checks/mzcompose.py"
+    spec = importlib.util.spec_from_file_location("platform_checks_workflow", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(
+        MzVersion, "parse_cargo", lambda: MzVersion.parse_mz("v26.46.0-dev")
+    )
+    monkeypatch.setattr(module.buildkite, "get_parallelism_count", lambda: 1)
+    monkeypatch.setattr(module.buildkite, "get_parallelism_index", lambda: 0)
+    monkeypatch.setattr(module.buildkite, "shard_list", lambda values, key: values)
+    monkeypatch.setattr(module, "setup", Mock())
+    monkeypatch.setattr(module, "create_mzs", Mock(return_value=[]))
+    monkeypatch.setattr(composition, "override", Mock(return_value=nullcontext()))
+    monkeypatch.setattr(composition, "down", Mock())
+    return module
+
+
+@pytest.mark.parametrize("mode", ["sequential", "parallel", "oneatatime"])
+@pytest.mark.parametrize(
+    "tags",
+    [
+        ("v26.44.0", "v26.45.0"),
+        (None, None),
+        ("v26.45.0", None),
+        (None, "v26.45.0"),
+        ("v26.45.0", None, "v26.45.0"),
+    ],
+)
+def test_platform_boundary_precedes_provisioning_and_reuses_plan(
+    platform_checks, composition, monkeypatch, mode, tags
+):
+    from materialize.checks import mzcompose_actions
+    from materialize.checks.checks import Check
+    from materialize.checks.scenarios import Scenario
+
+    class First(Check):
+        pass
+
+    class Second(Check):
+        pass
+
+    plans = []
+    executed = []
+
+    class Selected(Scenario):
+        def actions(self):
+            assert not getattr(self, "planned", False), "plan was generated twice"
+            self.planned = True
+            plan = [
+                mzcompose_actions.StartMz(
+                    self, tag=MzVersion.parse_mz(tag) if tag else None
+                )
+                for tag in tags
+            ]
+            plans.append(plan)
+            return plan
+
+    monkeypatch.setattr(platform_checks, "Selected", Selected, raising=False)
+    monkeypatch.setattr(
+        platform_checks,
+        "all_subclasses",
+        lambda cls: {First, Second} if cls is Check else {Selected},
+    )
+    for cls in (
+        mzcompose_actions.StartMz,
+        mzcompose_actions.ConfigureMz,
+        mzcompose_actions.SetupSqlServerTesting,
+        mzcompose_actions.SetupIcebergTesting,
+    ):
+        monkeypatch.setattr(
+            cls, "execute", lambda action, executor: executed.append(action)
+        )
+        monkeypatch.setattr(cls, "join", lambda action, executor: None)
+    platform_checks.workflow_default(
+        composition,
+        WorkflowArgumentParser(
+            "default",
+            "",
+            ["--scenario=Selected", f"--execution-mode={mode}", "--seed=chosen-plan"],
+        ),
+    )
+    runs = 2 if mode == "oneatatime" else 1
+    unsupported = None in tags and any(tag is not None for tag in tags)
+    assert len(plans) == runs
+    assert len(composition.test_results) == runs
+    if unsupported:
+        assert all(
+            "pre-native" in result.skipped_reason
+            for result in composition.test_results.values()
+        )
+        assert executed == []
+        platform_checks.create_mzs.assert_not_called()
+        composition.override.assert_not_called()
+        platform_checks.setup.assert_not_called()
+        composition.down.assert_not_called()
+    else:
+        assert all(
+            result.is_successful() for result in composition.test_results.values()
+        )
+        assert [
+            action
+            for action in executed
+            if isinstance(action, mzcompose_actions.StartMz)
+        ] == [
+            action
+            for plan in plans
+            for action in plan
+            if isinstance(action, mzcompose_actions.StartMz)
+        ]
+        assert platform_checks.setup.call_count == runs
+        assert composition.down.call_count == runs - 1
+
+
+@pytest.mark.parametrize(
+    "name,unsupported",
+    [
+        ("UpgradeClusterdComputeFirst", True),
+        ("UpgradeClusterdComputeLast", True),
+        ("PreflightCheckRollback", True),
+        ("ZeroDowntimeBumpedVersion", False),
+        ("ZeroDowntimeRestartEntireMzForcedMigrations", False),
+    ],
+)
+def test_platform_real_plans_classify_artifacts_not_parameter_versions(
+    platform_checks, composition, monkeypatch, name, unsupported
+):
+    from materialize.checks import scenarios_upgrade
+    from materialize.checks.executors import MzcomposeExecutor
+    from materialize.checks.features import Features
+
+    monkeypatch.setattr(
+        scenarios_upgrade, "get_last_version", lambda: MzVersion.parse_mz("v26.45.0")
+    )
+    scenario = getattr(platform_checks, name)(
+        [], MzcomposeExecutor(composition), Features([])
+    )
+    plan = scenario.actions()
+    if unsupported:
+        with pytest.raises(SkipTest, match="pre-native"):
+            platform_checks.check_native_upgrade_boundary(plan)
+    else:
+        platform_checks.check_native_upgrade_boundary(plan)
+    platform_checks.create_mzs.assert_not_called()
+    composition.override.assert_not_called()
+
+
+def test_platform_compute_only_boundary(platform_checks):
+    from materialize.checks.mzcompose_actions import StartClusterdCompute, StartMz
+
+    with pytest.raises(SkipTest, match="pre-native"):
+        platform_checks.check_native_upgrade_boundary(
+            [
+                StartMz(Mock(), tag=MzVersion.parse_mz("v26.45.0")),
+                StartClusterdCompute(),
+            ]
+        )
+
+
+def test_platform_default_continues_after_skip_and_keeps_native_failures(
+    platform_checks, composition, monkeypatch, tmp_path
+):
+    from materialize.checks import mzcompose_actions
+    from materialize.checks.scenarios import Scenario
+
+    class AUnsupported(Scenario):
+        def actions(self):
+            return [
+                mzcompose_actions.StartMz(self, tag=MzVersion.parse_mz("v26.45.0")),
+                mzcompose_actions.StartMz(self),
+            ]
+
+    class BNative(Scenario):
+        def actions(self):
+            return [mzcompose_actions.StartMz(self)]
+
+    class CNativeForced(Scenario):
+        def actions(self):
+            return [mzcompose_actions.StartMz(self, force_migrations="replacement")]
+
+    monkeypatch.setattr(
+        platform_checks,
+        "all_subclasses",
+        lambda cls: (
+            {AUnsupported, BNative, CNativeForced} if cls is Scenario else set()
+        ),
+    )
+
+    sql_report = tmp_path / "sql-failure.xml"
+    sql_report.write_text(
+        '<testsuite><testcase name="check.td"><failure message="check.td:23:1: native forced migration rejected"/></testcase></testsuite>'
+    )
+
+    def execute(action, executor):
+        if isinstance(action, mzcompose_actions.StartMz) and action.force_migrations:
+            raise FailedTestExecutionError(
+                composition._read_testdrive_junit_errors(sql_report)
+            )
+
+    for cls in (
+        mzcompose_actions.StartMz,
+        mzcompose_actions.ConfigureMz,
+        mzcompose_actions.SetupSqlServerTesting,
+        mzcompose_actions.SetupIcebergTesting,
+    ):
+        monkeypatch.setattr(cls, "execute", execute)
+        monkeypatch.setattr(cls, "join", lambda action, executor: None)
+    with pytest.raises(UIError, match="CNativeForced failed"):
+        platform_checks.workflow_default(
+            composition, WorkflowArgumentParser("default", "", [])
+        )
+    report_path = RunCommand().write_junit_report_to_file(
+        RunCommand().generate_junit_suite(composition)
+    )
+    report = ET.parse(report_path)
+    failures = [
+        case for case in report.findall(".//testcase") if case.find("error") is not None
+    ]
+    assert [case.attrib["name"] for case in failures] == ["CNativeForced/check.td:23"]
+    assert "native forced migration rejected" in failures[0].find("error").text
+    assert composition.test_results["AUnsupported"].skipped_reason
+    assert composition.test_results["BNative"].is_successful()
+    assert composition.test_results["CNativeForced"].errors
+    assert composition.test_results["CNativeForced"].skipped_reason is None
+    assert platform_checks.setup.call_count == 2
+    composition.down.assert_called_once_with(
+        destroy_volumes=True, sanity_restart_mz=False
+    )
+
+
+def test_platform_parallel_failure_never_resets_under_a_running_check(
+    platform_checks, composition, monkeypatch
+):
+    from materialize.checks import mzcompose_actions
+    from materialize.checks.actions import Initialize, Testdrive
+    from materialize.checks.checks import Check
+    from materialize.checks.scenarios import Scenario
+
+    started = threading.Event()
+    release = threading.Event()
+    workers = []
+
+    class AFail(Check):
+        def initialize(self):
+            return Testdrive("fail")
+
+    class BBlocked(Check):
+        def initialize(self):
+            return Testdrive("block")
+
+    class AParallelFailure(Scenario):
+        def actions(self):
+            return [mzcompose_actions.StartMz(self), Initialize(self)]
+
+    class ZMustNotRun(Scenario):
+        def actions(self):
+            raise AssertionError("another scenario planned after failure")
+
+    monkeypatch.setattr(
+        platform_checks,
+        "all_subclasses",
+        lambda cls: (
+            {AParallelFailure, ZMustNotRun} if cls is Scenario else {AFail, BBlocked}
+        ),
+    )
+    for cls in (
+        mzcompose_actions.StartMz,
+        mzcompose_actions.ConfigureMz,
+        mzcompose_actions.SetupSqlServerTesting,
+        mzcompose_actions.SetupIcebergTesting,
+    ):
+        monkeypatch.setattr(
+            cls,
+            "execute",
+            lambda action, executor: setattr(
+                executor, "current_mz_version", MzVersion.parse_cargo()
+            ),
+        )
+        monkeypatch.setattr(cls, "join", lambda action, executor: None)
+
+    def testdrive(input, **kwargs):
+        if input == "block":
+            workers.append(threading.current_thread())
+            started.set()
+            assert release.wait(10), "test did not release blocked worker"
+        else:
+            assert started.wait(10), "blocked worker did not start"
+            raise UIError("first parallel check failed")
+
+    monkeypatch.setattr(composition, "testdrive", testdrive)
+    try:
+        with pytest.raises(UIError, match="AParallelFailure failed"):
+            platform_checks.workflow_default(
+                composition,
+                WorkflowArgumentParser("default", "", ["--execution-mode=parallel"]),
+            )
+        assert workers and workers[0].is_alive()
+        assert set(composition.test_results) == {"AParallelFailure"}
+        composition.down.assert_not_called()
+        assert platform_checks.setup.call_count == 1
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(timeout=10)
+            assert not worker.is_alive()
