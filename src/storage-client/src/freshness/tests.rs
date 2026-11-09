@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use mz_cluster_client::ReplicaId;
@@ -22,7 +23,7 @@ use mz_storage_types::freshness::{BucketScheme, PeriodRow, RecorderConfig};
 use mz_storage_types::time_dependence::TimeDependence;
 use timely::progress::Antichain;
 
-use super::{FreshnessState, pack_rows, recorder_config};
+use super::{FreshnessState, MIN_PERIOD_INTERVAL, is_new_rejection, pack_rows, recorder_config};
 use crate::healthcheck::{
     REPLICA_WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC, WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC,
 };
@@ -314,4 +315,41 @@ fn recorder_config_reads_dyncfgs() {
         period: Duration::from_secs(10),
     };
     assert_eq!(recorder_config(&dyncfg), Some(expected));
+}
+
+#[mz_ore::test]
+fn recorder_config_rejects_invalid_values() {
+    let dyncfg = ConfigSet::default()
+        .add(&ENABLE_WALLCLOCK_FRESHNESS_RECORDING)
+        .add(&WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE)
+        .add(&WALLCLOCK_FRESHNESS_PERIOD_INTERVAL);
+    let mut updates = ConfigUpdates::default();
+    updates.add(&ENABLE_WALLCLOCK_FRESHNESS_RECORDING, true);
+    updates.add(&WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE, 3);
+    updates.add(&WALLCLOCK_FRESHNESS_PERIOD_INTERVAL, Duration::ZERO);
+    updates.apply(&dyncfg);
+    let default = *WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE.default();
+    let expected = RecorderConfig {
+        scheme: BucketScheme::new(default).expect("power of two"),
+        period: MIN_PERIOD_INTERVAL,
+    };
+    // Repeated reads of the same rejected values return the same fallback.
+    assert_eq!(recorder_config(&dyncfg), Some(expected));
+    assert_eq!(recorder_config(&dyncfg), Some(expected));
+    let mut updates = ConfigUpdates::default();
+    updates.add(
+        &WALLCLOCK_FRESHNESS_PERIOD_INTERVAL,
+        Duration::from_millis(999),
+    );
+    updates.apply(&dyncfg);
+    assert_eq!(recorder_config(&dyncfg), Some(expected));
+}
+
+#[mz_ore::test]
+fn rejections_are_new_once_per_value() {
+    let last = AtomicU64::new(u64::MAX);
+    assert!(is_new_rejection(&last, 3));
+    assert!(!is_new_rejection(&last, 3));
+    assert!(is_new_rejection(&last, 5));
+    assert!(is_new_rejection(&last, 3));
 }
