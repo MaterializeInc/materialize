@@ -294,9 +294,8 @@ impl PeekClient {
         let system_vars = catalog.system_config();
         // Serializable reads at the freshest time the inputs can serve. A
         // strict-serializable read picks the stalest valid time at or past the
-        // oracle's read timestamp instead. In a read-only environment whose
-        // leader is not running, nothing advances the oracle, and such a read
-        // sees introspection logs as of a time before the replicas started.
+        // oracle's read timestamp instead, which can precede the runtime
+        // observations that this query is meant to inspect.
         for (var, value) in [
             (&CLUSTER, cluster_name.as_str()),
             (&CLUSTER_REPLICA, replica_name.as_str()),
@@ -575,9 +574,6 @@ impl PeekClient {
         };
 
         // # From sequence_plan
-
-        // We have checked the plan kind above.
-        assert!(plan.allowed_in_read_only());
 
         let (cluster, target_cluster_id, target_cluster_name) = {
             let target_cluster = match session.transaction().cluster() {
@@ -1789,7 +1785,7 @@ impl PeekClient {
             upper.clone(),
         )?;
 
-        if !self.read_only && det.needs_table_progress(catalog, id_bundle) {
+        if det.needs_table_progress(catalog, id_bundle) {
             self.group_commit_notifier.notify();
         }
         session

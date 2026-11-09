@@ -1019,7 +1019,6 @@ impl Coordinator {
                     superuser_attribute,
                     occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
                     group_commit_notifier: self.group_commit_tx.clone(),
-                    read_only: self.read_only_controllers,
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate

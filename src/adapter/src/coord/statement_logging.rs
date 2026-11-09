@@ -250,7 +250,7 @@ impl Coordinator {
             (StatementLifecycleHistory, statement_lifecycle_updates),
             (SqlText, sql_text_updates),
         ] {
-            if !updates.is_empty() && !self.read_only_controllers {
+            if !updates.is_empty() {
                 self.adapter_storage.append_history(type_, updates);
             }
         }

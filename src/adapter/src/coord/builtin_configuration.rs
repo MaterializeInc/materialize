@@ -81,7 +81,6 @@ impl Coordinator {
         // A prewarming catalog handle can publish protection, so its writability
         // alone does not authorize configuration changes. This is the writable
         // bootstrap path, never the read-only replacement-shard backfill path.
-        assert!(!self.controller.read_only());
         let max_attempts = mz_adapter_types::dyncfgs::GROUP_COMMIT_MAX_ATTEMPTS
             .get(self.catalog().system_config().dyncfgs())
             .max(1);

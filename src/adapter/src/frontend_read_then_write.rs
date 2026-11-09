@@ -379,7 +379,6 @@ fn classify_write_result(
             target_timestamp,
             limit,
         }),
-        WriteResult::ReadOnly => WriteOutcome::Failed(AdapterError::ReadOnly),
         WriteResult::TargetChanged => {
             // A concurrent DDL gave the table a new generation after we
             // computed these diffs against the old one. The same error the

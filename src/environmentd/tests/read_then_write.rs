@@ -1850,8 +1850,8 @@ fn test_rejected_in_non_writable_transaction() {
     client.batch_execute("CREATE TABLE u (a int)").unwrap();
     client.batch_execute("INSERT INTO u VALUES (1)").unwrap();
 
-    let assert_read_only = |client: &mut postgres::Client, setup: &[&str]| {
-        client.batch_execute("BEGIN").unwrap();
+    let assert_read_only = |client: &mut postgres::Client, begin: &str, setup: &[&str]| {
+        client.batch_execute(begin).unwrap();
         for stmt in setup {
             client.batch_execute(stmt).unwrap();
         }
@@ -1866,14 +1866,18 @@ fn test_rejected_in_non_writable_transaction() {
         let _ = client.batch_execute("ROLLBACK");
     };
 
+    // SQL transaction access is independent of deployment write authority.
+    assert_read_only(&mut client, "BEGIN READ ONLY", &[]);
+
     // Each case rolls back, so the catalog changes never apply and the next
     // case starts from the same state.
-    assert_read_only(&mut client, &["ALTER TABLE z RENAME TO z2"]);
-    assert_read_only(&mut client, &["CREATE TABLE zz (i int)"]);
+    assert_read_only(&mut client, "BEGIN", &["ALTER TABLE z RENAME TO z2"]);
+    assert_read_only(&mut client, "BEGIN", &["CREATE TABLE zz (i int)"]);
     // The FETCH is what pins the transaction to the subscribe, the DECLARE
     // alone leaves it undecided.
     assert_read_only(
         &mut client,
+        "BEGIN",
         &["DECLARE c CURSOR FOR SUBSCRIBE u", "FETCH 1 c"],
     );
 

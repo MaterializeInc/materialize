@@ -259,7 +259,6 @@ impl Coordinator {
             .collect::<Vec<_>>();
         let now = (self.catalog().config().now)();
         let dyncfg = self.catalog().system_config().dyncfgs().clone();
-        let read_only = self.controller.read_only();
         let observed_replicas: BTreeSet<_> = replicas.iter().map(|(key, _)| *key).collect();
         let observed_collections: BTreeSet<_> = collections.iter().map(|(id, _, _)| *id).collect();
         let mut retained_collections = BTreeSet::new();
@@ -314,7 +313,6 @@ impl Coordinator {
         self.native_frontiers.wallclock_lag.update(
             now,
             &dyncfg,
-            read_only,
             replicas,
             collections,
             &retained_collections,

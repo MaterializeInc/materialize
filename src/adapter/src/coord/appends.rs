@@ -119,8 +119,6 @@ pub enum WriteResult {
     },
     /// The write was canceled before it entered the committer.
     Canceled,
-    /// The coordinator cannot accept writes.
-    ReadOnly,
     /// The target table was dropped or changed after planning.
     TargetChanged,
     /// The committer shut down with the write's outcome unknown.
@@ -1115,12 +1113,6 @@ impl Coordinator {
 
     /// Submit a write to be executed during the next group commit and trigger a group commit.
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        if self.read_only_controllers {
-            panic!(
-                "attempting table write in read-only mode: {:?}",
-                pending_write_txn
-            );
-        }
         self.pending_writes.push(pending_write_txn);
         self.trigger_group_commit();
     }
@@ -1189,20 +1181,7 @@ impl<'a> BuiltinTableAppend<'a> {
     /// back off the next group commit instead of triggering a potentially expensive group commit.
     ///
     /// Note: __do not__ call this for DDL which needs the system tables updated immediately.
-    ///
-    /// Note: When in read-only mode, this will buffer the update and return
-    /// immediately.
-    pub fn background(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
-        if self.coord.read_only_controllers {
-            self.coord
-                .buffered_builtin_table_updates
-                .as_mut()
-                .expect("in read-only mode")
-                .append(&mut updates);
-
-            return Box::pin(futures::future::ready(()));
-        }
-
+    pub fn background(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         let (tx, rx) = oneshot::channel();
         self.coord.pending_writes.push(PendingWriteTxn::System {
             updates,
@@ -1216,21 +1195,7 @@ impl<'a> BuiltinTableAppend<'a> {
     ///
     /// Returns a `Future` that resolves when the write has completed, does not block the
     /// Coordinator.
-    ///
-    /// Note: When in read-only mode, this will buffer the update and the
-    /// returned future will resolve immediately, without the update actually
-    /// having been written.
-    pub fn defer(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
-        if self.coord.read_only_controllers {
-            self.coord
-                .buffered_builtin_table_updates
-                .as_mut()
-                .expect("in read-only mode")
-                .append(&mut updates);
-
-            return Box::pin(futures::future::ready(()));
-        }
-
+    pub fn defer(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         let (tx, rx) = oneshot::channel();
         self.coord.pending_writes.push(PendingWriteTxn::System {
             updates,
@@ -1242,19 +1207,7 @@ impl<'a> BuiltinTableAppend<'a> {
     }
 
     /// Submits a system-table write immediately and returns its completion future.
-    ///
-    /// In read-only mode, buffers the update and returns a ready future.
-    pub fn execute(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
-        if self.coord.read_only_controllers {
-            self.coord
-                .buffered_builtin_table_updates
-                .as_mut()
-                .expect("in read-only mode")
-                .append(&mut updates);
-
-            return Box::pin(futures::future::ready(()));
-        }
-
+    pub fn execute(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         let (tx, rx) = oneshot::channel();
 
         // DDL system writes bypass the periodic wait. Extremely fast DDL can advance the global

@@ -941,8 +941,7 @@ impl Coordinator {
     /// Publishes changed client protection, recovery progress and permitted bounds atomically.
     pub(super) async fn publish_read_protection(&mut self) -> Result<(), AdapterError> {
         let start = Instant::now();
-        if !self.controller.read_only() && self.catalog().state().catalog_read_protection_enabled()
-        {
+        if self.catalog().state().catalog_read_protection_enabled() {
             // Apply available committed changes before sampling. Transaction-open
             // validation and CAS reject a stale candidate rather than refreshing
             // past the sampled prefix. Native following already repairs lost
@@ -1047,8 +1046,7 @@ impl Coordinator {
         &mut self,
         client_update: Option<(u64, &BTreeMap<GlobalId, Option<Timestamp>>)>,
     ) -> Option<PublicationCandidates> {
-        if self.controller.read_only()
-            || !self.catalog().state().catalog_read_protection_enabled()
+        if !self.catalog().state().catalog_read_protection_enabled()
             || !self.pending_compute_installations.is_empty()
         {
             return None;

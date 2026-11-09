@@ -266,9 +266,6 @@ impl Coordinator {
         };
         let cluster_id = target_cluster.id;
         let query_execution = if let Some(client) = self.query_client.clone() {
-            if self.read_only_controllers {
-                return ctx.retire(Err(AdapterError::ReadOnly));
-            }
             let metadata = return_if_err!(client.collection_metadata(&catalog, collection_id), ctx);
             let position = return_if_err!(
                 catalog

@@ -181,11 +181,10 @@ impl Coordinator {
             let dyncfgs = self.catalog().system_config().dyncfgs();
             HYDRATION_HISTORY_COLLECTION_INTERVAL.get(dyncfgs)
         };
-        // Builtin tables are not writable in read-only mode, and a disabled
-        // collector must do no background work at all. Retention is part of the
+        // A disabled collector must do no background work. Retention is part of the
         // sweep, so disabling collection also suspends it once any in-flight
         // sweep finishes. This makes zero a break-glass setting for the subsystem.
-        if collection_interval.is_zero() || self.read_only_controllers {
+        if collection_interval.is_zero() {
             self.schedule_hydration_history_collection();
             return;
         }

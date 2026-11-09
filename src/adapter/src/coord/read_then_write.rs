@@ -215,10 +215,6 @@ impl Coordinator {
             }
             WriteAttemptKind::Background { .. } => {}
         }
-        if self.read_only_controllers {
-            result.send(WriteResult::ReadOnly);
-            return;
-        }
 
         let current_global_id = self
             .catalog()

@@ -10,9 +10,9 @@
 //! Support for checking whether clusters/collections are caught up during a 0dt
 //! deployment.
 //!
-//! During a zero-downtime upgrade the new `environmentd` boots read-only and
-//! reports "ready to promote" once its clusters have caught up with the leader
-//! generation. A task spawned by [`Coordinator::spawn_caught_up_check_task`]
+//! A candidate deployment reports "ready to promote" once its clusters have
+//! caught up with the active deployment. This is independent of its authority
+//! to serve SQL and write tables. A task spawned by [`Coordinator::spawn_caught_up_check_task`]
 //! runs that check on an interval (see
 //! [`WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL`]). We call one such run a
 //! "tick", and the term is used throughout this module.
@@ -526,7 +526,7 @@ impl Coordinator {
     /// clusters/collections are caught up, and fires the trigger of
     /// `self.caught_up_check` once they are.
     ///
-    /// A no-op when there is no caught-up check, i.e. outside read-only mode.
+    /// A no-op when no deployment-readiness check was requested.
     pub(crate) fn spawn_caught_up_check_task(&mut self) {
         let Some(CaughtUpCheckContext {
             trigger,

@@ -64,7 +64,6 @@ impl NativeWallclockLag {
         &mut self,
         now_ms: u64,
         dyncfg: &ConfigSet,
-        read_only: bool,
         replicas: impl IntoIterator<Item = ((GlobalId, ReplicaId), WallclockLag)>,
         collections: impl IntoIterator<Item = (GlobalId, WallclockLag, Labels)>,
         retained_collections: &BTreeSet<GlobalId>,
@@ -89,10 +88,6 @@ impl NativeWallclockLag {
         self.maxima.retain(|key, _| current_replicas.contains(key));
         self.histograms
             .retain(|id, _| retained_collections.contains(id));
-
-        if read_only {
-            return Vec::new();
-        }
 
         // Flush after sampling when crossing an interval boundary, aligned with
         // storage. The first sample anchors the cadence at now, not the epoch.

@@ -473,7 +473,6 @@ impl Catalog {
         &mut self,
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
-        read_only: bool,
         txns_metrics: Arc<mz_txn_wal::metrics::Metrics>,
     ) -> Result<mz_controller::Controller, mz_catalog::durable::CatalogError> {
         let controller_start = Instant::now();
@@ -488,7 +487,7 @@ impl Catalog {
             mz_controller::Controller::new(
                 config,
                 envd_epoch,
-                read_only,
+                false,
                 self.state().catalog_read_protection_enabled(),
                 read_only_tx.transaction_mut(),
                 txns_metrics,

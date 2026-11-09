@@ -9,11 +9,12 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Remove the unused adapter read-only deployment mode, including its frontend flag
-and private builtin-update buffer. Preserve SQL transaction read-only and shared
-reconstruction/output-authority APIs. Then remove remaining legacy controller-owned
-compute/storage execution alternatives. Preserve controllerd's catalog-authorized reconciliation and
-explicit retirement, adapter policy, endpoint discovery and observations.
+Remove the private migration worker and obsolete migration readiness paths, then
+remaining controller-owned compute/storage alternatives. Preserve controllerd's
+catalog-authorized reconciliation, adapter policy and native observations.
+`adapter-read-only-research.md` maps the private worker boundary. Retire its
+unsupported observer-only tests deliberately, preserving native WAL identity,
+recovery, configuration and write-order coverage.
 
 A user decision is pending on retiring the unused legacy final-preflight hook
 with an explicit unsupported result. It has no enabled CI caller, but can run
@@ -37,7 +38,10 @@ serving rejects before TLS or metadata access. Combined/read-only bootstrap and
 DDL-triggered upgrade restarts are removed. Native admission precedes readiness,
 while explicit promotion and candidate-only restart remain. Alternate protection
 catalogs and compaction subscribers are removed. Native grants, recovery holds and
-publication barriers remain on the main catalog. All affected targets compile
+publication barriers remain on the main catalog. The adapter deployment read-only
+mode, private bootstrap update buffer/backfill and mode-only frontend restrictions
+are removed. SQL transaction access, native writer admission, WAL ordering and
+replica output authority remain intact. All affected targets compile
 and native owner tests pass. Independent review is resolved. Exclusive cleanup
 based on deployment age or local inventory is also removed. Its old retry interval
 remains accepted but ignored for persisted configuration compatibility.
@@ -62,11 +66,13 @@ before workflow dispatch. Its probe timed out during pulls, without starting
 services. Newly pulled unused image tags were removed.
 
 Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
+- `adapter-serving-mode-verification.md` links source review and passing native
+  startup, WAL/protection, SQL transaction, pgwire and statement logging checks.
 - `alternate-protection-verification.md` links protection, ownership and native
   restart evidence, including the reproduced and corrected namespace fixture.
-  `adapter-read-only-research.md` maps the next deletion and its test boundaries.
+  `adapter-read-only-research.md` maps the remaining private migration boundary.
 - `native-bootstrap-verification.md` links native bootstrap checks and runtime
-  coverage. `alternate-protection-catalog-research.md` maps the next deletion.
+  coverage. `alternate-protection-catalog-research.md` records that removal boundary.
 - `adapter-actuator-verification.md` links current-source build, review, boundary
   and runtime evidence. `container-runtime/aj-native-runtime-1c5c0a71/` contains
   the actuator-removal lifecycle run.
@@ -86,7 +92,7 @@ Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
 - `controller-alternatives.md`, `frontier-review.md`, `harness-decision.md`,
   `native-frontiers.log`, and `work-notes.md` for implementation/evidence pointers.
 
-All owned verification services are stopped. Superseded native benchmark binaries
+All owned verification services and disk monitors are stopped. Superseded native benchmark binaries
 were removed, with checksums retained in `archived-binary-cleanup.log`. Baseline
 artifacts, measurement reports and current binaries remain. Recreate isolated
 prerequisites before runtime checks. Pre/post-cleanup builtin schemas are incompatible, so use

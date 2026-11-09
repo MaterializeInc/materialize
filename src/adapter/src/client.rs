@@ -309,7 +309,6 @@ impl Client {
             superuser_attribute,
             occ_write_semaphore,
             group_commit_notifier,
-            read_only,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -324,7 +323,6 @@ impl Client {
             statement_logging_frontend,
             occ_write_semaphore,
             group_commit_notifier,
-            read_only,
         );
 
         let mut client = SessionClient {
@@ -1899,16 +1897,6 @@ impl SessionClient {
 
                 (plan, target_cluster, resolved_ids, sql_impl_ids)
             };
-
-            // Reject mutations in read-only mode (e.g. during 0dt upgrades). Placed
-            // where the coordinator has it, in `sequence_plan`: after planning, so a
-            // statement that does not plan reports the planning error, and before
-            // the cluster and RBAC checks below, which the coordinator also reports
-            // second. Every sub-path from here on writes (constant INSERT and the
-            // OCC INSERT/UPDATE/DELETE), so one check covers them all.
-            if self.peek_client.read_only {
-                return Err(AdapterError::ReadOnly);
-            }
 
             // Cluster restrictions and RBAC, mirroring the coordinator's checks
             // in sequencer.rs. Resolution may fail if the target cluster doesn't

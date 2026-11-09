@@ -88,8 +88,6 @@ pub struct PeekClient {
     /// Requests a group commit. Used to advance the write timeline when we
     /// need the oracle to move but have nothing to write ourselves.
     pub(crate) group_commit_notifier: GroupCommitNotifier,
-    /// Whether the coordinator is in read-only mode. Mutations must be rejected.
-    pub read_only: bool,
 }
 
 /// A catalog certified during one client operation.
@@ -171,7 +169,6 @@ impl PeekClient {
         statement_logging_frontend: StatementLoggingFrontend,
         occ_write_semaphore: Arc<Semaphore>,
         group_commit_notifier: GroupCommitNotifier,
-        read_only: bool,
     ) -> Self {
         assert_eq!(storage_collections.is_some(), query_client.is_none());
         Self {
@@ -187,7 +184,6 @@ impl PeekClient {
             persist_client,
             occ_write_semaphore,
             group_commit_notifier,
-            read_only,
         }
     }
 
@@ -244,7 +240,6 @@ impl PeekClient {
         lower: Timestamp,
     ) -> Result<Timestamp, AdapterError> {
         let notifier = self.group_commit_notifier.clone();
-        let read_only = self.read_only;
         let oracle = self.ensure_oracle(timeline).await?;
         let mut nudged = false;
         loop {
@@ -260,7 +255,7 @@ impl PeekClient {
             }
             // One nudge per wait. Repeated nudges cannot overcome the committer's
             // clock policy and would spin while a future timestamp is pending.
-            if !read_only && !nudged {
+            if !nudged {
                 notifier.notify();
                 nudged = true;
             }

@@ -155,7 +155,6 @@ use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
 use mz_sql_parser::ast::ExplainStage;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::client::TableData;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -386,7 +385,6 @@ pub enum Message {
         write_ts: Timestamp,
     },
     DeferredStatementReady,
-    AdvanceTimelines,
     LinearizeReads,
     StagedBatches {
         conn_id: ConnectionId,
@@ -569,7 +567,6 @@ impl Message {
             Message::DeferredPlanReady { .. } => "deferred_plan_ready",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApplied { .. } => "group_commit_applied",
-            Message::AdvanceTimelines => "advance_timelines",
             Message::LinearizeReads => "linearize_reads",
             Message::StagedBatches { .. } => "staged_batches",
             Message::StorageUsageSchedule => "storage_usage_schedule",
@@ -1482,14 +1479,9 @@ pub struct Config {
     pub webhook_concurrency_limit: WebhookConcurrencyLimiter,
     pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
-    /// Whether or not to start controllers in read-only mode. This is only
-    /// meant for use during development of read-only clusters and 0dt upgrades
-    /// and should go away once we have proper orchestration during upgrades.
-    pub read_only_controllers: bool,
 
     /// A trigger that signals that the current deployment has caught up with a
-    /// previous deployment. Only used during 0dt deployment, while in read-only
-    /// mode.
+    /// previous deployment. Readiness does not grant write authority.
     pub caught_up_trigger: Option<Trigger>,
 
     pub helm_chart_version: Option<String>,
@@ -2387,8 +2379,8 @@ pub struct Coordinator {
     timestamp_oracle_now: NowFn,
 
     /// Context needed to check whether all clusters/collections have caught up.
-    /// Only present during 0dt deployment, while in read-only mode, and taken
-    /// by [`Coordinator::spawn_caught_up_check_task`].
+    /// Present for a candidate deployment and taken by
+    /// [`Coordinator::spawn_caught_up_check_task`].
     caught_up_check: Option<CaughtUpCheckContext>,
 
     /// The metrics registry, handed to the catalog info-metrics background task
@@ -2414,20 +2406,6 @@ pub struct Coordinator {
 
     /// Tracks the statuses of all cluster replicas.
     cluster_replica_statuses: ClusterReplicaStatuses,
-
-    /// Whether or not to start controllers in read-only mode. This is only
-    /// meant for use during development of read-only clusters and 0dt upgrades
-    /// and should go away once we have proper orchestration during upgrades.
-    read_only_controllers: bool,
-
-    /// Updates to builtin tables that are being buffered while we are in
-    /// read-only mode. We apply these all at once when coming out of read-only
-    /// mode.
-    ///
-    /// This is a `Some` while in read-only mode and will be replaced by a
-    /// `None` when we transition out of read-only mode and write out any
-    /// buffered updates.
-    buffered_builtin_table_updates: Option<Vec<BuiltinTableUpdate>>,
 
     license_key: ValidatedLicenseKey,
 
@@ -2765,7 +2743,6 @@ impl Coordinator {
     #[instrument(name = "coord::bootstrap")]
     pub(crate) async fn bootstrap(
         &mut self,
-        boot_ts: Timestamp,
         migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
         hydrate_migrated_mvs: bool,
         initial_builtin_table_updates: Vec<BuiltinTableUpdate>,
@@ -2917,12 +2894,10 @@ impl Coordinator {
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
         let protected_plans = self.catalog().state().catalog_read_protection_enabled();
-        let write_plans = protected_plans
-            && (!self.read_only_controllers || self.controller.replica_owned_compute());
         let mut index_timeline_holds = ReadHolds::new();
         // Keep construction separate from activation. Bootstrap read policies
         // still use their initialization holds until the late client handoff.
-        let bootstrap_client = if write_plans {
+        let bootstrap_client = if protected_plans {
             let expected = Self::adapter_execution_predecessor(self.catalog(), self.adapter_id);
             let incarnations = self
                 .bootstrap_catalog_transact(
@@ -3015,7 +2990,7 @@ impl Coordinator {
                 ));
             }
             written_ids.extend(written.iter().filter_map(|(id, plan)| {
-                (!write_plans
+                (!protected_plans
                     || plan
                         .collection_imports()
                         .all(|input| self.catalog().try_get_entry_by_global_id(input).is_some()))
@@ -3023,7 +2998,7 @@ impl Coordinator {
             }));
             candidates.extend(written);
         }
-        let mut prepared = if write_plans {
+        let mut prepared = if protected_plans {
             candidates.clone()
         } else {
             BTreeMap::new()
@@ -3042,7 +3017,7 @@ impl Coordinator {
         let planning_revision = self.catalog().transient_revision();
         written_ids.extend(admitted_ids);
         index_timeline_holds.extend(admission_holds);
-        if write_plans {
+        if protected_plans {
             prepared.extend(uncached_global_exps.clone());
             prepared.retain(|id, _| {
                 !written_ids.contains(id)
@@ -3389,82 +3364,6 @@ impl Coordinator {
             )
         });
 
-        // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
-        // In read-only mode, the migrated builtin tables (which are a subset of migrated builtin
-        // storage collections) need to be back-filled so that any dependent dataflow can be
-        // hydrated. Additionally, these shards are not registered with the txn-shard, and cannot
-        // be registered while in read-only, so they are written to directly.
-        let migrated_updates_fut = if self.controller.read_only() {
-            let min_timestamp = Timestamp::minimum();
-            let mut migrated_builtin_table_updates = Vec::new();
-            for updates in [
-                &mut builtin_table_updates.snapshot,
-                &mut builtin_table_updates.committed,
-            ] {
-                migrated_builtin_table_updates.extend(updates.extract_if(.., |update| {
-                    let gid = self.catalog().get_entry(&update.id).latest_global_id();
-                    migrated_storage_collections_0dt.contains(&update.id)
-                        && self
-                            .controller
-                            .storage_collections
-                            .collection_frontiers(gid)
-                            .expect("all tables are registered")
-                            .write_frontier
-                            .elements()
-                            == &[min_timestamp]
-                }));
-            }
-            if migrated_builtin_table_updates.is_empty() {
-                futures::future::ready(()).boxed()
-            } else {
-                // Group all updates per-table.
-                let mut grouped_appends: BTreeMap<GlobalId, Vec<TableData>> = BTreeMap::new();
-                for update in migrated_builtin_table_updates {
-                    let gid = self.catalog().get_entry(&update.id).latest_global_id();
-                    assert!(
-                        gid.is_system() && migrated_storage_collections_0dt.contains(&update.id)
-                    );
-                    grouped_appends.entry(gid).or_default().push(update.data);
-                }
-                info!(
-                    "coordinator init: rehydrating migrated builtin tables in read-only mode: {:?}",
-                    grouped_appends.keys().collect::<Vec<_>>()
-                );
-
-                // Consolidate Row data, staged batches must already be consolidated.
-                let mut all_appends = Vec::with_capacity(grouped_appends.len());
-                for (item_id, table_data) in grouped_appends.into_iter() {
-                    let mut all_rows = Vec::new();
-                    let mut all_data = Vec::new();
-                    for data in table_data {
-                        match data {
-                            TableData::Rows(rows) => all_rows.extend(rows),
-                            TableData::Batches(_) => all_data.push(data),
-                        }
-                    }
-                    differential_dataflow::consolidation::consolidate(&mut all_rows);
-                    all_data.push(TableData::Rows(all_rows));
-
-                    // TODO(parkmycar): Use SmallVec throughout.
-                    all_appends.push((item_id, all_data));
-                }
-
-                let fut = self.table_write_handle.append(
-                    min_timestamp,
-                    boot_ts.step_forward(),
-                    all_appends,
-                );
-                async {
-                    fut.await
-                        .expect("One-shot shouldn't be dropped during bootstrap")
-                        .unwrap_or_terminate("cannot fail to append")
-                }
-                .boxed()
-            }
-        } else {
-            futures::future::ready(()).boxed()
-        };
-
         info!(
             "startup: coordinator init: bootstrap: postamble complete in {:?}",
             postamble_start.elapsed()
@@ -3485,28 +3384,16 @@ impl Coordinator {
                 .retain(|update| !configuration_ids.contains(&update.id));
         }
         if self.catalog().state().catalog_read_protection_enabled() && !initialized_catalog {
-            // Only the fresh initializer seeds shared projections. Private replacement
-            // shards have already consumed their backfill, and originating bootstrap
-            // transaction diffs remain in the separate committed bucket.
+            // Only the fresh initializer seeds shared projections. Originating
+            // bootstrap transaction diffs remain in the separate committed bucket.
             builtin_table_updates.snapshot.clear();
         }
-        if self.controller.read_only() {
-            info!(
-                "coordinator init: bootstrap: stashing builtin table updates while in read-only mode"
-            );
-
-            self.buffered_builtin_table_updates
-                .as_mut()
-                .expect("in read-only mode")
-                .extend(builtin_table_updates.into_updates());
-        } else {
-            self.bootstrap_tables(
-                &entries,
-                builtin_table_updates.into_updates(),
-                builtin_configuration,
-            )
-            .await;
-        };
+        self.bootstrap_tables(
+            &entries,
+            builtin_table_updates.into_updates(),
+            builtin_configuration,
+        )
+        .await;
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
             builtin_update_start.elapsed()
@@ -3528,7 +3415,6 @@ impl Coordinator {
 
             let next_user_item_id = catalog.get_next_user_item_id().await?;
             let next_system_item_id = catalog.get_next_system_item_id().await?;
-            let read_only = self.controller.read_only();
             // Fetch all IDs from the catalog to future-proof against other
             // things using secrets. Today, SECRET and CONNECTION objects use
             // secrets_controller.ensure, but more things could in the future
@@ -3538,12 +3424,6 @@ impl Coordinator {
             let secrets_controller = Arc::clone(secrets_controller);
 
             spawn(|| "cleanup-orphaned-secrets", async move {
-                if read_only {
-                    info!(
-                        "coordinator init: not cleaning up orphaned secrets while in read-only mode"
-                    );
-                    return;
-                }
                 info!("coordinator init: cleaning up orphaned secrets");
 
                 match secrets_controller.list().await {
@@ -3584,15 +3464,6 @@ impl Coordinator {
             cleanup_secrets_start.elapsed()
         );
 
-        // Run all of our final steps concurrently.
-        let final_steps_start = Instant::now();
-        info!(
-            "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode beginning"
-        );
-        migrated_updates_fut
-            .instrument(info_span!("coord::bootstrap::final"))
-            .await;
-
         debug!(
             "startup: coordinator init: bootstrap: announcing completion of initialization to controller"
         );
@@ -3603,11 +3474,6 @@ impl Coordinator {
             self.bootstrap_introspection_subscribes().await;
             self.bootstrap_metric_sinks().await;
         }
-
-        info!(
-            "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode complete in {:?}",
-            final_steps_start.elapsed()
-        );
 
         info!(
             "startup: coordinator init: bootstrap complete in {:?}",
@@ -3990,13 +3856,7 @@ impl Coordinator {
             }
         }
 
-        let register_ts = if self.controller.read_only() {
-            self.get_local_read_ts().await
-        } else {
-            // Getting a write timestamp bumps the write timestamp in the
-            // oracle, which we're not allowed in read-only mode.
-            self.get_local_write_ts().await.timestamp
-        };
+        let register_ts = self.get_local_write_ts().await.timestamp;
 
         let storage_metadata = self.catalog.state().storage_metadata();
         let migrated_storage_collections: BTreeSet<_> = migrated_storage_collections
@@ -4104,13 +3964,11 @@ impl Coordinator {
             }
 
             table_registrations.extend(ready.iter().filter_map(|(gid, collection)| {
-                (matches!(collection.data_source, DataSource::Table)
-                    && (!self.controller.read_only() || migrated_storage_collections.contains(gid)))
-                .then(|| self.table_registration(*gid, collection.desc.clone()))
+                matches!(collection.data_source, DataSource::Table)
+                    .then(|| self.table_registration(*gid, collection.desc.clone()))
             }));
 
-            self.register_adapter_storage_collections(&ready, &migrated_storage_collections)
-                .await;
+            self.register_adapter_storage_collections(&ready).await;
             self.controller
                 .storage
                 .create_collections_for_bootstrap(
@@ -4150,10 +4008,9 @@ impl Coordinator {
 
         // Writable native startup already completed and adopted table registration
         // before constructing controllers. Complete this bootstrap timestamp too,
-        // without reinstalling its local routes. Legacy and read-only startup still
-        // need their table handles installed here.
-        let tables_completed =
-            self.catalog.state().catalog_read_protection_enabled() && !self.controller.read_only();
+        // without reinstalling its local routes. Ungoverned startup still needs
+        // its table handles installed here.
+        let tables_completed = self.catalog.state().catalog_read_protection_enabled();
         if tables_completed {
             self.register_tables_via_committer(Vec::new()).await;
         } else if !table_registrations.is_empty() {
@@ -4164,9 +4021,7 @@ impl Coordinator {
                 .unwrap_or_terminate("cannot fail to register tables");
         }
 
-        if !self.controller.read_only() {
-            self.apply_local_write(register_ts).await;
-        }
+        self.apply_local_write(register_ts).await;
     }
 
     /// Returns the current list of catalog entries, sorted into an appropriate order for
@@ -4992,7 +4847,7 @@ impl Coordinator {
             &pending_replacements,
             &*self.controller.storage_collections,
             read_ts,
-            self.controller.read_only(),
+            false,
             self.catalog().state().catalog_read_protection_enabled(),
         );
 
@@ -5232,8 +5087,7 @@ impl Coordinator {
                     // but schedule from completion so a slow commit cannot monopolize us.
                     _ = publication_timer.as_mut(),
                         if self.query_client.is_some()
-                            || (self.catalog().state().catalog_read_protection_enabled()
-                                && !self.controller.read_only()) => {
+                            || self.catalog().state().catalog_read_protection_enabled() => {
                         if let Err(error) = trace_maintenance(
                             "publication", self.publish_read_protection()
                         ).await {
@@ -5327,14 +5181,9 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
                     _ = self.advance_timelines_interval.tick() => {
-                        // Writable keepalives use the committer to advance tables and read holds.
-                        // Its permit coalesces ticks behind a slow oracle. Read-only mode advances
-                        // timelines directly.
-                        if self.controller.read_only() {
-                            messages.push(Message::AdvanceTimelines);
-                        } else {
-                            self.group_commit_tx.notify();
-                        }
+                        // Keepalives use the committer to advance tables and read holds.
+                        // Its permit coalesces ticks behind a slow oracle.
+                        self.group_commit_tx.notify();
                     },
                     // Re-check pending strict serializable reads. Deliberately
                     // placed below the group commit branches above: a re-check
@@ -6056,11 +5905,6 @@ impl Coordinator {
     /// pruner](Self::prune_storage_usage_events_on_startup) for the same
     /// reasoning.
     async fn prune_arrangement_sizes_history_on_startup(&self) {
-        // The catalog server is not writable in read-only mode.
-        if self.controller.read_only() {
-            return;
-        }
-
         let retention_period = mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD
             .get(self.catalog().system_config().dyncfgs());
         let item_id = self
@@ -6263,7 +6107,6 @@ pub fn serve(
         webhook_concurrency_limit,
         http_host_name,
         tracing_handle,
-        read_only_controllers,
         caught_up_trigger: clusters_caught_up_trigger,
         helm_chart_version,
         license_key,
@@ -6329,7 +6172,6 @@ pub fn serve(
                 timestamp_oracle_now.clone(),
                 timestamp_oracle_config.clone(),
                 &mut timestamp_oracles,
-                read_only_controllers,
             )
             .await;
         }
@@ -6362,15 +6204,8 @@ pub fn serve(
             );
         }
 
-        let mut boot_ts = if read_only_controllers {
-            let read_ts = epoch_millis_oracle.read_ts().await;
-            std::cmp::max(read_ts, catalog_upper)
-        } else {
-            // Getting/applying a write timestamp bumps the write timestamp in the
-            // oracle, which we're not allowed in read-only mode.
-            epoch_millis_oracle.apply_write(catalog_upper).await;
-            epoch_millis_oracle.write_ts().await.timestamp
-        };
+        epoch_millis_oracle.apply_write(catalog_upper).await;
+        let mut boot_ts = epoch_millis_oracle.write_ts().await.timestamp;
 
         info!(
             "startup: coordinator init: timestamp oracle init complete in {:?}",
@@ -6387,7 +6222,7 @@ pub fn serve(
         let builtin_item_migration_config =
             BuiltinItemMigrationConfig {
                 persist_client: persist_client.clone(),
-                read_only: read_only_controllers,
+                read_only: false,
                 force_migration: force_builtin_schema_migration,
             }
         ;
@@ -6408,7 +6243,7 @@ pub fn serve(
                 all_features,
                 build_info,
                 environment_id: environment_id.clone(),
-                read_only: read_only_controllers,
+                read_only: false,
                 now: now.clone(),
                 boot_ts: boot_ts.clone(),
                 skip_migrations: false,
@@ -6441,9 +6276,7 @@ pub fn serve(
         let catalog_upper = catalog.current_upper().await;
         boot_ts = std::cmp::max(boot_ts, catalog_upper);
 
-        if !read_only_controllers {
-            epoch_millis_oracle.apply_write(boot_ts).await;
-        }
+        epoch_millis_oracle.apply_write(boot_ts).await;
 
         info!(
             "startup: coordinator init: catalog open complete in {:?}",
@@ -6580,7 +6413,7 @@ pub fn serve(
         let query_deploy_generation = controller_config.deploy_generation;
         let query_persist_location = controller_config.persist_location.clone();
         let adapter_storage =
-            mz_controller::AdapterStorageWriter::new(read_only_controllers, now.clone());
+            mz_controller::AdapterStorageWriter::new(false, now.clone());
         let storage_configuration = mz_storage_types::configuration::StorageConfiguration::new(
             controller_config.connection_context.clone(),
             catalog.system_config().dyncfgs().clone(),
@@ -6599,7 +6432,7 @@ pub fn serve(
                 let (table_write_handle, txns_metrics) = handle.block_on(
                     catalog.initialize_table_writer(
                         persist_client.clone(), &controller_config.metrics_registry,
-                        read_only_controllers,
+                        false,
                         timestamp_oracles
                             .get(&Timeline::EpochMilliseconds)
                             .expect("epoch milliseconds oracle initialized")
@@ -6612,7 +6445,6 @@ pub fn serve(
                         catalog.initialize_controller(
                             controller_config,
                             controller_envd_epoch,
-                            read_only_controllers,
                             txns_metrics,
                         )
                     })
@@ -6621,13 +6453,11 @@ pub fn serve(
                 // current catalog upper.
                 let catalog_upper = handle.block_on(catalog.current_upper());
                 boot_ts = std::cmp::max(boot_ts, catalog_upper);
-                if !read_only_controllers {
-                    let epoch_millis_oracle = &timestamp_oracles
-                        .get(&Timeline::EpochMilliseconds)
-                        .expect("inserted above")
-                        .oracle;
-                    handle.block_on(epoch_millis_oracle.apply_write(boot_ts));
-                }
+                let epoch_millis_oracle = &timestamp_oracles
+                    .get(&Timeline::EpochMilliseconds)
+                    .expect("inserted above")
+                    .oracle;
+                handle.block_on(epoch_millis_oracle.apply_write(boot_ts));
 
                 let catalog = Arc::new(catalog);
                 let max_concurrent_occ_writes =
@@ -6700,14 +6530,11 @@ pub fn serve(
                     query_watch_set_ids: Default::default(),
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
-                    read_only_controllers,
-                    buffered_builtin_table_updates: Some(Vec::new()),
                     license_key,
                     user_id_pool: IdPool::empty(),
                     persist_client,
                 };
 
-                // Read-only promotion restarts the process and creates a fresh committer.
                 handle.block_on(async {
                     appends::spawn_group_committer(
                         group_committer_rx,
@@ -6725,7 +6552,6 @@ pub fn serve(
                 let bootstrap = handle.block_on(async {
                     let prepared_client = coord
                         .bootstrap(
-                            boot_ts,
                             migrated_storage_collections_0dt,
                             hydrate_migrated_mvs,
                             builtin_table_updates,
@@ -6757,11 +6583,9 @@ pub fn serve(
                     .send(bootstrap)
                     .expect("bootstrap_rx is not dropped until it receives this message");
                 if ok {
-                    if !read_only_controllers {
-                        coord.controller.storage_collections.shard_finalization().install(
-                            appends::shard_retirement(coord.group_committer_tx.clone()),
-                        );
-                    }
+                    coord.controller.storage_collections.shard_finalization().install(
+                        appends::shard_retirement(coord.group_committer_tx.clone()),
+                    );
                     handle.block_on(coord.serve(
                         internal_cmd_rx,
                         strict_serializable_reads_rx,

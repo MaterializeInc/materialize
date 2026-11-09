@@ -804,7 +804,6 @@ impl Listeners {
             webhook_concurrency_limit: webhook_concurrency_limit.clone(),
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
-            read_only_controllers: false,
             caught_up_trigger,
             helm_chart_version: config.helm_chart_version.clone(),
             license_key: config.license_key,

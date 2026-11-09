@@ -180,20 +180,12 @@ impl Coordinator {
     ///   - Greater than the largest write timestamp used in the
     ///     [epoch millisecond timeline](Timeline::EpochMilliseconds).
     ///
-    /// In general this is fully satisfied by the getting the current write timestamp in the
-    /// [epoch millisecond timeline](Timeline::EpochMilliseconds) from the timestamp oracle,
-    /// however, in read-only mode we cannot modify the timestamp oracle.
+    /// Allocates a write timestamp from the
+    /// [epoch millisecond timeline](Timeline::EpochMilliseconds) timestamp oracle.
     pub(crate) async fn get_catalog_write_ts(
         &mut self,
     ) -> mz_catalog::durable::CatalogCommitTimestamp {
-        if self.read_only_controllers {
-            let (write_ts, upper) =
-                futures::future::join(self.peek_local_write_ts(), self.catalog().current_upper())
-                    .await;
-            std::cmp::max(write_ts, upper).into()
-        } else {
-            self.get_local_write_ts().await.into()
-        }
+        self.get_local_write_ts().await.into()
     }
 
     /// Ensures that a global timeline state exists for `timeline`.
@@ -207,7 +199,6 @@ impl Coordinator {
             self.timestamp_oracle_now.clone(),
             self.timestamp_oracle_config.clone(),
             &mut self.global_timelines,
-            self.read_only_controllers,
         )
         .await
     }
@@ -221,7 +212,6 @@ impl Coordinator {
         now: NowFn,
         oracle_config: Option<TimestampOracleConfig>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState>,
-        read_only: bool,
     ) -> &'a mut TimelineState {
         if !global_timelines.contains_key(timeline) {
             info!("opening a new TimestampOracle for timeline {:?}", timeline,);
@@ -245,7 +235,7 @@ impl Coordinator {
             );
 
             let oracle = oracle_config
-                .open(timeline.to_string(), initially, now_fn, read_only)
+                .open(timeline.to_string(), initially, now_fn, false)
                 .await;
 
             let batching_oracle = BatchingTimestampOracle::new(oracle_config.metrics(), oracle);
@@ -336,40 +326,38 @@ impl Coordinator {
                 continue;
             }
             let oracle = &state.oracle;
-            if !self.read_only_controllers {
-                // For non realtime sources, we define now as the largest timestamp, not in
-                // advance of any object's upper. This is the largest timestamp that is closed
-                // to writes.
-                let id_bundle = self.catalog().ids_in_timeline(&timeline);
+            // For non realtime sources, we define now as the largest timestamp, not in
+            // advance of any object's upper. This is the largest timestamp that is closed
+            // to writes.
+            let id_bundle = self.catalog().ids_in_timeline(&timeline);
 
-                // Advance the timeline if-and-only-if there are objects in it.
-                // Otherwise we'd advance to the empty frontier, meaning we
-                // close it off for ever.
-                if !id_bundle.is_empty() {
-                    let least_valid_write = if let Some(client) = &self.query_client {
-                        match client.write_frontier(self.catalog(), &id_bundle).await {
-                            Ok(upper) => upper,
-                            Err(error) => {
-                                error!(?timeline, %error, "could not observe timeline write frontier");
-                                // Retain both established and pending protection
-                                // unchanged until observation succeeds.
-                                self.global_timelines.insert(timeline, state);
-                                continue;
-                            }
+            // Advance the timeline if-and-only-if there are objects in it.
+            // Otherwise we'd advance to the empty frontier, meaning we
+            // close it off for ever.
+            if !id_bundle.is_empty() {
+                let least_valid_write = if let Some(client) = &self.query_client {
+                    match client.write_frontier(self.catalog(), &id_bundle).await {
+                        Ok(upper) => upper,
+                        Err(error) => {
+                            error!(?timeline, %error, "could not observe timeline write frontier");
+                            // Retain both established and pending protection
+                            // unchanged until observation succeeds.
+                            self.global_timelines.insert(timeline, state);
+                            continue;
                         }
-                    } else {
-                        self.least_valid_write(&id_bundle)
-                    };
-                    let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
-                    oracle.apply_write(now).await;
-                    debug!(
-                        least_valid_write = ?least_valid_write,
-                        oracle_read_ts = ?oracle.read_ts().await,
-                        "advanced {:?} to {}",
-                        timeline,
-                        now,
-                    );
-                }
+                    }
+                } else {
+                    self.least_valid_write(&id_bundle)
+                };
+                let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
+                oracle.apply_write(now).await;
+                debug!(
+                    least_valid_write = ?least_valid_write,
+                    oracle_read_ts = ?oracle.read_ts().await,
+                    "advanced {:?} to {}",
+                    timeline,
+                    now,
+                );
             }
             let read_ts = oracle.read_ts().await;
             state.read_holds.downgrade(read_ts);

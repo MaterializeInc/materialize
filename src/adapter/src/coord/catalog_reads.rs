@@ -153,7 +153,6 @@ impl Coordinator {
             self.statement_logging.create_frontend(build_version),
             Arc::clone(&self.occ_write_semaphore),
             self.group_commit_tx.clone(),
-            self.read_only_controllers,
         )
     }
 

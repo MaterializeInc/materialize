@@ -750,9 +750,7 @@ impl Coordinator {
             read_holds,
             upper.clone(),
         )?;
-        if !self.read_only_controllers
-            && det.needs_table_progress(self.catalog().state(), id_bundle)
-        {
+        if det.needs_table_progress(self.catalog().state(), id_bundle) {
             self.trigger_group_commit();
         }
         self.metrics

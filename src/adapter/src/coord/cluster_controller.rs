@@ -325,40 +325,23 @@ impl Coordinator {
     }
 
     /// Handle one [`ClusterControllerRequest`] on the coordinator loop.
-    ///
-    /// The controller is inactive while the deployment is in read-only mode (a
-    /// 0dt upgrade, where it must not write the catalog). When inactive, reads
-    /// report no managed clusters (so the controller finds nothing to
-    /// reconcile) and applies are rejected: the task still wakes each tick and
-    /// sends one `ManagedClusterIds` request, but that request early-returns
-    /// here and no catalog state is read or written. The task keeps ticking, so
-    /// the controller reactivates on its own once the deployment promotes out of
-    /// read-only mode.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_cluster_controller_request(
         &mut self,
         request: ClusterControllerRequest,
     ) {
-        let enabled = !self.controller.read_only() || self.controller.replica_owned_compute();
-
         match request {
             ClusterControllerRequest::ManagedClusterIds { tx } => {
-                let ids = if enabled {
-                    self.catalog()
-                        .clusters()
-                        .filter(|c| c.is_managed())
-                        .map(|c| c.id)
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let ids = self
+                    .catalog()
+                    .clusters()
+                    .filter(|c| c.is_managed())
+                    .map(|c| c.id)
+                    .collect();
                 let _ = tx.send(ids);
             }
             ClusterControllerRequest::ClusterStates { clusters, tx } => {
                 let now = Timestamp::from(self.now());
-                // Only ever asked about clusters the controller is reconciling
-                // this tick, which the inactive `ManagedClusterIds` gate above
-                // makes empty, so no guard is needed here.
                 let states: Vec<_> = clusters
                     .into_iter()
                     .filter_map(|id| self.observe_cluster_state(id))
@@ -411,11 +394,7 @@ impl Coordinator {
                 });
             }
             ClusterControllerRequest::Apply { decisions, tx } => {
-                let outcome = if enabled {
-                    self.apply_cluster_decisions(decisions).await
-                } else {
-                    ApplyOutcome::Rejected
-                };
+                let outcome = self.apply_cluster_decisions(decisions).await;
                 let _ = tx.send(outcome);
             }
             ClusterControllerRequest::TickInterval { tx } => {

@@ -129,11 +129,6 @@ impl Coordinator {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
-            if self.read_only_controllers && !plan.allowed_in_read_only() {
-                ctx.retire(Err(AdapterError::ReadOnly));
-                return;
-            }
-
             // Check if we're still waiting for any of the builtin table appends from when we
             // started the Session to complete.
             if let Some((dependencies, wait_future)) =

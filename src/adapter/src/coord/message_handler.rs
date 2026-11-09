@@ -183,21 +183,6 @@ impl Coordinator {
                     });
                 }
             }
-            Message::AdvanceTimelines => {
-                // Only sent by the periodic tick in read-only mode, where group commits (which
-                // otherwise drive the local timeline) don't run. Fetch the oracle's read ts here,
-                // it is the freshest timestamp the read holds may downgrade to.
-                let read_ts = self.get_local_read_ts().await;
-                self.downgrade_local_read_holds(read_ts);
-                self.advance_custom_timelines().boxed_local().await;
-                if let Err(error) = self
-                    .acquire_pending_query_timeline_holds()
-                    .boxed_local()
-                    .await
-                {
-                    tracing::warn!(%error, "unable to establish query timeline windows");
-                }
-            }
             Message::LinearizeReads => {
                 self.message_linearize_reads().boxed_local().await;
             }
@@ -343,15 +328,13 @@ impl Coordinator {
                 self.drain_statement_log();
             }
             Message::PrivateLinkVpcEndpointEvents(events) => {
-                if !self.controller.read_only() {
-                    self.controller.storage.append_introspection_updates(
-                        IntrospectionType::PrivatelinkConnectionStatusHistory,
-                        events
-                            .into_iter()
-                            .map(|e| (mz_repr::Row::from(e), Diff::ONE))
-                            .collect(),
-                    );
-                }
+                self.controller.storage.append_introspection_updates(
+                    IntrospectionType::PrivatelinkConnectionStatusHistory,
+                    events
+                        .into_iter()
+                        .map(|e| (mz_repr::Row::from(e), Diff::ONE))
+                        .collect(),
+                );
             }
             Message::ClusterControllerRequest(request) => {
                 self.handle_cluster_controller_request(request)
@@ -366,20 +349,6 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     pub async fn storage_usage_fetch(&self) {
-        // In read-only mode (e.g. a standby coordinator during a zero-downtime
-        // deployment) we cannot durably write the per-batch allocator bump or
-        // append to `mz_storage_usage_by_shard`, and we also don't want to do
-        // the slow shard scan on a process that isn't going to record the
-        // results. Skip the whole cycle and reschedule so we resume
-        // automatically once the coordinator transitions out of read-only.
-        if self.controller.read_only() {
-            tracing::info!("skipping storage usage collection in read-only mode");
-            if let Err(e) = self.internal_cmd_tx.send(Message::StorageUsageSchedule) {
-                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-            }
-            return;
-        }
-
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
@@ -415,9 +384,6 @@ impl Coordinator {
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
         // timestamp in the past.
-        //
-        // `storage_usage_fetch` skips this path in read-only mode, so we can
-        // unconditionally bump the oracle write ts here.
         let write_ts = self.get_catalog_write_ts().await.lower_bound();
         let collection_timestamp: EpochMillis = write_ts.into();
 
@@ -611,16 +577,6 @@ impl Coordinator {
     /// See [`Coordinator::fresh_introspection_replicas`].
     #[mz_ore::instrument(level = "debug")]
     async fn arrangement_sizes_snapshot(&self) {
-        // Builtin collections are not writable in read-only mode. Skip the
-        // cycle but keep rescheduling, mirroring `storage_usage_fetch`, so
-        // collection stays alive regardless of how the coordinator leaves
-        // read-only mode. The transition is one-way, so
-        // `arrangement_sizes_write` needs no check of its own.
-        if self.controller.read_only() {
-            self.schedule_arrangement_sizes_collection().await;
-            return;
-        }
-
         let fresh_size_replicas = self.fresh_introspection_replicas(
             IntrospectionType::ComputeObjectArrangementSizes,
             ARRANGEMENT_SIZES_FRESHNESS_MARGIN,

@@ -1265,13 +1265,6 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
     ) -> Result<CatalogTransactionState, AdapterError> {
-        let internal_metadata = conn_id.is_none()
-            && self.controller.replica_owned_compute()
-            && ops.iter().all(catalog::Op::is_deployment_metadata);
-        if self.read_only_controllers && !internal_metadata {
-            return Err(AdapterError::ReadOnly);
-        }
-
         if let Some(scoped_op) = self.scoped_overrides_create_op(&ops) {
             ops.push(scoped_op);
         }
@@ -1562,12 +1555,7 @@ impl Coordinator {
         if prepared.initial_write_ts.is_none() {
             self.validate_prepared_catalog_incarnation(prepared)?;
         }
-        let internal_metadata = conn_id.is_none()
-            && self.controller.replica_owned_compute()
-            && prepared.ops.iter().all(catalog::Op::is_deployment_metadata);
-        if self.read_only_controllers && !internal_metadata {
-            return Err(AdapterError::ReadOnly);
-        }
+
         // Preparation can yield even before the first commit attempt.
         self.validate_resource_limits(&prepared.ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
         let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();

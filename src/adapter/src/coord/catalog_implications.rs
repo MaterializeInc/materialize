@@ -1897,28 +1897,21 @@ impl Coordinator {
         let registrations = table_collections_to_create
             .iter()
             .filter_map(|(id, collection)| {
-                (!self.read_only_controllers && matches!(collection.data_source, DataSource::Table))
+                matches!(collection.data_source, DataSource::Table)
                     .then(|| self.table_registration(*id, collection.desc.clone()))
             })
             .collect::<Vec<_>>();
         let collections = table_collections_to_create.into_iter().collect_vec();
-        self.register_adapter_storage_collections(&collections, &BTreeSet::new())
+        self.register_adapter_storage_collections(&collections)
             .await;
 
-        let register_ts = if self.read_only_controllers {
-            // Following a committed table adopts its readability, not authority
-            // to register it or submit user writes. Migrated builtin writers are
-            // installed separately during bootstrap.
-            self.get_local_read_ts().await
-        } else {
-            // Confirm leadership before initializing writable collections.
-            let write_ts = self.get_local_write_ts().await;
-            self.catalog
-                .advance_upper(write_ts.advance_to)
-                .await
-                .unwrap_or_terminate("unable to advance catalog upper");
-            write_ts.timestamp
-        };
+        // Check deployment authority before initializing writable collections.
+        let write_ts = self.get_local_write_ts().await;
+        self.catalog
+            .advance_upper(write_ts.advance_to)
+            .await
+            .unwrap_or_terminate("unable to advance catalog upper");
+        let register_ts = write_ts.timestamp;
 
         {
             let storage_metadata = self.catalog.state().storage_metadata();
@@ -1936,9 +1929,7 @@ impl Coordinator {
 
         // Registration can choose a later timestamp than the collections' initial since. Reads
         // remain above the applied registration timestamp.
-        let table_ts = if self.read_only_controllers {
-            register_ts
-        } else if registrations.is_empty() {
+        let table_ts = if registrations.is_empty() {
             // Without txn-wal registration, this timestamp still makes the collections readable.
             self.apply_local_write(register_ts).await;
             register_ts
@@ -1989,7 +1980,7 @@ impl Coordinator {
         publish_status_history: bool,
     ) -> Result<(), AdapterError> {
         let collections = source_collections_to_create.into_iter().collect_vec();
-        self.register_adapter_storage_collections(&collections, &BTreeSet::new())
+        self.register_adapter_storage_collections(&collections)
             .await;
         let storage_metadata = self.catalog.state().storage_metadata();
 
@@ -2011,7 +2002,6 @@ impl Coordinator {
     pub(super) async fn register_adapter_storage_collections(
         &self,
         collections: &[(GlobalId, CollectionDescription)],
-        migrated_storage_collections: &BTreeSet<GlobalId>,
     ) {
         for (id, collection) in collections {
             let history = match collection.data_source {
@@ -2039,10 +2029,8 @@ impl Coordinator {
                 .await
                 .expect("adapter-written schema matches committed description");
             if let Some(typ) = history {
-                let force_writable =
-                    self.controller.read_only() && migrated_storage_collections.contains(id);
                 self.adapter_storage
-                    .register_history(typ, *id, writer, force_writable);
+                    .register_history(typ, *id, writer, false);
             } else {
                 self.adapter_storage.register_webhook(*id, writer);
             }
@@ -2265,18 +2253,15 @@ impl Coordinator {
         let new_desc = new_table
             .desc
             .at_version(RelationVersionSelector::Specific(new_version));
-        let registration = (!self.read_only_controllers
-            && matches!(new_table.data_source, TableDataSource::TableWrites { .. }))
-        .then(|| self.table_registration(new_gid, new_desc.clone()));
+        let registration = matches!(new_table.data_source, TableDataSource::TableWrites { .. })
+            .then(|| self.table_registration(new_gid, new_desc.clone()));
 
-        if !self.read_only_controllers {
-            // Confirm leadership before shared schema evolution.
-            let write_ts = self.get_local_write_ts().await;
-            self.catalog
-                .advance_upper(write_ts.advance_to)
-                .await
-                .unwrap_or_terminate("unable to advance catalog upper");
-        }
+        // Check deployment authority before shared schema evolution.
+        let write_ts = self.get_local_write_ts().await;
+        self.catalog
+            .advance_upper(write_ts.advance_to)
+            .await
+            .unwrap_or_terminate("unable to advance catalog upper");
 
         self.controller
             .storage
