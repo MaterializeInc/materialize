@@ -2,6 +2,7 @@
 name = "mz-clusterd"
 description = "Materialize's cluster server."
 version = "26.51.0-dev.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

@@ -2,6 +2,7 @@
 name = "persistcli"
 description = "Persist command-line utilities"
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

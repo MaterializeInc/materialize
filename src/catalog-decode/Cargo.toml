@@ -2,6 +2,7 @@
 name = "mz-catalog-decode"
 description = "Decoders for durable catalog data, backing the catalog-raw SQL functions."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

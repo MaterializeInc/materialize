@@ -2,6 +2,7 @@
 name = "mz-deploy"
 description = "Declarative SQL project tooling for Materialize: compile, test, deploy."
 version = "0.7.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

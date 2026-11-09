@@ -19,6 +19,7 @@
 workspace = "../../../test/cargo-fuzz"
 name = "mz-sql-parser-fuzz"
 version = "0.0.0"
+license = "BUSL-1.1"
 publish = false
 edition = "2021"
 

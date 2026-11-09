@@ -2,6 +2,7 @@
 name = "mz-expr-derive-impl"
 description = "Implementations of derives for the core expression language for Materialize."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

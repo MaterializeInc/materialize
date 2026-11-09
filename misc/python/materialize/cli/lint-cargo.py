@@ -210,6 +210,7 @@ BSL = "BUSL-1.1"
 # "Apache License" alone misclassifies BSL files.
 APACHE_HEADER_MARKER = "Licensed under the Apache License, Version 2.0"
 BSL_HEADER_MARKER = "Business Source License"
+COPYRIGHT_MARKER = "Copyright Materialize, Inc. and contributors."
 
 # BSL-headed files inside Apache crates, pending a decision on relabeling them
 # Apache. Relabeling loosens their license, so it needs sign-off. Remove an
@@ -246,15 +247,18 @@ LICENSE_ALLOWED_BSL_DEPS: set[tuple[str, str]] = {
 }
 
 
-def _header_license(path: Path) -> str | None:
+def _read_header(path: Path) -> str:
     try:
         with open(path, errors="replace") as f:
-            head = f.read(4096)
+            return f.read(4096)
     except (IsADirectoryError, FileNotFoundError):
-        return None
-    if APACHE_HEADER_MARKER in head:
+        return ""
+
+
+def _header_license(header: str) -> str | None:
+    if APACHE_HEADER_MARKER in header:
         return APACHE
-    if BSL_HEADER_MARKER in head:
+    if BSL_HEADER_MARKER in header:
         return BSL
     return None
 
@@ -276,20 +280,21 @@ def _workspace_license(root: Path, crate_dir: str) -> str | None:
 
 
 def check_crate_licenses(workspace: Workspace) -> bool:
-    """Checks that Apache crates contain no BSL files and have no BSL normal
-    or build dependencies.
+    """Checks that every crate declares its license, that Apache crates
+    contain no BSL files and have no BSL normal or build dependencies, and that
+    every file with a Materialize copyright line names its license.
 
     A crate declares its license with `package.license`, either `Apache-2.0` or
-    `BUSL-1.1`. A crate without the field is BSL, the repository default. The
-    check covers every crate in the repository, including crates outside the
-    root workspace such as fuzz targets. A file belongs to the innermost crate
-    whose directory contains it. Dev dependencies may be BSL, they do not end
-    up in the crate's artifacts."""
+    `BUSL-1.1`. The check covers every crate in the repository, including
+    crates outside the root workspace such as fuzz targets. A file belongs to
+    the innermost crate whose directory contains it. Dev dependencies may be
+    BSL, they do not end up in the crate's artifacts."""
 
     root = workspace.root
     tracked = spawn.capture(["git", "ls-files"], cwd=root).splitlines()
 
-    licenses: dict[str, str] = {}
+    # None marks a crate with a missing or invalid license, already reported.
+    licenses: dict[str, str | None] = {}
     configs: dict[str, dict] = {}
     success = True
     for path in tracked:
@@ -300,18 +305,26 @@ def check_crate_licenses(workspace: Workspace) -> bool:
         if "package" not in config:
             continue
         crate_dir = os.path.dirname(path)
-        license = config["package"].get("license", BSL)
+        license = config["package"].get("license")
         if isinstance(license, dict) and license.get("workspace"):
             license = _workspace_license(root, crate_dir)
-        if not isinstance(license, str) or license not in (APACHE, BSL):
+        configs[crate_dir] = config
+        if license is None:
+            print(
+                f'{path}: missing `license`, set it to "{APACHE}" or "{BSL}"',
+                file=sys.stderr,
+            )
+            success = False
+            licenses[crate_dir] = None
+        elif not isinstance(license, str) or license not in (APACHE, BSL):
             print(
                 f'{path}: license = "{license}" must be "{APACHE}" or "{BSL}"',
                 file=sys.stderr,
             )
             success = False
-            continue
-        licenses[crate_dir] = license
-        configs[crate_dir] = config
+            licenses[crate_dir] = None
+        else:
+            licenses[crate_dir] = license
 
     def owning_crate(path: str) -> str | None:
         d = os.path.dirname(path)
@@ -325,13 +338,22 @@ def check_crate_licenses(workspace: Workspace) -> bool:
     seen_files = set()
     for path in tracked:
         crate_dir = owning_crate(path)
-        if crate_dir is None:
+        if crate_dir is None or path.endswith("Cargo.toml"):
+            continue
+        header = _read_header(root / path)
+        header_license = _header_license(header)
+        if header_license is None:
+            if COPYRIGHT_MARKER in header:
+                print(
+                    f"{path}: copyright header names neither the {APACHE} nor "
+                    f"the {BSL} license",
+                    file=sys.stderr,
+                )
+                success = False
             continue
         # BSL crates may contain Apache files, for example code derived from
         # Apache-licensed third-party projects, which must keep its license.
-        if licenses[crate_dir] != APACHE:
-            continue
-        if _header_license(root / path) != BSL:
+        if licenses[crate_dir] != APACHE or header_license != BSL:
             continue
         if path in LICENSE_ALLOWED_BSL_FILES:
             seen_files.add(path)
@@ -366,7 +388,7 @@ def check_crate_licenses(workspace: Workspace) -> bool:
                         dep_dir = os.path.normpath(workspace_paths[name])
                     else:
                         continue
-                    if licenses.get(dep_dir, BSL) == APACHE:
+                    if licenses.get(dep_dir) == APACHE:
                         continue
                     if (crate_dir, dep_dir) in LICENSE_ALLOWED_BSL_DEPS:
                         seen_deps.add((crate_dir, dep_dir))
@@ -394,8 +416,9 @@ def check_crate_licenses(workspace: Workspace) -> bool:
 
     if not success:
         print(
-            '\nhint: files in a crate with `license = "Apache-2.0"` must '
-            "carry the Apache header, copy it from the crate's `src/lib.rs`. "
+            '\nhint: every crate sets `license` to "Apache-2.0" or "BUSL-1.1". '
+            "Files carry the license header of their crate, copy it from the "
+            "crate's `src/lib.rs`. BSL crates may also contain Apache files. "
             "An Apache crate may only depend on Apache crates outside "
             "dev-dependencies.",
             file=sys.stderr,

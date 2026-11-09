@@ -11,6 +11,7 @@
 workspace = "../../../test/cargo-fuzz"
 name = "mz-repr-fuzz"
 version = "0.0.0"
+license = "BUSL-1.1"
 publish = false
 edition = "2021"
 
