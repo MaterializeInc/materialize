@@ -9,11 +9,23 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Compile and exercise the native Rust TestHarness conversion. The fixture now
-starts the real controller initialization/reconciliation loop and hosts a
-join-only adapter behind a test-only orchestrator backend. A retained deployment
-handle separates adapter restart from replica and relay lifetime. This conversion
-is uncommitted and not yet compile- or runtime-verified.
+Convert the current container entrypoint and process-backed listeners, then
+remove the remaining combined serving and controller execution alternatives.
+The container audit is in `~/.local/share/aj/m3-evidence/native-only/container-native-conversion.md`.
+Native TCP currently forces loopback. Preserve configured listener policies and
+fixed container endpoints, avoid the relay diagnostics/serving-port collision,
+and resolve inherited listener-path versus assigned JSON conflicts.
+
+Rust and SLT fixtures now use the real controller and join-only hosted adapters.
+Adapter restart and candidate teardown preserve peer execution identities.
+Native observation selectors and their regenerated plans are committed.
+Targeted runtime, schema/plan, authentication, tracing, reset and retained-status
+checks passed. Detailed evidence remains in the linked local reports.
+
+Released-monolithic-to-native upgrade lanes conflict with the design's supported
+boundary. Their explicit unsupported disposition is awaiting user confirmation.
+Do not silently skip them or reset state under an upgrade test. Keep old-only
+coverage and compatible-native coexistence/retirement coverage distinct.
 
 The legacy frontier slice is committed and independently reviewed. Targeted Rust
 and catalog SQL checks passed. A fresh debug deployment preserved SQL progress
@@ -28,8 +40,10 @@ controller execution, introspection and harness conversion remains unfinished.
 Essential worker/evidence pointers:
 `~/.local/share/aj/m3-evidence/native-only/work-notes.md`, `frontier-review.md`,
 `harness-decision.md`, `controller-alternatives.md`, and `native-frontiers.log`.
-Only isolated PostgreSQL remains running for fixture verification. A two-job
-compilation check is running. Pre/post-cleanup builtin schemas are incompatible
+All owned verification services are stopped. Recreate isolated prerequisites
+before runtime checks. Current cache cleanup retained built binaries and the
+newest incremental session for each feature variant.
+Pre/post-cleanup builtin schemas are incompatible
 and admission rejects that pairing. Use matching post-cleanup schemas for the
 version demonstration.
 
@@ -43,8 +57,8 @@ Broad CI remains non-green and was not rerun. The last broad evidence is
 unpublished pubsubd image. Registry visibility, merge skew, the prior Persist
 JSON-order check and the stale hydration expectation remain unresolved.
 The last full formatting check failed on an unchanged generic call in
-`src/catalog/src/catalog.rs`. The prior changed-file Python checks passed. Current Rust cleanup verification
-is pending. The PR stays draft.
+`src/catalog/src/catalog.rs`. The prior changed-file Python checks passed. The native Rust/SLT fixture and observation SQL checks pass. Broad container,
+upgrade and remaining execution cleanup verification is still outstanding. The PR stays draft.
 
 M3 still needs arbitrary-release compatibility and external-sink handover.
 The birth-ordering concern is source-inspected, not reproduced. The original
