@@ -64,6 +64,7 @@ use tracing::{Level, debug, error, info, span, trace, warn};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::command_progress::MaintenanceProgress;
 use crate::compute_state::peek_budget::InlineBudget;
 use crate::compute_state::peek_metrics::{IndexPeekMetrics, PeekWalkMetrics};
 pub(crate) use crate::compute_state::peek_offload::PeekPermits;
@@ -221,6 +222,9 @@ pub struct ComputeState {
     pub persist_batches: SharedBatches,
     /// Publishes this runtime's indexes for its peer runtime, if that runtime reads them.
     pub(crate) publisher: Option<ArrangementSharingRegistry>,
+    /// How far the process's maintenance runtime applied its commands, on the interactive runtime.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) maintenance_progress: Option<MaintenanceProgress>,
     /// When the hold-gap metrics were last reported, `None` before the first report.
     hold_gaps_reported_at: Option<Instant>,
     /// Whether this runtime applies the process-global settings.
@@ -338,6 +342,7 @@ impl ComputeState {
         metrics_registry: MetricsRegistry,
         workers_per_process: usize,
         peek_permits: Arc<PeekPermits>,
+        maintenance_progress: Option<MaintenanceProgress>,
     ) -> Self {
         let worker_config: Rc<ConfigSet> = mz_dyncfgs::all_dyncfgs().into();
         let traces = TraceManager::new(metrics.clone());
@@ -367,6 +372,7 @@ impl ComputeState {
                 sharing_registry.attach_publisher();
                 sharing_registry.clone()
             }),
+            maintenance_progress,
             hold_gaps_reported_at: None,
             txns_ctx,
             command_history,

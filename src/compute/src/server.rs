@@ -48,6 +48,7 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::command_channel::{self, CommandNumber, Connection, StorageLaneInput, UnifiedCommand};
+use crate::command_progress::{CommandProgress, MaintenanceProgress};
 use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
@@ -543,6 +544,12 @@ struct Worker<'w> {
     peek_permits: Arc<PeekPermits>,
     /// The hosted storage guest, if any.
     storage: Option<StorageGuest>,
+    /// Reports the commands this worker applied to its interactive peer, on the maintenance
+    /// runtime.
+    command_progress: Option<CommandProgress>,
+    /// The replay of the maintenance peer's progress, on the interactive runtime, until
+    /// `CreateInstance` moves it into the compute state.
+    maintenance_progress: Option<MaintenanceProgress>,
 }
 
 /// Per-worker state for hosting storage objects on the compute cluster.
@@ -667,6 +674,8 @@ impl ClusterSpec for Config {
             .barrier_side()
             .map(|_| sharing_registry.connection_order().clone());
         let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, storage_lane_input, order);
+        let (command_progress, maintenance_progress) =
+            command_progress_ends(timely_worker, self.role, &sharing_registry);
         let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
@@ -716,8 +725,38 @@ impl ClusterSpec for Config {
             workers_per_process: self.workers_per_process,
             peek_permits: Arc::clone(&self.peek_permits),
             storage,
+            command_progress,
+            maintenance_progress,
         }
         .run()
+    }
+}
+
+/// Takes `registry`'s end of the command progress link that `role` takes, and renders the replay
+/// on the interactive runtime.
+///
+/// Like the command channel, the replay is rendered once per worker and lives across connections,
+/// so every worker of a runtime constructs it at the same point.
+fn command_progress_ends(
+    timely_worker: &mut TimelyWorker,
+    role: ComputeRuntimeRole,
+    registry: &ArrangementSharingRegistry,
+) -> (Option<CommandProgress>, Option<MaintenanceProgress>) {
+    match role {
+        ComputeRuntimeRole::Solo => (None, None),
+        ComputeRuntimeRole::Maintenance => (
+            Some(CommandProgress::new(
+                registry.take_command_progress_pusher(),
+            )),
+            None,
+        ),
+        ComputeRuntimeRole::Interactive => (
+            None,
+            Some(MaintenanceProgress::render(
+                timely_worker,
+                registry.take_command_progress_source(),
+            )),
+        ),
     }
 }
 
@@ -859,11 +898,24 @@ impl<'w> Worker<'w> {
     fn handle_pending_commands(&mut self) -> Result<(), NonceChange> {
         while let Some(cmd) = self.command_rx.try_recv()? {
             match cmd {
-                WorkerCommand::Compute(cmd, _number) => self.handle_command(cmd),
+                WorkerCommand::Compute(cmd, number) => {
+                    self.handle_command(cmd);
+                    if let Some(number) = number {
+                        self.report_applied(number);
+                    }
+                }
                 WorkerCommand::Storage(cmd) => self.handle_storage_internal_command(cmd),
             }
         }
         Ok(())
+    }
+
+    /// Reports to the interactive peer, if this worker has one, that it applied every command
+    /// through `number`.
+    fn report_applied(&mut self, number: CommandNumber) {
+        if let Some(progress) = &mut self.command_progress {
+            progress.applied(number);
+        }
     }
 
     /// Whether the storage guest has pending work that forbids parking.
@@ -1052,6 +1104,7 @@ impl<'w> Worker<'w> {
                 self.metrics_registry.clone(),
                 self.workers_per_process,
                 Arc::clone(&self.peek_permits),
+                self.maintenance_progress.take(),
             ));
         }
         self.activate_compute().unwrap().handle_compute_command(cmd);
@@ -1160,12 +1213,12 @@ impl<'w> Worker<'w> {
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
-        loop {
-            match self.recv_command()?.0 {
-                ComputeCommand::InitializationComplete => break,
-                command => new_commands.push(command),
+        let initialization_complete = loop {
+            match self.recv_command()? {
+                (ComputeCommand::InitializationComplete, number) => break number,
+                (command, _number) => new_commands.push(command),
             }
-        }
+        };
 
         // Commands we will need to apply before entering normal service.
         // These commands may include dropping existing dataflows, compacting existing dataflows,
@@ -1438,6 +1491,11 @@ impl<'w> Worker<'w> {
         self.await_reconcile_barrier();
         for command in todo_commands {
             self.handle_command(command);
+        }
+        // The connection's dataflows and their published indexes exist only after the create
+        // phase, so no command of the connection is reported applied before it.
+        if let Some(number) = initialization_complete {
+            self.report_applied(number);
         }
 
         // Overwrite `self.command_history` to reflect `new_commands`.
