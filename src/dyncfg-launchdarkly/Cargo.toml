@@ -2,7 +2,7 @@
 name = "mz-dyncfg-launchdarkly"
 description = "A dyncfg::ConfigSet backed by LaunchDarkly."
 version = "0.0.0"
-license = "Apache-2.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

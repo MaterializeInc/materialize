@@ -5,6 +5,7 @@ version = "0.0.0"
 exclude = ["tests/testdata"]
 edition.workspace = true
 rust-version.workspace = true
+license = "Apache-2.0"
 publish = false
 
 [lints]
