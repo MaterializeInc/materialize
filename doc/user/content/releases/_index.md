@@ -24,7 +24,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-11-05 (v26.49.0)* <br>
 *Released to Materialize Self-Managed: 2026-11-06* <br>
 
-### Serve more queries per second at high concurrency {#v26.49-qps}
+### Serve more queries per second {#v26.49-qps}
 
 Materialize now does less work per query, so it can serve more queries per second when many clients query it at once.
 
