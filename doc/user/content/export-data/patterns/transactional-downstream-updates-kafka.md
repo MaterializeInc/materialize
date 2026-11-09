@@ -240,12 +240,14 @@ ways to do this:
 
   ```sql
   CREATE VIEW shared_frontier AS
-  SELECT MIN(frontier) AS frontier
-  FROM (
-    SELECT sink_id, MAX(frontier) AS frontier
+  WITH current_frontiers AS (
+    -- The latest trusted frontier for each sink.
+    SELECT sink_id, MAX(frontier) AS current_frontier
     FROM trusted_frontier
-    GROUP BY 1
-  );
+    GROUP BY sink_id
+  )
+  SELECT MIN(current_frontier) AS frontier
+  FROM current_frontiers;
   ```
 
 - **One frontier per join.** For each join, gate on the lowest trusted
