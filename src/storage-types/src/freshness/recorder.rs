@@ -28,8 +28,6 @@ pub struct RecorderConfig {
     pub scheme: BucketScheme,
     /// The period length. Lengths below 1 ms count as 1 ms.
     pub period: Duration,
-    /// How long the histograms keep periods. The recorder does not use it.
-    pub retention: Duration,
 }
 
 impl RecorderConfig {
@@ -151,7 +149,6 @@ impl StalenessRecorder {
     /// Cuts the open period if `config` changed its period length or bucket scheme.
     fn apply_config(&mut self, config: &RecorderConfig) -> Vec<PeriodRow> {
         let mut rows = Vec::new();
-        // A changed retention concerns only the consumers of the rows, so it does not cut.
         let changed = |p: &OpenPeriod| {
             p.config.scheme != config.scheme || p.config.period_ms() != config.period_ms()
         };

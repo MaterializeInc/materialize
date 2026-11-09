@@ -228,7 +228,6 @@ fn config(period_ms: u64, per_octave: u32) -> RecorderConfig {
     RecorderConfig {
         scheme: scheme(per_octave),
         period: ms(period_ms),
-        retention: Duration::from_secs(30 * 24 * 60 * 60),
     }
 }
 
@@ -433,20 +432,6 @@ fn finish_without_counts_emits_nothing() {
     let c = config(60_000, 4);
     let mut recorder = StalenessRecorder::new(ts(5000), ts(0));
     assert_eq!(recorder.finish(ts(5000), &c), vec![]);
-}
-
-#[mz_ore::test]
-fn retention_change_does_not_cut() {
-    let mut recorder = StalenessRecorder::new(ts(0), ts(0));
-    let c = config(60_000, 4);
-    assert_eq!(recorder.observe(ts(30_000), ts(29_000), &c), vec![]);
-    let shorter = RecorderConfig {
-        retention: Duration::from_secs(60),
-        ..c
-    };
-    let rows = recorder.observe(ts(60_000), ts(59_000), &shorter);
-    let bounds: Vec<_> = periods(&rows).into_iter().map(|(b, _)| b).collect();
-    assert_eq!(bounds, vec![(0, 60_000)]);
 }
 
 #[derive(Debug, Clone)]
