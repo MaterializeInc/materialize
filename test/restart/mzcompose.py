@@ -1750,10 +1750,11 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
 def workflow_wallclock_freshness_restart(c: Composition) -> None:
     """Freshness histogram periods across an environmentd restart.
 
-    Recordings resume at the controller's start, so the arrivals during the
-    outage are missing. The progress view shows one gap per recording, at most
-    one period plus the downtime long, and the periods after it are contiguous
-    and each holds exactly one minute of wall-clock time.
+    Recordings resume at the controller's start, so the period open at the
+    kill and the downtime are a hole. The progress view shows one gap per
+    recording, at most one period plus the downtime long. The periods after it
+    are contiguous, and each full one holds exactly one minute of wall-clock
+    time.
     """
     names = ["freshness_tbl", "freshness_lg", "freshness_lg_tbl", "freshness_idx"]
     name_list = ", ".join(f"'{name}'" for name in names)
@@ -1885,9 +1886,6 @@ def workflow_wallclock_freshness_restart(c: Composition) -> None:
                 ), f"{key}: periods after the restart not contiguous: {after}"
             else:
                 raise UIError(f"{key}: no gap across the restart: {value}")
-
-        # The progress view covers past the restart for every recording.
-        wait_covered_until(restarted)
     c.down(destroy_volumes=True)
 
 

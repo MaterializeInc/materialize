@@ -15,9 +15,10 @@
 # at that staleness, so every full period sums to the period length. The first
 # period of an object starts at its creation and is partial. A period is
 # written once the controller's clock passes its end, so the test waits for
-# two full periods through testdrive's retry feature. Tables and
-# storage-managed collections are observed at the 1 s maintenance tick, so the
-# test asserts no bucket values for them.
+# two full periods through testdrive's retry feature. The buckets of most
+# objects depend on when their frontiers advance, so the test asserts bucket
+# values only for the materialized view, whose staleness only grows between
+# its refreshes.
 
 $ set-sql-timeout duration=300s
 
@@ -41,8 +42,9 @@ ALTER SYSTEM SET wallclock_freshness_period_interval = '1min'
 
 > CREATE INDEX lg_idx IN CLUSTER freshness_compute ON lg_tbl (counter)
 
-# Its frontier sits up to an hour ahead of the controller's clock, which must
-# read as zero staleness and not as an error.
+# Its frontier sits at its next refresh, up to an hour ahead of the
+# controller's clock, and it reflects its last refresh, so it is up to an hour
+# stale.
 > CREATE MATERIALIZED VIEW refresh_mv
   IN CLUSTER freshness_compute
   WITH (REFRESH EVERY '1 hour')
@@ -91,6 +93,21 @@ lg_idx      00:01:00  true
 lg_tbl      00:01:00  true
 refresh_mv  00:01:00  true
 tbl         00:01:00  true
+
+# A full period of the materialized view is one sample, charged at the
+# staleness at its end. That is at least a minute after its first refresh,
+# which is bucket 64 or above at 4 buckets per octave.
+> SELECT count(*) >= 2, bool_and(h.bucket >= 64), bool_and(h.buckets_per_octave = 4)
+  FROM mz_internal.mz_wallclock_global_freshness_histogram h
+  JOIN mz_internal.mz_object_global_ids g ON g.global_id = h.object_id
+  JOIN mz_objects o ON o.id = g.id
+  WHERE o.name = 'refresh_mv'
+    AND h.period_start > (
+      SELECT min(f.period_start)
+      FROM mz_internal.mz_wallclock_global_freshness_histogram f
+      WHERE f.object_id = h.object_id
+    )
+true  true  true
 
 # Rows carry the end-to-end measure only.
 > SELECT DISTINCT measure
