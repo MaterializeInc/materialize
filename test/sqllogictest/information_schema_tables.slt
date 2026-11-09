@@ -845,6 +845,18 @@ mz_type_pg_metadata
 BASE TABLE
 materialize
 mz_internal
+mz_wallclock_freshness_progress
+VIEW
+materialize
+mz_internal
+mz_wallclock_global_freshness_histogram
+VIEW
+materialize
+mz_internal
+mz_wallclock_global_freshness_histogram_raw
+SOURCE
+materialize
+mz_internal
 mz_wallclock_global_lag
 VIEW
 materialize
@@ -866,6 +878,14 @@ VIEW
 materialize
 mz_internal
 mz_wallclock_lag_history
+SOURCE
+materialize
+mz_internal
+mz_wallclock_replica_freshness_histogram
+VIEW
+materialize
+mz_internal
+mz_wallclock_replica_freshness_histogram_raw
 SOURCE
 materialize
 mz_internal
