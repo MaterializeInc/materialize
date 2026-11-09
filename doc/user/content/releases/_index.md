@@ -26,11 +26,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Serve more queries per second at high concurrency {#v26.49-qps}
 
-Materialize now does less work per query, so it can serve more queries per second when many clients query it at once. With 512 concurrent clients, throughput improved by 29% with [statement logging](/self-managed-deployments/query-history/) on, and by 49% with statement logging off.
+Materialize now does less work per query, so it can serve more queries per second when many clients query it at once. We tested v26.48 against v26.49, running `environmentd` with 32 CPUs and 512 concurrent clients issuing queries. With 512 concurrent clients, throughput improved by 29% with [statement logging](/self-managed-deployments/query-history/) on, and by 49% with statement logging off.
 
 ![Queries per second with 512 concurrent clients against environmentd running 32 CPUs, old versus new: with statement logging on, QPS rises from 3,302 to 4,265 (+29%), and with statement logging off, from 5,918 to 8,813 (+49%)](/images/releases/v2649_qps.png)
-
-We compared v26.48 to v26.49, running `environmentd` with 32 CPUs and 512 concurrent clients issuing queries.
 
 ### Right size your clusters, using the new Hydration tab on the console {#v26.49-hydration-tab}
 
