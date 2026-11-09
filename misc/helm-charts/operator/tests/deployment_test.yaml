@@ -454,3 +454,11 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].args
       content: "--enable-user-namespaces"
+
+- it: should pass the balancerd termination grace period
+  set:
+    balancerd.terminationGracePeriodSeconds: 900
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--balancerd-termination-grace-period-seconds=900"
