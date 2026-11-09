@@ -204,6 +204,35 @@ fn reflected_none_maps_to_start() {
     assert_eq!(periods(&rows), expected);
 }
 
+#[mz_ore::test]
+fn created_state_charges_at_most_since_start() {
+    let cfg = config();
+    // A table created at 100 s starts with a frontier from long before, the txns upper at boot.
+    let start = 100_000;
+    let mut state = FreshnessState::new_created(
+        TimeDependence::default(),
+        ts(start),
+        &frontier(1),
+        Some(&cfg),
+    );
+    assert_eq!(state.reported_lag(ts(100_500)), Duration::from_millis(500));
+    // Its first advance, and later ones that still reflect a time before its creation.
+    let mut rows = state.observe(ts(100_800), &frontier(2), Some(&cfg));
+    rows.extend(state.observe(ts(101_000), &frontier(100_901), Some(&cfg)));
+    rows.extend(state.finish(ts(101_100), Some(&cfg)));
+    let expected = BTreeMap::from([(
+        (start, 101_100),
+        BTreeMap::from([(bucket(800), 800), (bucket(1_000), 200), (bucket(200), 100)]),
+    )]);
+    assert_eq!(periods(&rows), expected);
+    for row in &rows {
+        assert!(
+            row.bucket <= bucket(1_100),
+            "charged more than since start: {row:?}"
+        );
+    }
+}
+
 fn period_row(start: u64, bucket: i32, count_ms: u64) -> PeriodRow {
     PeriodRow {
         period_start: ts(start),

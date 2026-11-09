@@ -134,6 +134,9 @@ fn timestamp(t: Timestamp) -> Option<CheckedTimestamp<DateTime<Utc>>> {
 pub struct FreshnessState {
     dependence: TimeDependence,
     start: Timestamp,
+    /// The earliest reflected time, [`Timestamp::MIN`] unless the state was created by
+    /// [`FreshnessState::new_created`].
+    floor: Timestamp,
     /// The latest observed frontier.
     frontier: Antichain<Timestamp>,
     /// The reflected time of the latest frontier, `None` if it reflects no time.
@@ -153,10 +156,34 @@ impl FreshnessState {
         frontier: &Antichain<Timestamp>,
         config: Option<&RecorderConfig>,
     ) -> Self {
-        let reflected = reflect(&dependence, frontier);
+        Self::with_floor(dependence, start, Timestamp::MIN, frontier, config)
+    }
+
+    /// Creates the state of a collection created at `start`, as [`FreshnessState::new`], except
+    /// that frontiers reflect no time before `start`.
+    ///
+    /// Its staleness at `now` is at most `now - start`, whatever frontier it starts with.
+    pub fn new_created(
+        dependence: TimeDependence,
+        start: Timestamp,
+        frontier: &Antichain<Timestamp>,
+        config: Option<&RecorderConfig>,
+    ) -> Self {
+        Self::with_floor(dependence, start, start, frontier, config)
+    }
+
+    fn with_floor(
+        dependence: TimeDependence,
+        start: Timestamp,
+        floor: Timestamp,
+        frontier: &Antichain<Timestamp>,
+        config: Option<&RecorderConfig>,
+    ) -> Self {
+        let reflected = reflect(&dependence, floor, frontier);
         let mut state = FreshnessState {
             dependence,
             start,
+            floor,
             frontier: frontier.clone(),
             reflected,
             reporter: StalenessReporter::new(start, reflected.unwrap_or(start)),
@@ -190,7 +217,7 @@ impl FreshnessState {
             return Vec::new();
         }
         self.frontier.clone_from(frontier);
-        self.reflected = reflect(&self.dependence, frontier);
+        self.reflected = reflect(&self.dependence, self.floor, frontier);
         self.reporter
             .observe(now, self.reflected.unwrap_or(self.start));
         match (&mut self.recorder, config) {
@@ -254,11 +281,16 @@ impl FreshnessState {
     }
 }
 
-/// The reflected time of `frontier`, `None` if it reflects no time.
-fn reflect(dependence: &TimeDependence, frontier: &Antichain<Timestamp>) -> Option<Timestamp> {
+/// The reflected time of `frontier`, at least `floor`, `None` if it reflects no time.
+fn reflect(
+    dependence: &TimeDependence,
+    floor: Timestamp,
+    frontier: &Antichain<Timestamp>,
+) -> Option<Timestamp> {
     frontier
         .as_option()
         .and_then(|frontier| reflected_time(dependence, *frontier))
+        .map(|reflected| reflected.max(floor))
 }
 
 #[cfg(test)]
