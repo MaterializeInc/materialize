@@ -491,24 +491,24 @@ impl UnreportedStates {
     }
 }
 
-/// The wallclock lag to report at `now` for a readable frontier whose staleness `state` tracks.
+/// The wallclock lag to report at `now` for a frontier whose staleness `state` tracks.
 ///
-/// `today` is the lag of the frontier as `WallclockLagFn` computes it, in whole seconds. With
-/// `reporting` and a `state`, the lag is [`FreshnessState::reported_lag`] in milliseconds,
-/// otherwise `today`. Callers pass each state once per refresh, also while the frontier is not
-/// readable, since the read resets the state's peak.
+/// `frontier_lag` is the lag of the frontier as `WallclockLagFn` computes it, in whole seconds.
+/// With `reporting` and a `state`, the lag is [`FreshnessState::reported_lag`] in milliseconds,
+/// otherwise `frontier_lag`. Callers pass each state once per refresh, also while the frontier
+/// is not readable and they report the lag as undefined, since the read resets the state's peak.
 pub fn reported_wallclock_lag(
     reporting: bool,
     state: Option<&mut FreshnessState>,
     now: Timestamp,
-    today: Duration,
+    frontier_lag: Duration,
 ) -> WallclockLag {
     // Read also while reporting is off, so that turning it on reports no peak from the time it
     // was off.
     let reported = state.map(|state| state.reported_lag(now));
     match reported {
         Some(lag) if reporting => WallclockLag::from_duration(lag),
-        _ => WallclockLag::from_duration(today),
+        _ => WallclockLag::from_duration(frontier_lag),
     }
 }
 
