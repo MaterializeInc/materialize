@@ -325,6 +325,7 @@ mod freshness {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use futures::future::BoxFuture;
@@ -351,6 +352,7 @@ mod freshness {
     use mz_storage_types::StorageDiff;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::errors::CollectionMissing;
+    use mz_storage_types::freshness::BucketScheme;
     use mz_storage_types::parameters::StorageParameters;
     use mz_storage_types::read_holds::{ChangeTx, ReadHold};
     use mz_storage_types::read_policy::ReadPolicy;
@@ -550,10 +552,12 @@ mod freshness {
     /// `[start, end)`.
     type RecordedKey = (String, Option<String>, u64, u64);
 
-    /// Sent staleness histogram counts, summed over the buckets of each period.
+    /// Sent staleness histogram counts, summed over the buckets of each period, and the
+    /// counts per bucket.
     #[derive(Debug, Default)]
     struct Recorded {
         counts: BTreeMap<RecordedKey, i64>,
+        buckets: BTreeMap<RecordedKey, BTreeMap<i32, i64>>,
     }
 
     impl Recorded {
@@ -567,6 +571,17 @@ mod freshness {
                 .filter(|((c, r, _, _), _)| *c == id && *r == replica)
                 .map(|((_, _, start, end), count)| (*start, *end, *count))
                 .collect()
+        }
+
+        /// The largest bucket recorded for `id` on `replica`, or globally, in any period.
+        fn max_bucket(&self, id: GlobalId, replica: Option<ReplicaId>) -> Option<i32> {
+            let id = id.to_string();
+            let replica = replica.map(|r| r.to_string());
+            self.buckets
+                .iter()
+                .filter(|((c, r, _, _), _)| *c == id && *r == replica)
+                .filter_map(|(_, buckets)| buckets.keys().max().copied())
+                .max()
         }
     }
 
@@ -747,6 +762,12 @@ mod freshness {
                     assert_eq!(rest[3].unwrap_map().iter().count(), 0, "no workload class");
                     let id = datums[2].unwrap_str().to_string();
                     let key = (id, replica, ms(datums[0]), ms(datums[1]));
+                    *recorded
+                        .buckets
+                        .entry(key.clone())
+                        .or_default()
+                        .entry(rest[2].unwrap_int32())
+                        .or_default() += diff.into_inner();
                     *recorded.counts.entry(key).or_insert(0) += diff.into_inner();
                 }
             }
@@ -891,6 +912,67 @@ mod freshness {
             recorded.periods(LOG, Some(r1)),
             vec![(T0 + 30_500, T0 + 60_000, 29_500)],
             "the log's new recording starts at the rehydration"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    async fn rehydration_measures_against_reset_frontier() {
+        let mut h = FreshnessHarness::new();
+        h.instance.initialization_complete();
+        let id = GlobalId::User(10);
+        h.add_collection(id, T0);
+        let r1 = ReplicaId::User(1);
+        h.add_replica(r1);
+
+        h.run(1..=30, &[r1], &[id]);
+        let before = h.recorded();
+        // The rehydrated replica restarts from the collection's read frontier, which stays at
+        // `T0` under the harness's read policy, and reports nothing before the period ends.
+        h.set_now(T0 + 30_500);
+        h.instance.rehydrate_replica(r1);
+        h.set_now(T0 + 60_000);
+        h.instance.tick_freshness();
+
+        let recorded = h.recorded();
+        assert_eq!(before.counts, BTreeMap::new(), "period still open");
+        assert_eq!(
+            recorded.periods(id, Some(r1)),
+            vec![(T0, T0 + 60_000, 60_000)]
+        );
+        let scheme = BucketScheme::new(4).expect("power of two");
+        // Against the frontier before the rehydration, the worst case would be about 30 s.
+        let reset = scheme.bucket(Duration::from_secs(50));
+        let max = recorded.max_bucket(id, Some(r1)).expect("rows");
+        assert!(max >= reset, "max bucket {max} below {reset}");
+        // The global frontier does not regress.
+        let global = recorded.max_bucket(id, None).expect("rows");
+        assert!(global < reset, "global max bucket {global}");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    async fn replica_added_after_drop_records_nothing() {
+        let mut h = FreshnessHarness::new();
+        h.instance.initialization_complete();
+        let id = GlobalId::User(10);
+        h.add_collection(id, T0);
+
+        // The harness's read holds never release, so the collection outlives the drop.
+        h.set_now(T0 + 1_000);
+        h.instance.drop_collections(vec![id]).expect("exists");
+        let r1 = ReplicaId::User(1);
+        h.add_replica(r1);
+        h.run(2..=60, &[r1], &[id]);
+        h.set_now(T0 + 120_000);
+        h.instance.tick_freshness();
+
+        let recorded = h.recorded();
+        assert_eq!(recorded.periods(id, Some(r1)), vec![], "replica");
+        assert_eq!(
+            recorded.periods(id, None),
+            vec![(T0, T0 + 1_000, 1_000)],
+            "global"
         );
     }
 
