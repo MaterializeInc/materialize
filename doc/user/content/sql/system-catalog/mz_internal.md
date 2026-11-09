@@ -1598,6 +1598,11 @@ The `mz_wallclock_global_lag_recent_history` view is a filtered subset of [`mz_w
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_histogram -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_histogram_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_freshness_progress -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_freshness_histogram -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_freshness_histogram_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_replica_freshness_histogram -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_replica_freshness_histogram_raw -->
 
 ## `mz_webhook_sources`
 
