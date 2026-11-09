@@ -82,13 +82,25 @@ fn flag_off_then_on_restarts_at_now() {
 }
 
 #[mz_ore::test]
-fn flag_on_first_time_starts_at_start() {
+fn flag_on_after_construction_starts_at_now() {
     let cfg = config();
     let mut state = FreshnessState::new(TimeDependence::default(), ts(0), &frontier(1), None);
-    assert_eq!(state.observe(ts(1_000), &frontier(1_001), None), vec![]);
-    // The first recording starts at the start, with the reflected time of the latest frontier.
-    let rows = state.finish(ts(2_000), Some(&cfg));
-    let expected = BTreeMap::from([((0, 2_000), BTreeMap::from([(bucket(1_000), 2_000)]))]);
+    assert_eq!(state.tick(ts(30_000), Some(&cfg)), vec![]);
+    let rows = state.tick(ts(60_000), Some(&cfg));
+    let expected = BTreeMap::from([((30_000, 60_000), BTreeMap::from([(bucket(60_000), 30_000)]))]);
+    assert_eq!(periods(&rows), expected);
+}
+
+#[mz_ore::test]
+fn reflected_none_maps_to_recorder_start() {
+    let cfg = config();
+    // A frontier at the minimum reflects nothing. The reporter counts staleness from the
+    // start, a recorder created later from its own start.
+    let mut state = FreshnessState::new(TimeDependence::default(), ts(0), &frontier(0), None);
+    assert_eq!(state.tick(ts(10_000), Some(&cfg)), vec![]);
+    assert_eq!(state.reported_lag(ts(13_000)), Duration::from_secs(13));
+    let rows = state.finish(ts(13_000), Some(&cfg));
+    let expected = BTreeMap::from([((10_000, 13_000), BTreeMap::from([(bucket(3_000), 3_000)]))]);
     assert_eq!(periods(&rows), expected);
 }
 
