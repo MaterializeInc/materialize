@@ -48,28 +48,16 @@ impl IoTimeout {
         poll_io: impl FnOnce(&mut Context<'_>) -> Poll<io::Result<T>>,
     ) -> Poll<io::Result<T>> {
         // Record the deadline before polling I/O, but only touch the timer if
-        // I/O blocks. A zero duration checks the timer before I/O, matching
-        // Tokio's sleep priority.
-        let deadline = match self.deadline {
-            Some(deadline) => deadline,
-            None => {
-                let Some(deadline) = Instant::now().checked_add(self.duration) else {
-                    // A deadline past the representable range never expires.
-                    return poll_io(cx);
-                };
-                if self.duration.is_zero() {
-                    self.deadline = Some(deadline);
-                }
-                deadline
-            }
-        };
+        // I/O blocks. A deadline past the representable range never expires.
+        let deadline = self
+            .deadline
+            .or_else(|| Instant::now().checked_add(self.duration));
 
-        // An expired timer wins even if I/O has become ready.
-        if self.deadline.is_some() && self.poll_expired(cx, deadline) {
-            self.deadline = None;
-            return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
-        }
-
+        // Poll I/O before the timer, as `tokio::time::timeout` does. If the
+        // task was not polled until after the deadline, for example because
+        // its runtime stalled, data that arrived in the meantime must win.
+        // Checking the timer first would time out connections to healthy
+        // peers that kept sending.
         let poll = poll_io(cx);
         if poll.is_ready() {
             // Leave the timer registered. Deregistering costs as much as the
@@ -78,12 +66,13 @@ impl IoTimeout {
             return poll;
         }
 
-        if self.deadline.is_none() {
-            self.deadline = Some(deadline);
-            if self.poll_expired(cx, deadline) {
-                self.deadline = None;
-                return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
-            }
+        let Some(deadline) = deadline else {
+            return Poll::Pending;
+        };
+        self.deadline = Some(deadline);
+        if self.poll_expired(cx, deadline) {
+            self.deadline = None;
+            return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
         }
         Poll::Pending
     }
@@ -218,7 +207,7 @@ mod tests {
     }
 
     #[crate::test(tokio::test(start_paused = true))]
-    async fn pending_repoll_keeps_deadline_and_timeout_wins_over_ready_io() {
+    async fn pending_repoll_keeps_deadline_and_ready_io_wins_over_expired_timer() {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let mut timeout = IoTimeout::new(Duration::from_millis(10));
@@ -228,9 +217,35 @@ mod tests {
         assert!(timeout.poll::<()>(&mut cx, |_| Poll::Pending).is_pending());
         assert_eq!(timeout.deadline, Some(deadline));
         tokio::time::advance(Duration::from_millis(6)).await;
-        let result = timeout.poll::<()>(&mut cx, |_| panic!("expired timeout must win"));
-        assert!(matches!(result, Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::TimedOut));
+        assert!(matches!(
+            timeout.poll(&mut cx, |_| Poll::Ready(Ok(42))),
+            Poll::Ready(Ok(42))
+        ));
         assert!(timeout.deadline.is_none());
+    }
+
+    #[crate::test(tokio::test(start_paused = true))]
+    async fn read_returns_data_that_arrived_before_a_late_poll() {
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut reader = TimedReader::new(ScriptedIo { ready: false }, Duration::from_millis(10));
+        let mut bytes = [0; 8];
+        let mut buf = ReadBuf::new(&mut bytes);
+        assert!(
+            Pin::new(&mut reader)
+                .poll_read(&mut cx, &mut buf)
+                .is_pending()
+        );
+        // The peer sends data, but the task is not polled again until after
+        // the deadline.
+        reader.reader.ready = true;
+        tokio::time::advance(Duration::from_millis(20)).await;
+        assert!(matches!(
+            Pin::new(&mut reader).poll_read(&mut cx, &mut buf),
+            Poll::Ready(Ok(()))
+        ));
+        assert_eq!(buf.filled(), b"x");
+        assert!(reader.timeout.deadline.is_none());
     }
 
     #[crate::test(tokio::test(start_paused = true))]
@@ -281,22 +296,17 @@ mod tests {
     }
 
     #[crate::test(tokio::test(start_paused = true))]
-    async fn zero_timeout_matches_tokio_sleep_priority() {
+    async fn zero_timeout_completes_ready_io_and_times_out_pending_io() {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
-        let mut reference = Box::pin(tokio::time::sleep(Duration::ZERO));
-        let expected_timeout = reference.as_mut().poll(&mut cx).is_ready();
         let mut timeout = IoTimeout::new(Duration::ZERO);
-        let mut polled_io = false;
-        let actual = timeout.poll(&mut cx, |_| {
-            polled_io = true;
+        assert!(matches!(
+            timeout.poll(&mut cx, |_| Poll::Ready(Ok(()))),
             Poll::Ready(Ok(()))
-        });
-        assert_eq!(!polled_io, expected_timeout);
-        assert_eq!(
-            matches!(actual, Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::TimedOut),
-            expected_timeout
-        );
+        ));
+        assert!(timeout.deadline.is_none());
+        let result = timeout.poll::<()>(&mut cx, |_| Poll::Pending);
+        assert!(matches!(result, Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::TimedOut));
         assert!(timeout.deadline.is_none());
     }
 
@@ -315,16 +325,14 @@ mod tests {
 
     struct ScriptedIo {
         ready: bool,
-        polls: usize,
     }
 
     impl AsyncRead for ScriptedIo {
         fn poll_read(
-            mut self: Pin<&mut Self>,
+            self: Pin<&mut Self>,
             _: &mut Context<'_>,
             buf: &mut ReadBuf<'_>,
         ) -> Poll<io::Result<()>> {
-            self.polls += 1;
             if self.ready {
                 buf.put_slice(b"x");
                 Poll::Ready(Ok(()))
@@ -336,11 +344,10 @@ mod tests {
 
     impl AsyncWrite for ScriptedIo {
         fn poll_write(
-            mut self: Pin<&mut Self>,
+            self: Pin<&mut Self>,
             _: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<io::Result<usize>> {
-            self.polls += 1;
             if self.ready {
                 Poll::Ready(Ok(buf.len()))
             } else {
@@ -348,8 +355,7 @@ mod tests {
             }
         }
 
-        fn poll_flush(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-            self.polls += 1;
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
             if self.ready {
                 Poll::Ready(Ok(()))
             } else {
@@ -366,13 +372,7 @@ mod tests {
     async fn pending_read_completes_before_deadline_and_clears_deadline() {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
-        let mut reader = TimedReader::new(
-            ScriptedIo {
-                ready: false,
-                polls: 0,
-            },
-            Duration::from_millis(10),
-        );
+        let mut reader = TimedReader::new(ScriptedIo { ready: false }, Duration::from_millis(10));
         let mut bytes = [0; 8];
         let mut buf = ReadBuf::new(&mut bytes);
         assert!(
@@ -394,13 +394,7 @@ mod tests {
     async fn timeout_wakes_pending_io_without_an_io_wakeup() {
         use tokio::io::AsyncReadExt;
 
-        let mut reader = TimedReader::new(
-            ScriptedIo {
-                ready: false,
-                polls: 0,
-            },
-            Duration::from_millis(10),
-        );
+        let mut reader = TimedReader::new(ScriptedIo { ready: false }, Duration::from_millis(10));
         let start = Instant::now();
         let mut bytes = [0; 8];
         let error = reader.read(&mut bytes).await.unwrap_err();
@@ -425,13 +419,7 @@ mod tests {
     async fn writer_transitions_preserve_pending_deadline_and_reset_on_completion() {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
-        let mut writer = TimedWriter::new(
-            ScriptedIo {
-                ready: false,
-                polls: 0,
-            },
-            Duration::from_millis(10),
-        );
+        let mut writer = TimedWriter::new(ScriptedIo { ready: false }, Duration::from_millis(10));
         assert!(
             Pin::new(&mut writer)
                 .poll_write(&mut cx, b"hello")
@@ -451,11 +439,16 @@ mod tests {
         assert!(Pin::new(&mut writer).poll_shutdown(&mut cx).is_pending());
         assert!(writer.timeout.deadline.unwrap() > deadline);
         tokio::time::advance(Duration::from_millis(11)).await;
-        writer.writer.ready = true;
-        let polls = writer.writer.polls;
         let result = Pin::new(&mut writer).poll_shutdown(&mut cx);
         assert!(matches!(result, Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::TimedOut));
-        assert_eq!(writer.writer.polls, polls);
+        assert!(writer.timeout.deadline.is_none());
+        assert!(Pin::new(&mut writer).poll_write(&mut cx, b"x").is_pending());
+        tokio::time::advance(Duration::from_millis(11)).await;
+        writer.writer.ready = true;
+        assert!(matches!(
+            Pin::new(&mut writer).poll_write(&mut cx, b"x"),
+            Poll::Ready(Ok(1))
+        ));
         assert!(writer.timeout.deadline.is_none());
     }
 
@@ -475,7 +468,7 @@ mod tests {
         assert!(timeout.poll::<()>(&mut cx, |_| Poll::Pending).is_pending());
         assert_eq!(timeout.sleep.as_ref().unwrap().deadline(), deadline);
         tokio::time::advance(Duration::from_millis(4)).await;
-        let result = timeout.poll::<()>(&mut cx, |_| panic!("expired timeout must win"));
+        let result = timeout.poll::<()>(&mut cx, |_| Poll::Pending);
         assert!(matches!(result, Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::TimedOut));
     }
 
