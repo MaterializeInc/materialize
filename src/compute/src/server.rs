@@ -155,6 +155,13 @@ impl ComputeRuntimeRole {
         matches!(self, ComputeRuntimeRole::Interactive)
     }
 
+    /// Whether this role derives the creation numbers of the incarnations it hosts or peers.
+    ///
+    /// `Solo` has no peer runtime to name an incarnation to, so its numbers stay unread.
+    pub(crate) fn derives_creation_numbers(self) -> bool {
+        !matches!(self, ComputeRuntimeRole::Solo)
+    }
+
     /// The side this role takes in the reconciliation barrier, or `None` for a runtime alone in
     /// its process.
     pub(crate) fn barrier_side(self) -> Option<BarrierSide> {
@@ -899,7 +906,7 @@ impl<'w> Worker<'w> {
         while let Some(cmd) = self.command_rx.try_recv()? {
             match cmd {
                 WorkerCommand::Compute(cmd, number) => {
-                    self.handle_command(cmd);
+                    self.handle_command(cmd, number);
                     if let Some(number) = number {
                         self.report_applied(number);
                     }
@@ -1090,7 +1097,8 @@ impl<'w> Worker<'w> {
         self.storage = Some(guest);
     }
 
-    fn handle_command(&mut self, cmd: ComputeCommand) {
+    /// Applies `cmd`, numbered `number` by the command sequencer if it is numbered.
+    fn handle_command(&mut self, cmd: ComputeCommand, number: Option<CommandNumber>) {
         if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
             self.compute_state = Some(ComputeState::new(
                 self.role,
@@ -1107,7 +1115,9 @@ impl<'w> Worker<'w> {
                 self.maintenance_progress.take(),
             ));
         }
-        self.activate_compute().unwrap().handle_compute_command(cmd);
+        self.activate_compute()
+            .unwrap()
+            .handle_compute_command(cmd, number);
     }
 
     fn activate_compute(&mut self) -> Option<ActiveComputeState<'_>> {
@@ -1216,7 +1226,7 @@ impl<'w> Worker<'w> {
         let initialization_complete = loop {
             match self.recv_command()? {
                 (ComputeCommand::InitializationComplete, number) => break number,
-                (command, _number) => new_commands.push(command),
+                (command, number) => new_commands.push((command, number)),
             }
         };
 
@@ -1226,7 +1236,9 @@ impl<'w> Worker<'w> {
         // The result should be the same as if dropping all dataflows and running `new_commands`.
         //
         // The compactions and drops of existing dataflows run first, as `drop_commands`, then the
-        // reconciliation barrier, then `todo_commands`.
+        // reconciliation barrier, then `todo_commands`. A command of `todo_commands` keeps its
+        // number from `new_commands`, which a `CreateDataflow` turns into the creation number of the
+        // incarnations it creates. `drop_commands` are synthesized here and carry no number.
         let mut drop_commands = Vec::new();
         let mut todo_commands = Vec::new();
         // We only have a compute history if we are in an initialized state
@@ -1280,7 +1292,7 @@ impl<'w> Worker<'w> {
             let mut retain_ids = BTreeSet::default();
 
             // Traverse new commands, sorting out what remediation we can do.
-            for command in new_commands.iter() {
+            for (command, number) in new_commands.iter() {
                 match command {
                     ComputeCommand::CreateDataflow(dataflow) => {
                         // Attempt to find an existing match for the dataflow.
@@ -1347,8 +1359,10 @@ impl<'w> Worker<'w> {
                                     );
                                 }
 
-                                todo_commands
-                                    .push(ComputeCommand::CreateDataflow(dataflow.clone()));
+                                todo_commands.push((
+                                    ComputeCommand::CreateDataflow(dataflow.clone()),
+                                    *number,
+                                ));
                             }
 
                             compute_state.metrics.record_dataflow_reconciliation(
@@ -1359,7 +1373,8 @@ impl<'w> Worker<'w> {
                                 dependencies_retained,
                             );
                         } else {
-                            todo_commands.push(ComputeCommand::CreateDataflow(dataflow.clone()));
+                            todo_commands
+                                .push((ComputeCommand::CreateDataflow(dataflow.clone()), *number));
                         }
                     }
                     ComputeCommand::CreateInstance(config) => {
@@ -1374,7 +1389,7 @@ impl<'w> Worker<'w> {
                     }
                     // All other commands we apply as requested.
                     command => {
-                        todo_commands.push(command.clone());
+                        todo_commands.push((command.clone(), *number));
                     }
                 }
             }
@@ -1486,11 +1501,11 @@ impl<'w> Worker<'w> {
         // from this worker alone, through `drop_dataflow`, which releases its capabilities and
         // channels into worker-local state without exchanging anything.
         for command in drop_commands {
-            self.handle_command(command);
+            self.handle_command(command, None);
         }
         self.await_reconcile_barrier();
-        for command in todo_commands {
-            self.handle_command(command);
+        for (command, number) in todo_commands {
+            self.handle_command(command, number);
         }
         // The connection's dataflows and their published indexes exist only after the create
         // phase, so no command of the connection is reported applied before it.
@@ -1502,7 +1517,7 @@ impl<'w> Worker<'w> {
         // It is possible that there still isn't a compute state yet.
         if let Some(compute_state) = &mut self.compute_state {
             let mut command_history = ComputeCommandHistory::new(self.metrics.for_history());
-            for command in new_commands.iter() {
+            for (command, _number) in new_commands.iter() {
                 command_history.push(command.clone());
             }
             compute_state.command_history = command_history;
