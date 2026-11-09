@@ -2171,15 +2171,20 @@ class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
 class SourceIngestionScenario(ClusterScalingScenario):
     # 1.1.0: MySQL RDS instance type changed
     # 1.2.0: MySQL table rebuilt with OPTIMIZE TABLE
-    VERSION: str = "1.2.0"
+    # 1.3.0: Postgres RDS instance replaced (db.t3.small, freshly seeded table)
+    VERSION: str = "1.3.0"
 
     def name(self) -> str:
         return "source_ingestion"
 
     def setup(self) -> list[str]:
         # External setup was done once:
-        # Postgres (RDS)
+        # Postgres (RDS db.t3.small, 400 GiB gp3)
+        # NOTE: Keep storage at 400 GiB or more. Below that, gp3 caps throughput
+        # at 125 MiB/s, and hydration has been observed reading about 200 MB/s,
+        # so the measurement would be bound by the disk.
         # create user materialize password '...';
+        # grant rds_replication to materialize;
         # create table tbl (customer_id int, region_id int, customer_name text, customer_email text, customer_phone text);
         # \set N 50000000
         # set synchronous_commit = off;
@@ -2192,9 +2197,12 @@ class SourceIngestionScenario(ClusterScalingScenario):
         #   lpad((random()*10000000000)::bigint::text, 10, '0') as customer_phone
         # from generate_series(1, :N) as gs;
         # analyze tbl;
+        # alter table tbl replica identity full;
+        # create publication mz_source for table tbl;
+        # grant select on tbl to materialize;
         # Parameter group: rds.logical_replication = 1, max_slot_wal_keep_size = 20480
 
-        # MySQL (RDS)
+        # MySQL (RDS db.t3.small, 50 GiB gp3)
         # CREATE USER 'materialize'@'%' IDENTIFIED BY '...';
         # CREATE DATABASE admin;
         # USE admin;
