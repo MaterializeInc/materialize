@@ -18,11 +18,11 @@ import {
   MenuButton,
   MenuItem,
   MenuList,
-  RadioProps,
   Spinner,
   Text,
   useRadio,
   useRadioGroup,
+  UseRadioProps,
   useTheme,
   VStack,
 } from "@chakra-ui/react";
@@ -72,7 +72,7 @@ const CLIENT_ICONS: Record<McpClientId, React.ReactElement> = {
 };
 
 const McpServerRadioCard = forwardRef<
-  RadioProps & { label: string; blurb: string },
+  UseRadioProps & { label: string; blurb: string },
   "input"
 >(({ label, blurb, ...props }, ref) => {
   const { colors, shadows } = useTheme<MaterializeTheme>();
