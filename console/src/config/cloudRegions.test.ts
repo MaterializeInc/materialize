@@ -27,7 +27,6 @@ describe("getCloudRegions", () => {
       {
         provider: "aws",
         region: "us-west-1",
-        regionApiUrl: "",
       },
     ]);
   });

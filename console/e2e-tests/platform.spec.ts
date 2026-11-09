@@ -19,13 +19,14 @@ import CacheableLookup from "cacheable-lookup";
 import retry from "p-retry";
 import { Client } from "pg";
 
-import { Region } from "~/api/cloudGlobalApi";
+import { AvailableRegion } from "~/api/cloudGlobalApi";
 
 import {
   CONSOLE_ADDR,
   EMAIL,
   FRONTEGG_LOADING_TIMEOUT,
   REGIONS,
+  regionUrl,
   STATE_NAME,
   TestContext,
 } from "./util";
@@ -285,7 +286,7 @@ for (const region of REGIONS) {
 async function testAccountBlocking(
   page: Page,
   context: TestContext,
-  region: Region,
+  region: AvailableRegion,
 ) {
   try {
     // Set the blocked state
@@ -299,7 +300,7 @@ async function testAccountBlocking(
     try {
       // Attempt to create an environment...
       console.info("Attempting to create an environment");
-      await context.apiRequest(`${region.url}/api/region`, {
+      await context.apiRequest(regionUrl(region), {
         method: "PATCH",
         data: {},
       });
