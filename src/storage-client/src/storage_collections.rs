@@ -443,16 +443,20 @@ impl StorageCollectionsImpl {
     /// [StorageCollections::initialize_state],
     /// [StorageCollections::prepare_state], and
     /// [StorageCollections::create_collections_for_bootstrap].
+    ///
+    /// Every advance of a collection's write frontier is sent to `write_frontier_tx`, stamped
+    /// with the wall-clock time of `now` at which it was learned.
     pub async fn new(
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
         metrics_registry: &MetricsRegistry,
-        _now: NowFn,
+        now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
         read_only: bool,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn,
+        write_frontier_tx: mpsc::UnboundedSender<WriteFrontierAdvances>,
     ) -> Self {
         let metrics = StorageCollectionsMetrics::register_into(metrics_registry);
 
@@ -535,6 +539,8 @@ impl StorageCollectionsImpl {
             since_handles: BTreeMap::new(),
             txns_handle: Some(txns_write),
             txns_shards: Default::default(),
+            now,
+            write_frontier_tx,
         };
 
         let background_task =
@@ -2788,6 +2794,16 @@ struct BackgroundTask {
     since_handles: BTreeMap<GlobalId, SinceHandleWrapper>,
     txns_handle: Option<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     txns_shards: BTreeSet<GlobalId>,
+    now: NowFn,
+    /// Receives the write frontiers that advanced. Its receiver hanging up is fine.
+    write_frontier_tx: mpsc::UnboundedSender<WriteFrontierAdvances>,
+}
+
+/// Write frontiers of collections that advanced, learned at wall-clock time `at`.
+#[derive(Debug)]
+pub struct WriteFrontierAdvances {
+    pub at: Timestamp,
+    pub frontiers: Vec<(GlobalId, Antichain<Timestamp>)>,
 }
 
 #[derive(Debug)]
@@ -3017,6 +3033,7 @@ impl BackgroundTask {
     #[instrument(level = "debug")]
     async fn update_write_frontiers(&self, updates: &[(GlobalId, &Antichain<Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
+        let mut advanced = Vec::new();
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
@@ -3032,6 +3049,7 @@ impl BackgroundTask {
 
             if PartialOrder::less_than(&collection.write_frontier, *new_upper) {
                 collection.write_frontier.clone_from(new_upper);
+                advanced.push((*id, collection.write_frontier.clone()));
             }
 
             let mut new_read_capability = collection
@@ -3066,6 +3084,15 @@ impl BackgroundTask {
                 &mut self_collections,
                 &mut read_capability_changes,
             );
+        }
+
+        if !advanced.is_empty() {
+            let advances = WriteFrontierAdvances {
+                at: Timestamp::from((self.now)()),
+                frontiers: advanced,
+            };
+            // The receiver hangs up only when the controller shuts down.
+            let _ = self.write_frontier_tx.send(advances);
         }
     }
 
@@ -3722,10 +3749,60 @@ mod tests {
         res.await
     }
 
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`
+    async fn write_frontier_advances_are_sent() {
+        let (write_frontier_tx, mut write_frontier_rx) = mpsc::unbounded_channel();
+        let (_cmds_tx, task) = BackgroundTask::new_for_test_with_frontiers(write_frontier_tx);
+        let metadata = CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            },
+            data_shard: ShardId::new(),
+            relation_desc: RelationDesc::empty(),
+            txns_shard: None,
+        };
+        let id = GlobalId::User(1);
+        let state = CollectionState::new(
+            None,
+            None,
+            None,
+            None,
+            Antichain::from_elem(0.into()),
+            Antichain::from_elem(1.into()),
+            vec![],
+            metadata,
+        );
+        task.collections
+            .lock()
+            .expect("lock poisoned")
+            .insert(id, state);
+
+        let advanced = Antichain::from_elem(5.into());
+        task.update_write_frontiers(&[(id, &advanced)]).await;
+        let advances = write_frontier_rx.try_recv().expect("advance sent");
+        assert_eq!(advances.at, Timestamp::from(7_000));
+        assert_eq!(advances.frontiers, vec![(id, advanced.clone())]);
+
+        // Neither a repeated nor a lagging upper advances the write frontier.
+        task.update_write_frontiers(&[(id, &advanced)]).await;
+        task.update_write_frontiers(&[(id, &Antichain::from_elem(3.into()))])
+            .await;
+        assert!(write_frontier_rx.try_recv().is_err());
+    }
+
     impl BackgroundTask {
         fn new_for_test(
             _persist_location: PersistLocation,
             _persist_client: Arc<PersistClientCache>,
+        ) -> (mpsc::UnboundedSender<BackgroundCmd>, Self) {
+            let (write_frontier_tx, _) = mpsc::unbounded_channel();
+            Self::new_for_test_with_frontiers(write_frontier_tx)
+        }
+
+        fn new_for_test_with_frontiers(
+            write_frontier_tx: mpsc::UnboundedSender<WriteFrontierAdvances>,
         ) -> (mpsc::UnboundedSender<BackgroundCmd>, Self) {
             let (cmds_tx, cmds_rx) = mpsc::unbounded_channel();
             let (_holds_tx, holds_rx) = mpsc::unbounded_channel();
@@ -3748,6 +3825,8 @@ mod tests {
                 since_handles: BTreeMap::new(),
                 txns_handle: None,
                 txns_shards: BTreeSet::new(),
+                now: NowFn::from(|| 7_000),
+                write_frontier_tx,
             };
 
             (cmds_tx, task)

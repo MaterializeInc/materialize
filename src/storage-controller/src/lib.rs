@@ -71,7 +71,9 @@ use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
     ControllerSinkStatistics, ControllerSourceStatistics, WebhookStatistics,
 };
-use mz_storage_client::storage_collections::{StorageCollections, shard_has_no_updates};
+use mz_storage_client::storage_collections::{
+    StorageCollections, WriteFrontierAdvances, shard_has_no_updates,
+};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
@@ -244,6 +246,8 @@ pub struct Controller {
     instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
     /// Receive end for replica responses.
     instance_response_rx: mpsc::UnboundedReceiver<(Option<ReplicaId>, StorageResponse)>,
+    /// Write frontier advances that [`StorageCollections`] learned.
+    write_frontier_rx: mpsc::UnboundedReceiver<WriteFrontierAdvances>,
 
     /// Background task run at startup to warm persist state.
     persist_warm_task: Option<AbortOnDropHandle<Box<dyn Debug + Send>>>,
@@ -2785,6 +2789,7 @@ impl StorageController for Controller {
             maintenance_scheduled,
             instance_response_tx: _,
             instance_response_rx: _,
+            write_frontier_rx: _,
             persist_warm_task: _,
         } = self;
 
@@ -2883,6 +2888,7 @@ where
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn,
         storage_collections: Arc<dyn StorageCollections + Send + Sync>,
+        write_frontier_rx: mpsc::UnboundedReceiver<WriteFrontierAdvances>,
     ) -> Self {
         let txns_client = persist_clients
             .open(persist_location.clone())
@@ -2995,6 +3001,7 @@ where
             maintenance_scheduled: false,
             instance_response_rx,
             instance_response_tx,
+            write_frontier_rx,
             persist_warm_task,
         }
     }
@@ -3183,6 +3190,39 @@ where
         };
         let rows = state.observe(now, frontier, freshness_config.as_ref());
         let updates = freshness_updates(&self.instances, id, &collection.extra_state, rows);
+        self.append_freshness_updates(updates);
+    }
+
+    /// Records the write frontier advances that [`StorageCollections`] learned since the last
+    /// call in the staleness states of collections that do not report their frontiers to this
+    /// controller, among them tables, webhooks, and storage-managed collections.
+    fn observe_write_frontier_advances(&mut self) {
+        let freshness_config = self.freshness_config();
+        let mut updates = Vec::new();
+        while let Ok(advances) = self.write_frontier_rx.try_recv() {
+            for (id, frontier) in advances.frontiers {
+                let Some(collection) = self.collections.get_mut(&id) else {
+                    continue;
+                };
+                // Ingestions and exports are observed in `update_write_frontier`, so observing
+                // them here as well would interleave two frontier sources.
+                if !matches!(collection.extra_state, CollectionStateExtra::None) {
+                    continue;
+                }
+                let Some(state) = &mut collection.freshness else {
+                    continue;
+                };
+                // The advance is observed at the time it was learned, not at this call, which
+                // runs only at the maintenance tick.
+                let rows = state.observe(advances.at, &frontier, freshness_config.as_ref());
+                updates.extend(freshness_updates(
+                    &self.instances,
+                    id,
+                    &collection.extra_state,
+                    rows,
+                ));
+            }
+        }
         self.append_freshness_updates(updates);
     }
 
@@ -3909,8 +3949,6 @@ where
             Some(ts) => (self.wallclock_lag)(*ts),
             None => Duration::ZERO,
         };
-        let freshness_config = self.freshness_config();
-        let mut unreported_updates = Vec::new();
 
         for frontiers in self.storage_collections.active_collection_frontiers() {
             let id = frontiers.id;
@@ -3940,27 +3978,7 @@ where
                 let key = (histogram_period, bucket, labels);
                 *stash.entry(key).or_default() += Diff::ONE;
             }
-
-            // Ingestions and exports report their write frontiers to `update_write_frontier`.
-            // The other collections, among them tables, webhooks, and storage-managed
-            // collections, advance without a report to this controller.
-            if matches!(collection.extra_state, CollectionStateExtra::None)
-                && let Some(state) = &mut collection.freshness
-            {
-                let rows = state.observe(
-                    Timestamp::from(now_ms),
-                    &frontiers.write_frontier,
-                    freshness_config.as_ref(),
-                );
-                unreported_updates.extend(freshness_updates(
-                    &self.instances,
-                    id,
-                    &collection.extra_state,
-                    rows,
-                ));
-            }
         }
-        self.append_freshness_updates(unreported_updates);
 
         // Record lags to persist, if it's time.
         self.maybe_record_wallclock_lag();
@@ -4055,6 +4073,8 @@ where
     /// for tasks that need to run periodically, such as state cleanup or updating of metrics.
     fn maintain(&mut self) {
         self.update_frontier_introspection();
+        // Observed before the refresh, so that the reported lag reads the latest frontiers.
+        self.observe_write_frontier_advances();
         self.refresh_wallclock_lag();
         self.tick_freshness();
 

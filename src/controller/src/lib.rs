@@ -690,6 +690,7 @@ impl Controller {
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
+        let (write_frontier_tx, write_frontier_rx) = mpsc::unbounded_channel();
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
             Arc::clone(&config.persist_clients),
@@ -700,6 +701,7 @@ impl Controller {
             read_only,
             config.connection_context.clone(),
             storage_txn,
+            write_frontier_tx,
         )
         .await;
 
@@ -718,6 +720,7 @@ impl Controller {
             config.connection_context,
             storage_txn,
             Arc::clone(&collections_ctl),
+            write_frontier_rx,
         )
         .await;
 
