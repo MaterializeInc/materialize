@@ -1155,6 +1155,29 @@ SELECT pow(0::numeric, -1::numeric)
 query error function pow cannot return complex numbers
 SELECT pow(-1::numeric, '-.1'::numeric)
 
+# Whether an exponent is integral is a property of its value, not of its
+# representation. `Row` encoding folds trailing zeroes into the exponent, so an
+# integral value computed inline (`1.5 + 0.5`, coefficient 20, exponent -1)
+# reaches `pow` differently than the same value read back out of a `Row`. Both
+# must raise a negative base without complaining about complex results.
+statement ok
+CREATE TABLE pow_operands (base numeric, exponent numeric)
+
+statement ok
+INSERT INTO pow_operands VALUES (-2, 1.5)
+
+query RR
+SELECT pow(base, exponent + 0.5), pow(base, exponent * 2) FROM pow_operands
+----
+4  -8
+
+# A genuinely fractional exponent still errors.
+query error function pow cannot return complex numbers
+SELECT pow(base, exponent) FROM pow_operands
+
+statement ok
+DROP TABLE pow_operands
+
 # Square root
 query RRR
 SELECT sqrt(2::numeric), sqrt(3::numeric), sqrt(0::numeric)
