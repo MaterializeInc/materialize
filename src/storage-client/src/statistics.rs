@@ -18,7 +18,7 @@
 
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mz_controller_types::ReplicaId;
 use serde::{Deserialize, Serialize};
@@ -291,9 +291,43 @@ impl ResettingTotal {
     }
 }
 
+/// Throttles the `error!` log for gauge regressions.
+///
+/// A regressed gauge keeps regressing on every statistics update, every few
+/// seconds, until the source restarts. Only the first regression in each
+/// interval is logged at `error!`, which reaches Sentry, the rest at `warn!`.
+#[derive(Clone, Debug, Default)]
+struct RegressionLog {
+    last_error: Option<Instant>,
+}
+
+impl RegressionLog {
+    const ERROR_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+    fn log(&mut self, message: std::fmt::Arguments<'_>) {
+        let now = Instant::now();
+        match self.last_error {
+            Some(last) if now.duration_since(last) < Self::ERROR_INTERVAL => {
+                tracing::warn!("{message}")
+            }
+            _ => {
+                self.last_error = Some(now);
+                tracing::error!("{message}")
+            }
+        }
+    }
+}
+
+// The throttle state is bookkeeping, not part of the gauge's value.
+impl PartialEq for RegressionLog {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 /// A boolean gauge that is never reset.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct Boolean(bool);
+pub struct Boolean(bool, #[serde(skip)] RegressionLog);
 
 impl StorageMetric for Boolean {
     fn summarize<'a, I>(values: I) -> Self
@@ -302,7 +336,10 @@ impl StorageMetric for Boolean {
         Self: Sized + 'a,
     {
         // All workers must be true for this gauge to be true.
-        Self(values.into_iter().fold(true, |base, new| base & new.0))
+        Self(
+            values.into_iter().fold(true, |base, new| base & new.0),
+            RegressionLog::default(),
+        )
     }
 
     fn incorporate(&mut self, other: Self, field_name: &'static str) {
@@ -311,9 +348,9 @@ impl StorageMetric for Boolean {
         // Clippy's suggestion here is not good!
         #[allow(clippy::bool_comparison)]
         if other.0 < self.0 {
-            tracing::error!(
+            self.1.log(format_args!(
                 "boolean gauge for field {field_name} erroneously regressed from true to false",
-            );
+            ));
             return;
         }
         self.0 = other.0;
@@ -322,7 +359,7 @@ impl StorageMetric for Boolean {
 
 impl From<bool> for Boolean {
     fn from(f: bool) -> Self {
-        Boolean(f)
+        Boolean(f, RegressionLog::default())
     }
 }
 
@@ -336,6 +373,8 @@ pub struct Total {
     #[serde(skip)]
     regressions:
         Option<mz_ore::metrics::DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>>>,
+    #[serde(skip)]
+    regression_log: RegressionLog,
 }
 
 impl From<Option<u64>> for Total {
@@ -343,6 +382,7 @@ impl From<Option<u64>> for Total {
         Total {
             total: f,
             regressions: None,
+            regression_log: RegressionLog::default(),
         }
     }
 }
@@ -352,6 +392,7 @@ impl Clone for Total {
         Self {
             total: self.total,
             regressions: None,
+            regression_log: self.regression_log.clone(),
         }
     }
 }
@@ -392,6 +433,7 @@ impl StorageMetric for Total {
         Self {
             total: (!any_none).then_some(inner),
             regressions: None,
+            regression_log: RegressionLog::default(),
         }
     }
 
@@ -404,11 +446,10 @@ impl StorageMetric for Total {
                     if let Some(metric) = &self.regressions {
                         metric.inc()
                     } else {
-                        tracing::error!(
+                        self.regression_log.log(format_args!(
                             "total gauge {field_name} erroneously regressed from {} to {}",
-                            this,
-                            other
-                        );
+                            this, other
+                        ));
                     }
                     return;
                 }
@@ -1181,5 +1222,23 @@ impl WebhookStatistics {
             offset_known: Gauge::gauge(None::<u64>),
             offset_committed: Gauge::gauge(None::<u64>),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn regression_log_errors_once_per_interval() {
+        let mut log = RegressionLog::default();
+        log.log(format_args!("first"));
+        let first = log.last_error.expect("first regression logs an error");
+        log.log(format_args!("second"));
+        assert_eq!(
+            log.last_error,
+            Some(first),
+            "second regression within the interval only warns"
+        );
     }
 }
