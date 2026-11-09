@@ -7338,7 +7338,7 @@ dependencies = [
  "tracing-capture",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "tungstenite 0.30.0",
+ "tungstenite",
  "url",
  "uuid",
 ]
@@ -13743,7 +13743,7 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tungstenite 0.29.0",
+ "tungstenite",
 ]
 
 [[package]]
@@ -14249,22 +14249,6 @@ dependencies = [
  "log",
  "rand 0.9.4",
  "sha1 0.10.7",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "tungstenite"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e48ac77174b19c110a50ab2128b24215ac9cb40e0e12e093fb602d175c569d22"
-dependencies = [
- "bytes",
- "data-encoding",
- "http 1.5.0",
- "httparse",
- "log",
- "rand 0.10.3",
- "sha1 0.11.0",
  "thiserror 2.0.21",
 ]
 

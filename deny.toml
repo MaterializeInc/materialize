@@ -89,8 +89,6 @@ skip = [
     { name = "itertools", version = "0.14.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
-    # tokio-tungstenite still pulls 0.29.
-    { name = "tungstenite", version = "0.29.0" },
     # duckdb pins comfy-table to 7.1 for its MSRV, which still pulls 0.28.
     { name = "crossterm", version = "0.28.1" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
