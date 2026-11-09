@@ -174,14 +174,16 @@ frontiers you have confirmed:
 
 ```sql
 CREATE TABLE trusted_frontier (
-  sink_id STRING PRIMARY KEY,
+  sink_id STRING NOT NULL,
   frontier NUMBER NOT NULL,
-  updated_at TIMESTAMP_LTZ NOT NULL
+  confirmed_at TIMESTAMP_LTZ NOT NULL
 );
 ```
 
-Then run a small routine outside Snowflake, on a schedule, that advances each
-sink's row. For each sink, the routine should:
+Then run a small routine outside Snowflake, on a schedule, that appends a row
+each time it confirms a new frontier for a sink. Views read the highest
+frontier for each sink, the same way they would read `raw_progress`. For each
+sink, the routine should:
 
 - Read the candidate frontier for the sink from `raw_progress`.
 - After that progress record is visible, read each data partition's high
@@ -201,19 +203,26 @@ frontier:
 
 ```sql
 CREATE VIEW committed_orders AS
+WITH latest_trusted AS (
+  -- The latest trusted frontier for each sink.
+  SELECT sink_id, MAX(frontier) AS frontier
+  FROM trusted_frontier
+  GROUP BY 1
+)
 SELECT
   o.RECORD_METADATA:headers:"materialize-timestamp"::number AS mz_timestamp,
   o.RECORD_CONTENT AS order_record
 FROM raw_orders AS o
 -- Match each data message to the trusted frontier for its sink.
-JOIN trusted_frontier AS f
+JOIN latest_trusted AS f
   ON f.sink_id = o.RECORD_METADATA:headers:"materialize-sink-id"::string
 -- Keep only the changes below the frontier.
 WHERE o.RECORD_METADATA:headers:"materialize-timestamp"::number < f.frontier;
 ```
 
-The join uses the `materialize-sink-id` header, so each message is compared to
-its own sink's frontier. Messages at or above the frontier appear in the view
+`latest_trusted` takes the highest trusted frontier for each sink. The join
+uses the `materialize-sink-id` header, so each message is compared to its own
+sink's frontier. Messages at or above the frontier appear in the view
 once the routine confirms they have loaded.
 
 ## Step 5. Join changes from multiple sinks
@@ -231,7 +240,12 @@ ways to do this:
 
   ```sql
   CREATE VIEW shared_frontier AS
-  SELECT MIN(frontier) AS frontier FROM trusted_frontier;
+  SELECT MIN(frontier) AS frontier
+  FROM (
+    SELECT sink_id, MAX(frontier) AS frontier
+    FROM trusted_frontier
+    GROUP BY 1
+  );
   ```
 
 - **One frontier per join.** For each join, gate on the lowest trusted
