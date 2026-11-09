@@ -48,24 +48,25 @@ through the cluster so it can retract it. The work therefore scales with the
 number of rows matched, not just the size of the table or the complexity of the
 `WHERE` clause.
 
-A `DELETE` is bound by [`statement_timeout`](../set) (default 60 seconds): a
-statement that cannot finish within that window is cancelled, and a very large
-read-back can also disconnect the cluster replica before it completes. There is
-no fixed row or byte limit; how many rows you can delete in a single statement
-depends on how wide those rows are and the size of the cluster. A
-`DELETE ... RETURNING` is additionally subject to the `max_result_size`
-configuration parameter (default 1 GiB) on the rows it returns.
+A `DELETE` has two limits:
+
+- **Size.** The rows a `DELETE` matches can total at most `max_result_size`
+  (default 1 GiB). A larger `DELETE` fails with `total result exceeds max size`
+  and removes no rows.
+- **Time.** [`statement_timeout`](../set) (default 60 seconds) covers the
+  statement until its commit, including time spent waiting behind other
+  `DELETE`, `UPDATE`, and `INSERT ... SELECT` statements. If the timeout fires
+  during the commit, the `DELETE` can still succeed.
 
 To tell whether a `DELETE` is at risk before running it, time the matching
 `SELECT`: a `DELETE` does roughly the same work as selecting the rows it matches.
 If `SELECT * FROM <table> WHERE <condition>` does not return comfortably within
 `statement_timeout`, a `DELETE` with the same `WHERE` clause will not complete
-either. A `DELETE` that exceeds the timeout is cancelled and removes no rows (the
+either. A `DELETE` that fails with a statement timeout removes no rows (the
 statement is atomic), so it is safe to retry as smaller batches.
 
 To delete more than fits in one statement, split it into smaller statements that
-each match fewer rows. Use a predicate on an [indexed](../create-index) column so
-each batch is cheap to locate, for example by key range:
+each match fewer rows, for example by key range:
 
 ```mzsql
 -- Instead of one large delete:
