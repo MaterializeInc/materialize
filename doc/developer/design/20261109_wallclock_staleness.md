@@ -49,14 +49,21 @@ For an object in an epoch-based timeline without refresh schedules on its path, 
 This holds for sources, tables, webhooks and joins alike, because a join's frontier is the minimum of its inputs' frontiers.
 
 A REFRESH view's frontier sits at its next refresh while its contents date from the last one, so F - 1 overstates what it reflects.
-The existing `TimeDependence` of a collection describes the refresh schedules on its path, and `apply(t)` is the frontier the object reaches for wall-clock time t.
-The reflected time inverts it, r(F) = max { t : apply(t) < F }.
+The existing `TimeDependence` of a collection describes the refresh schedules on its path, and the reflected time inverts it structurally: r(F) = r_D(F - 1), where a node first rounds its bound b down to its schedule's last refresh at or before b, and then takes the minimum of its children's reflected times at that bound, or the bound itself if it has no children.
+Inverting `apply` instead, as max { t : apply(t) < F }, overstates for nodes with several children, because `apply` takes the minimum of its children's frontiers.
 The type stays unchanged, and no tick intervals are added to it.
 If REFRESH EVERY is deprecated, this inversion reduces to F - 1.
 
+`TimeDependence::merge` collapses any input that follows wall clock into a plain wall-clock dependence, so a join of a REFRESH view with a source inverts as wall clock and reads fresher than the view's contents are.
+This understatement is accepted while REFRESH EVERY exists, since dataflow expiration depends on the merge as it is.
+
+Load generators have no time dependence, so neither they nor objects that only depend on them would be recorded.
+Recording therefore uses a freshness dependence per collection, computed like `TimeDependence` except that load generators count as wall clock.
+Dataflow expiration keeps using `TimeDependence`, so it does not change.
+
 Staleness at wall-clock time w is s(w) = w - r(F(w)), clamped at 0, where F(w) is the frontier the controller has observed by w.
 Between two observed frontier advances, r is constant and s rises with slope 1.
-Objects without a time dependence, such as constants and objects in non-epoch timelines, keep today's reported value and get no histogram rows.
+Objects without a freshness dependence, such as constants and objects in non-epoch timelines, keep today's reported value and get no histogram rows.
 
 ### Samples and their worst case
 
