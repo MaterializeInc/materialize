@@ -10,10 +10,14 @@
 //! Wall-clock staleness histograms of collections, bucketed exponentially.
 
 mod histogram;
+mod recorder;
 mod reflected;
+mod reporter;
 
 pub use histogram::BucketScheme;
+pub use recorder::{PeriodRow, RecorderConfig, StalenessRecorder};
 pub use reflected::reflected_time;
+pub use reporter::StalenessReporter;
 
 #[cfg(test)]
 mod tests;
