@@ -42,6 +42,7 @@ from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import IO, Any, TextIO, TypeVar, cast
+from unittest import SkipTest
 
 import psycopg
 import sqlparse
@@ -69,7 +70,7 @@ from materialize.ui import (
     CommandFailureCausedUIError,
     UIError,
 )
-from materialize.util import filter_cmd
+from materialize.util import filter_cmd, redact_secrets
 
 
 def _split_complete_lines(buffered: str) -> tuple[str, str]:
@@ -711,9 +712,9 @@ class Composition:
 
         This context manager provides a very lightweight testing framework. If
         the body of the context manager raises an exception, the test case is
-        considered to have failed; otherwise it is considered to have succeeded.
-        In either case the execution time and status of the test are recorded in
-        `test_results`.
+        considered to have failed, except that `unittest.SkipTest` records a
+        skipped case with its reason. A normal return records success. Every
+        outcome and its execution time are recorded in `test_results`.
 
         Example:
             A simple workflow that executes a table-driven test:
@@ -743,11 +744,18 @@ class Composition:
             raise UIError(f"test case {name} executed twice")
         ui.header(f"Running test case {name}")
         errors = []
+        skipped_reason = None
         start_time = time.time()
         try:
             yield
             end_time = time.time()
             ui.header(f"mzcompose: test case {name} succeeded")
+        except SkipTest as e:
+            end_time = time.time()
+            skipped_reason = str(e) or "Skipped"
+            ui.header(
+                redact_secrets(f"mzcompose: test case {name} skipped: {skipped_reason}")
+            )
         except Exception as e:
             end_time = time.time()
             error_message = f"{e.__class__.__module__}.{e.__class__.__name__}: {e}"
@@ -758,7 +766,7 @@ class Composition:
                 traceback.print_exc()
 
         duration = end_time - start_time
-        self.test_results[name] = TestResult(duration, errors)
+        self.test_results[name] = TestResult(duration, errors, skipped_reason)
 
     def extract_test_errors(
         self, e: Exception, error_message: str

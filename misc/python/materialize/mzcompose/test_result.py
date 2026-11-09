@@ -26,9 +26,10 @@ class TestResult:
 
     duration: float
     errors: list[TestFailureDetails]
+    skipped_reason: str | None = None
 
     def is_successful(self) -> bool:
-        return len(self.errors) == 0
+        return not self.errors and self.skipped_reason is None
 
 
 @dataclass

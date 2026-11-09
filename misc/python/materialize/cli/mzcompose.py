@@ -41,7 +41,7 @@ import shtab
 from humanize import naturalsize
 from semver.version import Version
 
-from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
+from materialize import MZ_ROOT, buildkite, ci_util, mzbuild, spawn, ui
 from materialize.mzcompose.composition import (
     Composition,
     UnknownCompositionError,
@@ -869,14 +869,39 @@ To see the available workflows, run:
                     workflow_name, *args.unknown_subargs[1:], *extra_args
                 )
 
+            skipped = any(
+                result.skipped_reason is not None and not result.errors
+                for result in composition.test_results.values()
+            )
+            can_report = (
+                workflow_name != "ci-cleanup" and args.find != "get-cloud-hostname"
+            )
             if self.shall_generate_junit_report(args.find, workflow_name, composition):
                 junit_suite = self.generate_junit_suite(composition)
                 self.write_junit_report_to_file(junit_suite)
+            elif can_report and skipped:
+                # Detailed SQL reports contain no result for a case we never ran.
+                # Supplement them with skips only, without duplicating failures or
+                # overwriting the main workflow's report during cleanup.
+                junit_suite = self.generate_junit_suite(composition, skipped_only=True)
+                self.write_junit_report_to_file(
+                    junit_suite, suite_name="mzcompose-skipped"
+                )
 
-            if any(
-                not result.is_successful()
-                for result in composition.test_results.values()
-            ):
+            if can_report and skipped and buildkite.is_in_buildkite():
+                content = "\n".join(
+                    f"- {name}: {result.skipped_reason}"
+                    for name, result in composition.test_results.items()
+                    if result.skipped_reason is not None and not result.errors
+                )
+                buildkite.add_annotation(
+                    "info",
+                    "Skipped mzcompose test cases",
+                    redact_secrets(content),
+                    context="mzcompose-skipped-tests",
+                )
+
+            if any(result.errors for result in composition.test_results.values()):
                 raise UIError("at least one test case failed")
 
     def shall_generate_junit_report(
@@ -908,7 +933,9 @@ To see the available workflows, run:
             "get-cloud-hostname",
         }
 
-    def generate_junit_suite(self, composition: Composition) -> junit_xml.TestSuite:
+    def generate_junit_suite(
+        self, composition: Composition, *, skipped_only: bool = False
+    ) -> junit_xml.TestSuite:
         buildkite_step_name = os.getenv("BUILDKITE_LABEL")
         test_suite_name = buildkite_step_name or composition.name
         test_class_name = test_suite_name
@@ -917,6 +944,8 @@ To see the available workflows, run:
         junit_suite = junit_xml.TestSuite(test_suite_name)
 
         for test_case_key, result in composition.test_results.items():
+            if skipped_only and (result.skipped_reason is None or result.errors):
+                continue
             self.append_to_junit_suite(
                 junit_suite, test_class_name, test_case_key, result
             )
@@ -930,13 +959,15 @@ To see the available workflows, run:
         test_case_key: str,
         result: TestResult,
     ):
-        if result.is_successful():
+        if not result.errors:
             test_case_name = test_case_key
             test_case = junit_xml.TestCase(
                 test_case_name,
                 test_class_name,
                 result.duration,
             )
+            if result.skipped_reason is not None:
+                test_case.add_skipped_info(message=result.skipped_reason)
             junit_suite.test_cases.append(test_case)
         else:
             for error in result.errors:
@@ -964,13 +995,15 @@ To see the available workflows, run:
                 )
                 junit_suite.test_cases.append(test_case)
 
-    def write_junit_report_to_file(self, junit_suite: junit_xml.TestSuite) -> Path:
+    def write_junit_report_to_file(
+        self, junit_suite: junit_xml.TestSuite, *, suite_name: str = "mzcompose"
+    ) -> Path:
         for test_case in junit_suite.test_cases:
             for obj in test_case.errors + test_case.failures + test_case.skipped:
                 for typ in ("message", "output"):
                     if obj[typ]:
                         obj[typ] = redact_secrets(obj[typ])
-        junit_report = ci_util.junit_report_filename("mzcompose")
+        junit_report = ci_util.junit_report_filename(suite_name)
         with junit_report.open("w") as f:
             junit_xml.to_xml_report_file(f, [junit_suite])
 

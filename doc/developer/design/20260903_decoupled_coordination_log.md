@@ -11,9 +11,12 @@ Performance changes remain separate from this cleanup.
 
 Convert the remaining upgrade and multi-generation harness assumptions, then
 remove the remaining combined bootstrap and controller execution alternatives.
-Start with explicit unsupported-case reporting before any released-to-native
-workflow starts or resets services. Keep compatible-native coexistence,
-promotion and explicit retirement as separate runtime coverage.
+Apply explicit unsupported-case reporting to the remaining platform scenarios
+before released-to-native workflows start or reset services. The legacy-upgrade
+composition now reports historical cases as skipped and retains current-source
+creation/check scripts. Its native shared-relay topology and promotion/retirement
+behavior still need conversion and real runtime verification. Keep compatible-native
+coexistence, promotion and explicit retirement as separate runtime coverage.
 
 The current all-in-one entrypoint now starts controllerd. The actual environmentd
 binary rejects before startup, and the CLI no longer hosts an inline relay.
@@ -39,6 +42,11 @@ Do not implement conversion or reset workarounds. Keep old-only coverage and
 compatible-native coexistence/promotion/retirement coverage distinct. Classify
 unsupported cases before starting or resetting services. Exact workflow and
 reporting boundaries are in `~/.local/share/aj/m3-evidence/native-only/upgrade-boundary-classification.md`.
+Skip results now reach normal or supplementary JUnit reports and a collected,
+redacted Buildkite annotation. Real failures still fail the workflow. Targeted
+reporting and adjacent launcher/CI tests passed, with independent review. Evidence:
+`unsupported-reporting-review.md` and `unsupported-reporting-combined.log` in that
+directory. These mocked workflow tests are not native-upgrade runtime evidence.
 
 The legacy frontier slice is committed and independently reviewed. Targeted Rust
 and catalog SQL checks passed. A fresh debug deployment preserved SQL progress
