@@ -122,6 +122,7 @@ FROM ci-builder-min AS ci-builder-full
 
 ARG ARCH_GCC
 ARG ARCH_GO
+ARG C_BRANCH_PROTECTION
 
 WORKDIR /workdir
 
@@ -400,6 +401,14 @@ RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
 # trustworthy on the first connection.
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
+# Hardening for the C and C++ libraries that cargo builds from source
+# (librdkafka, jemalloc, RocksDB, OpenSSL, zstd, ...). The cc and cmake
+# crates and the configure-based build scripts all honor these variables,
+# and a build that sets CFLAGS itself, such as a sanitizer build, replaces
+# them. Rust code is unaffected. _FORTIFY_SOURCE is inert below -O1, so
+# it only takes effect in the optimized profiles.
+ENV CFLAGS="-fstack-protector-strong -D_FORTIFY_SOURCE=2 $C_BRANCH_PROTECTION"
+ENV CXXFLAGS="-fstack-protector-strong -D_FORTIFY_SOURCE=2 $C_BRANCH_PROTECTION"
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
 ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zstd -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,--icf=all -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
 ENV PATH=/opt/google-cloud-sdk/bin:$PATH
