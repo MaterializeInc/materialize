@@ -4535,7 +4535,7 @@
       "name": "wallclock_freshness_buckets_per_octave",
       "typeName": "unsigned integer",
       "default": "4",
-      "description": "The number of histogram buckets per power of two of staleness. Must be a power of two.",
+      "description": "The number of histogram buckets per power of two of staleness. Must be a power of two of at most 256, other values count as the default.",
       "scope": "environment",
       "userVisible": false,
       "dyncfg": true
@@ -4553,7 +4553,7 @@
       "name": "wallclock_freshness_period_interval",
       "typeName": "duration",
       "default": "1 min",
-      "description": "The period interval of histograms in wallclock freshness introspection.",
+      "description": "The period interval of histograms in wallclock freshness introspection. Intervals below 1 s count as 1 s.",
       "scope": "environment",
       "userVisible": false,
       "dyncfg": true

@@ -10,6 +10,7 @@
 //! Wall-clock staleness state of a frontier, shared by the compute and storage controllers.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -28,21 +29,54 @@ use mz_storage_types::freshness::{
 use mz_storage_types::time_dependence::TimeDependence;
 use timely::progress::Antichain;
 
+/// The shortest period interval. Every recorded collection writes rows for every period, so
+/// shorter configured intervals count as this one.
+pub const MIN_PERIOD_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The last rejected buckets per octave, `u64::MAX` if none.
+static REJECTED_BUCKETS_PER_OCTAVE: AtomicU64 = AtomicU64::new(u64::MAX);
+/// The last rejected period interval in milliseconds, `u64::MAX` if none.
+static REJECTED_PERIOD_MS: AtomicU64 = AtomicU64::new(u64::MAX);
+
 /// The recorder configuration, `None` if recording is disabled.
+///
+/// A buckets per octave that is not a valid [`BucketScheme`] counts as the default, and a
+/// period interval below [`MIN_PERIOD_INTERVAL`] counts as that minimum.
 pub fn recorder_config(dyncfg: &ConfigSet) -> Option<RecorderConfig> {
     if !ENABLE_WALLCLOCK_FRESHNESS_RECORDING.get(dyncfg) {
         return None;
     }
     let per_octave = WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE.get(dyncfg);
     let scheme = BucketScheme::new(per_octave).unwrap_or_else(|| {
-        soft_panic_or_log!("invalid wallclock freshness buckets per octave: {per_octave}");
         let default = *WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE.default();
+        if is_new_rejection(&REJECTED_BUCKETS_PER_OCTAVE, u64::from(per_octave)) {
+            tracing::warn!(
+                "invalid wallclock freshness buckets per octave {per_octave}, using {default}"
+            );
+        }
         BucketScheme::new(default).expect("valid default")
     });
-    Some(RecorderConfig {
-        scheme,
-        period: WALLCLOCK_FRESHNESS_PERIOD_INTERVAL.get(dyncfg),
-    })
+    let mut period = WALLCLOCK_FRESHNESS_PERIOD_INTERVAL.get(dyncfg);
+    if period < MIN_PERIOD_INTERVAL {
+        let period_ms = u64::try_from(period.as_millis()).expect("below the minimum");
+        if is_new_rejection(&REJECTED_PERIOD_MS, period_ms) {
+            tracing::warn!(
+                "wallclock freshness period interval {period:?} below the minimum, using \
+                {MIN_PERIOD_INTERVAL:?}"
+            );
+        }
+        period = MIN_PERIOD_INTERVAL;
+    }
+    Some(RecorderConfig { scheme, period })
+}
+
+/// Records `value` as the last one rejected in `last`, and returns whether it differs from the
+/// previous one.
+///
+/// Both controllers read the configuration on every frontier response, so logging every
+/// rejection rather than only new ones would flood the log.
+fn is_new_rejection(last: &AtomicU64, value: u64) -> bool {
+    last.swap(value, Ordering::Relaxed) != value
 }
 
 /// Packs `rows` of a collection's global histogram, or of a replica's if `replica_id` is set.
