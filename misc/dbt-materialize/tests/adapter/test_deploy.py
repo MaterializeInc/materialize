@@ -1136,7 +1136,14 @@ class TestTargetDeploy:
 
         project.run_sql("CREATE VIEW prod_dbt_deploy.view AS SELECT 1")
 
-        run_dbt(["run-operation", "deploy_init"], expect_pass=False)
+        _, output = run_dbt_and_capture(
+            ["run-operation", "deploy_init"], expect_pass=False
+        )
+        assert "Deployment schema prod_dbt_deploy already exists" in output
+        assert (
+            "dbt run-operation deploy_init --args '{ignore_existing_objects: True}'"
+            in output
+        )
         run_dbt(
             [
                 "run-operation",
@@ -1753,8 +1760,15 @@ class TestDeployPromoteRetry:
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
 
         _, log_output = run_dbt_and_capture(["run-operation", "deploy_promote"])
+        assert "Promoting deployment for target" in log_output, log_output
         assert "Swapping schemas prod and prod_dbt_deploy" in log_output, log_output
         assert "Swapping clusters prod and prod_dbt_deploy" in log_output, log_output
+        # The docs point users at this line to tell whether the swap committed.
+        assert (
+            log_output.index("Swapping clusters")
+            < log_output.index("Swap committed")
+            < log_output.index("Tagging schema")
+        ), log_output
         # No retries should have happened on the happy path.
         assert "Retrying atomic swap" not in log_output, log_output
 

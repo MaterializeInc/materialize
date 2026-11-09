@@ -7,6 +7,19 @@
   ownership hints now quote the cluster or schema name, and the CREATECLUSTER
   hint quotes the role.
 
+* Fix `refresh_interval` configs that set both `at` and `at_creation`. The
+  two options were rendered without a comma between them, so creating the
+  materialized view failed with `Expected right parenthesis, found REFRESH`.
+
+* Fail fast with a clear error when the profile points at PostgreSQL. The
+  server rejected the adapter's session parameters at startup, so dbt retried
+  the connection and then reported only `unrecognized configuration parameter
+  "auto_route_catalog_queries"`.
+
+* Fix the hint `deploy_init` prints when a deployment schema is not empty.
+  It named a `create_deployment_environment` operation that does not exist
+  instead of `deploy_init`.
+
 ## 1.9.12 - 2026-11-03
 
 * Fix the deployment timestamp in the schema comment `deploy_promote` leaves
