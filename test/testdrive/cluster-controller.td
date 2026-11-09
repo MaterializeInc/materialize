@@ -1982,6 +1982,53 @@ scale=2,workers=2 true
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 
+# ----- ON IDLE scheduling -----
+#
+# An ON IDLE cluster runs one replica while it has ad-hoc work, and none once
+# the idle timeout passes after the last of it. A query against the suspended
+# cluster resumes it and waits for the replica instead of failing.
+
+> CREATE CLUSTER cc_idle (SIZE 'scale=1,workers=1', SCHEDULE = ON IDLE (IDLE TIMEOUT = '3s'))
+> CREATE TABLE cc_idle_t (a int)
+> INSERT INTO cc_idle_t VALUES (1)
+
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_idle'
+0
+
+> SET cluster = cc_idle
+
+> SELECT a FROM cc_idle_t
+1
+
+> RESET cluster
+
+# The resume is audited as a schedule decision. The replica itself may already
+# be gone again, so the audit log is the durable witness.
+> SELECT count(*) FROM mz_catalog.mz_audit_events WHERE event_type = 'create' AND object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_idle' AND details->>'reason' = 'schedule'
+1
+
+# Once the idle timeout passes, the cluster suspends.
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_idle'
+0
+
+# Sources would stall while the cluster is suspended, so they are rejected.
+! CREATE SOURCE cc_idle_counter IN CLUSTER cc_idle FROM LOAD GENERATOR COUNTER
+contains:SCHEDULE = ON IDLE does not allow ingest workloads
+
+# Maintained work is allowed. It does not keep the cluster on.
+> CREATE INDEX cc_idle_t_idx IN CLUSTER cc_idle ON cc_idle_t (a)
+> DROP INDEX cc_idle_t_idx
+
+# A cluster running a source cannot become ON IDLE.
+> CREATE CLUSTER cc_idle_ingest (SIZE 'scale=1,workers=1')
+> CREATE SOURCE cc_idle_counter IN CLUSTER cc_idle_ingest FROM LOAD GENERATOR COUNTER
+! ALTER CLUSTER cc_idle_ingest SET (SCHEDULE = ON IDLE)
+contains:cannot set SCHEDULE = ON IDLE on cluster "cc_idle_ingest" because it runs ingest workloads
+
+> DROP CLUSTER cc_idle_ingest CASCADE
+> DROP CLUSTER cc_idle CASCADE
+> DROP TABLE cc_idle_t
+
 # Restore pristine server state (including the tick-interval override).
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM RESET cluster_controller_tick_interval

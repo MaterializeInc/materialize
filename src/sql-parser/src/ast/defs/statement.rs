@@ -4848,6 +4848,9 @@ pub enum ClusterScheduleOptionValue {
     Refresh {
         hydration_time_estimate: Option<IntervalValue>,
     },
+    Idle {
+        idle_timeout: Option<IntervalValue>,
+    },
 }
 
 impl Default for ClusterScheduleOptionValue {
@@ -4870,6 +4873,14 @@ impl AstDisplay for ClusterScheduleOptionValue {
                 if let Some(hydration_time_estimate) = hydration_time_estimate {
                     f.write_str(" (HYDRATION TIME ESTIMATE = '");
                     f.write_node(hydration_time_estimate);
+                    f.write_str(")");
+                }
+            }
+            ClusterScheduleOptionValue::Idle { idle_timeout } => {
+                f.write_str("ON IDLE");
+                if let Some(idle_timeout) = idle_timeout {
+                    f.write_str(" (IDLE TIMEOUT = '");
+                    f.write_node(idle_timeout);
                     f.write_str(")");
                 }
             }

@@ -603,6 +603,7 @@ pub struct StartupResponse {
     /// Whether the coordinator is in read-only mode (e.g. during 0dt upgrades).
     /// The frontend path must reject mutations when this is true.
     pub read_only: bool,
+    pub cluster_activity: Arc<crate::cluster_activity::ClusterActivity>,
 }
 
 #[derive(Derivative)]

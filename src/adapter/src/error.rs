@@ -18,6 +18,7 @@ use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
 
 use mz_compute_types::ComputeInstanceId;
+use mz_controller::clusters::WorkloadClass;
 use mz_controller_types::ClusterId;
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
@@ -45,6 +46,16 @@ use tokio_postgres::error::SqlState;
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
 use crate::peek_client::CollectionLookupError;
+
+/// What restricts the workload classes a cluster runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkloadRestriction {
+    /// The replica sizes, through `allowed_workloads`.
+    ReplicaSizes,
+    /// `SCHEDULE = ON IDLE`, which suspends the cluster while it has no ad-hoc
+    /// work and so cannot run ingestion.
+    IdleSchedule,
+}
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -222,6 +233,27 @@ pub enum AdapterError {
     SubscribeOnlyTransaction,
     /// An error occurred in the optimizer.
     Optimizer(OptimizerError),
+    /// A replica size of the cluster does not allow the workload class.
+    /// `action` completes the sentence "cluster ... cannot", e.g. "run SELECT".
+    WorkloadNotAllowed {
+        cluster: String,
+        action: String,
+        class: WorkloadClass,
+        restriction: WorkloadRestriction,
+    },
+    /// The cluster runs an object of a workload class that the schedule being
+    /// set does not allow.
+    WorkloadScheduleConflict {
+        cluster: String,
+        class: WorkloadClass,
+    },
+    /// The replica size does not allow the workload class of an object bound
+    /// to the cluster.
+    WorkloadSizeConflict {
+        cluster: String,
+        size: String,
+        class: WorkloadClass,
+    },
     /// A query depends on items which are not allowed to be referenced from the current cluster.
     UnallowedOnCluster {
         depends_on: SmallVec<[String; 2]>,
@@ -904,6 +936,26 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
+            AdapterError::WorkloadNotAllowed {
+                restriction: WorkloadRestriction::ReplicaSizes,
+                ..
+            } => Some(
+                "Use a cluster whose replica sizes allow this workload. \
+                mz_cluster_replica_sizes.allowed_workloads lists the workloads each size allows."
+                    .into(),
+            ),
+            AdapterError::WorkloadNotAllowed {
+                restriction: WorkloadRestriction::IdleSchedule,
+                ..
+            } => Some("Use a cluster that is not scheduled ON IDLE.".into()),
+            AdapterError::WorkloadScheduleConflict { .. } => Some(
+                "Move the objects to another cluster or drop them first.".into(),
+            ),
+            AdapterError::WorkloadSizeConflict { .. } => Some(
+                "Choose a size that allows the workloads of the objects on the cluster, \
+                or drop those objects first."
+                    .into(),
+            ),
             AdapterError::UnallowedOnCluster { cluster, .. } => {
                 (cluster != MZ_CATALOG_SERVER_CLUSTER.name).then(||
                     "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
@@ -1096,6 +1148,11 @@ impl AdapterError {
                 OptimizerError::InternalUnsafeMfpPlan(_) => SqlState::INTERNAL_ERROR,
             },
             AdapterError::UnallowedOnCluster { .. } => {
+                SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
+            }
+            AdapterError::WorkloadNotAllowed { .. }
+            | AdapterError::WorkloadSizeConflict { .. }
+            | AdapterError::WorkloadScheduleConflict { .. } => {
                 SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
             }
             AdapterError::Unauthorized(_) => SqlState::INSUFFICIENT_PRIVILEGE,
@@ -1500,6 +1557,38 @@ impl fmt::Display for AdapterError {
                 f.write_str("SUBSCRIBE in transactions must be the only read statement")
             }
             AdapterError::Optimizer(e) => e.fmt(f),
+            AdapterError::WorkloadNotAllowed {
+                cluster,
+                action,
+                class,
+                restriction,
+            } => {
+                let restricted_by = match restriction {
+                    WorkloadRestriction::ReplicaSizes => "its replica sizes do not",
+                    WorkloadRestriction::IdleSchedule => "SCHEDULE = ON IDLE does not",
+                };
+                write!(
+                    f,
+                    "cluster {} cannot {action} because {restricted_by} allow {class} workloads",
+                    cluster.quoted()
+                )
+            }
+            AdapterError::WorkloadScheduleConflict { cluster, class } => write!(
+                f,
+                "cannot set SCHEDULE = ON IDLE on cluster {} because it runs {class} workloads",
+                cluster.quoted()
+            ),
+            AdapterError::WorkloadSizeConflict {
+                cluster,
+                size,
+                class,
+            } => write!(
+                f,
+                "cannot use cluster size {} on cluster {} because the size does not allow \
+                {class} workloads, which objects on the cluster run",
+                size.quoted(),
+                cluster.quoted()
+            ),
             AdapterError::UnallowedOnCluster {
                 depends_on,
                 cluster,

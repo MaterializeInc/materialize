@@ -50,7 +50,8 @@ use crate::ctx::{
 };
 use crate::strategy::{
     BaselineStrategy, ConfigSignals, DesiredReplica, GracefulReconfigurationStrategy,
-    HydrationBurstStrategy, LiveSignals, OnRefreshStrategy, SignalRequest, Strategy,
+    HydrationBurstStrategy, LiveSignals, OnIdleStrategy, OnRefreshStrategy, SignalRequest,
+    Strategy,
 };
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
@@ -71,6 +72,7 @@ impl ClusterController {
                 Box::new(BaselineStrategy),
                 Box::new(GracefulReconfigurationStrategy),
                 Box::new(OnRefreshStrategy),
+                Box::new(OnIdleStrategy),
                 Box::new(HydrationBurstStrategy),
             ],
             dyncfgs,
@@ -248,8 +250,8 @@ impl ClusterController {
     /// The strategies keep every field single-writer at any given moment:
     /// most fields are owned by exactly one strategy outright, and
     /// `new_replication_factor`, which both the graceful cut-over and the
-    /// on-refresh normalization write, is time-shared (on-refresh skips its
-    /// normalization while a reconfiguration record is in progress). So by
+    /// scheduled-cluster normalization write, is time-shared (the normalization
+    /// is skipped while a reconfiguration record is in progress). So by
     /// design a conflict cannot happen and the merge is really a disjoint
     /// union. We treat a conflict as an invariant violation rather than a
     /// condition to resolve: there is no safety-meaningful winner to pick for
@@ -401,6 +403,9 @@ impl ClusterController {
             }
             if request.refresh_window {
                 refresh_window_clusters.push(state.cluster_id);
+            }
+            if request.idle_activity {
+                live.idle_activity = Some(ctx.idle_activity(state.cluster_id).await);
             }
             signals.insert(state.cluster_id, live);
         }

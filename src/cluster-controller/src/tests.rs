@@ -28,11 +28,11 @@ use mz_repr::{GlobalId, Timestamp};
 use crate::ClusterController;
 use crate::ctx::{
     ApplyOutcome, AutoScalingPolicy, AvailabilityZones, BurstAudit, ClusterControllerCtx,
-    ClusterSchedule, ClusterState, CreateReason, Decision, ObservedReplica, ReconfigurationAudit,
-    ReconfigurationStatus, RefreshWindowClusterInputs, RefreshWindowInputs,
+    ClusterSchedule, ClusterState, CreateReason, Decision, IdleActivity, ObservedReplica,
+    ReconfigurationAudit, ReconfigurationStatus, RefreshWindowClusterInputs, RefreshWindowInputs,
     RefreshWindowInputsBatch, ReplicaShape, StateWrite,
 };
-use crate::strategy::{ConfigSignals, DesiredReplica, LiveSignals, Strategy};
+use crate::strategy::{ConfigSignals, DesiredReplica, LiveSignals, OnIdleStrategy, Strategy};
 
 /// A controller over the crate's dyncfgs at their defaults: burst enabled (the
 /// break-glass default) and a zero default linger, so seam tests observe burst
@@ -174,6 +174,9 @@ struct FakeCtx {
     refresh_window: Option<RefreshWindowInputsBatch>,
     /// The cluster ids in each batched refresh-window probe.
     refresh_window_probes: Vec<Vec<ClusterId>>,
+    /// The ad-hoc activity the fake reports per cluster. An absent entry reads
+    /// as no activity and nothing in flight, tracked since time 0.
+    idle_activity: BTreeMap<ClusterId, IdleActivity>,
 }
 
 impl FakeCtx {
@@ -195,6 +198,7 @@ impl FakeCtx {
             has_hydratable_objects: BTreeMap::new(),
             refresh_window: None,
             refresh_window_probes: Vec::new(),
+            idle_activity: BTreeMap::new(),
         }
     }
 
@@ -321,6 +325,17 @@ impl ClusterControllerCtx for FakeCtx {
                 cluster_inputs,
             })
         }
+    }
+
+    async fn idle_activity(&mut self, cluster_id: ClusterId) -> IdleActivity {
+        self.idle_activity
+            .get(&cluster_id)
+            .copied()
+            .unwrap_or(IdleActivity {
+                last_activity: None,
+                tracked_since: Timestamp::from(0u64),
+                in_flight: false,
+            })
     }
 
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
@@ -4169,4 +4184,172 @@ mod hydration_burst {
             "the burst replica was created under a matching witness"
         );
     }
+}
+
+/// An `ON IDLE` cluster state with the given idle timeout and replicas, and
+/// `rf = 0`.
+fn idle_state(
+    cluster_id: ClusterId,
+    idle_timeout_ms: u64,
+    replicas: Vec<ObservedReplica>,
+) -> ClusterState {
+    ClusterState {
+        schedule: ClusterSchedule::Idle {
+            idle_timeout: Duration::from_millis(idle_timeout_ms),
+        },
+        ..state(cluster_id, "100cc", 0, replicas)
+    }
+}
+
+fn idle_signals(last_activity: Option<u64>, tracked_since: u64, in_flight: bool) -> LiveSignals {
+    LiveSignals {
+        idle_activity: Some(IdleActivity {
+            last_activity: last_activity.map(Timestamp::from),
+            tracked_since: Timestamp::from(tracked_since),
+            in_flight,
+        }),
+        ..Default::default()
+    }
+}
+
+fn idle_desired(state: &ClusterState, signals: &LiveSignals, now: u64) -> Vec<DesiredReplica> {
+    OnIdleStrategy.desired_replicas(state, signals, &config(), Timestamp::from(now))
+}
+
+#[mz_ore::test]
+fn on_idle_recent_activity_desires_one_replica() {
+    let state = idle_state(cluster(1), 100, Vec::new());
+    let desired = idle_desired(&state, &idle_signals(Some(1000), 0, false), 1099);
+    assert_eq!(
+        desired.len(),
+        1,
+        "activity inside the timeout keeps the cluster on"
+    );
+    assert_eq!(desired[0].shape.size, "100cc");
+    assert_eq!(desired[0].reason, CreateReason::OnIdle);
+}
+
+#[mz_ore::test]
+fn on_idle_timeout_elapsed_desires_nothing() {
+    let state = idle_state(cluster(1), 100, vec![observed(replica(1), "r1", "100cc")]);
+    assert!(
+        idle_desired(&state, &idle_signals(Some(1000), 0, false), 1100).is_empty(),
+        "the cluster suspends exactly at the idle deadline"
+    );
+}
+
+#[mz_ore::test]
+fn on_idle_in_flight_work_holds_cluster_on() {
+    let state = idle_state(cluster(1), 100, vec![observed(replica(1), "r1", "100cc")]);
+    let desired = idle_desired(&state, &idle_signals(Some(0), 0, true), 1_000_000);
+    assert_eq!(desired.len(), 1, "a long-running query is never cut off");
+}
+
+#[mz_ore::test]
+fn on_idle_untracked_cluster_keeps_its_state_for_one_timeout() {
+    // No activity since tracking began at 1000. A cluster that is on stays on
+    // for one timeout after that, and one that is off stays off.
+    let on = idle_state(cluster(1), 100, vec![observed(replica(1), "r1", "100cc")]);
+    let off = idle_state(cluster(1), 100, Vec::new());
+    let signals = idle_signals(None, 1000, false);
+    assert_eq!(idle_desired(&on, &signals, 1050).len(), 1);
+    assert!(idle_desired(&on, &signals, 1100).is_empty());
+    assert!(idle_desired(&off, &signals, 1050).is_empty());
+}
+
+#[mz_ore::test]
+fn on_idle_ignores_other_schedules() {
+    let manual = state(cluster(1), "100cc", 1, Vec::new());
+    let signals = idle_signals(Some(1000), 0, true);
+    assert!(idle_desired(&manual, &signals, 1000).is_empty());
+    assert!(
+        !OnIdleStrategy
+            .signal_request(&manual, &config())
+            .idle_activity
+    );
+    assert!(
+        OnIdleStrategy
+            .update_state(&manual, &signals, &config(), Timestamp::from(0u64))
+            .is_empty()
+    );
+}
+
+#[mz_ore::test]
+fn on_idle_normalizes_replication_factor() {
+    let state = ClusterState {
+        replication_factor: 1,
+        ..idle_state(cluster(1), 100, Vec::new())
+    };
+    let write = OnIdleStrategy.update_state(
+        &state,
+        &LiveSignals::default(),
+        &config(),
+        Timestamp::from(0u64),
+    );
+    assert_eq!(write.new_replication_factor, Some(0));
+}
+
+#[mz_ore::test]
+fn on_refresh_does_not_engage_idle_clusters() {
+    let state = ClusterState {
+        replication_factor: 1,
+        ..idle_state(cluster(1), 100, Vec::new())
+    };
+    let request = OnRefreshStrategy.signal_request(&state, &config());
+    assert!(
+        !request.refresh_window,
+        "an idle cluster has no refresh window"
+    );
+    assert!(
+        OnRefreshStrategy
+            .update_state(
+                &state,
+                &LiveSignals::default(),
+                &config(),
+                Timestamp::from(0u64)
+            )
+            .is_empty(),
+        "the on-idle strategy owns an idle cluster's normalization"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_idle_resumes_and_suspends_through_seam() {
+    let c = cluster(1);
+    let mut ctx = FakeCtx::new(vec![idle_state(c, 100, Vec::new())]);
+    let controller = controller();
+
+    // No activity: the suspended cluster stays suspended.
+    controller.reconcile(&mut ctx).await;
+    assert!(
+        ctx.applied.is_empty(),
+        "an idle cluster without activity stays off"
+    );
+
+    // A query arrives: the cluster resumes with one replica.
+    ctx.idle_activity.insert(
+        c,
+        IdleActivity {
+            last_activity: Some(ctx.now),
+            tracked_since: Timestamp::from(0u64),
+            in_flight: true,
+        },
+    );
+    controller.reconcile(&mut ctx).await;
+    let creates = ctx.creates();
+    assert_eq!(creates.len(), 1, "activity resumes the cluster");
+    let Decision::CreateReplica { reason, .. } = creates[0] else {
+        unreachable!()
+    };
+    assert_eq!(*reason, CreateReason::OnIdle);
+
+    // The query finishes and the timeout passes: the cluster suspends.
+    ctx.idle_activity.get_mut(&c).unwrap().in_flight = false;
+    ctx.now = ctx.now.step_forward_by(&Timestamp::from(100u64));
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(
+        ctx.drops().len(),
+        1,
+        "an idle cluster suspends after the timeout"
+    );
 }

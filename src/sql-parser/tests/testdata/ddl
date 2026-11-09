@@ -2291,6 +2291,27 @@ CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRA
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [], if_not_exists: false })
 
 parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON IDLE)
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON IDLE)
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Idle { idle_timeout: None })) }], features: [], if_not_exists: false })
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON IDLE (IDLE TIMEOUT '10 minutes'))
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON IDLE (IDLE TIMEOUT = '10 minutes'))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Idle { idle_timeout: Some(IntervalValue { value: "10 minutes", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [], if_not_exists: false })
+
+parse-statement
+ALTER CLUSTER cluster SET (SCHEDULE = ON IDLE (IDLE TIMEOUT = '1 hour'))
+----
+ALTER CLUSTER cluster SET (SCHEDULE = ON IDLE (IDLE TIMEOUT = '1 hour'))
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Idle { idle_timeout: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], with_options: [] } })
+
+parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE))
 ----
 error: Expected literal string, found right parenthesis

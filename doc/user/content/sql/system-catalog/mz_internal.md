@@ -168,8 +168,9 @@ The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each 
 | Field                               | Type         | Meaning                                                        |
 |-------------------------------------|--------------|----------------------------------------------------------------|
 | `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
-| `type`                              | [`text`]     | `on-refresh`, or `manual`. Default: `manual`                   |
+| `type`                              | [`text`]     | `on-refresh`, `on-idle`, or `manual`. Default: `manual`        |
 | `refresh_hydration_time_estimate`   | [`interval`] | The interval given in the `HYDRATION TIME ESTIMATE` option.    |
+| `idle_timeout`                      | [`interval`] | The interval given in the `IDLE TIMEOUT` option of an `on-idle` schedule. |
 
 ## `mz_cluster_reconfigurations`
 

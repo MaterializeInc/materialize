@@ -37,9 +37,9 @@ use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
     ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, CreateReason, Decision,
-    ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationStatus,
-    ReconfigurationTarget, RefreshMvInfo, RefreshWindowClusterInputs, RefreshWindowInputsBatch,
-    ReplicaShape, StateWrite,
+    ExpectedClusterState, IdleActivity, ObservedReplica, OnTimeout, ReconfigurationRecord,
+    ReconfigurationStatus, ReconfigurationTarget, RefreshMvInfo, RefreshWindowClusterInputs,
+    RefreshWindowInputsBatch, ReplicaShape, StateWrite,
 };
 use mz_cluster_controller::strategy::duration_to_ts;
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -106,6 +106,11 @@ pub enum ClusterControllerRequest {
     },
     /// One timestamp-oracle read for a completed refresh-window input batch.
     RefreshWindowReadTs { tx: oneshot::Sender<Timestamp> },
+    /// The ad-hoc activity of one `ON IDLE` cluster.
+    IdleActivity {
+        cluster_id: ClusterId,
+        tx: oneshot::Sender<IdleActivity>,
+    },
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     Apply {
         decisions: Vec<Decision>,
@@ -254,6 +259,18 @@ impl ClusterControllerCtx for CoordCtx {
         })
     }
 
+    async fn idle_activity(&mut self, cluster_id: ClusterId) -> IdleActivity {
+        self.request(|tx| ClusterControllerRequest::IdleActivity { cluster_id, tx })
+            .await
+            // A lost reply means shutdown. In-flight work keeps the cluster as
+            // it is, so the controller drops nothing.
+            .unwrap_or(IdleActivity {
+                last_activity: None,
+                tracked_since: Timestamp::MIN,
+                in_flight: true,
+            })
+    }
+
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
         self.request(|tx| ClusterControllerRequest::Apply { decisions, tx })
             .await
@@ -397,6 +414,9 @@ impl Coordinator {
                     let _ = tx.send(read_ts);
                 });
             }
+            ClusterControllerRequest::IdleActivity { cluster_id, tx } => {
+                let _ = tx.send(self.idle_activity(cluster_id));
+            }
             ClusterControllerRequest::Apply { decisions, tx } => {
                 let outcome = if active {
                     self.apply_cluster_decisions(decisions).await
@@ -410,6 +430,27 @@ impl Coordinator {
                     CLUSTER_CONTROLLER_TICK_INTERVAL.get(self.catalog().system_config().dyncfgs());
                 let _ = tx.send(interval);
             }
+        }
+    }
+
+    /// The ad-hoc activity of `cluster_id`. Pending peeks and session-owned
+    /// compute sinks (`SUBSCRIBE`, `COPY TO`) on the cluster are in flight.
+    fn idle_activity(&self, cluster_id: ClusterId) -> IdleActivity {
+        let in_flight = self
+            .pending_peeks
+            .values()
+            .any(|peek| peek.cluster_id == cluster_id)
+            || self
+                .active_compute_sinks
+                .values()
+                .any(|sink| sink.cluster_id() == cluster_id && sink.connection_id().is_some());
+        IdleActivity {
+            last_activity: self
+                .cluster_activity
+                .last_activity(cluster_id)
+                .map(Timestamp::from),
+            tracked_since: Timestamp::from(self.cluster_activity.tracked_since()),
+            in_flight,
         }
     }
 
@@ -1025,6 +1066,7 @@ fn audit_reason_for_create(reason: CreateReason) -> ReplicaCreateDropReason {
         CreateReason::GracefulReconfiguration => ReplicaCreateDropReason::GracefulReconfiguration,
         CreateReason::HydrationBurst => ReplicaCreateDropReason::HydrationBurst,
         CreateReason::OnRefresh(decision) => ReplicaCreateDropReason::OnRefresh(decision),
+        CreateReason::OnIdle => ReplicaCreateDropReason::OnIdle,
     }
 }
 

@@ -772,6 +772,7 @@ pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinMaterializedView> = LazyLock::n
                 "refresh_hydration_time_estimate",
                 SqlScalarType::Interval.nullable(true),
             )
+            .with_column("idle_timeout", SqlScalarType::Interval.nullable(true))
             .with_key(vec![0])
             .finish(),
         column_comments: BTreeMap::from_iter([
@@ -779,10 +780,14 @@ pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinMaterializedView> = LazyLock::n
                 "cluster_id",
                 "The ID of the cluster. Corresponds to `mz_clusters.id`.",
             ),
-            ("type", "`on-refresh`, or `manual`. Default: `manual`"),
+            ("type", "`on-refresh`, `on-idle`, or `manual`. Default: `manual`"),
             (
                 "refresh_hydration_time_estimate",
                 "The interval given in the `HYDRATION TIME ESTIMATE` option.",
+            ),
+            (
+                "idle_timeout",
+                "The interval given in the `IDLE TIMEOUT` option of an `on-idle` schedule.",
             ),
         ]),
         // Only managed clusters produce a schedule row. The `schedule` field on
@@ -804,6 +809,8 @@ SELECT
             THEN 'manual'
         WHEN data->'value'->'config'->'variant'->'Managed'->'schedule' ? 'Refresh'
             THEN 'on-refresh'
+        WHEN data->'value'->'config'->'variant'->'Managed'->'schedule' ? 'Idle'
+            THEN 'on-idle'
     END AS type,
     CASE
         WHEN data->'value'->'config'->'variant'->'Managed'->'schedule' ? 'Refresh' THEN
@@ -813,7 +820,16 @@ SELECT
                 || ((data->'value'->'config'->'variant'->'Managed'->'schedule'->'Refresh'->'rehydration_time_estimate'->>'nanos')::bigint / 1000)::text
                 || ' microseconds'
             )::interval
-    END AS refresh_hydration_time_estimate
+    END AS refresh_hydration_time_estimate,
+    CASE
+        WHEN data->'value'->'config'->'variant'->'Managed'->'schedule' ? 'Idle' THEN
+            (
+                (data->'value'->'config'->'variant'->'Managed'->'schedule'->'Idle'->'idle_timeout'->>'secs')
+                || ' seconds '
+                || ((data->'value'->'config'->'variant'->'Managed'->'schedule'->'Idle'->'idle_timeout'->>'nanos')::bigint / 1000)::text
+                || ' microseconds'
+            )::interval
+    END AS idle_timeout
 FROM mz_internal.mz_catalog_raw
 WHERE
     data->>'kind' = 'Cluster' AND

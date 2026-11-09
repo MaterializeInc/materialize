@@ -44,6 +44,24 @@ pub use mz_adapter_types::cluster_state::{
     ReconfigurationRecord, ReconfigurationStatus, ReconfigurationTarget, ReplicaShape,
 };
 
+/// The ad-hoc activity of one cluster: the queries, `SUBSCRIBE`s, and reads of
+/// writes that users run on it.
+///
+/// Activity lives in memory, so a restart forgets it. `tracked_since` is when
+/// tracking began, which lets the strategy keep a cluster that was on at the
+/// restart on for one more idle timeout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdleActivity {
+    /// When ad-hoc work last started on the cluster, if any did since
+    /// `tracked_since`.
+    pub last_activity: Option<Timestamp>,
+    /// When activity tracking began.
+    pub tracked_since: Timestamp,
+    /// Whether ad-hoc work is running on the cluster right now. A cluster with
+    /// a long-running query or an open `SUBSCRIBE` is never idle.
+    pub in_flight: bool,
+}
+
 /// A replica that actually exists on a cluster, as observed through the ctx.
 /// Every replica physically on the cluster appears here, whether or not the
 /// controller owns it; [`Self::owned_shape`] is the ownership test.
@@ -122,6 +140,9 @@ pub enum CreateReason {
     /// reason" structural: when another reason wins the precedence, the
     /// decision is discarded with it.
     OnRefresh(RefreshWindowDecision),
+    /// The on-idle strategy holding an `ON IDLE` cluster on while it has
+    /// recent or in-flight ad-hoc work.
+    OnIdle,
 }
 
 impl CreateReason {
@@ -142,7 +163,7 @@ impl CreateReason {
             // over on-refresh, and the baseline loses to everything: any
             // strategy's reason beats the implicit "the config calls for it".
             CreateReason::Baseline => 0,
-            CreateReason::OnRefresh(_) => 1,
+            CreateReason::OnRefresh(_) | CreateReason::OnIdle => 1,
             CreateReason::HydrationBurst => 2,
             CreateReason::GracefulReconfiguration => 3,
         }
@@ -472,6 +493,10 @@ pub trait ClusterControllerCtx: Send {
         &mut self,
         cluster_ids: &[ClusterId],
     ) -> Option<RefreshWindowInputsBatch>;
+
+    /// The ad-hoc activity of `cluster_id`, which the on-idle strategy turns
+    /// an `ON IDLE` cluster on and off by.
+    async fn idle_activity(&mut self, cluster_id: ClusterId) -> IdleActivity;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     /// Each decision carries the [`ExpectedClusterState`] it was derived from;

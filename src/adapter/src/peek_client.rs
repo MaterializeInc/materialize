@@ -40,6 +40,7 @@ use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
+use crate::cluster_activity::ClusterActivity;
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::appends::GroupCommitNotifier;
 use crate::coord::peek::FastPathPlan;
@@ -92,6 +93,7 @@ pub struct PeekClient {
     pub(crate) group_commit_notifier: GroupCommitNotifier,
     /// Whether the coordinator is in read-only mode. Mutations must be rejected.
     pub read_only: bool,
+    pub(crate) cluster_activity: Arc<ClusterActivity>,
 }
 
 /// A command sender that does not make background work keep the coordinator alive.
@@ -162,6 +164,7 @@ impl PeekClient {
         occ_write_semaphore: Arc<Semaphore>,
         group_commit_notifier: GroupCommitNotifier,
         read_only: bool,
+        cluster_activity: Arc<ClusterActivity>,
     ) -> Self {
         Self {
             coordinator_client,
@@ -176,6 +179,7 @@ impl PeekClient {
             occ_write_semaphore,
             group_commit_notifier,
             read_only,
+            cluster_activity,
         }
     }
 
