@@ -893,6 +893,72 @@ pub struct Table {
 }
 
 impl Table {
+    /// Constructs a user table from its planned definition.
+    ///
+    /// # Panics
+    /// Panics for unsupported table data sources or webhook plans without a cluster.
+    pub fn from_plan(
+        plan: mz_sql::plan::Table,
+        global_id: GlobalId,
+        connection_id: ConnectionId,
+        resolved_ids: ResolvedIds,
+    ) -> Self {
+        let conn_id = plan.temporary.then_some(connection_id);
+        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+        let data_source = match plan.data_source {
+            mz_sql::plan::TableDataSource::TableWrites { defaults } => {
+                TableDataSource::TableWrites { defaults }
+            }
+            mz_sql::plan::TableDataSource::DataSource {
+                desc: data_source_plan,
+                timeline,
+            } => match data_source_plan {
+                mz_sql::plan::DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                    data_config,
+                } => TableDataSource::DataSource {
+                    desc: DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                        details,
+                        data_config,
+                    },
+                    timeline,
+                },
+                mz_sql::plan::DataSourceDesc::Webhook {
+                    validate_using,
+                    body_format,
+                    headers,
+                    cluster_id,
+                } => TableDataSource::DataSource {
+                    desc: DataSourceDesc::Webhook {
+                        validate_using,
+                        body_format,
+                        headers,
+                        cluster_id: cluster_id.expect("Webhook Tables must have cluster_id set"),
+                    },
+                    timeline,
+                },
+                o => {
+                    unreachable!("CREATE TABLE data source got {:?}", o)
+                }
+            },
+        };
+
+        Self {
+            create_sql: Some(plan.create_sql),
+            desc: plan.desc,
+            collections,
+            conn_id,
+            resolved_ids,
+            custom_logical_compaction_window: plan.compaction_window,
+            is_retained_metrics_object: false,
+            data_source,
+        }
+    }
+
     pub fn timeline(&self) -> Timeline {
         match &self.data_source {
             // The Coordinator controls insertions for writable tables
