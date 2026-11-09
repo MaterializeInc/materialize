@@ -9,23 +9,28 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Convert the current container entrypoint and process-backed listeners, then
-remove the remaining combined serving and controller execution alternatives.
+Convert the current container entrypoint, then remove the remaining combined
+serving and controller execution alternatives.
 The container audit is in `~/.local/share/aj/m3-evidence/native-only/container-native-conversion.md`.
-Native TCP currently forces loopback. Preserve configured listener policies and
-fixed container endpoints, avoid the relay diagnostics/serving-port collision,
-and resolve inherited listener-path versus assigned JSON conflicts.
+Process-backed listeners now preserve configured bind IPs while local launcher
+defaults remain loopback-only. Container conversion still needs fixed endpoints,
+resolution of the relay diagnostics/serving-port collision, and inherited
+listener-path versus assigned JSON precedence.
 
 Rust and SLT fixtures now use the real controller and join-only hosted adapters.
 Adapter restart and candidate teardown preserve peer execution identities.
 Native observation selectors and their regenerated plans are committed.
 Targeted runtime, schema/plan, authentication, tracing, reset and retained-status
-checks passed. Detailed evidence remains in the linked local reports.
+checks passed. Native listener lifecycle/adoption and launcher checks also
+passed, with review findings resolved. See `native-bind-review.md`,
+`native-bind-reviewed-green.log` and `native-bind-reviewed-check.log` in the
+same evidence directory.
 
-Released-monolithic-to-native upgrade lanes conflict with the design's supported
-boundary. Their explicit unsupported disposition is awaiting user confirmation.
-Do not silently skip them or reset state under an upgrade test. Keep old-only
-coverage and compatible-native coexistence/retirement coverage distinct.
+The user approved reporting pre-native-to-native upgrades explicitly unsupported.
+Do not implement conversion or reset workarounds. Keep old-only coverage and
+compatible-native coexistence/promotion/retirement coverage distinct. Classify
+unsupported cases before starting or resetting services. Exact workflow and
+reporting boundaries are in `~/.local/share/aj/m3-evidence/native-only/upgrade-boundary-classification.md`.
 
 The legacy frontier slice is committed and independently reviewed. Targeted Rust
 and catalog SQL checks passed. A fresh debug deployment preserved SQL progress
@@ -60,7 +65,8 @@ The last full formatting check failed on an unchanged generic call in
 `src/catalog/src/catalog.rs`. The prior changed-file Python checks passed. The native Rust/SLT fixture and observation SQL checks pass. Broad container,
 upgrade and remaining execution cleanup verification is still outstanding. The PR stays draft.
 
-M3 still needs arbitrary-release compatibility and external-sink handover.
+Arbitrary-version compatibility and external-sink handover remain unverified.
+Pre-native-to-native conversion is out of scope.
 The birth-ordering concern is source-inspected, not reproduced. The original
 four-adapter workload has not been rerun with the txn-WAL retirement repair.
 The [follow-up inventory](20260903_decoupled_coordination_followups.md) preserves
