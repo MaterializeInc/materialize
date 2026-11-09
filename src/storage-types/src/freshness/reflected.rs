@@ -41,6 +41,11 @@ fn reflected_at(dependence: &TimeDependence, bound: Timestamp) -> Option<Timesta
 }
 
 /// The last refresh of `schedule` at or before `timestamp`, if any.
+///
+/// NOTE: A `REFRESH EVERY` grid extends below its `aligned_to`, so a view whose frontier is
+/// still its first refresh reflects the grid point one interval before it, a time before the
+/// view existed. Until that first refresh completes, the view's staleness is overstated by
+/// about one interval.
 fn last_refresh_at_or_before(
     schedule: &RefreshSchedule,
     timestamp: Timestamp,

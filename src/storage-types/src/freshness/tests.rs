@@ -173,12 +173,34 @@ fn reflected_before_first_refresh() {
         vec![TimeDependence::default(), refreshed(every(60_000, 30_000))],
     );
     assert_eq!(reflected_time(&join, ts(10_000)), None);
+    // Before its first refresh at its alignment, a view reflects the grid point one interval
+    // earlier.
+    let created = refreshed(every(60_000, 120_000));
+    assert_eq!(reflected_time(&created, ts(120_000)), Some(ts(60_000)));
+}
+
+/// A schedule of up to three `REFRESH AT`s and up to two `REFRESH EVERY`s, like
+/// `REFRESH AT CREATION, REFRESH EVERY ...`.
+fn arb_schedule() -> impl Strategy<Value = RefreshSchedule> + Clone {
+    let every = (1u64..=120, 0u64..=120_000).prop_map(|(secs, align)| RefreshEvery {
+        interval: ms(secs * 1000),
+        aligned_to: ts(align),
+    });
+    (
+        proptest::collection::vec(0u64..=600_000, 0..=3),
+        proptest::collection::vec(every, 0..=2),
+    )
+        .prop_filter("a schedule refreshes", |(ats, everies)| {
+            !ats.is_empty() || !everies.is_empty()
+        })
+        .prop_map(|(ats, everies)| RefreshSchedule {
+            everies,
+            ats: ats.into_iter().map(ts).collect(),
+        })
 }
 
 fn arb_dependence() -> impl Strategy<Value = TimeDependence> {
-    let schedule = proptest::option::of(
-        (1u64..=120, 0u64..=120_000).prop_map(|(secs, align)| every(secs * 1000, align)),
-    );
+    let schedule = proptest::option::of(arb_schedule());
     let leaf = schedule
         .clone()
         .prop_map(|s| TimeDependence::new(s, vec![]));
