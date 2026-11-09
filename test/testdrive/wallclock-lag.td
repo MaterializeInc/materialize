@@ -260,6 +260,11 @@ src     <null>
 # minute for a view refreshed every minute, whose frontier is at its next
 # refresh, and about a second for a source that ticks every second, at
 # whatever phase the lag is sampled.
+#
+# The refreshed view first reads a minute after its first refresh, so the
+# queries below get more time.
+
+$ set-sql-timeout duration=240s
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_wallclock_freshness_reporting = true
@@ -273,16 +278,27 @@ ALTER SYSTEM SET enable_wallclock_freshness_reporting = true
   AS SELECT * FROM refresh_input
 
 > SELECT DISTINCT ON(o.name, r.name)
-    o.name, r.name, l.lag >= '59s', l.lag < '2s', l.lag = date_trunc('second', l.lag)
+    o.name, r.name, l.lag >= '59s', l.lag < '2s'
   FROM mz_internal.mz_wallclock_lag_history l
   JOIN mz_objects o ON o.id = l.object_id
   LEFT JOIN mz_cluster_replicas r ON r.id = l.replica_id
   WHERE o.name IN ('src_1s', 'src_1s_tbl', 'mv_refresh')
   ORDER BY o.name, r.name, l.occurred_at DESC
-mv_refresh  r1      true  false false
-mv_refresh  <null>  true  false false
-src_1s      <null>  false true  false
-src_1s_tbl  <null>  false true  false
+mv_refresh  r1      true  false
+mv_refresh  <null>  true  false
+src_1s      <null>  false true
+src_1s_tbl  <null>  false true
+
+# A single lag is a whole second about once in a thousand, so the check for
+# milliseconds looks at all of an object's lags.
+> SELECT o.name, bool_or(l.lag <> date_trunc('second', l.lag))
+  FROM mz_internal.mz_wallclock_lag_history l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE o.name IN ('src_1s', 'src_1s_tbl', 'mv_refresh')
+  GROUP BY o.name
+mv_refresh  true
+src_1s      true
+src_1s_tbl  true
 
 > SELECT DISTINCT ON(o.name)
     o.name, l.lag >= '59s', l.lag < '2s'
@@ -293,6 +309,8 @@ src_1s_tbl  <null>  false true  false
 mv_refresh  true  false
 src_1s      false true
 src_1s_tbl  false true
+
+$ set-sql-timeout duration=120s
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET enable_wallclock_freshness_reporting
