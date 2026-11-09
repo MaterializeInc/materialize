@@ -31,9 +31,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::LazyLock;
-use std::time::Duration;
 use std::{env, fmt, ops, str, thread};
 
 use anyhow::{anyhow, bail};
@@ -44,22 +42,10 @@ use futures::sink::SinkExt;
 use itertools::Itertools;
 use maplit::btreemap;
 use md5::{Digest, Md5};
-use mz_adapter_types::bootstrap_builtin_cluster_config::{
-    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
-    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-};
-use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_controller::{ControllerConfig, ReplicaHttpLocator};
-use mz_environmentd::CatalogConfig;
-use mz_license_keys::ValidatedLicenseKey;
-use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
+use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::channel::trigger;
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::sql;
 use mz_ore::sql::Sql;
@@ -68,24 +54,17 @@ use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_ore::url::SensitiveUrl;
 use mz_persist_client::PersistLocation;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::rpc::{
-    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
-};
 use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value, oid};
 use mz_repr::ColumnName;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
-use mz_secrets::SecretsController;
 use mz_server_core::listeners::v26_32_0::ListenersConfig;
 use mz_server_core::listeners::{
     AllowedRoles, AuthenticatorKind, HttpListenerConfig, HttpRoutesEnabled, RouteGroup,
     SqlListenerConfig,
 };
 use mz_sql::ast::{Expr, Raw, Statement};
-use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateIndexStatement, CreateViewStatement, CteBlock, Distinct, DropObjectsStatement, Ident,
@@ -94,17 +73,13 @@ use mz_sql_parser::ast::{
     UnresolvedItemName, UnresolvedObjectName, ViewDefinition,
 };
 use mz_sql_parser::parser;
-use mz_storage_types::connections::ConnectionContext;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
-use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
-use tokio_stream::wrappers::TcpListenerStream;
-use tower_http::cors::AllowOrigin;
 use tracing::{error, info};
 use uuid::Uuid;
 use uuid::fmt::Simple;
@@ -1171,8 +1146,6 @@ impl<'a> Runner<'a> {
 impl<'a> RunnerInner<'a> {
     pub async fn start(config: &RunConfig<'a>) -> Result<RunnerInner<'a>, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
-        let scratch_dir = tempfile::tempdir()?;
-        let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, timestamp_oracle_url): (SensitiveUrl, SensitiveUrl) = {
             let postgres_url = &config.postgres_url;
             let prefix = &config.prefix;
@@ -1214,68 +1187,6 @@ impl<'a> RunnerInner<'a> {
             )
         };
 
-        let secrets_dir = temp_dir.path().join("secrets");
-        let orchestrator = Arc::new(
-            ProcessOrchestrator::new(ProcessOrchestratorConfig {
-                image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                suppress_output: false,
-                environment_id: environment_id.to_string(),
-                secrets_dir: secrets_dir.clone(),
-                command_wrapper: config
-                    .orchestrator_process_wrapper
-                    .as_ref()
-                    .map_or(Ok(vec![]), |s| shell_words::split(s))?,
-                propagate_crashes: true,
-                retain_on_shutdown: false,
-                tcp_proxy: None,
-                scratch_directory: scratch_dir.path().to_path_buf(),
-            })
-            .await?,
-        );
-        let now = SYSTEM_TIME.clone();
-        let metrics_registry = MetricsRegistry::new();
-
-        let persist_config = PersistConfig::new(
-            &mz_environmentd::BUILD_INFO,
-            now.clone(),
-            mz_dyncfgs::all_dyncfgs(),
-        );
-        let persist_pubsub_server =
-            PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
-        let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
-        let persist_pubsub_tcp_listener =
-            TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-                .await
-                .expect("pubsub addr binding");
-        let persist_pubsub_server_port = persist_pubsub_tcp_listener
-            .local_addr()
-            .expect("pubsub addr has local addr")
-            .port();
-        info!("listening for persist pubsub connections on localhost:{persist_pubsub_server_port}");
-        mz_ore::task::spawn(|| "persist_pubsub_server", async move {
-            persist_pubsub_server
-                .serve_with_stream(TcpListenerStream::new(persist_pubsub_tcp_listener))
-                .await
-                .expect("success")
-        });
-        let persist_clients =
-            PersistClientCache::new(persist_config, &metrics_registry, |cfg, metrics| {
-                let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
-                    cfg,
-                    persist_pubsub_client.sender,
-                    metrics,
-                ));
-                PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
-            });
-        let persist_clients = Arc::new(persist_clients);
-
-        let secrets_controller = Arc::clone(&orchestrator);
-        let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
-        connection_context.environment_id = environment_id.to_string();
-        let orchestrator = Arc::new(TracingOrchestrator::new(
-            orchestrator,
-            config.tracing.clone(),
-        ));
         let listeners_config = ListenersConfig {
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
@@ -1330,31 +1241,21 @@ impl<'a> RunnerInner<'a> {
                 },
             ],
         };
-        let listeners = mz_environmentd::Listeners::bind(listeners_config).await?;
-        let host_name = format!(
-            "localhost:{}",
-            listeners.http["external"].handle.local_addr.port()
-        );
-        let catalog_config = CatalogConfig {
-            persist_clients: Arc::clone(&persist_clients),
-            metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
-        };
-        let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
-        let server_config = mz_environmentd::Config {
-            adapter_size_names: Default::default(),
-            joined_adapter_id: None,
-            catalog_config,
-            timestamp_oracle_url: Some(timestamp_oracle_url.clone()),
-            controller: ControllerConfig {
-                manage_replica_processes: true,
-                timestamp_oracle_url: Some(timestamp_oracle_url),
-                timestamp_oracle_clock_file: None,
-                build_info: &mz_environmentd::BUILD_INFO,
-                orchestrator,
-                clusterd_image: "clusterd".into(),
-                init_container_image: None,
-                deploy_generation: 0,
-                persist_location: PersistLocation {
+        let mut system_parameter_defaults = BTreeMap::from([
+            (
+                "log_filter".to_string(),
+                config.tracing.startup_log_filter.to_string(),
+            ),
+            (
+                "enable_catalog_read_protection".to_string(),
+                "true".to_string(),
+            ),
+        ]);
+        system_parameter_defaults.extend(config.system_parameter_defaults.clone());
+        let harness = mz_environmentd::test_util::TestHarness::default()
+            .data_directory(temp_dir.path())
+            .with_storage(
+                PersistLocation {
                     blob_uri: format!(
                         "file://{}/persist/blob",
                         config.persist_dir.path().display()
@@ -1363,98 +1264,26 @@ impl<'a> RunnerInner<'a> {
                     .expect("invalid blob URI"),
                     consensus_uri,
                 },
-                persist_clients,
-                now: SYSTEM_TIME.clone(),
-                metrics_registry: metrics_registry.clone(),
-                persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
-                secrets_args: mz_secrets_cli::SecretsReaderCliArgs {
-                    secrets_reader: mz_secrets_cli::SecretsControllerKind::LocalFile,
-                    secrets_reader_local_file_dir: Some(secrets_dir),
-                    secrets_reader_kubernetes_context: None,
-                    secrets_reader_aws_prefix: None,
-                    secrets_reader_name_prefix: None,
-                },
-                connection_context,
-                replica_http_locator: Arc::new(ReplicaHttpLocator::default()),
-            },
-            secrets_controller,
-            cloud_resource_controller: None,
-            system_dyncfgs,
-            tls: None,
-            frontegg: None,
-            frontegg_oauth_issuer_url: None,
-            cors_allowed_origin: AllowOrigin::list([]),
-            cors_allowed_origin_list: Vec::new(),
-            unsafe_mode: true,
-            all_features: false,
-            metrics_registry,
-            now,
-            environment_id,
-            cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
-            bootstrap_default_cluster_replica_size: config.replica_size.clone(),
-            bootstrap_default_cluster_replication_factor: config
-                .replicas
-                .try_into()
-                .expect("replicas must fit"),
-            bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
-                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.clone(),
-            },
-            bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
-                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.clone(),
-            },
-            bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
-                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.clone(),
-            },
-            bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
-                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.clone(),
-            },
-            bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
-                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.clone(),
-            },
-            system_parameter_defaults: {
-                let mut params = BTreeMap::new();
-                params.insert(
-                    "log_filter".to_string(),
-                    config.tracing.startup_log_filter.to_string(),
-                );
-                params.insert(
-                    "enable_catalog_read_protection".to_string(),
-                    "true".to_string(),
-                );
-                params.extend(config.system_parameter_defaults.clone());
-                params
-            },
-            availability_zones: Default::default(),
-            tracing_handle: config.tracing_handle.clone(),
-            storage_usage_collection_interval: Duration::from_secs(3600),
-            storage_usage_retention_period: None,
-            segment_api_key: None,
-            segment_client_side: false,
-            // SLT doesn't like eternally running tasks since it waits for them to finish inbetween SLT files
-            test_only_dummy_segment_client: false,
-            egress_addresses: vec![],
-            aws_account_id: None,
-            aws_privatelink_availability_zones: None,
-            launchdarkly_sdk_key: None,
-            launchdarkly_base_uri: None,
-            launchdarkly_key_map: Default::default(),
-            config_sync_file_path: None,
-            config_sync_timeout: Duration::from_secs(30),
-            config_sync_loop_interval: None,
-            bootstrap_role: Some("materialize".into()),
-            http_host_name: Some(host_name),
-            internal_console_redirect_url: None,
-            tls_reload_certs: mz_server_core::cert_reload_never_reload(),
-            helm_chart_version: None,
-            license_key: ValidatedLicenseKey::for_tests(),
-            external_login_password_mz_system: None,
-            force_builtin_schema_migration: None,
-        };
+                timestamp_oracle_url,
+            )
+            .with_process_launch(
+                env::current_exe()?.parent().unwrap().to_path_buf(),
+                config
+                    .orchestrator_process_wrapper
+                    .as_ref()
+                    .map_or(Ok(vec![]), |s| shell_words::split(s))?,
+                config.tracing.clone(),
+            )
+            .with_listeners_config(listeners_config)
+            .with_tracing_handle(config.tracing_handle.clone())
+            .with_propagate_crashes(true)
+            .unsafe_mode()
+            .with_default_cluster_replica_size(config.replica_size.clone())
+            .with_default_cluster_replication_factor(
+                config.replicas.try_into().expect("replicas must fit"),
+            )
+            .with_builtin_cluster_replica_size(config.replica_size.clone())
+            .with_system_parameter_defaults(system_parameter_defaults);
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
         // by the server to be shutdown at the end of each file. If we were to
@@ -1466,7 +1295,7 @@ impl<'a> RunnerInner<'a> {
         let (password_server_addr_tx, password_server_addr_rx) = oneshot::channel();
         let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
         let (shutdown_trigger, shutdown_trigger_rx) = trigger::channel();
-        let server_thread = thread::spawn(|| {
+        let server_thread = thread::spawn(move || {
             let runtime = match Runtime::new() {
                 Ok(runtime) => runtime,
                 Err(e) => {
@@ -1476,7 +1305,7 @@ impl<'a> RunnerInner<'a> {
                     return;
                 }
             };
-            let server = match runtime.block_on(listeners.serve(server_config)) {
+            let server = match runtime.block_on(harness.try_start()) {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     server_addr_tx
@@ -1486,16 +1315,16 @@ impl<'a> RunnerInner<'a> {
                 }
             };
             server_addr_tx
-                .send(Ok(server.sql_listener_handles["external"].local_addr))
+                .send(Ok(server.inner.sql_listener_handles["external"].local_addr))
                 .expect("receiver should not drop first");
             internal_server_addr_tx
-                .send(server.sql_listener_handles["internal"].local_addr)
+                .send(server.inner.sql_listener_handles["internal"].local_addr)
                 .expect("receiver should not drop first");
             password_server_addr_tx
-                .send(server.sql_listener_handles["password"].local_addr)
+                .send(server.inner.sql_listener_handles["password"].local_addr)
                 .expect("receiver should not drop first");
             internal_http_server_addr_tx
-                .send(server.http_listener_handles["internal"].local_addr)
+                .send(server.inner.http_listener_handles["internal"].local_addr)
                 .expect("receiver should not drop first");
             runtime.block_on(shutdown_trigger_rx);
         });

@@ -162,6 +162,10 @@ impl Drop for TimestampOracleClock {
 #[derive(Clone)]
 pub struct TestHarness {
     data_directory: Option<PathBuf>,
+    storage: Option<(PersistLocation, mz_ore::url::SensitiveUrl)>,
+    process_image_dir: Option<PathBuf>,
+    command_wrapper: Vec<String>,
+    tracing_handle: Option<TracingHandle>,
     tls: Option<TlsCertConfig>,
     frontegg: Option<FronteggAuthenticator>,
     external_login_password_mz_system: Option<Password>,
@@ -208,6 +212,10 @@ impl Default for TestHarness {
     fn default() -> TestHarness {
         TestHarness {
             data_directory: None,
+            storage: None,
+            process_image_dir: None,
+            command_wrapper: Vec::new(),
+            tracing_handle: None,
             tls: None,
             frontegg: None,
             external_login_password_mz_system: None,
@@ -326,6 +334,65 @@ impl Default for TestHarness {
 }
 
 impl TestHarness {
+    /// Use caller-owned storage locations. The caller must create the metadata
+    /// schemas and retain the blob directory until the deployment has stopped.
+    pub fn with_storage(
+        mut self,
+        persist: PersistLocation,
+        timestamp_oracle: mz_ore::url::SensitiveUrl,
+    ) -> Self {
+        self.storage = Some((persist, timestamp_oracle));
+        self
+    }
+
+    /// Configure child executable discovery, instrumentation and tracing.
+    pub fn with_process_launch(
+        mut self,
+        image_dir: PathBuf,
+        command_wrapper: Vec<String>,
+        tracing: TracingCliArgs,
+    ) -> Self {
+        self.process_image_dir = Some(image_dir);
+        self.command_wrapper = command_wrapper;
+        self.orchestrator_tracing_cli_args = tracing;
+        self
+    }
+
+    pub fn with_listeners_config(mut self, listeners: ListenersConfig) -> Self {
+        self.listeners_config = listeners;
+        self
+    }
+
+    /// Reuse a caller-installed tracing subscriber across fixture restarts.
+    pub fn with_tracing_handle(mut self, handle: TracingHandle) -> Self {
+        self.tracing_handle = Some(handle);
+        self
+    }
+
+    /// Replace the harness defaults with the caller's complete parameter map.
+    pub fn with_system_parameter_defaults(mut self, defaults: BTreeMap<String, String>) -> Self {
+        self.system_parameter_defaults = defaults;
+        self
+    }
+
+    pub fn with_default_cluster_replication_factor(mut self, factor: u32) -> Self {
+        self.default_cluster_replication_factor = factor;
+        self
+    }
+
+    pub fn with_builtin_cluster_replica_size(mut self, size: String) -> Self {
+        for config in [
+            &mut self.builtin_system_cluster_config,
+            &mut self.builtin_catalog_server_cluster_config,
+            &mut self.builtin_probe_cluster_config,
+            &mut self.builtin_support_cluster_config,
+            &mut self.builtin_analytics_cluster_config,
+        ] {
+            config.size = size.clone();
+        }
+        self
+    }
+
     /// Start the default adapter in an existing test deployment, without
     /// reinitializing metadata or replacing the replica process owner.
     /// Use the same harness configuration that created the deployment.
@@ -864,7 +931,9 @@ impl Listeners {
             .clone()
             .unwrap_or_else(MetricsRegistry::new);
         let persist_clients = Arc::clone(&resources.adapter_persist_clients);
-        let tracing_handle = if config.enable_tracing {
+        let tracing_handle = if let Some(handle) = config.tracing_handle.clone() {
+            handle
+        } else if config.enable_tracing {
             let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
                 service_name: "environmentd",
                 stderr_log: StderrLogConfig {
@@ -1046,10 +1115,9 @@ impl TestDeployment {
             Some(data_directory) => (data_directory, None),
         };
         let scratch_dir = tempfile::tempdir()?;
-        let (consensus_uri, timestamp_oracle_url): (
-            mz_ore::url::SensitiveUrl,
-            mz_ore::url::SensitiveUrl,
-        ) = {
+        let (persist_location, timestamp_oracle_url) = if let Some(storage) = &config.storage {
+            storage.clone()
+        } else {
             let seed = config.seed;
             let cockroach_url = env::var("METADATA_BACKEND_URL")
                 .map_err(|_| anyhow!("METADATA_BACKEND_URL environment variable is not set"))?;
@@ -1072,36 +1140,48 @@ impl TestDeployment {
             )
             .await?;
             (
-                format!("{cockroach_url}?options=--search_path=consensus_{seed}")
+                PersistLocation {
+                    blob_uri: format!("file://{}/persist/blob", data_directory.display())
+                        .parse()?,
+                    consensus_uri: format!(
+                        "{cockroach_url}?options=--search_path=consensus_{seed}"
+                    )
                     .parse()
                     .expect("invalid consensus URI"),
+                },
                 format!("{cockroach_url}?options=--search_path=tsoracle_{seed}")
                     .parse()
                     .expect("invalid timestamp oracle URI"),
             )
         };
         let orchestrator = ProcessOrchestrator::new(ProcessOrchestratorConfig {
-            image_dir: env::current_exe()?
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .to_path_buf(),
+            image_dir: match &config.process_image_dir {
+                Some(path) => path.clone(),
+                None => env::current_exe()?
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .to_path_buf(),
+            },
             suppress_output: false,
             environment_id: config.environment_id.to_string(),
             secrets_dir: data_directory.join("secrets"),
             // Scope version simulation to this harness's child launches, including
             // replacements. Other concurrently running harnesses keep their version.
-            command_wrapper: if config.code_version != crate::BUILD_INFO.semver_version() {
-                vec![
-                    "env".into(),
-                    format!(
-                        "CLUSTERD_TEST_PERSIST_BUILD_VERSION={}",
-                        config.code_version
-                    ),
-                ]
-            } else {
-                vec![]
+            command_wrapper: {
+                let mut wrapper = Vec::new();
+                if config.code_version != crate::BUILD_INFO.semver_version() {
+                    wrapper.extend([
+                        "env".into(),
+                        format!(
+                            "CLUSTERD_TEST_PERSIST_BUILD_VERSION={}",
+                            config.code_version
+                        ),
+                    ]);
+                }
+                wrapper.extend(config.command_wrapper.clone());
+                wrapper
             },
             propagate_crashes: config.propagate_crashes,
             retain_on_shutdown: false,
@@ -1147,10 +1227,7 @@ impl TestDeployment {
             hosted,
             secrets_controller,
             adapter_persist_clients: adapter_clients,
-            persist_location: PersistLocation {
-                blob_uri: format!("file://{}/persist/blob", data_directory.display()).parse()?,
-                consensus_uri,
-            },
+            persist_location,
             timestamp_oracle_url,
             timestamp_oracle_now,
             pubsub_url,
