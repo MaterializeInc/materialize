@@ -3118,6 +3118,9 @@ where
     fn freshness_config(&self) -> Option<RecorderConfig> {
         // A read-only controller belongs to a generation that is not the leader yet. The leader
         // writes the histograms, so a second writer would count the same time twice.
+        // NOTE: `read_only` never changes, because a promoted process halts and reboots as the
+        // leader (see `environmentd::deployment::preflight`). Promoting in place would leave
+        // recording off until the next restart.
         if self.read_only {
             return None;
         }
@@ -3151,6 +3154,8 @@ where
         }
         // The compute controller writes the global rows of the collections it writes, among
         // them materialized views, so a second writer would count the same time twice.
+        // NOTE: The catalog shard is `DataSource::Other` too, but no compute collection writes
+        // it, so no controller records its staleness.
         if matches!(data_source, DataSource::Other) {
             return None;
         }
