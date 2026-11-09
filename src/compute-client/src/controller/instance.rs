@@ -25,7 +25,8 @@ use mz_compute_types::sinks::{
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
-    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, ENABLE_WALLCLOCK_FRESHNESS_REPORTING,
+    WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
@@ -39,7 +40,9 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
-use mz_storage_client::freshness::{FreshnessState, pack_rows, recorder_config};
+use mz_storage_client::freshness::{
+    FreshnessState, pack_rows, recorder_config, reported_wallclock_lag,
+};
 use mz_storage_types::freshness::{PeriodRow, RecorderConfig};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -586,6 +589,9 @@ impl Instance {
     ///   wallclock time every second. Every minute we emit all lags observed over the last minute,
     ///   together with the current histogram period.
     ///
+    /// Under `enable_wallclock_freshness_reporting`, histories report the staleness of
+    /// [`reported_wallclock_lag`] instead, while histograms keep the lag of the write frontier.
+    ///
     /// Histories are emitted to both Mz introspection and Prometheus, histograms only to
     /// introspection. We treat lags of unreadable collections (i.e. collections that contain no
     /// readable times) as undefined and set them to NULL in introspection and `u64::MAX` in
@@ -602,6 +608,8 @@ impl Instance {
         let now_ms = (self.now)();
         let histogram_period = WallclockLagHistogramPeriod::from_epoch_millis(now_ms, &self.dyncfg);
         let histogram_labels = self.histogram_labels();
+        let reporting = ENABLE_WALLCLOCK_FRESHNESS_REPORTING.get(&self.dyncfg);
+        let now = Timestamp::from(now_ms);
 
         // For collections that sink into storage, we need to ask the storage controller to know
         // whether they're currently readable.
@@ -626,11 +634,9 @@ impl Instance {
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
                 let bucket = if readable {
-                    let lag = frontier_lag(&write_frontier);
-                    let lag = lag.as_secs().next_power_of_two();
-                    WallclockLag::Seconds(lag)
+                    WallclockLag::from_duration(frontier_lag(&write_frontier)).histogram_bucket()
                 } else {
-                    WallclockLag::Undefined
+                    None
                 };
 
                 let key = (histogram_period, bucket, histogram_labels.clone());
@@ -647,9 +653,11 @@ impl Instance {
                 //  (b) it is hydrated
                 let readable = readable_storage_collections.contains(id) || collection.hydrated();
 
+                let today = frontier_lag(&collection.write_frontier);
+                let lag =
+                    reported_wallclock_lag(reporting, collection.freshness.as_mut(), now, today);
                 let lag = if readable {
-                    let lag = frontier_lag(&collection.write_frontier);
-                    WallclockLag::Seconds(lag.as_secs())
+                    lag
                 } else {
                     WallclockLag::Undefined
                 };
@@ -661,8 +669,7 @@ impl Instance {
                 if let Some(metrics) = &mut collection.metrics {
                     // No way to specify values as undefined in Prometheus metrics, so we use the
                     // maximum value instead.
-                    let secs = lag.unwrap_seconds_or(u64::MAX);
-                    metrics.wallclock_lag.observe(secs);
+                    metrics.wallclock_lag.observe(lag.metric_seconds());
                 };
             }
         }
@@ -732,13 +739,13 @@ impl Instance {
                 continue;
             };
 
-            for ((period, lag, labels), count) in std::mem::take(stash) {
+            for ((period, bucket, labels), count) in std::mem::take(stash) {
                 let mut packer = row_buf.packer();
                 packer.extend([
                     Datum::TimestampTz(period.start),
                     Datum::TimestampTz(period.end),
                     Datum::String(&collection_id.to_string()),
-                    lag.into_uint64_datum(),
+                    Datum::from(bucket),
                 ]);
                 let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
                 packer.push_dict(labels);
@@ -2843,14 +2850,15 @@ struct CollectionState {
     /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
     /// introspection update.
     ///
-    /// Keys are `(period, lag, labels)` triples, values are counts.
+    /// Keys are `(period, bucket, labels)` triples, values are counts. The bucket is that of
+    /// [`WallclockLag::histogram_bucket`].
     ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
     wallclock_lag_histogram_stash: Option<
         BTreeMap<
             (
                 WallclockLagHistogramPeriod,
-                WallclockLag,
+                Option<u64>,
                 BTreeMap<&'static str, String>,
             ),
             Diff,

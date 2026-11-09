@@ -31,6 +31,8 @@ use mz_storage_types::freshness::{
 use mz_storage_types::time_dependence::TimeDependence;
 use timely::progress::Antichain;
 
+use crate::controller::WallclockLag;
+
 /// The shortest period interval. Every recorded collection writes rows for every period, so
 /// shorter configured intervals count as this one.
 pub const MIN_PERIOD_INTERVAL: Duration = Duration::from_secs(1);
@@ -409,6 +411,11 @@ impl UnreportedStates {
         mz_ore::soft_assert_or_log!(previous.is_none(), "staleness state of {id} replaced");
     }
 
+    /// The state of collection `id`.
+    pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut FreshnessState> {
+        self.states.get_mut(id)
+    }
+
     /// The collections that have a state.
     fn ids(&self) -> Vec<GlobalId> {
         self.states.keys().copied().collect()
@@ -450,6 +457,27 @@ impl UnreportedStates {
         if !rows.is_empty() {
             self.rows.push((id, rows));
         }
+    }
+}
+
+/// The wallclock lag to report at `now` for a readable frontier whose staleness `state` tracks.
+///
+/// `today` is the lag of the frontier as `WallclockLagFn` computes it, in whole seconds. With
+/// `reporting` and a `state`, the lag is [`FreshnessState::reported_lag`] in milliseconds,
+/// otherwise `today`. Callers pass each state once per refresh, also while the frontier is not
+/// readable, since the read resets the state's peak.
+pub fn reported_wallclock_lag(
+    reporting: bool,
+    state: Option<&mut FreshnessState>,
+    now: Timestamp,
+    today: Duration,
+) -> WallclockLag {
+    // Read also while reporting is off, so that turning it on reports no peak from the time it
+    // was off.
+    let reported = state.map(|state| state.reported_lag(now));
+    match reported {
+        Some(lag) if reporting => WallclockLag::from_duration(lag),
+        _ => WallclockLag::from_duration(today),
     }
 }
 

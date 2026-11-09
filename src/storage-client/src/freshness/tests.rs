@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
-use mz_cluster_client::ReplicaId;
+use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{
     ENABLE_WALLCLOCK_FRESHNESS_RECORDING, WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE,
     WALLCLOCK_FRESHNESS_PERIOD_INTERVAL,
@@ -26,8 +26,9 @@ use timely::progress::Antichain;
 
 use super::{
     FreshnessState, MIN_PERIOD_INTERVAL, UnreportedFreshness, UnreportedStates, is_new_rejection,
-    pack_rows, recorder_config,
+    pack_rows, recorder_config, reported_wallclock_lag,
 };
+use crate::controller::WallclockLag;
 use crate::healthcheck::{
     REPLICA_WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC, WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC,
 };
@@ -501,4 +502,77 @@ fn unreported_drop_emits_partial_period_once() {
     let (mut states, now) = shared.lock_synced(&at(120_000), Some(cfg), true, |_| None);
     states.tick(now);
     assert_eq!(taken(&mut states), BTreeMap::new());
+}
+
+/// The lag of `frontier` at `now`, as `WallclockLagFn` computes it.
+fn whole_seconds(frontier: &Antichain<Timestamp>, now: Timestamp) -> Duration {
+    let now_ms = u64::from(now);
+    let lag_fn = WallclockLagFn::new(NowFn::from(move || now_ms));
+    frontier.as_option().map_or(Duration::ZERO, |t| lag_fn(*t))
+}
+
+/// The reported lags and today's lags of a 1 s source that ticks at whole seconds, whose
+/// frontier the controller observes 5 ms after each tick, refreshed `offset_ms` after each tick.
+fn one_second_source(
+    reporting: bool,
+    with_state: bool,
+    offset_ms: u64,
+) -> Vec<(WallclockLag, Duration)> {
+    let mut state = with_state
+        .then(|| FreshnessState::new(TimeDependence::default(), ts(0), &frontier(1), None));
+    let mut lags = Vec::new();
+    for tick in 1..10 {
+        let tick_ms = tick * 1_000;
+        let f = frontier(tick_ms + 1);
+        if let Some(state) = &mut state {
+            assert_eq!(state.observe(ts(tick_ms + 5), &f, None), vec![]);
+        }
+        let now = ts(tick_ms + offset_ms);
+        let today = whole_seconds(&f, now);
+        let lag = reported_wallclock_lag(reporting, state.as_mut(), now, today);
+        lags.push((lag, today));
+    }
+    lags
+}
+
+#[mz_ore::test]
+fn reporting_off_is_unchanged() {
+    for with_state in [false, true] {
+        for offset_ms in [10, 300, 700, 990] {
+            for (lag, today) in one_second_source(false, with_state, offset_ms) {
+                assert_eq!(lag, WallclockLag::from_duration(today));
+                assert_eq!(today.subsec_nanos(), 0, "whole seconds");
+            }
+        }
+    }
+    // Without a state, the flag does not change the value either.
+    for (lag, today) in one_second_source(true, false, 300) {
+        assert_eq!(lag, WallclockLag::from_duration(today));
+    }
+}
+
+#[mz_ore::test]
+fn reporting_on_reads_sample_peak() {
+    // Each closed sample's worst case is 1,005 ms, from 5 ms after one tick to 5 ms after the
+    // next, so every refresh reads it, at whatever phase it falls.
+    for offset_ms in [10, 300, 700, 990] {
+        for (lag, _) in one_second_source(true, true, offset_ms) {
+            assert_eq!(lag, WallclockLag::Millis(1_005), "offset {offset_ms}");
+        }
+    }
+}
+
+#[mz_ore::test]
+fn reporting_toggled_on_reads_no_peak_from_off_time() {
+    let mut state = FreshnessState::new(TimeDependence::default(), ts(0), &frontier(1), None);
+    // A 30 s stall closes while reporting is off.
+    assert_eq!(state.observe(ts(30_000), &frontier(30_001), None), vec![]);
+    let today = whole_seconds(&frontier(30_001), ts(30_500));
+    let lag = reported_wallclock_lag(false, Some(&mut state), ts(30_500), today);
+    assert_eq!(lag, WallclockLag::Millis(1_000));
+    assert_eq!(state.observe(ts(31_000), &frontier(31_001), None), vec![]);
+    // The stall's sample was read while off, so turning reporting on reads the last sample.
+    let today = whole_seconds(&frontier(31_001), ts(31_500));
+    let lag = reported_wallclock_lag(true, Some(&mut state), ts(31_500), today);
+    assert_eq!(lag, WallclockLag::Millis(1_000));
 }

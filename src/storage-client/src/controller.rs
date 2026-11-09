@@ -33,6 +33,7 @@ use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL;
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
+use mz_ore::cast::CastLossy;
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::{Codec64, ShardId};
@@ -948,58 +949,56 @@ impl MonotonicAppender {
 /// collections, i.e. collections that contain no readable times.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WallclockLag {
-    /// Lag value in seconds, for readable collections.
-    Seconds(u64),
+    /// Lag value in milliseconds, for readable collections.
+    Millis(u64),
     /// Undefined lag, for unreadable collections.
     Undefined,
 }
 
 impl WallclockLag {
     /// The smallest possible wallclock lag measurement.
-    pub const MIN: Self = Self::Seconds(0);
+    pub const MIN: Self = Self::Millis(0);
 
     /// Return the maximum of two lag values.
     ///
-    /// We treat `Undefined` lags as greater than `Seconds`, to ensure we never report low lag
+    /// We treat `Undefined` lags as greater than `Millis`, to ensure we never report low lag
     /// values when a collection was actually unreadable for some amount of time.
     pub fn max(self, other: Self) -> Self {
         match (self, other) {
-            (Self::Seconds(a), Self::Seconds(b)) => Self::Seconds(a.max(b)),
+            (Self::Millis(a), Self::Millis(b)) => Self::Millis(a.max(b)),
             (Self::Undefined, _) | (_, Self::Undefined) => Self::Undefined,
         }
     }
 
-    /// Return the wrapped seconds value, or a default if the lag is `Undefined`.
-    pub fn unwrap_seconds_or(self, default: u64) -> u64 {
+    /// A lag of `lag`, saturating at `u64::MAX` ms.
+    pub fn from_duration(lag: Duration) -> Self {
+        Self::Millis(u64::try_from(lag.as_millis()).unwrap_or(u64::MAX))
+    }
+
+    /// The bucket of this lag in the `WallclockLagHistogram`, the next power of two of the lag
+    /// rounded up to whole seconds, or `None` if the lag is `Undefined`.
+    pub fn histogram_bucket(self) -> Option<u64> {
         match self {
-            Self::Seconds(s) => s,
-            Self::Undefined => default,
+            Self::Millis(ms) => Some(ms.div_ceil(1000).next_power_of_two()),
+            Self::Undefined => None,
         }
     }
 
-    /// Create a new `WallclockLag` by transforming the wrapped seconds value.
-    pub fn map_seconds(self, f: impl FnOnce(u64) -> u64) -> Self {
+    /// The lag in seconds, `u64::MAX` if `Undefined`.
+    pub fn metric_seconds(self) -> f64 {
         match self {
-            Self::Seconds(s) => Self::Seconds(f(s)),
-            Self::Undefined => Self::Undefined,
+            Self::Millis(ms) => f64::cast_lossy(ms) / 1000.0,
+            Self::Undefined => f64::cast_lossy(u64::MAX),
         }
     }
 
     /// Convert this lag value into a [`Datum::Interval`] or [`Datum::Null`].
     pub fn into_interval_datum(self) -> Datum<'static> {
         match self {
-            Self::Seconds(secs) => {
-                let micros = i64::try_from(secs * 1_000_000).expect("must fit");
+            Self::Millis(ms) => {
+                let micros = i64::try_from(ms.saturating_mul(1000)).unwrap_or(i64::MAX);
                 Datum::Interval(Interval::new(0, 0, micros))
             }
-            Self::Undefined => Datum::Null,
-        }
-    }
-
-    /// Convert this lag value into a [`Datum::UInt64`] or [`Datum::Null`].
-    pub fn into_uint64_datum(self) -> Datum<'static> {
-        match self {
-            Self::Seconds(secs) => Datum::UInt64(secs),
             Self::Undefined => Datum::Null,
         }
     }
@@ -1045,5 +1044,49 @@ mod tests {
             ReadPolicy::lag_writes_by(mz_repr::Timestamp::default(), mz_repr::Timestamp::default());
         let write_frontier = Antichain::from_elem(mz_repr::Timestamp::from(5));
         assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
+    }
+
+    #[mz_ore::test]
+    fn wallclock_lag_millis() {
+        let lag = WallclockLag::Millis(1_234);
+        assert_eq!(
+            lag.into_interval_datum(),
+            Datum::Interval(Interval::new(0, 0, 1_234_000)),
+            "interval at ms precision"
+        );
+        assert_eq!(lag.metric_seconds(), 1.234);
+        assert_eq!(
+            WallclockLag::Undefined.metric_seconds(),
+            f64::cast_lossy(u64::MAX),
+            "undefined lags read as the maximum, as before"
+        );
+        assert_eq!(WallclockLag::Undefined.into_interval_datum(), Datum::Null);
+        assert_eq!(
+            WallclockLag::Millis(5).max(WallclockLag::Undefined),
+            WallclockLag::Undefined
+        );
+        assert_eq!(
+            WallclockLag::Millis(5).max(WallclockLag::Millis(7)),
+            WallclockLag::Millis(7)
+        );
+    }
+
+    #[mz_ore::test]
+    fn wallclock_lag_histogram_bucket_is_power_of_two_seconds() {
+        for (ms, bucket) in [
+            (0, Some(1)),
+            (1, Some(1)),
+            (1_000, Some(1)),
+            (1_001, Some(2)),
+            (3_000, Some(4)),
+            (60_000, Some(64)),
+        ] {
+            assert_eq!(
+                WallclockLag::Millis(ms).histogram_bucket(),
+                bucket,
+                "{ms} ms"
+            );
+        }
+        assert_eq!(WallclockLag::Undefined.histogram_bucket(), None);
     }
 }
