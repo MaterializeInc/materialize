@@ -9,18 +9,30 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Finish unsupported-boundary reporting for final preflight checks before they
-change deployment state. Do not add
-conversion or reset workarounds. Preserve old-only cases and classify actual
-artifact provenance, not SQL version thresholds.
+Continue removing adapter-side process actuation and combined bootstrap
+alternatives. Preserve controllerd's catalog-authorized reconciliation and
+explicit retirement, adapter policy, endpoint discovery and observations.
 
-Then convert native multi-generation harnesses to shared relay topology and
+A user decision is pending on retiring the unused legacy final-preflight hook
+with an explicit unsupported result. It has no enabled CI caller, but can run
+an old-to-old check when manually configured. Keep that hook unchanged pending
+the answer. Do not add image-classification machinery or conversion/reset
+workarounds. Research: `final-preflight-boundary-research.md` in the evidence
+directory below.
+
+Convert native multi-generation harnesses to shared relay topology and
 explicit retirement. Verify compatible writers before and after promotion,
 warmed replicas and surviving deployments. Current-source script selection is
-preserved, but its multi-container runtime remains unverified. Remove remaining
-combined bootstrap and controller execution alternatives afterwards.
+preserved, but its multi-container runtime remains unverified. Remaining
+controller-owned compute/storage execution also needs removal.
 
 ## Current cleanup outcome
+
+Exclusive replica cleanup based on deployment age or local allocator/inventory
+state is removed. Catalog-authorized cleanup, explicit retirement and service-name
+compatibility remain. All affected targets compile. Protected cleanup and native
+owner reconciliation tests passed, with independent review. The old retry interval
+remains accepted but ignored for persisted configuration compatibility.
 
 Native frontier publishers and SQL selectors, controller-backed Rust/SLT fixtures,
 and the controller-managed container entrypoint are committed and reviewed.
@@ -42,6 +54,8 @@ before workflow dispatch. Its probe timed out during pulls, without starting
 services. Newly pulled unused image tags were removed.
 
 Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
+- `exclusive-cleanup-review.md`, `exclusive-cleanup-check.log`,
+  `exclusive-cleanup-combined-tests.log`.
 - `container-runtime/verification.md`, `native-bind-review.md`,
   `native-bind-reviewed-green.log`, `native-bind-reviewed-check.log`.
 - `unsupported-reporting-review.md`, `unsupported-reporting-combined.log`.
@@ -55,8 +69,10 @@ Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
 - `controller-alternatives.md`, `frontier-review.md`, `harness-decision.md`,
   `native-frontiers.log`, and `work-notes.md` for implementation/evidence pointers.
 
-All owned verification services are stopped. Recreate isolated prerequisites
-before runtime checks. Pre/post-cleanup builtin schemas are incompatible, so use
+All owned verification services are stopped. Superseded native benchmark binaries
+were removed, with checksums retained in `archived-binary-cleanup.log`. Baseline
+artifacts, measurement reports and current binaries remain. Recreate isolated
+prerequisites before runtime checks. Pre/post-cleanup builtin schemas are incompatible, so use
 matching post-cleanup schemas for native version demonstrations.
 The prior [publication comparison](20260903_decoupled_coordination_publication_interval.md)
 remains the load baseline, not a performance claim for this cleanup.

@@ -13,11 +13,12 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
-/// The interval at which to retry cleaning replicas from past generatinos.
+/// Accepted for persisted configuration compatibility, but ignored.
+/// Replica retirement requires catalog authorization, not deployment age.
 pub const CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL: Config<Duration> = Config::new(
     "controller_past_generation_replica_cleanup_retry_interval",
     Duration::from_secs(300),
-    "The interval at which to attempt to retry cleaning up replicas from past generations.",
+    "Deprecated and ignored. Replica retirement requires catalog authorization.",
     ParameterScope::Environment,
 );
 

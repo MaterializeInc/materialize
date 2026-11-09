@@ -776,7 +776,7 @@ impl Controller {
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
-        let this = Self {
+        Self {
             storage: Box::new(storage_controller),
             storage_collections: collections_ctl,
             compute: compute_controller,
@@ -805,12 +805,6 @@ impl Controller {
             dyncfg: mz_dyncfgs::all_dyncfgs(),
             replica_dyncfg_overrides: BTreeMap::new(),
             replica_http_locator: config.replica_http_locator,
-        };
-
-        if !this.read_only {
-            this.remove_past_generation_replicas_in_background();
         }
-
-        this
     }
 }

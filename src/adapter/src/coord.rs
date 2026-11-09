@@ -6852,26 +6852,18 @@ pub fn serve(
                             uncached_local_exprs,
                         )
                         .await?;
-                    if coord.controller.manages_replica_processes() {
-                        if coord.catalog().state().catalog_read_protection_enabled() {
-                            if !read_only_controllers {
-                                let observed = coord.controller.list_replica_services().await
-                                    .map_err(AdapterError::Orchestrator)?;
-                                // Writable creation commits before provisioning. Read
-                                // membership after listing, not from bootstrap inventory.
-                                let live = coord.catalog().committed_cluster_replicas().await?;
-                                coord.controller
-                                    .remove_orphaned_replicas_from_snapshot(observed, live)
-                                    .map_err(AdapterError::Orchestrator)?;
-                            }
-                            // A prewarming savepoint can provision private replicas.
-                            // Durable membership is not authority to delete them.
-                        } else {
-                            coord.controller.remove_orphaned_replicas(
-                                coord.catalog().get_next_user_replica_id().await?,
-                                coord.catalog().get_next_system_replica_id().await?,
-                            ).await.map_err(AdapterError::Orchestrator)?;
-                        }
+                    if coord.controller.manages_replica_processes()
+                        && coord.catalog().state().catalog_read_protection_enabled()
+                        && !read_only_controllers
+                    {
+                        let observed = coord.controller.list_replica_services().await
+                            .map_err(AdapterError::Orchestrator)?;
+                        // Writable creation commits before provisioning. Read
+                        // membership after listing, not from bootstrap inventory.
+                        let live = coord.catalog().committed_cluster_replicas().await?;
+                        coord.controller
+                            .remove_orphaned_replicas_from_snapshot(observed, live)
+                            .map_err(AdapterError::Orchestrator)?;
                     }
 
                     if let Some(retention_period) = storage_usage_retention_period {

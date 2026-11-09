@@ -27,17 +27,14 @@ pub use mz_controller_types::clusters::{
     ClusterRole, ClusterStatus, ManagedReplicaLocation, ReplicaAllocation, ReplicaConfig,
     ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
 };
-use mz_controller_types::dyncfgs::CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_orchestrator::{Service, ServiceEvent, ServicePort};
-use mz_ore::task::{self, AbortOnDropHandle};
-use mz_ore::{halt, instrument};
+use mz_ore::task::AbortOnDropHandle;
 use mz_repr::GlobalId;
 use regex::Regex;
 use serde::Serialize;
-use tokio::time;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 use crate::Controller;
 
@@ -260,39 +257,6 @@ impl Controller {
         Ok(())
     }
 
-    /// Removes replicas from past generations in a background task.
-    pub(crate) fn remove_past_generation_replicas_in_background(&self) {
-        if !self.manage_replica_processes {
-            return;
-        }
-        let deploy_generation = self.deploy_generation;
-        let dyncfg = Arc::clone(self.compute.dyncfg());
-        let orchestrator = Arc::clone(&self.orchestrator);
-        task::spawn(
-            || "controller_remove_past_generation_replicas",
-            async move {
-                info!("attempting to remove past generation replicas");
-                loop {
-                    match try_remove_past_generation_replicas(&*orchestrator, deploy_generation)
-                        .await
-                    {
-                        Ok(()) => {
-                            info!("successfully removed past generation replicas");
-                            return;
-                        }
-                        Err(e) => {
-                            let interval =
-                                CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL
-                                    .get(&dyncfg);
-                            warn!(%e, "failed to remove past generation replicas; will retry in {interval:?}");
-                            time::sleep(interval).await;
-                        }
-                    }
-                }
-            },
-        );
-    }
-
     /// Lists actual replica services across all generations.
     ///
     /// For snapshot-based orphan cleanup, await this list before reading
@@ -322,62 +286,6 @@ impl Controller {
         remove_orphaned_replica_services(observed, &live, self.deploy_generation, |name| {
             self.deprovision_replica(name.cluster_id, name.replica_id, name.generation)
         })
-    }
-
-    /// Remove replicas that are orphaned in the current generation using local
-    /// inventory and allocator bounds, for unprotected upgrade/prewarming.
-    #[instrument]
-    pub async fn remove_orphaned_replicas(
-        &mut self,
-        next_user_replica_id: u64,
-        next_system_replica_id: u64,
-    ) -> Result<(), anyhow::Error> {
-        let desired: BTreeSet<_> = self.metrics_tasks.keys().copied().collect();
-
-        let actual: BTreeSet<_> = self
-            .orchestrator
-            .list_services()
-            .await?
-            .iter()
-            .map(|s| ReplicaServiceName::from_str(s))
-            .collect::<Result<_, _>>()?;
-
-        for ReplicaServiceName {
-            cluster_id,
-            replica_id,
-            generation,
-        } in actual
-        {
-            // We limit our attention here to replicas from the current deploy
-            // generation. Replicas from past generations are cleaned up during
-            // `Controller::allow_writes`.
-            if generation != self.deploy_generation {
-                continue;
-            }
-
-            let smaller_next = match replica_id {
-                ReplicaId::User(id) if id >= next_user_replica_id => {
-                    Some(ReplicaId::User(next_user_replica_id))
-                }
-                ReplicaId::System(id) if id >= next_system_replica_id => {
-                    Some(ReplicaId::System(next_system_replica_id))
-                }
-                _ => None,
-            };
-            if let Some(next) = smaller_next {
-                // Found a replica in the orchestrator with a higher replica ID
-                // than what we are aware of. This must have been created by an
-                // environmentd that's competing for control of this generation.
-                // Abort to let the other process have full control.
-                halt!("found replica ID ({replica_id}) in orchestrator >= next ID ({next})");
-            }
-            if !desired.contains(&replica_id) {
-                self.deprovision_replica(cluster_id, replica_id, generation)?;
-            }
-        }
-
-        self.orchestrator.flush().await?;
-        Ok(())
     }
 
     pub fn events_stream(&self) -> BoxStream<'static, ClusterEvent> {
@@ -516,28 +424,6 @@ fn remove_orphaned_replica_services(
             drop_service(name)?;
         }
     }
-    Ok(())
-}
-
-/// Remove all replicas from past generations.
-async fn try_remove_past_generation_replicas(
-    orchestrator: &dyn NamespacedOrchestrator,
-    deploy_generation: u64,
-) -> Result<(), anyhow::Error> {
-    let services: BTreeSet<_> = orchestrator.list_services().await?.into_iter().collect();
-
-    for service in services {
-        let name: ReplicaServiceName = service.parse()?;
-        if name.generation < deploy_generation {
-            info!(
-                cluster_id = %name.cluster_id,
-                replica_id = %name.replica_id,
-                "removing past generation replica",
-            );
-            orchestrator.drop_service(&service)?;
-        }
-    }
-
     Ok(())
 }
 
