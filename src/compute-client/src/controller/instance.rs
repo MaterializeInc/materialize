@@ -773,6 +773,9 @@ impl Instance {
     fn freshness_config(&self) -> Option<RecorderConfig> {
         // A read-only instance belongs to a generation that is not the leader yet. The leader
         // writes the histograms, so a second writer would count the same time twice.
+        // NOTE: `read_only` never changes, because a promoted process halts and reboots as the
+        // leader (see `environmentd::deployment::preflight`). Promoting in place would leave
+        // recording off until the next restart.
         if self.read_only {
             return None;
         }
