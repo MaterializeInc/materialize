@@ -38,7 +38,7 @@ Syntax element | Description
   a concurrent write to the same table is retried automatically. Plain
   `INSERT ... VALUES` is not blocked.
 * **Large deletes.** A single `DELETE` that matches a very large number of rows
-  can fail to complete within `statement_timeout`. See
+  can exceed `max_result_size` or `statement_timeout`. See
   [Large `DELETE` statements](#large-delete-statements).
 
 ### Large `DELETE` statements
