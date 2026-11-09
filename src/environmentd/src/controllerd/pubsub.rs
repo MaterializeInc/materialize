@@ -26,7 +26,7 @@ const HTTP: &str = "internal-http";
 
 pub struct PubsubConfig {
     pub image: String,
-    pub grpc_port_hint: u16,
+    pub grpc_listen_addr: std::net::SocketAddr,
     pub http_port_hint: u16,
     pub cpu_limit: CpuLimit,
     pub memory_limit: MemoryLimit,
@@ -52,13 +52,13 @@ impl PubsubConfig {
             ports: vec![
                 ServicePort {
                     name: GRPC.into(),
-                    port_hint: self.grpc_port_hint,
-                    requires_tcp: true,
+                    port_hint: self.grpc_listen_addr.port(),
+                    tcp_listen_ip: Some(self.grpc_listen_addr.ip()),
                 },
                 ServicePort {
                     name: HTTP.into(),
                     port_hint: self.http_port_hint,
-                    requires_tcp: true,
+                    tcp_listen_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
                 },
             ],
             memory_limit: Some(self.memory_limit),
@@ -180,7 +180,7 @@ mod tests {
     fn relay_uses_assigned_ports_and_environment_lifetime() {
         let config = PubsubConfig {
             image: "pubsubd".into(),
-            grpc_port_hint: 6879,
+            grpc_listen_addr: "0.0.0.0:6879".parse().unwrap(),
             http_port_hint: 6881,
             cpu_limit: CpuLimit::from_millicpus(1000),
             memory_limit: MemoryLimit("512 MiB".parse().unwrap()),
@@ -189,7 +189,14 @@ mod tests {
         assert!(!config.inherit_kubernetes_owner_references);
         assert!(config.process_restart_on_image_change);
         assert_eq!(config.scale.get(), 1);
-        assert!(config.ports.iter().all(|port| port.requires_tcp));
+        assert_eq!(
+            config.ports[0].tcp_listen_ip,
+            Some(std::net::Ipv4Addr::UNSPECIFIED.into())
+        );
+        assert_eq!(
+            config.ports[1].tcp_listen_ip,
+            Some(std::net::Ipv4Addr::LOCALHOST.into())
+        );
         assert!(config.ports.iter().any(|port| port.name == "internal-http"));
         assert!(!config.labels.contains_key("generation"));
         let listen_addrs = BTreeMap::from([

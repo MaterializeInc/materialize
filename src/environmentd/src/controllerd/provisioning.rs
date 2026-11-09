@@ -99,7 +99,7 @@ impl AdapterProvisioningConfig {
             .map(|(i, (_, config))| ServicePort {
                 name: format!("sql-{i}"),
                 port_hint: config.addr.port(),
-                requires_tcp: true,
+                tcp_listen_ip: Some(config.addr.ip()),
             })
             .chain(
                 self.listeners
@@ -109,7 +109,7 @@ impl AdapterProvisioningConfig {
                     .map(|(i, (_, config))| ServicePort {
                         name: format!("http-{i}"),
                         port_hint: config.addr.port(),
-                        requires_tcp: true,
+                        tcp_listen_ip: Some(config.addr.ip()),
                     }),
             )
             .collect();
@@ -180,6 +180,12 @@ mod tests {
             "../../../materialized/ci/listener_configs/v26_32_0/no_auth.json"
         ))
         .expect("listener fixture parses");
+        listeners
+            .sql
+            .get_mut("internal")
+            .expect("internal SQL")
+            .addr
+            .set_ip(std::net::Ipv4Addr::LOCALHOST.into());
         let external = listeners
             .http
             .remove("external")
@@ -204,14 +210,34 @@ mod tests {
         let renamed = launch
             .service_config(AdapterId(3), "after", "small", &allocation)
             .expect("renamed specification");
+        let expected_ips: Vec<_> = listeners
+            .sql
+            .values()
+            .map(|l| Some(l.addr.ip()))
+            .chain(listeners.http.values().map(|l| Some(l.addr.ip())))
+            .collect();
+        assert_eq!(
+            original
+                .ports
+                .iter()
+                .map(|p| p.tcp_listen_ip)
+                .collect::<Vec<_>>(),
+            expected_ips
+        );
         let addresses: BTreeMap<_, _> = original
             .ports
             .iter()
             .enumerate()
             .map(|(i, port)| {
-                assert!(port.requires_tcp);
                 assert!(port.name.len() <= 15);
-                (port.name.clone(), format!("127.0.0.1:{}", 18000 + i))
+                (
+                    port.name.clone(),
+                    std::net::SocketAddr::new(
+                        port.tcp_listen_ip.unwrap(),
+                        18000 + u16::try_from(i).unwrap(),
+                    )
+                    .to_string(),
+                )
             })
             .collect();
         let assignments = || ServiceAssignments {

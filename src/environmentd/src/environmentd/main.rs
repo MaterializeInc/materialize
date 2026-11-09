@@ -1200,7 +1200,7 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
                     .pubsubd_image
                     .clone()
                     .context("managed pubsub requires --pubsubd-image")?,
-                grpc_port_hint: args.internal_persist_pubsub_listen_addr.port(),
+                grpc_listen_addr: args.internal_persist_pubsub_listen_addr,
                 http_port_hint: args.pubsub_http_port,
                 cpu_limit: args.pubsub_cpu_limit,
                 memory_limit: args.pubsub_memory_limit,

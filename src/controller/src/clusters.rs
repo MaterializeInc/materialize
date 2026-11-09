@@ -167,7 +167,7 @@ impl Controller {
                         &ServicePort {
                             name: name.into(),
                             port_hint,
-                            requires_tcp: false,
+                            tcp_listen_ip: None,
                         },
                     )
                 };

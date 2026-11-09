@@ -61,7 +61,7 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// scale and port, without provisioning, mutating service state, or making
     /// lifecycle RPCs. Addresses do not imply that the service exists or is ready.
     /// Backends that assign TCP ports dynamically return an error until an
-    /// assignment exists for a port with `requires_tcp`.
+    /// assignment exists for a port with `tcp_listen_ip`.
     fn service_addresses(
         &self,
         id: &str,
@@ -317,10 +317,11 @@ pub struct ServicePort {
     ///
     /// Not all orchestrator backends will make use of the hint.
     pub port_hint: u16,
-    /// Require an ordinary TCP endpoint rather than a backend-specific transport.
-    /// The local backend binds directly on loopback and treats `port_hint` as a
-    /// preference. Kubernetes ports are always TCP.
-    pub requires_tcp: bool,
+    /// Request a native TCP listener on this IP in the process backend instead
+    /// of its default Unix socket transport. `port_hint` remains a preference.
+    /// Retained processes keep their assigned endpoint until explicitly dropped.
+    /// Kubernetes ignores this setting and always assigns TCP listeners.
+    pub tcp_listen_ip: Option<std::net::IpAddr>,
 }
 
 /// Assignments that the orchestrator has made for a process in a service.
@@ -328,7 +329,7 @@ pub struct ServicePort {
 pub struct ServiceAssignments<'a> {
     /// For each specified [`ServicePort`] name, a listen address.
     pub listen_addrs: &'a BTreeMap<String, String>,
-    /// The listen addresses of each peer in the service.
+    /// The connectable addresses of each peer in the service.
     ///
     /// The order of peers is significant. Each peer is uniquely identified by its position in the
     /// list.

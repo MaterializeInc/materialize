@@ -349,14 +349,14 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         port: &ServicePort,
     ) -> Result<Vec<String>, anyhow::Error> {
         let run_dir = self.config.service_run_dir(id);
-        if port.requires_tcp {
+        if port.tcp_listen_ip.is_some() {
             let assignments = read_tcp_assignments(&run_dir)?;
             (0..usize::from(scale.get()))
                 .map(|i| {
                     assignments
                         .get(i)
                         .and_then(|a| a.get(&port.name))
-                        .map(ToString::to_string)
+                        .map(|address| connectable_tcp_address(*address).to_string())
                         .ok_or_else(|| {
                             anyhow!(
                                 "TCP port {} for service {id} process {i} is not assigned",
@@ -390,7 +390,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                 config
                     .ports
                     .iter()
-                    .any(|p| p.name == *name && p.requires_tcp)
+                    .any(|p| p.name == *name && p.tcp_listen_ip.is_some())
             });
         }
         let service = ProcessService {
@@ -398,12 +398,12 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             scale: config.scale,
             tcp,
         };
-        let peer_addrs = (0..config.scale.get())
+        let listen_addrs = (0..config.scale.get())
             .map(|i| {
                 config
                     .ports
                     .iter()
-                    .map(|port| (port.name.clone(), service.address(&port.name, i)))
+                    .map(|port| (port.name.clone(), service.listen_address(&port.name, i)))
                     .collect()
             })
             .collect();
@@ -416,7 +416,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             image: config.image,
             args: config.args,
             ports: config.ports,
-            peer_addrs,
+            listen_addrs,
             memory_limit: config.memory_limit,
             cpu_limit: config.cpu_limit,
             scale: config.scale,
@@ -539,7 +539,7 @@ struct EnsureServiceConfig {
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// Addresses selected before the lifecycle command was queued.
-    pub peer_addrs: Vec<BTreeMap<String, String>>,
+    pub listen_addrs: Vec<BTreeMap<String, String>>,
     /// An optional limit on the memory that the service can use.
     pub memory_limit: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
@@ -672,7 +672,7 @@ impl OrchestratorWorker {
             image,
             args,
             ports: ports_in,
-            peer_addrs,
+            listen_addrs,
             memory_limit,
             cpu_limit,
             scale,
@@ -681,6 +681,23 @@ impl OrchestratorWorker {
         }: EnsureServiceConfig,
     ) -> Result<(), anyhow::Error> {
         let full_id = self.config.full_id(&id);
+        // Children bind their configured interfaces, but peers need a destination
+        // address. Unix socket paths already serve both purposes.
+        let peer_addrs: Vec<BTreeMap<_, _>> = listen_addrs
+            .iter()
+            .map(|ports| {
+                ports
+                    .iter()
+                    .map(|(name, address)| {
+                        let address = address
+                            .parse::<SocketAddr>()
+                            .map(|address| connectable_tcp_address(address).to_string())
+                            .unwrap_or_else(|_| address.clone());
+                        (name.clone(), address)
+                    })
+                    .collect()
+            })
+            .collect();
 
         let run_dir = self.config.service_run_dir(&id);
         fs::create_dir_all(&run_dir)
@@ -726,7 +743,7 @@ impl OrchestratorWorker {
             // Create the state for new processes.
             let mut process_states = vec![];
             for i in 0..usize::cast_from(scale) {
-                let listen_addrs = &peer_addrs[i];
+                let listen_addrs = &listen_addrs[i];
 
                 // Fill out placeholders in the command wrapper for this process.
                 let mut command_wrapper = self.config.command_wrapper.clone();
@@ -744,7 +761,7 @@ impl OrchestratorWorker {
                         .config
                         .tcp_proxy
                         .as_ref()
-                        .filter(|_| !port.requires_tcp)
+                        .filter(|_| port.tcp_listen_ip.is_none())
                     {
                         None => None,
                         Some(tcp_proxy) => {
@@ -1571,12 +1588,40 @@ fn write_tcp_assignments(
     Ok(())
 }
 
+// IPv6 wildcard sockets can also accept IPv4. Reserve conservatively across
+// families, including mapped IPv4 addresses, even on IPv6-only hosts.
+fn tcp_bindings_overlap(a: SocketAddr, b: SocketAddr) -> bool {
+    a.port() == b.port() && {
+        let a = a.ip().to_canonical();
+        let b = b.ip().to_canonical();
+        a == b
+            || match (a, b) {
+                (IpAddr::V4(a), IpAddr::V4(b)) => a.is_unspecified() || b.is_unspecified(),
+                (IpAddr::V6(a), IpAddr::V6(b)) => a.is_unspecified() || b.is_unspecified(),
+                (IpAddr::V6(v6), IpAddr::V4(_)) | (IpAddr::V4(_), IpAddr::V6(v6)) => {
+                    v6.is_unspecified()
+                }
+            }
+    }
+}
+
+fn connectable_tcp_address(mut address: SocketAddr) -> SocketAddr {
+    let ip = address.ip().to_canonical();
+    if ip.is_unspecified() {
+        address.set_ip(match ip {
+            IpAddr::V4(_) => std::net::Ipv4Addr::LOCALHOST.into(),
+            IpAddr::V6(_) => std::net::Ipv6Addr::LOCALHOST.into(),
+        });
+    }
+    address
+}
+
 fn assign_tcp_ports(
     metadata_dir: &Path,
     run_dir: &Path,
     config: &ServiceConfig,
 ) -> Result<TcpAssignments, anyhow::Error> {
-    if !config.ports.iter().any(|port| port.requires_tcp) {
+    if !config.ports.iter().any(|port| port.tcp_listen_ip.is_some()) {
         return Ok(Vec::new());
     }
     let previous = read_tcp_assignments(run_dir)?;
@@ -1600,26 +1645,33 @@ fn assign_tcp_ports(
     );
     for i in 0..usize::from(config.scale.get()) {
         let ports = &mut assignments[i];
-        for port in config.ports.iter().filter(|port| port.requires_tcp) {
+        for port in config
+            .ports
+            .iter()
+            .filter(|port| port.tcp_listen_ip.is_some())
+        {
             let address = match previous.get(i).and_then(|ports| ports.get(&port.name)) {
                 // Never probe an existing assignment: a retained child can own it.
                 Some(address) => *address,
                 None => {
-                    let hint = SocketAddr::from(([127, 0, 0, 1], port.port_hint));
-                    let listener = if !used.contains(&hint) {
+                    let ip = port.tcp_listen_ip.expect("native TCP port");
+                    let reserved =
+                        |address| used.iter().any(|used| tcp_bindings_overlap(*used, address));
+                    let hint = SocketAddr::new(ip, port.port_hint);
+                    let listener = if !reserved(hint) {
                         StdTcpListener::bind(hint).ok()
                     } else {
                         None
                     };
                     let listener = match listener {
-                        Some(listener) if !used.contains(&listener.local_addr()?) => listener,
+                        Some(listener) if !reserved(listener.local_addr()?) => listener,
                         candidate => {
                             // Keep rejected ephemeral sockets bound until selection
                             // finishes so the OS cannot keep returning the same port.
                             let mut rejected: Vec<_> = candidate.into_iter().collect();
                             loop {
-                                let listener = StdTcpListener::bind(("127.0.0.1", 0))?;
-                                if !used.contains(&listener.local_addr()?) {
+                                let listener = StdTcpListener::bind((ip, 0))?;
+                                if !reserved(listener.local_addr()?) {
                                     drop(rejected);
                                     break listener;
                                 }
@@ -1668,7 +1720,7 @@ struct ProcessService {
 }
 
 impl ProcessService {
-    fn address(&self, port: &str, process: u16) -> String {
+    fn listen_address(&self, port: &str, process: u16) -> String {
         self.tcp
             .get(usize::from(process))
             .and_then(|a| a.get(port))
@@ -1680,7 +1732,13 @@ impl ProcessService {
 impl Service for ProcessService {
     fn addresses(&self, port: &str) -> Vec<String> {
         (0..self.scale.get())
-            .map(|i| self.address(port, i))
+            .map(|i| {
+                self.tcp
+                    .get(usize::from(i))
+                    .and_then(|ports| ports.get(port))
+                    .map(|address| connectable_tcp_address(*address).to_string())
+                    .unwrap_or_else(|| self.listen_address(port, i))
+            })
             .collect()
     }
 }
@@ -1689,6 +1747,42 @@ impl Service for ProcessService {
 mod tests {
     use super::*;
     use itertools::Itertools;
+
+    #[mz_ore::test]
+    fn native_tcp_discovery_uses_destination_addresses() {
+        for (listen, destination) in [
+            ("0.0.0.0:1234", "127.0.0.1:1234"),
+            ("[::]:1234", "[::1]:1234"),
+            ("[::ffff:0.0.0.0]:1234", "127.0.0.1:1234"),
+            ("127.0.0.2:1234", "127.0.0.2:1234"),
+            ("[::1]:1234", "[::1]:1234"),
+        ] {
+            let service = ProcessService {
+                run_dir: PathBuf::new(),
+                scale: NonZero::new(1).unwrap(),
+                tcp: vec![BTreeMap::from([("tcp".into(), listen.parse().unwrap())])],
+            };
+            assert_eq!(service.addresses("tcp"), vec![destination], "{listen}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn native_tcp_reservations_cover_dual_stack_overlap() {
+        for (a, b, overlaps) in [
+            ("[::]:1234", "127.0.0.1:1234", true),
+            ("[::]:1234", "[::1]:1234", true),
+            ("[::ffff:127.0.0.1]:1234", "127.0.0.1:1234", true),
+            ("[::ffff:0.0.0.0]:1234", "127.0.0.1:1234", true),
+            ("0.0.0.0:1234", "[::1]:1234", false),
+            ("[::]:1234", "127.0.0.1:1235", false),
+            ("127.0.0.1:1234", "127.0.0.2:1234", false),
+        ] {
+            let a = a.parse().unwrap();
+            let b = b.parse().unwrap();
+            assert_eq!(tcp_bindings_overlap(a, b), overlaps, "{a} vs {b}");
+            assert_eq!(tcp_bindings_overlap(b, a), overlaps, "{b} vs {a}");
+        }
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn service_addresses_parity() {
@@ -1726,7 +1820,7 @@ mod tests {
                 let port = ServicePort {
                     name: "compute".into(),
                     port_hint: 2100,
-                    requires_tcp: false,
+                    tcp_listen_ip: None,
                 };
                 let addresses = orchestrator.service_addresses(id, scale, &port).unwrap();
                 assert!(command_rx.try_recv().is_err());

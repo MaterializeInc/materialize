@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import json
 import os
 import shutil
 import signal
@@ -91,6 +92,16 @@ def test_controller_launch_and_restart(launcher, tmp_path, monkeypatch, optimize
     assert f"--pubsubd-image={tmp_path}/mzbuild/bin/pubsubd" in command
     if not optimized:
         assert launch.call_args.args[1]["RUST_MIN_STACK"] == run.RUST_MIN_STACK
+    listeners_arg = next(
+        arg for arg in command if arg.startswith("--listeners-config-json=")
+    )
+    listeners = json.loads(listeners_arg.split("=", 1)[1])
+    expected = json.loads(run.DEFAULT_LISTENERS_CONFIG.read_text())
+    for protocol in ("sql", "http"):
+        for name, listener in expected[protocol].items():
+            listener["addr"] = "127.0.0.1:" + listener["addr"].rsplit(":", 1)[1]
+            assert listeners[protocol][name] == listener
+    assert listeners == expected
     assert "--adapter-plan-build=1.2.3+build" in command
     assert f"--adapterd-image={tmp_path}/mzbuild/bin/adapterd" in command
     assert (
@@ -109,6 +120,18 @@ def test_controller_launch_and_restart(launcher, tmp_path, monkeypatch, optimize
     assert launch.call_args.args[0] == command
     assert (tmp_path / "mzdata-controllerd/environment-id").read_text() == identity
     assert not (tmp_path / "mzdata").exists()
+
+
+def test_controller_preserves_explicit_listener_configuration(launcher, monkeypatch):
+    monkeypatch.setattr(
+        run.sys,
+        "argv",
+        ["run", "controllerd", "--listeners-config-path", "/custom/listeners.json"],
+    )
+    assert run.main() == 0
+    command = launcher[5].call_args.args[0]
+    assert "--listeners-config-path=/custom/listeners.json" in command
+    assert not any(arg.startswith("--listeners-config-json=") for arg in command)
 
 
 def test_controller_prebuilt_versions_keep_binary_selection_independent(

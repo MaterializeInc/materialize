@@ -346,7 +346,7 @@ mod tests {
                 .map(|name| ServicePort {
                     name: name.into(),
                     port_hint: 0,
-                    requires_tcp: true,
+                    tcp_listen_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
                 })
                 .to_vec(),
             memory_limit: None,

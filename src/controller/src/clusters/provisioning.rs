@@ -263,7 +263,7 @@ impl ReplicaProvisioningConfig<'_> {
                 ServicePort {
                     name: "storagectl".into(),
                     port_hint: 2100,
-                    requires_tcp: false,
+                    tcp_listen_ip: None,
                 },
                 // To simplify the changes to tests, the port
                 // chosen here is _after_ the compute ones.
@@ -271,22 +271,22 @@ impl ReplicaProvisioningConfig<'_> {
                 ServicePort {
                     name: "storage".into(),
                     port_hint: 2103,
-                    requires_tcp: false,
+                    tcp_listen_ip: None,
                 },
                 ServicePort {
                     name: "computectl".into(),
                     port_hint: 2101,
-                    requires_tcp: false,
+                    tcp_listen_ip: None,
                 },
                 ServicePort {
                     name: "compute".into(),
                     port_hint: 2102,
-                    requires_tcp: false,
+                    tcp_listen_ip: None,
                 },
                 ServicePort {
                     name: "internal-http".into(),
                     port_hint: 6878,
-                    requires_tcp: false,
+                    tcp_listen_ip: None,
                 },
             ],
             cpu_limit: location.allocation.cpu_limit,

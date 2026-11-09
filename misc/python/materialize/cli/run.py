@@ -47,6 +47,9 @@ SANITIZER_TARGET = (
 )
 DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
 MZDATA = MZ_ROOT / "mzdata"
+DEFAULT_LISTENERS_CONFIG = (
+    MZ_ROOT / "src/materialized/ci/listener_configs/v26_32_0/no_auth.json"
+)
 DEFAULT_BLOB = f"file://{MZDATA}/persist/blob"
 RUST_MIN_STACK = os.getenv("RUST_MIN_STACK", "8388608")
 
@@ -196,8 +199,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--listeners-config-path",
-        help="Path to json file with environmentd listeners configuration.",
-        default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
+        help="Path to listener configuration (default: local-only unauthenticated listeners).",
     )
     parser.add_argument(
         "--controller-data-directory",
@@ -480,8 +482,19 @@ def _environment_args(
     except FileNotFoundError:
         environment_id = f"local-az1-{uuid.uuid4()}-0"
         environment_file.write_text(environment_id)
+    if args.listeners_config_path is None:
+        # The container default is wildcard-bound. Local development remains
+        # loopback-only unless the caller supplies an explicit configuration.
+        listeners = json.loads(DEFAULT_LISTENERS_CONFIG.read_text())
+        for protocol in ("sql", "http"):
+            for listener in listeners[protocol].values():
+                port = listener["addr"].rsplit(":", 1)[1]
+                listener["addr"] = f"127.0.0.1:{port}"
+        listeners_arg = f"--listeners-config-json={json.dumps(listeners)}"
+    else:
+        listeners_arg = f"--listeners-config-path={args.listeners_config_path}"
     return [
-        f"--listeners-config-path={args.listeners_config_path}",
+        listeners_arg,
         "--orchestrator=process",
         f"--orchestrator-process-secrets-directory={data}/secrets",
         f"--orchestrator-process-tcp-proxy-listen-addr={proxy_addr}",

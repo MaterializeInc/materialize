@@ -287,7 +287,7 @@ fn tcp_port(hint: u16) -> ServicePort {
     ServicePort {
         name: "client".into(),
         port_hint: hint,
-        requires_tcp: true,
+        tcp_listen_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
     }
 }
 
@@ -331,7 +331,7 @@ async fn tcp_assignment_discovery_and_queued_lifecycle() {
     other_config.ports.push(ServicePort {
         name: "peer".into(),
         port_hint: 0,
-        requires_tcp: false,
+        tcp_listen_ip: None,
     });
     let other = namespace.ensure_service("other", other_config).unwrap();
     let other_addresses = other.addresses(&port.name);
@@ -432,13 +432,52 @@ async fn tcp_hint_is_preferred() {
         .unwrap();
 }
 
+#[mz_ore::test(tokio::test)]
+async fn pending_tcp_reservations_cover_overlapping_bind_ips() {
+    for (first_ip, second_ip) in [
+        ([0, 0, 0, 0], [127, 0, 0, 1]),
+        ([127, 0, 0, 1], [0, 0, 0, 0]),
+    ] {
+        let fixture = Fixture::new(false);
+        let owner = fixture.owner().await;
+        let first = owner.namespace(NAMESPACE);
+        let second = owner.namespace("another");
+        let mut port = tcp_port(0);
+        port.tcp_listen_ip = Some(first_ip.into());
+        let service = first.ensure_service(SERVICE, tcp_config(&port)).unwrap();
+        let address: SocketAddr = service.addresses(&port.name)[0].parse().unwrap();
+
+        // Neither queued child is listening yet. Reservations must cover a
+        // wildcard's overlap with specific interfaces, across namespaces.
+        port.port_hint = address.port();
+        port.tcp_listen_ip = Some(second_ip.into());
+        let service = second.ensure_service(SERVICE, tcp_config(&port)).unwrap();
+        let other: SocketAddr = service.addresses(&port.name)[0].parse().unwrap();
+        assert_ne!(address.port(), other.port());
+
+        for namespace in [first, second] {
+            namespace.drop_service(SERVICE).unwrap();
+            time::timeout(TIMEOUT, namespace.flush())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+}
+
 fn echo_config(port: &ServicePort) -> ServiceConfig {
     let mut config = tcp_config(port);
     config.image = "/usr/bin/python3".into();
     let name = port.name.clone();
+    let expected_bind_ip = port.tcp_listen_ip.unwrap();
     config.args = Box::new(move |assignments| {
         let address = assignments.listen_addrs[&name].clone();
-        assert_eq!(assignments.peer_addresses(&name), vec![address.clone()]);
+        let mut peer: SocketAddr = address.parse().unwrap();
+        assert_eq!(peer.ip(), expected_bind_ip);
+        if peer.ip().is_unspecified() {
+            peer.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+        }
+        assert_eq!(assignments.peer_addresses(&name), vec![peer.to_string()]);
         vec![
             "-c".into(),
             r#"
@@ -464,80 +503,96 @@ while True:
 
 #[mz_ore::test(tokio::test)]
 async fn direct_tcp_connection_survives_owner_and_adoption() {
+    use itertools::Itertools;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let fixture = Fixture::new(true);
-    let owner = fixture.owner().await;
-    let namespace = owner.namespace(NAMESPACE);
-    let events = namespace.watch_services();
-    let port = tcp_port(0);
-    let service = namespace
-        .ensure_service(SERVICE, echo_config(&port))
-        .unwrap();
-    let address = service.addresses(&port.name)[0].clone();
-    let mut connection = time::timeout(TIMEOUT, async {
-        loop {
-            match tokio::net::TcpStream::connect(&address).await {
-                Ok(stream) => break stream,
-                Err(_) => time::sleep(Duration::from_millis(10)).await,
+    let ips = [
+        std::net::Ipv4Addr::LOCALHOST,
+        std::net::Ipv4Addr::UNSPECIFIED,
+    ];
+    for (bind_ip, requested_ip) in ips.into_iter().cartesian_product(ips) {
+        let fixture = Fixture::new(true);
+        let owner = fixture.owner().await;
+        let namespace = owner.namespace(NAMESPACE);
+        let events = namespace.watch_services();
+        let mut port = tcp_port(0);
+        port.tcp_listen_ip = Some(bind_ip.into());
+        let service = namespace
+            .ensure_service(SERVICE, echo_config(&port))
+            .unwrap();
+        let address = service.addresses(&port.name)[0].clone();
+        let mut connect_address: SocketAddr = address.parse().unwrap();
+        assert_eq!(connect_address.ip(), IpAddr::from([127, 0, 0, 1]));
+        if bind_ip.is_unspecified() {
+            // Another local destination proves the child did not bind only 127.0.0.1.
+            connect_address.set_ip(IpAddr::from([127, 0, 0, 2]));
+        }
+        let mut connection = time::timeout(TIMEOUT, async {
+            loop {
+                match tokio::net::TcpStream::connect(connect_address).await {
+                    Ok(stream) => break stream,
+                    Err(_) => time::sleep(Duration::from_millis(10)).await,
+                }
             }
-        }
-    })
-    .await
-    .expect("TCP child did not listen");
-    // Connecting can precede the supervisor's PID-file write.
-    time::timeout(TIMEOUT, async {
-        while read_identity(&fixture.run_dir().join("0.pid")).is_none() {
-            time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
-    let original = fixture.identity();
-    shutdown(owner, namespace, events).await;
-    assert_alive(original);
-    time::timeout(TIMEOUT, async {
-        connection.write_all(b"before").await.unwrap();
-        let mut reply = [0; 6];
-        connection.read_exact(&mut reply).await.unwrap();
-        assert_eq!(&reply, b"before");
-    })
-    .await
-    .unwrap();
-
-    let owner = fixture.owner().await;
-    let namespace = owner.namespace(NAMESPACE);
-    assert_eq!(
-        namespace
-            .service_addresses(SERVICE, NonZero::new(1).unwrap(), &port)
-            .unwrap(),
-        vec![address.clone()]
-    );
-    let mut events = namespace.watch_services();
-    let adopted = namespace
-        .ensure_service(SERVICE, echo_config(&port))
+        })
+        .await
+        .expect("TCP child did not honor its configured bind IP");
+        // Connecting can precede the supervisor's PID-file write.
+        time::timeout(TIMEOUT, async {
+            while read_identity(&fixture.run_dir().join("0.pid")).is_none() {
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
         .unwrap();
-    assert_eq!(adopted.addresses(&port.name), vec![address]);
-    time::timeout(TIMEOUT, async {
-        while events.next().await.unwrap().unwrap().status != ServiceStatus::Online {}
-    })
-    .await
-    .unwrap();
-    assert_eq!(fixture.identity(), original);
-    time::timeout(TIMEOUT, async {
-        connection.write_all(b"after").await.unwrap();
-        let mut reply = [0; 5];
-        connection.read_exact(&mut reply).await.unwrap();
-        assert_eq!(&reply, b"after");
-    })
-    .await
-    .unwrap();
-    fixture.drop_service(namespace.as_ref(), original).await;
-    assert!(
-        namespace
-            .service_addresses(SERVICE, NonZero::new(1).unwrap(), &port)
-            .is_err()
-    );
+        let original = fixture.identity();
+        shutdown(owner, namespace, events).await;
+        assert_alive(original);
+        time::timeout(TIMEOUT, async {
+            connection.write_all(b"before").await.unwrap();
+            let mut reply = [0; 6];
+            connection.read_exact(&mut reply).await.unwrap();
+            assert_eq!(&reply, b"before");
+        })
+        .await
+        .unwrap();
+
+        let owner = fixture.owner().await;
+        let namespace = owner.namespace(NAMESPACE);
+        // The assigned endpoint, not a changed bind request, governs adoption.
+        let mut config = echo_config(&port);
+        port.tcp_listen_ip = Some(requested_ip.into());
+        config.ports = vec![port.clone()];
+        assert_eq!(
+            namespace
+                .service_addresses(SERVICE, NonZero::new(1).unwrap(), &port)
+                .unwrap(),
+            vec![address.clone()]
+        );
+        let mut events = namespace.watch_services();
+        let adopted = namespace.ensure_service(SERVICE, config).unwrap();
+        assert_eq!(adopted.addresses(&port.name), vec![address]);
+        time::timeout(TIMEOUT, async {
+            while events.next().await.unwrap().unwrap().status != ServiceStatus::Online {}
+        })
+        .await
+        .unwrap();
+        assert_eq!(fixture.identity(), original);
+        time::timeout(TIMEOUT, async {
+            connection.write_all(b"after").await.unwrap();
+            let mut reply = [0; 5];
+            connection.read_exact(&mut reply).await.unwrap();
+            assert_eq!(&reply, b"after");
+        })
+        .await
+        .unwrap();
+        fixture.drop_service(namespace.as_ref(), original).await;
+        assert!(
+            namespace
+                .service_addresses(SERVICE, NonZero::new(1).unwrap(), &port)
+                .is_err()
+        );
+    }
 }
 
 #[mz_ore::test(tokio::test)]

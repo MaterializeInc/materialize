@@ -1967,7 +1967,7 @@ mod tests {
                 let port = mz_orchestrator::ServicePort {
                     name: "compute".into(),
                     port_hint: 2100 + scale.get(),
-                    requires_tcp,
+                    tcp_listen_ip: requires_tcp.then_some(std::net::Ipv4Addr::LOCALHOST.into()),
                 };
                 let infos_before = orchestrator.service_infos.lock().unwrap().len();
                 let addresses = orchestrator.service_addresses(id, scale, &port).unwrap();
