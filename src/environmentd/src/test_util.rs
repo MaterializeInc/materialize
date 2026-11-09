@@ -1353,7 +1353,6 @@ impl TestDeploymentResources {
             },
             timestamp_oracle_url: Some(self.timestamp_oracle_url.clone()),
             controller: ControllerConfig {
-                manage_replica_processes: false,
                 timestamp_oracle_url: Some(self.timestamp_oracle_url.clone()),
                 timestamp_oracle_clock_file: self
                     ._timestamp_oracle_clock
@@ -2492,4 +2491,96 @@ pub fn get_counter_value(registry: &MetricsRegistry, name: &str, labels: &[(&str
         })
         .map(|metric| u64::cast_lossy(metric.get_counter().value()))
         .sum()
+}
+
+#[cfg(test)]
+mod native_serve_tests {
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn unjoined_serving_rejects_before_tls_or_metadata() {
+        let mut harness = TestHarness::default();
+        let data = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let process = Arc::new(
+            ProcessOrchestrator::new(ProcessOrchestratorConfig {
+                image_dir: data.path().to_path_buf(),
+                suppress_output: true,
+                environment_id: harness.environment_id.to_string(),
+                secrets_dir: data.path().join("secrets"),
+                command_wrapper: vec![],
+                propagate_crashes: false,
+                retain_on_shutdown: false,
+                tcp_proxy: None,
+                scratch_directory: scratch.path().to_path_buf(),
+            })
+            .await
+            .unwrap(),
+        );
+        let hosted = Arc::new(hosted_adapters::HostedAdapters::new());
+        let registry = MetricsRegistry::new();
+        let clients = fixture_persist_clients(&harness, &registry, PubSubClientConnection::noop());
+        // Neither backend may be opened by a rejected serving request.
+        let forbidden: mz_ore::url::SensitiveUrl =
+            "invalid://metadata-access-forbidden".parse().unwrap();
+        let resources = TestDeploymentResources {
+            orchestrator: Arc::new(hosted_adapters::HostedOrchestrator::new(
+                process.clone(),
+                Arc::clone(&hosted),
+            )),
+            hosted,
+            secrets_controller: process,
+            adapter_persist_clients: Arc::clone(&clients),
+            persist_location: PersistLocation {
+                blob_uri: forbidden.clone(),
+                consensus_uri: forbidden.clone(),
+            },
+            timestamp_oracle_url: forbidden,
+            timestamp_oracle_now: harness.now.clone(),
+            pubsub_url: "http://127.0.0.1:1".into(),
+            environment_id: harness.environment_id.clone(),
+            generation: harness.deploy_generation,
+            code_version: harness.code_version.clone(),
+            seed: harness.seed,
+            data_directory: data.path().to_path_buf(),
+            _temp_dir: Some(data),
+            _scratch_dir: scratch,
+            _timestamp_oracle_clock: None,
+        };
+        for tls in [
+            None,
+            Some(TlsCertConfig {
+                cert: resources.data_directory.join("missing-cert.pem"),
+                key: resources.data_directory.join("missing-key.pem"),
+            }),
+        ] {
+            harness.tls = tls;
+            let config = resources.config(
+                harness.clone(),
+                None,
+                mz_server_core::cert_reload_never_reload(),
+                None,
+                registry.clone(),
+                Arc::clone(&clients),
+                TracingHandle::disabled(),
+            );
+            let listeners = crate::Listeners {
+                sql: BTreeMap::new(),
+                http: BTreeMap::new(),
+            };
+            let error = match listeners.serve(config).await {
+                Err(error) => error,
+                Ok(_) => panic!("combined serving must be rejected"),
+            };
+            assert!(
+                matches!(
+                    &error,
+                    mz_adapter::AdapterError::Unsupported(
+                        "combined environmentd deployments (use controllerd and adapterd)"
+                    )
+                ),
+                "unexpected startup error: {error}"
+            );
+        }
+    }
 }

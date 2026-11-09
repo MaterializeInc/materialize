@@ -11,7 +11,7 @@
 
 pub mod provisioning;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -19,8 +19,6 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use chrono::{DateTime, Utc};
-use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_client::logging::LogVariant;
 pub use mz_controller_types::clusters::{
@@ -29,12 +27,11 @@ pub use mz_controller_types::clusters::{
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
-use mz_orchestrator::{Service, ServiceEvent, ServicePort};
+use mz_orchestrator::ServicePort;
 use mz_ore::task::AbortOnDropHandle;
 use mz_repr::GlobalId;
 use regex::Regex;
-use serde::Serialize;
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::Controller;
 
@@ -52,19 +49,6 @@ pub struct ClusterConfig {
 
 /// Identifier of a process within a replica.
 pub type ProcessId = u64;
-
-/// An event describing a change in status of a cluster replica process.
-#[derive(Debug, Clone, Serialize)]
-pub struct ClusterEvent {
-    pub cluster_id: ClusterId,
-    pub replica_id: ReplicaId,
-    pub process_id: ProcessId,
-    pub status: ClusterStatus,
-    /// Cumulative restart count of the process, propagated from the orchestrator.
-    /// See [`mz_orchestrator::ServiceEvent::restart_count`].
-    pub restart_count: u64,
-    pub time: DateTime<Utc>,
-}
 
 impl Controller {
     /// Creates a cluster with the specified identifier and configuration.
@@ -127,15 +111,10 @@ impl Controller {
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        cluster_name: String,
-        replica_name: String,
-        role: ClusterRole,
         config: ReplicaConfig,
-        enable_worker_core_affinity: bool,
     ) -> Result<(), anyhow::Error> {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
-        let metrics_task: Option<AbortOnDropHandle<()>>;
 
         match config.location {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
@@ -148,9 +127,8 @@ impl Controller {
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: storagectl_addrs,
                 };
-                metrics_task = None;
             }
-            ReplicaLocation::Managed(m) if !self.manage_replica_processes => {
+            ReplicaLocation::Managed(m) => {
                 let service = ReplicaServiceName {
                     cluster_id,
                     replica_id,
@@ -179,30 +157,6 @@ impl Controller {
                     replica_id,
                     addresses("internal-http", 6878)?,
                 );
-                metrics_task = None;
-            }
-            ReplicaLocation::Managed(m) => {
-                let (service, metrics_task_join_handle) = self.provision_replica(
-                    cluster_id,
-                    replica_id,
-                    cluster_name,
-                    replica_name,
-                    role,
-                    m,
-                    enable_worker_core_affinity,
-                )?;
-                storage_location = ClusterReplicaLocation {
-                    ctl_addrs: service.addresses("storagectl"),
-                };
-                compute_location = ClusterReplicaLocation {
-                    ctl_addrs: service.addresses("computectl"),
-                };
-                metrics_task = Some(metrics_task_join_handle);
-
-                // Register the replica for HTTP proxying.
-                let http_addresses = service.addresses("internal-http");
-                self.replica_http_locator
-                    .register_replica(cluster_id, replica_id, http_addresses);
             }
         }
 
@@ -219,10 +173,6 @@ impl Controller {
             )?;
         }
 
-        if let Some(task) = metrics_task {
-            self.metrics_tasks.insert(replica_id, task);
-        }
-
         Ok(())
     }
 
@@ -233,21 +183,9 @@ impl Controller {
         replica_id: ReplicaId,
         publish_status_history: bool,
     ) -> Result<(), anyhow::Error> {
-        // We unconditionally deprovision even for unmanaged replicas to avoid
-        // needing to keep track of which replicas are managed and which are
-        // unmanaged. Deprovisioning is a no-op if the replica ID was never
-        // provisioned.
-        self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)?;
-        self.metrics_tasks.remove(&replica_id);
-
         // Remove HTTP addresses from the locator.
         self.replica_http_locator
             .remove_replica(cluster_id, replica_id);
-
-        // The coordinator only re-pushes the override map when the scoped
-        // configuration itself changes, so a dropped replica's entry would
-        // otherwise be retained until the next such change.
-        self.replica_dyncfg_overrides.remove(&replica_id);
 
         if !self.replica_owned_compute() {
             self.compute.drop_replica(cluster_id, replica_id)?;
@@ -256,175 +194,6 @@ impl Controller {
             .drop_replica(cluster_id, replica_id, publish_status_history);
         Ok(())
     }
-
-    /// Lists actual replica services across all generations.
-    ///
-    /// For snapshot-based orphan cleanup, await this list before reading
-    /// authoritative durable catalog replica membership.
-    pub async fn list_replica_services(&self) -> Result<Vec<ReplicaServiceName>, anyhow::Error> {
-        self.orchestrator
-            .list_services()
-            .await?
-            .iter()
-            .map(|s| s.parse())
-            .collect()
-    }
-
-    /// Removes only observed, current-generation services absent from `live`.
-    ///
-    /// The caller must obtain `observed` from `list_replica_services` BEFORE
-    /// fetching `live` from the authoritative durable catalog, not a bootstrap
-    /// or controller-local snapshot. Service creation must follow catalog commit
-    /// and replica IDs must never be reused. Thus an observed service absent from
-    /// the later catalog snapshot cannot belong to an in-flight allocation.
-    /// Services created after the list are left for a subsequent cleanup pass.
-    pub fn remove_orphaned_replicas_from_snapshot(
-        &self,
-        observed: Vec<ReplicaServiceName>,
-        live: BTreeSet<(ClusterId, ReplicaId)>,
-    ) -> Result<(), anyhow::Error> {
-        remove_orphaned_replica_services(observed, &live, self.deploy_generation, |name| {
-            self.deprovision_replica(name.cluster_id, name.replica_id, name.generation)
-        })
-    }
-
-    pub fn events_stream(&self) -> BoxStream<'static, ClusterEvent> {
-        if !self.manage_replica_processes {
-            return futures::stream::pending().boxed();
-        }
-        let deploy_generation = self.deploy_generation;
-
-        fn translate_event(event: ServiceEvent) -> Result<(ClusterEvent, u64), anyhow::Error> {
-            let ReplicaServiceName {
-                cluster_id,
-                replica_id,
-                generation: replica_generation,
-                ..
-            } = event.service_id.parse()?;
-
-            let event = ClusterEvent {
-                cluster_id,
-                replica_id,
-                process_id: event.process_id,
-                status: event.status,
-                restart_count: event.restart_count,
-                time: event.time,
-            };
-
-            Ok((event, replica_generation))
-        }
-
-        let stream = self
-            .orchestrator
-            .watch_services()
-            .map(|event| event.and_then(translate_event))
-            .filter_map(move |event| async move {
-                match event {
-                    Ok((event, replica_generation)) => {
-                        if replica_generation == deploy_generation {
-                            Some(event)
-                        } else {
-                            None
-                        }
-                    }
-                    Err(error) => {
-                        error!("service watch error: {error}");
-                        None
-                    }
-                }
-            });
-
-        Box::pin(stream)
-    }
-
-    /// Provisions a replica with the service orchestrator.
-    fn provision_replica(
-        &self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        cluster_name: String,
-        replica_name: String,
-        role: ClusterRole,
-        location: ManagedReplicaLocation,
-        enable_worker_core_affinity: bool,
-    ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
-        let service_name = ReplicaServiceName {
-            cluster_id,
-            replica_id,
-            generation: self.deploy_generation,
-        }
-        .to_string();
-        let config = provisioning::ReplicaProvisioningConfig {
-            deploy_generation: self.deploy_generation,
-            connection_context: self.connection_context(),
-            persist_pubsub_url: &self.persist_pubsub_url,
-            catalog_persist_location: self.catalog_persist_location.as_ref(),
-            catalog_timestamp_oracle_url: self.catalog_timestamp_oracle_url.as_ref(),
-            timestamp_oracle_clock_file: self.timestamp_oracle_clock_file.as_deref(),
-            catalog_follower_config: self.catalog_follower_config.as_deref(),
-            secrets_args: &self.secrets_args,
-            dyncfg: &self.dyncfg,
-            replica_dyncfg_overrides: self.replica_dyncfg_overrides.get(&replica_id),
-            clusterd_image: &self.clusterd_image,
-            init_container_image: self.init_container_image.as_deref(),
-        }
-        .service_config(
-            cluster_id,
-            replica_id,
-            cluster_name,
-            replica_name,
-            role,
-            location,
-            enable_worker_core_affinity,
-        )?;
-        let service = self.orchestrator.ensure_service(&service_name, config)?;
-
-        let tx = self.metrics_tx.clone();
-        let metrics_task = spawn_service_metrics_task(
-            Arc::clone(&self.orchestrator),
-            service_name,
-            move |metrics| {
-                let _ = tx.send((replica_id, metrics));
-            },
-        );
-
-        Ok((service, metrics_task))
-    }
-
-    /// Deprovisions a replica with the service orchestrator.
-    fn deprovision_replica(
-        &self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        generation: u64,
-    ) -> Result<(), anyhow::Error> {
-        if !self.manage_replica_processes {
-            return Ok(());
-        }
-        let service_name = ReplicaServiceName {
-            cluster_id,
-            replica_id,
-            generation,
-        }
-        .to_string();
-        self.orchestrator.drop_service(&service_name)
-    }
-}
-
-fn remove_orphaned_replica_services(
-    observed: Vec<ReplicaServiceName>,
-    live: &BTreeSet<(ClusterId, ReplicaId)>,
-    deploy_generation: u64,
-    mut drop_service: impl FnMut(ReplicaServiceName) -> Result<(), anyhow::Error>,
-) -> Result<(), anyhow::Error> {
-    for name in observed {
-        if name.generation == deploy_generation
-            && !live.contains(&(name.cluster_id, name.replica_id))
-        {
-            drop_service(name)?;
-        }
-    }
-    Ok(())
 }
 
 /// Represents the name of a cluster replica service in the orchestrator.
@@ -466,65 +235,6 @@ impl FromStr for ReplicaServiceName {
             // TODO: remove this in the next version of Materialize.
             generation: caps.get(3).map_or("0", |m| m.as_str()).parse().unwrap(),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[mz_ore::test]
-    fn snapshot_orphan_cleanup() {
-        // The actuator inventory includes a committed replica missing from the
-        // caller's bootstrap inventory, an orphan, and other generations.
-        let mut services: BTreeSet<String> = [
-            "u1-replica-u1-gen-2",
-            "u1-replica-u2-gen-2",
-            "u1-replica-u3-gen-1",
-            "u1-replica-u4-gen-3",
-            "s1-replica-s1-gen-2",
-        ]
-        .map(String::from)
-        .into_iter()
-        .collect();
-        let observed = services.iter().map(|s| s.parse().unwrap()).collect();
-
-        // Read authoritative membership after listing, including the newly
-        // committed replica. A service arriving after the list is out of scope,
-        // even if it is absent from this catalog snapshot.
-        let live = BTreeSet::from([
-            (ClusterId::User(1), ReplicaId::User(1)),
-            (ClusterId::System(1), ReplicaId::System(1)),
-        ]);
-        services.insert("u1-replica-u5-gen-2".into());
-        remove_orphaned_replica_services(observed, &live, 2, |name| {
-            assert!(services.remove(&name.to_string()));
-            Ok(())
-        })
-        .unwrap();
-
-        assert_eq!(
-            services,
-            [
-                "u1-replica-u1-gen-2",
-                "u1-replica-u3-gen-1",
-                "u1-replica-u4-gen-3",
-                "u1-replica-u5-gen-2",
-                "s1-replica-s1-gen-2",
-            ]
-            .map(String::from)
-            .into_iter()
-            .collect()
-        );
-    }
-
-    #[mz_ore::test]
-    fn snapshot_orphan_cleanup_propagates_drop_failure() {
-        let observed = vec!["u1-replica-u1-gen-2".parse().unwrap()];
-        let result = remove_orphaned_replica_services(observed, &BTreeSet::new(), 2, |_| {
-            Err(anyhow!("drop failed"))
-        });
-        assert_eq!(result.unwrap_err().to_string(), "drop failed");
     }
 }
 

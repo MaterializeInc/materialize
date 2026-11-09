@@ -9,7 +9,7 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Continue removing adapter-side process actuation and combined bootstrap
+Remove combined bootstrap and legacy controller-owned compute/storage execution
 alternatives. Preserve controllerd's catalog-authorized reconciliation and
 explicit retirement, adapter policy, endpoint discovery and observations.
 
@@ -28,10 +28,12 @@ controller-owned compute/storage execution also needs removal.
 
 ## Current cleanup outcome
 
-Exclusive replica cleanup based on deployment age or local allocator/inventory
-state is removed. Catalog-authorized cleanup, explicit retirement and service-name
-compatibility remain. All affected targets compile. Protected cleanup and native
-owner reconciliation tests passed, with independent review. The old retry interval
+Adapter-side replica provisioning, cleanup, process events and metrics ownership
+are removed. Controllerd remains the process owner. Adapter policy, endpoint
+discovery, child configuration and native observations remain. Combined library
+serving now rejects before TLS or metadata access. All affected targets compile
+and native owner tests pass. Independent review is resolved. Exclusive cleanup
+based on deployment age or local inventory is also removed. Its old retry interval
 remains accepted but ignored for persisted configuration compatibility.
 
 Native frontier publishers and SQL selectors, controller-backed Rust/SLT fixtures,
@@ -42,8 +44,8 @@ retained process identities, surviving sessions and persisted table/MV contents.
 This was a cached image with current binaries and entrypoint mounted, not a rebuilt
 image or broad CI. Port6881 is SASL SQL, not HTTP. Relay diagnostics use6883.
 
-Historical legacy-upgrade cases, incident-1007 repair paths and mixed
-pre-native/native platform plans now produce explicit skipped results before
+Historical legacy-upgrade cases, incident-1007 repair paths, PG CDC published-to-local
+upgrades and mixed pre-native/native platform plans produce explicit skipped results before
 workflow startup/reset. Obsolete old-checkout preflight selection is removed,
 and its CI triggers retain explicit unsupported skips. Old-only and
 all-native plans remain selected. Prepared randomized plans execute once.
@@ -54,6 +56,10 @@ before workflow dispatch. Its probe timed out during pulls, without starting
 services. Newly pulled unused image tags were removed.
 
 Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
+- `adapter-actuator-verification.md` links current-source build, review, boundary
+  and runtime evidence. `container-runtime/aj-native-runtime-1c5c0a71/` contains
+  the actuator-removal lifecycle run.
+- `pg-upgrade-boundary.md` links regression tests and the real CLI skipped result.
 - `exclusive-cleanup-review.md`, `exclusive-cleanup-check.log`,
   `exclusive-cleanup-combined-tests.log`.
 - `container-runtime/verification.md`, `native-bind-review.md`,

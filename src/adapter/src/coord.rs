@@ -82,7 +82,6 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
-use futures::StreamExt;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use http::Uri;
 use ipnet::IpNet;
@@ -113,7 +112,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
+    ClusterConfig, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
@@ -390,7 +389,6 @@ pub enum Message {
     },
     DeferredStatementReady,
     AdvanceTimelines,
-    ClusterEvent(ClusterEvent),
     LinearizeReads,
     StagedBatches {
         conn_id: ConnectionId,
@@ -561,9 +559,6 @@ impl Message {
                 controller: ControllerReadiness::Storage,
             } => "controller_ready(storage)",
             Message::ControllerReady {
-                controller: ControllerReadiness::Metrics,
-            } => "controller_ready(metrics)",
-            Message::ControllerReady {
                 controller: ControllerReadiness::Internal,
             } => "controller_ready(internal)",
             Message::QueryDataflowResponse(_) => "query_dataflow_response",
@@ -577,7 +572,6 @@ impl Message {
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApplied { .. } => "group_commit_applied",
             Message::AdvanceTimelines => "advance_timelines",
-            Message::ClusterEvent(_) => "cluster_event",
             Message::LinearizeReads => "linearize_reads",
             Message::StagedBatches { .. } => "staged_batches",
             Message::StorageUsageSchedule => "storage_usage_schedule",
@@ -629,8 +623,6 @@ pub enum ControllerReadiness {
     Storage,
     /// The compute controller is ready.
     Compute,
-    /// A batch of metric data is ready.
-    Metrics,
     /// An internally-generated message is ready to be returned.
     Internal,
 }
@@ -2130,25 +2122,6 @@ impl ClusterReplicaStatuses {
         prev.unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"))
     }
 
-    /// Inserts or updates the status of the specified cluster replica process.
-    ///
-    /// Panics if the cluster or replica does not exist.
-    pub(crate) fn ensure_cluster_status(
-        &mut self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        process_id: ProcessId,
-        status: ClusterReplicaProcessStatus,
-    ) {
-        let replica_statuses = self
-            .0
-            .get_mut(&cluster_id)
-            .unwrap_or_else(|| panic!("unknown cluster: {cluster_id}"))
-            .get_mut(&replica_id)
-            .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"));
-        replica_statuses.insert(process_id, status);
-    }
-
     /// Computes the status of the cluster replica as a whole.
     ///
     /// Panics if `cluster_id` or `replica_id` don't exist.
@@ -2854,20 +2827,11 @@ impl Coordinator {
         // Inform the controllers about their initial configuration.
         let compute_config = flags::compute_config(system_config);
         let storage_config = flags::storage_config(system_config);
-        let scheduling_config = flags::orchestrator_scheduling_config(system_config);
-        let dyncfg_updates = system_config.dyncfg_updates();
         self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_parameters(storage_config);
-        self.controller
-            .update_orchestrator_scheduling_config(scheduling_config);
-        self.controller.update_configuration(dyncfg_updates);
 
-        // Install the replica-local scoped overrides before creating any
-        // replica below. Parts of a replica's configuration (its `TimelyConfig`,
-        // its expiration offset) are resolved once, when the controller
-        // provisions the replica, and must see its overrides at that point. The
-        // push after the creation loop cannot serve this purpose, because those
-        // values are frozen by then.
+        // Install scoped controller overrides before registering replicas.
+        // Controllerd reconstructs process launch configuration from the catalog.
         let replica_dyncfg_overrides = self.replica_dyncfg_overrides();
         self.controller
             .update_replica_dyncfg_overrides(replica_dyncfg_overrides);
@@ -2897,8 +2861,6 @@ impl Coordinator {
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
 
-        let enable_worker_core_affinity =
-            self.catalog().system_config().enable_worker_core_affinity();
         self.restore_compute_read_protection().await?;
         for instance in self.catalog.clusters() {
             self.controller.create_cluster(
@@ -2909,15 +2871,10 @@ impl Coordinator {
                 },
             )?;
             for replica in instance.replicas() {
-                let role = instance.role();
                 self.controller.create_replica(
                     instance.id,
                     replica.replica_id,
-                    instance.name.clone(),
-                    replica.name.clone(),
-                    role,
                     replica.config.clone(),
-                    enable_worker_core_affinity,
                 )?;
             }
         }
@@ -5078,8 +5035,6 @@ impl Coordinator {
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
         async move {
-            // Watcher that listens for and reports cluster service status changes.
-            let mut cluster_events = self.controller.events_stream();
             let last_message = Arc::new(Mutex::new(LastMessage {
                 kind: "none",
                 stmt: None,
@@ -5327,12 +5282,6 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
                     // Receive a batch of commands.
                     _ = internal_cmd_rx.recv_many(&mut messages, MESSAGE_BATCH) => {},
-                    // `next()` on any stream is cancel-safe:
-                    // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
-                    // Receive a single command.
-                    Some(event) = cluster_events.next() => {
-                        messages.push(Message::ClusterEvent(event))
-                    },
                     // See [`mz_controller::Controller::Controller::ready`] for notes
                     // on why this is cancel-safe.
                     // Receive a single command.
@@ -5343,7 +5292,6 @@ impl Coordinator {
                         let controller = match self.controller.get_readiness() {
                             Readiness::Storage => ControllerReadiness::Storage,
                             Readiness::Compute => ControllerReadiness::Compute,
-                            Readiness::Metrics(_) => ControllerReadiness::Metrics,
                             Readiness::Internal(_) => ControllerReadiness::Internal,
                             Readiness::NotReady => unreachable!("just signaled as ready"),
                         };
@@ -5639,34 +5587,6 @@ impl Coordinator {
     /// Obtain a reference to the coordinator's secret reader, in an `Arc`.
     fn secrets_reader(&self) -> &Arc<dyn SecretsReader> {
         &self.connection_context().secrets_reader
-    }
-
-    /// Publishes a notice message to all sessions.
-    ///
-    /// TODO(parkmycar): This code is dead, but is a nice parallel to [`Coordinator::broadcast_notice_tx`]
-    /// so we keep it around.
-    #[allow(dead_code)]
-    pub(crate) fn broadcast_notice(&self, notice: AdapterNotice) {
-        for meta in self.active_conns.values() {
-            let _ = meta.notice_tx.send(notice.clone());
-        }
-    }
-
-    /// Returns a closure that will publish a notice to all sessions that were active at the time
-    /// this method was called.
-    pub(crate) fn broadcast_notice_tx(
-        &self,
-    ) -> Box<dyn FnOnce(AdapterNotice) -> () + Send + 'static> {
-        let senders: Vec<_> = self
-            .active_conns
-            .values()
-            .map(|meta| meta.notice_tx.clone())
-            .collect();
-        Box::new(move |notice| {
-            for tx in senders {
-                let _ = tx.send(notice.clone());
-            }
-        })
     }
 
     pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {
@@ -6852,20 +6772,6 @@ pub fn serve(
                             uncached_local_exprs,
                         )
                         .await?;
-                    if coord.controller.manages_replica_processes()
-                        && coord.catalog().state().catalog_read_protection_enabled()
-                        && !read_only_controllers
-                    {
-                        let observed = coord.controller.list_replica_services().await
-                            .map_err(AdapterError::Orchestrator)?;
-                        // Writable creation commits before provisioning. Read
-                        // membership after listing, not from bootstrap inventory.
-                        let live = coord.catalog().committed_cluster_replicas().await?;
-                        coord.controller
-                            .remove_orphaned_replicas_from_snapshot(observed, live)
-                            .map_err(AdapterError::Orchestrator)?;
-                    }
-
                     if let Some(retention_period) = storage_usage_retention_period {
                         coord
                             .prune_storage_usage_events_on_startup(retention_period)

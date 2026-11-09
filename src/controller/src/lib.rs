@@ -37,27 +37,24 @@ use mz_compute_client::controller::{
 };
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::{ClusterId, WatchSetId};
-use mz_dyncfg::{ConfigSet, ConfigUpdates};
-use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
-use mz_ore::cast::CastFrom;
+use mz_dyncfg::ConfigUpdates;
+use mz_orchestrator::{NamespacedOrchestrator, Orchestrator};
 use mz_ore::id_gen::Gen;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_secrets_cli::SecretsReaderCliArgs;
-use mz_storage_client::controller::{IntrospectionType, StorageController, StorageTxn};
+use mz_storage_client::controller::{StorageController, StorageTxn};
 use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::StorageError;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use timely::progress::Antichain;
-use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub mod clusters;
@@ -76,9 +73,6 @@ pub struct ControllerConfig {
     pub build_info: &'static BuildInfo,
     /// The orchestrator implementation to use.
     pub orchestrator: Arc<dyn Orchestrator>,
-    /// Whether this process owns replica provisioning, retirement and observations.
-    /// Join-only SQL adapters discover endpoints without managing processes.
-    pub manage_replica_processes: bool,
     /// The persist location where all storage collections will be written to.
     pub persist_location: PersistLocation,
     /// The shared EpochMilliseconds oracle used by replica catalog writers.
@@ -144,8 +138,6 @@ pub enum Readiness {
     Storage,
     /// The compute controller is ready.
     Compute,
-    /// A batch of metric data is ready.
-    Metrics((ReplicaId, Vec<ServiceProcessMetrics>)),
     /// An internally-generated message is ready to be returned.
     Internal(ControllerResponse),
 }
@@ -157,10 +149,6 @@ pub struct Controller {
     pub compute: ComputeController,
     /// Shared collection metrics for lifecycle owners and passive observers.
     pub metrics: ControllerMetrics,
-    /// The clusterd image to use when starting new cluster processes.
-    clusterd_image: String,
-    /// The init container image to use for clusterd.
-    init_container_image: Option<String>,
     /// A number representing the environment's generation.
     deploy_generation: u64,
     /// Whether or not this controller is in read-only mode.
@@ -171,32 +159,10 @@ pub struct Controller {
     read_only: bool,
     /// The cluster orchestrator.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
-    manage_replica_processes: bool,
     /// Tracks the readiness of the underlying controllers.
     readiness: Readiness,
-    /// Tasks for collecting replica metrics.
-    metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
-    /// Sender for the channel over which replica metrics are sent.
-    metrics_tx: mpsc::UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
-    /// Receiver for the channel over which replica metrics are sent.
-    metrics_rx: mpsc::UnboundedReceiver<(ReplicaId, Vec<ServiceProcessMetrics>)>,
-    /// A function providing the current wallclock time.
-    now: NowFn,
-
-    /// The URL for Persist PubSub.
-    persist_pubsub_url: String,
-
     /// Catalog access supplied to replicas in writable protected environments.
     catalog_persist_location: Option<PersistLocation>,
-    catalog_timestamp_oracle_url: Option<mz_ore::url::SensitiveUrl>,
-    timestamp_oracle_clock_file: Option<std::path::PathBuf>,
-
-    /// Opaque serialized reconstruction inputs supplied by the catalog owner.
-    catalog_follower_config: Option<String>,
-
-    /// Arguments for secrets readers.
-    secrets_args: SecretsReaderCliArgs,
-
     /// A map associating a global ID to the set of all the unfulfilled watch
     /// set ids that include it.
     ///
@@ -217,63 +183,30 @@ pub struct Controller {
     /// See [`Controller::install_compute_watch_set`]/[`Controller::install_storage_watch_set`] for a description of watch sets.
     immediate_watch_sets: Vec<WatchSetId>,
 
-    /// Dynamic system configuration.
-    dyncfg: ConfigSet,
-
-    /// The replica-local scoped overrides of [`Self::dyncfg`], by replica.
-    ///
-    /// Sparse: only replicas LaunchDarkly targets to a replica-specific value
-    /// have an entry. See [`Self::update_replica_dyncfg_overrides`].
-    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
-
     /// Locator for HTTP addresses of cluster replicas.
     replica_http_locator: Arc<ReplicaHttpLocator>,
 }
 
 impl Controller {
-    /// Sets catalog reconstruction inputs for subsequently provisioned replicas.
-    /// Must be called before provisioning replicas in a protected writable environment.
-    pub fn set_catalog_follower_config(&mut self, config: String) {
-        self.catalog_follower_config = Some(config);
-    }
-
     /// Whether maintained compute is enacted by catalog-following replicas.
-    /// Process provisioning and adapter-owned table work remain local.
+    /// Process provisioning belongs to controllerd. Table work remains adapter-owned.
     pub fn replica_owned_compute(&self) -> bool {
         mz_controller_types::clusters::REPLICA_OWNED_COMPUTE
             && self.catalog_persist_location.is_some()
     }
 
-    /// Update the controller configuration.
-    pub fn update_configuration(&mut self, updates: ConfigUpdates) {
-        updates.apply(&self.dyncfg);
-    }
-
     /// Replaces the per-replica dyncfg overrides of the replica-local scoped
-    /// system parameters, in this controller and in the compute and storage
-    /// controllers beneath it.
+    /// system parameters in the compute and storage controllers.
     ///
     /// Replicas absent from `overrides` have their overrides cleared, so a
     /// replica that no longer has one reverts to the environment-wide
     /// configuration. Callers should follow with a configuration push so
     /// running replicas observe the new values.
     ///
-    /// The three layers realize a [`ParameterScope::Replica`] config in
-    /// different places, which is why all three are fed from one call. The
-    /// compute and storage controllers specialize the configuration they push
-    /// to a running replica. This controller resolves the overrides that are
-    /// baked into a replica's process configuration when it is provisioned.
-    ///
-    /// [`ParameterScope::Replica`]: mz_dyncfg::ParameterScope::Replica
     pub fn update_replica_dyncfg_overrides(
         &mut self,
         overrides: BTreeMap<ClusterId, BTreeMap<ReplicaId, ConfigUpdates>>,
     ) {
-        self.replica_dyncfg_overrides = overrides
-            .values()
-            .flat_map(|replicas| replicas.iter())
-            .map(|(replica_id, updates)| (*replica_id, updates.clone()))
-            .collect();
         self.compute
             .update_replica_dyncfg_overrides(overrides.clone());
         self.storage.update_replica_dyncfg_overrides(overrides);
@@ -316,29 +249,15 @@ impl Controller {
             storage,
             compute,
             metrics: _,
-            clusterd_image: _,
-            init_container_image: _,
             deploy_generation,
             read_only,
             orchestrator: _,
-            manage_replica_processes: _,
             readiness,
-            metrics_tasks: _,
-            metrics_tx: _,
-            metrics_rx: _,
-            now: _,
-            persist_pubsub_url: _,
             catalog_persist_location: _,
-            catalog_timestamp_oracle_url: _,
-            timestamp_oracle_clock_file: _,
-            catalog_follower_config: _,
-            secrets_args: _,
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
             watch_set_id_gen: _,
             immediate_watch_sets,
-            dyncfg: _,
-            replica_dyncfg_overrides: _,
             replica_http_locator: _,
         } = self;
 
@@ -369,14 +288,6 @@ impl Controller {
 }
 
 impl Controller {
-    pub fn update_orchestrator_scheduling_config(
-        &self,
-        config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
-    ) {
-        if self.manage_replica_processes {
-            self.orchestrator.update_scheduling_config(config);
-        }
-    }
     /// Marks the end of any initialization commands.
     ///
     /// The implementor may wait for this method to be called before implementing prior commands,
@@ -385,11 +296,6 @@ impl Controller {
     pub fn initialization_complete(&mut self) {
         self.storage.initialization_complete();
         self.compute.initialization_complete();
-    }
-
-    /// Whether this process owns replica lifecycle rather than only local handles.
-    pub fn manages_replica_processes(&self) -> bool {
-        self.manage_replica_processes
     }
 
     /// Reports whether the controller is in read only mode.
@@ -432,9 +338,6 @@ impl Controller {
                     }
                     () = self.compute.ready() => {
                         self.readiness = Readiness::Compute;
-                    }
-                    Some(metrics) = self.metrics_rx.recv() => {
-                        self.readiness = Readiness::Metrics(metrics);
                     }
                 }
             }
@@ -592,7 +495,6 @@ impl Controller {
             Readiness::NotReady => Ok(None),
             Readiness::Storage => self.process_storage_response(),
             Readiness::Compute => self.process_compute_response(),
-            Readiness::Metrics((id, metrics)) => self.process_replica_metrics(id, metrics),
             Readiness::Internal(message) => Ok(Some(message)),
         }
     }
@@ -636,48 +538,6 @@ impl Controller {
             }
         }
         (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
-    }
-
-    fn process_replica_metrics(
-        &mut self,
-        id: ReplicaId,
-        metrics: Vec<ServiceProcessMetrics>,
-    ) -> Result<Option<ControllerResponse>, anyhow::Error> {
-        self.record_replica_metrics(id, &metrics);
-        Ok(None)
-    }
-
-    fn record_replica_metrics(&mut self, replica_id: ReplicaId, metrics: &[ServiceProcessMetrics]) {
-        if self.read_only() {
-            return;
-        }
-
-        let now = mz_ore::now::to_datetime((self.now)());
-        let now_tz = now.try_into().expect("must fit");
-
-        let replica_id = replica_id.to_string();
-        let mut row = Row::default();
-        let updates = metrics
-            .iter()
-            .enumerate()
-            .map(|(process_id, m)| {
-                row.packer().extend(&[
-                    Datum::String(&replica_id),
-                    Datum::UInt64(u64::cast_from(process_id)),
-                    m.cpu_nano_cores.into(),
-                    m.memory_bytes.into(),
-                    m.disk_bytes.into(),
-                    Datum::TimestampTz(now_tz),
-                    m.heap_bytes.into(),
-                    m.heap_limit.into(),
-                    m.swap_bytes.into(),
-                ]);
-                (row.clone(), mz_repr::Diff::ONE)
-            })
-            .collect();
-
-        self.storage
-            .append_introspection_updates(IntrospectionType::ReplicaMetricsHistory, updates);
     }
 
     /// Determine the "real-time recency" timestamp for all `ids`.
@@ -774,36 +634,21 @@ impl Controller {
             config.now.clone(),
             wallclock_lag_fn,
         );
-        let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
         Self {
             storage: Box::new(storage_controller),
             storage_collections: collections_ctl,
             compute: compute_controller,
             metrics: controller_metrics,
-            clusterd_image: config.clusterd_image,
-            init_container_image: config.init_container_image,
             deploy_generation: config.deploy_generation,
             read_only,
             orchestrator: config.orchestrator.namespace("cluster"),
-            manage_replica_processes: config.manage_replica_processes,
             readiness: Readiness::NotReady,
-            metrics_tasks: BTreeMap::new(),
-            metrics_tx,
-            metrics_rx,
-            now: config.now,
-            persist_pubsub_url: config.persist_pubsub_url,
             catalog_persist_location,
-            catalog_timestamp_oracle_url: config.timestamp_oracle_url,
-            timestamp_oracle_clock_file: config.timestamp_oracle_clock_file,
-            catalog_follower_config: None,
-            secrets_args: config.secrets_args,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),
             watch_set_id_gen: Gen::default(),
             immediate_watch_sets: Vec::new(),
-            dyncfg: mz_dyncfgs::all_dyncfgs(),
-            replica_dyncfg_overrides: BTreeMap::new(),
             replica_http_locator: config.replica_http_locator,
         }
     }

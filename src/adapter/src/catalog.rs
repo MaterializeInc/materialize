@@ -505,10 +505,6 @@ impl Catalog {
         controller
             .storage
             .set_collection_metadata_certifier(Arc::new(self.upper_handle()));
-        controller.set_catalog_follower_config(
-            serde_json::to_string(&self.replica_config())
-                .expect("catalog reconstruction configuration is serializable"),
-        );
         let revision = self.transient_revision();
         loop {
             match self

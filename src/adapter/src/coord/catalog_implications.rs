@@ -46,7 +46,7 @@ use mz_catalog::memory::objects::{
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::protocol::response::{PeekError, PeekResponse};
-use mz_controller::clusters::{ClusterRole, ReplicaConfig};
+use mz_controller::clusters::ReplicaConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -198,14 +198,12 @@ impl Coordinator {
     /// Called once per changed batch, including retractions that restore defaults.
     fn apply_current_system_configuration(&mut self) {
         mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
-        self.update_controller_config();
         self.update_compute_config();
         self.update_storage_config();
         self.update_timestamp_oracle_config();
         self.update_metrics_retention();
         self.update_tracing_config();
         self.update_secrets_caching_config();
-        self.update_cluster_scheduling_config();
         self.update_http_config();
 
         // Preserve the pending tick when an unrelated configuration changes.
@@ -220,12 +218,6 @@ impl Coordinator {
         self.optimizer_metrics
             .set_e2e_optimization_time_log_threshold(threshold);
         self.catalog().system_config().notify_all_callbacks();
-    }
-
-    fn update_cluster_scheduling_config(&self) {
-        let config = flags::orchestrator_scheduling_config(self.catalog.system_config());
-        self.controller
-            .update_orchestrator_scheduling_config(config);
     }
 
     fn update_secrets_caching_config(&self) {
@@ -291,12 +283,6 @@ impl Coordinator {
             .collect::<Vec<_>>();
         self.update_storage_read_policies(storage_policies);
         self.update_compute_read_policies(compute_policies);
-    }
-
-    fn update_controller_config(&mut self) {
-        let sys_config = self.catalog().system_config();
-        self.controller
-            .update_configuration(sys_config.dyncfg_updates());
     }
 
     fn update_http_config(&mut self) {
@@ -831,14 +817,9 @@ impl Coordinator {
             }
         }
 
-        // Apply replica-scoped overrides after clusters are created (so their
-        // compute instances exist) but before replicas are created below. The
-        // override layer must be set before `create_replica`, so the new
-        // replica's first configuration replays with its override, and so the
-        // configuration the controller freezes into the replica's process at
-        // provisioning time resolves against it. The push reads the catalog
-        // working copy, which already reflects this transaction's scoped-config
-        // changes.
+        // Apply replica-scoped overrides after clusters exist and before the
+        // replicas' first controller configuration. The catalog working copy
+        // already reflects this transaction's scoped-config changes.
         if replica_scoped_config_changed {
             self.push_replica_dyncfg_overrides();
         }
@@ -856,22 +837,9 @@ impl Coordinator {
                             replica.config.location.num_processes(),
                             now,
                         );
-                    // Read the cluster name and role from the current catalog
-                    // state. This is correct as long as implications are
-                    // processed right after each catalog transaction. For a
-                    // more future-proof approach that tracks cluster info
-                    // locally across transactions, see the last commit of
-                    // https://github.com/ggevay/materialize/tree/implications-cluster-name-tracking
-                    // which removes that logic.
-                    let cluster = self.catalog().get_cluster(cluster_id);
-                    let cluster_name = cluster.name.clone();
-                    let cluster_role = cluster.role();
                     cluster_replicas_to_create.push((
                         cluster_id,
                         replica_id,
-                        cluster_role,
-                        cluster_name,
-                        replica.name.clone(),
                         replica.config.clone(),
                     ));
                 }
@@ -923,18 +891,9 @@ impl Coordinator {
                 self.drop_replica(cluster_id, replica_id, publish_derived_rows);
             }
         }
-        for (cluster_id, replica_id, role, cluster_name, replica_name, config) in
-            cluster_replicas_to_create
-        {
-            self.handle_create_cluster_replica(
-                cluster_id,
-                replica_id,
-                role,
-                cluster_name,
-                replica_name,
-                config,
-            )
-            .await;
+        for (cluster_id, replica_id, config) in cluster_replicas_to_create {
+            self.handle_create_cluster_replica(cluster_id, replica_id, config)
+                .await;
         }
 
         if !source_collections_to_create.is_empty() || !table_collections_to_create.is_empty() {
@@ -2574,14 +2533,8 @@ impl Coordinator {
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        role: ClusterRole,
-        cluster_name: String,
-        replica_name: String,
         replica_config: ReplicaConfig,
     ) {
-        let enable_worker_core_affinity =
-            self.catalog().system_config().enable_worker_core_affinity();
-
         // This replica's scoped (replica-local) overrides were pushed into the
         // controller's per-replica layer before this loop, by the
         // replica-scoped-configuration implication, so the replica's first
@@ -2589,15 +2542,7 @@ impl Coordinator {
         // too late, which is why the push precedes `create_replica`.
 
         self.controller
-            .create_replica(
-                cluster_id,
-                replica_id,
-                cluster_name,
-                replica_name,
-                role,
-                replica_config,
-                enable_worker_core_affinity,
-            )
+            .create_replica(cluster_id, replica_id, replica_config)
             .expect("creating replicas must not fail");
 
         self.install_introspection_subscribes(cluster_id, replica_id)

@@ -17,13 +17,10 @@ use std::time::{Duration, Instant};
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_audit_log::VersionedStorageUsage;
-use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::ControllerResponse;
-use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
-use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
@@ -35,19 +32,17 @@ use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::StorageDiff;
 use opentelemetry::trace::TraceContextExt;
 use rand::{RngExt, SeedableRng, rngs};
-use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::TimestampContext;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::BuiltinTableUpdate;
 use crate::command::Command;
 use crate::coord::{
-    AlterConnectionValidationReady, ArrangementSizeRecord, ClusterReplicaStatuses, Coordinator,
+    AlterConnectionValidationReady, ArrangementSizeRecord, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
-use crate::telemetry::{EventDetails, SegmentClientExt};
-use crate::{AdapterNotice, TimestampContext};
 
 /// How long an introspection subscribe must have been delivering data before
 /// the arrangement sizes snapshot trusts its replica's rows.
@@ -203,7 +198,6 @@ impl Coordinator {
                     tracing::warn!(%error, "unable to establish query timeline windows");
                 }
             }
-            Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::LinearizeReads => {
                 self.message_linearize_reads().boxed_local().await;
             }
@@ -723,8 +717,8 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     async fn arrangement_sizes_write(&mut self, records: Vec<ArrangementSizeRecord>) {
         // Freshness may have been invalidated while the snapshot task ran,
-        // e.g. by a cluster event reporting a replica offline. Revalidate so
-        // records prepared from a now-untrusted replica's data are dropped.
+        // e.g. by an introspection subscribe failing after a replica disconnects.
+        // Revalidate so records from a now-untrusted replica's data are dropped.
         let fresh_size_replicas = self.fresh_introspection_replicas(
             IntrospectionType::ComputeObjectArrangementSizes,
             ARRANGEMENT_SIZES_FRESHNESS_MARGIN,
@@ -1128,126 +1122,6 @@ impl Coordinator {
             .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_id, conn)
             .await;
         ctx.retire(result);
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn message_cluster_event(&mut self, event: ClusterEvent) {
-        event!(Level::TRACE, event = format!("{:?}", event));
-
-        if let Some(segment_client) = &self.segment_client {
-            let env_id = &self.catalog().config().environment_id;
-            let mut properties = json!({
-                "cluster_id": event.cluster_id.to_string(),
-                "replica_id": event.replica_id.to_string(),
-                "process_id": event.process_id,
-                "status": event.status.as_kebab_case_str(),
-            });
-            match event.status {
-                ClusterStatus::Online => (),
-                ClusterStatus::Offline(reason) => {
-                    let properties = match &mut properties {
-                        serde_json::Value::Object(map) => map,
-                        _ => unreachable!(),
-                    };
-                    properties.insert(
-                        "reason".into(),
-                        json!(reason.display_or("unknown").to_string()),
-                    );
-                }
-            };
-            segment_client.environment_track(
-                env_id,
-                "Cluster Changed Status",
-                properties,
-                EventDetails {
-                    timestamp: Some(event.time),
-                    ..Default::default()
-                },
-            );
-        }
-
-        // It is possible that we receive a status update for a replica that has
-        // already been dropped from the catalog. Just ignore these events.
-        let Some(replica_statuses) = self
-            .cluster_replica_statuses
-            .try_get_cluster_replica_statuses(event.cluster_id, event.replica_id)
-        else {
-            return;
-        };
-
-        let old_process_status = &replica_statuses[&event.process_id];
-        let status_changed = event.status != old_process_status.status;
-        let restart_count_changed = event.restart_count != old_process_status.restart_count;
-
-        // Restart counts must remain current even when status does not change.
-        // Status history and notices track actual status transitions, and no-op
-        // events must not advance the mirrored status-change time.
-        if !status_changed && !restart_count_changed {
-            return;
-        }
-
-        if status_changed && !self.controller.read_only() {
-            let offline_reason = match event.status {
-                ClusterStatus::Online => None,
-                ClusterStatus::Offline(None) => None,
-                ClusterStatus::Offline(Some(reason)) => Some(reason.to_string()),
-            };
-            let row = Row::pack_slice(&[
-                Datum::String(&event.replica_id.to_string()),
-                Datum::UInt64(event.process_id),
-                Datum::String(event.status.as_kebab_case_str()),
-                Datum::from(offline_reason.as_deref()),
-                Datum::TimestampTz(event.time.try_into().expect("must fit")),
-            ]);
-            self.controller.storage.append_introspection_updates(
-                IntrospectionType::ReplicaStatusHistory,
-                vec![(row, Diff::ONE)],
-            );
-        }
-
-        // Capture the rolled-up replica status before the update so we can tell
-        // whether the user-visible status changed. Only needed for the notice.
-        let old_replica_status = status_changed
-            .then(|| ClusterReplicaStatuses::cluster_replica_status(replica_statuses));
-
-        let new_process_status = ClusterReplicaProcessStatus {
-            status: event.status,
-            restart_count: event.restart_count,
-            time: event.time,
-        };
-        self.cluster_replica_statuses.ensure_cluster_status(
-            event.cluster_id,
-            event.replica_id,
-            event.process_id,
-            new_process_status,
-        );
-
-        // The replica's introspection subscribes may keep serving data written
-        // for its previous incarnation until their failure responses are
-        // processed. Invalidate freshness eagerly so consumers like the
-        // arrangement sizes history don't record that data as current.
-        if !matches!(event.status, ClusterStatus::Online) || restart_count_changed {
-            self.invalidate_introspection_freshness(event.replica_id);
-        }
-
-        if let Some(old_replica_status) = old_replica_status {
-            let cluster = self.catalog().get_cluster(event.cluster_id);
-            let replica = cluster.replica(event.replica_id).expect("Replica exists");
-            let new_replica_status = self
-                .cluster_replica_statuses
-                .get_cluster_replica_status(event.cluster_id, event.replica_id);
-
-            if old_replica_status != new_replica_status {
-                let notifier = self.broadcast_notice_tx();
-                let notice = AdapterNotice::ClusterReplicaStatusChanged {
-                    cluster: cluster.name.clone(),
-                    replica: replica.name.clone(),
-                    status: new_replica_status,
-                    time: event.time,
-                };
-                notifier(notice);
-            }
-        }
     }
 
     #[mz_ore::instrument(level = "debug")]

@@ -10,12 +10,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZero;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::stream::BoxStream;
 use mz_catalog::catalog::{Catalog, Op, ReplicaCreateDropReason};
 use mz_catalog::durable::{TestCatalogStateBuilder, test_bootstrap_args};
 use mz_controller::clusters::ReplicaServiceName;
 use mz_controller::clusters::provisioning::ReplicaProvisioningConfig;
+use mz_controller_types::ReplicaId;
 use mz_orchestrator::{
     NamespacedOrchestrator, Service, ServiceConfig, ServiceEvent, ServicePort,
     ServiceProcessMetrics,
@@ -46,7 +48,7 @@ async fn disconnected_catalogs() -> (Catalog, Catalog, MetricsRegistry) {
     let bootstrap = test_bootstrap_args();
     let storage = TestCatalogStateBuilder::new(producer.clone())
         .with_organization_id(organization)
-        .with_default_deploy_generation()
+        .with_deploy_generation(2)
         .unwrap_build()
         .await
         .open(SYSTEM_TIME().into(), &bootstrap)
@@ -72,7 +74,7 @@ async fn disconnected_catalogs() -> (Catalog, Catalog, MetricsRegistry) {
     let observer = cache.open(location).await.expect("controller Persist");
     let storage = TestCatalogStateBuilder::new(observer.clone())
         .with_organization_id(organization)
-        .with_default_deploy_generation()
+        .with_deploy_generation(2)
         .unwrap_build()
         .await
         .join()
@@ -125,6 +127,10 @@ fn adapter_id(catalog: &Catalog, name: &str) -> Option<AdapterId> {
 #[derive(Debug, Default)]
 struct InventoryOrchestrator {
     observed: Vec<String>,
+    // A later list can see services absent from the cleanup's original snapshot.
+    late_services: Vec<String>,
+    lists: AtomicUsize,
+    fail_drop: bool,
     dropped: Mutex<Vec<String>>,
     ensured: Mutex<Vec<String>>,
 }
@@ -166,12 +172,17 @@ impl NamespacedOrchestrator for InventoryOrchestrator {
     }
 
     fn drop_service(&self, id: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.fail_drop, "drop failed");
         self.dropped.lock().unwrap().push(id.to_owned());
         Ok(())
     }
 
     async fn list_services(&self) -> anyhow::Result<Vec<String>> {
-        Ok(self.observed.clone())
+        let mut observed = self.observed.clone();
+        if self.lists.fetch_add(1, Ordering::SeqCst) > 0 {
+            observed.extend(self.late_services.clone());
+        }
+        Ok(observed)
     }
 
     async fn flush(&self) -> anyhow::Result<()> {
@@ -236,6 +247,7 @@ async fn adapter_cleanup_preserves_unobserved_peer_create() {
         observed: vec![
             live_service.clone(),
             retired_service.clone(),
+            service_name(retired, generation - 1),
             service_name(retired, generation + 1),
         ],
         ..Default::default()
@@ -360,8 +372,10 @@ async fn replica_cleanup_preserves_unobserved_peer_create() {
         observed: vec![
             live_service.clone(),
             retired_service.clone(),
+            service(retired, generation - 1),
             service(retired, generation + 1),
         ],
+        late_services: vec![service(ReplicaId::User(9999), generation)],
         ..Default::default()
     };
     let dyncfg = mz_controller_types::dyncfgs::all_dyncfgs(mz_dyncfg::ConfigSet::default());
@@ -389,7 +403,10 @@ async fn replica_cleanup_preserves_unobserved_peer_create() {
     let inventory = reconcile_replicas(&mut controller, &orchestrator, &launch)
         .await
         .expect("reconcile stale replica inventory");
-    assert_eq!(*orchestrator.dropped.lock().unwrap(), vec![retired_service]);
+    assert_eq!(
+        *orchestrator.dropped.lock().unwrap(),
+        vec![retired_service.clone()]
+    );
     let entry = inventory
         .iter()
         .find(|entry| entry.replica_id == live)
@@ -430,6 +447,16 @@ async fn replica_cleanup_preserves_unobserved_peer_create() {
         "known inventory needs no fresh read"
     );
     assert!(settled.dropped.lock().unwrap().is_empty());
+
+    let failing = InventoryOrchestrator {
+        observed: vec![retired_service],
+        fail_drop: true,
+        ..Default::default()
+    };
+    let error = reconcile_replicas(&mut controller, &failing, &launch)
+        .await
+        .expect_err("cleanup must report a rejected process drop");
+    assert_eq!(error.to_string(), "drop failed");
 
     controller.expire().await;
     writer.expire().await;

@@ -94,7 +94,8 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 pub struct Config {
     pub adapter_size_names: std::collections::BTreeSet<String>,
     /// Join this declared adapter in the specified deployment without initialization
-    /// or process-management authority. `None` retains combined environmentd mode.
+    /// or process-management authority. Required by [`Listeners::serve`].
+    /// Controller initialization leaves this unset.
     pub joined_adapter_id: Option<mz_repr::AdapterId>,
 
     // === Special modes. ===
@@ -383,13 +384,17 @@ impl Listeners {
         Ok(Listeners { http, sql })
     }
 
-    /// Starts an `environmentd` server.
+    /// Starts a declared, join-only adapter.
     ///
-    /// Returns a handle to the server once it is fully booted.
+    /// Requires `config.joined_adapter_id`. Returns a handle once fully booted.
+    /// Combined initialization and serving is unsupported. Use controllerd to
+    /// initialize the deployment before starting its adapters.
     #[instrument(name = "environmentd::serve")]
-    pub async fn serve(self, mut config: Config) -> Result<Server, AdapterError> {
-        if config.joined_adapter_id.is_some() {
-            config.controller.manage_replica_processes = false;
+    pub async fn serve(self, config: Config) -> Result<Server, AdapterError> {
+        if config.joined_adapter_id.is_none() {
+            return Err(AdapterError::Unsupported(
+                "combined environmentd deployments (use controllerd and adapterd)",
+            ));
         }
         let serve_start = Instant::now();
         info!("startup: envd serve: beginning");

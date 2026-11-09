@@ -1362,7 +1362,6 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let replica_http_locator = Arc::new(ReplicaHttpLocator::default());
     let controller = ControllerConfig {
-        manage_replica_processes: is_controller,
         timestamp_oracle_url: timestamp_oracle_url.clone(),
         timestamp_oracle_clock_file: None,
         build_info: &BUILD_INFO,
