@@ -21,9 +21,7 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 import uuid
-from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import psutil
@@ -197,12 +195,6 @@ def main() -> int:
         help="Wrapper command for the program",
     )
     parser.add_argument(
-        "--monitoring",
-        help="Automatically send monitoring data.",
-        default=False,
-        action="store_true",
-    )
-    parser.add_argument(
         "--listeners-config-path",
         help="Path to json file with environmentd listeners configuration.",
         default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
@@ -243,6 +235,11 @@ def main() -> int:
         help="Active controller HTTP address for retirement (default: http://127.0.0.1:6882)",
     )
     args = parser.parse_intermixed_args()
+    if args.program == "environmentd":
+        raise UIError(
+            "environmentd is no longer supported; use bin/controllerd instead. "
+            "Existing environmentd state cannot be reused."
+        )
     if args.controller_binaries_directory is not None:
         if args.program != "controllerd" or args.build_only:
             raise UIError(
@@ -352,46 +349,7 @@ def main() -> int:
         command.append(binaries[-1])
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
-        if args.program == "environmentd":
-            _handle_lingering_services(kill=args.reset)
-            scratch = MZ_ROOT / "scratch"
-            dbconn = _connect_sql(args.postgres)
-            for schema in ["consensus", "tsoracle", "storage"]:
-                if args.reset:
-                    _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-                _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
-            # Keep this after clearing out Postgres. Otherwise there is a race
-            # where a ctrl-c could leave persist with references in Postgres to
-            # files that have been deleted. There's no race if we reset in the
-            # opposite order.
-            if args.reset:
-                # Remove everything in the `mzdata`` directory *except* for
-                # the `prometheus` directory and all contents of `tempo`.
-                paths = list(MZDATA.glob("prometheus/*"))
-                paths.extend(
-                    p
-                    for p in MZDATA.glob("*")
-                    if p.name != "prometheus" and p.name != "tempo"
-                )
-                paths.extend(p for p in scratch.glob("*"))
-                for path in paths:
-                    print(f"Removing {path}...")
-                    if path.is_dir():
-                        shutil.rmtree(path, ignore_errors=True)
-                    else:
-                        path.unlink()
-
-            MZDATA.mkdir(exist_ok=True)
-            scratch.mkdir(exist_ok=True)
-            print(f"persist-blob-url: {args.blob}")
-            print(f"listeners config path: {args.listeners_config_path}")
-            command += _environment_args(args, MZDATA, scratch) + args.args
-            if args.monitoring:
-                command += ["--opentelemetry-endpoint=http://localhost:4317"]
-            # Common stack overflows in Debug mode
-            if not args.release and not args.optimized:
-                env["RUST_MIN_STACK"] = RUST_MIN_STACK
-        elif args.program == "controllerd":
+        if args.program == "controllerd":
             command += _controller_args(args, binaries_dir, env) + args.args
             if not args.release and not args.optimized:
                 env["RUST_MIN_STACK"] = RUST_MIN_STACK
@@ -461,7 +419,7 @@ def main() -> int:
         env["METADATA_BACKEND_URL"] = args.postgres
         # some tests run into stack overflows
         env["RUST_MIN_STACK"] = RUST_MIN_STACK
-        dbconn = _connect_sql(args.postgres)
+        _connect_sql(args.postgres)
     else:
         raise UIError(f"unknown program {args.program}")
 
@@ -471,9 +429,8 @@ def main() -> int:
     # We fork off a process that moves to its own process group and then runs
     # `command`. This parent process continues running until `command` exits,
     # and then kills `command`'s process group. This avoids leaking "grandchild"
-    # processes--e.g., if we spawn an `environmentd` process that in turn spawns
-    # `clusterd` processes, and then `environmentd` panics, we want to clean up
-    # those `clusterd` processes before we exit.
+    # processes created by test fixtures if a test runner panics. Controllerd
+    # uses its own lifecycle above and intentionally preserves managed processes.
     #
     # This isn't foolproof. If this script itself crashes, that can leak
     # processes. The subprocess can also intentionally daemonize (i.e., move to
@@ -506,27 +463,7 @@ def main() -> int:
     # Then, spawn the desired command.
     if args.program != "sqllogictest":
         print(f"$ {' '.join(command)}")
-    if args.program == "environmentd":
-        # Automatically restart `environmentd` after it halts, but not more than
-        # once every 5s to prevent hot loops. This simulates what happens when
-        # running in Kubernetes, which restarts failed `environmentd` process
-        # automatically. (We don't restart after a panic, since panics are
-        # generally unexpected and we don't want to inadvertently hide them
-        # during local development.)
-        while True:
-            last_start_time = datetime.now(UTC)
-            proc = subprocess.run(command, env=env)
-            if proc.returncode == 166:
-                wait = max(
-                    timedelta(seconds=5) - (datetime.now(UTC) - last_start_time),
-                    timedelta(seconds=0),
-                )
-                print(f"environmentd halted; will restart in {wait.total_seconds()}s")
-                time.sleep(wait.total_seconds())
-            else:
-                break
-    else:
-        proc = subprocess.run(command, env=env)
+    proc = subprocess.run(command, env=env)
 
     exit(proc.returncode)
 
@@ -1155,26 +1092,6 @@ def _run_sql(conn: psycopg.Connection, sql: str) -> None:
     print(f"> {sql}")
     with conn.cursor() as cur:
         cur.execute(sql.encode("utf-8"))
-
-
-def _handle_lingering_services(kill: bool = False) -> None:
-    uid = os.getuid()
-    for proc in psutil.process_iter():
-        try:
-            if proc.name() in REQUIRED_SERVICES:
-                if proc.uids().real != uid:
-                    print(
-                        f"Ignoring {proc.name()} process with different UID (PID {proc.pid}, likely running in Docker)"
-                    )
-                elif kill:
-                    print(f"Killing orphaned {proc.name()} process (PID {proc.pid})")
-                    proc.kill()
-                else:
-                    ui.warn(
-                        f"Existing {proc.name()} process (PID {proc.pid}) will be reused"
-                    )
-        except psutil.NoSuchProcess:
-            continue
 
 
 if __name__ == "__main__":

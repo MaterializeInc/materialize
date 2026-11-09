@@ -56,11 +56,6 @@ def launcher(monkeypatch, tmp_path):
     launch = MagicMock(return_value=0)
     monkeypatch.setattr(run, "_run_controller", launch)
     monkeypatch.setattr(
-        run,
-        "_handle_lingering_services",
-        MagicMock(side_effect=AssertionError("must not scan/kill children")),
-    )
-    monkeypatch.setattr(
         run.os,
         "fork",
         MagicMock(side_effect=AssertionError("must not use group cleanup")),
@@ -170,7 +165,7 @@ def test_controller_prebuilt_rejects_unusable_binary(
     launcher[5].assert_not_called()
 
 
-@pytest.mark.parametrize("args", [["environmentd"], ["controllerd", "--build-only"]])
+@pytest.mark.parametrize("args", [["test"], ["controllerd", "--build-only"]])
 def test_controller_prebuilt_rejects_inapplicable_commands(launcher, monkeypatch, args):
     monkeypatch.setattr(
         run.sys,
@@ -382,66 +377,24 @@ def test_controller_signals_only_controller(monkeypatch):
     killpg.assert_not_called()
 
 
-@pytest.mark.parametrize("reset", [False, True])
-def test_environmentd_retains_setup_and_reset_behavior(monkeypatch, tmp_path, reset):
-    monkeypatch.setattr(run, "MZ_ROOT", tmp_path)
+@pytest.mark.parametrize("args", [[], ["--reset"], ["--build-only"]])
+def test_environmentd_rejected_without_touching_state(
+    launcher, monkeypatch, tmp_path, args
+):
     data = tmp_path / "mzdata"
     data.mkdir()
-    (data / "environment-id").write_text("existing-environment")
-    monkeypatch.setattr(run, "MZDATA", data)
-    for key in ("MZDEV_POSTGRES", "MZDEV_BLOB"):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(
-        run.sys, "argv", ["run", "environmentd"] + (["--reset"] if reset else [])
-    )
-    monkeypatch.setattr(
-        run,
-        "_cargo_build",
-        MagicMock(
-            return_value=(
-                0,
-                [
-                    str(tmp_path / "target/debug/clusterd"),
-                    str(tmp_path / "target/debug/environmentd"),
-                ],
-            )
-        ),
-    )
-    connect = MagicMock()
-    monkeypatch.setattr(run, "_connect_sql", connect)
-    sql = MagicMock()
-    monkeypatch.setattr(run, "_run_sql", sql)
-    lingering = MagicMock()
-    monkeypatch.setattr(run, "_handle_lingering_services", lingering)
-    fork = MagicMock(return_value=0)
-    monkeypatch.setattr(run.os, "fork", fork)
-    setpgid = MagicMock()
-    monkeypatch.setattr(run.os, "setpgid", setpgid)
-    launch = MagicMock(return_value=argparse.Namespace(returncode=0))
-    monkeypatch.setattr(run.subprocess, "run", launch)
-    with pytest.raises(SystemExit) as exited:
+    identity = data / "environment-id"
+    identity.write_text("existing-environment")
+    monkeypatch.setattr(run.sys, "argv", ["run", "environmentd", *args])
+
+    with pytest.raises(UIError, match="no longer supported; use bin/controllerd"):
         run.main()
-    assert exited.value.code == 0
-    connect.assert_called_once_with(run.DEFAULT_POSTGRES)
-    lingering.assert_called_once_with(kill=reset)
-    setpgid.assert_called_once_with(0, 0)
-    statements = [call.args[1] for call in sql.call_args_list]
-    expected = []
-    for schema in ("consensus", "tsoracle", "storage"):
-        if reset:
-            expected.append(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-        expected.append(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-    assert statements == expected
-    command = launch.call_args.args[0]
-    assert "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0" in command
-    assert f"--orchestrator-process-scratch-directory={tmp_path}/scratch" in command
-    assert f"--persist-blob-url={run.DEFAULT_BLOB}" in command
-    assert "--persist-pubsub-external" not in command
-    assert launch.call_args.kwargs["env"]["RUST_MIN_STACK"] == run.RUST_MIN_STACK
-    if reset:
-        assert (data / "environment-id").read_text() != "existing-environment"
-    else:
-        assert "--environment-id=existing-environment" in command
+
+    for operation in launcher:
+        operation.assert_not_called()
+    run.os.fork.assert_not_called()
+    assert identity.read_text() == "existing-environment"
+    assert sorted(tmp_path.iterdir()) == [data]
 
 
 def test_controller_stop_without_initialization(launcher, monkeypatch, tmp_path):
@@ -926,7 +879,7 @@ def test_retirement_failure_stops_nothing(retirement, failure):
         ("controllerd", ["--stop"]),
         ("controllerd", ["--reset"]),
         ("controllerd", ["--build-only"]),
-        ("environmentd", []),
+        ("sqllogictest", []),
         ("adapterd", []),
     ],
 )
