@@ -613,7 +613,7 @@ fn make_builtin_source(name: String) -> (SystemObjectDescription, &'static Built
         name: name.leak(),
         schema: "schema",
         oid: 1,
-        data_source: IntrospectionType::Frontiers.into(),
+        data_source: IntrospectionType::ShardMapping.into(),
         desc: RelationDesc::builder()
             .with_column("a", SqlScalarType::String.nullable(false))
             .finish(),

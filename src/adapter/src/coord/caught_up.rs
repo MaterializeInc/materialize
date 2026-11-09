@@ -1333,7 +1333,7 @@ mod tests {
             realization: ClientRealization::Replica(ReplicaId::User(id)),
         };
         let incarnations = [
-            (11, replica(1, 1)),
+            (11_u64, replica(1, 1)),
             (12, replica(1, 2)),
             (21, replica(2, 1)),
             (

@@ -832,7 +832,6 @@ mz_catalog_shared
 mz_cluster_auto_scaling_strategies
 mz_cluster_deployment_lineage
 mz_cluster_reconfigurations
-mz_cluster_replica_frontiers_raw
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_metrics_history
@@ -861,7 +860,6 @@ mz_current_replica_frontiers
 mz_current_storage_frontiers
 mz_frontier_object_placement
 mz_frontiers
-mz_frontiers_raw
 mz_global_frontiers
 mz_history_retention_strategies
 mz_hydration_statuses

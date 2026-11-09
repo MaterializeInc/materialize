@@ -200,12 +200,6 @@ pub struct Controller {
     persist: Arc<PersistClientCache>,
     /// Metrics of the Storage controller
     metrics: StorageControllerMetrics,
-    /// `(read, write)` frontiers that have been recorded in the `Frontiers` collection, kept to be
-    /// able to retract old rows.
-    recorded_frontiers: BTreeMap<GlobalId, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    /// Write frontiers that have been recorded in the `ReplicaFrontiers` collection, kept to be
-    /// able to retract old rows.
-    recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Timestamp>>,
 
     /// A function that computes the lag between the given time and wallclock time.
     #[derivative(Debug = "ignore")]
@@ -2694,8 +2688,6 @@ impl StorageController for Controller {
             persist_location,
             persist: _,
             metrics: _,
-            recorded_frontiers,
-            recorded_replica_frontiers,
             wallclock_lag: _,
             wallclock_lag_last_recorded,
             storage_collections: _,
@@ -2729,14 +2721,6 @@ impl StorageController for Controller {
             .iter()
             .map(|(id, i)| (id.to_string(), format!("{i:?}")))
             .collect();
-        let recorded_frontiers: BTreeMap<_, _> = recorded_frontiers
-            .iter()
-            .map(|(id, fs)| (id.to_string(), format!("{fs:?}")))
-            .collect();
-        let recorded_replica_frontiers: Vec<_> = recorded_replica_frontiers
-            .iter()
-            .map(|((gid, rid), f)| (gid.to_string(), rid.to_string(), format!("{f:?}")))
-            .collect();
         let migrated_storage_collections: Vec<_> = migrated_storage_collections
             .iter()
             .map(|id| id.to_string())
@@ -2754,8 +2738,6 @@ impl StorageController for Controller {
             "initialized": initialized,
             "config": format!("{config:?}"),
             "persist_location": format!("{persist_location:?}"),
-            "recorded_frontiers": recorded_frontiers,
-            "recorded_replica_frontiers": recorded_replica_frontiers,
             "wallclock_lag_last_recorded": format!("{wallclock_lag_last_recorded:?}"),
             "migrated_storage_collections": migrated_storage_collections,
             "maintenance_scheduled": maintenance_scheduled,
@@ -2859,8 +2841,6 @@ where
             metrics,
             storage_frontier_observations: None,
             collection_metadata_certifier: None,
-            recorded_frontiers: BTreeMap::new(),
-            recorded_replica_frontiers: BTreeMap::new(),
             wallclock_lag,
             wallclock_lag_last_recorded: now_dt,
             storage_collections,
@@ -3669,111 +3649,6 @@ where
         Ok(())
     }
 
-    /// Update introspection with the current frontiers of storage objects.
-    ///
-    /// This method is invoked by `Controller::maintain`, which we expect to be called once per
-    /// second during normal operation.
-    fn update_frontier_introspection(&mut self) {
-        // Native frontiers derive from replica reports and cooperative
-        // storage samples. An adapter must not replace those shared observations.
-        if self.replica_owned {
-            return;
-        }
-
-        let mut global_frontiers = BTreeMap::new();
-        let mut replica_frontiers = BTreeMap::new();
-
-        for collection_frontiers in self.storage_collections.active_collection_frontiers() {
-            let id = collection_frontiers.id;
-            // Native read protection can retain physical history beyond the
-            // object's controller lifetime, but not its public frontier row.
-            let since = collection_frontiers.read_capabilities;
-            let upper = collection_frontiers.write_frontier;
-
-            let instance = self
-                .collections
-                .get(&id)
-                .and_then(|collection_state| collection_state.extra_state.instance_id())
-                .and_then(|i| self.instances.get(&i));
-
-            if let Some(instance) = instance {
-                for replica_id in instance.replica_ids() {
-                    replica_frontiers.insert((id, replica_id), upper.clone());
-                }
-            }
-
-            global_frontiers.insert(id, (since, upper));
-        }
-
-        let mut global_updates = Vec::new();
-        let mut replica_updates = Vec::new();
-
-        let mut push_global_update =
-            |id: GlobalId,
-             (since, upper): (Antichain<Timestamp>, Antichain<Timestamp>),
-             diff: Diff| {
-                let read_frontier = since.into_option().map_or(Datum::Null, |t| t.into());
-                let write_frontier = upper.into_option().map_or(Datum::Null, |t| t.into());
-                let row = Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    read_frontier,
-                    write_frontier,
-                ]);
-                global_updates.push((row, diff));
-            };
-
-        let mut push_replica_update =
-            |(id, replica_id): (GlobalId, ReplicaId), upper: Antichain<Timestamp>, diff: Diff| {
-                let write_frontier = upper.into_option().map_or(Datum::Null, |t| t.into());
-                let row = Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&replica_id.to_string()),
-                    write_frontier,
-                ]);
-                replica_updates.push((row, diff));
-            };
-
-        let mut old_global_frontiers =
-            std::mem::replace(&mut self.recorded_frontiers, global_frontiers);
-        for (&id, new) in &self.recorded_frontiers {
-            match old_global_frontiers.remove(&id) {
-                Some(old) if &old != new => {
-                    push_global_update(id, new.clone(), Diff::ONE);
-                    push_global_update(id, old, Diff::MINUS_ONE);
-                }
-                Some(_) => (),
-                None => push_global_update(id, new.clone(), Diff::ONE),
-            }
-        }
-        for (id, old) in old_global_frontiers {
-            push_global_update(id, old, Diff::MINUS_ONE);
-        }
-
-        let mut old_replica_frontiers =
-            std::mem::replace(&mut self.recorded_replica_frontiers, replica_frontiers);
-        for (&key, new) in &self.recorded_replica_frontiers {
-            match old_replica_frontiers.remove(&key) {
-                Some(old) if &old != new => {
-                    push_replica_update(key, new.clone(), Diff::ONE);
-                    push_replica_update(key, old, Diff::MINUS_ONE);
-                }
-                Some(_) => (),
-                None => push_replica_update(key, new.clone(), Diff::ONE),
-            }
-        }
-        for (key, old) in old_replica_frontiers {
-            push_replica_update(key, old, Diff::MINUS_ONE);
-        }
-
-        let id = self.introspection_ids[&IntrospectionType::Frontiers];
-        self.collection_manager
-            .differential_append(id, global_updates);
-
-        let id = self.introspection_ids[&IntrospectionType::ReplicaFrontiers];
-        self.collection_manager
-            .differential_append(id, replica_updates);
-    }
-
     /// Refresh the wallclock lag introspection and metrics with the current lag values.
     ///
     /// This method produces wallclock lag metrics of two different shapes:
@@ -3936,7 +3811,6 @@ where
         if let Some(sampler) = &self.storage_frontier_observations {
             sampler.sample();
         }
-        self.update_frontier_introspection();
         self.refresh_wallclock_lag();
 
         // Perform instance maintenance work.
@@ -3954,8 +3828,6 @@ impl From<&IntrospectionType> for CollectionManagerKind {
     fn from(value: &IntrospectionType) -> Self {
         match value {
             IntrospectionType::ShardMapping
-            | IntrospectionType::Frontiers
-            | IntrospectionType::ReplicaFrontiers
             | IntrospectionType::StorageSourceStatistics
             | IntrospectionType::StorageSinkStatistics
             | IntrospectionType::ComputeDependencies

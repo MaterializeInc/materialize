@@ -107,9 +107,6 @@ pub enum IntrospectionType {
     SourceStatusHistory,
     ShardMapping,
 
-    Frontiers,
-    ReplicaFrontiers,
-
     ReplicaStatusHistory,
     ReplicaMetricsHistory,
     WallclockLagHistory,

@@ -864,15 +864,6 @@ pub static MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION: LazyLock<SystemObjectDescri
         object_name: MZ_REPLICA_HYDRATION_HISTORY.name.to_string(),
     });
 
-/// Identifies [`MZ_CLUSTER_REPLICA_FRONTIERS_RAW`] for the schema-migration guard in
-/// `builtin_schema_migration.rs`, which forbids migrating this source because the 0dt
-/// caught-up gate reads the leader's shard for it to learn the live frontiers.
-pub static MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION: LazyLock<SystemObjectDescription> =
-    LazyLock::new(|| SystemObjectDescription {
-        schema_name: MZ_CLUSTER_REPLICA_FRONTIERS_RAW.schema.to_string(),
-        object_type: CatalogItemType::Source,
-        object_name: MZ_CLUSTER_REPLICA_FRONTIERS_RAW.name.to_string(),
-    });
 /// Native active-deployment reference progress must survive candidate bootstrap.
 pub static MZ_REPLICA_FRONTIER_OBSERVATIONS_DESCRIPTION: LazyLock<SystemObjectDescription> =
     LazyLock::new(|| SystemObjectDescription {
@@ -1420,7 +1411,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SINK_STATISTICS),
         Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::View(&MZ_STORAGE_USAGE),
-        Builtin::Source(&MZ_FRONTIERS_RAW),
         Builtin::View(&MZ_FRONTIER_OBJECT_PLACEMENT),
         Builtin::View(&MZ_CURRENT_REPLICA_FRONTIERS),
         Builtin::View(&MZ_CURRENT_STORAGE_FRONTIERS),
@@ -1456,7 +1446,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_LIR_MAPPING),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_RAW),
         Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
-        Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS_RAW),
         Builtin::View(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::View(&MZ_HYDRATION_STATUSES),

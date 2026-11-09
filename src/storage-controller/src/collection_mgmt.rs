@@ -294,8 +294,7 @@ impl CollectionManager {
             _ => |_| true,
         };
         let row_scope = match introspection_config.introspection_type {
-            IntrospectionType::ReplicaFrontiers
-            | IntrospectionType::StorageSourceStatistics
+            IntrospectionType::StorageSourceStatistics
             | IntrospectionType::StorageSinkStatistics
             | IntrospectionType::ComputeHydrationTimes
             | IntrospectionType::ComputeObjectArrangementSizes
@@ -742,10 +741,6 @@ where
         match introspection_config.introspection_type {
             IntrospectionType::ShardMapping => {
                 // Done by the `append_shard_mappings` call.
-            }
-            IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
-                // Differential collections start with an empty
-                // desired state. No need to manually reset.
             }
             IntrospectionType::StorageSourceStatistics => {
                 let prev = snapshot_statistics(
@@ -1263,8 +1258,6 @@ impl AppendOnlyWriteTask {
                 | None => None,
 
                 Some(introspection_type @ IntrospectionType::ShardMapping)
-                | Some(introspection_type @ IntrospectionType::Frontiers)
-                | Some(introspection_type @ IntrospectionType::ReplicaFrontiers)
                 | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
                 | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
                 | Some(introspection_type @ IntrospectionType::ComputeDependencies)
@@ -1448,8 +1441,6 @@ impl AppendOnlyWriteTask {
             }
 
             introspection_type @ IntrospectionType::ShardMapping
-            | introspection_type @ IntrospectionType::Frontiers
-            | introspection_type @ IntrospectionType::ReplicaFrontiers
             | introspection_type @ IntrospectionType::StorageSourceStatistics
             | introspection_type @ IntrospectionType::StorageSinkStatistics
             | introspection_type @ IntrospectionType::ComputeDependencies

@@ -1685,7 +1685,6 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_shared -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_frontiers_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_size_internal -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_by_deployment -->

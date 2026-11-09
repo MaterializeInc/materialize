@@ -124,8 +124,8 @@ WHERE data->>'kind' = 'FenceToken'
     },
 );
 
-// Separate from the upgrade-protected legacy reference relation. Unknown and
-// completed frontiers are distinct: NULL means empty only when *_known is true.
+// Unknown and completed frontiers are distinct: NULL means empty only when
+// *_known is true.
 pub static MZ_STORAGE_FRONTIER_OBSERVATIONS: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
         name: "mz_storage_frontier_observations",
@@ -170,42 +170,6 @@ pub static MZ_REPLICA_FRONTIER_OBSERVATIONS: LazyLock<BuiltinSource> =
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
-
-pub static MZ_CLUSTER_REPLICA_FRONTIERS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| {
-    BuiltinSource {
-        name: "mz_cluster_replica_frontiers_raw",
-        schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_RAW_OID,
-        data_source: IntrospectionType::ReplicaFrontiers.into(),
-        desc: RelationDesc::builder()
-            .with_column("object_id", SqlScalarType::String.nullable(false))
-            .with_column("replica_id", SqlScalarType::String.nullable(false))
-            .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
-            .with_column(
-                "deployment_generation",
-                SqlScalarType::UInt64.nullable(true),
-            )
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            (
-                "object_id",
-                "The ID of the source, sink, index, materialized view, or subscription.",
-            ),
-            ("replica_id", "The ID of a cluster replica."),
-            (
-                "write_frontier",
-                "The next timestamp at which the output may change.",
-            ),
-            (
-                "deployment_generation",
-                "The exact deployment generation of native execution, or NULL for legacy execution.",
-            ),
-        ]),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-        ontology: None,
-    }
-});
 
 pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
@@ -3179,35 +3143,6 @@ ORDER BY replica_id, process_id, occurred_at DESC",
     }),
 });
 
-pub static MZ_FRONTIERS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
-    name: "mz_frontiers_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::SOURCE_MZ_FRONTIERS_OID,
-    data_source: IntrospectionType::Frontiers.into(),
-    desc: RelationDesc::builder()
-        .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_column("read_frontier", SqlScalarType::MzTimestamp.nullable(true))
-        .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "object_id",
-            "The ID of the source, sink, table, index, materialized view, or subscription.",
-        ),
-        (
-            "read_frontier",
-            "The earliest timestamp at which the output is still readable.",
-        ),
-        (
-            "write_frontier",
-            "The next timestamp at which the output may change.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
-
 pub static MZ_FRONTIER_OBJECT_PLACEMENT: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_frontier_object_placement",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3329,27 +3264,37 @@ pub static MZ_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_FRONTIERS_OID,
-    desc: MZ_FRONTIERS_RAW.desc.clone(),
-    column_comments: MZ_FRONTIERS_RAW.column_comments.clone(),
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("read_frontier", SqlScalarType::MzTimestamp.nullable(true))
+        .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the source, sink, table, index, materialized view, or subscription.",
+        ),
+        (
+            "read_frontier",
+            "The earliest timestamp at which the output is still readable.",
+        ),
+        (
+            "write_frontier",
+            "The next timestamp at which the output may change.",
+        ),
+    ]),
     // Across replicas, read is a meet (empty is top), write is a join
     // (empty dominates). Unknown fields do not participate in either reduction.
     sql: "
-WITH protected AS (
-    SELECT 1 FROM mz_internal.mz_catalog_deployment_authority
-    WHERE catalog_read_protection_enabled
-)
-SELECT object_id, read_frontier, write_frontier FROM mz_internal.mz_frontiers_raw
-WHERE NOT EXISTS (SELECT 1 FROM protected)
-UNION ALL
 SELECT object_id, read_frontier, write_frontier FROM mz_internal.mz_current_storage_frontiers
-WHERE read_known AND write_known AND EXISTS (SELECT 1 FROM protected)
+WHERE read_known AND write_known
 UNION ALL
 SELECT object_id,
        min(CASE WHEN read_known THEN read_frontier END) AS read_frontier,
        CASE WHEN bool_or(write_known AND write_frontier IS NULL) THEN NULL
             ELSE max(CASE WHEN write_known THEN write_frontier END) END AS write_frontier
 FROM mz_internal.mz_current_replica_frontiers
-WHERE compute_global AND EXISTS (SELECT 1 FROM protected)
+WHERE compute_global
 GROUP BY object_id
 HAVING bool_or(read_known) AND bool_or(write_known)",
     access: vec![PUBLIC_SELECT],
