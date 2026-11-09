@@ -367,8 +367,9 @@ impl Instance {
 
     /// Adds the state of replica `id`.
     ///
-    /// The staleness states of its collections are taken from `freshness`, and the missing ones
-    /// start at `freshness_start`.
+    /// The staleness states of its collections are taken from `freshness`, and observe the
+    /// replica's initial write frontiers at `freshness_start`. The missing ones start at
+    /// `freshness_start`. Dropped collections get no staleness state.
     fn add_replica_state(
         &mut self,
         id: ReplicaId,
@@ -380,6 +381,7 @@ impl Instance {
         mut freshness: BTreeMap<GlobalId, FreshnessState>,
     ) -> Result<(), read_holds::ReadHoldIssuerHungUp> {
         let freshness_config = self.freshness_config();
+        let mut freshness_rows = Vec::new();
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
         let metrics = self.metrics.for_replica(id);
@@ -441,19 +443,29 @@ impl Instance {
                 break;
             }
 
-            let freshness = freshness.remove(collection_id).or_else(|| {
-                new_freshness_state(
+            // A dropped collection's recordings ended at the drop.
+            let freshness = match freshness.remove(collection_id) {
+                _ if collection.dropped => None,
+                // The new replica restarts from `as_of`, which can be below the frontier the
+                // carried state reflects, and its readers see that regression.
+                Some(mut state) => {
+                    let rows = state.observe(freshness_start, &as_of, freshness_config.as_ref());
+                    freshness_rows.push((*collection_id, Some(id), rows));
+                    Some(state)
+                }
+                None => new_freshness_state(
                     *collection_id,
                     collection.freshness_dependence.as_ref(),
                     freshness_start,
                     &as_of,
                     freshness_config.as_ref(),
-                )
-            });
+                ),
+            };
             replica.add_collection(*collection_id, as_of, input_read_holds, freshness);
         }
 
         self.replicas.insert(id, replica);
+        self.deliver_freshness_rows(freshness_rows);
 
         match shutdown_input {
             Some(input_id) => Err(read_holds::ReadHoldIssuerHungUp(input_id)),
@@ -1485,11 +1497,16 @@ impl Instance {
     /// Remove an existing instance replica, by ID.
     #[mz_ore::instrument(level = "debug")]
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
+        let now = self.now_ts();
+        self.remove_replica_at(id, now)
+    }
+
+    /// Like [`Instance::remove_replica`], ending the replica's staleness recordings at `now`.
+    fn remove_replica_at(&mut self, id: ReplicaId, now: Timestamp) -> Result<(), ReplicaMissing> {
         let mut replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
 
         // The replica's staleness recordings end with it.
         let freshness_config = self.freshness_config();
-        let now = self.now_ts();
         let mut freshness_rows = Vec::new();
         for (collection_id, collection) in &mut replica.collections {
             if let Some(state) = &mut collection.freshness {
@@ -1582,8 +1599,8 @@ impl Instance {
         let dyncfg_override = replica.dyncfg_override.clone();
 
         // The rehydrated replica serves the same collections, so their staleness recordings
-        // continue. A log collection starts fresh logs, so `remove_replica` ends its recordings
-        // and new ones start now.
+        // continue. A log collection starts fresh logs, so `remove_replica_at` ends its
+        // recordings and new ones start at the same instant.
         let collections = &self.collections;
         let replica = self.replicas.get_mut(&id).expect("replica must exist");
         let freshness: BTreeMap<_, _> = replica
@@ -1596,7 +1613,7 @@ impl Instance {
             })
             .filter_map(|(collection_id, c)| Some((*collection_id, c.freshness.take()?)))
             .collect();
-        let freshness_start = self.now_ts();
+        let now = self.now_ts();
 
         // NOTE: Between `remove_replica` and `add_replica` the replica map can be empty while the
         // replica process is still running its dataflows. Nothing on this path may treat that as
@@ -1604,13 +1621,13 @@ impl Instance {
         // advances the input read holds of a dataflow that has not hydrated past its as-of, and
         // the replica keeps that dataflow at the old as-of when it reconciles. If its persist
         // reader has not registered yet, the import halts with "cannot serve requested as_of".
-        self.remove_replica(id).expect("replica must exist");
+        self.remove_replica_at(id, now).expect("replica must exist");
         let result = self.add_replica_with_freshness(
             id,
             config,
             Some(epoch),
             dyncfg_override,
-            freshness_start,
+            now,
             freshness,
         );
 
