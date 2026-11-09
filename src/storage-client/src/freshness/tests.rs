@@ -167,6 +167,27 @@ fn refresh_view_reads_last_refresh() {
 }
 
 #[mz_ore::test]
+fn repeated_frontier_is_one_sample_per_period() {
+    let cfg = config();
+    let mut state = FreshnessState::new(TimeDependence::default(), ts(0), &frontier(1), Some(&cfg));
+    let mut rows = Vec::new();
+    // The frontier stalls at 1 for two periods, observed once per second.
+    for now in (1_000..=120_000).step_by(1_000) {
+        rows.extend(state.observe(ts(now), &frontier(1), Some(&cfg)));
+        rows.extend(state.tick(ts(now), Some(&cfg)));
+    }
+    let expected = BTreeMap::from([
+        ((0, 60_000), BTreeMap::from([(bucket(60_000), 60_000)])),
+        (
+            (60_000, 120_000),
+            BTreeMap::from([(bucket(120_000), 60_000)]),
+        ),
+    ]);
+    assert_eq!(periods(&rows), expected);
+    assert_eq!(state.reported_lag(ts(120_000)), Duration::from_secs(120));
+}
+
+#[mz_ore::test]
 fn reflected_none_maps_to_start() {
     let cfg = config();
     // A frontier at the minimum reflects nothing, so staleness counts from the start.

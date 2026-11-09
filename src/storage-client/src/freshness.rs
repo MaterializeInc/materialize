@@ -100,6 +100,8 @@ fn timestamp(t: Timestamp) -> Option<CheckedTimestamp<DateTime<Utc>>> {
 pub struct FreshnessState {
     dependence: TimeDependence,
     start: Timestamp,
+    /// The latest observed frontier.
+    frontier: Antichain<Timestamp>,
     /// The reflected time of the latest frontier, `None` if it reflects no time.
     reflected: Option<Timestamp>,
     reporter: StalenessReporter,
@@ -121,6 +123,7 @@ impl FreshnessState {
         let mut state = FreshnessState {
             dependence,
             start,
+            frontier: frontier.clone(),
             reflected,
             reporter: StalenessReporter::new(start, reflected.unwrap_or(start)),
             recorder: None,
@@ -131,6 +134,9 @@ impl FreshnessState {
     }
 
     /// Records that the frontier is `frontier` at `now`, and returns the periods that closed.
+    ///
+    /// Only a changed frontier closes the open sample. Observing the latest frontier again
+    /// leaves the sample open, so a stall is one sample per period.
     pub fn observe(
         &mut self,
         now: Timestamp,
@@ -144,6 +150,12 @@ impl FreshnessState {
             return Vec::new();
         }
         self.apply_config(now, config);
+        // Closing the sample at a repeated frontier would split a stall into samples charged
+        // at their own, smaller, staleness.
+        if *frontier == self.frontier {
+            return Vec::new();
+        }
+        self.frontier.clone_from(frontier);
         self.reflected = reflect(&self.dependence, frontier);
         self.reporter
             .observe(now, self.reflected.unwrap_or(self.start));
