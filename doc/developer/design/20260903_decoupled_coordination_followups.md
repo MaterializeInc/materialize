@@ -20,7 +20,7 @@ MV lacks a common source predicate. Do not redirect its history through the
 unretained shared catalog arrangement.
 
 At 10s publication, most CAS excess was empty completeness fanout into 50 durable
-catalog outputs. The [60s comparison](20260903_decoupled_coordination_publication_interval.md)
+advancing catalog outputs. The [60s comparison](20260903_decoupled_coordination_publication_interval.md)
 reduces that contribution. Frontier observations now lead the remaining CAS gap.
 Slower protection publication reduces one source of input progress. General
 output coalescing still needs an explicit latency budget.

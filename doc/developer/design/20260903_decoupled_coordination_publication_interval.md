@@ -44,6 +44,13 @@ backend audit instrumentation used in the
 
 ## What the interval changes
 
+The reference inventories both contain 51 catalog MV output shards, with 50
+advancing during measurement. AWS PrivateLink connections is the non-advancing
+output in both. Native adds adapters, adapter endpoints, adapter statuses and
+deployment authority as MVs. Columns, index columns, history-retention strategies
+and MV refresh strategies are tables instead of upstream's MVs. There is no net
+increase of five MVs explaining the extra output CAS.
+
 Packed catalog updates fall from about 188 to 33 per second, close to the
 sixfold interval change. Durable projection CAS falls from 75.9 to 58.5/s.
 That accounts for about 87% of the total CAS reduction. The exact-upper audit

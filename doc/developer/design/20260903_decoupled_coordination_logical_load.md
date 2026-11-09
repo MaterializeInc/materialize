@@ -86,8 +86,9 @@ successful writes. Full per-process call/byte and DELETE accounting is in the JS
 
 ### Catalog completeness and recovery protection
 
-Both versions have **50 durable catalog projection outputs**. Their empty
-committed advances rise from **50.04 to 69.13/s**. Total output CAS rises from
+Both inventories contain **51 durable catalog projection outputs**, with **50
+advancing during the idle windows**. The AWS PrivateLink connections output does
+not advance in either fixture. Their empty committed advances rise from **50.04 to 69.13/s**. Total output CAS rises from
 53.17 to 74.98/s, accounting for 61% of the deployment CAS increase. Output
 progress writes advance each output's own shard, not the raw catalog shard.
 
