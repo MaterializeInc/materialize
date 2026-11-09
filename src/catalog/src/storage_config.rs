@@ -268,3 +268,140 @@ impl CatalogState {
         (desc, sink.cluster_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use mz_dyncfg::{ConfigVal, ParameterScope};
+    use mz_sql::session::vars::{OwnedVarInput, VarInput};
+    use mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL;
+
+    use super::*;
+    use crate::catalog::{Op, ReplicaCreateDropReason};
+    use crate::config::{ScopedParameters, ScopedParametersScope};
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn replica_storage_config_applies_and_removes_replica_override() {
+        Catalog::with_debug(|mut catalog| async move {
+            let replica = catalog
+                .user_cluster_replicas()
+                .next()
+                .expect("bootstrap user replica")
+                .clone();
+            let ts = catalog.current_upper().await;
+            let other_replica_id = catalog
+                .allocate_user_replica_ids(1, ts)
+                .await
+                .expect("allocate second replica")[0];
+            let name = ENABLE_UPSERT_PAGED_SPILL.name();
+            let ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    None,
+                    ts,
+                    None,
+                    vec![
+                        Op::CreateClusterReplica {
+                            cluster_id: replica.cluster_id,
+                            replica_id: other_replica_id,
+                            name: "storage_config_peer".into(),
+                            config: replica.config.clone(),
+                            owner_id: replica.owner_id,
+                            reason: ReplicaCreateDropReason::Manual,
+                        },
+                        Op::UpdateSystemConfiguration {
+                            name: name.into(),
+                            value: OwnedVarInput::Flat("true".into()),
+                        },
+                    ],
+                )
+                .await
+                .expect("create peer and commit non-default environment value");
+
+            assert_eq!(
+                storage_config(catalog.system_config())
+                    .dyncfg_updates
+                    .updates
+                    .get(name),
+                Some(&ConfigVal::Bool(true)),
+            );
+
+            // Model environment-wide installation. ConfigSet clones share their
+            // values, so deriving a replica must not apply its override here.
+            catalog.system_config().sync_dyncfgs();
+            let shared = catalog.system_config().dyncfgs().clone();
+            assert!(ENABLE_UPSERT_PAGED_SPILL.get(&shared));
+            assert_eq!(shared.entry(name).unwrap().scope(), ParameterScope::Replica);
+            let shared_values = || {
+                shared
+                    .entries()
+                    .map(|entry| (entry.name(), entry.val()))
+                    .collect::<BTreeMap<_, _>>()
+            };
+            let before = shared_values();
+            let persist_state_version = semver::Version::new(1, 2, 3);
+            let assert_config = |catalog: &Catalog, replica_id, expected| {
+                let config = replica_storage_config(
+                    catalog,
+                    replica.cluster_id,
+                    replica_id,
+                    persist_state_version.clone(),
+                );
+                assert_eq!(
+                    config.dyncfg_updates.updates.get(name),
+                    Some(&ConfigVal::Bool(expected)),
+                );
+                assert_eq!(
+                    config.persist_state_version,
+                    Some(persist_state_version.clone())
+                );
+                assert_eq!(shared_values(), before, "derivation mutated shared dyncfgs");
+            };
+            assert_config(&catalog, replica.replica_id, true);
+            assert_config(&catalog, other_replica_id, true);
+
+            // Scoped transactions consume validated values rather than parsing
+            // them themselves. Use the same SystemVars parser as environment config.
+            let override_value = catalog
+                .system_config()
+                .parse(name, VarInput::Flat("false"))
+                .expect("valid replica override")
+                .format();
+            for (value, expected) in [(Some(override_value), false), (None, true)] {
+                let mut scoped = ScopedParameters::default();
+                if let Some(value) = value {
+                    scoped.replica.insert(
+                        replica.replica_id,
+                        BTreeMap::from([(name.to_string(), value)]),
+                    );
+                }
+                let ts = catalog.current_upper().await;
+                catalog
+                    .transact(
+                        None,
+                        None,
+                        ts,
+                        None,
+                        vec![Op::UpdateScopedSystemParameters {
+                            scoped,
+                            prune_scope: ScopedParametersScope {
+                                clusters: BTreeSet::new(),
+                                replicas: BTreeSet::from([replica.replica_id]),
+                            },
+                        }],
+                    )
+                    .await
+                    .expect("commit replica override change");
+
+                assert_config(&catalog, replica.replica_id, expected);
+                assert_config(&catalog, other_replica_id, true);
+            }
+
+            catalog.expire().await;
+        })
+        .await
+    }
+}
