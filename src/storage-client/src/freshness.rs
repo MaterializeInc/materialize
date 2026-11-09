@@ -10,7 +10,8 @@
 //! Wall-clock staleness state of a frontier, shared by the compute and storage controllers.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -20,6 +21,7 @@ use mz_controller_types::dyncfgs::{
     WALLCLOCK_FRESHNESS_PERIOD_INTERVAL,
 };
 use mz_dyncfg::ConfigSet;
+use mz_ore::now::NowFn;
 use mz_ore::soft_panic_or_log;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
@@ -254,6 +256,31 @@ impl FreshnessState {
         }
     }
 
+    /// Restarts the state at `now` with the frontier `frontier`, after a time in which nobody
+    /// observed its frontier, and returns the periods that closed.
+    ///
+    /// The time since the last observation is not charged, since its frontiers are unknown.
+    pub fn resume(
+        &mut self,
+        now: Timestamp,
+        frontier: &Antichain<Timestamp>,
+        config: Option<&RecorderConfig>,
+    ) -> Vec<PeriodRow> {
+        if self.complete {
+            return Vec::new();
+        }
+        // The open samples of the reporter and the recorder span the unobserved time.
+        self.recorder = None;
+        if frontier.is_empty() {
+            return self.finish(now, config);
+        }
+        self.frontier.clone_from(frontier);
+        self.reflected = reflect(&self.dependence, self.floor, frontier);
+        self.reporter = StalenessReporter::new(now, self.reflected.unwrap_or(self.start));
+        self.apply_config(now, config);
+        Vec::new()
+    }
+
     /// The staleness to report at `now`, see [`StalenessReporter::read`].
     pub fn reported_lag(&mut self, now: Timestamp) -> Duration {
         if self.complete {
@@ -277,6 +304,151 @@ impl FreshnessState {
             // The flag was turned off, so the open period is dropped without writing it.
             (Some(_), None) => self.recorder = None,
             (Some(_), Some(_)) | (None, None) => {}
+        }
+    }
+}
+
+/// The staleness states of collections whose write frontiers only [`StorageCollections`] learns,
+/// among them tables, webhooks, and storage-managed collections.
+///
+/// The background task of [`StorageCollections`] observes their advances when it learns them,
+/// with [`UnreportedFreshness::observe`]. The storage controller creates, ticks, and finishes
+/// the states under [`UnreportedFreshness::lock`], and it alone writes the rows they close.
+///
+/// [`StorageCollections`]: crate::storage_collections::StorageCollections
+#[derive(Debug, Default)]
+pub struct UnreportedFreshness {
+    /// Whether [`UnreportedFreshness::observe`] is called.
+    ///
+    /// The background task reads it while it holds the lock of its collections, and the
+    /// controller reads those collections while it holds the lock of the states. Keeping it
+    /// in the states would take the two locks in both orders.
+    observing: AtomicBool,
+    states: Mutex<UnreportedStates>,
+}
+
+impl UnreportedFreshness {
+    /// Whether advances are to be observed.
+    pub fn is_observing(&self) -> bool {
+        self.observing.load(Ordering::SeqCst)
+    }
+
+    /// Locks the states, sets their recorder configuration to `config` and whether advances are
+    /// observed to `observing`, and returns them with the time of `now` read under the lock.
+    ///
+    /// When observing turns on, every state resumes at that time from the frontier that
+    /// `frontier_of` returns for it, see [`FreshnessState::resume`]. A state without one keeps
+    /// its frontier. `frontier_of` may take the lock of the `StorageCollections` collections.
+    pub fn lock_synced(
+        &self,
+        now: &NowFn,
+        config: Option<RecorderConfig>,
+        observing: bool,
+        mut frontier_of: impl FnMut(GlobalId) -> Option<Antichain<Timestamp>>,
+    ) -> (MutexGuard<'_, UnreportedStates>, Timestamp) {
+        let mut states = self.lock();
+        // Read under the lock, so that no observation is later than an operation on the states
+        // at this time.
+        let now = Timestamp::from(now());
+        states.config = config;
+        let was_observing = self.observing.swap(observing, Ordering::SeqCst);
+        if observing && !was_observing {
+            // Read after observing turned on and before unlocking. The background task observes
+            // every advance these frontiers miss once it gets the lock, at a later time.
+            for id in states.ids() {
+                if let Some(frontier) = frontier_of(id) {
+                    states.resume(id, now, &frontier);
+                }
+            }
+        }
+        (states, now)
+    }
+
+    fn lock(&self) -> MutexGuard<'_, UnreportedStates> {
+        self.states.lock().expect("lock poisoned")
+    }
+
+    /// Observes the write frontiers that advanced to `advances`, at the time of `now`.
+    ///
+    /// Must not be called while holding the lock of the `StorageCollections` collections.
+    pub fn observe(&self, now: &NowFn, advances: &[(GlobalId, Antichain<Timestamp>)]) {
+        let mut guard = self.lock();
+        // Read under the lock, so that no observation is earlier than the controller's last
+        // operation on the states.
+        let now = Timestamp::from(now());
+        let UnreportedStates {
+            config,
+            states,
+            rows,
+        } = &mut *guard;
+        for (id, frontier) in advances {
+            if let Some(state) = states.get_mut(id) {
+                let closed = state.observe(now, frontier, config.as_ref());
+                if !closed.is_empty() {
+                    rows.push((*id, closed));
+                }
+            }
+        }
+    }
+}
+
+/// The states of [`UnreportedFreshness`].
+#[derive(Debug, Default)]
+pub struct UnreportedStates {
+    /// The recorder configuration of the states, `None` while recording is off.
+    config: Option<RecorderConfig>,
+    states: BTreeMap<GlobalId, FreshnessState>,
+    /// The rows that closed and that the controller has not taken yet.
+    rows: Vec<(GlobalId, Vec<PeriodRow>)>,
+}
+
+impl UnreportedStates {
+    /// Adds the state of collection `id`.
+    pub fn insert(&mut self, id: GlobalId, state: FreshnessState) {
+        let previous = self.states.insert(id, state);
+        mz_ore::soft_assert_or_log!(previous.is_none(), "staleness state of {id} replaced");
+    }
+
+    /// The collections that have a state.
+    fn ids(&self) -> Vec<GlobalId> {
+        self.states.keys().copied().collect()
+    }
+
+    /// Resumes the state of collection `id` at `now` with `frontier`, see
+    /// [`FreshnessState::resume`].
+    fn resume(&mut self, id: GlobalId, now: Timestamp, frontier: &Antichain<Timestamp>) {
+        if let Some(state) = self.states.get_mut(&id) {
+            let closed = state.resume(now, frontier, self.config.as_ref());
+            self.push_rows(id, closed);
+        }
+    }
+
+    /// Closes the periods of all states that ended at or before `now`.
+    pub fn tick(&mut self, now: Timestamp) {
+        for (id, state) in &mut self.states {
+            let closed = state.tick(now, self.config.as_ref());
+            if !closed.is_empty() {
+                self.rows.push((*id, closed));
+            }
+        }
+    }
+
+    /// Removes the state of collection `id`, and ends its recording at `now`.
+    pub fn finish(&mut self, id: GlobalId, now: Timestamp) {
+        if let Some(mut state) = self.states.remove(&id) {
+            let closed = state.finish(now, self.config.as_ref());
+            self.push_rows(id, closed);
+        }
+    }
+
+    /// Takes the rows that closed since the last call, by collection.
+    pub fn take_rows(&mut self) -> Vec<(GlobalId, Vec<PeriodRow>)> {
+        std::mem::take(&mut self.rows)
+    }
+
+    fn push_rows(&mut self, id: GlobalId, rows: Vec<PeriodRow>) {
+        if !rows.is_empty() {
+            self.rows.push((id, rows));
         }
     }
 }

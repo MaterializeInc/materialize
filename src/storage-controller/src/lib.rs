@@ -62,6 +62,9 @@ use mz_storage_client::controller::{
     StorageMetadata, StorageTxn, StorageWriteOp, TableRegistration, WallclockLag,
     WallclockLagHistogramPeriod,
 };
+use mz_storage_client::freshness::{
+    FreshnessState, UnreportedFreshness, UnreportedStates, pack_rows, recorder_config,
+};
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
     MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_STATUS_HISTORY_DESC,
@@ -76,6 +79,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::errors::CollectionMissing;
+use mz_storage_types::freshness::{PeriodRow, RecorderConfig};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
@@ -224,6 +228,9 @@ pub struct Controller {
     wallclock_lag: WallclockLagFn<Timestamp>,
     /// The last time wallclock lag introspection was recorded.
     wallclock_lag_last_recorded: DateTime<Utc>,
+    /// The wall-clock time this controller started at, where the staleness recordings of
+    /// collections created during bootstrap start.
+    boot: Timestamp,
 
     /// Handle to a [StorageCollections].
     storage_collections: Arc<dyn StorageCollections + Send + Sync>,
@@ -239,6 +246,9 @@ pub struct Controller {
     instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
     /// Receive end for replica responses.
     instance_response_rx: mpsc::UnboundedReceiver<(Option<ReplicaId>, StorageResponse)>,
+    /// The staleness states of collections that do not report their frontiers to this
+    /// controller, which [`StorageCollections`] observes.
+    unreported_freshness: Arc<UnreportedFreshness>,
 
     /// Background task run at startup to warm persist state.
     persist_warm_task: Option<AbortOnDropHandle<Box<dyn Debug + Send>>>,
@@ -1239,8 +1249,9 @@ impl StorageController for Controller {
             }
 
             let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(id, maybe_instance_id);
-            let collection_state =
+            let mut collection_state =
                 CollectionState::new(data_source, metadata, extra_state, wallclock_lag_metrics);
+            self.install_freshness_state(id, &mut collection_state);
 
             self.collections.insert(id, collection_state);
         }
@@ -1505,12 +1516,13 @@ impl StorageController for Controller {
         };
         // TODO(alter_table): Support schema evolution on sources.
         let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(new_collection, None);
-        let collection_state = CollectionState::new(
+        let mut collection_state = CollectionState::new(
             DataSource::Table,
             collection_meta,
             CollectionStateExtra::None,
             wallclock_lag_metrics,
         );
+        self.install_freshness_state(new_collection, &mut collection_state);
 
         // Great! We have successfully evolved the schema of our Table, now we need to update our
         // in-memory data structures.
@@ -2058,12 +2070,23 @@ impl StorageController for Controller {
         }
 
         // Remove collection state
+        let freshness_config = self.freshness_config();
+        let now = self.now_ts();
+        let mut freshness_updates = Vec::new();
         for id in ingestions_to_drop.iter().chain(collections_to_drop.iter()) {
             tracing::info!(%id, "dropping collection state");
-            let collection = self
+            let mut collection = self
                 .collections
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
+
+            // A dropped collection's staleness recording ends at the drop.
+            freshness_updates.extend(self.finish_freshness(
+                *id,
+                &mut collection,
+                now,
+                freshness_config.as_ref(),
+            ));
 
             let instance = match &collection.extra_state {
                 CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
@@ -2100,6 +2123,7 @@ impl StorageController for Controller {
                 }
             }
         }
+        self.append_freshness_updates(freshness_updates);
 
         // Also let StorageCollections know!
         self.storage_collections
@@ -2170,12 +2194,23 @@ impl StorageController for Controller {
         }
 
         // Remove collection/export state
+        let freshness_config = self.freshness_config();
+        let now = self.now_ts();
+        let mut freshness_updates = Vec::new();
         for id in sinks_to_drop.iter() {
             tracing::info!(%id, "dropping export state");
-            let collection = self
+            let mut collection = self
                 .collections
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
+
+            // A dropped collection's staleness recording ends at the drop.
+            freshness_updates.extend(self.finish_freshness(
+                *id,
+                &mut collection,
+                now,
+                freshness_config.as_ref(),
+            ));
 
             let instance = match &collection.extra_state {
                 CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
@@ -2194,6 +2229,7 @@ impl StorageController for Controller {
                 }
             }
         }
+        self.append_freshness_updates(freshness_updates);
 
         // Also let StorageCollections know!
         self.storage_collections
@@ -2745,12 +2781,14 @@ impl StorageController for Controller {
             recorded_replica_frontiers,
             wallclock_lag: _,
             wallclock_lag_last_recorded,
+            boot,
             storage_collections: _,
             migrated_storage_collections,
             maintenance_ticker: _,
             maintenance_scheduled,
             instance_response_tx: _,
             instance_response_rx: _,
+            unreported_freshness: _,
             persist_warm_task: _,
         } = self;
 
@@ -2803,6 +2841,7 @@ impl StorageController for Controller {
             "recorded_frontiers": recorded_frontiers,
             "recorded_replica_frontiers": recorded_replica_frontiers,
             "wallclock_lag_last_recorded": format!("{wallclock_lag_last_recorded:?}"),
+            "boot": boot.to_string(),
             "migrated_storage_collections": migrated_storage_collections,
             "maintenance_scheduled": maintenance_scheduled,
         }))
@@ -2848,6 +2887,7 @@ where
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn,
         storage_collections: Arc<dyn StorageCollections + Send + Sync>,
+        unreported_freshness: Arc<UnreportedFreshness>,
     ) -> Self {
         let txns_client = persist_clients
             .open(persist_location.clone())
@@ -2917,7 +2957,8 @@ where
 
         let metrics = StorageControllerMetrics::new(metrics_registry, controller_metrics);
 
-        let now_dt = mz_ore::now::to_datetime(now());
+        let boot_ms = now();
+        let now_dt = mz_ore::now::to_datetime(boot_ms);
 
         Self {
             build_info,
@@ -2952,12 +2993,14 @@ where
             recorded_replica_frontiers: BTreeMap::new(),
             wallclock_lag,
             wallclock_lag_last_recorded: now_dt,
+            boot: Timestamp::from(boot_ms),
             storage_collections,
             migrated_storage_collections: BTreeSet::new(),
             maintenance_ticker,
             maintenance_scheduled: false,
             instance_response_rx,
             instance_response_tx,
+            unreported_freshness,
             persist_warm_task,
         }
     }
@@ -3010,6 +3053,7 @@ where
     #[instrument(level = "debug", fields(updates))]
     fn update_write_frontier(&mut self, id: GlobalId, new_upper: &Antichain<Timestamp>) {
         let mut read_capability_changes = BTreeMap::default();
+        let mut advanced = false;
 
         if let Some(collection) = self.collections.get_mut(&id) {
             let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state {
@@ -3039,6 +3083,7 @@ where
 
             if PartialOrder::less_than(write_frontier, new_upper) {
                 write_frontier.clone_from(new_upper);
+                advanced = true;
             }
 
             let new_derived_since = hold_policy.frontier(write_frontier.borrow());
@@ -3055,6 +3100,199 @@ where
 
         if !read_capability_changes.is_empty() {
             self.update_hold_capabilities(&mut read_capability_changes);
+        }
+
+        // A replica's report can lag the global write frontier, so only advances are observed.
+        if advanced {
+            self.observe_freshness(id, new_upper);
+        }
+    }
+
+    /// The current wall-clock time.
+    fn now_ts(&self) -> Timestamp {
+        Timestamp::from((self.now)())
+    }
+
+    /// The staleness recorder configuration, `None` while recording is off.
+    fn freshness_config(&self) -> Option<RecorderConfig> {
+        // A read-only controller belongs to a generation that is not the leader yet. The leader
+        // writes the histograms, so a second writer would count the same time twice.
+        // NOTE: `read_only` never changes, because a promoted process halts and reboots as the
+        // leader (see `environmentd::deployment::preflight`). Promoting in place would leave
+        // recording off until the next restart.
+        if self.read_only {
+            return None;
+        }
+        recorder_config(self.config.config_set())
+    }
+
+    /// The staleness state of collection `id` with `data_source`, `None` if this controller does
+    /// not track its staleness.
+    ///
+    /// Must be called after `id` is registered with [`StorageCollections`].
+    fn new_freshness_state(
+        &self,
+        id: GlobalId,
+        data_source: &DataSource,
+    ) -> Option<FreshnessState> {
+        // Transient collections are short-lived and numerous, so tracking them would bloat the
+        // histograms, as for the wallclock lag introspection.
+        if id.is_transient() {
+            return None;
+        }
+        // The compute controller writes the global rows of the collections it writes, among
+        // them materialized views, so a second writer would count the same time twice.
+        // NOTE: The catalog shard is `DataSource::Other` too, but no compute collection writes
+        // it, so no controller records its staleness.
+        if matches!(data_source, DataSource::Other) {
+            return None;
+        }
+        let dependence = match self.storage_collections.determine_freshness_dependence(id) {
+            Ok(dependence) => dependence,
+            Err(err) => {
+                soft_panic_or_log!("freshness dependence of {id} missing: {err}");
+                None
+            }
+        };
+        // A collection without a dependence, among them sinks, does not follow wall-clock time.
+        let dependence = dependence?;
+        // The write frontier the collection starts with. Its since would charge the time until
+        // the first observation against the compaction window.
+        let frontier = self
+            .storage_collections
+            .collection_frontiers(id)
+            .map(|frontiers| frontiers.write_frontier)
+            .unwrap_or_else(|_| Antichain::from_elem(Timestamp::MIN));
+        let config = self.freshness_config();
+        let state = if self.initialized {
+            // A collection created now can start with a frontier that reflects a time long
+            // before, a new table the txns upper at boot, but it was not stale before it existed.
+            FreshnessState::new_created(dependence, self.now_ts(), &frontier, config.as_ref())
+        } else {
+            // Collections created before initialization completes existed before the restart, so
+            // their recordings start when the controller started, however long bootstrap takes,
+            // and the frontier they start with charges the restart.
+            FreshnessState::new(dependence, self.boot, &frontier, config.as_ref())
+        };
+        Some(state)
+    }
+
+    /// Records the write frontier `frontier` of collection `id` in its staleness state.
+    fn observe_freshness(&mut self, id: GlobalId, frontier: &Antichain<Timestamp>) {
+        let freshness_config = self.freshness_config();
+        let now = self.now_ts();
+        let Some(collection) = self.collections.get_mut(&id) else {
+            return;
+        };
+        let Some(state) = &mut collection.freshness else {
+            return;
+        };
+        let rows = state.observe(now, frontier, freshness_config.as_ref());
+        let updates = freshness_updates(&self.instances, id, &collection.extra_state, rows);
+        self.append_freshness_updates(updates);
+    }
+
+    /// Creates the staleness state of collection `id`, and installs it in `collection`, or in
+    /// [`UnreportedFreshness`] if the collection does not report its frontiers to this
+    /// controller.
+    fn install_freshness_state(&mut self, id: GlobalId, collection: &mut CollectionState) {
+        // Ingestions and exports are observed in `update_write_frontier`. The others, among them
+        // tables, webhooks, and storage-managed collections, advance without a report to this
+        // controller, and `StorageCollections` observes them.
+        if !matches!(collection.extra_state, CollectionStateExtra::None) {
+            collection.freshness = self.new_freshness_state(id, &collection.data_source);
+            return;
+        }
+        let ((), updates) = self.with_unreported_freshness(|this, states, _now| {
+            // Created under the lock, so that `StorageCollections` observes every advance after
+            // the frontier the state starts with.
+            if let Some(state) = this.new_freshness_state(id, &collection.data_source) {
+                states.insert(id, state);
+            }
+        });
+        self.append_freshness_updates(updates);
+    }
+
+    /// Calls `f` with the locked states of [`UnreportedFreshness`] and the current time, and
+    /// returns its result and the updates of the rows the states closed since the last call.
+    ///
+    /// The states use the current recorder configuration, and observe advances while it is set.
+    fn with_unreported_freshness<R>(
+        &self,
+        f: impl FnOnce(&Self, &mut UnreportedStates, Timestamp) -> R,
+    ) -> (R, Vec<(Row, Diff)>) {
+        let config = self.freshness_config();
+        let observing = config.is_some();
+        let (mut states, now) =
+            self.unreported_freshness
+                .lock_synced(&self.now, config, observing, |id| {
+                    match self.storage_collections.collection_frontiers(id) {
+                        Ok(frontiers) => Some(frontiers.write_frontier),
+                        Err(err) => {
+                            soft_panic_or_log!("frontiers of {id} missing: {err}");
+                            None
+                        }
+                    }
+                });
+        let result = f(self, &mut states, now);
+        let mut updates = Vec::new();
+        for (id, rows) in states.take_rows() {
+            updates.extend(freshness_updates(
+                &self.instances,
+                id,
+                &CollectionStateExtra::None,
+                rows,
+            ));
+        }
+        (result, updates)
+    }
+
+    /// Closes the staleness periods that ended by now, and appends their rows.
+    fn tick_freshness(&mut self) {
+        let ((), mut updates) = self.with_unreported_freshness(|_, states, now| states.tick(now));
+        let freshness_config = self.freshness_config();
+        let now = self.now_ts();
+        for (id, collection) in &mut self.collections {
+            if let Some(state) = &mut collection.freshness {
+                let rows = state.tick(now, freshness_config.as_ref());
+                updates.extend(freshness_updates(
+                    &self.instances,
+                    *id,
+                    &collection.extra_state,
+                    rows,
+                ));
+            }
+        }
+        self.append_freshness_updates(updates);
+    }
+
+    /// Ends the staleness recording of the dropped collection `id` at `now`, and returns the
+    /// updates of its remaining periods, including the open partial one.
+    fn finish_freshness(
+        &self,
+        id: GlobalId,
+        collection: &mut CollectionState,
+        now: Timestamp,
+        freshness_config: Option<&RecorderConfig>,
+    ) -> Vec<(Row, Diff)> {
+        if matches!(collection.extra_state, CollectionStateExtra::None) {
+            let ((), updates) =
+                self.with_unreported_freshness(|_, states, now| states.finish(id, now));
+            return updates;
+        }
+        let Some(state) = &mut collection.freshness else {
+            return Vec::new();
+        };
+        let rows = state.finish(now, freshness_config);
+        freshness_updates(&self.instances, id, &collection.extra_state, rows)
+    }
+
+    fn append_freshness_updates(&mut self, updates: Vec<(Row, Diff)>) {
+        if !updates.is_empty() {
+            self.append_introspection_updates(
+                IntrospectionType::WallclockFreshnessHistogram,
+                updates,
+            );
         }
     }
 
@@ -3762,20 +4000,7 @@ where
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
                 let bucket = lag.map_seconds(|secs| secs.next_power_of_two());
-
-                let instance_id = match &collection.extra_state {
-                    CollectionStateExtra::Ingestion(i) => Some(i.instance_id),
-                    CollectionStateExtra::Export(e) => Some(e.cluster_id()),
-                    CollectionStateExtra::None => None,
-                };
-                let workload_class = instance_id
-                    .and_then(|id| self.instances.get(&id))
-                    .and_then(|i| i.workload_class.clone());
-                let labels = match workload_class {
-                    Some(wc) => [("workload_class", wc.clone())].into(),
-                    None => BTreeMap::new(),
-                };
-
+                let labels = histogram_labels(&self.instances, &collection.extra_state);
                 let key = (histogram_period, bucket, labels);
                 *stash.entry(key).or_default() += Diff::ONE;
             }
@@ -3875,6 +4100,7 @@ where
     fn maintain(&mut self) {
         self.update_frontier_introspection();
         self.refresh_wallclock_lag();
+        self.tick_freshness();
 
         // Perform instance maintenance work.
         for instance in self.instances.values_mut() {
@@ -3977,6 +4203,38 @@ async fn read_handle_for_snapshot(
     Ok(read_handle)
 }
 
+/// The labels of wallclock lag and staleness histogram rows of a collection.
+fn histogram_labels(
+    instances: &BTreeMap<StorageInstanceId, Instance>,
+    extra_state: &CollectionStateExtra,
+) -> BTreeMap<&'static str, String> {
+    let instance_id = match extra_state {
+        CollectionStateExtra::Ingestion(i) => Some(i.instance_id),
+        CollectionStateExtra::Export(e) => Some(e.cluster_id()),
+        CollectionStateExtra::None => None,
+    };
+    let workload_class = instance_id
+        .and_then(|id| instances.get(&id))
+        .and_then(|i| i.workload_class.clone());
+    match workload_class {
+        Some(wc) => [("workload_class", wc)].into(),
+        None => BTreeMap::new(),
+    }
+}
+
+/// The global staleness histogram updates of `rows` of collection `id`.
+fn freshness_updates(
+    instances: &BTreeMap<StorageInstanceId, Instance>,
+    id: GlobalId,
+    extra_state: &CollectionStateExtra,
+    rows: Vec<PeriodRow>,
+) -> Vec<(Row, Diff)> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    pack_rows(rows, id, None, &histogram_labels(instances, extra_state))
+}
+
 /// State maintained about individual collections.
 #[derive(Debug)]
 struct CollectionState {
@@ -4007,6 +4265,10 @@ struct CollectionState {
     >,
     /// Frontier wallclock lag metrics tracked for this collection.
     wallclock_lag_metrics: WallclockLagMetrics,
+    /// The staleness state of the write frontier of an ingestion or export, `None` if
+    /// staleness is not tracked for this collection. The states of other collections are in
+    /// [`UnreportedFreshness`].
+    freshness: Option<FreshnessState>,
 }
 
 impl CollectionState {
@@ -4031,6 +4293,7 @@ impl CollectionState {
             wallclock_lag_max: WallclockLag::MIN,
             wallclock_lag_histogram_stash,
             wallclock_lag_metrics,
+            freshness: None,
         }
     }
 }

@@ -64,6 +64,7 @@ use crate::client::TimestamplessUpdateBuilder;
 use crate::controller::{
     CollectionDescription, DataSource, PersistEpoch, StorageMetadata, StorageTxn,
 };
+use crate::freshness::UnreportedFreshness;
 use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
 
 mod metrics;
@@ -443,16 +444,20 @@ impl StorageCollectionsImpl {
     /// [StorageCollections::initialize_state],
     /// [StorageCollections::prepare_state], and
     /// [StorageCollections::create_collections_for_bootstrap].
+    ///
+    /// Every advance of a collection's write frontier is observed in `unreported_freshness`,
+    /// at the wall-clock time of `now` at which it was learned.
     pub async fn new(
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
         metrics_registry: &MetricsRegistry,
-        _now: NowFn,
+        now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
         read_only: bool,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn,
+        unreported_freshness: Arc<UnreportedFreshness>,
     ) -> Self {
         let metrics = StorageCollectionsMetrics::register_into(metrics_registry);
 
@@ -535,6 +540,8 @@ impl StorageCollectionsImpl {
             since_handles: BTreeMap::new(),
             txns_handle: Some(txns_write),
             txns_shards: Default::default(),
+            now,
+            unreported_freshness,
         };
 
         let background_task =
@@ -2788,6 +2795,8 @@ struct BackgroundTask {
     since_handles: BTreeMap<GlobalId, SinceHandleWrapper>,
     txns_handle: Option<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     txns_shards: BTreeSet<GlobalId>,
+    now: NowFn,
+    unreported_freshness: Arc<UnreportedFreshness>,
 }
 
 #[derive(Debug)]
@@ -3017,8 +3026,11 @@ impl BackgroundTask {
     #[instrument(level = "debug")]
     async fn update_write_frontiers(&self, updates: &[(GlobalId, &Antichain<Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
+        let mut advanced = Vec::new();
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");
+        // Read under the lock, see `UnreportedFreshness::set_observing`.
+        let observing = self.unreported_freshness.is_observing();
 
         for (id, new_upper) in updates.iter() {
             let collection = if let Some(c) = self_collections.get_mut(id) {
@@ -3032,6 +3044,9 @@ impl BackgroundTask {
 
             if PartialOrder::less_than(&collection.write_frontier, *new_upper) {
                 collection.write_frontier.clone_from(new_upper);
+                if observing {
+                    advanced.push((*id, collection.write_frontier.clone()));
+                }
             }
 
             let mut new_read_capability = collection
@@ -3066,6 +3081,12 @@ impl BackgroundTask {
                 &mut self_collections,
                 &mut read_capability_changes,
             );
+        }
+
+        drop(self_collections);
+
+        if !advanced.is_empty() {
+            self.unreported_freshness.observe(&self.now, &advanced);
         }
     }
 
@@ -3420,6 +3441,7 @@ pub(crate) enum SnapshotStatsAsOf {
 mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigSet;
@@ -3434,6 +3456,9 @@ mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{RelationDesc, Row};
     use mz_secrets::InMemorySecretsController;
+    use mz_storage_types::freshness::{BucketScheme, RecorderConfig};
+
+    use crate::freshness::FreshnessState;
 
     use super::*;
 
@@ -3722,10 +3747,103 @@ mod tests {
         res.await
     }
 
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`
+    async fn write_frontier_advances_are_observed_when_learned() {
+        let time = Arc::new(AtomicU64::new(2_000));
+        let now = {
+            let time = Arc::clone(&time);
+            NowFn::from(move || time.load(Ordering::SeqCst))
+        };
+        let freshness = Arc::new(UnreportedFreshness::default());
+        let (_cmds_tx, task) = BackgroundTask::new_for_test_with(now, Arc::clone(&freshness));
+        let metadata = CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            },
+            data_shard: ShardId::new(),
+            relation_desc: RelationDesc::empty(),
+            txns_shard: None,
+        };
+        let id = GlobalId::User(1);
+        let state = CollectionState::new(
+            None,
+            None,
+            None,
+            None,
+            Antichain::from_elem(0.into()),
+            Antichain::from_elem(1.into()),
+            vec![],
+            metadata,
+        );
+        task.collections
+            .lock()
+            .expect("lock poisoned")
+            .insert(id, state);
+
+        let config = RecorderConfig {
+            scheme: BucketScheme::new(4).expect("power of two"),
+            period: Duration::from_secs(60),
+        };
+        let state = FreshnessState::new(
+            TimeDependence::default(),
+            0.into(),
+            &Antichain::from_elem(1.into()),
+            Some(&config),
+        );
+        {
+            let (mut states, _) =
+                freshness.lock_synced(&NowFn::from(|| 0), Some(config.clone()), false, |_| None);
+            states.insert(id, state);
+        }
+
+        // Not observed, so the state keeps reflecting the frontier it started with.
+        task.update_write_frontiers(&[(id, &Antichain::from_elem(3.into()))])
+            .await;
+        // Turned on without resuming, to show that the task observes from the frontier the state
+        // has.
+        let _ = freshness.lock_synced(&NowFn::from(|| 0), Some(config.clone()), true, |_| None);
+        time.store(7_000, Ordering::SeqCst);
+        let advanced = Antichain::from_elem(5.into());
+        task.update_write_frontiers(&[(id, &advanced)]).await;
+        // Neither a repeated nor a lagging upper advances the write frontier.
+        time.store(8_000, Ordering::SeqCst);
+        task.update_write_frontiers(&[(id, &advanced)]).await;
+        task.update_write_frontiers(&[(id, &Antichain::from_elem(3.into()))])
+            .await;
+
+        let (mut states, _) =
+            freshness.lock_synced(&NowFn::from(|| 10_000), Some(config.clone()), true, |_| {
+                None
+            });
+        states.finish(id, 10_000.into());
+        let rows = states.take_rows();
+        let mut counts = BTreeMap::new();
+        for (row_id, rows) in rows {
+            assert_eq!(row_id, id);
+            for row in rows {
+                *counts.entry(row.bucket).or_insert(0) += row.count_ms;
+            }
+        }
+        // The advance to 5 is charged at 7 s, when the task learned it. The time until then
+        // counts against the frontier 1, the time after it against the frontier 5.
+        let bucket = |staleness_ms| config.scheme.bucket(Duration::from_millis(staleness_ms));
+        let expected = BTreeMap::from([(bucket(7_000), 7_000), (bucket(10_000 - 4), 3_000)]);
+        assert_eq!(counts, expected);
+    }
+
     impl BackgroundTask {
         fn new_for_test(
             _persist_location: PersistLocation,
             _persist_client: Arc<PersistClientCache>,
+        ) -> (mpsc::UnboundedSender<BackgroundCmd>, Self) {
+            Self::new_for_test_with(NowFn::from(|| 0), Default::default())
+        }
+
+        fn new_for_test_with(
+            now: NowFn,
+            unreported_freshness: Arc<UnreportedFreshness>,
         ) -> (mpsc::UnboundedSender<BackgroundCmd>, Self) {
             let (cmds_tx, cmds_rx) = mpsc::unbounded_channel();
             let (_holds_tx, holds_rx) = mpsc::unbounded_channel();
@@ -3748,6 +3866,8 @@ mod tests {
                 since_handles: BTreeMap::new(),
                 txns_handle: None,
                 txns_shards: BTreeSet::new(),
+                now,
+                unreported_freshness,
             };
 
             (cmds_tx, task)

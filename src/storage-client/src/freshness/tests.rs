@@ -17,13 +17,17 @@ use mz_controller_types::dyncfgs::{
     WALLCLOCK_FRESHNESS_PERIOD_INTERVAL,
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
+use mz_ore::now::NowFn;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::freshness::{BucketScheme, PeriodRow, RecorderConfig};
 use mz_storage_types::time_dependence::TimeDependence;
 use timely::progress::Antichain;
 
-use super::{FreshnessState, MIN_PERIOD_INTERVAL, is_new_rejection, pack_rows, recorder_config};
+use super::{
+    FreshnessState, MIN_PERIOD_INTERVAL, UnreportedFreshness, UnreportedStates, is_new_rejection,
+    pack_rows, recorder_config,
+};
 use crate::healthcheck::{
     REPLICA_WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC, WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC,
 };
@@ -233,6 +237,38 @@ fn created_state_charges_at_most_since_start() {
     }
 }
 
+#[mz_ore::test]
+fn resume_charges_nothing_for_unobserved_time() {
+    let cfg = config();
+    let mut state = FreshnessState::new(TimeDependence::default(), ts(0), &frontier(1), None);
+    assert_eq!(state.reported_lag(ts(1_000)), Duration::from_secs(1));
+    // Nobody observed the frontier from 1 s to 50 s, when recording turns on.
+    assert_eq!(
+        state.resume(ts(50_000), &frontier(49_001), Some(&cfg)),
+        vec![]
+    );
+    assert_eq!(state.reported_lag(ts(50_000)), Duration::from_secs(1));
+    let rows = state.finish(ts(52_000), Some(&cfg));
+    let expected = BTreeMap::from([((50_000, 52_000), BTreeMap::from([(bucket(3_000), 2_000)]))]);
+    assert_eq!(periods(&rows), expected);
+}
+
+#[mz_ore::test]
+fn resume_with_empty_frontier_completes() {
+    let cfg = config();
+    let mut state = FreshnessState::new(TimeDependence::default(), ts(0), &frontier(1), None);
+    assert_eq!(
+        state.resume(ts(50_000), &Antichain::new(), Some(&cfg)),
+        vec![]
+    );
+    assert_eq!(state.reported_lag(ts(60_000)), Duration::ZERO);
+    assert_eq!(
+        state.observe(ts(61_000), &frontier(61_001), Some(&cfg)),
+        vec![]
+    );
+    assert_eq!(state.finish(ts(62_000), Some(&cfg)), vec![]);
+}
+
 fn period_row(start: u64, bucket: i32, count_ms: u64) -> PeriodRow {
     PeriodRow {
         period_start: ts(start),
@@ -381,4 +417,88 @@ fn rejections_are_new_once_per_value() {
     assert!(!is_new_rejection(&last, 3));
     assert!(is_new_rejection(&last, 5));
     assert!(is_new_rejection(&last, 3));
+}
+
+fn at(n: u64) -> NowFn {
+    NowFn::from(move || n)
+}
+
+/// The rows of all collections that `states` closed since the last call, by period.
+fn taken(states: &mut UnreportedStates) -> BTreeMap<(u64, u64), BTreeMap<i32, u64>> {
+    let rows: Vec<_> = states
+        .take_rows()
+        .into_iter()
+        .flat_map(|(_, rows)| rows)
+        .collect();
+    periods(&rows)
+}
+
+#[mz_ore::test]
+fn unreported_observing_on_resumes_from_current_frontier() {
+    let cfg = config();
+    let id = GlobalId::User(1);
+    let shared = UnreportedFreshness::default();
+    {
+        let (mut states, now) = shared.lock_synced(&at(0), None, false, |_| unreachable!());
+        states.insert(
+            id,
+            FreshnessState::new(TimeDependence::default(), now, &frontier(1), None),
+        );
+    }
+    // While nothing records or reports, the background task observes nothing.
+    assert!(!shared.is_observing());
+
+    // Recording turns on at 20 s, when the frontier is 19_001.
+    {
+        let (mut states, _) = shared.lock_synced(&at(20_000), Some(cfg.clone()), true, |_| {
+            // The task observes every advance after this read only if it sees observing on.
+            assert!(shared.is_observing());
+            Some(frontier(19_001))
+        });
+        assert_eq!(taken(&mut states), BTreeMap::new());
+    }
+    shared.observe(&at(21_000), &[(id, frontier(21_001))]);
+
+    let (mut states, now) = shared.lock_synced(&at(25_000), Some(cfg), true, |_| unreachable!());
+    states.finish(id, now);
+    // The off time before 20 s is not charged. The resumed frontier holds until the advance at
+    // 21 s, the advance until the drop.
+    let expected = BTreeMap::from([(
+        (20_000, 25_000),
+        BTreeMap::from([(bucket(2_000), 1_000), (bucket(4_000), 4_000)]),
+    )]);
+    assert_eq!(taken(&mut states), expected);
+}
+
+#[mz_ore::test]
+fn unreported_drop_emits_partial_period_once() {
+    let cfg = config();
+    let id = GlobalId::User(1);
+    let shared = UnreportedFreshness::default();
+    {
+        let (mut states, now) = shared.lock_synced(&at(0), Some(cfg.clone()), true, |_| None);
+        states.insert(
+            id,
+            FreshnessState::new(TimeDependence::default(), now, &frontier(1), Some(&cfg)),
+        );
+    }
+    shared.observe(&at(3_000), &[(id, frontier(3_001))]);
+    {
+        let (mut states, now) = shared.lock_synced(&at(5_000), Some(cfg.clone()), true, |_| None);
+        states.finish(id, now);
+        let expected = BTreeMap::from([(
+            (0, 5_000),
+            BTreeMap::from([(bucket(3_000), 3_000), (bucket(2_000), 2_000)]),
+        )]);
+        assert_eq!(taken(&mut states), expected);
+        assert_eq!(taken(&mut states), BTreeMap::new());
+        // A second drop of the same collection finds no state.
+        states.finish(id, now);
+        assert_eq!(taken(&mut states), BTreeMap::new());
+    }
+    // An advance the task learned before the drop and observes after it finds no state.
+    shared.observe(&at(6_000), &[(id, frontier(6_001))]);
+    let (mut states, now) = shared.lock_synced(&at(120_000), Some(cfg), true, |_| None);
+    states.tick(now);
+    assert_eq!(taken(&mut states), BTreeMap::new());
 }
