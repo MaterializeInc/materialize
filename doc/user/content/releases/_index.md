@@ -28,9 +28,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 Materialize now does less work per query, so it can serve more queries per second when many clients query it at once.
 
-![Queries per second with 512 concurrent clients against environmentd running 32 CPUs, old versus new: with statement logging on, QPS rises from 3,302 to 4,265 (+29%), and with statement logging off, from 5,918 to 8,813 (+49%)](/images/releases/v2649_qps.png)
+![Queries per second from 16 to 512 concurrent clients against environmentd running 32 CPUs, v26.48 versus v26.49: with statement logging on, QPS improves by 29% to 66%, for example from 3,302 to 4,265 at 512 clients, and with statement logging off, by 49% to 105%, for example from 5,918 to 8,813 at 512 clients](/images/releases/v2649_qps.png)
 
-We tested v26.48 against v26.49, running `environmentd` with 32 CPUs and 512 concurrent clients issuing point lookups against an indexed view. We observed throughput improved by 29% with [statement logging](/self-managed-deployments/query-history/) on, and by 49% with statement logging off.
+We tested v26.48 against v26.49, running `environmentd` with 32 CPUs and between 16 and 512 concurrent clients issuing point lookups against an indexed view. At 512 clients, we observed throughput improved by 29% with [statement logging](/self-managed-deployments/query-history/) on, and by 49% with statement logging off. At lower concurrency, the gains were larger, up to 66% with statement logging on and 105% with it off.
 
 ### Right size your clusters, using the new Hydration tab on the console {#v26.49-hydration-tab}
 
