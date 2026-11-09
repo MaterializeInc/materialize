@@ -1057,6 +1057,10 @@ mod tests {
             unimplemented!()
         }
 
+        fn set_freshness_dependence(&self, _id: GlobalId, _dependence: Option<TimeDependence>) {
+            unimplemented!()
+        }
+
         fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
             unimplemented!()
         }

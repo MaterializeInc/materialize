@@ -272,10 +272,6 @@ ALTER SYSTEM SET enable_wallclock_freshness_reporting = true
   WITH (REFRESH EVERY '1 minute')
   AS SELECT * FROM refresh_input
 
-# NOTE: The storage controller tracks no staleness for materialized views, so
-# their row without a replica keeps the lag of the write frontier, which is 0
-# while the frontier is at the next refresh.
-
 > SELECT DISTINCT ON(o.name, r.name)
     o.name, r.name, l.lag >= '59s', l.lag < '2s', l.lag = date_trunc('second', l.lag)
   FROM mz_internal.mz_wallclock_lag_history l
@@ -284,7 +280,7 @@ ALTER SYSTEM SET enable_wallclock_freshness_reporting = true
   WHERE o.name IN ('src_1s', 'src_1s_tbl', 'mv_refresh')
   ORDER BY o.name, r.name, l.occurred_at DESC
 mv_refresh  r1      true  false false
-mv_refresh  <null>  false true  true
+mv_refresh  <null>  true  false false
 src_1s      <null>  false true  false
 src_1s_tbl  <null>  false true  false
 
@@ -294,7 +290,7 @@ src_1s_tbl  <null>  false true  false
   JOIN mz_objects o ON o.id = l.object_id
   WHERE o.name IN ('src_1s', 'src_1s_tbl', 'mv_refresh')
   ORDER BY o.name, l.occurred_at DESC
-mv_refresh  false true
+mv_refresh  true  false
 src_1s      false true
 src_1s_tbl  false true
 

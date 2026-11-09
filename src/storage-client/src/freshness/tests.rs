@@ -563,6 +563,35 @@ fn reporting_on_reads_sample_peak() {
 }
 
 #[mz_ore::test]
+fn reporting_only_state_never_records() {
+    // A REFRESH EVERY 1 minute view, as the storage controller tracks a materialized view that
+    // the compute controller records.
+    let every_minute = TimeDependence::new(
+        Some(RefreshSchedule {
+            everies: vec![RefreshEvery {
+                interval: Duration::from_secs(60),
+                aligned_to: ts(0),
+            }],
+            ats: vec![],
+        }),
+        vec![],
+    );
+    let mut state = FreshnessState::new(every_minute, ts(60_000), &frontier(120_000), None);
+    for now in (61_000..=300_000).step_by(1_000) {
+        let f = frontier((now / 60_000 + 1) * 60_000);
+        assert_eq!(state.observe(ts(now), &f, None), vec![]);
+        assert_eq!(state.tick(ts(now), None), vec![]);
+    }
+    // The frontier at 360 s reflects the refresh at 300 s, and the sample before it reflected
+    // the refresh at 240 s, so the view reads up to its period.
+    let today = whole_seconds(&frontier(360_000), ts(300_500));
+    assert_eq!(today, Duration::ZERO);
+    let lag = reported_wallclock_lag(true, Some(&mut state), ts(300_500), today);
+    assert_eq!(lag, WallclockLag::Millis(60_000));
+    assert_eq!(state.finish(ts(301_000), None), vec![]);
+}
+
+#[mz_ore::test]
 fn reporting_toggled_on_reads_no_peak_from_off_time() {
     let mut state = FreshnessState::new(TimeDependence::default(), ts(0), &frontier(1), None);
     // A 30 s stall closes while reporting is off.

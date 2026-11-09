@@ -319,6 +319,11 @@ pub trait StorageCollections: Debug + Sync {
         id: GlobalId,
     ) -> Result<Option<TimeDependence>, TimeDependenceError>;
 
+    /// Sets the freshness dependence that [`Self::determine_freshness_dependence`] reports for a
+    /// collection that another controller writes, such as a materialized view. Does nothing if
+    /// `id` is unknown.
+    fn set_freshness_dependence(&self, id: GlobalId, dependence: Option<TimeDependence>);
+
     /// Returns the state of [`StorageCollections`] formatted as JSON.
     fn dump(&self) -> Result<serde_json::Value, anyhow::Error>;
 }
@@ -2486,6 +2491,13 @@ impl StorageCollections for StorageCollectionsImpl {
         let collections = self.collections.lock().expect("lock poisoned");
         let state = collections.get(&id).ok_or(CollectionMissing(id))?;
         Ok(state.freshness_dependence.clone())
+    }
+
+    fn set_freshness_dependence(&self, id: GlobalId, dependence: Option<TimeDependence>) {
+        let mut collections = self.collections.lock().expect("lock poisoned");
+        if let Some(state) = collections.get_mut(&id) {
+            state.freshness_dependence = dependence;
+        }
     }
 
     fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {

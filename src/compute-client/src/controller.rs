@@ -987,6 +987,13 @@ impl ComputeController {
         let freshness_dependence = self
             .determine_freshness_dependence(instance_id, &dataflow, &used_imports)
             .expect("must exist");
+        // The storage controller reports the wallclock lag of the storage collections this
+        // dataflow writes, and `mz_wallclock_global_lag_history` takes the minimum over its row
+        // and the replicas' rows, so it needs the same dependence.
+        for id in dataflow.persist_sink_ids() {
+            self.storage_collections
+                .set_freshness_dependence(id, freshness_dependence.clone());
+        }
 
         let instance = self.instance_mut(instance_id).expect("validated");
 
