@@ -419,7 +419,7 @@ where
 fn serve_until_next_connection(worker: &mut Worker<'_>) -> Uuid {
     loop {
         match worker.recv_command() {
-            Ok(command) => worker.handle_command(command),
+            Ok((command, _number)) => worker.handle_command(command),
             Err(NonceChange(nonce)) => {
                 worker.set_nonce(nonce);
                 assert!(
@@ -559,10 +559,10 @@ fn forwarded_until(
     let mut forwarded = Vec::new();
     loop {
         match rx.try_recv() {
-            Some(UnifiedCommand::Compute(command, received)) if received.nonce == connection => {
+            Some(UnifiedCommand::Compute(command, received, _)) if received.nonce == connection => {
                 forwarded.push(command)
             }
-            Some(UnifiedCommand::Compute(_, received)) if received.nonce == next => {
+            Some(UnifiedCommand::Compute(_, received, _)) if received.nonce == next => {
                 return forwarded;
             }
             Some(_) => panic!("only commands of the two connections are sent"),
