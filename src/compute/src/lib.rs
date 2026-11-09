@@ -16,6 +16,7 @@ pub mod server;
 
 mod arrangement;
 mod command_channel;
+mod command_progress;
 mod compute_state;
 mod extensions;
 mod logging;

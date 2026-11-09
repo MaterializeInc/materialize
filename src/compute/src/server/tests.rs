@@ -30,7 +30,8 @@ use crate::reconcile_barrier::{BarrierSide, ConnectionOrder, ReconcileBarrier};
 /// A worker of `role` on `timely_worker` with a compute state already created, as after a
 /// `CreateInstance`, and the senders of its commands and receiver of its responses.
 ///
-/// Renders the command channel the way `run_worker` does, with `registry`'s connection order.
+/// Renders the command channel the way `run_worker` does, with `registry`'s connection order, and
+/// takes `registry`'s end of the command progress link that `role` takes.
 fn test_worker<'w>(
     timely_worker: &'w mut TimelyWorker,
     role: ComputeRuntimeRole,
@@ -48,6 +49,8 @@ fn test_worker<'w>(
         .barrier_side()
         .map(|_| registry.connection_order().clone());
     let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, None, order);
+    let (command_progress, maintenance_progress) =
+        command_progress_ends(timely_worker, role, &registry);
     let (resp_tx, resp_rx) = mpsc::unbounded_channel();
     let persist_batches = SharedBatches::new();
     let txns_ctx = TxnsContext::default();
@@ -66,6 +69,7 @@ fn test_worker<'w>(
         metrics_registry.clone(),
         1,
         Arc::clone(&peek_permits),
+        maintenance_progress,
     );
     let worker = Worker {
         role,
@@ -84,6 +88,8 @@ fn test_worker<'w>(
         workers_per_process: 1,
         peek_permits,
         storage: None,
+        command_progress,
+        maintenance_progress: None,
     };
     (worker, cmd_tx, resp_rx)
 }
@@ -641,4 +647,261 @@ fn after_a_failed_response_send_an_adapter_forwards_the_connection_except_its_pe
         vec![without_peeks, commands],
         "the adapter that failed to send drops only the peeks, the other forwards every command"
     );
+}
+
+/// Bound on worker steps the replayed maintenance progress may take to pass a command.
+const MAX_PROGRESS_STEPS: usize = 1000;
+
+/// The replayed maintenance progress of an interactive `worker`.
+fn maintenance_progress<'a>(worker: &'a Worker<'_>) -> &'a MaintenanceProgress {
+    worker
+        .compute_state
+        .as_ref()
+        .expect("compute state")
+        .maintenance_progress
+        .as_ref()
+        .expect("an interactive worker replays maintenance progress")
+}
+
+/// Steps an interactive `worker` until the replayed maintenance progress passed `number`, and
+/// returns whether it did within [`MAX_PROGRESS_STEPS`].
+fn await_maintenance_passed(worker: &mut Worker<'_>, number: CommandNumber) -> bool {
+    for _ in 0..MAX_PROGRESS_STEPS {
+        if maintenance_progress(worker).passed(number) {
+            return true;
+        }
+        worker
+            .timely_worker
+            .step_or_park(Some(Duration::from_millis(10)));
+    }
+    maintenance_progress(worker).passed(number)
+}
+
+/// A registry pairing one maintenance and one interactive worker over the connection `nonce`.
+fn paired_registry(nonce: Uuid) -> ArrangementSharingRegistry {
+    let order = ConnectionOrder::default();
+    order.record(nonce);
+    ArrangementSharingRegistry::per_worker(1, &order)
+        .pop()
+        .expect("one registry")
+}
+
+/// A numbered command every worker applies without any state to apply it to.
+fn update_configuration() -> ComputeCommand {
+    ComputeCommand::UpdateConfiguration(Box::default())
+}
+
+/// The connection's commands are numbered 0 to 3. The maintenance worker has them delivered but
+/// has not reconciled them, so the interactive worker must not see them passed. Once maintenance
+/// reconciled, including the create phase, the interactive worker sees every command through the
+/// connection's `InitializationComplete` passed.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn maintenance_progress_passes_a_connection_only_after_its_create_phase() {
+    let nonce = Uuid::new_v4();
+    let registry = paired_registry(nonce);
+    let (_rt, persist_clients) = test_persist_clients();
+    let commands = || {
+        vec![
+            update_configuration(),
+            update_configuration(),
+            update_configuration(),
+            ComputeCommand::InitializationComplete,
+        ]
+    };
+
+    // Signals that the maintenance worker has the connection's commands delivered. The receivers
+    // are behind a `Mutex` because a timely worker closure must be `Sync`.
+    let (delivered_tx, delivered_rx) = std_mpsc::channel();
+    let delivered_rx = Mutex::new(delivered_rx);
+    // Releases the maintenance worker into its reconciliation.
+    let (reconcile_tx, reconcile_rx) = std_mpsc::channel();
+    let reconcile_rx = Mutex::new(reconcile_rx);
+
+    let maintenance = std::thread::spawn({
+        let registry = registry.clone();
+        let persist_clients = Arc::clone(&persist_clients);
+        move || {
+            timely::execute_directly(move |timely_worker| {
+                let (mut worker, cmd_tx, _resp_rx) = test_worker(
+                    timely_worker,
+                    ComputeRuntimeRole::Maintenance,
+                    registry,
+                    persist_clients,
+                );
+                for command in commands() {
+                    cmd_tx.send((command, nonce));
+                }
+                let NonceChange(received) = worker
+                    .recv_command()
+                    .expect_err("the connection's first command changes the nonce");
+                worker.set_nonce(received);
+                delivered_tx.send(()).expect("interactive worker alive");
+                reconcile_rx
+                    .lock()
+                    .expect("poisoned")
+                    .recv()
+                    .expect("interactive worker alive");
+                assert!(
+                    worker.reconcile().is_ok(),
+                    "the connection's commands end with `InitializationComplete`"
+                );
+                drop(worker);
+                drop(cmd_tx);
+                drop_dataflows(timely_worker);
+            })
+        }
+    });
+
+    let (passed_early, passed, frontier) = timely::execute_directly(move |timely_worker| {
+        let (mut worker, cmd_tx, _resp_rx) = test_worker(
+            timely_worker,
+            ComputeRuntimeRole::Interactive,
+            registry,
+            persist_clients,
+        );
+        for command in commands() {
+            cmd_tx.send((command, nonce));
+        }
+        delivered_rx
+            .lock()
+            .expect("poisoned")
+            .recv()
+            .expect("maintenance worker alive");
+        for _ in 0..10 {
+            worker.timely_worker.step();
+        }
+        let passed_early = maintenance_progress(&worker).passed(1);
+        reconcile_tx.send(()).expect("maintenance worker alive");
+
+        assert_eq!(reconcile_next_connection(&mut worker), nonce);
+        let passed = await_maintenance_passed(&mut worker, 3);
+        let frontier = maintenance_progress(&worker).frontier();
+
+        drop(worker);
+        drop(cmd_tx);
+        drop_dataflows(timely_worker);
+        (passed_early, passed, frontier)
+    });
+    maintenance.join().expect("maintenance worker panicked");
+
+    assert!(
+        !passed_early,
+        "maintenance progress passed a command maintenance had not reconciled"
+    );
+    assert!(
+        passed,
+        "maintenance progress passes the reconciled connection"
+    );
+    assert_eq!(
+        frontier,
+        Antichain::from_elem(4),
+        "maintenance progress stops after the connection's `InitializationComplete`"
+    );
+}
+
+/// After the connection is reconciled through command 0, maintenance applies an `AllowCompaction`
+/// numbered 1 in normal operation, and the interactive worker sees it passed.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn maintenance_progress_follows_commands_in_normal_operation() {
+    let nonce = Uuid::new_v4();
+    let id = GlobalId::User(1);
+    let registry = paired_registry(nonce);
+    let (_rt, persist_clients) = test_persist_clients();
+
+    // Signals that the interactive worker observed the reconciled connection. The receivers are
+    // behind a `Mutex` because a timely worker closure must be `Sync`.
+    let (reconciled_tx, reconciled_rx) = std_mpsc::channel();
+    let reconciled_rx = Mutex::new(reconciled_rx);
+    // Signals that the interactive worker finished observing.
+    let (done_tx, done_rx) = std_mpsc::channel();
+    let done_rx = Mutex::new(done_rx);
+
+    let maintenance = std::thread::spawn({
+        let registry = registry.clone();
+        let persist_clients = Arc::clone(&persist_clients);
+        move || {
+            timely::execute_directly(move |timely_worker| {
+                let (mut worker, cmd_tx, _resp_rx) = test_worker(
+                    timely_worker,
+                    ComputeRuntimeRole::Maintenance,
+                    registry,
+                    persist_clients,
+                );
+                cmd_tx.send((ComputeCommand::InitializationComplete, nonce));
+                assert_eq!(reconcile_next_connection(&mut worker), nonce);
+                reconciled_rx
+                    .lock()
+                    .expect("poisoned")
+                    .recv()
+                    .expect("interactive worker alive");
+
+                // Stands for a collection the worker hosts, which makes the compaction valid
+                // without rendering a dataflow.
+                worker
+                    .compute_state
+                    .as_mut()
+                    .expect("compute state")
+                    .peers
+                    .insert(id);
+                cmd_tx.send((
+                    ComputeCommand::AllowCompaction {
+                        id,
+                        frontier: Antichain::from_elem(Timestamp::new(1)),
+                    },
+                    nonce,
+                ));
+                let done_rx = done_rx.lock().expect("poisoned");
+                while done_rx.try_recv().is_err() {
+                    worker
+                        .timely_worker
+                        .step_or_park(Some(Duration::from_millis(1)));
+                    assert!(
+                        worker.handle_pending_commands().is_ok(),
+                        "the connection does not change"
+                    );
+                }
+                drop(worker);
+                drop(cmd_tx);
+                drop_dataflows(timely_worker);
+            })
+        }
+    });
+
+    let (passed_reconciled, passed_early, passed, frontier) =
+        timely::execute_directly(move |timely_worker| {
+            let (mut worker, cmd_tx, _resp_rx) = test_worker(
+                timely_worker,
+                ComputeRuntimeRole::Interactive,
+                registry,
+                persist_clients,
+            );
+            cmd_tx.send((ComputeCommand::InitializationComplete, nonce));
+            assert_eq!(reconcile_next_connection(&mut worker), nonce);
+            let passed_reconciled = await_maintenance_passed(&mut worker, 0);
+            let passed_early = maintenance_progress(&worker).passed(1);
+            reconciled_tx.send(()).expect("maintenance worker alive");
+
+            let passed = await_maintenance_passed(&mut worker, 1);
+            let frontier = maintenance_progress(&worker).frontier();
+            done_tx.send(()).expect("maintenance worker alive");
+
+            drop(worker);
+            drop(cmd_tx);
+            drop_dataflows(timely_worker);
+            (passed_reconciled, passed_early, passed, frontier)
+        });
+    maintenance.join().expect("maintenance worker panicked");
+
+    assert!(
+        passed_reconciled,
+        "maintenance progress passes the reconciled connection"
+    );
+    assert!(
+        !passed_early,
+        "maintenance progress passed a command maintenance had not received"
+    );
+    assert!(passed, "maintenance progress passes the applied compaction");
+    assert_eq!(frontier, Antichain::from_elem(2));
 }

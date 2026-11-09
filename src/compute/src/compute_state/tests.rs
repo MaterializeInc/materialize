@@ -441,6 +441,7 @@ fn interactive_compute_state(
         metrics_registry,
         1,
         Arc::new(PeekPermits::new(1)),
+        None,
     )
 }
 
