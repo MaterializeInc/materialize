@@ -3793,18 +3793,17 @@ mod tests {
             Some(&config),
         );
         {
-            let mut states = freshness.lock();
-            states.set_config(Some(config.clone()));
+            let (mut states, _) =
+                freshness.lock_synced(&NowFn::from(|| 0), Some(config.clone()), false, |_| None);
             states.insert(id, state);
         }
 
         // Not observed, so the state keeps reflecting the frontier it started with.
         task.update_write_frontiers(&[(id, &Antichain::from_elem(3.into()))])
             .await;
-        {
-            let states = freshness.lock();
-            assert!(!freshness.set_observing(&states, true));
-        }
+        // Turned on without resuming, to show that the task observes from the frontier the state
+        // has.
+        let _ = freshness.lock_synced(&NowFn::from(|| 0), Some(config.clone()), true, |_| None);
         time.store(7_000, Ordering::SeqCst);
         let advanced = Antichain::from_elem(5.into());
         task.update_write_frontiers(&[(id, &advanced)]).await;
@@ -3814,7 +3813,10 @@ mod tests {
         task.update_write_frontiers(&[(id, &Antichain::from_elem(3.into()))])
             .await;
 
-        let mut states = freshness.lock();
+        let (mut states, _) =
+            freshness.lock_synced(&NowFn::from(|| 10_000), Some(config.clone()), true, |_| {
+                None
+            });
         states.finish(id, 10_000.into());
         let rows = states.take_rows();
         let mut counts = BTreeMap::new();
