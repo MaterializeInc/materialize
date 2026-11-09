@@ -13,16 +13,12 @@ Native Postgres source tests, functional.
 
 import glob
 import time
-from random import Random
+from unittest import SkipTest
 
 import pg8000
 from pg8000 import Connection
 
 from materialize import MZ_ROOT, buildkite
-from materialize.mz_0dt_upgrader import (
-    Materialized0dtUpgrader,
-    generate_materialized_upgrade_args,
-)
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -44,7 +40,6 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
 )
-from materialize.version_list import get_compatible_upgrade_from_versions
 
 # Set the max slot WAL keep size to 10MB
 DEFAULT_PG_EXTRA_COMMAND = ["-c", "max_slot_wal_keep_size=10"]
@@ -494,9 +489,9 @@ def workflow_migration_multi_version_upgrade(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Multiversion upgrade with the source versioning migration.
+    Report the unsupported published-to-native source migration.
     """
-    pg_version = get_targeted_pg_version(parser)
+    get_targeted_pg_version(parser)
 
     parser.add_argument(
         "--mode",
@@ -520,82 +515,8 @@ def workflow_migration_multi_version_upgrade(
         help="limit to only the files matching filter",
     )
 
-    args = parser.parse_args()
+    parser.parse_args()
 
-    # Get matching files and apply sharding
-
-    sharded_files = get_sharded_files(args.filter)
-    print(f"Files: {sharded_files}")
-
-    ssl_args_dict = get_testdrive_ssl_args(c)
-    testdrive_ssl_args = ssl_args_dict["testdrive_args"]
-    volumes_extra = ssl_args_dict["volumes_extra"]
-
-    testdrive_args = (
-        testdrive_ssl_args + get_default_testdrive_size_args() + ["--no-reset"]
-    )
-
-    compatible_versions = get_compatible_upgrade_from_versions()
-
-    if args.mode == "random":
-        random_initial_version = Random(args.seed).choice(compatible_versions)
-        versions = [random_initial_version, None]
-    else:
-        versions = [compatible_versions[0], None]
-
-    materialize_service_instances = []
-
-    upgrade_args_list = generate_materialized_upgrade_args(versions)
-
-    for i, upgrade_args in enumerate(upgrade_args_list):
-        log_filter = "mz_storage::source::postgres=trace,info"
-
-        # Enable source versioning migration at the end (final version)
-        enable_source_migration_arg = (
-            {"force_source_table_syntax": "true"}
-            if i == len(upgrade_args_list) - 1
-            else {}
-        )
-
-        materialize_service_instances.append(
-            Materialized(
-                **upgrade_args,
-                external_blob_store=True,
-                volumes_extra=volumes_extra,
-                additional_system_parameter_defaults={
-                    log_filter: log_filter,
-                    **enable_source_migration_arg,
-                },
-            )
-        )
-
-    upgrade_path = Materialized0dtUpgrader(c, materialize_service_instances)
-
-    upgrade_path.print_upgrade_path()
-
-    for file in sharded_files:
-
-        with c.override(create_postgres(pg_version=pg_version)):
-            c.up("test-certs", "postgres")
-            initial_materialized_service, upgrade_steps = upgrade_path.initialize()
-            c.run_testdrive_files(
-                *testdrive_args,
-                file,
-                mz_service=initial_materialized_service.name,
-            )
-
-            for step in upgrade_steps:
-                step.upgrade()
-
-            # Verify the source table migration at the end.
-            last_materialized_service = upgrade_steps[-1].new_service
-            print(
-                f"Verifying source table migration for version {last_materialized_service.config.get('image')}"
-            )
-            verify_sources_after_source_table_migration(
-                c, file, service=last_materialized_service.name
-            )
-            upgrade_path.cleanup()
-            c.kill("postgres", wait=True)
-            c.rm("postgres")
-            c.rm_volumes("mzdata")
+    # Both modes upgrade from a published pre-native version to this checkout.
+    # Keep argument validation, but do not provision even certificate services.
+    raise SkipTest("pre-native to native PG CDC catalog upgrades are unsupported")

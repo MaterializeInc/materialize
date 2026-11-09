@@ -579,3 +579,23 @@ def test_pre_native_preflight_triggers_are_explicitly_skipped():
     }
     for name in ("test-preflight-check-rollback", "nightly-preflight-check-rollback"):
         assert "pre-native" in steps[name]["skip"]
+
+
+@pytest.mark.parametrize("mode", ["random", "earliest-to-current"])
+def test_pg_cdc_mixed_upgrade_stops_before_certificate_setup(mode):
+    path = MZ_ROOT / "test/pg-cdc-old-syntax/mzcompose.py"
+    spec = importlib.util.spec_from_file_location("pg_cdc_old_syntax_workflow", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    c = Mock(spec=Composition)
+    c.up.side_effect = AssertionError("unsupported upgrade started certificate setup")
+    with pytest.raises(SkipTest, match="pre-native"):
+        module.workflow_migration_multi_version_upgrade(
+            c,
+            WorkflowArgumentParser(
+                "migration-multi-version-upgrade",
+                "",
+                [f"--mode={mode}", "--seed=fixed", "--pg-version=17", "basic.td"],
+            ),
+        )
+    assert c.method_calls == []
