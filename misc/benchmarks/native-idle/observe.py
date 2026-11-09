@@ -25,6 +25,7 @@ from types import SimpleNamespace
 
 import psutil
 import psycopg
+from capture_publications import capture_publications
 from psycopg.rows import dict_row
 
 from materialize.cli.run import _controller_args, _environment_args
@@ -40,6 +41,8 @@ parser.add_argument("--warmup", type=int, default=300)
 parser.add_argument("--window", type=int, default=300)
 parser.add_argument("--windows", type=int, default=2)
 parser.add_argument("--profile-seconds", type=int, default=30)
+parser.add_argument("--heap-profile", action="store_true")
+parser.add_argument("--publication-seconds", type=int, default=0)
 parser.add_argument("--label", default=None)
 parser.add_argument("--scheduling-diagnostics", action="store_true")
 parser.add_argument("--plan-diagnostics", action="store_true")
@@ -55,6 +58,8 @@ if args.warmup < 0 or args.window < 4 or args.windows < 1 or args.profile_second
     parser.error("require warmup >= 0, window >= 4, windows >= 1, profile-seconds >= 0")
 if args.frontier_lifecycle and args.kind != "native":
     parser.error("--frontier-lifecycle requires native")
+if args.publication_seconds < 0:
+    parser.error("require publication-seconds >= 0")
 if args.plan_diagnostics and args.kind != "native":
     parser.error("--plan-diagnostics requires native")
 assert not any(
@@ -64,6 +69,9 @@ os.umask(0o077)
 RUN = E / f"{args.label or args.kind}-{int(time.time())}"
 RUN.mkdir()
 (RUN / "observe.py").write_bytes(Path(__file__).read_bytes())
+(RUN / "capture_publications.py").write_bytes(
+    Path(__file__).with_name("capture_publications.py").read_bytes()
+)
 state = RUN / "state"
 state.mkdir()
 (state / "scratch").mkdir()
@@ -664,11 +672,30 @@ try:
         assert c.execute("SELECT * FROM idle_probe").fetchall() == [(1,)]
     result["measurement_status"] = "passed"
     profile_errors = {}
+    profile_timing = {}
+    if args.profile_seconds or args.heap_profile:
+        # CPU capture pauses allocation sampling. Capture all heaps first, both
+        # to avoid that blind interval and to keep their process ages comparable.
+        for role, record in endpoints.items():
+            if record["name"] == "pubsubd":
+                continue
+            (RUN / f"{role}-binary.txt").write_text(record["exe"] + "\n")
+            heap_route = "/heap" if record["name"] == "clusterd" else "/prof/heap"
+            started = time.time()
+            try:
+                curl(record, heap_route, RUN / f"{role}-heap.pb.gz")
+                profile_timing[role + "-heap"] = {
+                    "start": started,
+                    "end": time.time(),
+                }
+            except (OSError, subprocess.SubprocessError) as error:
+                profile_errors[role + "-heap"] = repr(error)
     if args.profile_seconds:
         for role, record in endpoints.items():
             if record["name"] == "pubsubd":
                 continue
             route = "/cpu" if record["name"] == "clusterd" else "/prof/cpu"
+            started = time.time()
             try:
                 curl(
                     record,
@@ -679,13 +706,12 @@ try:
             except (OSError, subprocess.SubprocessError) as error:
                 profile_errors[role] = repr(error)
                 continue
-            (RUN / f"{role}-binary.txt").write_text(record["exe"] + "\n")
+            profile_timing[role + "-cpu"] = {
+                "start": started,
+                "end": time.time(),
+            }
             print("profiled", role, flush=True)
-            heap_route = "/heap" if record["name"] == "clusterd" else "/prof/heap"
-            try:
-                curl(record, heap_route, RUN / f"{role}-heap.pb.gz")
-            except (OSError, subprocess.SubprocessError) as error:
-                profile_errors[role + "-heap"] = repr(error)
+    save("profile-timing.json", profile_timing)
     result["profile_errors"] = profile_errors
     if profile_errors:
         raise RuntimeError(f"profiling incomplete: {profile_errors}")
@@ -780,6 +806,9 @@ try:
                     f"plan-{name}-physical-json.json",
                     {"query": query, "rows": c.execute(query).fetchall()},
                 )
+    if args.publication_seconds:
+        with connect(sql_addr) as c:
+            capture_publications(RUN, c, endpoints, curl, args.publication_seconds)
     result["status"] = "passed"
 except BaseException as error:
     result.update(status="failed", error=repr(error))

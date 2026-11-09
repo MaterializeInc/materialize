@@ -2,19 +2,21 @@
 
 ## Current objective
 
-The shared-frontier-input repair is verified. Both public frontier indexes now
-reuse validated arrangements. Matched measurements show blob GETs falling from
-14.09/s to 10.05/s, with no remaining duplicate observation-key reads in the
-catalog replica. CPU, memory and write traffic are largely unchanged.
-See the [report](20260903_decoupled_coordination_shared_frontiers.md).
+The fresh idle comparison and logical-component audit are complete. Native uses
+1.24 versus 0.63 CPU cores and 2865 versus 1354 MiB PSS. Catalog-output
+completeness drives most extra CAS,
+while protection journal consumption/compaction drives most extra blob bytes.
+See the [report](20260903_decoupled_coordination_logical_load.md) for exact units,
+repeat measurements, source attribution and limits.
 
 ## Next concrete action
 
-Agree the next scope before changing more code. The remaining cost is dominated
-by catalog journal traffic, distributed compaction and empty progress writes to
-catalog outputs. The report proposes caller-side investigation without slowing
-publication, adding a designated owner or changing Persist. No runtime needs to
-remain running for this decision.
+Agree a bounded repair. The narrowest demonstrated redundant work is repeated
+immutable-plan decoding for producer metadata. The larger write-cost target is
+catalog-output completeness fanout, which needs an explicit latency contract.
+Filtering irrelevant protection rows before the shared SQL arrangement and
+reducing non-execution catalog/cache ownership are separate scopes. Do not change
+Persist internals or publication cadence. No runtime needs to remain running.
 
 ## Live limitations
 
@@ -22,8 +24,9 @@ Broad CI remains non-green and was not rerun. The last broad evidence is
 [Build141419](https://buildkite.com/materialize/test/builds/141419), including the
 unpublished pubsubd image. Registry visibility, merge skew, the prior Persist
 JSON-order check and the stale hydration expectation remain unresolved.
-Full formatting still fails on an unchanged generic call in `src/catalog/src/catalog.rs`.
-Changed Rust files and Python checks pass. The PR stays draft.
+The last full formatting check failed on an unchanged generic call in
+`src/catalog/src/catalog.rs`. Changed-file Python checks pass. This audit changed
+no Rust production sources. The PR stays draft.
 
 M3 still needs arbitrary-release compatibility and external-sink handover.
 The birth-ordering concern is source-inspected, not reproduced. The original
@@ -42,10 +45,13 @@ not establish arbitrary-version compatibility or green CI.
 
 ## Essential evidence and local state
 
-- Current evidence: `~/.local/share/aj/m3-evidence/shared-frontier-inputs/`.
-  The report links accepted runs, provenance, independent review and checks.
-  The initial symlink-discovery run is excluded. Temporary instrumentation is
-  removed from production sources. Owned runtimes and metadata container are stopped.
+- Current evidence: `~/.local/share/aj/m3-evidence/logical-component-load/`.
+  CPU/counter windows passed. Valid heaps precede CPU profiling. The baseline's
+  post-window inventory failure was reproduced and repaired without rewriting
+  its original failed status. Exact current scan-origin rates remain unmeasured.
+  Instrumentation is absent from production sources. Owned runtimes are stopped.
+- Shared-input lifecycle and plan evidence: `shared-frontier-inputs/` under the
+  same evidence parent. Its initial symlink-discovery run remains excluded.
 - Previous [backend attribution](20260903_decoupled_coordination_backend_load.md),
   [resource review](20260903_decoupled_coordination_resource_review.md),
   [read reductions](20260903_decoupled_coordination_observed_progress.md) and

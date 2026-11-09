@@ -32,6 +32,28 @@ No saving from further batching is established. A cached shared-since shortcut
 would need a Persist API that is absent at this revision, so it remains deferred.
 The report separates measured attribution from prospective savings.
 
+The [fresh logical-component comparison](20260903_decoupled_coordination_logical_load.md)
+confirms that output completeness, rather than raw catalog CAS count, dominates
+extra conditional writes. Source-linked CPU evidence also identifies repeated
+immutable written-plan decoding for producer schemas. Cache those facts by
+selection/revision while retaining version checks and pending misses. Filtering
+irrelevant protection kinds before the shared SQL arrangement is a separate
+candidate. It cannot by itself remove empty completeness writes or journal bytes.
+
+### Catalog/cache ownership in non-execution processes
+
+Native followers and controllerd reconstruct full SQL catalogs and retain
+whole-shard serialized expression stores. This is retained duplication, not a
+full reconstruction on every tick. Valid heaps show substantial extra catalog,
+encoded-batch and file-buffer allocations in otherwise small replicas. Detached
+file-read stacks do not prove which cache retains those buffers.
+
+Consider caller-specific plan-store admission and lazy opening before a larger
+lightweight-catalog or selected-revision-store design. Disabling best-effort
+expression caching alone does not remove the raw store because fallback opens
+remain. Preserve admin validation, committed selection, cross-cluster producer
+schemas and catalog-authorized retirement. No measured saving is claimed yet.
+
 ## Duplicate progress observation
 
 Persist-internal repairs are deferred. The current
