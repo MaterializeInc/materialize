@@ -311,7 +311,8 @@ impl FreshnessState {
 }
 
 /// The staleness states of collections whose write frontiers only [`StorageCollections`] learns,
-/// among them tables, webhooks, and storage-managed collections.
+/// among them tables, webhooks, storage-managed collections, and the materialized views whose
+/// staleness the storage controller only reports.
 ///
 /// The background task of [`StorageCollections`] observes their advances when it learns them,
 /// with [`UnreportedFreshness::observe`]. The storage controller creates, ticks, and finishes
@@ -381,6 +382,7 @@ impl UnreportedFreshness {
         let UnreportedStates {
             config,
             states,
+            reporting_only,
             rows,
         } = &mut *guard;
         for (id, frontier) in advances {
@@ -389,6 +391,9 @@ impl UnreportedFreshness {
                 if !closed.is_empty() {
                     rows.push((*id, closed));
                 }
+            } else if let Some(state) = reporting_only.get_mut(id) {
+                let closed = state.observe(now, frontier, None);
+                mz_ore::soft_assert_or_log!(closed.is_empty(), "reporting-only state recorded");
             }
         }
     }
@@ -400,6 +405,10 @@ pub struct UnreportedStates {
     /// The recorder configuration of the states, `None` while recording is off.
     config: Option<RecorderConfig>,
     states: BTreeMap<GlobalId, FreshnessState>,
+    /// The states of collections that another controller writes and records, only for the
+    /// reported wallclock lag. They are always driven without a recorder configuration, so they
+    /// never record.
+    reporting_only: BTreeMap<GlobalId, FreshnessState>,
     /// The rows that closed and that the controller has not taken yet.
     rows: Vec<(GlobalId, Vec<PeriodRow>)>,
 }
@@ -411,14 +420,32 @@ impl UnreportedStates {
         mz_ore::soft_assert_or_log!(previous.is_none(), "staleness state of {id} replaced");
     }
 
+    /// Adds the reporting-only state of collection `id`, which never records.
+    pub fn insert_reporting_only(&mut self, id: GlobalId, state: FreshnessState) {
+        let previous = self.reporting_only.insert(id, state);
+        mz_ore::soft_assert_or_log!(previous.is_none(), "staleness state of {id} replaced");
+    }
+
+    /// Whether collection `id` has a state.
+    pub fn contains(&self, id: &GlobalId) -> bool {
+        self.states.contains_key(id) || self.reporting_only.contains_key(id)
+    }
+
     /// The state of collection `id`.
     pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut FreshnessState> {
-        self.states.get_mut(id)
+        match self.states.get_mut(id) {
+            Some(state) => Some(state),
+            None => self.reporting_only.get_mut(id),
+        }
     }
 
     /// The collections that have a state.
     fn ids(&self) -> Vec<GlobalId> {
-        self.states.keys().copied().collect()
+        self.states
+            .keys()
+            .chain(self.reporting_only.keys())
+            .copied()
+            .collect()
     }
 
     /// Resumes the state of collection `id` at `now` with `frontier`, see
@@ -427,6 +454,9 @@ impl UnreportedStates {
         if let Some(state) = self.states.get_mut(&id) {
             let closed = state.resume(now, frontier, self.config.as_ref());
             self.push_rows(id, closed);
+        } else if let Some(state) = self.reporting_only.get_mut(&id) {
+            let closed = state.resume(now, frontier, None);
+            mz_ore::soft_assert_or_log!(closed.is_empty(), "reporting-only state recorded");
         }
     }
 
@@ -446,6 +476,7 @@ impl UnreportedStates {
             let closed = state.finish(now, self.config.as_ref());
             self.push_rows(id, closed);
         }
+        self.reporting_only.remove(&id);
     }
 
     /// Takes the rows that closed since the last call, by collection.
