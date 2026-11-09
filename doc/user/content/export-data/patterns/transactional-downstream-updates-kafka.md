@@ -17,8 +17,8 @@ destination:
 
 1. Create a Kafka sink in Materialize.
 1. Load the sink's data topic and progress topic into Snowflake.
-1. Create a Snowflake view that exposes only committed changes.
-1. Confirm the loader has caught up before exposing a timestamp.
+1. Build a table of trusted frontiers that Snowflake has fully loaded.
+1. Create Snowflake views that expose only changes below the trusted frontier.
 
 The same approach works for any destination that stores Kafka headers and
 message keys alongside the message value.
@@ -43,13 +43,14 @@ records are keyed by `mz-sink-<sink_id>`. Joining on the `materialize-sink-id`
 header is what ties each data message to its own sink's frontier.
 
 The `frontier` is exclusive: the sink has committed every change with a
-timestamp less than the frontier. To expose only committed data:
+timestamp less than the frontier. The pattern has two parts:
 
-1. Match each data message to the progress records whose key equals
-   `'mz-sink-' || <materialize-sink-id header>`.
-1. Take the latest frontier for that sink.
-1. Keep the data messages where `materialize-timestamp` is less than that
-   frontier.
+1. **Build a trusted frontier.** For each sink, record a frontier only once
+   the loader has confirmed that every data message below it has landed in
+   the destination. The latest frontier in the progress topic is only a
+   candidate; see [Step 3](#step-3-build-a-trusted-frontier-table).
+1. **Gate views on the trusted frontier.** Keep the data messages whose
+   `materialize-timestamp` is less than the trusted frontier for their sink.
 
 ## Before you begin
 
@@ -153,110 +154,31 @@ Two settings in this configuration matter for the pattern:
   (`connector.client.config.override.policy`). Alternatively, set
   `consumer.isolation.level=read_committed` in the worker configuration.
   This setting only excludes aborted transactions. It does not order the
-  connector's flushes across partitions; see [Step 4](#step-4-confirm-the-loader-has-caught-up).
+  connector's flushes across partitions; see [Step 3](#step-3-build-a-trusted-frontier-table).
 
-## Step 3. Create a view of committed changes in Snowflake
+## Step 3. Build a trusted frontier table
 
-In Snowflake, create a view that keeps only the data messages that Materialize
-has fully committed:
+The latest frontier in `raw_progress` is not enough to gate on. Kafka
+transactions are atomic on write, not on read: the Snowflake connector loads
+each topic partition through its own channel and flushes each one
+independently. A progress record can land in Snowflake before every data
+message below its frontier has landed. Before you trust a frontier, you must
+confirm that the loader has consumed the data topic up to it.
 
-```sql
-CREATE VIEW committed_orders AS
-WITH latest_progress AS (
-  -- The latest frontier for each sink that uses the progress topic.
-  SELECT
-    RECORD_METADATA:key::string AS progress_key,
-    MAX(RECORD_CONTENT:frontier[0]::number) AS frontier
-  FROM raw_progress
-  GROUP BY 1
-)
-SELECT
-  o.RECORD_METADATA:headers:"materialize-timestamp"::number AS mz_timestamp,
-  o.RECORD_CONTENT AS order_record
-FROM raw_orders AS o
--- Match each data message to the progress records for its sink.
-JOIN latest_progress AS p
-  ON p.progress_key =
-     'mz-sink-' || o.RECORD_METADATA:headers:"materialize-sink-id"::string
--- Keep only the changes below the frontier.
-WHERE o.RECORD_METADATA:headers:"materialize-timestamp"::number < p.frontier;
-```
-
-The view works as follows:
-
-1. `latest_progress` finds the most recent frontier for each sink. Because the
-   progress topic is shared by every sink on the same Kafka connection, the
-   query groups by message key.
-1. The join matches each order message to its sink's frontier, using the
-   `materialize-sink-id` header.
-1. The `WHERE` clause drops any message whose timestamp is not yet below the
-   frontier. Those messages appear in the view once Materialize commits the
-   rest of their timestamp.
-
-## Step 4. Confirm the loader has caught up
-
-The view in Step 3 is not sufficient on its own. Kafka transactions are atomic
-on write, not on read: the Snowflake connector loads each topic partition
-through its own channel and flushes each one independently. The progress
-record can land in Snowflake before every data message below its frontier has
-landed, so the loader must also confirm it has consumed the data topic up to
-the frontier before you expose it. Use one of the following checks.
-
-### Option 1: Gate on loaded timestamps
-
-This option needs no extra infrastructure. The sink writes data messages in
-non-decreasing `materialize-timestamp` order, so once a message with timestamp
-`T` has loaded from a partition, every message below `T` on that partition has
-loaded too (assuming your loader writes each partition in offset order). Gate
-the view on the lesser of the latest frontier and the lowest per-partition
-maximum timestamp:
+This requires a loader that reports the offset it has committed for each
+partition, such as the Snowpipe Streaming offset tokens of the Snowflake
+connector. Create a table to hold the frontiers you have confirmed:
 
 ```sql
-CREATE OR REPLACE VIEW committed_orders AS
-WITH latest_progress AS (
-  SELECT
-    RECORD_METADATA:key::string AS progress_key,
-    MAX(RECORD_CONTENT:frontier[0]::number) AS frontier
-  FROM raw_progress
-  GROUP BY 1
-),
-loaded AS (
-  -- The highest timestamp loaded from each data topic partition.
-  SELECT
-    'mz-sink-' || RECORD_METADATA:headers:"materialize-sink-id"::string AS progress_key,
-    RECORD_METADATA:partition::number AS kafka_partition,
-    MAX(RECORD_METADATA:headers:"materialize-timestamp"::number) AS max_ts
-  FROM raw_orders
-  GROUP BY 1, 2
-),
-safe_frontier AS (
-  SELECT p.progress_key, LEAST(p.frontier, MIN(l.max_ts)) AS frontier
-  FROM latest_progress AS p
-  JOIN loaded AS l ON l.progress_key = p.progress_key
-  GROUP BY p.progress_key, p.frontier
-  -- Require a row from every partition of the data topic.
-  HAVING COUNT(*) = <data_topic_partition_count>
-)
-SELECT
-  o.RECORD_METADATA:headers:"materialize-timestamp"::number AS mz_timestamp,
-  o.RECORD_CONTENT AS order_record
-FROM raw_orders AS o
-JOIN safe_frontier AS f
-  ON f.progress_key =
-     'mz-sink-' || o.RECORD_METADATA:headers:"materialize-sink-id"::string
-WHERE o.RECORD_METADATA:headers:"materialize-timestamp"::number < f.frontier;
+CREATE TABLE trusted_frontier (
+  sink_id STRING PRIMARY KEY,
+  frontier NUMBER NOT NULL,
+  updated_at TIMESTAMP_LTZ NOT NULL
+);
 ```
 
-This check is safe but conservative. A partition that has no rows yet, or that
-receives no new messages, holds the gate back until it does.
-
-### Option 2: Gate on committed offsets
-
-If your loader exposes the offset it has committed for each partition, such as
-Snowpipe Streaming offset tokens, run a small routine outside Snowflake that
-publishes a frontier only after checking offsets. Point the view at the
-published frontier instead of `latest_progress`. Before publishing a frontier,
-the routine should:
+Then run a small routine outside Snowflake, on a schedule, that advances each
+sink's row. For each sink, the routine should:
 
 - Read the candidate frontier for the sink from `raw_progress`.
 - After that progress record is visible, read each data partition's high
@@ -267,8 +189,55 @@ the routine should:
   skipped.
 - Confirm that each partition's committed offset has reached that message, or
   that the partition is empty.
+- Only then write the candidate frontier to `trusted_frontier`. A frontier
+  never moves backward, so skip the write if the stored frontier is already
+  higher.
 
-## Step 5. Query the view
+## Step 4. Create a view of committed changes in Snowflake
+
+Create a view that keeps only the data messages below the sink's trusted
+frontier:
+
+```sql
+CREATE VIEW committed_orders AS
+SELECT
+  o.RECORD_METADATA:headers:"materialize-timestamp"::number AS mz_timestamp,
+  o.RECORD_CONTENT AS order_record
+FROM raw_orders AS o
+-- Match each data message to the trusted frontier for its sink.
+JOIN trusted_frontier AS f
+  ON f.sink_id = o.RECORD_METADATA:headers:"materialize-sink-id"::string
+-- Keep only the changes below the frontier.
+WHERE o.RECORD_METADATA:headers:"materialize-timestamp"::number < f.frontier;
+```
+
+The join uses the `materialize-sink-id` header, so each message is compared to
+its own sink's frontier. Messages at or above the frontier appear in the view
+once the routine confirms they have loaded.
+
+## Step 5. Join changes from multiple sinks
+
+If you sink several relations and create a view like `committed_orders` for
+each, each view is gated on its own sink's frontier. Joining two such views can
+combine changes from different Materialize timestamps, which loses
+consistency. Gate joined views on a common frontier instead. There are two
+ways to do this:
+
+- **One shared frontier.** Gate every view on the lowest trusted frontier
+  across all sinks. Any of the views can then be joined with any other. The
+  tradeoff is freshness: every view is held back by the sink that is furthest
+  behind.
+
+  ```sql
+  CREATE VIEW shared_frontier AS
+  SELECT MIN(frontier) AS frontier FROM trusted_frontier;
+  ```
+
+- **One frontier per join.** For each join, gate on the lowest trusted
+  frontier of only the sinks that join reads. This keeps each join as fresh as
+  its inputs allow, but each join needs its own gate that lists its sinks.
+
+## Step 6. Query the view
 
 Point downstream readers at `committed_orders` instead of `raw_orders`:
 
@@ -276,9 +245,9 @@ Point downstream readers at `committed_orders` instead of `raw_orders`:
 SELECT * FROM committed_orders ORDER BY mz_timestamp DESC LIMIT 10;
 ```
 
-Once one of the checks in Step 4 is in place, every row in the result belongs
-to a Materialize timestamp whose changes have all been loaded into Snowflake.
-The frontier join from Step 3 alone does not guarantee this.
+Every row in the result belongs to a Materialize timestamp whose changes have
+all been loaded into Snowflake, because the view gates on `trusted_frontier`
+rather than on `raw_progress` directly.
 
 ## Considerations
 
