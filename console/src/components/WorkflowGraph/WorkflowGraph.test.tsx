@@ -117,7 +117,7 @@ interface LagRow {
 const hydrated = (targetObjectId: string): LagRow => ({
   targetObjectId,
   hydrated: true,
-  lag: null,
+  lag: "00:00:01",
 });
 
 const lagHandler = (
@@ -274,7 +274,7 @@ describe("WorkflowGraph from the edges collection", () => {
     expect(screen.getByText("Created")).toBeVisible();
   });
 
-  it("shows a node's freshness once it hydrates", async () => {
+  it("shows a node's freshness once it hydrates, then stops polling", async () => {
     fakePollTimers();
     server.use(
       detailsHandler(NODE_IDS, OBJECTS.map(nodeDetails)),
@@ -297,6 +297,12 @@ describe("WorkflowGraph from the edges collection", () => {
 
     expect(await screen.findByText("2s")).toBeVisible();
     expect(screen.queryByText("Not hydrated")).not.toBeInTheDocument();
+
+    const lagRequests = countRequests(
+      clusterQueryKeys.materializationLag({ objectIds: NODE_IDS }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(2 * millisecondsInMinute));
+    expect(lagRequests()).toBe(0);
   });
 
   it("polls a node that never hydrates at most once a minute", async () => {
@@ -381,6 +387,72 @@ describe("WorkflowGraph from the edges collection", () => {
 
     expect(await findNode(added)).toBeVisible();
     expect(await findNode(REVENUE)).toBeVisible();
+  });
+
+  it("keeps drawing an object with no edges while its connection reconnects", async () => {
+    const lone = catalogObject("u14", "audit_log", { objectType: "table" });
+    server.use(
+      detailsHandler([lone.id], [nodeDetails(lone)]),
+      lagHandler([lone.id]),
+    );
+    allObjectsCollection.applySnapshot({
+      data: [...OBJECTS, lone],
+      snapshotComplete: true,
+      error: undefined,
+    });
+    await renderAt(WITH_EDGES, lone.id);
+    expect(await findNode(lone)).toBeVisible();
+
+    workflowGraphEdgesCollection.applySnapshot({
+      data: EDGES,
+      snapshotComplete: true,
+      error: undefined,
+      resubscribing: true,
+    });
+    // A reconnect attempt that closes before its snapshot.
+    workflowGraphEdgesCollection.applySnapshot({
+      data: [],
+      snapshotComplete: false,
+      error: {
+        code: SUBSCRIBE_ERROR_CODE.CONNECTION_CLOSED,
+        message: "Socket closed unexpectedly",
+      },
+    });
+
+    expect(await findNode(lone)).toBeVisible();
+    expect(screen.queryByTestId("loading-spinner")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("An error occurred fetching workflow data."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows an error when held edges predate the object and the connection drops", async () => {
+    const added = catalogObject("u13", "low_regions");
+    allObjectsCollection.applySnapshot({
+      data: [...OBJECTS, added],
+      snapshotComplete: true,
+      error: undefined,
+    });
+    workflowGraphEdgesCollection.applySnapshot({
+      data: [],
+      snapshotComplete: false,
+      error: undefined,
+    });
+    await renderAt(WITH_EDGES, added.id);
+    expect(await screen.findByTestId("loading-spinner")).toBeVisible();
+
+    workflowGraphEdgesCollection.applySnapshot({
+      data: [],
+      snapshotComplete: false,
+      error: {
+        code: SUBSCRIBE_ERROR_CODE.CONNECTION_CLOSED,
+        message: "Socket closed unexpectedly",
+      },
+    });
+
+    expect(
+      await screen.findByText("An error occurred fetching workflow data."),
+    ).toBeVisible();
   });
 
   it("keeps the graph and selection through a dropped connection", async () => {

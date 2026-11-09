@@ -10,6 +10,7 @@
 import { Flex } from "@chakra-ui/react";
 import * as Sentry from "@sentry/react";
 import { keepPreviousData } from "@tanstack/react-query";
+import { millisecondsInSecond } from "date-fns/constants";
 import React from "react";
 
 import { DatabaseObject } from "~/api/materialize/objects";
@@ -211,6 +212,17 @@ const SyncedWorkflowGraph = ({
     );
   }, [edges, drawnIds]);
 
+  const [hasLiveRows, setHasLiveRows] = React.useState(false);
+  if (
+    !hasLiveRows &&
+    edgesReady &&
+    !edgesRefreshing &&
+    objectsSnapshotComplete &&
+    !objectsRefreshing
+  ) {
+    setHasLiveRows(true);
+  }
+
   if (
     isFailure(edgesError, edgesReady) ||
     isFailure(objectsError, objectsSnapshotComplete)
@@ -220,11 +232,20 @@ const SyncedWorkflowGraph = ({
 
   const nodesReady = nodeIds.every((id) => nodeMap.has(id));
   // Rows held from the cache or an earlier session can predate an object
-  // created since, which would be drawn alone, or reported missing.
+  // created since, which would be drawn alone, or reported missing. Once
+  // both collections have served live rows, a reconnect keeps what's drawn,
+  // as it does for a graph with edges.
+  const awaitingLiveRows =
+    !hasLiveRows &&
+    ((edgesRefreshing && edges.length === 0) ||
+      (!nodesReady && objectsRefreshing));
+  if (awaitingLiveRows && (edgesError || objectsError)) {
+    return <ErrorBox message="An error occurred fetching workflow data." />;
+  }
   if (
     !edgesReady ||
-    (edgesRefreshing && edges.length === 0) ||
-    (!nodesReady && (!objectsSnapshotComplete || objectsRefreshing))
+    awaitingLiveRows ||
+    (!nodesReady && !objectsSnapshotComplete)
   ) {
     return <LoadingContainer />;
   }
@@ -273,17 +294,14 @@ const WorkflowGraphView = ({
     picked?.focusedObjectId === focusedObjectId && nodeMap.has(picked.nodeId)
       ? picked.nodeId
       : focusedObjectId;
-  const selectNode = React.useCallback(
-    (nodeId: string) => setPicked({ focusedObjectId, nodeId }),
-    [focusedObjectId],
-  );
+  const selectNode = (nodeId: string) => setPicked({ focusedObjectId, nodeId });
 
   // Keyed on the node ids, since `nodeMap` changes when details land, and a new
   // layout pans the canvas back to the selected node.
-  const nodeIds = [...nodeMap.keys()].join(",");
+  const nodeIdsKey = [...nodeMap.keys()].join(",");
   const objectsWithLag = React.useMemo(
-    () => (nodeIds === "" ? [] : nodeIds.split(",")),
-    [nodeIds],
+    () => (nodeIdsKey === "" ? [] : nodeIdsKey.split(",")),
+    [nodeIdsKey],
   );
 
   const { data, isLoading: isLagmapLoading } = useMaterializationLag(
@@ -293,7 +311,7 @@ const WorkflowGraphView = ({
       placeholderData: drawBeforeLag ? keepPreviousData : undefined,
       // Lag otherwise loads once per node set, and a node created while the
       // graph is open is drawn before it hydrates.
-      pollUntilFreshnessMs: 10_000,
+      pollUntilFreshnessMs: 10 * millisecondsInSecond,
     },
   );
 
