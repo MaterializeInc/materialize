@@ -91,11 +91,14 @@ all set.
 
 ### Eatmydata
 
-If you are just testing Materialize locally and don't care about data loss you can run environmentd with `eatmydata environmentd`, which will disable fsync calls.
+For disposable local tests, `eatmydata bin/controllerd` disables fsync calls in
+newly launched processes. Do not use this when data loss matters.
 
 Similarly postgres as the metadata store can be instructed to eat your data using `echo LD_PRELOAD=libeatmydata.so > /etc/postgresql/18/main/environment`, and then restarting it.
 
-On my Linux system without `eatmydata` for both Materialize and Postgres, running with `bin/environmentd --reset --optimized --no-default-features --postgres=postgres://deen@%2Fvar%2Frun%2Fpostgresql`:
+These historical measurements used the unsupported monolithic launcher:
+`bin/environmentd --reset --optimized --no-default-features --postgres=postgres://deen@%2Fvar%2Frun%2Fpostgresql`.
+Without `eatmydata` in Materialize and Postgres:
 ```
 DROP TABLE
 Time: 105.810 ms
@@ -262,13 +265,17 @@ access token for use with HTTPS][github-https].
 
 Then you can build Materialize. Because Materialize is a collection of several
 Rust services that need to be built together, each service can be built
-individually via Cargo, but we recommend using the `bin/environmentd` script to
+individually via Cargo, but we recommend using the `bin/controllerd` script to
 drive the process:
 
 ```shell
 cd materialize
-bin/environmentd [--release] [--optimized] [<environmentd arg>...]
+bin/controllerd --build-only [--release] [--optimized]
 ```
+
+This builds controllerd, adapterd, clusterd and pubsubd. The monolithic
+`bin/environmentd` launcher is no longer supported. See
+[Local controllerd](controllerd.md) for state locations and process lifecycle.
 
 ### WebAssembly / WASM
 
@@ -332,11 +339,12 @@ is up.
 Once things are built and CockroachDB is running, you can start Materialize:
 
 ```shell
-bin/environmentd --reset -- --all-features --unsafe-mode
+bin/controllerd -- --all-features --unsafe-mode
 ```
 
-This should bootstrap a fresh Materialize instance. Once you see the logline
-"environmentd v<version> listening...", you can connect to the database via:
+This initializes a fresh environment or resumes its committed inventory. Wait
+for the adapter to become ready in `http://127.0.0.1:6882/api/adapters`. The default
+external SQL port is 6875, with a discovered fallback if that port is occupied:
 
 ```shell
 psql -U materialize -h localhost -p 6875 materialize
@@ -349,15 +357,21 @@ you can use the internal port with the `mz_system` user:
 psql -U mz_system -h localhost -p 6877 materialize
 ```
 
+Use the inventory's `sql-external` and `sql-internal` endpoints when ports differ.
+Ctrl-C stops only controllerd, leaving managed processes running. Use
+`bin/controllerd --stop` to stop the environment. State and reset behavior are
+documented in [Local controllerd](controllerd.md). Existing environmentd state
+cannot be reused.
+
 In order to run Materialize with large clusters and more memory available, you have to set a license key. Set `export MZ_LICENSE_KEY=$HOME/license-key` and write the `materialize dev license key` from 1Password into that file. In order to have `mzcompose` based tests pick up the license key, set `export MZ_CI_LICENSE_KEY=$(cat $MZ_LICENSE_KEY)`.
 
 ## Console UI
 
-Console can point at your local environmentd. To use this feature, pass the
+Console can point at your local adapter. To use this feature, pass the
 internal console flag:
 
 ```shell
-bin/environmentd -- --internal-console-redirect-url="https://local.console.materialize.com"
+bin/controllerd -- --internal-console-redirect-url="https://local.console.materialize.com"
 ```
 
 Then visit http://localhost:6878/internal-console/. This is a great way to
@@ -378,8 +392,7 @@ full rebuild of the binary.
 To speed up the development cycle, you can enable the `dev-web` feature like so:
 
 ```shell
-cd src/environmentd
-bin/environmentd --features=dev-web
+bin/controllerd --features=dev-web
 ```
 
 In this mode, every request for a static file will reload the file from disk.

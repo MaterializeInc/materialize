@@ -5,6 +5,9 @@ the developer launcher. Local demos use the default development build. The
 launcher does not create SQL objects or adapter declarations. Controllerd
 initializes the default adapter only for a fresh catalog.
 
+`bin/environmentd` is no longer supported. It reports this launcher rather than
+reinterpreting or resetting existing state.
+
 M3 targets this local-process workflow, including version upgrades. Kubernetes
 backend and operator integration are deferred beyond M3.
 

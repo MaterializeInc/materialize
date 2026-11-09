@@ -2,26 +2,39 @@
 
 ## Current objective
 
-Choose the next scoped usage-side improvement after the
-[one-minute publication comparison](20260903_decoupled_coordination_publication_interval.md).
-Slower protection publication cuts CAS and blob work, but does not erase frontier
-publication/reduction costs or the additional memory footprint. Total scan deltas
-are unstable because notification loss changes fallback traffic.
+Make this branch native-only. Remove legacy monolithic ownership, execution,
+upgrade and introspection alternatives while preserving adapter policy, shared
+query/table machinery, durable protection and native multi-version retirement.
+Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Agree the next optimization with Aljoscha. Retaining immutable selected-plan/schema results is an isolated
-candidate. Removing legacy frontier progress requires removing inactive SQL input
-dependencies first. Do not stop those writers alone or change Persist/defaults
-without a separate decision.
+Compile and exercise the native Rust TestHarness conversion. The fixture now
+starts the real controller initialization/reconciliation loop and hosts a
+join-only adapter behind a test-only orchestrator backend. A retained deployment
+handle separates adapter restart from replica and relay lifetime. This conversion
+is uncommitted and not yet compile- or runtime-verified.
 
-Evidence: `~/.local/share/aj/m3-evidence/publication-interval/`.
-`comparison.json`, `scan-summary.json` and `reader-scan-residual.md/json` retain
-cost, caller and input-identity evidence. All three primary 60s fixtures and the
-fresh scan pair passed. Temporary instrumentation is absent from production
-sources. Owned runtimes stopped, five metadata containers were removed, and
-about 135 GiB is free. Independent review is complete. No runtime or worker
-is still running.
+The legacy frontier slice is committed and independently reviewed. Targeted Rust
+and catalog SQL checks passed. A fresh debug deployment preserved SQL progress
+through peer join/restart/removal and retained frontier observations through a
+catalog-replica restart. Managed processes were stopped afterwards. The affected
+source-enumeration block in `catalog.td` passed, not the full Kafka-dependent file.
+
+`bin/environmentd` now reports the unsupported launcher before touching state.
+Launcher tests and formatting checks pass. Broader native-only serving,
+controller execution, introspection and harness conversion remains unfinished.
+
+Essential worker/evidence pointers:
+`~/.local/share/aj/m3-evidence/native-only/work-notes.md`, `frontier-review.md`,
+`harness-decision.md`, `controller-alternatives.md`, and `native-frontiers.log`.
+Only isolated PostgreSQL remains running for fixture verification. A two-job
+compilation check is running. Pre/post-cleanup builtin schemas are incompatible
+and admission rejects that pairing. Use matching post-cleanup schemas for the
+version demonstration.
+
+The prior [publication comparison](20260903_decoupled_coordination_publication_interval.md)
+remains the load baseline, not a performance claim for this cleanup.
 
 ## Live limitations
 
@@ -30,8 +43,8 @@ Broad CI remains non-green and was not rerun. The last broad evidence is
 unpublished pubsubd image. Registry visibility, merge skew, the prior Persist
 JSON-order check and the stale hydration expectation remain unresolved.
 The last full formatting check failed on an unchanged generic call in
-`src/catalog/src/catalog.rs`. Changed-file Python checks pass. This audit changed
-no Rust production sources. The PR stays draft.
+`src/catalog/src/catalog.rs`. The prior changed-file Python checks passed. Current Rust cleanup verification
+is pending. The PR stays draft.
 
 M3 still needs arbitrary-release compatibility and external-sink handover.
 The birth-ordering concern is source-inspected, not reproduced. The original
