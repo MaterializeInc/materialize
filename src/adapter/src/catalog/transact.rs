@@ -883,32 +883,20 @@ impl Catalog {
         }
     }
 
-    pub(crate) async fn prepare_source_statement(
+    /// Applies a compiled source statement to a DDL transaction's speculative catalog.
+    ///
+    /// The compilation must be resolved against `base`.
+    pub(crate) async fn stage_source_statement(
         &self,
-        statement: &mut super::command::source_statement::SourceStatement,
+        statement: super::command::source_statement::SourceStatement,
+        mut compiled: super::command::source_statement::SourceCompilation,
         base: (&CatalogState, &Snapshot),
         session: Option<&ConnMeta>,
         oracle_write_ts: mz_repr::Timestamp,
-        response: Option<mz_sql::pure::SourcePreparationResponse>,
-    ) -> Result<super::command::source_statement::SourceStatementPreparation, AdapterError> {
-        use super::command::source_statement::{
-            PreparedSourceStatement, SourceCommand, SourceResolution, SourceStatementPreparation,
-        };
+    ) -> Result<super::command::source_statement::StagedSourceStatement, AdapterError> {
+        use super::command::source_statement::{SourceCommand, StagedSourceStatement};
 
         let (state, snapshot) = base;
-        let resolution = match response {
-            Some(response) => statement.finish(state, response)?,
-            None => statement.resolve(state)?,
-        };
-        let mut compiled = match resolution {
-            SourceResolution::Prepare(request) => {
-                return Ok(SourceStatementPreparation::Prepare(request));
-            }
-            SourceResolution::Allocate(keys) => {
-                return Ok(SourceStatementPreparation::Allocate(keys));
-            }
-            SourceResolution::Ready(compiled) => compiled,
-        };
         let ops = std::mem::take(&mut compiled.ops);
         let result = self
             .transact_incremental_dry_run(
@@ -921,18 +909,15 @@ impl Catalog {
             .await;
         let (prepared_state, outcome) = compiled.classify_result(result)?;
         let (state, snapshot) = prepared_state.unwrap_or_else(|| (state.clone(), snapshot.clone()));
-        Ok(SourceStatementPreparation::Ready(Box::new(
-            PreparedSourceStatement {
-                command: SourceCommand {
-                    statement: statement.clone(),
-                    outcome,
-                    observed: true,
-                },
-                state,
-                snapshot,
-                plan: compiled.plan,
+        Ok(StagedSourceStatement {
+            command: SourceCommand {
+                statement,
+                outcome,
+                observed: true,
             },
-        )))
+            state,
+            snapshot,
+        })
     }
 
     /// Returns in-memory catalog state and a durable snapshot of the same catalog revision.

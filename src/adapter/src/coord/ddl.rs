@@ -184,43 +184,32 @@ impl Coordinator {
         mut pending: PendingSourceStatement,
         mut response: Option<mz_sql::pure::SourcePreparationResponse>,
     ) {
-        use catalog::command::source_statement::SourceStatementPreparation;
+        use catalog::command::source_statement::{SourceCommand, SourceResolution};
         if self.controller.read_only() {
             return pending.ctx.retire(Err(AdapterError::ReadOnly));
         }
-        let prepared = loop {
-            let (state, snapshot) = match pending.ctx.session().transaction().inner() {
-                Some(crate::session::Transaction {
-                    ops:
-                        TransactionOps::DDL {
-                            state, snapshot, ..
-                        },
-                    ..
-                }) => (state.clone(), snapshot.clone()),
-                _ => self.catalog().ddl_transaction_snapshot().await,
+        let compiled = loop {
+            let state = pending
+                .ctx
+                .session()
+                .transaction()
+                .catalog_state()
+                .unwrap_or_else(|| self.catalog().state());
+            let result = match response.take() {
+                Some(response) => pending.statement.finish(state, response),
+                None => pending.statement.resolve(state),
             };
-            let ts = self.get_local_write_ts().await.timestamp;
-            let result = self
-                .catalog()
-                .prepare_source_statement(
-                    &mut pending.statement,
-                    (&state, &snapshot),
-                    self.active_conns.get(pending.ctx.session().conn_id()),
-                    ts,
-                    response.take(),
-                )
-                .await;
             match result {
                 Err(error) => return pending.ctx.retire(Err(error)),
-                Ok(SourceStatementPreparation::Ready(prepared)) => break prepared,
-                Ok(SourceStatementPreparation::Allocate(keys)) => {
+                Ok(SourceResolution::Ready(compiled)) => break compiled,
+                Ok(SourceResolution::Allocate(keys)) => {
                     let ids = match self.allocate_user_ids(u64::cast_from(keys.len())).await {
                         Ok(ids) => ids,
                         Err(error) => return pending.ctx.retire(Err(error)),
                     };
                     pending.statement.record_ids(keys, ids);
                 }
-                Ok(SourceStatementPreparation::Prepare(request)) => {
+                Ok(SourceResolution::Prepare(request)) => {
                     let config = self.controller.storage.config().clone();
                     let tx = self.internal_cmd_tx.clone();
                     let otel_ctx = OpenTelemetryContext::obtain();
@@ -239,12 +228,12 @@ impl Coordinator {
         let mut ctx = pending.ctx;
         ctx.tx_mut()
             .set_allowed(crate::ExecuteResponse::generated_from(
-                &mz_sql::plan::PlanKind::from(&prepared.plan),
+                &mz_sql::plan::PlanKind::from(&compiled.plan),
             ));
-        if let Err(error) = self.prepare_plan_execution(&ctx, &prepared.plan) {
+        if let Err(error) = self.prepare_plan_execution(&ctx, &compiled.plan) {
             return ctx.retire(Err(error));
         }
-        let response = match &prepared.plan {
+        let response = match &compiled.plan {
             mz_sql::plan::Plan::CreateSources(_) => crate::ExecuteResponse::CreatedSource,
             mz_sql::plan::Plan::CreateTable(_) => crate::ExecuteResponse::CreatedTable,
             mz_sql::plan::Plan::AlterSource(_) => {
@@ -256,14 +245,42 @@ impl Coordinator {
             _ => unreachable!("source command plan"),
         };
         if ctx.session().transaction().is_ddl() {
-            let command = catalog::command::CatalogCommand::Source(Arc::new(prepared.command));
+            let ts = self.get_local_write_ts().await.timestamp;
+            let TransactionOps::DDL {
+                commands: _,
+                state,
+                snapshot,
+            } = &ctx
+                .session()
+                .transaction()
+                .inner()
+                .expect("DDL transaction")
+                .ops
+            else {
+                unreachable!("DDL transaction")
+            };
+            let staged = match self
+                .catalog()
+                .stage_source_statement(
+                    pending.statement,
+                    *compiled,
+                    (state, snapshot),
+                    self.active_conns.get(ctx.session().conn_id()),
+                    ts,
+                )
+                .await
+            {
+                Ok(staged) => staged,
+                Err(error) => return ctx.retire(Err(error)),
+            };
+            let command = catalog::command::CatalogCommand::Source(Arc::new(staged.command));
             if let Err(error) = ctx
                 .session_mut()
                 .transaction_mut()
                 .add_ops(TransactionOps::DDL {
                     commands: vec![command.clone()],
-                    state: prepared.state,
-                    snapshot: prepared.snapshot,
+                    state: staged.state,
+                    snapshot: staged.snapshot,
                 })
             {
                 return ctx.retire(Err(error));
@@ -271,8 +288,9 @@ impl Coordinator {
             self.emit_command_notices(ctx.session(), &command);
             ctx.retire(Ok(response));
         } else {
-            let command =
-                catalog::command::CatalogCommand::Source(Arc::new(prepared.command.unobserved()));
+            let command = catalog::command::CatalogCommand::Source(Arc::new(
+                SourceCommand::unobserved(pending.statement, *compiled),
+            ));
             self.sequence_ddl_commit(PendingDdlCommit::statement(ctx, response, vec![command]))
                 .await;
         }

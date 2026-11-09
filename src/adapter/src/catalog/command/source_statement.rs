@@ -82,17 +82,14 @@ impl SourceStatement {
         }
     }
 
-    pub(in crate::catalog) fn resolve(
-        &self,
-        state: &CatalogState,
-    ) -> Result<SourceResolution, AdapterError> {
+    pub(crate) fn resolve(&self, state: &CatalogState) -> Result<SourceResolution, AdapterError> {
         let (tx, rx) = mpsc::unbounded_channel();
         let (catalog, statement) = self.input(state, tx)?;
         let status = self.preparation.resolve(&catalog, statement)?;
         self.compile(&catalog, status, rx)
     }
 
-    pub(in crate::catalog) fn finish(
+    pub(crate) fn finish(
         &mut self,
         state: &CatalogState,
         response: SourcePreparationResponse,
@@ -406,10 +403,13 @@ impl SourceCommand {
         self.skipped_name().is_some() || (!self.observed && !compiled.if_not_exists.is_empty())
     }
 
-    /// Allows changes to an outcome that has not been exposed to the client.
-    pub(crate) fn unobserved(mut self) -> Self {
-        self.observed = false;
-        self
+    /// Creates a command whose outcome is determined by final execution.
+    pub(crate) fn unobserved(statement: SourceStatement, compiled: SourceCompilation) -> Self {
+        Self {
+            statement,
+            outcome: compiled.created(),
+            observed: false,
+        }
     }
 
     pub(crate) fn item_ids(&self) -> impl Iterator<Item = CatalogItemId> + '_ {
@@ -457,16 +457,8 @@ impl SourceCommand {
 }
 
 #[derive(Debug)]
-pub(crate) enum SourceStatementPreparation {
-    Prepare(SourcePreparationRequest),
-    Allocate(Vec<SourceObject>),
-    Ready(Box<PreparedSourceStatement>),
-}
-
-#[derive(Debug)]
-pub(crate) struct PreparedSourceStatement {
+pub(crate) struct StagedSourceStatement {
     pub command: SourceCommand,
     pub state: CatalogState,
     pub snapshot: mz_catalog::durable::Snapshot,
-    pub plan: Plan,
 }

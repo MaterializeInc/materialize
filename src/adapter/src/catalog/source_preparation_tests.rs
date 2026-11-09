@@ -341,7 +341,7 @@ async fn source_command_preserves_only_observed_outcomes() {
     use crate::AdapterError;
     use crate::catalog::command::CatalogCommand;
     use crate::catalog::command::source_statement::{
-        SourceCommand, SourceStatement, SourceStatementPreparation,
+        SourceCommand, SourceCompilation, SourceResolution, SourceStatement,
     };
     use crate::catalog::{CommandExecutionError, CommandWork};
     use crate::session::Session;
@@ -353,7 +353,11 @@ async fn source_command_preserves_only_observed_outcomes() {
         )
     }
 
-    async fn stage(catalog: &Catalog, session: &Session, sql: &str) -> SourceCommand {
+    async fn prepare(
+        catalog: &Catalog,
+        session: &Session,
+        sql: &str,
+    ) -> (SourceStatement, Box<SourceCompilation>) {
         let raw = mz_sql_parser::parser::parse_statements(sql)
             .expect("parse source")
             .remove(0)
@@ -364,26 +368,19 @@ async fn source_command_preserves_only_observed_outcomes() {
             session.meta(),
             1000,
         );
-        let (state, snapshot) = catalog.ddl_transaction_snapshot().await;
         let mut response = None;
         loop {
-            let ts = catalog.current_upper().await;
-            match catalog
-                .prepare_source_statement(
-                    &mut statement,
-                    (&state, &snapshot),
-                    None,
-                    ts,
-                    response.take(),
-                )
-                .await
-                .expect("stage source")
-            {
-                SourceStatementPreparation::Ready(prepared) => return prepared.command,
-                SourceStatementPreparation::Prepare(request) => {
+            let resolution = match response.take() {
+                Some(response) => statement.finish(catalog.state(), response),
+                None => statement.resolve(catalog.state()),
+            };
+            match resolution.expect("prepare source") {
+                SourceResolution::Ready(compiled) => return (statement, compiled),
+                SourceResolution::Prepare(request) => {
                     response = Some(request.execute(&storage(catalog)).await);
                 }
-                SourceStatementPreparation::Allocate(keys) => {
+                SourceResolution::Allocate(keys) => {
+                    let ts = catalog.current_upper().await;
                     let ids = catalog
                         .allocate_user_ids(u64::try_from(keys.len()).expect("ID count"), ts)
                         .await
@@ -392,6 +389,17 @@ async fn source_command_preserves_only_observed_outcomes() {
                 }
             }
         }
+    }
+
+    async fn stage(catalog: &Catalog, session: &Session, sql: &str) -> SourceCommand {
+        let (statement, compiled) = prepare(catalog, session, sql).await;
+        let (state, snapshot) = catalog.ddl_transaction_snapshot().await;
+        let ts = catalog.current_upper().await;
+        catalog
+            .stage_source_statement(statement, *compiled, (&state, &snapshot), None, ts)
+            .await
+            .expect("stage source")
+            .command
     }
 
     async fn apply(
@@ -456,18 +464,21 @@ async fn source_command_preserves_only_observed_outcomes() {
             .expect("start invoking transaction");
         let sql = "CREATE SOURCE IF NOT EXISTS materialize.public.ddl_outcome IN CLUSTER source_cluster FROM LOAD GENERATOR AUCTION FOR ALL TABLES";
         let staged = stage(&catalog, &session, sql).await;
-        let competing = stage(&catalog, &session, sql).await;
+        let (statement, compiled) = prepare(&catalog, &session, sql).await;
+        let standalone = SourceCommand::unobserved(statement, *compiled);
+        let (statement, compiled) = prepare(&catalog, &session, &sql.replace(" IF NOT EXISTS", "")).await;
+        let competing = SourceCommand::unobserved(statement, *compiled);
         let competing_ids: Vec<_> = competing.item_ids().collect();
         apply(&mut catalog, competing).await.expect("commit competing source");
         assert!(competing_ids.iter().any(|id| catalog.get_entry(id).is_progress_source()),
             "the compound fixture must create a progress source");
         let (_, before) = catalog.ddl_transaction_snapshot().await;
 
-        let error = apply(&mut catalog, staged.clone()).await.expect_err("observed creation cannot become a skip");
+        let error = apply(&mut catalog, staged).await.expect_err("observed creation cannot become a skip");
         assert!(matches!(error, AdapterError::DDLTransactionOutcomeChanged));
         assert_eq!(catalog.ddl_transaction_snapshot().await.1, before);
 
-        let applied = apply(&mut catalog, staged.unobserved()).await.expect("unreported outcome may become a skip");
+        let applied = apply(&mut catalog, standalone).await.expect("unreported outcome may become a skip");
         assert_eq!(applied.skipped_name(), Some("ddl_outcome"));
         assert_eq!(catalog.ddl_transaction_snapshot().await.1, before);
         assert!(applied.item_ids().all(|id| catalog.try_get_entry(&id).is_none()),
