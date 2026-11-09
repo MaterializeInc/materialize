@@ -16,6 +16,10 @@
   the connection and then reported only `unrecognized configuration parameter
   "auto_route_catalog_queries"`.
 
+* Fix the hint `deploy_init` prints when a deployment schema is not empty.
+  It named a `create_deployment_environment` operation that does not exist
+  instead of `deploy_init`.
+
 ## 1.9.12 - 2026-11-03
 
 * Fix the deployment timestamp in the schema comment `deploy_promote` leaves

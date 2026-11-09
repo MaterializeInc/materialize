@@ -17,10 +17,10 @@
 {#
   Performs atomic deployment of current dbt targets to production,
   based on the deployment configuration specified in the dbt_project.yml file.
-  This macro ensures all deployment targets, including schemas and clusters,
-  are fully hydrated and deployed together as a single atomic operation.
-  If any part of the deployment fails, the entire deployment is rolled back
-  to maintain consistency and prevent partial updates.
+  The schema and cluster swaps run in one transaction, so a failed swap
+  leaves production unchanged. Tagging the promoted schemas and repointing
+  sinks run after that transaction commits, so a failure there leaves the
+  swap in place.
 
   ## Arguments
   - `wait` (boolean, optional): Waits for the deployment to be fully hydrated.
@@ -51,7 +51,7 @@
 {% set current_target_name = target.name %}
 {% set target_config = internal_get_deployment_config() %}
 
-{{ log("Creating deployment environment for target " ~ current_target_name, info=True) }}
+{{ log("Promoting deployment for target " ~ current_target_name, info=True) }}
 
 {% set clusters = target_config.get('clusters', []) %}
 {% set schemas = target_config.get('schemas', []) %}
@@ -113,6 +113,9 @@
         {% endif %}
 
         {% if adapter.try_atomic_swap(swap_sql) %}
+            {# NOTE: the docs tell users not to re-run once this is logged, so it
+               must stay the first output after the commit. #}
+            {{ log("Swap committed", info=True) }}
             {% if attempt > 0 %}
                 {{ log("Atomic swap succeeded on attempt " ~ (attempt + 1), info=True) }}
             {% endif %}
