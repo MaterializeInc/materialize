@@ -18,7 +18,6 @@ use mz_controller_types::dyncfgs::{
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Timestamp};
-use mz_storage_types::dyncfgs::WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL;
 use mz_storage_types::freshness::{BucketScheme, PeriodRow, RecorderConfig};
 use mz_storage_types::time_dependence::TimeDependence;
 use timely::progress::Antichain;
@@ -40,7 +39,6 @@ fn config() -> RecorderConfig {
     RecorderConfig {
         scheme: BucketScheme::new(4).expect("power of two"),
         period: Duration::from_secs(60),
-        retention: Duration::from_secs(30 * 24 * 60 * 60),
     }
 }
 
@@ -280,8 +278,7 @@ fn recorder_config_reads_dyncfgs() {
     let dyncfg = ConfigSet::default()
         .add(&ENABLE_WALLCLOCK_FRESHNESS_RECORDING)
         .add(&WALLCLOCK_FRESHNESS_BUCKETS_PER_OCTAVE)
-        .add(&WALLCLOCK_FRESHNESS_PERIOD_INTERVAL)
-        .add(&WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL);
+        .add(&WALLCLOCK_FRESHNESS_PERIOD_INTERVAL);
     assert_eq!(recorder_config(&dyncfg), None);
     let mut updates = ConfigUpdates::default();
     updates.add(&ENABLE_WALLCLOCK_FRESHNESS_RECORDING, true);
@@ -290,15 +287,10 @@ fn recorder_config_reads_dyncfgs() {
         &WALLCLOCK_FRESHNESS_PERIOD_INTERVAL,
         Duration::from_secs(10),
     );
-    updates.add(
-        &WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL,
-        Duration::from_secs(3_600),
-    );
     updates.apply(&dyncfg);
     let expected = RecorderConfig {
         scheme: BucketScheme::new(8).expect("power of two"),
         period: Duration::from_secs(10),
-        retention: Duration::from_secs(3_600),
     };
     assert_eq!(recorder_config(&dyncfg), Some(expected));
 }

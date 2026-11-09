@@ -22,7 +22,6 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use mz_storage_types::dyncfgs::WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL;
 use mz_storage_types::freshness::{
     BucketScheme, PeriodRow, RecorderConfig, StalenessRecorder, StalenessReporter, reflected_time,
 };
@@ -43,7 +42,6 @@ pub fn recorder_config(dyncfg: &ConfigSet) -> Option<RecorderConfig> {
     Some(RecorderConfig {
         scheme,
         period: WALLCLOCK_FRESHNESS_PERIOD_INTERVAL.get(dyncfg),
-        retention: WALLCLOCK_FRESHNESS_HISTOGRAM_RETENTION_INTERVAL.get(dyncfg),
     })
 }
 
