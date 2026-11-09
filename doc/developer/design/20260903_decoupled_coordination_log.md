@@ -9,13 +9,21 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Convert the current container entrypoint, then remove the remaining combined
-serving and controller execution alternatives.
-The container audit is in `~/.local/share/aj/m3-evidence/native-only/container-native-conversion.md`.
-Process-backed listeners now preserve configured bind IPs while local launcher
-defaults remain loopback-only. Container conversion still needs fixed endpoints,
-resolution of the relay diagnostics/serving-port collision, and inherited
-listener-path versus assigned JSON precedence.
+Convert the remaining upgrade and multi-generation harness assumptions, then
+remove the remaining combined bootstrap and controller execution alternatives.
+Start with explicit unsupported-case reporting before any released-to-native
+workflow starts or resets services. Keep compatible-native coexistence,
+promotion and explicit retirement as separate runtime coverage.
+
+The current all-in-one entrypoint now starts controllerd. The actual environmentd
+binary rejects before startup, and the CLI no longer hosts an inline relay.
+A fresh debug container verified SQL/HTTP/authentication, retained process
+identities and a surviving SQL session through controller restart, adapter-only
+recovery, and table/MV contents through whole-container restart. All verification
+resources were removed. Details and limits:
+`~/.local/share/aj/m3-evidence/native-only/container-runtime/verification.md`.
+The earlier container audit incorrectly called port6881 HTTP. It is SASL SQL.
+Relay diagnostics now default to6883 in this image.
 
 Rust and SLT fixtures now use the real controller and join-only hosted adapters.
 Adapter restart and candidate teardown preserve peer execution identities.
@@ -62,8 +70,9 @@ Broad CI remains non-green and was not rerun. The last broad evidence is
 unpublished pubsubd image. Registry visibility, merge skew, the prior Persist
 JSON-order check and the stale hydration expectation remain unresolved.
 The last full formatting check failed on an unchanged generic call in
-`src/catalog/src/catalog.rs`. The prior changed-file Python checks passed. The native Rust/SLT fixture and observation SQL checks pass. Broad container,
-upgrade and remaining execution cleanup verification is still outstanding. The PR stays draft.
+`src/catalog/src/catalog.rs`. The prior changed-file Python checks passed. The native Rust/SLT fixture, observation SQL and targeted native-container checks
+pass. Broad container/upgrade suites and remaining execution cleanup are still
+outstanding. The PR stays draft.
 
 Arbitrary-version compatibility and external-sink handover remain unverified.
 Pre-native-to-native conversion is out of scope.
