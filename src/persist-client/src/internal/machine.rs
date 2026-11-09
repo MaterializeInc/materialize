@@ -41,7 +41,7 @@ use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::apply::Applier;
 use crate::internal::compact::CompactReq;
-use crate::internal::gc::{GarbageCollector, GcReq};
+use crate::internal::gc::{GarbageCollector, GcCaller, GcReq};
 use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::PartialRollupKey;
@@ -781,7 +781,7 @@ where
                         shard_id,
                         new_seqno_since,
                     };
-                    if let Some(done) = gc.gc_and_truncate_background(req) {
+                    if let Some(done) = gc.gc_and_truncate_background(req, GcCaller::Finalize) {
                         let _ = done.await;
                     }
                 }
@@ -2566,7 +2566,7 @@ pub mod tests {
     use crate::batch::{BatchBuilderConfig, INLINE_WRITES_SINGLE_MAX_BYTES};
     use crate::cache::StateCache;
     use crate::cfg::GC_REMOVE_FINALIZED_ROLLUPS;
-    use crate::internal::gc::{GarbageCollector, GcReq, GcResults};
+    use crate::internal::gc::{GarbageCollector, GcCaller, GcReq, GcResults};
     use crate::internal::machine::Machine;
     use crate::internal::metrics::Metrics;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
@@ -3046,6 +3046,26 @@ pub mod tests {
             };
             assert!(parts().await > 0);
 
+            // GC on a live shard isn't counted. A GC deletes the rollups the
+            // previous one removed from state, so run two.
+            read.expire().await;
+            let deleted = |caller| client.metrics.gc.tombstone_deleted_blobs(caller);
+            let rollups_before = rollup_keys(&client, shard_id).await.0.len();
+            for _ in 0..2 {
+                let _ = write.machine.add_rollup_for_current_seqno().await;
+                let req = GcReq {
+                    shard_id,
+                    new_seqno_since: write.machine.applier.seqno_since(),
+                };
+                let done = write
+                    .gc
+                    .gc_and_truncate_background(req, GcCaller::Maintenance);
+                let _ = done.expect("gc running").await;
+            }
+            let rollups_after = rollup_keys(&client, shard_id).await.0.len();
+            assert!(rollups_after < rollups_before, "live GC deleted nothing");
+            assert_eq!(deleted("maintenance"), 0, "counted a live shard");
+
             // Crash after the tombstone commit, before its GC.
             let _ = write
                 .machine
@@ -3064,6 +3084,7 @@ pub mod tests {
             assert!(finalize.await.expect("valid usage"));
             assert!(is_finalized().await);
             assert_eq!(parts().await, 0, "retry left parts in blob");
+            assert!(deleted("finalize") > 0, "retry's deletes not counted");
             let (blob, state) = rollup_keys(&client, shard_id).await;
             assert_eq!(blob, state, "retry left rollups in blob");
         }
