@@ -625,9 +625,22 @@ try:
             settings[name] = c.execute("SHOW " + name).fetchone()[0]
         save("effective-settings.json", settings)
         if args.kind == "native":
-            assert (
-                settings["catalog_read_protection_publish_interval"] == "10 s"
-            ), settings
+            requested_interval = (
+                dict(value.split("=", 1) for value in args.system_parameter)
+                .get("catalog_read_protection_publish_interval", "10s")
+                .strip()
+            )
+            # System durations default to milliseconds, SQL intervals to seconds.
+            if re.fullmatch(r"[0-9]+", requested_interval):
+                requested_interval += "ms"
+            # SHOW normalizes durations, e.g. 60s becomes "1 min".
+            assert c.execute(
+                "SELECT %s::interval = %s::interval",
+                (
+                    settings["catalog_read_protection_publish_interval"],
+                    requested_interval,
+                ),
+            ).fetchone() == (True,), settings
         assert settings["persist_shard_metrics"] == "both", settings
         clusters = c.execute(
             "SELECT c.id,c.name,r.id,r.name,r.size FROM mz_catalog.mz_clusters c LEFT JOIN mz_catalog.mz_cluster_replicas r ON r.cluster_id=c.id ORDER BY c.id,r.id"

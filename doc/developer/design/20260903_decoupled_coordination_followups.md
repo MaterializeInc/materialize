@@ -19,8 +19,11 @@ The catalog journal and progress fanout remain. A separate retained dependency
 MV lacks a common source predicate. Do not redirect its history through the
 unretained shared catalog arrangement.
 
-Most CAS excess is empty completeness fanout into 50 durable catalog outputs.
-Output coalescing needs a latency budget, not slower read-protection publication.
+At 10s publication, most CAS excess was empty completeness fanout into 50 durable
+catalog outputs. The [60s comparison](20260903_decoupled_coordination_publication_interval.md)
+reduces that contribution. Frontier observations now lead the remaining CAS gap.
+Slower protection publication reduces one source of input progress. General
+output coalescing still needs an explicit latency budget.
 At the collection-manager boundary, peer progress can inform an idle completeness
 deadline without choosing an owner. Preserve the existing maximum lag and all
 pending command obligations. Source statistics has two partition timers, not
@@ -40,6 +43,11 @@ selection/revision while retaining version checks and pending misses. Filtering
 irrelevant protection kinds before the shared SQL arrangement is a separate
 candidate. It cannot by itself remove empty completeness writes or journal bytes.
 
+The 60s comparison also finds legacy frontier progress retained by dynamic SQL
+branches. Remove inactive input dependencies before stopping their writers,
+otherwise protected-mode results can stall. This is a view/progress design
+change, not an unconditional writer-disable patch.
+
 ### Catalog/cache ownership in non-execution processes
 
 Native followers and controllerd reconstruct full SQL catalogs and retain
@@ -55,6 +63,17 @@ remain. Preserve admin validation, committed selection, cross-cluster producer
 schemas and catalog-authorized retirement. No measured saving is claimed yet.
 
 ## Duplicate progress observation
+
+Fresh scan tracing at 60s identifies additional authority/placement imports and
+retained metadata watches, not reintroduced duplicate frontier-observation
+sources. MV correction readers have a separate contract. Eighteen logical IDs
+share one WAL watch, and all sampled metadata inputs carry policy obligations.
+Authority, object-global-IDs and index-columns are concrete arrangement-reuse
+candidates, subject to retention boundaries. Raw-catalog overlapping observers
+are small candidates, not guaranteed savings. The total scan delta is unstable:
+the fresh baseline loses PubSub messages and performs more writer recovery.
+Do not infer caller necessity or a fixed native overhead from retry counters.
+
 
 Persist-internal repairs are deferred. The current
 [resource comparison](20260903_decoupled_coordination_resource_review.md) ranks

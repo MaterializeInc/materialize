@@ -2,21 +2,26 @@
 
 ## Current objective
 
-The fresh idle comparison and logical-component audit are complete. Native uses
-1.24 versus 0.63 CPU cores and 2865 versus 1354 MiB PSS. Catalog-output
-completeness drives most extra CAS,
-while protection journal consumption/compaction drives most extra blob bytes.
-See the [report](20260903_decoupled_coordination_logical_load.md) for exact units,
-repeat measurements, source attribution and limits.
+Choose the next scoped usage-side improvement after the
+[one-minute publication comparison](20260903_decoupled_coordination_publication_interval.md).
+Slower protection publication cuts CAS and blob work, but does not erase frontier
+publication/reduction costs or the additional memory footprint. Total scan deltas
+are unstable because notification loss changes fallback traffic.
 
 ## Next concrete action
 
-Agree a bounded repair. The narrowest demonstrated redundant work is repeated
-immutable-plan decoding for producer metadata. The larger write-cost target is
-catalog-output completeness fanout, which needs an explicit latency contract.
-Filtering irrelevant protection rows before the shared SQL arrangement and
-reducing non-execution catalog/cache ownership are separate scopes. Do not change
-Persist internals or publication cadence. No runtime needs to remain running.
+Agree the next optimization with Aljoscha. Retaining immutable selected-plan/schema results is an isolated
+candidate. Removing legacy frontier progress requires removing inactive SQL input
+dependencies first. Do not stop those writers alone or change Persist/defaults
+without a separate decision.
+
+Evidence: `~/.local/share/aj/m3-evidence/publication-interval/`.
+`comparison.json`, `scan-summary.json` and `reader-scan-residual.md/json` retain
+cost, caller and input-identity evidence. All three primary 60s fixtures and the
+fresh scan pair passed. Temporary instrumentation is absent from production
+sources. Owned runtimes stopped, five metadata containers were removed, and
+about 135 GiB is free. Independent review is complete. No runtime or worker
+is still running.
 
 ## Live limitations
 
@@ -45,11 +50,12 @@ not establish arbitrary-version compatibility or green CI.
 
 ## Essential evidence and local state
 
-- Current evidence: `~/.local/share/aj/m3-evidence/logical-component-load/`.
-  CPU/counter windows passed. Valid heaps precede CPU profiling. The baseline's
-  post-window inventory failure was reproduced and repaired without rewriting
-  its original failed status. Exact current scan-origin rates remain unmeasured.
-  Instrumentation is absent from production sources. Owned runtimes are stopped.
+- Current comparison and raw evidence are linked above. Primary and scan-audit
+  instrumentation differ, so their windows are not pooled. Reader correction,
+  policy progress and background recovery are distinct contracts.
+- Reference evidence: `~/.local/share/aj/m3-evidence/logical-component-load/`.
+  Valid heaps precede CPU profiling. The baseline's post-window inventory failure
+  was reproduced and repaired without rewriting its original failed status.
 - Shared-input lifecycle and plan evidence: `shared-frontier-inputs/` under the
   same evidence parent. Its initial symlink-discovery run remains excluded.
 - Previous [backend attribution](20260903_decoupled_coordination_backend_load.md),
