@@ -52,6 +52,40 @@ else
     unset LD_PRELOAD
 fi
 
+# Resolve the selected adapter exactly as the process backend does. A caller
+# supplying a plan-build namespace remains responsible for its compatibility.
+adapter_image=${MZ_ADAPTERD_IMAGE:-adapterd}
+plan_build_supplied=${MZ_ADAPTER_PLAN_BUILD:-}
+previous_arg=
+for arg in "$@"; do
+    if [[ "$previous_arg" == --adapterd-image ]]; then
+        adapter_image=$arg
+    fi
+    case "$arg" in
+        --adapterd-image=*) adapter_image=${arg#*=} ;;
+        --adapter-plan-build|--adapter-plan-build=*) plan_build_supplied=1 ;;
+    esac
+    previous_arg=$arg
+done
+if [[ -z "$plan_build_supplied" ]]; then
+    if [[ "$adapter_image" != /* ]]; then
+        controller_executable=$(readlink -f "$(command -v controllerd)")
+        adapter_image="$(dirname "$controller_executable")/$adapter_image"
+    fi
+    adapter_version=$("$adapter_image" --version)
+    mapfile -t plan_builds < <(printf '%s\n' "$adapter_version" | sed -n 's/^written-plan-build: //p')
+    if [[ ${#plan_builds[@]} != 1 || ! "${plan_builds[0]}" =~ [^[:space:]] ]]; then
+        echo "adapterd must report exactly one nonempty written-plan-build" >&2
+        exit 1
+    fi
+    export MZ_ADAPTER_PLAN_BUILD="${plan_builds[0]}"
+fi
+export MZ_ADAPTER_SIZES=${MZ_ADAPTER_SIZES:-'{"1":{"cpu_limit":1,"memory_limit":"4 GiB"}}'}
+# The SASL serving configuration uses 6881 for SQL. Relay diagnostics
+# remain private and must not displace that fixed listener.
+export MZ_PUBSUB_HTTP_PORT=${MZ_PUBSUB_HTTP_PORT:-6883}
+export MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=${MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR:-0.0.0.0:6879}
+
 export PGUSER=root
 
 # Start PostgreSQL, unless suppressed.
@@ -84,7 +118,6 @@ if ! is_truthy "${MZ_NO_BUILTIN_POSTGRES:-0}"; then
   psql -c "ALTER USER $PGUSER WITH PASSWORD 'root'; \
            CREATE SCHEMA IF NOT EXISTS consensus; \
            CREATE SCHEMA IF NOT EXISTS storage; \
-           CREATE SCHEMA IF NOT EXISTS adapter; \
            CREATE SCHEMA IF NOT EXISTS tsoracle;"
 fi
 
@@ -102,19 +135,12 @@ fi
 # arguments when running the container via either environment variables or
 # command-line arguments.
 export MZ_ENVIRONMENT_ID=${MZ_ENVIRONMENT_ID:-$(</mzdata/environment-id)}
-export MZ_SQL_LISTEN_ADDR=${MZ_SQL_LISTEN_ADDR:-0.0.0.0:6875}
-export MZ_HTTP_LISTEN_ADDR=${MZ_HTTP_LISTEN_ADDR:-0.0.0.0:6876}
-export MZ_INTERNAL_SQL_LISTEN_ADDR=${MZ_INTERNAL_SQL_LISTEN_ADDR:-0.0.0.0:6877}
-export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
-export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
-export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
 if is_truthy "${MZ_NO_EXTERNAL_CLUSTERD:-0}"; then
   export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
 else
   export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@$(hostname):26257/?options=--search_path=consensus}
 fi
 export MZ_PERSIST_BLOB_URL=${MZ_PERSIST_BLOB_URL:-file:///mzdata/persist/blob}
-export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
 export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
 export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
@@ -229,7 +255,7 @@ EOF
 )}
 
 
-if [ -z "${MZ_LISTENERS_CONFIG_PATH:-}" ]; then
+if [[ -z "${MZ_LISTENERS_CONFIG_PATH:-}" && -z "${MZ_LISTENERS_CONFIG_JSON:-}" ]]; then
     if [ -z "${MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM:-}" ]; then
         export MZ_LISTENERS_CONFIG_PATH="/listener_configs/no_auth.json"
     else
@@ -282,24 +308,24 @@ fi
 
 if is_truthy "${MZ_RESTART_ON_FAILURE:-0}"; then
     for ((i = 0; i < ${MZ_RESTART_LIMIT:-9999999999}; i++)); do
-        # Run `environmentd` inside of an `if` to avoid tripping `set -e`
+        # Run `controllerd` inside of an `if` to avoid tripping `set -e`
         # behavior.
-        if environmentd "$@"; then
+        if controllerd "$@"; then
             code=$?
         else
             code=$?
         fi
 
         if [[ $code != 0 ]]; then
-            echo "environmentd exited (code: $code); restarting in 5s..." >&2
+            echo "controllerd exited (code: $code); restarting in 5s..." >&2
             sleep 5
         else
-            echo "environmentd exited gracefully; sleeping forever" >&2
+            echo "controllerd exited gracefully; sleeping forever" >&2
             sleep infinity
         fi
     done
-    echo "environmentd exited; giving up after $i tries" >&2
+    echo "controllerd exited; giving up after $i tries" >&2
     exit "$code"
 else
-    exec environmentd "$@"
+    exec controllerd "$@"
 fi

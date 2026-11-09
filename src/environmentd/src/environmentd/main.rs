@@ -7,10 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Manages a single Materialize environment.
-//!
-//! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
-//! on port 6876.
+//! Launches a deployment controller or a join-only SQL/HTTP adapter.
 
 use std::ffi::CStr;
 use std::fs::File;
@@ -56,15 +53,11 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
 use mz_ore::now::SYSTEM_TIME;
-use mz_ore::task::RuntimeExt;
 use mz_ore::url::SensitiveUrl;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::rpc::{
-    GrpcPubSubClient, MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PersistPubSubClient,
-    PersistPubSubClientConfig, PubSubClientConnection, PubSubSender,
-};
+use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use mz_secrets::SecretsController;
 use mz_secrets_cli::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_server_core::TlsCliArgs;
@@ -73,7 +66,7 @@ use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{info, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -119,10 +112,10 @@ pub struct Args {
         value_name = "PATH",
         action = ArgAction::Set,
         required_unless_present = "listeners_config_json",
-        conflicts_with = "listeners_config_json",
     )]
     listeners_config_path: Option<PathBuf>,
     /// Inline listener configuration for backend-assigned process addresses.
+    /// Explicit input takes precedence over inherited file configuration.
     #[clap(long, env = "LISTENERS_CONFIG_JSON", value_name = "JSON")]
     listeners_config_json: Option<String>,
     /// Password for the mz_system user.
@@ -431,7 +424,8 @@ pub struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
-    /// Use the external Persist PubSub service instead of starting an in-process relay.
+    /// Use the supplied relay instead of provisioning a controller-managed one.
+    /// Required for join-only adapters.
     #[clap(long, env = "PERSIST_PUBSUB_EXTERNAL")]
     persist_pubsub_external: bool,
     /// The number of worker threads created for the IsolatedRuntime used for
@@ -706,37 +700,55 @@ fn aws_secrets_controller_key_alias(env_id: &EnvironmentId) -> String {
 }
 
 pub fn main() {
-    let args = cli::parse_args(CliConfig {
-        env_prefix: Some("MZ_"),
-        enable_version_flag: true,
-    });
-    if let Err(err) = run(args, None) {
-        panic!("environmentd: fatal: {}", err.display_with_causes());
-    }
+    eprintln!("environmentd is unsupported: use controllerd to manage a native deployment");
+    std::process::exit(1);
 }
 
 pub fn adapter_main() {
-    let args: Args = cli::parse_args(CliConfig {
+    let (mut args, matches): (Args, _) = cli::parse_args_with_matches(CliConfig {
         env_prefix: Some("MZ_"),
         enable_version_flag: true,
     });
     if args.adapter_id.is_none() {
         panic!("adapterd requires --adapter-id");
     }
-    if let Err(err) = run(args, None) {
+    let result = resolve_listener_configuration(&mut args, &matches).and_then(|()| run(args, None));
+    if let Err(err) = result {
         panic!("adapterd: fatal: {}", err.display_with_causes());
     }
 }
 
 pub fn controller_main() {
-    let (args, matches): (Args, _) = cli::parse_args_with_matches(CliConfig {
+    let (mut args, matches): (Args, _) = cli::parse_args_with_matches(CliConfig {
         env_prefix: Some("MZ_"),
         enable_version_flag: true,
     });
-    let result = controller_child_args(&matches).and_then(|child_args| run(args, Some(child_args)));
+    let result = resolve_listener_configuration(&mut args, &matches)
+        .and_then(|()| controller_child_args(&matches))
+        .and_then(|child_args| run(args, Some(child_args)));
     if let Err(err) = result {
         panic!("controllerd: fatal: {}", err.display_with_causes());
     }
+}
+
+// Assigned adapter listeners must override the controller's inherited file
+// setting. Clap conflicts/overrides do not prefer CLI input over a different
+// argument supplied by the environment. Keep ambiguous same-source input an error.
+fn resolve_listener_configuration(
+    args: &mut Args,
+    matches: &clap::ArgMatches,
+) -> anyhow::Result<()> {
+    use clap::parser::ValueSource::{CommandLine, EnvVariable};
+    match (
+        matches.value_source("listeners_config_path"),
+        matches.value_source("listeners_config_json"),
+    ) {
+        (Some(CommandLine), Some(EnvVariable)) => args.listeners_config_json = None,
+        (Some(EnvVariable), Some(CommandLine)) => args.listeners_config_path = None,
+        (Some(_), Some(_)) => bail!("exactly one listener configuration is required"),
+        _ => (),
+    }
+    Ok(())
 }
 
 // Forward resolved CLI/environment input, not process-local defaults or credentials
@@ -805,6 +817,80 @@ fn controller_child_args(matches: &clap::ArgMatches) -> anyhow::Result<Vec<Strin
 #[cfg(test)]
 mod controller_cli_tests {
     use super::*;
+    use clap::FromArgMatches;
+
+    fn controller_arguments() -> Vec<&'static str> {
+        vec![
+            "controllerd",
+            "--orchestrator=process",
+            "--secrets-controller=local-file",
+            "--orchestrator-process-secrets-directory=/tmp/secrets",
+            "--persist-blob-url=file:///tmp/blob",
+            "--bootstrap-default-cluster-replica-size=1",
+            "--cluster-replica-sizes={}",
+            "--environment-id=local-az1-00000000-0000-0000-0000-000000000001-0",
+            "--listeners-config-json={}",
+            "--metadata-backend-url=postgres://user:password@localhost/db",
+            "--adapterd-image=/tmp/adapterd",
+            "--adapter-sizes={}",
+            "--adapter-plan-build=26.46.0-dev.0+testbuild",
+            "--deploy-generation=7",
+            "--persist-pubsub-external",
+            "--unsafe-mode",
+            "--system-parameter-default=enable_catalog_read_protection=true",
+            "--system-parameter-default=max_tables=100",
+        ]
+    }
+
+    #[mz_ore::test]
+    fn explicit_listener_configuration_overrides_inherited_configuration() {
+        for (inherited, selected) in [
+            ("listeners_config_path", "listeners_config_json"),
+            ("listeners_config_json", "listeners_config_path"),
+        ] {
+            let mut args = controller_arguments();
+            if selected == "listeners_config_path" {
+                args.retain(|arg| !arg.starts_with("--listeners-config-json="));
+                args.push("--listeners-config-path=/explicit/listeners.json");
+            }
+            // PATH supplies a real environment value without process-global
+            // mutation. The parser must prefer the caller's explicit input.
+            let matches = Args::command()
+                .mut_arg(inherited, |arg| arg.env("PATH"))
+                .try_get_matches_from(args)
+                .expect("explicit config overrides inherited config");
+            let mut args = Args::from_arg_matches(&matches).unwrap();
+            resolve_listener_configuration(&mut args, &matches).unwrap();
+            assert_eq!(
+                args.listeners_config_json.as_deref(),
+                (selected == "listeners_config_json").then_some("{}")
+            );
+            assert_eq!(
+                args.listeners_config_path.as_deref(),
+                (selected == "listeners_config_path")
+                    .then_some(std::path::Path::new("/explicit/listeners.json"))
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn ambiguous_listener_configuration_is_rejected() {
+        for from_environment in [false, true] {
+            let mut command = Args::command();
+            let mut args = controller_arguments();
+            if from_environment {
+                args.retain(|arg| !arg.starts_with("--listeners-config-json="));
+                command = command
+                    .mut_arg("listeners_config_path", |arg| arg.env("PATH"))
+                    .mut_arg("listeners_config_json", |arg| arg.env("PATH"));
+            } else {
+                args.push("--listeners-config-path=/explicit/listeners.json");
+            }
+            let matches = command.try_get_matches_from(args).unwrap();
+            let mut args = Args::from_arg_matches(&matches).unwrap();
+            assert!(resolve_listener_configuration(&mut args, &matches).is_err());
+        }
+    }
 
     #[mz_ore::test]
     fn child_arguments_preserve_values_but_not_controller_owned_fields() {
@@ -812,26 +898,7 @@ mod controller_cli_tests {
             // Exercise environment-sourced input without mutating process-global
             // environment while other tests run.
             .mut_arg("http_host_name", |arg| arg.env("PATH"))
-            .try_get_matches_from([
-                "controllerd",
-                "--orchestrator=process",
-                "--secrets-controller=local-file",
-                "--orchestrator-process-secrets-directory=/tmp/secrets",
-                "--persist-blob-url=file:///tmp/blob",
-                "--bootstrap-default-cluster-replica-size=1",
-                "--cluster-replica-sizes={}",
-                "--environment-id=local-az1-00000000-0000-0000-0000-000000000001-0",
-                "--listeners-config-json={}",
-                "--metadata-backend-url=postgres://user:password@localhost/db",
-                "--adapterd-image=/tmp/adapterd",
-                "--adapter-sizes={}",
-                "--adapter-plan-build=26.46.0-dev.0+testbuild",
-                "--deploy-generation=7",
-                "--persist-pubsub-external",
-                "--unsafe-mode",
-                "--system-parameter-default=enable_catalog_read_protection=true",
-                "--system-parameter-default=max_tables=100",
-            ])
+            .try_get_matches_from(controller_arguments())
             .expect("valid controller arguments");
         let child = controller_child_args(&matches).expect("forward arguments");
         assert!(child.contains(&"--unsafe-mode".to_string()));
@@ -878,11 +945,13 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
     let is_controller = controller_child_args.is_some();
     let service_name = if is_controller {
         "controllerd"
-    } else if args.adapter_id.is_some() {
-        "adapterd"
     } else {
-        "environmentd"
+        "adapterd"
     };
+    anyhow::ensure!(
+        is_controller || args.adapter_id.is_some(),
+        "adapterd requires --adapter-id"
+    );
     anyhow::ensure!(
         !is_controller || args.adapter_id.is_none(),
         "controllerd cannot join as an adapter"
@@ -1211,8 +1280,6 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
     } else {
         None
     };
-    // Even a controller-managed relay is out of process.
-    args.persist_pubsub_external |= is_controller;
     let cloud_resource_reader = cloud_resource_controller.as_ref().map(|c| c.reader());
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
@@ -1221,12 +1288,6 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
         PersistConfig::new(&BUILD_INFO, now.clone(), mz_dyncfgs::all_dyncfgs());
     // Start with compaction disabled, later enable it if we're not in read-only mode.
     persist_config.disable_compaction();
-
-    let persist_pubsub_server = (!args.persist_pubsub_external)
-        .then(|| PersistGrpcPubSubServer::new(&persist_config, &metrics_registry));
-    let persist_pubsub_client = persist_pubsub_server
-        .as_ref()
-        .map(PersistGrpcPubSubServer::new_same_process_connection);
 
     match args.persist_isolated_runtime_threads {
         // Use the default.
@@ -1241,49 +1302,22 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
         }
     };
 
-    let _server = persist_pubsub_server.map(|persist_pubsub_server| {
-        runtime.spawn_named(
-            || "persist::rpc::server",
-            async move {
-                info!(
-                    "listening for Persist PubSub connections on {}",
-                    args.internal_persist_pubsub_listen_addr
-                );
-                // Intentionally do not bubble up errors here, we don't want to take
-                // down environmentd if there are any issues with the pubsub server.
-                let res = persist_pubsub_server
-                    .serve(args.internal_persist_pubsub_listen_addr)
-                    .await;
-                error!("Persist Pubsub server exited {:?}", res);
-            }
-            .instrument(tracing::info_span!("persist::rpc::server")),
-        )
-    });
-
     let persist_clients = {
-        // PersistClientCache may spawn tasks, so run within a tokio runtime context
+        // PersistClientCache may spawn tasks, so run within a tokio runtime context.
         let _tokio_guard = runtime.enter();
         PersistClientCache::new(persist_config, &metrics_registry, |cfg, metrics| {
-            match persist_pubsub_client {
-                Some(client) => {
-                    let sender: Arc<dyn PubSubSender> = Arc::new(
-                        MetricsSameProcessPubSubSender::new(cfg, client.sender, metrics),
-                    );
-                    PubSubClientConnection::new(sender, client.receiver)
-                }
-                None => GrpcPubSubClient::connect(
-                    PersistPubSubClientConfig {
-                        url: args.persist_pubsub_url.clone(),
-                        caller_id: format!(
-                            "environmentd:{}:{}",
-                            args.environment_id,
-                            std::process::id()
-                        ),
-                        persist_cfg: cfg.clone(),
-                    },
-                    metrics,
-                ),
-            }
+            GrpcPubSubClient::connect(
+                PersistPubSubClientConfig {
+                    url: args.persist_pubsub_url.clone(),
+                    caller_id: format!(
+                        "{service_name}:{}:{}",
+                        args.environment_id,
+                        std::process::id()
+                    ),
+                    persist_cfg: cfg.clone(),
+                },
+                metrics,
+            )
         })
     };
 
@@ -1328,7 +1362,7 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let replica_http_locator = Arc::new(ReplicaHttpLocator::default());
     let controller = ControllerConfig {
-        manage_replica_processes: args.adapter_id.is_none(),
+        manage_replica_processes: is_controller,
         timestamp_oracle_url: timestamp_oracle_url.clone(),
         timestamp_oracle_clock_file: None,
         build_info: &BUILD_INFO,
@@ -1530,7 +1564,7 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
     info!("startup: envd init: complete in {start_duration:?}");
 
     println!(
-        "environmentd {} listening...",
+        "{service_name} {} listening...",
         BUILD_INFO.human_version(args.helm_chart_version)
     );
     for (name, handle) in &server.sql_listener_handles {
@@ -1539,14 +1573,6 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
     for (name, handle) in &server.http_listener_handles {
         println!("{} HTTP address: {}", name, handle.local_addr);
     }
-    if !args.persist_pubsub_external {
-        // TODO move persist pubsub address like metrics address?
-        println!(
-            " Internal Persist PubSub address: {}",
-            args.internal_persist_pubsub_listen_addr
-        );
-    }
-
     println!(" Root trace ID: {id}");
 
     // Block forever.

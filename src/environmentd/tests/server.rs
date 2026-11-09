@@ -71,6 +71,27 @@ use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message, Utf8Bytes};
 use uuid::Uuid;
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // requires a subprocess
+fn test_monolithic_binary_is_unsupported_before_startup() {
+    let directory = tempfile::tempdir().unwrap();
+    let blob = directory.path().join("blob");
+    for args in [vec![], vec!["--version"], vec!["--help"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_environmentd"))
+            .args(args)
+            .env("MZ_PERSIST_BLOB_URL", format!("file://{}", blob.display()))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert_contains!(
+            String::from_utf8(output.stderr).unwrap(),
+            "environmentd is unsupported: use controllerd"
+        );
+        assert!(!blob.exists());
+    }
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // requires replica processes
 #[allow(clippy::disallowed_methods)]
