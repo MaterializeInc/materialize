@@ -285,7 +285,6 @@ impl Instance {
         compute_dependencies: BTreeMap<GlobalId, ReadHold>,
         replica_input_read_holds: Vec<ReadHold>,
         write_only: bool,
-        storage_sink: bool,
         initial_as_of: Option<Antichain<Timestamp>>,
         refresh_schedule: Option<RefreshSchedule>,
         target_replica: Option<ReplicaId>,
@@ -300,7 +299,6 @@ impl Instance {
             id,
             self.introspection_tx.clone(),
             as_of.clone(),
-            storage_sink,
             initial_as_of,
             refresh_schedule,
             dependency_ids,
@@ -353,14 +351,7 @@ impl Instance {
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
         let metrics = self.metrics.for_replica(id);
-        let mut replica = ReplicaState::new(
-            id,
-            client,
-            config,
-            metrics,
-            self.introspection_tx.clone(),
-            epoch,
-        );
+        let mut replica = ReplicaState::new(id, client, config, metrics, epoch);
 
         // Add per-replica collection state.
         let mut shutdown_input = None;
@@ -459,27 +450,17 @@ impl Instance {
         })
     }
 
-    /// Update introspection with the current collection frontiers.
+    /// Update MV refresh introspection with the current collection write frontiers.
     ///
-    /// We could also do this directly in response to frontier changes, but doing it periodically
-    /// lets us avoid emitting some introspection updates that can be consolidated (e.g. a write
-    /// frontier updated immediately followed by a read frontier update).
+    /// Doing this periodically consolidates refresh updates between maintenance calls.
     ///
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
-    fn update_frontier_introspection(&mut self) {
+    fn update_refresh_introspection(&mut self) {
         for collection in self.collections.values_mut() {
             collection
                 .introspection
-                .observe_frontiers(&collection.read_frontier(), &collection.write_frontier());
-        }
-
-        for replica in self.replicas.values_mut() {
-            for collection in replica.collections.values_mut() {
-                collection
-                    .introspection
-                    .observe_frontier(&collection.write_frontier);
-            }
+                .update_refresh_introspection(&collection.write_frontier());
         }
     }
 
@@ -1501,7 +1482,6 @@ impl Instance {
                 .remove(&export_id)
                 .unwrap_or_else(|| SharedCollectionState::new(as_of.clone(), None));
             let write_only = dataflow.sink_exports.contains_key(&export_id);
-            let storage_sink = dataflow.persist_sink_ids().any(|id| id == export_id);
 
             self.add_collection(
                 export_id,
@@ -1511,7 +1491,6 @@ impl Instance {
                 compute_dependencies.clone(),
                 replica_input_read_holds.clone(),
                 write_only,
-                storage_sink,
                 dataflow.initial_storage_as_of.clone(),
                 dataflow.refresh_schedule.clone(),
                 target_replica,
@@ -2491,7 +2470,7 @@ impl Instance {
         self.forward_implied_capabilities();
         self.schedule_collections();
         self.cleanup_collections();
-        self.update_frontier_introspection();
+        self.update_refresh_introspection();
         self.refresh_state_metrics();
         self.refresh_wallclock_lag();
     }
@@ -2646,7 +2625,6 @@ impl CollectionState {
             id,
             introspection_tx,
             since.clone(),
-            false,
             None,
             None,
             Vec::new(),
@@ -2838,11 +2816,6 @@ struct CollectionIntrospection {
     collection_id: GlobalId,
     /// A channel through which introspection updates are delivered.
     introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
-    /// Introspection state for `IntrospectionType::Frontiers`.
-    ///
-    /// `Some` if the collection does _not_ sink into a storage collection (i.e. is not an MV). If
-    /// the collection sinks into storage, the storage controller reports its frontiers instead.
-    frontiers: Option<FrontiersIntrospectionState>,
     /// Introspection state for `IntrospectionType::ComputeMaterializedViewRefreshes`.
     ///
     /// `Some` if the collection is a REFRESH MV.
@@ -2856,7 +2829,6 @@ impl CollectionIntrospection {
         collection_id: GlobalId,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         as_of: Antichain<Timestamp>,
-        storage_sink: bool,
         initial_as_of: Option<Antichain<Timestamp>>,
         refresh_schedule: Option<RefreshSchedule>,
         dependency_ids: Vec<GlobalId>,
@@ -2876,12 +2848,10 @@ impl CollectionIntrospection {
                     None
                 }
             };
-        let frontiers = (!storage_sink).then(|| FrontiersIntrospectionState::new(as_of));
 
         let self_ = Self {
             collection_id,
             introspection_tx,
-            frontiers,
             refresh,
             dependency_ids,
         };
@@ -2892,12 +2862,6 @@ impl CollectionIntrospection {
 
     /// Reports the initial introspection state.
     fn report_initial_state(&self) {
-        if let Some(frontiers) = &self.frontiers {
-            let row = frontiers.row_for_collection(self.collection_id);
-            let updates = vec![(row, Diff::ONE)];
-            self.send(IntrospectionType::Frontiers, updates);
-        }
-
         if let Some(refresh) = &self.refresh {
             let row = refresh.row_for_collection(self.collection_id);
             let updates = vec![(row, Diff::ONE)];
@@ -2922,38 +2886,6 @@ impl CollectionIntrospection {
                 (row, diff)
             })
             .collect()
-    }
-
-    /// Observe the given current collection frontiers and update the introspection state as
-    /// necessary.
-    fn observe_frontiers(
-        &mut self,
-        read_frontier: &Antichain<Timestamp>,
-        write_frontier: &Antichain<Timestamp>,
-    ) {
-        self.update_frontier_introspection(read_frontier, write_frontier);
-        self.update_refresh_introspection(write_frontier);
-    }
-
-    fn update_frontier_introspection(
-        &mut self,
-        read_frontier: &Antichain<Timestamp>,
-        write_frontier: &Antichain<Timestamp>,
-    ) {
-        let Some(frontiers) = &mut self.frontiers else {
-            return;
-        };
-
-        if &frontiers.read_frontier == read_frontier && &frontiers.write_frontier == write_frontier
-        {
-            return; // no change
-        };
-
-        let retraction = frontiers.row_for_collection(self.collection_id);
-        frontiers.update(read_frontier, write_frontier);
-        let insertion = frontiers.row_for_collection(self.collection_id);
-        let updates = vec![(retraction, Diff::MINUS_ONE), (insertion, Diff::ONE)];
-        self.send(IntrospectionType::Frontiers, updates);
     }
 
     fn update_refresh_introspection(&mut self, write_frontier: &Antichain<Timestamp>) {
@@ -2982,13 +2914,6 @@ impl CollectionIntrospection {
 
 impl Drop for CollectionIntrospection {
     fn drop(&mut self) {
-        // Retract collection frontiers.
-        if let Some(frontiers) = &self.frontiers {
-            let row = frontiers.row_for_collection(self.collection_id);
-            let updates = vec![(row, Diff::MINUS_ONE)];
-            self.send(IntrospectionType::Frontiers, updates);
-        }
-
         // Retract MV refresh state.
         if let Some(refresh) = &self.refresh {
             let retraction = refresh.row_for_collection(self.collection_id);
@@ -3000,52 +2925,6 @@ impl Drop for CollectionIntrospection {
         if !self.dependency_ids.is_empty() {
             let updates = self.dependency_rows(Diff::MINUS_ONE);
             self.send(IntrospectionType::ComputeDependencies, updates);
-        }
-    }
-}
-
-#[derive(Debug)]
-struct FrontiersIntrospectionState {
-    read_frontier: Antichain<Timestamp>,
-    write_frontier: Antichain<Timestamp>,
-}
-
-impl FrontiersIntrospectionState {
-    fn new(as_of: Antichain<Timestamp>) -> Self {
-        Self {
-            read_frontier: as_of.clone(),
-            write_frontier: as_of,
-        }
-    }
-
-    /// Return a `Row` reflecting the current collection frontiers.
-    fn row_for_collection(&self, collection_id: GlobalId) -> Row {
-        let read_frontier = self
-            .read_frontier
-            .as_option()
-            .map_or(Datum::Null, |ts| ts.clone().into());
-        let write_frontier = self
-            .write_frontier
-            .as_option()
-            .map_or(Datum::Null, |ts| ts.clone().into());
-        Row::pack_slice(&[
-            Datum::String(&collection_id.to_string()),
-            read_frontier,
-            write_frontier,
-        ])
-    }
-
-    /// Update the introspection state with the given new frontiers.
-    fn update(
-        &mut self,
-        read_frontier: &Antichain<Timestamp>,
-        write_frontier: &Antichain<Timestamp>,
-    ) {
-        if read_frontier != &self.read_frontier {
-            self.read_frontier.clone_from(read_frontier);
-        }
-        if write_frontier != &self.write_frontier {
-            self.write_frontier.clone_from(write_frontier);
         }
     }
 }
@@ -3147,8 +3026,6 @@ struct ReplicaState {
     config: ReplicaConfig,
     /// Replica metrics.
     metrics: ReplicaMetrics,
-    /// A channel through which introspection updates are delivered.
-    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     /// Per-replica collection state.
     collections: BTreeMap<GlobalId, ReplicaCollectionState>,
     /// The epoch of the replica.
@@ -3161,7 +3038,6 @@ impl ReplicaState {
         client: ReplicaClient,
         config: ReplicaConfig,
         metrics: ReplicaMetrics,
-        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         epoch: u64,
     ) -> Self {
         Self {
@@ -3169,7 +3045,6 @@ impl ReplicaState {
             client,
             config,
             metrics,
-            introspection_tx,
             epoch,
             collections: Default::default(),
         }
@@ -3187,14 +3062,7 @@ impl ReplicaState {
         input_read_holds: Vec<ReadHold>,
     ) {
         let metrics = self.metrics.for_collection(id);
-        let introspection = ReplicaCollectionIntrospection::new(
-            self.id,
-            id,
-            self.introspection_tx.clone(),
-            as_of.clone(),
-        );
-        let mut state =
-            ReplicaCollectionState::new(metrics, as_of, introspection, input_read_holds);
+        let mut state = ReplicaCollectionState::new(metrics, as_of, input_read_holds);
 
         // In an effort to keep the produced wallclock lag introspection data small and
         // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
@@ -3250,7 +3118,6 @@ impl ReplicaState {
             client: _,
             config: _,
             metrics: _,
-            introspection_tx: _,
             epoch,
             collections,
         } = self;
@@ -3289,8 +3156,6 @@ struct ReplicaCollectionState {
     metrics: Option<ReplicaCollectionMetrics>,
     /// As-of frontier with which this collection was installed on the replica.
     as_of: Antichain<Timestamp>,
-    /// Tracks introspection state for this collection.
-    introspection: ReplicaCollectionIntrospection,
     /// Read holds on storage inputs to this collection.
     ///
     /// These read holds are kept to ensure that the replica is able to read from storage inputs at
@@ -3308,7 +3173,6 @@ impl ReplicaCollectionState {
     fn new(
         metrics: Option<ReplicaCollectionMetrics>,
         as_of: Antichain<Timestamp>,
-        introspection: ReplicaCollectionIntrospection,
         input_read_holds: Vec<ReadHold>,
     ) -> Self {
         Self {
@@ -3317,7 +3181,6 @@ impl ReplicaCollectionState {
             output_frontier: as_of.clone(),
             metrics,
             as_of,
-            introspection,
             input_read_holds,
             wallclock_lag_max: Some(WallclockLag::MIN),
         }
@@ -3399,89 +3262,6 @@ impl ReplicaCollectionState {
     }
 }
 
-/// Maintains the introspection state for a given replica and collection, and ensures that reported
-/// introspection data is retracted when the collection is dropped.
-#[derive(Debug)]
-struct ReplicaCollectionIntrospection {
-    /// The ID of the replica.
-    replica_id: ReplicaId,
-    /// The ID of the compute collection.
-    collection_id: GlobalId,
-    /// The collection's reported replica write frontier.
-    write_frontier: Antichain<Timestamp>,
-    /// A channel through which introspection updates are delivered.
-    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
-}
-
-impl ReplicaCollectionIntrospection {
-    /// Create a new `HydrationState` and initialize introspection.
-    fn new(
-        replica_id: ReplicaId,
-        collection_id: GlobalId,
-        introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
-        as_of: Antichain<Timestamp>,
-    ) -> Self {
-        let self_ = Self {
-            replica_id,
-            collection_id,
-            write_frontier: as_of,
-            introspection_tx,
-        };
-
-        self_.report_initial_state();
-        self_
-    }
-
-    /// Reports the initial introspection state.
-    fn report_initial_state(&self) {
-        let row = self.write_frontier_row();
-        let updates = vec![(row, Diff::ONE)];
-        self.send(IntrospectionType::ReplicaFrontiers, updates);
-    }
-
-    /// Observe the given current write frontier and update the introspection state as necessary.
-    fn observe_frontier(&mut self, write_frontier: &Antichain<Timestamp>) {
-        if self.write_frontier == *write_frontier {
-            return; // no change
-        }
-
-        let retraction = self.write_frontier_row();
-        self.write_frontier.clone_from(write_frontier);
-        let insertion = self.write_frontier_row();
-
-        let updates = vec![(retraction, Diff::MINUS_ONE), (insertion, Diff::ONE)];
-        self.send(IntrospectionType::ReplicaFrontiers, updates);
-    }
-
-    /// Return a `Row` reflecting the current replica write frontier.
-    fn write_frontier_row(&self) -> Row {
-        let write_frontier = self
-            .write_frontier
-            .as_option()
-            .map_or(Datum::Null, |ts| ts.clone().into());
-        Row::pack_slice(&[
-            Datum::String(&self.collection_id.to_string()),
-            Datum::String(&self.replica_id.to_string()),
-            write_frontier,
-        ])
-    }
-
-    fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
-        // Failure to send means the `ComputeController` has been dropped and doesn't care about
-        // introspection updates anymore.
-        let _ = self.introspection_tx.send((introspection_type, updates));
-    }
-}
-
-impl Drop for ReplicaCollectionIntrospection {
-    fn drop(&mut self) {
-        // Retract the write frontier.
-        let row = self.write_frontier_row();
-        let updates = vec![(row, Diff::MINUS_ONE)];
-        self.send(IntrospectionType::ReplicaFrontiers, updates);
-    }
-}
-
 /// Classifies one collection's readiness over every replica hosting it.
 ///
 /// Hydration and sufficient progress must belong to the same target replica.
@@ -3543,26 +3323,22 @@ mod tests {
     use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
     use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
     use mz_persist_types::PersistLocation;
-    use mz_repr::{GlobalId, Timestamp};
+    use mz_repr::Timestamp;
     use timely::progress::Antichain;
-    use tokio::sync::mpsc;
 
     use crate::protocol::command::{ComputeCommand, InstanceConfig};
 
     use super::{
-        CollectionReadiness, Instance, ReplicaCollectionIntrospection, ReplicaCollectionState,
-        ReplicaId, classify_collection_readiness,
+        CollectionReadiness, Instance, ReplicaCollectionState, ReplicaId,
+        classify_collection_readiness,
     };
 
     fn ac(ts: u64) -> Antichain<Timestamp> {
         Antichain::from_elem(Timestamp::new(ts))
     }
 
-    fn state(id: ReplicaId, as_of: u64, write: u64, output: u64) -> ReplicaCollectionState {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let introspection =
-            ReplicaCollectionIntrospection::new(id, GlobalId::User(1), tx, ac(as_of));
-        let mut state = ReplicaCollectionState::new(None, ac(as_of), introspection, Vec::new());
+    fn state(as_of: u64, write: u64, output: u64) -> ReplicaCollectionState {
+        let mut state = ReplicaCollectionState::new(None, ac(as_of), Vec::new());
         state.update_write_frontier(ac(write));
         state.update_output_frontier(ac(output));
         state
@@ -3592,10 +3368,10 @@ mod tests {
         let reference = ReplicaId::User(1);
         let target = ReplicaId::User(2);
         let mut replicas = vec![
-            (reference, state(reference, 100, 10_000, 10_000)),
+            (reference, state(100, 10_000, 10_000)),
             // The shared MV write frontier is caught up, but this replica has
             // only just produced its first output past the as-of.
-            (target, state(target, 100, 10_000, 101)),
+            (target, state(100, 10_000, 101)),
         ];
         assert_eq!(
             classify(&replicas, &[target], &[reference], LAG),
@@ -3613,8 +3389,8 @@ mod tests {
         let reference = ReplicaId::User(1);
         let target = ReplicaId::User(2);
         let replicas = vec![
-            (reference, state(reference, 100, 20_000, 10_000)),
-            (target, state(target, 100, 20_000, 10_000)),
+            (reference, state(100, 20_000, 10_000)),
+            (target, state(100, 20_000, 10_000)),
         ];
         assert_eq!(
             classify(&replicas, &[target], &[reference], LAG),
@@ -3629,10 +3405,10 @@ mod tests {
         let target = ReplicaId::User(3);
         let bystander = ReplicaId::User(4);
         let replicas = vec![
-            (trailing, state(trailing, 100, 9_000, 9_000)),
-            (ahead, state(ahead, 100, 10_000, 10_000)),
-            (target, state(target, 100, 8_990, 8_990)),
-            (bystander, state(bystander, 100, 1_000_000, 1_000_000)),
+            (trailing, state(100, 9_000, 9_000)),
+            (ahead, state(100, 10_000, 10_000)),
+            (target, state(100, 8_990, 8_990)),
+            (bystander, state(100, 1_000_000, 1_000_000)),
         ];
         assert_eq!(
             classify(&replicas, &[target], &[trailing], LAG),
@@ -3651,13 +3427,13 @@ mod tests {
         let lagging = ReplicaId::User(3);
         let ready = ReplicaId::User(4);
         let replicas = vec![
-            (reference, state(reference, 100, 10_000, 10_000)),
+            (reference, state(100, 10_000, 10_000)),
             // This replica is within the lag allowance but has not advanced
             // past its own as-of. It cannot supply progress for the hydrated,
             // lagging replica below.
-            (unhydrated, state(unhydrated, 10_000, 10_000, 10_000)),
-            (lagging, state(lagging, 100, 1_000, 1_000)),
-            (ready, state(ready, 100, 9_990, 9_990)),
+            (unhydrated, state(10_000, 10_000, 10_000)),
+            (lagging, state(100, 1_000, 1_000)),
+            (ready, state(100, 9_990, 9_990)),
         ];
         assert_eq!(
             classify(&replicas, &[unhydrated, lagging, ready], &[reference], LAG),
@@ -3674,14 +3450,14 @@ mod tests {
         let reference = ReplicaId::User(1);
         let target = ReplicaId::User(2);
         let replicas = vec![
-            (reference, state(reference, 100, 10_000, 10_000)),
-            (target, state(target, 100, 101, 101)),
+            (reference, state(100, 10_000, 10_000)),
+            (target, state(100, 101, 101)),
         ];
         assert_eq!(
             classify(&replicas, &[target], &[reference], None),
             CollectionReadiness::Ready,
         );
-        let unhydrated = vec![(target, state(target, 100, 100, 100))];
+        let unhydrated = vec![(target, state(100, 100, 100))];
         assert_eq!(
             classify(&unhydrated, &[target], &[], None),
             CollectionReadiness::Unhydrated,
@@ -3694,9 +3470,9 @@ mod tests {
         let far = ReplicaId::User(2);
         let close = ReplicaId::User(3);
         let mut replicas = vec![
-            (reference, state(reference, 100, 10_000, 10_000)),
-            (far, state(far, 100, 1_000, 1_000)),
-            (close, state(close, 100, 9_000, 9_000)),
+            (reference, state(100, 10_000, 10_000)),
+            (far, state(100, 1_000, 1_000)),
+            (close, state(100, 9_000, 9_000)),
         ];
         for _ in 0..2 {
             assert_eq!(
@@ -3712,8 +3488,8 @@ mod tests {
         let reference = ReplicaId::User(1);
         let target = ReplicaId::User(2);
         let mut replicas = vec![
-            (reference, state(reference, 100, 1_000, 1_000)),
-            (target, state(target, 100, 1_000, 1_000)),
+            (reference, state(100, 1_000, 1_000)),
+            (target, state(100, 1_000, 1_000)),
         ];
         replicas[0].1.update_output_frontier(Antichain::new());
         assert_eq!(
@@ -3730,7 +3506,7 @@ mod tests {
     #[mz_ore::test]
     fn no_reference_means_nothing_to_regress() {
         let target = ReplicaId::User(1);
-        let replicas = vec![(target, state(target, 100, 5_000, 5_000))];
+        let replicas = vec![(target, state(100, 5_000, 5_000))];
         assert_eq!(
             classify(&replicas, &[target], &[], Some(Timestamp::new(0))),
             CollectionReadiness::Ready,
@@ -3744,7 +3520,7 @@ mod tests {
     #[mz_ore::test]
     fn no_targets_is_unhydrated() {
         let reference = ReplicaId::User(1);
-        let replicas = vec![(reference, state(reference, 100, 10_000, 10_000))];
+        let replicas = vec![(reference, state(100, 10_000, 10_000))];
         assert_eq!(
             classify(&replicas, &[], &[reference], LAG),
             CollectionReadiness::Unhydrated,

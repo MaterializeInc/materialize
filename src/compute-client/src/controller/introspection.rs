@@ -96,10 +96,6 @@ type DifferentialSender = mpsc::UnboundedSender<(StorageWriteOp, Notifier)>;
 /// updates to persist.
 #[derive(Debug)]
 struct IntrospectionSink {
-    /// Sender for [`IntrospectionType::Frontiers`] updates.
-    frontiers_tx: DifferentialSender,
-    /// Sender for [`IntrospectionType::ReplicaFrontiers`] updates.
-    replica_frontiers_tx: DifferentialSender,
     /// Sender for [`IntrospectionType::ComputeDependencies`] updates.
     compute_dependencies_tx: DifferentialSender,
     /// Sender for [`IntrospectionType::ComputeMaterializedViewRefreshes`] updates.
@@ -115,9 +111,6 @@ impl IntrospectionSink {
     pub fn new(storage_controller: &dyn StorageController) -> Self {
         use IntrospectionType::*;
         Self {
-            frontiers_tx: storage_controller.differential_introspection_tx(Frontiers),
-            replica_frontiers_tx: storage_controller
-                .differential_introspection_tx(ReplicaFrontiers),
             compute_dependencies_tx: storage_controller
                 .differential_introspection_tx(ComputeDependencies),
             compute_materialized_view_refreshes_tx: storage_controller
@@ -144,8 +137,6 @@ impl IntrospectionSink {
 
         use IntrospectionType::*;
         match type_ {
-            Frontiers => send_differential(&self.frontiers_tx, updates),
-            ReplicaFrontiers => send_differential(&self.replica_frontiers_tx, updates),
             ComputeDependencies => send_differential(&self.compute_dependencies_tx, updates),
             ComputeMaterializedViewRefreshes => {
                 send_differential(&self.compute_materialized_view_refreshes_tx, updates);
