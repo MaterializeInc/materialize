@@ -17,7 +17,7 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
-use futures_util::future::{try_join, try_join_all};
+use futures_util::future::{try_join_all, try_join3};
 use google_cloud_gax::error::rpc::Code;
 use google_cloud_gax::options::RequestOptionsBuilder;
 use google_cloud_gax::paginator::ItemPaginator;
@@ -251,7 +251,29 @@ impl GcsBlob {
         };
         let size = u64::try_from(first.object().size).context("GCS sent negative size value")?;
         let generation = first.object().generation;
-        let crc32c = first.object().checksums.as_ref().and_then(|c| c.crc32c);
+        // The SDK skips checksum validation for range reads, so check the
+        // whole object's CRC32C ourselves. GCS sends it only when the range
+        // covers the whole object, so larger objects fetch it from the
+        // object's metadata, concurrently with the remaining chunks.
+        let first_crc32c = first.object().checksums.as_ref().and_then(|c| c.crc32c);
+        let expected_crc32c = async {
+            let crc32c = match first_crc32c {
+                Some(crc32c) => Some(crc32c),
+                None => self
+                    .storage_control_client
+                    .get_object()
+                    .set_bucket(&bucket)
+                    .set_object(&path)
+                    .set_generation(generation)
+                    .with_attempt_timeout(self.knobs.operation_attempt_timeout())
+                    .send()
+                    .await
+                    .map_err(|e| self.error("GetObject", e))?
+                    .checksums
+                    .and_then(|c| c.crc32c),
+            };
+            crc32c.ok_or_else(|| ExternalError::from(anyhow!("GCS object {path} has no crc32c")))
+        };
 
         let rest = (GET_CHUNK_SIZE..size)
             .step_by(usize::cast_from(GET_CHUNK_SIZE))
@@ -267,9 +289,10 @@ impl GcsBlob {
                     self.read_body(stream, count).await
                 }
             });
-        let (first, rest) = try_join(
+        let (first, rest, expected_crc32c) = try_join3(
             self.read_body(first, GET_CHUNK_SIZE.min(size)),
             try_join_all(rest),
+            expected_crc32c,
         )
         .await?;
 
@@ -284,15 +307,11 @@ impl GcsBlob {
         if fetched != size {
             return Err(anyhow!("GCS ReadObject {path} returned {fetched} of {size} bytes").into());
         }
-        // The SDK skips checksum validation for range reads, so check the
-        // whole object's CRC32C from the first response's metadata.
-        if let Some(expected_crc32c) = crc32c {
-            if actual_crc32c != expected_crc32c {
-                return Err(anyhow!(
-                    "GCS ReadObject {path} checksum mismatch: expected crc32c {expected_crc32c:#010x}, got {actual_crc32c:#010x}"
-                )
-                .into());
-            }
+        if actual_crc32c != expected_crc32c {
+            return Err(anyhow!(
+                "GCS ReadObject {path} checksum mismatch: expected crc32c {expected_crc32c:#010x}, got {actual_crc32c:#010x}"
+            )
+            .into());
         }
         Ok(Some(SegmentedBytes::from(segments)))
     }
