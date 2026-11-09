@@ -1,6 +1,6 @@
 ---
 title: "Use dbt to manage Materialize"
-description: "How to use dbt and Materialize to transform streaming data in real time."
+description: "Overview of using dbt with Materialize through the dbt-materialize adapter, with guides for getting started, development, and deployment."
 disable_list: true
 aliases:
   - /guides/dbt/

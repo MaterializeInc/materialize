@@ -1,6 +1,6 @@
 ---
 title: "Access control (Role-based)"
-description: "How to configure and manage role-based database access control (RBAC) in Materialize."
+description: "How to configure and manage role-based database access control (RBAC) in Materialize Cloud."
 disable_list: true
 aliases:
   - /manage/access-control/rbac/
