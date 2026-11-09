@@ -233,6 +233,38 @@ fn created_state_charges_at_most_since_start() {
     }
 }
 
+#[mz_ore::test]
+fn resume_charges_nothing_for_unobserved_time() {
+    let cfg = config();
+    let mut state = FreshnessState::new(TimeDependence::default(), ts(0), &frontier(1), None);
+    assert_eq!(state.reported_lag(ts(1_000)), Duration::from_secs(1));
+    // Nobody observed the frontier from 1 s to 50 s, when recording turns on.
+    assert_eq!(
+        state.resume(ts(50_000), &frontier(49_001), Some(&cfg)),
+        vec![]
+    );
+    assert_eq!(state.reported_lag(ts(50_000)), Duration::from_secs(1));
+    let rows = state.finish(ts(52_000), Some(&cfg));
+    let expected = BTreeMap::from([((50_000, 52_000), BTreeMap::from([(bucket(3_000), 2_000)]))]);
+    assert_eq!(periods(&rows), expected);
+}
+
+#[mz_ore::test]
+fn resume_with_empty_frontier_completes() {
+    let cfg = config();
+    let mut state = FreshnessState::new(TimeDependence::default(), ts(0), &frontier(1), None);
+    assert_eq!(
+        state.resume(ts(50_000), &Antichain::new(), Some(&cfg)),
+        vec![]
+    );
+    assert_eq!(state.reported_lag(ts(60_000)), Duration::ZERO);
+    assert_eq!(
+        state.observe(ts(61_000), &frontier(61_001), Some(&cfg)),
+        vec![]
+    );
+    assert_eq!(state.finish(ts(62_000), Some(&cfg)), vec![]);
+}
+
 fn period_row(start: u64, bucket: i32, count_ms: u64) -> PeriodRow {
     PeriodRow {
         period_start: ts(start),
