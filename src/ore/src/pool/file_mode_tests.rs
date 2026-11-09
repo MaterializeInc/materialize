@@ -22,7 +22,7 @@ use itertools::Itertools;
 
 use super::*;
 use crate::pool::extent::testing::TEST_CODEC;
-use crate::pool::testing::{DEMOTION_HOOK, ENFORCE_BUDGET_HOOK, demotion_probes};
+use crate::pool::testing::{DEMOTION_HOOK, ENFORCE_BUDGET_HOOK, demotion_probes, extent_visits};
 
 /// Words that fill a 64 KiB class exactly.
 const SMALL: usize = (64 << 10) / 8;
@@ -592,10 +592,11 @@ fn unplaceable_head_does_not_block_smaller_class() {
         "the pass demoted something"
     );
 
-    // No class can allocate now, so the next pass stops at once.
+    // The large extent stays parked while its class cannot fit, so the next
+    // pass probes nothing and still reports the store full.
     let probes = demotion_probes();
     pool.enforce_compressed();
-    assert_eq!(demotion_probes() - probes, 1);
+    assert_eq!(demotion_probes(), probes);
     assert_eq!(pool.stats().extent_file_full, 2);
     assert!(pool.0.full_hint.load(Ordering::Relaxed));
     assert_eq!(read(&large_handle), large);
@@ -1416,5 +1417,80 @@ fn typed_take_during_demotion_keeps_the_body() {
     assert!(handle.file_slot().is_some(), "the demotion committed");
     let body = handle.take_typed().expect("backed typed body");
     assert_eq!(taken(body), orig);
+    assert_drained(&pool);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn unplaceable_extents_are_not_revisited_by_later_passes() {
+    let small = flat(SMALL, 60);
+    let small_slot = stored_class_size(&small, &TEST_CODEC);
+    assert!(stored_class_size(&payload(SMALL, 61), &IDENTITY_CODEC) > small_slot);
+    let (_dir, pool) = file_pool(256 << 20, u64::cast_from(small_slot));
+
+    // Extents of a class the store can never place, behind which small
+    // extents keep arriving.
+    const LARGE: u64 = 200;
+    let large: Vec<_> = (0..LARGE)
+        .map(|seed| {
+            let handle = insert_with_codec(&pool, &payload(SMALL, 100 + seed), &IDENTITY_CODEC);
+            pool.evict(&handle);
+            handle
+        })
+        .collect();
+
+    const CYCLES: u64 = 50;
+    let visits = extent_visits();
+    for _ in 0..CYCLES {
+        let handle = insert(&pool, &small);
+        pool.evict(&handle);
+        pool.enforce_compressed();
+        assert!(handle.file_slot().is_some(), "the small extent demotes");
+        drop(handle);
+    }
+    let visits = extent_visits() - visits;
+    // Each large entry is visited once, when its pass parks it, instead of
+    // once per cycle.
+    assert!(
+        visits <= LARGE + 2 * CYCLES,
+        "{visits} visits for {CYCLES} placeable extents behind {LARGE} unplaceable ones"
+    );
+    assert_eq!(
+        pool.extent_queue_len(),
+        large.len(),
+        "the large entries stay"
+    );
+    for (seed, handle) in (0..LARGE).zip_eq(&large) {
+        assert_eq!(read(handle), payload(SMALL, 100 + seed));
+    }
+    drop(large);
+    assert_drained(&pool);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn parked_extents_return_once_their_class_fits() {
+    let small = flat(SMALL, 62);
+    let large = payload(SMALL, 63);
+    let small_slot = stored_class_size(&small, &TEST_CODEC);
+    let large_slot = stored_class_size(&large, &IDENTITY_CODEC);
+    assert!(large_slot >= 2 * small_slot, "the small class still fits");
+    let (_dir, pool) = file_pool(256 << 20, u64::cast_from(large_slot));
+
+    let filler = insert(&pool, &small);
+    pool.evict(&filler);
+    assert!(filler.file_slot().is_some());
+    let parked = insert_with_codec(&pool, &large, &IDENTITY_CODEC);
+    pool.evict(&parked);
+    assert!(parked.file_slot().is_none(), "the large class does not fit");
+    assert_ne!(pool.0.parked_classes.load(Ordering::Relaxed), 0, "parked");
+
+    // Freeing the filler leaves a warm slot whose punch makes room.
+    drop(filler);
+    pool.enforce_compressed();
+    assert!(parked.file_slot().is_some(), "the parked extent demoted");
+    assert_eq!(pool.0.parked_classes.load(Ordering::Relaxed), 0);
+    assert_eq!(read(&parked), large);
+    drop(parked);
     assert_drained(&pool);
 }

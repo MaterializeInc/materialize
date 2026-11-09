@@ -516,6 +516,13 @@ struct PoolInner {
     /// next free, commit, or enqueue of a placeable extent, or the next spill
     /// thread retry.
     full_hint: AtomicBool,
+    /// File mode: entries whose extent class the store refused, set aside so
+    /// that passes stop revisiting them. A pass returns a class's entries to
+    /// the front of `extent_queue` once the store can place that class.
+    parked_extents: Mutex<ParkedExtents>,
+    /// `class_bit` of every class with parked entries, so a pass skips the
+    /// parked lock when nothing is parked.
+    parked_classes: AtomicU64,
     /// File mode: the schedule on which spill threads release warm file
     /// store slots. See [`Pool::set_file_release`].
     file_release: Mutex<FileRelease>,
@@ -652,7 +659,7 @@ enum Demotion {
     /// The entry was stale, or the chunk died mid-write.
     Skipped,
     /// The store cannot place the extent's class, carried in the variant, but
-    /// can place another class. The entry went to the back of the queue.
+    /// can place another class. The entry was parked.
     Refused(usize),
     /// The store can place no class or has writes disabled. The entry went to
     /// the front of the queue, and the pass must end.
@@ -660,6 +667,16 @@ enum Demotion {
     /// The write failed, which disabled the store's writes. The entry went to
     /// the front of the queue, and the pass must end.
     WriteFailed,
+}
+
+/// `extent_queue` entries set aside per extent class. See
+/// `PoolInner::parked_extents`.
+#[derive(Debug, Default)]
+struct ParkedExtents {
+    /// Indexed by file store class, each oldest first.
+    classes: Vec<VecDeque<ExtentEntry>>,
+    /// Entries across all classes.
+    len: usize,
 }
 
 /// An `extent_queue` entry.
@@ -841,6 +858,8 @@ impl Pool {
             extent_arena,
             store,
             full_hint: AtomicBool::new(false),
+            parked_extents: Mutex::new(ParkedExtents::default()),
+            parked_classes: AtomicU64::new(0),
             file_release: Mutex::new(FileRelease {
                 interval: std::time::Duration::ZERO,
                 bytes_per_class: 0,
@@ -1262,6 +1281,11 @@ impl PoolInner {
     /// Locks the resident-extent queue.
     fn extent_queue(&self) -> MutexGuard<'_, VecDeque<ExtentEntry>> {
         self.extent_queue.lock().expect("extent queue poisoned")
+    }
+
+    /// Locks the parked resident-extent entries.
+    fn parked_extents(&self) -> MutexGuard<'_, ParkedExtents> {
+        self.parked_extents.lock().expect("parked extents poisoned")
     }
 
     /// Locks the spill hand-off queue.
@@ -2260,9 +2284,71 @@ impl PoolInner {
     /// pin on the dead chunk's allocation) per freed extent forever.
     fn prune_extent_queue(&self) {
         let live = usize::cast_from(self.extent_residents.load(Ordering::Relaxed));
+        // Parked entries count as queued. Their count is read before the
+        // queue lock, so the two locks are never held together.
+        let parked = self.parked_classes.load(Ordering::Relaxed) != 0;
+        let parked_len = if parked { self.parked_extents().len } else { 0 };
         let mut queue = self.extent_queue();
-        if queue.len() > 2 * live + 16 {
-            queue.retain(|entry| entry.chunk.strong_count() > 0);
+        if queue.len() + parked_len <= 2 * live + 16 {
+            return;
+        }
+        queue.retain(|entry| entry.chunk.strong_count() > 0);
+        drop(queue);
+        if parked {
+            let mut parked = self.parked_extents();
+            let mut len = 0;
+            for (class, entries) in parked.classes.iter_mut().enumerate() {
+                entries.retain(|entry| entry.chunk.strong_count() > 0);
+                if entries.is_empty() {
+                    self.parked_classes
+                        .fetch_and(!class_bit(class), Ordering::Relaxed);
+                }
+                len += entries.len();
+            }
+            parked.len = len;
+        }
+    }
+
+    /// Sets aside `entry`, whose extent class `class` the store refused,
+    /// until a pass finds the class placeable. A class beyond the bit mask
+    /// is requeued at the back instead.
+    fn park_extent(&self, class: usize, entry: ExtentEntry) {
+        let bit = class_bit(class);
+        if bit == 0 {
+            self.extent_queue().push_back(entry);
+            return;
+        }
+        let mut parked = self.parked_extents();
+        if parked.classes.len() <= class {
+            parked.classes.resize_with(class + 1, VecDeque::new);
+        }
+        parked.classes[class].push_back(entry);
+        parked.len += 1;
+        self.parked_classes.fetch_or(bit, Ordering::Relaxed);
+    }
+
+    /// Returns the parked entries of every class `store` can place now to
+    /// the front of the extent queue, where they keep their age order ahead
+    /// of the younger entries queued since.
+    fn unpark_placeable(&self, store: &FileStore) {
+        if self.parked_classes.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let mut returned = Vec::new();
+        {
+            let mut parked = self.parked_extents();
+            for (class, entries) in parked.classes.iter_mut().enumerate() {
+                if !entries.is_empty() && store.can_alloc(class) {
+                    returned.extend(entries.drain(..));
+                    self.parked_classes
+                        .fetch_and(!class_bit(class), Ordering::Relaxed);
+                }
+            }
+            parked.len -= returned.len();
+        }
+        let mut queue = self.extent_queue();
+        for entry in returned.into_iter().rev() {
+            queue.push_front(entry);
         }
     }
 
@@ -2359,11 +2445,14 @@ impl PoolInner {
         if !above(self) {
             return;
         }
+        if let ExtentStore::File(store) = &self.store {
+            self.unpark_placeable(store);
+        }
         // File mode: whether this pass demoted an extent, whether the store
         // refused one, and whether a refusal ended the pass.
         let (mut demoted, mut refused, mut stopped) = (false, false, false);
         // File mode: the classes the store refused during this pass. Their
-        // entries go to the back without a lock or a store probe, so a pass
+        // entries are parked without a lock or a store probe, so a pass
         // probes the store at most once per class.
         let mut refused_classes = 0u64;
         let mut remaining = self.extent_queue().len();
@@ -2382,14 +2471,17 @@ impl PoolInner {
             let Some(entry) = popped else {
                 break;
             };
+            #[cfg(test)]
+            testing::EXTENT_VISITS.with(|visits| visits.set(visits.get() + 1));
             let Some(meta) = entry.chunk.upgrade() else {
                 continue;
             };
             if let ExtentStore::File(store) = &self.store {
-                let class = store.class_for(entry.alloc_size).map_or(0, class_bit);
-                if refused_classes & class != 0 {
-                    self.extent_queue().push_back(entry);
-                    continue;
+                if let Some(class) = store.class_for(entry.alloc_size) {
+                    if refused_classes & class_bit(class) != 0 {
+                        self.park_extent(class, entry);
+                        continue;
+                    }
                 }
             }
             // `try_lock`: a chunk mid-read or mid-compression holds its lock
@@ -2464,6 +2556,11 @@ impl PoolInner {
                 // resident event re-enqueues.
                 _ => {}
             }
+        }
+        // Parked extents the store still cannot place keep the tier above
+        // its cap like a refusal in this pass.
+        if !refused && self.parked_classes.load(Ordering::Relaxed) != 0 && above(self) {
+            refused = true;
         }
         if refused {
             self.counters
@@ -2608,18 +2705,20 @@ impl PoolInner {
         }
     }
 
-    /// Requeues the entry of an extent whose `class` the store could not
-    /// take.
+    /// Parks or requeues the entry of an extent whose `class` the store
+    /// could not take.
     fn refuse(&self, store: &FileStore, class: usize, entry: ExtentEntry) -> Demotion {
         // `can_alloc` is per class: a full store may still place smaller
         // classes in its free capacity, or any class in a warm slot of that
-        // class. While some class can allocate, the entry goes to the back so
-        // the entries behind it get their turn. Otherwise no entry can
-        // succeed and the pass ends, with the entry back at the front: every
-        // pass then stops at this entry while the store stays full, where
-        // pushing it to the back would rotate the queue once per pass.
+        // class. While some class can allocate, the entry is parked so the
+        // entries behind it get their turn, and later passes skip it until
+        // its class fits. Requeued at the back instead, it would cost every
+        // later pass a visit, which makes each pass linear in the number of
+        // unplaceable extents. Otherwise no entry can succeed and the pass
+        // ends, with the entry back at the front: every pass then stops at
+        // this entry while the store stays full.
         if store.can_alloc_any() {
-            self.extent_queue().push_back(entry);
+            self.park_extent(class, entry);
             return Demotion::Refused(class);
         }
         self.extent_queue().push_front(entry);

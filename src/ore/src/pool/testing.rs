@@ -63,6 +63,16 @@ pub(super) fn demotion_probes() -> u64 {
     DEMOTION_PROBES.with(std::cell::Cell::get)
 }
 
+// Counts the extent-queue entries enforcement passes pop on this thread, so
+// tests can bound a pass's work independently of what it demotes.
+thread_local! {
+    pub(super) static EXTENT_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub(super) fn extent_visits() -> u64 {
+    EXTENT_VISITS.with(std::cell::Cell::get)
+}
+
 impl Pool {
     /// As [`Pool::new`], with a caller-chosen virtual reservation per size
     /// class. Small reservations let tests exercise slot exhaustion.
@@ -163,9 +173,9 @@ impl Pool {
     }
 
     /// Test-only: the number of resident-extent queue entries, live and
-    /// stale.
+    /// stale, parked ones included.
     pub(super) fn extent_queue_len(&self) -> usize {
-        self.0.extent_queue().len()
+        self.0.extent_queue().len() + self.0.parked_extents().len
     }
 
     /// Test hook: explicitly evicts one chunk. No-op if the chunk is already
