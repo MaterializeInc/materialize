@@ -166,8 +166,11 @@ message below its frontier has landed. Before you trust a frontier, you must
 confirm that the loader has consumed the data topic up to it.
 
 This requires a loader that reports the offset it has committed for each
-partition, such as the Snowpipe Streaming offset tokens of the Snowflake
-connector. Create a table to hold the frontiers you have confirmed:
+partition. With Snowpipe Streaming, the Snowflake connector loads each
+partition through its own channel, and each channel's offset token records the
+last Kafka offset that channel has committed to Snowflake. The checks below
+compare those offset tokens to the data topic. Create a table to hold the
+frontiers you have confirmed:
 
 ```sql
 CREATE TABLE trusted_frontier (
@@ -187,11 +190,9 @@ sink's row. For each sink, the routine should:
 - Find the last committed data message below the LSO. Transaction markers
   occupy offsets, so this is not simply `LSO - 1`, and aborted ranges must be
   skipped.
-- Confirm that each partition's committed offset has reached that message, or
-  that the partition is empty.
-- Only then write the candidate frontier to `trusted_frontier`. A frontier
-  never moves backward, so skip the write if the stored frontier is already
-  higher.
+- Confirm that each partition's channel offset token has reached that message,
+  or that the partition is empty.
+- Only then write the candidate frontier to `trusted_frontier`.
 
 ## Step 4. Create a view of committed changes in Snowflake
 
