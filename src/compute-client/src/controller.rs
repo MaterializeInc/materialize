@@ -257,6 +257,9 @@ pub struct ComputeController {
     now: NowFn,
     /// A function that computes the lag between the given time and wallclock time.
     wallclock_lag: WallclockLagFn<Timestamp>,
+    /// The wall-clock time this controller started at, where the staleness recordings of
+    /// collections installed during bootstrap start.
+    boot: Timestamp,
     /// Dynamic system configuration.
     ///
     /// Updated through `ComputeController::update_configuration` calls and shared with all
@@ -360,6 +363,7 @@ impl ComputeController {
             peek_stash_persist_location,
             stashed_response: None,
             metrics,
+            boot: Timestamp::from(now()),
             now,
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
@@ -545,6 +549,7 @@ impl ComputeController {
             metrics: _,
             now: _,
             wallclock_lag: _,
+            boot,
             dyncfg: _,
             replica_dyncfg_overrides: _,
             response_rx: _,
@@ -573,6 +578,7 @@ impl ComputeController {
             "instance_workload_classes": instance_workload_classes,
             "initialized": initialized,
             "read_only": read_only,
+            "boot": boot.to_string(),
             "stashed_response": format!("{stashed_response:?}"),
             "maintenance_scheduled": maintenance_scheduled,
         }))
@@ -608,6 +614,7 @@ impl ComputeController {
             logs,
             self.metrics.for_instance(id),
             self.now.clone(),
+            self.boot,
             self.wallclock_lag.clone(),
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),
@@ -1005,6 +1012,7 @@ impl ComputeController {
                 import_read_holds,
                 shared_collection_state,
                 target_replica,
+                freshness_dependence,
             )
             .expect("validated")
         });
