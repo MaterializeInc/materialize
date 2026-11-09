@@ -164,6 +164,48 @@ pub(super) fn validate_grant_references(
     }
 }
 
+/// Validates that each `GRANT ... USING INDEX` names an index created in the
+/// same file.
+///
+/// Must run before grant references are normalized, which rewrites the index
+/// name to the target's sibling and would discard a mismatched qualifier.
+pub(super) fn validate_grant_using_index(
+    fqn: &FullyQualifiedName,
+    grants: &[GrantPrivilegesStatement<Raw>],
+    offsets: &[usize],
+    indexes: &[CreateIndexStatement<Raw>],
+    errors: &mut Vec<ValidationError>,
+) {
+    for (i, grant) in grants.iter().enumerate() {
+        let Some(index) = &grant.using_index else {
+            continue;
+        };
+        let parts: Vec<&str> = index.name().0.iter().map(|p| p.as_str()).collect();
+        let qualifier_matches = match parts.as_slice() {
+            [_] => true,
+            [schema, _] => *schema == fqn.schema(),
+            [database, schema, _] => *database == fqn.database() && *schema == fqn.schema(),
+            _ => false,
+        };
+        let defined_here = parts.last().is_some_and(|name| {
+            indexes
+                .iter()
+                .any(|idx| idx.name.as_ref().is_some_and(|n| n.as_str() == *name))
+        });
+        if !(qualifier_matches && defined_here) {
+            errors.push(ValidationError::with_file_sql_and_offset(
+                ValidationErrorKind::GrantUsingIndexNotDefined {
+                    index: index.name().to_string(),
+                    object: fqn.object().to_string(),
+                },
+                fqn.path.clone(),
+                format!("{};", grant),
+                offsets[i],
+            ));
+        }
+    }
+}
+
 /// Validates that the GRANT statement uses the correct object type for the target object.
 ///
 /// Materialize has specific rules about which object types can be used in GRANT statements:

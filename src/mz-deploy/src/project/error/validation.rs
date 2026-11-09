@@ -156,6 +156,8 @@ pub enum ValidationErrorKind {
         referenced: String,
         expected: String,
     },
+    /// A `GRANT ... USING INDEX` names an index not defined in the same file
+    GrantUsingIndexNotDefined { index: String, object: String },
     /// A comment references a different object
     CommentReferenceMismatch {
         referenced: String,
@@ -391,6 +393,12 @@ impl ValidationErrorKind {
                 format!(
                     "GRANT references wrong object: '{}' instead of '{}'",
                     referenced, expected
+                )
+            }
+            Self::GrantUsingIndexNotDefined { index, object } => {
+                format!(
+                    "GRANT ... USING INDEX references '{}', which is not an index defined on '{}'",
+                    index, object
                 )
             }
             Self::CommentReferenceMismatch {
@@ -797,6 +805,9 @@ impl ValidationErrorKind {
             }
             Self::GrantReferenceMismatch { .. } => {
                 Some("grants must be defined in the same file as the object they apply to".to_string())
+            }
+            Self::GrantUsingIndexNotDefined { .. } => {
+                Some("USING INDEX must name an index created in the same file, on the object the grant is for".to_string())
             }
             Self::CommentReferenceMismatch { .. } => {
                 Some("comments must be defined in the same file as the object they describe".to_string())

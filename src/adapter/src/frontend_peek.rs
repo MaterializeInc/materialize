@@ -1237,6 +1237,16 @@ impl PeekClient {
             in_immediate_multi_stmt_txn,
         );
 
+        if let Some((source_imports, index_imports)) = optimization_result.dataflow_imports() {
+            rbac::check_index_routed_reads(
+                &catalog.for_session(session),
+                session,
+                &source_ids,
+                &source_imports,
+                &index_imports,
+            )?;
+        }
+
         // Handle the optimization result: either generate EXPLAIN output or continue with execution
         match optimization_result {
             Execution::ExplainPlan {
@@ -1661,76 +1671,49 @@ impl PeekClient {
         target_cluster_id: ClusterId,
         in_immediate_multi_stmt_txn: bool,
     ) {
-        // Extract source_imports, index_imports, as_of, and execution_name based on Execution variant
-        let (source_imports, index_imports, as_of, execution_name): (
-            Vec<GlobalId>,
-            Vec<GlobalId>,
-            Timestamp,
-            &str,
-        ) = match execution {
+        let Some((source_imports, index_imports)) = execution.dataflow_imports() else {
+            // No read holds assertions needed for EXPLAIN variants
+            return;
+        };
+        let (as_of, execution_name): (Timestamp, &str) = match execution {
             Execution::Peek {
                 global_lir_plan, ..
             } => match global_lir_plan.peek_plan() {
-                PeekPlan::FastPath(fast_path_plan) => {
-                    let (sources, indexes) = match fast_path_plan {
-                        FastPathPlan::Constant(..) => (vec![], vec![]),
-                        FastPathPlan::PeekExisting(_coll_id, idx_id, ..) => (vec![], vec![*idx_id]),
-                        FastPathPlan::PeekPersist(global_id, ..) => (vec![*global_id], vec![]),
-                    };
-                    (
-                        sources,
-                        indexes,
-                        determination.timestamp_context.timestamp_or_default(),
-                        "FastPath",
-                    )
-                }
-                PeekPlan::SlowPath(dataflow_plan) => {
-                    let as_of = dataflow_plan
+                PeekPlan::FastPath(_) => (
+                    determination.timestamp_context.timestamp_or_default(),
+                    "FastPath",
+                ),
+                PeekPlan::SlowPath(dataflow_plan) => (
+                    dataflow_plan
                         .desc
                         .as_of
                         .clone()
                         .expect("dataflow has an as_of")
-                        .into_element();
-                    (
-                        dataflow_plan.desc.source_imports.keys().cloned().collect(),
-                        dataflow_plan.desc.index_imports.keys().cloned().collect(),
-                        as_of,
-                        "SlowPath",
-                    )
-                }
+                        .into_element(),
+                    "SlowPath",
+                ),
             },
             Execution::CopyToS3 {
                 global_lir_plan, ..
-            } => {
-                let df_desc = global_lir_plan.df_desc();
-                let as_of = df_desc
+            } => (
+                global_lir_plan
+                    .df_desc()
                     .as_of
                     .clone()
                     .expect("dataflow has an as_of")
-                    .into_element();
-                (
-                    df_desc.source_imports.keys().cloned().collect(),
-                    df_desc.index_imports.keys().cloned().collect(),
-                    as_of,
-                    "CopyToS3",
-                )
-            }
+                    .into_element(),
+                "CopyToS3",
+            ),
+            Execution::Subscribe { df_desc, .. } => (
+                df_desc
+                    .as_of
+                    .clone()
+                    .expect("dataflow has an as_of")
+                    .into_element(),
+                "Subscribe",
+            ),
             Execution::ExplainPlan { .. } | Execution::ExplainPushdown { .. } => {
-                // No read holds assertions needed for EXPLAIN variants
-                return;
-            }
-            Execution::Subscribe { df_desc, .. } => {
-                let as_of = df_desc
-                    .as_of
-                    .clone()
-                    .expect("dataflow has an as_of")
-                    .into_element();
-                (
-                    df_desc.source_imports.keys().cloned().collect(),
-                    df_desc.index_imports.keys().cloned().collect(),
-                    as_of,
-                    "Subscribe",
-                )
+                unreachable!("dataflow_imports is None for EXPLAIN")
             }
         };
 
@@ -1789,6 +1772,41 @@ impl PeekClient {
                 determination,
                 in_immediate_multi_stmt_txn,
             );
+        }
+    }
+}
+
+impl Execution {
+    /// The storage collections and indexes that the optimized plan reads, as
+    /// `(source imports, index imports)`. `None` for EXPLAIN, which reads no
+    /// data.
+    fn dataflow_imports(&self) -> Option<(BTreeSet<GlobalId>, BTreeSet<GlobalId>)> {
+        let df_imports = |df_desc: &mz_compute_types::dataflows::LirDataflowDescription| {
+            (
+                df_desc.source_imports.keys().cloned().collect(),
+                df_desc.index_imports.keys().cloned().collect(),
+            )
+        };
+        match self {
+            Execution::Peek {
+                global_lir_plan, ..
+            } => Some(match global_lir_plan.peek_plan() {
+                PeekPlan::FastPath(FastPathPlan::Constant(..)) => {
+                    (BTreeSet::new(), BTreeSet::new())
+                }
+                PeekPlan::FastPath(FastPathPlan::PeekExisting(_coll_id, idx_id, ..)) => {
+                    (BTreeSet::new(), BTreeSet::from([*idx_id]))
+                }
+                PeekPlan::FastPath(FastPathPlan::PeekPersist(global_id, ..)) => {
+                    (BTreeSet::from([*global_id]), BTreeSet::new())
+                }
+                PeekPlan::SlowPath(dataflow_plan) => df_imports(&dataflow_plan.desc),
+            }),
+            Execution::CopyToS3 {
+                global_lir_plan, ..
+            } => Some(df_imports(global_lir_plan.df_desc())),
+            Execution::Subscribe { df_desc, .. } => Some(df_imports(df_desc)),
+            Execution::ExplainPlan { .. } | Execution::ExplainPushdown { .. } => None,
         }
     }
 }

@@ -51,7 +51,8 @@ use clusters::{
 };
 use identifiers::{validate_fqn_identifiers, validate_ident};
 use references::{
-    validate_comment_references, validate_grant_references, validate_index_references,
+    validate_comment_references, validate_grant_references, validate_grant_using_index,
+    validate_index_references,
 };
 use schema_constraints::validate_no_storage_and_computation_in_schema;
 
@@ -375,6 +376,8 @@ fn validate_single_variant(
 
     // Normalize statement name and dependencies
     let stmt = stmt.normalize_stmt(&fqn);
+
+    validate_grant_using_index(&fqn, &grants, &grant_offsets, &indexes, &mut errors);
 
     // Normalize index, grant, and comment references to be fully qualified
     let visitor = NormalizingVisitor::fully_qualifying(&fqn);

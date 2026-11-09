@@ -1082,6 +1082,19 @@ in the system.
 | `address`        | [`text`]   | The address the rule will take action on.                                                              |
 | `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction. |
 
+## `mz_index_scoped_privileges`
+
+The `mz_index_scoped_privileges` table contains a row for each grant of
+`SELECT` on a relation that is restricted to reads through one of its indexes.
+
+<!-- RELATION_SPEC mz_internal.mz_index_scoped_privileges -->
+| Field      | Type     | Meaning                                                                                                                 |
+|------------|----------|-------------------------------------------------------------------------------------------------------------------------|
+| `index_id` | [`text`] | The ID of the index that reads are restricted to. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes). |
+| `on_id`    | [`text`] | The ID of the relation the role may read. Corresponds to [`mz_catalog.mz_relations.id`](../mz_catalog#mz_relations).     |
+| `grantor`  | [`text`] | The role that granted the privilege. Corresponds to [`mz_catalog.mz_roles.id`](../mz_catalog#mz_roles).                  |
+| `grantee`  | [`text`] | The role that the privilege was granted to. Corresponds to [`mz_catalog.mz_roles.id`](../mz_catalog#mz_roles), or `p` for `PUBLIC`. |
+
 ## `mz_show_network_policies`
 
 The `mz_show_show_network_policies` view contains a row for each network policy in the system.
@@ -1143,6 +1156,23 @@ in the system in user databases and schemas to user roles.
 | `object_type`    | [`text`] | Privileges described in this row will be granted only on objects of type `object_type`.             |
 | `grantee`        | [`text`] | Privileges described in this row will be granted to `grantee`.                                      |
 | `privilege_type` | [`text`] | They type of privilege to be granted.                                                               |
+
+## `mz_show_index_scoped_privileges`
+
+The `mz_show_index_scoped_privileges` view contains a row for each grant of
+`SELECT` on a user relation that is restricted to reads through one of its
+indexes, granted to a user role.
+
+<!-- RELATION_SPEC mz_internal.mz_show_index_scoped_privileges -->
+| Field      | Type     | Meaning                                             |
+|------------|----------|-----------------------------------------------------|
+| `grantor`  | [`text`] | The role that granted the privilege.                |
+| `grantee`  | [`text`] | The role that the privilege was granted to.         |
+| `database` | [`text`] | The name of the database containing the relation.   |
+| `schema`   | [`text`] | The name of the schema containing the relation.     |
+| `name`     | [`text`] | The name of the relation the role may read.         |
+| `index`    | [`text`] | The name of the index that reads are restricted to. |
+| `cluster`  | [`text`] | The name of the cluster that maintains the index.   |
 
 ## `mz_show_object_privileges`
 
