@@ -47,7 +47,7 @@ use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 use uuid::Uuid;
 
-use crate::command_channel::{self, Connection, StorageLaneInput, UnifiedCommand};
+use crate::command_channel::{self, CommandNumber, Connection, StorageLaneInput, UnifiedCommand};
 use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
@@ -387,8 +387,8 @@ struct CommandReceiver {
     worker_id: usize,
     /// The connection of the current cluster protocol incarnation.
     connection: Option<Connection>,
-    /// A stash to enable peeking the next command, used in `try_recv`.
-    stashed_command: Option<ComputeCommand>,
+    /// A stash to enable peeking the next command, with its number, used in `try_recv`.
+    stashed_command: Option<(ComputeCommand, Option<CommandNumber>)>,
 }
 
 impl CommandReceiver {
@@ -411,15 +411,15 @@ impl CommandReceiver {
     /// If the next compute command has a different nonce, this method instead returns an `Err`
     /// containing the new nonce.
     fn try_recv(&mut self) -> Result<Option<WorkerCommand>, NonceChange> {
-        if let Some(command) = self.stashed_command.take() {
-            return Ok(Some(WorkerCommand::Compute(command)));
+        if let Some((command, number)) = self.stashed_command.take() {
+            return Ok(Some(WorkerCommand::Compute(command, number)));
         }
         let Some(message) = self.inner.try_recv() else {
             return Ok(None);
         };
 
-        let (command, connection) = match message {
-            UnifiedCommand::Compute(command, connection) => (command, connection),
+        let (command, connection, number) = match message {
+            UnifiedCommand::Compute(command, connection, number) => (command, connection, number),
             UnifiedCommand::Storage(command) => {
                 trace!(
                     worker = self.worker_id,
@@ -437,10 +437,10 @@ impl CommandReceiver {
             .connection
             .is_some_and(|current| current.nonce == nonce)
         {
-            Ok(Some(WorkerCommand::Compute(command)))
+            Ok(Some(WorkerCommand::Compute(command, number)))
         } else {
             self.connection = Some(connection);
-            self.stashed_command = Some(command);
+            self.stashed_command = Some((command, number));
             Err(NonceChange(nonce))
         }
     }
@@ -448,8 +448,8 @@ impl CommandReceiver {
 
 /// A command dispatched to the worker from the command channel.
 enum WorkerCommand {
-    /// A compute command.
-    Compute(ComputeCommand),
+    /// A compute command, with its number from the command channel.
+    Compute(ComputeCommand, Option<CommandNumber>),
     /// A storage-internal command, to be dispatched to the storage guest.
     Storage(InternalStorageCommand),
 }
@@ -859,7 +859,7 @@ impl<'w> Worker<'w> {
     fn handle_pending_commands(&mut self) -> Result<(), NonceChange> {
         while let Some(cmd) = self.command_rx.try_recv()? {
             match cmd {
-                WorkerCommand::Compute(cmd) => self.handle_command(cmd),
+                WorkerCommand::Compute(cmd, _number) => self.handle_command(cmd),
                 WorkerCommand::Storage(cmd) => self.handle_storage_internal_command(cmd),
             }
         }
@@ -1069,15 +1069,15 @@ impl<'w> Worker<'w> {
         }
     }
 
-    /// Receive the next compute command.
+    /// Receive the next compute command, with its number from the command channel.
     ///
     /// This method blocks if no command is currently available, but takes care to step the Timely
     /// worker while doing so.
-    fn recv_command(&mut self) -> Result<ComputeCommand, NonceChange> {
+    fn recv_command(&mut self) -> Result<(ComputeCommand, Option<CommandNumber>), NonceChange> {
         loop {
             if let Some(cmd) = self.command_rx.try_recv()? {
                 match cmd {
-                    WorkerCommand::Compute(cmd) => return Ok(cmd),
+                    WorkerCommand::Compute(cmd, number) => return Ok((cmd, number)),
                     // Storage-internal commands are dispatched even while
                     // waiting for compute commands (e.g. during compute reconciliation), so
                     // storage dataflow construction keeps its lane position on all workers.
@@ -1161,7 +1161,7 @@ impl<'w> Worker<'w> {
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
         loop {
-            match self.recv_command()? {
+            match self.recv_command()?.0 {
                 ComputeCommand::InitializationComplete => break,
                 command => new_commands.push(command),
             }
