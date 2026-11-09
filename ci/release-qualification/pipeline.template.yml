@@ -290,7 +290,7 @@ steps:
     topics: [0dt-migration, upgrade]
     label: Test with preflight check and rollback
     depends_on: []
-    skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
+    skip: "Unsupported: pre-native to native catalog upgrade"
     trigger: test
     async: false
     build:
@@ -302,7 +302,7 @@ steps:
     topics: [0dt-migration, upgrade]
     label: Nightly with preflight check and rollback
     depends_on: []
-    skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
+    skip: "Unsupported: pre-native to native catalog upgrade"
     trigger: nightly
     async: false
     build:

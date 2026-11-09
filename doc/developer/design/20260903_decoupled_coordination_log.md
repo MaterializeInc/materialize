@@ -9,8 +9,8 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Finish unsupported-boundary reporting for incident-1007, final preflight checks
-and old-checkout CI triggers before they change deployment state. Do not add
+Finish unsupported-boundary reporting for final preflight checks before they
+change deployment state. Do not add
 conversion or reset workarounds. Preserve old-only cases and classify actual
 artifact provenance, not SQL version thresholds.
 
@@ -30,8 +30,10 @@ retained process identities, surviving sessions and persisted table/MV contents.
 This was a cached image with current binaries and entrypoint mounted, not a rebuilt
 image or broad CI. Port6881 is SASL SQL, not HTTP. Relay diagnostics use6883.
 
-Historical legacy-upgrade cases and mixed pre-native/native platform plans now
-produce explicit skipped results before workflow startup/reset. Old-only and
+Historical legacy-upgrade cases, incident-1007 repair paths and mixed
+pre-native/native platform plans now produce explicit skipped results before
+workflow startup/reset. Obsolete old-checkout preflight selection is removed,
+and its CI triggers retain explicit unsupported skips. Old-only and
 all-native plans remain selected. Prepared randomized plans execute once.
 Skips continue, failures remain fail-fast, and SQL errors retain scenario/source
 identity. Reporting tests, a real blocked parallel-worker test and a real CLI
@@ -43,6 +45,9 @@ Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
 - `container-runtime/verification.md`, `native-bind-review.md`,
   `native-bind-reviewed-green.log`, `native-bind-reviewed-check.log`.
 - `unsupported-reporting-review.md`, `unsupported-reporting-combined.log`.
+- `fixed-upgrade-combined.log`, `fixed-upgrade-cli-corrected.log` and
+  `junit_mzcompose_local-incident-skip.xml` cover the removed fixed historical paths.
+  Full CI pipeline generation was not run.
 - `platform-boundary-followup.md`, `platform-boundary-combined.log`,
   `platform-cli/` for actual CLI output, JUnit and cleanup evidence.
 - `upgrade-boundary-classification.md` for remaining workflow boundaries.

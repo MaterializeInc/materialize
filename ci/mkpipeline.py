@@ -40,11 +40,9 @@ import yaml
 
 from materialize import mzbuild, spawn, ui
 from materialize.buildkite_insights.buildkite_api import generic_api
-from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 from materialize.rustc_flags import Sanitizer
 from materialize.ui import UIError
-from materialize.version_list import get_previous_published_version
 from materialize.xcompile import Arch
 
 from .deploy.deploy_util import rust_version
@@ -400,7 +398,6 @@ so it is executed.""",
     expand_parallel_concurrency_groups(pipeline)
     set_parallelism_name(pipeline)
     check_depends_on(pipeline, args.pipeline)
-    add_version_to_preflight_tests(pipeline)
     move_build_to_lto(pipeline, lto)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
@@ -949,20 +946,6 @@ def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
             raise UIError(
                 f"Every step should have an explicit depends_on value, missing in: {step}"
             )
-
-
-def add_version_to_preflight_tests(pipeline: Any) -> None:
-    for step in steps(pipeline):
-        if step.get("id", "") in (
-            "test-preflight-check-rollback",
-            "nightly-preflight-check-rollback",
-        ):
-            current_version = MzVersion.parse_cargo()
-            version = get_previous_published_version(
-                current_version, previous_minor=True
-            )
-            step["build"]["commit"] = str(version)
-            step["build"]["branch"] = str(version)
 
 
 def trim_test_selection_id(pipeline: Any, step_ids_to_run: set[int]) -> None:

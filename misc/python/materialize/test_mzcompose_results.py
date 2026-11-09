@@ -18,6 +18,7 @@ from unittest import SkipTest
 from unittest.mock import MagicMock, Mock
 
 import pytest
+import yaml
 
 from materialize import MZ_ROOT, mzbuild
 from materialize.cli.mzcompose import RunCommand
@@ -520,3 +521,61 @@ def test_platform_parallel_failure_never_resets_under_a_running_check(
         for worker in workers:
             worker.join(timeout=10)
             assert not worker.is_alive()
+
+
+@pytest.mark.parametrize("workflow", ["default", "dangling", "stale-rows"])
+def test_incident_1007_reports_unsupported_before_services(
+    composition, monkeypatch, tmp_path, workflow
+):
+    path = MZ_ROOT / "test/catalog-migration/incident-1007/mzcompose.py"
+    spec = importlib.util.spec_from_file_location("incident_1007_workflow", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    composition.workflows = {
+        name.removeprefix("workflow_").replace("_", "-"): getattr(module, name)
+        for name in dir(module)
+        if name.startswith("workflow_")
+    }
+    for operation in ("up", "down", "override"):
+        monkeypatch.setattr(
+            composition,
+            operation,
+            Mock(side_effect=AssertionError(f"unsupported case attempted {operation}")),
+        )
+    RunCommand().handle_composition(
+        argparse.Namespace(
+            workflow=workflow,
+            unknown_args=[],
+            unknown_subargs=[workflow],
+            find="results",
+        ),
+        composition,
+    )
+    report = ET.parse(tmp_path / "junit_mzcompose.xml")
+    skipped = [
+        case
+        for case in report.findall(".//testcase")
+        if case.find("skipped") is not None
+    ]
+    assert {case.attrib["name"] for case in skipped} == (
+        {"dangling", "stale-rows"}
+        if workflow == "default"
+        else {f"workflow-{workflow}"}
+    )
+    assert all(
+        "pre-native" in case.find("skipped").attrib["message"] for case in skipped
+    )
+    assert not report.findall(".//error")
+    for operation in ("up", "down", "override"):
+        getattr(composition, operation).assert_not_called()
+
+
+def test_pre_native_preflight_triggers_are_explicitly_skipped():
+    pipeline = yaml.safe_load(
+        (MZ_ROOT / "ci/release-qualification/pipeline.template.yml").read_text()
+    )
+    steps = {
+        step.get("id"): step for step in pipeline["steps"] if isinstance(step, dict)
+    }
+    for name in ("test-preflight-check-rollback", "nightly-preflight-check-rollback"):
+        assert "pre-native" in steps[name]["skip"]
