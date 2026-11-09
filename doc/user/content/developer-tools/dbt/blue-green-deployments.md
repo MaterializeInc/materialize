@@ -198,8 +198,14 @@ environment before cutting over.
     are deployed together as a **single atomic operation**, and that any sinks
     that depend on changed objects are automatically cut over to the new
     definition of their upstream dependencies. If the swap fails, it is rolled
-    back and production is left unchanged. Sinks are cut over after the swap
-    commits, so if a sink cutover fails, the swap stays in place.
+    back and production is left unchanged, so you can re-run the operation.
+    Tagging the schemas and cutting over sinks happen after the swap commits,
+    which the `Tagging schema` log line marks. If the operation fails after
+    that line, do **not** re-run it, because a second run swaps the previous
+    version back into production. Instead, run it with
+    `--args '{dry_run: true}'` to print the `ALTER SINK` statements, and run
+    the ones that did not complete. Running a completed statement again is
+    safe.
 
 1. Use the run `run-operation` command to invoke the [`deploy_cleanup`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_cleanup.sql)
    macro, which (cascade) drops the `_dbt_deploy`-suffixed cluster(s) and schema(s):
