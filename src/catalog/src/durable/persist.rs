@@ -53,7 +53,7 @@ use crate::durable::debug::{Collection, CollectionType, DebugCatalogState, Trace
 use crate::durable::error::FenceError;
 use crate::durable::initialize::{
     ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
-    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::metrics::Metrics;
 use crate::durable::objects::serialization::RustType;
@@ -2214,19 +2214,6 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     async fn get_0dt_deployment_max_wait(&mut self) -> Result<Option<Duration>, CatalogError> {
         let value = self
             .get_current_config(WITH_0DT_DEPLOYMENT_MAX_WAIT)
-            .await?;
-        match value {
-            None => Ok(None),
-            Some(millis) => Ok(Some(Duration::from_millis(millis))),
-        }
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn get_0dt_deployment_ddl_check_interval(
-        &mut self,
-    ) -> Result<Option<Duration>, CatalogError> {
-        let value = self
-            .get_current_config(WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
             .await?;
         match value {
             None => Ok(None),

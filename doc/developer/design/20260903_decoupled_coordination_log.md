@@ -9,8 +9,8 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Remove combined bootstrap and legacy controller-owned compute/storage execution
-alternatives. Preserve controllerd's catalog-authorized reconciliation and
+Remove the alternate adapter protection catalog and compaction-bound subscriber,
+then legacy controller-owned compute/storage execution alternatives. Preserve controllerd's catalog-authorized reconciliation and
 explicit retirement, adapter policy, endpoint discovery and observations.
 
 A user decision is pending on retiring the unused legacy final-preflight hook
@@ -31,7 +31,9 @@ controller-owned compute/storage execution also needs removal.
 Adapter-side replica provisioning, cleanup, process events and metrics ownership
 are removed. Controllerd remains the process owner. Adapter policy, endpoint
 discovery, child configuration and native observations remain. Combined library
-serving now rejects before TLS or metadata access. All affected targets compile
+serving rejects before TLS or metadata access. Combined/read-only bootstrap and
+DDL-triggered upgrade restarts are removed. Native admission precedes readiness,
+while explicit promotion and candidate-only restart remain. All affected targets compile
 and native owner tests pass. Independent review is resolved. Exclusive cleanup
 based on deployment age or local inventory is also removed. Its old retry interval
 remains accepted but ignored for persisted configuration compatibility.
@@ -56,6 +58,8 @@ before workflow dispatch. Its probe timed out during pulls, without starting
 services. Newly pulled unused image tags were removed.
 
 Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
+- `native-bootstrap-verification.md` links native bootstrap checks and runtime
+  coverage. `alternate-protection-catalog-research.md` maps the next deletion.
 - `adapter-actuator-verification.md` links current-source build, review, boundary
   and runtime evidence. `container-runtime/aj-native-runtime-1c5c0a71/` contains
   the actuator-removal lifecycle run.

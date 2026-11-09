@@ -33,7 +33,7 @@ pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
 pub const WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL: Config<Duration> = Config::new(
     "with_0dt_deployment_ddl_check_interval",
     Duration::from_secs(5 * 60),
-    "How often to check for DDL changes during zero-downtime deployment.",
+    "Deprecated and ignored. Native deployments follow committed DDL without restarting for changes.",
     ParameterScope::Environment,
 );
 

@@ -35,8 +35,7 @@ use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_adapter::{AdapterError, Client as AdapterClient, load_remote_system_parameters};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
-    WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_auth::password::Password;
 use mz_authenticator::GenericOidcAuthenticator;
@@ -391,11 +390,9 @@ impl Listeners {
     /// initialize the deployment before starting its adapters.
     #[instrument(name = "environmentd::serve")]
     pub async fn serve(self, config: Config) -> Result<Server, AdapterError> {
-        if config.joined_adapter_id.is_none() {
-            return Err(AdapterError::Unsupported(
-                "combined environmentd deployments (use controllerd and adapterd)",
-            ));
-        }
+        let adapter_id = config.joined_adapter_id.ok_or(AdapterError::Unsupported(
+            "combined environmentd deployments (use controllerd and adapterd)",
+        ))?;
         let serve_start = Instant::now();
         info!("startup: envd serve: beginning");
         info!("startup: envd serve: preamble beginning");
@@ -620,52 +617,6 @@ impl Listeners {
             );
             computed
         };
-        // Determine the DDL check interval when doing a 0dt deployment.
-        let with_0dt_deployment_ddl_check_interval = {
-            let cli_default = config
-                .system_parameter_defaults
-                .get(WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name())
-                .map(|x| {
-                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
-                        anyhow!(
-                            "failed to parse default for {}: {:?}",
-                            WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
-                            err
-                        )
-                    })
-                })
-                .transpose()?;
-            let compiled_default = WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.default().clone();
-            let ld = get_ld_value(
-                WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
-                &remote_system_parameters,
-                |x| {
-                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
-                        format!(
-                            "failed to parse LD value {} for {}: {:?}",
-                            x,
-                            WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
-                            err
-                        )
-                    })
-                },
-            )?;
-            let catalog = openable_adapter_storage
-                .get_0dt_deployment_ddl_check_interval()
-                .await?;
-            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
-            info!(
-                ?computed,
-                ?ld,
-                ?catalog,
-                ?cli_default,
-                ?compiled_default,
-                "determined value for {} system parameter",
-                WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name()
-            );
-            computed
-        };
-
         // Determine whether we should panic if we reach the maximum wait time
         // without the preflight checks succeeding.
         let enable_0dt_deployment_panic_after_timeout = {
@@ -708,22 +659,41 @@ impl Listeners {
         // Managed SQL adapters are full writers in every admitted generation.
         // Catch-up controls promotion readiness, not their permission to serve.
         // Durable join below validates membership, compatibility and retirement.
-        let needs_catchup = if config.joined_adapter_id.is_some() {
-            openable_adapter_storage.get_deployment_generation().await?
-                < config.controller.deploy_generation
-        } else {
-            preflight::preflight_0dt(
-                openable_adapter_storage.as_mut(),
-                config.controller.deploy_generation,
-            )
-            .await?
-        };
-        let read_only = needs_catchup && config.joined_adapter_id.is_none();
-        let protected = openable_adapter_storage
-            .catalog_read_protection_enabled()
-            .await?;
-        let protected_prewarming = read_only && protected;
+        let needs_catchup = openable_adapter_storage.get_deployment_generation().await?
+            < config.controller.deploy_generation;
 
+        info!(
+            "startup: envd serve: preflight checks complete in {:?}",
+            preflight_checks_start.elapsed()
+        );
+
+        let catalog_open_start = Instant::now();
+        info!("startup: envd serve: durable catalog open beginning");
+
+        // No execution process may race an unfinished controller seed.
+        if openable_adapter_storage
+            .controller_initialization_pending()
+            .await?
+        {
+            return Err(anyhow!("controller initialization is not complete").into());
+        }
+        // Load the adapter durable storage.
+        if !openable_adapter_storage
+            .catalog_read_protection_enabled()
+            .await?
+        {
+            return Err(anyhow!(
+                "adapterd requires a native deployment initialized by controllerd"
+            )
+            .into());
+        }
+        let build = mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO).to_string();
+        let adapter_storage = openable_adapter_storage.join_admitted(&build).await?;
+        if !needs_catchup {
+            deployment_state.set_is_leader();
+        }
+
+        // Only an admitted native deployment may expose promotion readiness.
         let bootstrap_args = BootstrapArgs {
             controller_initialization: false,
             default_adapter_size: mz_catalog::durable::DEFAULT_ADAPTER_SIZE.into(),
@@ -744,11 +714,9 @@ impl Listeners {
                 deployment_state: deployment_state.clone(),
                 catalog_metrics: Arc::clone(&config.catalog_config.metrics),
                 timestamp_oracle: catalog_timestamp_oracle.clone(),
-                native_prewarming: protected,
                 caught_up_max_wait: with_0dt_deployment_max_wait,
                 panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
                 bootstrap_args: bootstrap_args.clone(),
-                ddl_check_interval: with_0dt_deployment_ddl_check_interval,
             };
             preflight::spawn_catchup(catchup_config, caught_up_receiver, bootstrapped_receiver);
             (Some(caught_up_trigger), Some(bootstrapped))
@@ -756,80 +724,7 @@ impl Listeners {
             (None, None)
         };
 
-        info!(
-            "startup: envd serve: preflight checks complete in {:?}",
-            preflight_checks_start.elapsed()
-        );
-
-        let catalog_open_start = Instant::now();
-        info!("startup: envd serve: durable catalog open beginning");
-
-        // No execution process may race an unfinished controller seed.
-        if openable_adapter_storage
-            .controller_initialization_pending()
-            .await?
-        {
-            return Err(anyhow!("controller initialization is not complete").into());
-        }
-        // Load the adapter durable storage.
-        if config.joined_adapter_id.is_some()
-            && !openable_adapter_storage
-                .catalog_read_protection_enabled()
-                .await?
-        {
-            return Err(anyhow!(
-                "adapterd requires a native deployment initialized by controllerd"
-            )
-            .into());
-        }
-        let mut adapter_storage = if config.joined_adapter_id.is_some() {
-            let build =
-                mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO).to_string();
-            let adapter_storage = openable_adapter_storage.join_admitted(&build).await?;
-            if !needs_catchup {
-                deployment_state.set_is_leader();
-            }
-            adapter_storage
-        } else if protected_prewarming {
-            let build =
-                mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO).to_string();
-            openable_adapter_storage.join_prewarming(&build).await?
-        } else if read_only {
-            // TODO: behavior of migrations when booting in savepoint mode is
-            // not well defined.
-            let adapter_storage = openable_adapter_storage
-                .open_savepoint(boot_ts, &bootstrap_args)
-                .await?;
-            // In read-only mode, we intentionally do not call `set_is_leader`,
-            // because we are by definition not the leader if we are in
-            // read-only mode.
-
-            adapter_storage
-        } else {
-            let adapter_storage = openable_adapter_storage
-                .open(boot_ts, &bootstrap_args)
-                .await?;
-
-            // Catalog admission succeeded for this deployment. Protected
-            // components can share its generation without fencing one another.
-            deployment_state.set_is_leader();
-
-            adapter_storage
-        };
-
-        let bootstrapped = match bootstrapped {
-            Some(tx) => Some((tx, preflight::get_user_ids(adapter_storage.as_mut()).await?)),
-            None => None,
-        };
-
-        // Native prewarming follows committed metadata through its own joined
-        // handle, including read protection. It does not borrow active authority.
-        let compaction_bound_subscriber = None;
-
-        // Enable Persist compaction if we're not in read only.
-        if !read_only {
-            config.controller.persist_clients.cfg().enable_compaction();
-        }
+        config.controller.persist_clients.cfg().enable_compaction();
 
         info!(
             "startup: envd serve: durable catalog open complete in {:?}",
@@ -870,39 +765,17 @@ impl Listeners {
             connection_limiter.update_superuser_reserved(superuser_reserved);
         });
 
-        let client_protection_storage = if protected_prewarming {
-            Some(
-                mz_catalog::durable::persist_backed_catalog_state(
-                    persist_client.clone(),
-                    config.environment_id.organization_id(),
-                    config.controller.build_info.semver_version(),
-                    Some(config.controller.deploy_generation),
-                    Arc::clone(&config.catalog_config.metrics),
-                    Some(catalog_timestamp_oracle.clone()),
-                )
-                .await?
-                .join_admitted(
-                    &mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO)
-                        .to_string(),
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
         let envd_epoch = adapter_storage.epoch();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             adapter_size_names: config.adapter_size_names,
-            adapter_id: config
-                .joined_adapter_id
-                .unwrap_or(mz_catalog::durable::DEFAULT_ADAPTER_ID),
+            adapter_id,
             connection_context: config.controller.connection_context.clone(),
             connection_limit_callback,
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
-            client_protection_storage,
-            compaction_bound_subscriber,
+            client_protection_storage: None,
+            compaction_bound_subscriber: None,
             timestamp_oracle_config: Some(oracle_config),
             timestamp_oracle_now,
             unsafe_mode: config.unsafe_mode,
@@ -933,7 +806,7 @@ impl Listeners {
             webhook_concurrency_limit: webhook_concurrency_limit.clone(),
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
-            read_only_controllers: read_only,
+            read_only_controllers: false,
             caught_up_trigger,
             helm_chart_version: config.helm_chart_version.clone(),
             license_key: config.license_key,
@@ -943,9 +816,9 @@ impl Listeners {
         .instrument(info_span!("adapter::serve"))
         .await?;
 
-        if let Some((tx, initial_ids)) = bootstrapped {
+        if let Some(tx) = bootstrapped {
             // The receiver is gone if an administrator already skipped catch-up.
-            let _ = tx.send(initial_ids);
+            let _ = tx.send(());
         }
 
         // Initialize the OIDC authenticator, shared between the HTTP and SQL servers.

@@ -24,28 +24,17 @@ enum DeploymentStateInner {
     IsLeader,
 }
 
-/// The state of an environment deployment.
+/// The local readiness and promotion state of an admitted deployment.
 ///
-/// This object should be held by the `environmentd` server. It provides methods
-/// to handle state transitions that should be driven by the server itself.
+/// All admitted generations may serve SQL and writes. These compatibility status
+/// names do not grant exclusive execution authority or retire older deployments.
 ///
-/// A deployment begins in the `Initializing` state.
-///
-/// If, during initialization, the server realizes that it is taking over from a
-/// failed `environmentd` process of a generation that is already the leader,
-/// the server may proceed directly to the `IsLeader` state, via
-/// [`DeploymentState::set_is_leader`].
-///
-/// Otherwise, the server should leave the deployment state in `Initializing`
-/// while performing initialization activities. Once the server is catching up
-/// its workloads, it should proceeded to the `CatchingUp` state. Once the
-/// environment is ready to take over from the prior generation, the server
-/// should call [`DeploymentState::set_ready_to_promote`]. After this, the
-/// server should *not* call [`DeploymentState::set_is_leader`], as an external
-/// orchestrator will determine when promotion occurs. The future returned by
-/// `set_ready_to_promote` will resolve when promotion has occurred and the
-/// deployment should take over from the prior generation and begin serving
-/// queries.
+/// An adapter begins in `Initializing`. An already promoted or retained
+/// generation proceeds to `IsLeader` via [`DeploymentState::set_is_leader`].
+/// A candidate enters `CatchingUp`, then `ReadyToPromote`. The future returned by
+/// [`DeploymentState::set_ready_to_promote`] waits for explicit promotion. Its
+/// caller commits the active-deployment change and restarts the candidate adapter
+/// without restarting warmed replicas or retiring compatible writers.
 #[derive(Clone)]
 pub struct DeploymentState {
     inner: Arc<Mutex<DeploymentStateInner>>,
@@ -88,7 +77,7 @@ impl DeploymentState {
     /// When the function returns, the state will be `ReadyToPromote`. When the
     /// returned future resolves, the state will be `Promoting`.
     ///
-    /// Panics if the leader state is not `Initializing`.
+    /// Panics unless the state is `Initializing` or `CatchingUp`.
     pub fn set_ready_to_promote(&self) -> impl Future<Output = ()> {
         let (promote_trigger, promote_trigger_rx) = trigger::channel();
         {
