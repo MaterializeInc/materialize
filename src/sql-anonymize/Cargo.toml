@@ -2,6 +2,7 @@
 name = "mz-sql-anonymize"
 description = "A small CLI that renames identifiers and redacts literals in SQL using Materialize's own parser."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

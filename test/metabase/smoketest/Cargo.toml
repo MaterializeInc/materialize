@@ -2,6 +2,7 @@
 name = "mz-metabase-smoketest"
 description = "A simple smoke test for Metabase and Materialize."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

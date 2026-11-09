@@ -2,6 +2,7 @@
 name = "mz-system-parameter-catalog"
 description = "Generates a machine-readable catalog of the system parameters that can be synced."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
