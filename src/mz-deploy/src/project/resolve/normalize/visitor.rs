@@ -251,9 +251,25 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
             } = &mut grant.target
                 && let GrantTargetSpecificationInner::Objects { names } = object_spec_inner
             {
-                for obj in names {
+                for obj in names.iter_mut() {
                     if let UnresolvedObjectName::Item(item_name) = obj {
                         self.normalize_unresolved_item_name(item_name);
+                    }
+                }
+                // `CREATE INDEX` places an index in the schema of its relation,
+                // so the `USING INDEX` name becomes the target's sibling.
+                // Transforming it as a project object would rename it to a
+                // schema the index is not in, for example under staging.
+                if let [UnresolvedObjectName::Item(target)] = names.as_slice()
+                    && let Some(index) = &mut grant.using_index
+                {
+                    let index_name = index.name_mut();
+                    if let Some(index_ident) = index_name.0.last().cloned() {
+                        let mut sibling = target.0.clone();
+                        if let Some(last) = sibling.last_mut() {
+                            *last = index_ident;
+                        }
+                        *index_name = UnresolvedItemName(sibling);
                     }
                 }
             }

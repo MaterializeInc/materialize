@@ -5965,17 +5965,18 @@ query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_index_scoped_privileges";
 ----
 mz_internal.mz_index_scoped_privileges:
-  →Fused with Child Map/Filter/Project
-    Project: #1..=#4
-    Filter: (#5{privilege_type} = "SELECT")
-      →Table Function mz_aclexplode(parse_catalog_privileges(((#0{data} -> "value") -> "privileges")))
-        →Differential Join %1:mz_indexes[#0{id}] » %0:mz_catalog_raw[parse_catalog_id(((#0{data} -> "key") -> "gid"))]
-          after %0:
-            Project: #8, #0, #3
-            Filter: like["u%"](#0{id})
-          →Arrange (parse_catalog_id(((#0{data} -> "key") -> "gid")))
+  →Differential Join %1:mz_indexes[#0{id}] » %0[#2{id}]
+    after %0:
+      Project: #0, #3, #8, #9
+      Filter: like["u%"](#0{id})
+    →Arrange (#2{id})
+      →Fused with Child Map/Filter/Project
+        Project: #1, #2, #5
+        Filter: (#3{privilege_type} = "SELECT")
+        Map: parse_catalog_id(((#0{data} -> "key") -> "gid"))
+          →Table Function mz_aclexplode(parse_catalog_privileges(((#0{data} -> "value") -> "privileges")))
             →Read mz_internal.mz_catalog_raw
-          →Arranged mz_catalog.mz_indexes
+    →Arranged mz_catalog.mz_indexes
 
 Source mz_internal.mz_catalog_raw
   filter=(like["u%"](parse_catalog_id(((#0{data} -> "key") -> "gid"))) AND ("Item" = (#0{data} ->> "kind")))

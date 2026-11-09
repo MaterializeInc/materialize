@@ -236,6 +236,11 @@ pub async fn reconcile(
 ///
 /// Expands `ALL` privileges based on `all_privileges` (the set of privileges
 /// that `ALL` maps to for the object type).
+///
+/// NOTE: this treats a `GRANT ... USING INDEX` as a plain grant. None reach
+/// it: `validate_grant_using_index` requires the index to be defined in the
+/// object's file, and `validate_indexes_supported` rejects indexes on the
+/// tables and sources that apply reconciles.
 pub fn desired_grants(
     grants: &[GrantPrivilegesStatement<Raw>],
     all_privileges: &[&str],

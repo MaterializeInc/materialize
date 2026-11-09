@@ -7334,18 +7334,26 @@ WITH (
 SELECT
     i.id AS index_id,
     i.on_id AS on_id,
-    p.grantor AS grantor,
-    p.grantee AS grantee
+    g.grantor AS grantor,
+    g.grantee AS grantee
 FROM
-    mz_internal.mz_catalog_raw r
-    JOIN mz_catalog.mz_indexes i
-        ON i.id = mz_internal.parse_catalog_id(r.data->'key'->'gid'),
-    mz_internal.mz_aclexplode(
-        mz_internal.parse_catalog_privileges(r.data->'value'->'privileges')) p
-WHERE
-    r.data->>'kind' = 'Item' AND
-    i.id LIKE 'u%' AND
-    p.privilege_type = 'SELECT'",
+    (
+        -- Explode and filter the privileges before the join, so that the join
+        -- arranges privilege rows and not the full JSON of every user item.
+        SELECT
+            mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+            p.grantor,
+            p.grantee
+        FROM
+            mz_internal.mz_catalog_raw r,
+            mz_internal.mz_aclexplode(
+                mz_internal.parse_catalog_privileges(r.data->'value'->'privileges')) p
+        WHERE
+            r.data->>'kind' = 'Item' AND
+            p.privilege_type = 'SELECT'
+    ) g
+    JOIN mz_catalog.mz_indexes i ON i.id = g.id
+WHERE i.id LIKE 'u%'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,

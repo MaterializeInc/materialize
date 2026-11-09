@@ -1581,6 +1581,90 @@ def workflow_index_on_storage(c: Composition, parser: WorkflowArgumentParser) ->
     ), f"expected hint to suggest indexing a view, got:\n{combined}"
 
 
+def workflow_index_scoped_grant(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """`GRANT SELECT ... USING INDEX` survives blue/green staging and promotion.
+
+    Staging creates the view and its index in a suffixed schema, so the grant
+    must name the staged index, not the production one. After promotion the
+    reader can query the view only on the index's cluster.
+    """
+    setup_base(c)
+
+    result = run_mz_deploy(c, "index-scoped-grant/bad", "compile", check=False)
+    combined = result.stdout + result.stderr
+    assert (
+        result.returncode != 0
+    ), f"compile should reject USING INDEX naming an unknown index:\n{combined}"
+    assert (
+        "not an index defined on 'recent_events'" in combined
+    ), f"expected USING INDEX validation error, got:\n{combined}"
+
+    c.sql("GRANT CREATEROLE ON SYSTEM TO deploy_user", user="mz_system", port=6877)
+    run_mz_deploy(c, "index-scoped-grant/v1", "apply")
+    c.sql(
+        "INSERT INTO app.ingest.events VALUES (1), (2), (3)",
+        user="mz_system",
+        port=6877,
+    )
+
+    def scoped_grants() -> list[tuple[str, str, str]]:
+        return [
+            tuple(row)
+            for row in c.sql_query(
+                "SELECT grantee, schema, index "
+                "FROM mz_internal.mz_show_index_scoped_privileges "
+                "WHERE database = 'app' AND name = 'recent_events' "
+                "ORDER BY schema"
+            )
+        ]
+
+    run_mz_deploy(
+        c, "index-scoped-grant/v1", "stage", "--deploy-id", "v1", "--allow-dirty"
+    )
+    assert scoped_grants() == [
+        ("reader", "serving_v1", "recent_events_idx")
+    ], f"staged grant must target the staged index, got {scoped_grants()}"
+
+    run_mz_deploy(
+        c,
+        "index-scoped-grant/v1",
+        "wait",
+        "v1",
+        "--timeout",
+        "300",
+        "--allowed-lag",
+        "86400",
+    )
+    run_mz_deploy(c, "index-scoped-grant/v1", "promote", "v1", "--no-ready-check")
+    assert scoped_grants() == [
+        ("reader", "serving", "recent_events_idx")
+    ], f"promoted grant must follow the index, got {scoped_grants()}"
+
+    c.sql("CREATE ROLE reader_user LOGIN", user="mz_system", port=6877)
+    c.sql("GRANT reader TO reader_user", user="mz_system", port=6877)
+    c.sql(
+        "GRANT USAGE ON DATABASE app TO reader; "
+        "GRANT USAGE ON SCHEMA app.serving TO reader",
+        user="mz_system",
+        port=6877,
+    )
+    with c.sql_cursor(
+        user="reader_user",
+        database="app",
+        startup_params={"enable_session_rbac_checks": "true"},
+    ) as cur:
+        cur.execute("SET cluster = serving")
+        cur.execute("SELECT id FROM serving.recent_events ORDER BY id")
+        assert cur.fetchall() == [(2,), (3,)]
+        cur.execute("SET cluster = quickstart")
+        try:
+            cur.execute("SELECT id FROM serving.recent_events")
+        except Exception as e:
+            assert "only through index" in str(e), f"unexpected error: {e}"
+        else:
+            raise AssertionError("reading off the index's cluster must fail")
+
+
 def workflow_promote_resume(c: Composition, parser: WorkflowArgumentParser) -> None:
     """`promote` is crash-safe and resumable.
 

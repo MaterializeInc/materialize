@@ -13,7 +13,9 @@ use super::*;
 use crate::project::ir::compiled::FullyQualifiedName;
 use crate::project::syntax::parser::parse_statements;
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
-use mz_sql_parser::ast::{Ident, Statement, UnresolvedItemName};
+use mz_sql_parser::ast::{
+    GrantTargetSpecification, GrantTargetSpecificationInner, Ident, Statement, UnresolvedItemName,
+};
 
 /// Create a test FQN for materialize.public.test_view
 fn test_fqn() -> FullyQualifiedName {
@@ -2508,4 +2510,69 @@ fn test_system_schema_2part_not_qualified() {
     } else {
         panic!("Expected CreateView statement");
     }
+}
+
+fn normalized_using_index(
+    visitor: &NormalizingVisitor<impl NameTransformer>,
+    sql: &str,
+) -> (String, String) {
+    let statements = parse_statements(vec![sql]).unwrap();
+    let Statement::GrantPrivileges(grant) = &statements[0] else {
+        panic!("expected GRANT");
+    };
+    let mut grants = vec![grant.clone()];
+    visitor.normalize_grant_references(&mut grants);
+    let target = match &grants[0].target {
+        GrantTargetSpecification::Object {
+            object_spec_inner: GrantTargetSpecificationInner::Objects { names },
+            ..
+        } => names[0].to_ast_string(FormatMode::Simple),
+        other => panic!("unexpected target: {other:?}"),
+    };
+    let index = grants[0]
+        .using_index
+        .as_ref()
+        .expect("USING INDEX survives normalization")
+        .name()
+        .to_ast_string(FormatMode::Simple);
+    (target, index)
+}
+
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+#[mz_ore::test]
+fn test_staging_using_index_follows_target_schema() {
+    let fqn = staging_test_fqn();
+    let external_deps = BTreeSet::new();
+    let replacement_objects = BTreeSet::new();
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_deploy123".to_string(),
+        &external_deps,
+        None,
+        &replacement_objects,
+    );
+    for sql in [
+        "GRANT SELECT ON my_view TO r USING INDEX my_view_idx",
+        "GRANT SELECT ON public.my_view TO r USING INDEX public.my_view_idx",
+        "GRANT SELECT ON materialize.public.my_view TO r USING INDEX materialize.public.my_view_idx",
+    ] {
+        let (target, index) = normalized_using_index(&visitor, sql);
+        assert_eq!(target, "materialize.public_deploy123.my_view", "{sql}");
+        assert_eq!(index, "materialize.public_deploy123.my_view_idx", "{sql}");
+    }
+}
+
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+#[mz_ore::test]
+fn test_flattening_using_index_is_target_sibling() {
+    let fqn = staging_test_fqn();
+    let visitor = NormalizingVisitor::flattening(&fqn);
+    let (target, index) = normalized_using_index(
+        &visitor,
+        "GRANT SELECT ON my_view TO r USING INDEX my_view_idx",
+    );
+    // Flattening collapses the target into one identifier in the session's
+    // schema, so the index is left unqualified, beside it.
+    assert_eq!(target, "\"materialize.public.my_view\"");
+    assert_eq!(index, "my_view_idx");
 }
