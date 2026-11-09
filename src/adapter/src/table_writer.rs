@@ -7,14 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Table writes and registration through the transaction WAL or read-only migration worker.
+//! Table writes and registration through the transaction WAL.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use futures::stream::FuturesUnordered;
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::critical::Opaque;
@@ -22,7 +21,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
-use mz_storage_client::client::{TableData, Update};
+use mz_storage_client::client::TableData;
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{InvalidUpper, StorageError, TxnsCodecRow};
@@ -32,8 +31,6 @@ use timely::progress::Antichain;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Span, debug, info_span};
-
-mod read_only_table_worker;
 
 /// Metadata required to register a table with the txns shard.
 #[derive(Debug, Clone)]
@@ -46,8 +43,9 @@ pub(crate) struct TableRegistration {
 /// Queues txns-shard operations on the table worker.
 ///
 /// Each adapter queues runtime operations through its group committer, preserving
-/// local FIFO order. Other actors may use the same tables and txn-WAL. On [`StorageError::InvalidUppers`], the writable implementation
-/// restores its bookkeeping and the caller must retry at a fresh timestamp.
+/// local FIFO order. Other actors may use the same tables and txn-WAL. On
+/// [`StorageError::InvalidUppers`], the worker restores its bookkeeping and the
+/// caller must retry at a fresh timestamp.
 pub(crate) trait TableWriteHandle: Debug + Send + Sync {
     /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
     /// `IdentifierMissing(id)` definitively rejects the entire append without
@@ -79,41 +77,24 @@ pub(crate) trait TableWriteHandle: Debug + Send + Sync {
 
 /// Opens the table writer after the txns shard identity has been durably recorded.
 ///
-/// Callers must await this before starting controller txn reads: writable mode upgrades
+/// Callers must await this before starting controller txn reads: this upgrades
 /// the txns shard version before any reader starts.
 pub(crate) async fn open(
     persist: PersistClient,
     txns_id: ShardId,
     txns_metrics: Arc<mz_txn_wal::metrics::Metrics>,
-    read_only: bool,
 ) -> Arc<dyn TableWriteHandle> {
-    let worker = if read_only {
-        let txns_write = persist
-            .open_writer(
-                txns_id,
-                Arc::new(TxnsCodecRow::desc()),
-                Arc::new(UnitSchema),
-                Diagnostics {
-                    shard_name: "txns".to_owned(),
-                    handle_purpose: "follow txns upper".to_owned(),
-                },
-            )
-            .await
-            .expect("txns schema shouldn't change");
-        PersistTableWriteWorker::new_read_only_mode(txns_write, persist.clone())
-    } else {
-        let mut txns = TxnsHandle::open(
-            Timestamp::MIN,
-            persist.clone(),
-            persist.dyncfgs().clone(),
-            Arc::clone(&txns_metrics),
-            txns_id,
-            Opaque::encode(&PersistEpoch::default()),
-        )
-        .await;
-        txns.upgrade_version().await;
-        PersistTableWriteWorker::new_txns(txns, persist.clone())
-    };
+    let mut txns = TxnsHandle::open(
+        Timestamp::MIN,
+        persist.clone(),
+        persist.dyncfgs().clone(),
+        txns_metrics,
+        txns_id,
+        Opaque::encode(&PersistEpoch::default()),
+    )
+    .await;
+    txns.upgrade_version().await;
+    let worker = PersistTableWriteWorker::new_txns(txns, persist);
     Arc::new(worker)
 }
 
@@ -213,88 +194,7 @@ async fn open_table_write_handles(
         .await
 }
 
-async fn append_work(
-    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
-    mut commands: BTreeMap<
-        GlobalId,
-        (
-            tracing::Span,
-            Vec<Update>,
-            Antichain<Timestamp>,
-            Antichain<Timestamp>,
-        ),
-    >,
-) -> Result<(), Vec<(GlobalId, Antichain<Timestamp>)>> {
-    let futs = FuturesUnordered::new();
-
-    // We cannot iterate through the updates and then set off a persist call
-    // on the write handle because we cannot mutably borrow the write handle
-    // multiple times.
-    //
-    // Instead, we first group the update by ID above and then iterate
-    // through all available write handles and see if there are any updates
-    // for it. If yes, we send them all in one go.
-    for (id, write) in write_handles.iter_mut() {
-        if let Some((span, updates, expected_upper, new_upper)) = commands.remove(id) {
-            let updates = updates.into_iter().map(|u| {
-                (
-                    (SourceData(Ok(u.row)), ()),
-                    u.timestamp,
-                    u.diff.into_inner(),
-                )
-            });
-
-            futs.push(async move {
-                write
-                    .compare_and_append(updates.clone(), expected_upper.clone(), new_upper.clone())
-                    .instrument(span.clone())
-                    .await
-                    .expect("cannot append updates")
-                    .or_else(|upper_mismatch| Err((*id, upper_mismatch.current)))?;
-
-                Ok::<_, (GlobalId, Antichain<Timestamp>)>((*id, new_upper))
-            })
-        }
-    }
-
-    // Ensure all futures run to completion, and track status of each of them individually
-    let (_new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .partition_result();
-
-    if failed_appends.is_empty() {
-        Ok(())
-    } else {
-        Err(failed_appends)
-    }
-}
-
 impl PersistTableWriteWorker {
-    /// Create a new read-only table worker that continually bumps the upper of
-    /// it's tables. It is expected that we only register migrated builtin
-    /// tables, that cannot yet be registered in the txns system in read-only
-    /// mode.
-    ///
-    /// This takes a [WriteHandle] for the txns shard so that it can follow the
-    /// upper and continually bump the upper of registered tables to follow the
-    /// upper of the txns shard.
-    pub(crate) fn new_read_only_mode(
-        txns_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-        persist_client: PersistClient,
-    ) -> Self {
-        let (tx, rx) =
-            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
-        mz_ore::task::spawn(
-            || "PersistTableWriteWorker",
-            read_only_table_worker::read_only_mode_table_worker(rx, txns_handle, persist_client),
-        );
-        Self {
-            inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),
-        }
-    }
-
     pub(crate) fn new_txns(
         txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
         persist_client: PersistClient,
@@ -705,8 +605,8 @@ mod tests {
         let txns = ShardId::new();
         let shard = ShardId::new();
         let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
-        let first = open(persist.clone(), txns, Arc::clone(&metrics), false).await;
-        let peer = open(persist.clone(), txns, metrics, false).await;
+        let first = open(persist.clone(), txns, Arc::clone(&metrics)).await;
+        let peer = open(persist.clone(), txns, metrics).await;
         let original = GlobalId::User(1);
         let alias = GlobalId::User(2);
         let peer_id = GlobalId::User(3);
@@ -803,8 +703,8 @@ mod tests {
         let retired_id = GlobalId::User(1);
         let live_id = GlobalId::User(2);
         let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
-        let first = open(persist.clone(), txns, Arc::clone(&metrics), false).await;
-        let peer = open(peer_persist, txns, metrics, false).await;
+        let first = open(persist.clone(), txns, Arc::clone(&metrics)).await;
+        let peer = open(peer_persist, txns, metrics).await;
         for (worker, ts) in [(&first, 10u64), (&peer, 11)] {
             worker
                 .register(
@@ -909,7 +809,6 @@ mod tests {
             persist.clone(),
             txns,
             Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
-            false,
         )
         .await;
         let mut reader = persist
@@ -970,69 +869,6 @@ mod tests {
                 .expect("can observe WAL upper"),
             Antichain::from_elem(14.into()),
         );
-        reader.expire().await;
-    }
-
-    #[mz_ore::test(tokio::test)]
-    async fn read_only_backfill_does_not_tick_the_wal() {
-        let persist = persist_client().await;
-        let txns = ShardId::new();
-        let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
-        let live = open(persist.clone(), txns, Arc::clone(&metrics), false).await;
-        live.append(10.into(), 11.into(), Vec::new())
-            .await
-            .expect("live worker responds")
-            .expect("live adapter ticks WAL");
-        let prewarming = open(persist.clone(), txns, metrics, true).await;
-        let shard = ShardId::new();
-        let id = GlobalId::System(1);
-        let mut reader = persist
-            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
-                shard,
-                Arc::new(RelationDesc::empty()),
-                Arc::new(UnitSchema),
-                Diagnostics::for_tests(),
-                true,
-            )
-            .await
-            .expect("can open migrated table reader");
-        prewarming
-            .register(
-                12.into(),
-                vec![TableRegistration {
-                    id,
-                    data_shard: shard,
-                    relation_desc: RelationDesc::empty(),
-                }],
-            )
-            .await
-            .expect("prewarming worker responds")
-            .expect("can register migrated shard locally");
-        prewarming
-            .append(
-                0.into(),
-                1.into(),
-                vec![(id, vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])])],
-            )
-            .await
-            .expect("prewarming worker responds")
-            .expect("can backfill migrated shard");
-        assert_eq!(
-            persist
-                .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
-                    txns,
-                    Diagnostics::for_tests(),
-                )
-                .await
-                .expect("can observe WAL upper"),
-            Antichain::from_elem(11.into()),
-        );
-        let rows = reader
-            .snapshot_and_fetch(Antichain::from_elem(0.into()))
-            .await
-            .expect("backfilled row is readable");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].0.0, SourceData(Ok(Row::default())));
         reader.expire().await;
     }
 }

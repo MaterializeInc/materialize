@@ -77,9 +77,6 @@ impl DerefMut for Catalog {
 pub struct OpenCatalogResult {
     pub catalog: Catalog,
     pub initialized_catalog: bool,
-    pub last_seen_version: Option<semver::Version>,
-    pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
-    pub new_builtin_collections: BTreeSet<GlobalId>,
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     pub cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
     pub uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
@@ -176,19 +173,14 @@ impl Catalog {
             let mz_catalog::catalog::OpenCatalogResult {
                 catalog,
                 initialized_catalog,
-                last_seen_version,
-                migrated_storage_collections_0dt,
-                new_builtin_collections,
                 builtin_table_updates,
                 cached_global_exprs,
                 uncached_local_exprs,
+                ..
             } = open.await?;
             Ok(OpenCatalogResult {
                 catalog: Self(catalog),
                 initialized_catalog,
-                last_seen_version,
-                migrated_storage_collections_0dt,
-                new_builtin_collections,
                 builtin_table_updates,
                 cached_global_exprs,
                 uncached_local_exprs,
@@ -447,7 +439,6 @@ impl Catalog {
         &mut self,
         persist: mz_persist_client::PersistClient,
         metrics_registry: &mz_ore::metrics::MetricsRegistry,
-        read_only: bool,
         oracle: &(dyn mz_timestamp_oracle::TimestampOracle<mz_repr::Timestamp> + Send + Sync),
     ) -> Result<
         (
@@ -457,7 +448,7 @@ impl Catalog {
         mz_catalog::catalog::CatalogError,
     > {
         let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(metrics_registry));
-        let writer = if !read_only && self.state().catalog_read_protection_enabled() {
+        let writer = if self.state().catalog_read_protection_enabled() {
             self.initialize_storage_metadata().await?;
             let infrastructure = self
                 .complete_table_infrastructure(persist.clone(), Arc::clone(&metrics), oracle)
@@ -465,7 +456,7 @@ impl Catalog {
             crate::table_writer::from_infrastructure(infrastructure, persist)
         } else {
             let shard = self.txn_wal_shard().await?;
-            crate::table_writer::open(persist, shard, Arc::clone(&metrics), read_only).await
+            crate::table_writer::open(persist, shard, Arc::clone(&metrics)).await
         };
         Ok((writer, metrics))
     }

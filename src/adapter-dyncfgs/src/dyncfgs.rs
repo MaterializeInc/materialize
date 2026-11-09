@@ -93,13 +93,8 @@ pub const WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD: Config<Duration> = Config::
 pub const ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS: Config<bool> = Config::new(
     "enable_0dt_hydrate_migrated_builtin_mvs",
     true,
-    "Write-enable replacement-migrated builtin materialized views while read-only during a 0dt \
-     deployment, so they hydrate before cut-over and keep gating promotion. Emergency break-glass \
-     flag: disabling excludes migrated MVs (and their dependents) from the caught-up check again, \
-     so promotion proceeds with them unhydrated. Not an exact revert: a collection with no live \
-     leader frontier must be hydrated either way. Only takes effect when the leader is new enough \
-     for the write to make progress, and is read once at startup, so changing it means setting it \
-     on the leader and restarting the new deployment.",
+    "Retained for configuration compatibility. Native deployments do not prewarm private \
+     migrated builtin materialized views, so this setting is ignored.",
     ParameterScope::Environment,
 );
 

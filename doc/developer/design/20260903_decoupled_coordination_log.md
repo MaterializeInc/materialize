@@ -9,12 +9,14 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Remove the private migration worker and obsolete migration readiness paths, then
-remaining controller-owned compute/storage alternatives. Preserve controllerd's
-catalog-authorized reconciliation, adapter policy and native observations.
-`adapter-read-only-research.md` maps the private worker boundary. Retire its
-unsupported observer-only tests deliberately, preserving native WAL identity,
-recovery, configuration and write-order coverage.
+Remove controller-owned storage execution while preserving native observation,
+readability, history and table contracts. `native-storage-test-boundary.md` maps
+actual callers and test coverage. Replace meaningful legacy export assertions at
+their native owners rather than changing fixture booleans or adding production
+test-only APIs. Keep controllerd reconciliation and adapter policy.
+
+Use one Cargo job for the next heavy build to avoid overlapping large links.
+Preserve the30GiB disk reserve.
 
 A user decision is pending on retiring the unused legacy final-preflight hook
 with an explicit unsupported result. It has no enabled CI caller, but can run
@@ -41,7 +43,10 @@ catalogs and compaction subscribers are removed. Native grants, recovery holds a
 publication barriers remain on the main catalog. The adapter deployment read-only
 mode, private bootstrap update buffer/backfill and mode-only frontend restrictions
 are removed. SQL transaction access, native writer admission, WAL ordering and
-replica output authority remain intact. All affected targets compile
+replica output authority remain intact. Private migration workers, migrated-MV
+write exceptions and readiness exclusions are also removed. Shared builtin-schema
+admission, native WAL recovery and readiness classification remain protected.
+All affected targets compile
 and native owner tests pass. Independent review is resolved. Exclusive cleanup
 based on deployment age or local inventory is also removed. Its old retry interval
 remains accepted but ignored for persisted configuration compatibility.
@@ -66,11 +71,13 @@ before workflow dispatch. Its probe timed out during pulls, without starting
 services. Newly pulled unused image tags were removed.
 
 Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
+- `private-migration-verification.md` links passing native startup/readiness,
+  infrastructure and WAL/protection checks, source review and cache cleanup.
 - `adapter-serving-mode-verification.md` links source review and passing native
   startup, WAL/protection, SQL transaction, pgwire and statement logging checks.
 - `alternate-protection-verification.md` links protection, ownership and native
   restart evidence, including the reproduced and corrected namespace fixture.
-  `adapter-read-only-research.md` maps the remaining private migration boundary.
+  `adapter-read-only-research.md` records the removed mode/migration boundaries.
 - `native-bootstrap-verification.md` links native bootstrap checks and runtime
   coverage. `alternate-protection-catalog-research.md` records that removal boundary.
 - `adapter-actuator-verification.md` links current-source build, review, boundary

@@ -61,7 +61,7 @@ impl mz_timestamp_oracle::TimestampOracle<Timestamp> for TableBootstrapOracle {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
-async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates() {
+async fn table_writer_initialization_preserves_identity_and_recovers_native_infrastructure() {
     use mz_catalog::durable::{TestCatalogStateBuilder, test_bootstrap_args};
     use mz_ore::metrics::MetricsRegistry;
 
@@ -106,7 +106,7 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
     let oracle = TableBootstrapOracle(std::sync::Mutex::new((upper, upper)));
     let registry = MetricsRegistry::new();
     let (writer, _) = catalog
-        .initialize_table_writer(persist.clone(), &registry, false, &oracle)
+        .initialize_table_writer(persist.clone(), &registry, &oracle)
         .await
         .expect("initialize the first table writer without restarting the catalog");
     let shard = catalog.txn_wal_shard().await.expect("initialized WAL");
@@ -181,7 +181,7 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
         .await
         .expect("commit ALTER without schema evolution");
     let (writer, _) = catalog
-        .initialize_table_writer(persist.clone(), &MetricsRegistry::new(), false, &oracle)
+        .initialize_table_writer(persist.clone(), &MetricsRegistry::new(), &oracle)
         .await
         .expect("finish committed CREATE and ALTER");
     let table_shard = catalog.state().storage_metadata().collection_metadata[&new_id];
@@ -313,57 +313,12 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
     }
     reader.expire().await;
     drop(infrastructure);
-
-    let mut peer = TestCatalogStateBuilder::new(persist.clone())
-        .with_organization_id(organization)
-        .with_default_deploy_generation()
-        .unwrap_build()
-        .await
-        .join()
-        .await
-        .expect("join metadata publisher");
-    peer.sync_to_current_updates()
-        .await
-        .expect("consume peer snapshot");
-    let incarnation = {
-        let mut tx = peer.transaction().await.expect("start peer publication");
-        let incarnation = tx
-            .create_client_incarnation(mz_catalog::durable::ClientRealization::Adapter(
-                mz_catalog::durable::DEFAULT_ADAPTER_ID,
-            ))
-            .expect("register peer");
-        let _ = tx.get_and_commit_op_updates();
-        let ts = tx.upper();
-        tx.commit(ts).await.expect("publish peer metadata");
-        incarnation
-    };
-    let (writer, _) = catalog
-        .initialize_table_writer(persist, &MetricsRegistry::new(), true, &oracle)
-        .await
-        .expect("open a WAL reader despite pending peer metadata");
     assert_eq!(
         catalog.txn_wal_shard().await.expect("same WAL identity"),
         shard
     );
-    assert!(
-        !catalog
-            .state()
-            .client_incarnations()
-            .contains_key(&incarnation)
-    );
-    catalog
-        .sync_to_current_updates()
-        .await
-        .expect("apply queued peer metadata");
-    assert!(
-        catalog
-            .state()
-            .client_incarnations()
-            .contains_key(&incarnation)
-    );
-    drop(writer);
+
     catalog.expire().await;
-    peer.expire().await;
 }
 
 /// System sessions have an empty `search_path` so it's necessary to

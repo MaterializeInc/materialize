@@ -66,7 +66,6 @@ use mz_compute_client::controller::CollectionReadiness;
 use mz_compute_client::logging::{ComputeLog, LogVariant};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::OfflineReason;
-use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
@@ -111,19 +110,6 @@ fn hydration_query(ignored: &BTreeSet<GlobalId>) -> String {
     }
     query.push_str(" ORDER BY hydrated_at DESC NULLS FIRST LIMIT 1");
     query
-}
-
-/// Context needed to check whether clusters/collections are caught up.
-#[derive(Debug)]
-pub struct CaughtUpCheckContext {
-    /// A trigger that signals that all clusters/collections have been caught
-    /// up.
-    pub trigger: Trigger,
-    /// Collections to exclude from the caught up check.
-    ///
-    /// When a caught up check is performed as part of a 0dt upgrade, it makes sense to exclude
-    /// collections of newly added builtin objects, as these might not hydrate in read-only mode.
-    pub exclude_collections: BTreeSet<GlobalId>,
 }
 
 /// Incremental active-reference state, owned by the readiness task. Dropping
@@ -230,7 +216,6 @@ impl ReplicaFrontierReference {
 /// Requests local controller state without waiting for external reads.
 #[derive(Debug)]
 pub struct CaughtUpCheckRequest {
-    exclude_collections: Arc<BTreeSet<GlobalId>>,
     policy_read_ts: Timestamp,
     tx: oneshot::Sender<CaughtUpCheck>,
 }
@@ -528,14 +513,9 @@ impl Coordinator {
     ///
     /// A no-op when no deployment-readiness check was requested.
     pub(crate) fn spawn_caught_up_check_task(&mut self) {
-        let Some(CaughtUpCheckContext {
-            trigger,
-            exclude_collections,
-        }) = self.caught_up_check.take()
-        else {
+        let Some(trigger) = self.caught_up_check.take() else {
             return;
         };
-        let exclude_collections = Arc::new(exclude_collections);
         let period = WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL
             .get(self.catalog().system_config().dyncfgs());
         let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -577,11 +557,7 @@ impl Coordinator {
                 // local execution evidence should age behind a slow Persist read.
                 let policy_read_ts = policy_oracle.read_ts().await;
                 let (tx, rx) = oneshot::channel();
-                let request = CaughtUpCheckRequest {
-                    exclude_collections: Arc::clone(&exclude_collections),
-                    policy_read_ts,
-                    tx,
-                };
+                let request = CaughtUpCheckRequest { policy_read_ts, tx };
                 // Dropping the trigger on coordinator shutdown preserves the
                 // existing shutdown behavior of the readiness task.
                 if internal_cmd_tx
@@ -635,18 +611,14 @@ impl Coordinator {
 
     /// Captures candidate execution and cluster-policy state without external reads.
     pub(crate) fn handle_caught_up_check_request(&self, request: CaughtUpCheckRequest) {
-        let CaughtUpCheckRequest {
-            exclude_collections,
-            policy_read_ts,
-            tx,
-        } = request;
+        let CaughtUpCheckRequest { policy_read_ts, tx } = request;
         let clusters = self
             .catalog()
             .clusters()
             .map(|cluster| {
                 (
                     cluster.id,
-                    self.caught_up_cluster_snapshot(cluster, &exclude_collections, policy_read_ts),
+                    self.caught_up_cluster_snapshot(cluster, policy_read_ts),
                 )
             })
             .collect();
@@ -660,16 +632,17 @@ impl Coordinator {
     fn caught_up_cluster_snapshot(
         &self,
         cluster: &Cluster,
-        exclude_collections: &BTreeSet<GlobalId>,
         policy_read_ts: Timestamp,
     ) -> Result<ClusterSnapshot, anyhow::Error> {
-        let mut ignored_compute_collections = exclude_collections.clone();
+        // Admission requires compatible shared builtin identities. They participate
+        // in readiness like other exports, without private-migration exclusions.
+        let mut ignored_compute_collections = BTreeSet::new();
         let storage_frontiers = self
             .controller
             .storage
             .active_ingestion_exports(cluster.id)
             .copied()
-            .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
+            .filter(|id| !id.is_transient())
             .map(|id| {
                 let (_read_frontier, write_frontier) =
                     self.controller.storage.collection_frontiers(id)?;
@@ -715,7 +688,7 @@ impl Coordinator {
                 CatalogItem::MetricSink(sink) => (sink.global_id, None),
                 _ => return None,
             };
-            if id.is_transient() || exclude_collections.contains(&id) {
+            if id.is_transient() {
                 return None;
             }
             let output = self.query_client.as_ref().and_then(|client| {
