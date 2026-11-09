@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { hashKey, QueryKey } from "@tanstack/react-query";
-import { act, fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { millisecondsInMinute } from "date-fns/constants";
 import React from "react";
 
@@ -28,8 +28,8 @@ import { clusterQueryKeys } from "~/platform/clusters/queries";
 import { allObjectsCollection } from "~/store/allObjectsCollection";
 import { workflowGraphEdgesCollection } from "~/store/workflowGraphEdgesCollection";
 import {
+  createProviderWrapper,
   healthyEnvironment,
-  renderComponent,
   setFakeEnvironment,
 } from "~/test/utils";
 import { parseDbVersion } from "~/version/api";
@@ -181,13 +181,18 @@ const fakePollTimers = () =>
     ],
   });
 
+// Through `wrapper`, so `rerender` moves the focus without remounting the
+// graph, as navigating between objects' workflow routes does.
 const renderAt = async (
   environment: typeof WITH_EDGES,
   focusedObjectId: string,
 ) =>
-  renderComponent(<WorkflowGraph focusedObjectId={focusedObjectId} />, {
-    initializeState: ({ set }) =>
-      setFakeEnvironment(set, "aws/us-east-1", environment),
+  render(<WorkflowGraph focusedObjectId={focusedObjectId} />, {
+    wrapper: await createProviderWrapper({
+      initializeState: ({ set }) =>
+        setFakeEnvironment(set, "aws/us-east-1", environment),
+      router: { type: "MEMORY_ROUTER" },
+    }),
   });
 
 describe("WorkflowGraph from the edges collection", () => {
@@ -440,6 +445,47 @@ describe("WorkflowGraph from the edges collection", () => {
     });
     await renderAt(WITH_EDGES, added.id);
     expect(await screen.findByTestId("loading-spinner")).toBeVisible();
+
+    workflowGraphEdgesCollection.applySnapshot({
+      data: [],
+      snapshotComplete: false,
+      error: {
+        code: SUBSCRIBE_ERROR_CODE.CONNECTION_CLOSED,
+        message: "Socket closed unexpectedly",
+      },
+    });
+
+    expect(
+      await screen.findByText("An error occurred fetching workflow data."),
+    ).toBeVisible();
+  });
+
+  it("waits again for live edges when the focus moves during a reconnect", async () => {
+    const added = catalogObject("u13", "low_regions");
+    server.use(
+      detailsHandler(NODE_IDS, OBJECTS.map(nodeDetails)),
+      detailsHandler([added.id], [nodeDetails(added)]),
+      lagHandler([added.id]),
+    );
+    const { rerender } = await renderAt(WITH_EDGES, REVENUE.id);
+    expect(await findNode(TOP)).toBeVisible();
+
+    workflowGraphEdgesCollection.applySnapshot({
+      data: EDGES,
+      snapshotComplete: true,
+      error: undefined,
+      resubscribing: true,
+    });
+    // Created while the edges reconnect, so the held edges predate it.
+    allObjectsCollection.applySnapshot({
+      data: [...OBJECTS, added],
+      snapshotComplete: true,
+      error: undefined,
+    });
+    rerender(<WorkflowGraph focusedObjectId={added.id} />);
+
+    expect(await screen.findByTestId("loading-spinner")).toBeVisible();
+    expect(screen.queryAllByTitle(nodeTitle(added))).toHaveLength(0);
 
     workflowGraphEdgesCollection.applySnapshot({
       data: [],

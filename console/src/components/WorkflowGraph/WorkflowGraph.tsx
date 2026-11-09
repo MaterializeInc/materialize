@@ -212,7 +212,8 @@ const SyncedWorkflowGraph = ({
     );
   }, [edges, drawnIds]);
 
-  const [hasLiveRows, setHasLiveRows] = React.useState(false);
+  const [liveRowsFocusId, setLiveRowsFocusId] = React.useState<string>();
+  const hasLiveRows = liveRowsFocusId === focusedObjectId;
   if (
     !hasLiveRows &&
     edgesReady &&
@@ -220,7 +221,7 @@ const SyncedWorkflowGraph = ({
     objectsSnapshotComplete &&
     !objectsRefreshing
   ) {
-    setHasLiveRows(true);
+    setLiveRowsFocusId(focusedObjectId);
   }
 
   if (
@@ -233,8 +234,8 @@ const SyncedWorkflowGraph = ({
   const nodesReady = nodeIds.every((id) => nodeMap.has(id));
   // Rows held from the cache or an earlier session can predate an object
   // created since, which would be drawn alone, or reported missing. Once
-  // both collections have served live rows, a reconnect keeps what's drawn,
-  // as it does for a graph with edges.
+  // both collections have been live with this object in focus, a reconnect
+  // keeps what's drawn, as it does for a graph with edges.
   const awaitingLiveRows =
     !hasLiveRows &&
     ((edgesRefreshing && edges.length === 0) ||
