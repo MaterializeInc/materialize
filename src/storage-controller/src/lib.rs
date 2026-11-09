@@ -3221,22 +3221,19 @@ where
         &self,
         f: impl FnOnce(&Self, &mut UnreportedStates, Timestamp) -> R,
     ) -> (R, Vec<(Row, Diff)>) {
-        let mut states = self.unreported_freshness.lock();
-        // Read under the lock, so that it is no earlier than the background task's observations.
-        let now = self.now_ts();
         let config = self.freshness_config();
         let observing = config.is_some();
-        states.set_config(config);
-        let was_observing = self.unreported_freshness.set_observing(&states, observing);
-        if observing && !was_observing {
-            // The frontiers are read after observing turned on, see `set_observing`.
-            for id in states.ids() {
-                match self.storage_collections.collection_frontiers(id) {
-                    Ok(frontiers) => states.resume(id, now, &frontiers.write_frontier),
-                    Err(err) => soft_panic_or_log!("frontiers of {id} missing: {err}"),
-                }
-            }
-        }
+        let (mut states, now) =
+            self.unreported_freshness
+                .lock_synced(&self.now, config, observing, |id| {
+                    match self.storage_collections.collection_frontiers(id) {
+                        Ok(frontiers) => Some(frontiers.write_frontier),
+                        Err(err) => {
+                            soft_panic_or_log!("frontiers of {id} missing: {err}");
+                            None
+                        }
+                    }
+                });
         let result = f(self, &mut states, now);
         let mut updates = Vec::new();
         for (id, rows) in states.take_rows() {

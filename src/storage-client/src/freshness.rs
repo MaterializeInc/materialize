@@ -333,17 +333,38 @@ impl UnreportedFreshness {
         self.observing.load(Ordering::SeqCst)
     }
 
-    /// Sets whether advances are to be observed, and returns the previous value.
+    /// Locks the states, sets their recorder configuration to `config` and whether advances are
+    /// observed to `observing`, and returns them with the time of `now` read under the lock.
     ///
-    /// Takes the locked `states`, because a caller that turns observing on must read the
-    /// frontiers it resumes the states from after setting it and before unlocking. An advance
-    /// it does not read is then observed after it unlocks.
-    pub fn set_observing(&self, _states: &UnreportedStates, observing: bool) -> bool {
-        self.observing.swap(observing, Ordering::SeqCst)
+    /// When observing turns on, every state resumes at that time from the frontier that
+    /// `frontier_of` returns for it, see [`FreshnessState::resume`]. A state without one keeps
+    /// its frontier. `frontier_of` may take the lock of the `StorageCollections` collections.
+    pub fn lock_synced(
+        &self,
+        now: &NowFn,
+        config: Option<RecorderConfig>,
+        observing: bool,
+        mut frontier_of: impl FnMut(GlobalId) -> Option<Antichain<Timestamp>>,
+    ) -> (MutexGuard<'_, UnreportedStates>, Timestamp) {
+        let mut states = self.lock();
+        // Read under the lock, so that no observation is later than an operation on the states
+        // at this time.
+        let now = Timestamp::from(now());
+        states.config = config;
+        let was_observing = self.observing.swap(observing, Ordering::SeqCst);
+        if observing && !was_observing {
+            // Read after observing turned on and before unlocking. The background task observes
+            // every advance these frontiers miss once it gets the lock, at a later time.
+            for id in states.ids() {
+                if let Some(frontier) = frontier_of(id) {
+                    states.resume(id, now, &frontier);
+                }
+            }
+        }
+        (states, now)
     }
 
-    /// Locks the states.
-    pub fn lock(&self) -> MutexGuard<'_, UnreportedStates> {
+    fn lock(&self) -> MutexGuard<'_, UnreportedStates> {
         self.states.lock().expect("lock poisoned")
     }
 
@@ -382,11 +403,6 @@ pub struct UnreportedStates {
 }
 
 impl UnreportedStates {
-    /// Sets the recorder configuration that the states use from now on.
-    pub fn set_config(&mut self, config: Option<RecorderConfig>) {
-        self.config = config;
-    }
-
     /// Adds the state of collection `id`.
     pub fn insert(&mut self, id: GlobalId, state: FreshnessState) {
         let previous = self.states.insert(id, state);
@@ -394,13 +410,13 @@ impl UnreportedStates {
     }
 
     /// The collections that have a state.
-    pub fn ids(&self) -> Vec<GlobalId> {
+    fn ids(&self) -> Vec<GlobalId> {
         self.states.keys().copied().collect()
     }
 
     /// Resumes the state of collection `id` at `now` with `frontier`, see
     /// [`FreshnessState::resume`].
-    pub fn resume(&mut self, id: GlobalId, now: Timestamp, frontier: &Antichain<Timestamp>) {
+    fn resume(&mut self, id: GlobalId, now: Timestamp, frontier: &Antichain<Timestamp>) {
         if let Some(state) = self.states.get_mut(&id) {
             let closed = state.resume(now, frontier, self.config.as_ref());
             self.push_rows(id, closed);
