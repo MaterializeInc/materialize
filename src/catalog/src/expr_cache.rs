@@ -168,7 +168,7 @@ impl DurableCacheCodec for ExpressionCodec {
 /// The native prototype assumes identical committed-plan encodings across its
 /// demonstration builds. Replace this assumption with pinned-plan version support.
 /// This namespace is never a deployment build identity.
-pub(crate) const PROTOTYPE_SHARED_PLAN_NAMESPACE: &str = "prototype-shared-plans-v1";
+pub const PROTOTYPE_SHARED_PLAN_NAMESPACE: &str = "prototype-shared-plans-v1";
 
 /// Configuration needed to initialize an [`ExpressionCache`].
 #[derive(Debug, Clone)]

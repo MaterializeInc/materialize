@@ -421,6 +421,9 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
             .is_err()
     );
     let build = "0.0.0+pending";
+    // Admission uses the real build identity, while native selections use the
+    // shared encoding namespace. Keep foreign-owner and foreign-namespace checks distinct.
+    let plan_namespace = mz_catalog::expr_cache::PROTOTYPE_SHARED_PLAN_NAMESPACE;
     let mut pending = pending_builder
         .clone()
         .unwrap_build()
@@ -443,7 +446,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         .unwrap();
     tx.set_written_plan_with_owner(
         index,
-        build,
+        plan_namespace,
         Some(uuid::Uuid::new_v4()),
         None,
         BTreeSet::from([input]),
@@ -470,7 +473,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     let own_plan = GlobalId::User(1002);
     tx.set_written_plan_with_owner(
         own_plan,
-        build,
+        plan_namespace,
         Some(uuid::Uuid::new_v4()),
         Some(ReplicaPlanOwner {
             replica_id: own_replica_id,
@@ -607,7 +610,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
             "foreign replica plan" => {
                 tx.set_written_plan_with_owner(
                     GlobalId::User(1003),
-                    build,
+                    plan_namespace,
                     Some(uuid::Uuid::new_v4()),
                     Some(ReplicaPlanOwner {
                         replica_id: active_replica.replica_id,
@@ -695,7 +698,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     tx.remove_cluster_replica(own_replica_id).unwrap();
     assert_eq!(tx.remove_cluster_runtime(cluster.id, 8), Some(own_runtime));
     tx.remove_replica_system_config(own_replica_id, "enable_arrangement_size_logging");
-    tx.set_written_plan(own_plan, build, None).unwrap();
+    tx.set_written_plan(own_plan, plan_namespace, None).unwrap();
     commit(tx).await;
     let retired = pending.snapshot().await.unwrap();
     assert_eq!(retired.cluster_replicas, active_lifecycle.cluster_replicas);
@@ -709,7 +712,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         active_lifecycle.replica_system_configurations
     );
     let tx = pending.transaction().await.unwrap();
-    assert!(tx.get_written_plan(own_plan, build).is_none());
+    assert!(tx.get_written_plan(own_plan, plan_namespace).is_none());
     drop(tx);
     let protected = pending
         .snapshot()
