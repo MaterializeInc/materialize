@@ -17,8 +17,8 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use timely::dataflow::Scope;
 use timely::dataflow::operators::generic::OperatorInfo;
@@ -194,5 +194,56 @@ impl ActivationAck {
     pub fn ack(&self) {
         // Release ensures the `false` is visible to the Tokio task's `activate`.
         self.0.store(false, Ordering::Release);
+    }
+}
+
+/// A thread-safe [`ActivatorTrait`] for an operator driven from another thread.
+///
+/// Clones share one registration and one pending flag. [`ActivatorTrait::activate`] wakes the
+/// registered operator's worker unless an activation is already pending, and
+/// [`ActivatorTrait::ack`] clears the pending flag. An activation before
+/// [`ActivatorTrait::register`] is dropped, so the operator must read its input on its first
+/// scheduling.
+#[derive(Clone, Default)]
+pub struct SharedSyncActivator {
+    inner: Arc<SharedSyncActivatorInner>,
+}
+
+#[derive(Default)]
+struct SharedSyncActivatorInner {
+    activator: Mutex<Option<timely::scheduling::SyncActivator>>,
+    /// `true` if the operator has been activated but not yet scheduled.
+    pending: AtomicBool,
+}
+
+impl SharedSyncActivator {
+    /// Creates an activator with no operator registered.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ActivatorTrait for SharedSyncActivator {
+    fn activate(&self) {
+        let activator = self.inner.activator.lock().expect("lock poisoned");
+        if let Some(activator) = activator.as_ref() {
+            if !self.inner.pending.swap(true, Ordering::AcqRel) {
+                // An error means the worker is gone, and with it the operator.
+                let _ = activator.activate();
+            }
+        }
+    }
+
+    fn ack(&self) {
+        // NOTE: A swap, not a store. When `activate` finds the flag set and skips waking the
+        // worker, this swap reads its write, which orders the activating thread's earlier push
+        // before the operator's subsequent read. A plain store would allow the operator to miss
+        // that push with no further wakeup coming.
+        self.inner.pending.swap(false, Ordering::AcqRel);
+    }
+
+    fn register<'scope, T: Timestamp>(&self, scope: Scope<'scope, T>, path: Rc<[usize]>) {
+        let activator = scope.worker().sync_activator_for(path.to_vec());
+        *self.inner.activator.lock().expect("lock poisoned") = Some(activator);
     }
 }
