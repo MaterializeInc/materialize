@@ -1,8 +1,9 @@
 [package]
 name = "mz"
 description = "The Materialize command-line interface (CLI)."
-license = "Apache-2.0"
+license = "BUSL-1.1"
 version = "0.3.1"
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 

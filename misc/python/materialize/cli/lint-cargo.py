@@ -18,7 +18,7 @@ from pprint import pprint
 
 import toml
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, spawn
 from materialize.cargo import Workspace
 
 
@@ -203,12 +203,213 @@ def check_fuzz_patches_mirror_root(workspace: Workspace) -> bool:
     return success
 
 
+APACHE = "Apache-2.0"
+BSL = "BUSL-1.1"
+# Files carry the Apache license header when it contains this text. The BSL
+# header names the Apache License as its change license, so matching on
+# "Apache License" alone misclassifies BSL files.
+APACHE_HEADER_MARKER = "Licensed under the Apache License, Version 2.0"
+BSL_HEADER_MARKER = "Business Source License"
+
+# BSL-headed files inside Apache crates, pending a decision on relabeling them
+# Apache. Relabeling loosens their license, so it needs sign-off. Remove an
+# entry once its file is fixed. A stale entry fails the lint.
+LICENSE_ALLOWED_BSL_FILES: set[str] = {
+    "src/ore-proc/tests/instrument.rs",
+    "src/ore/benches/bytes.rs",
+    "src/ore/benches/id_gen.rs",
+    "src/sql-lexer/tests/testdata/strings",
+    "src/sql-parser/src/ast/item_refs.rs",
+    "src/sql-parser/tests/keyword_audit.rs",
+    "src/timely-util/benches/chunk_pool.rs",
+    "src/timely-util/benches/column_borrow.rs",
+    "src/timely-util/benches/column_pager.rs",
+    "src/timely-util/benches/columnar_merge_batcher.rs",
+    "src/timely-util/benches/columnar_merger.rs",
+    "src/timely-util/benches/consolidating_column_builder.rs",
+    "src/timely-util/benches/reclock.rs",
+    "src/timely-util/examples/column_paged_spill.rs",
+    "src/timely-util/src/columnar/chunk.rs",
+    "src/timely-util/src/columnar/chunk/metrics.rs",
+    "src/timely-util/src/columnar/unload.rs",
+    "src/timely-util/src/containers/heap_size.rs",
+    "src/timely-util/src/funded_spine.rs",
+    "src/timely-util/src/funded_spine/spine_fueled.rs",
+    "src/timely-util/src/funded_spine/tests.rs",
+}
+
+# Apache crates that depend on BSL crates, as (crate dir, dependency dir),
+# pending the same decision.
+LICENSE_ALLOWED_BSL_DEPS: set[tuple[str, str]] = {
+    ("src/prof", "src/build-tools"),
+    ("src/sql-parser", "src/walkabout"),
+}
+
+
+def _header_license(path: Path) -> str | None:
+    try:
+        with open(path, errors="replace") as f:
+            head = f.read(4096)
+    except (IsADirectoryError, FileNotFoundError):
+        return None
+    if APACHE_HEADER_MARKER in head:
+        return APACHE
+    if BSL_HEADER_MARKER in head:
+        return BSL
+    return None
+
+
+def _workspace_license(root: Path, crate_dir: str) -> str | None:
+    """Returns `workspace.package.license` of the workspace enclosing
+    `crate_dir`, for crates that declare `license.workspace = true`."""
+    d = crate_dir
+    while True:
+        manifest = root / d / "Cargo.toml"
+        if manifest.exists():
+            with open(manifest) as f:
+                config = toml.load(f)
+            if "workspace" in config:
+                return config["workspace"].get("package", {}).get("license")
+        if d == "":
+            return None
+        d = os.path.dirname(d)
+
+
+def check_crate_licenses(workspace: Workspace) -> bool:
+    """Checks that Apache crates contain no BSL files and have no BSL normal
+    or build dependencies.
+
+    A crate declares its license with `package.license`, either `Apache-2.0` or
+    `BUSL-1.1`. A crate without the field is BSL, the repository default. The
+    check covers every crate in the repository, including crates outside the
+    root workspace such as fuzz targets. A file belongs to the innermost crate
+    whose directory contains it. Dev dependencies may be BSL, they do not end
+    up in the crate's artifacts."""
+
+    root = workspace.root
+    tracked = spawn.capture(["git", "ls-files"], cwd=root).splitlines()
+
+    licenses: dict[str, str] = {}
+    configs: dict[str, dict] = {}
+    success = True
+    for path in tracked:
+        if not path.endswith("Cargo.toml"):
+            continue
+        with open(root / path) as f:
+            config = toml.load(f)
+        if "package" not in config:
+            continue
+        crate_dir = os.path.dirname(path)
+        license = config["package"].get("license", BSL)
+        if isinstance(license, dict) and license.get("workspace"):
+            license = _workspace_license(root, crate_dir)
+        if not isinstance(license, str) or license not in (APACHE, BSL):
+            print(
+                f'{path}: license = "{license}" must be "{APACHE}" or "{BSL}"',
+                file=sys.stderr,
+            )
+            success = False
+            continue
+        licenses[crate_dir] = license
+        configs[crate_dir] = config
+
+    def owning_crate(path: str) -> str | None:
+        d = os.path.dirname(path)
+        while True:
+            if d in licenses:
+                return d
+            if d == "":
+                return None
+            d = os.path.dirname(d)
+
+    seen_files = set()
+    for path in tracked:
+        crate_dir = owning_crate(path)
+        if crate_dir is None:
+            continue
+        # BSL crates may contain Apache files, for example code derived from
+        # Apache-licensed third-party projects, which must keep its license.
+        if licenses[crate_dir] != APACHE:
+            continue
+        if _header_license(root / path) != BSL:
+            continue
+        if path in LICENSE_ALLOWED_BSL_FILES:
+            seen_files.add(path)
+            continue
+        print(
+            f"{path}: has a {BSL} header, but crate {crate_dir} is {APACHE}",
+            file=sys.stderr,
+        )
+        success = False
+
+    workspace_paths = {
+        name: spec["path"]
+        for name, spec in workspace.workspace_dependencies.items()
+        if isinstance(spec, dict) and "path" in spec
+    }
+    seen_deps = set()
+    for crate_dir, config in sorted(configs.items()):
+        if licenses[crate_dir] != APACHE:
+            continue
+        sections = [config]
+        sections.extend(config.get("target", {}).values())
+        for section in sections:
+            for dep_type in ("dependencies", "build-dependencies"):
+                for name, spec in section.get(dep_type, {}).items():
+                    if not isinstance(spec, dict):
+                        continue
+                    if "path" in spec:
+                        dep_dir = os.path.normpath(
+                            os.path.join(crate_dir, spec["path"])
+                        )
+                    elif spec.get("workspace") and name in workspace_paths:
+                        dep_dir = os.path.normpath(workspace_paths[name])
+                    else:
+                        continue
+                    if licenses.get(dep_dir, BSL) == APACHE:
+                        continue
+                    if (crate_dir, dep_dir) in LICENSE_ALLOWED_BSL_DEPS:
+                        seen_deps.add((crate_dir, dep_dir))
+                        continue
+                    print(
+                        f"{crate_dir}/Cargo.toml: {APACHE} crate depends on "
+                        f"{BSL} crate {dep_dir} (in {dep_type})",
+                        file=sys.stderr,
+                    )
+                    success = False
+
+    for path in sorted(LICENSE_ALLOWED_BSL_FILES - seen_files):
+        print(
+            f"{path}: stale entry in LICENSE_ALLOWED_BSL_FILES, remove it",
+            file=sys.stderr,
+        )
+        success = False
+    for crate_dir, dep_dir in sorted(LICENSE_ALLOWED_BSL_DEPS - seen_deps):
+        print(
+            f"({crate_dir}, {dep_dir}): stale entry in "
+            "LICENSE_ALLOWED_BSL_DEPS, remove it",
+            file=sys.stderr,
+        )
+        success = False
+
+    if not success:
+        print(
+            '\nhint: files in a crate with `license = "Apache-2.0"` must '
+            "carry the Apache header, copy it from the crate's `src/lib.rs`. "
+            "An Apache crate may only depend on Apache crates outside "
+            "dev-dependencies.",
+            file=sys.stderr,
+        )
+    return success
+
+
 LINTS: dict[str, Callable[[Workspace], bool]] = {
     "rust-versions": check_rust_versions,
     "default-members": check_default_members,
     "workspace-dependencies": check_workspace_dependencies,
     "fuzz-versions-mirror-root": check_fuzz_versions_mirror_root,
     "fuzz-patches-mirror-root": check_fuzz_patches_mirror_root,
+    "crate-licenses": check_crate_licenses,
 }
 
 
