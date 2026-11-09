@@ -118,7 +118,7 @@ pub struct WallclockLagMetrics {
 
 impl WallclockLagMetrics {
     /// Observe a new wallclock lag measurement.
-    pub fn observe(&mut self, lag_secs: u64) {
+    pub fn observe(&mut self, lag_secs: f64) {
         let lag_secs = f32::cast_lossy(lag_secs);
 
         self.wallclock_lag_minmax.add_sample(lag_secs);

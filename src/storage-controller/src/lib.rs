@@ -33,7 +33,8 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_0DT_DEPLOYMENT_SOURCES, ENABLE_WALLCLOCK_FRESHNESS_REPORTING,
+    WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::ConfigUpdates;
 use mz_ore::collections::CollectionExt;
@@ -64,6 +65,7 @@ use mz_storage_client::controller::{
 };
 use mz_storage_client::freshness::{
     FreshnessState, UnreportedFreshness, UnreportedStates, pack_rows, recorder_config,
+    reported_wallclock_lag,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -3216,13 +3218,15 @@ where
     /// Calls `f` with the locked states of [`UnreportedFreshness`] and the current time, and
     /// returns its result and the updates of the rows the states closed since the last call.
     ///
-    /// The states use the current recorder configuration, and observe advances while it is set.
+    /// The states use the current recorder configuration, and observe advances while recording
+    /// or reporting is on.
     fn with_unreported_freshness<R>(
         &self,
         f: impl FnOnce(&Self, &mut UnreportedStates, Timestamp) -> R,
     ) -> (R, Vec<(Row, Diff)>) {
         let config = self.freshness_config();
-        let observing = config.is_some();
+        let observing =
+            config.is_some() || ENABLE_WALLCLOCK_FRESHNESS_REPORTING.get(self.config.config_set());
         let (mut states, now) =
             self.unreported_freshness
                 .lock_synced(&self.now, config, observing, |id| {
@@ -3959,6 +3963,9 @@ where
     ///   wallclock time every second. Every minute we emit all lags observed over the last minute,
     ///   together with the current histogram period.
     ///
+    /// Under `enable_wallclock_freshness_reporting`, histories report the staleness of
+    /// [`reported_wallclock_lag`] instead, while histograms keep the lag of the write frontier.
+    ///
     /// Histories are emitted to both Mz introspection and Prometheus, histograms only to
     /// introspection. We treat lags of unreadable collections (i.e. collections that contain no
     /// readable times) as undefined and set them to NULL in introspection and `u64::MAX` in
@@ -3967,16 +3974,59 @@ where
     /// This method is invoked by `Controller::maintain`, which we expect to be called once per
     /// second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        let now_ms = (self.now)();
+        let frontier_lag =
+            |lag_fn: &WallclockLagFn<Timestamp>, frontier: &Antichain<Timestamp>| match frontier
+                .as_option()
+            {
+                Some(ts) => lag_fn(*ts),
+                None => Duration::ZERO,
+            };
+        let reporting = ENABLE_WALLCLOCK_FRESHNESS_REPORTING.get(self.config.config_set());
+
+        // The states of unreported collections are read in a pre-pass, because the background
+        // task waits for their lock, and an advance it learns meanwhile would be charged late.
+        let ((now, all_frontiers, mut unreported_lags), updates) =
+            self.with_unreported_freshness(|this, states, now| {
+                let all_frontiers = this.storage_collections.active_collection_frontiers();
+                let mut lags = BTreeMap::new();
+                for frontiers in &all_frontiers {
+                    let id = frontiers.id;
+                    // The compute controller records the collections it writes, among them
+                    // materialized views, so this controller tracks their staleness only to report
+                    // it. Their freshness dependence appears once the compute controller creates
+                    // their dataflow, and `StorageCollections` observes them from then on.
+                    // TODO: The dependence is captured once, so a later change of an existing
+                    // materialized view's dependence is not picked up.
+                    if this
+                        .collections
+                        .get(&id)
+                        .is_some_and(|c| matches!(c.data_source, DataSource::Other))
+                        && !id.is_transient()
+                        && !states.contains(&id)
+                        && let Ok(Some(dependence)) =
+                            this.storage_collections.determine_freshness_dependence(id)
+                    {
+                        // The frontiers were read under the lock, so `StorageCollections` observes
+                        // every later advance.
+                        let state =
+                            FreshnessState::new(dependence, now, &frontiers.write_frontier, None);
+                        states.insert_reporting_only(id, state);
+                    }
+                    if let Some(state) = states.get_mut(&id) {
+                        let today = frontier_lag(&this.wallclock_lag, &frontiers.write_frontier);
+                        let lag = reported_wallclock_lag(reporting, Some(state), now, today);
+                        lags.insert(id, lag);
+                    }
+                }
+                (now, all_frontiers, lags)
+            });
+        self.append_freshness_updates(updates);
+
+        let now_ms = u64::from(now);
         let histogram_period =
             WallclockLagHistogramPeriod::from_epoch_millis(now_ms, self.config.config_set());
 
-        let frontier_lag = |frontier: &Antichain<Timestamp>| match frontier.as_option() {
-            Some(ts) => (self.wallclock_lag)(*ts),
-            None => Duration::ZERO,
-        };
-
-        for frontiers in self.storage_collections.active_collection_frontiers() {
+        for frontiers in all_frontiers {
             let id = frontiers.id;
             let Some(collection) = self.collections.get_mut(&id) else {
                 continue;
@@ -3984,22 +4034,29 @@ where
 
             let collection_unreadable =
                 PartialOrder::less_equal(&frontiers.write_frontier, &frontiers.read_capabilities);
-            let lag = if collection_unreadable {
-                WallclockLag::Undefined
+            let today = frontier_lag(&self.wallclock_lag, &frontiers.write_frontier);
+            let reported = match unreported_lags.remove(&id) {
+                Some(lag) => lag,
+                None => {
+                    reported_wallclock_lag(reporting, collection.freshness.as_mut(), now, today)
+                }
+            };
+            let (lag, histogram_lag) = if collection_unreadable {
+                (WallclockLag::Undefined, WallclockLag::Undefined)
             } else {
-                let lag = frontier_lag(&frontiers.write_frontier);
-                WallclockLag::Seconds(lag.as_secs())
+                (reported, WallclockLag::from_duration(today))
             };
 
             collection.wallclock_lag_max = collection.wallclock_lag_max.max(lag);
 
             // No way to specify values as undefined in Prometheus metrics, so we use the
             // maximum value instead.
-            let secs = lag.unwrap_seconds_or(u64::MAX);
-            collection.wallclock_lag_metrics.observe(secs);
+            collection
+                .wallclock_lag_metrics
+                .observe(lag.metric_seconds());
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
-                let bucket = lag.map_seconds(|secs| secs.next_power_of_two());
+                let bucket = histogram_lag.histogram_bucket();
                 let labels = histogram_labels(&self.instances, &collection.extra_state);
                 let key = (histogram_period, bucket, labels);
                 *stash.entry(key).or_default() += Diff::ONE;
@@ -4062,13 +4119,13 @@ where
                 continue;
             };
 
-            for ((period, lag, labels), count) in std::mem::take(stash) {
+            for ((period, bucket, labels), count) in std::mem::take(stash) {
                 let mut packer = row_buf.packer();
                 packer.extend([
                     Datum::TimestampTz(period.start),
                     Datum::TimestampTz(period.end),
                     Datum::String(&id.to_string()),
-                    lag.into_uint64_datum(),
+                    Datum::from(bucket),
                 ]);
                 let labels = labels.iter().map(|(k, v)| (*k, Datum::String(v)));
                 packer.push_dict(labels);
@@ -4250,14 +4307,15 @@ struct CollectionState {
     /// Frontier wallclock lag measurements stashed until the next `WallclockLagHistogram`
     /// introspection update.
     ///
-    /// Keys are `(period, lag, labels)` triples, values are counts.
+    /// Keys are `(period, bucket, labels)` triples, values are counts. The bucket is that of
+    /// [`WallclockLag::histogram_bucket`].
     ///
     /// If this is `None`, wallclock lag is not tracked for this collection.
     wallclock_lag_histogram_stash: Option<
         BTreeMap<
             (
                 WallclockLagHistogramPeriod,
-                WallclockLag,
+                Option<u64>,
                 BTreeMap<&'static str, String>,
             ),
             Diff,
