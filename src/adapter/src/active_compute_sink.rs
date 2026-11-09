@@ -612,7 +612,7 @@ pub(crate) struct ActiveCopyFrom {
     /// The table we're currently copying into.
     pub table_id: CatalogItemId,
     /// Query-owned staging and connection cleanup, including pending admission.
-    pub query_execution: Option<mz_ore::task::AbortOnDropHandle<()>>,
+    pub query_execution: mz_ore::task::AbortOnDropHandle<()>,
     /// Context of the SQL session that ran the statement.
     pub ctx: ExecuteContext,
 }

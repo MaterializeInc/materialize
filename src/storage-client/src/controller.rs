@@ -34,7 +34,6 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL;
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_ore::soft_panic_or_log;
-use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::{Codec64, ShardId};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -44,7 +43,6 @@ use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
-use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -658,19 +656,6 @@ pub trait StorageController: Debug {
 
     /// Acquire a mutable reference to the export state, should it exist.
     fn export_mut(&mut self, id: GlobalId) -> Result<&mut ExportState, StorageError>;
-
-    /// Create a oneshot ingestion.
-    async fn create_oneshot_ingestion(
-        &mut self,
-        ingestion_id: uuid::Uuid,
-        collection_id: GlobalId,
-        instance_id: StorageInstanceId,
-        request: OneshotIngestionRequest,
-        result_tx: OneshotResultCallback<ProtoBatch>,
-    ) -> Result<(), StorageError>;
-
-    /// Cancel a oneshot ingestion.
-    fn cancel_oneshot_ingestion(&mut self, ingestion_id: uuid::Uuid) -> Result<(), StorageError>;
 
     /// Alter the sink identified by the given id to match the provided `ExportDescription`.
     async fn alter_export(

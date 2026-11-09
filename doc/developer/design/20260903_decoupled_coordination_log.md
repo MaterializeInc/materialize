@@ -16,7 +16,7 @@ their native owners rather than changing fixture booleans or adding production
 test-only APIs. Keep controllerd reconciliation and adapter policy.
 
 Use one Cargo job for the next heavy build to avoid overlapping large links.
-Preserve the30GiB disk reserve.
+Preserve the 30 GiB disk reserve.
 
 A user decision is pending on retiring the unused legacy final-preflight hook
 with an explicit unsupported result. It has no enabled CI caller, but can run
@@ -46,6 +46,8 @@ are removed. SQL transaction access, native writer admission, WAL ordering and
 replica output authority remain intact. Private migration workers, migrated-MV
 write exceptions and readiness exclusions are also removed. Shared builtin-schema
 admission, native WAL recovery and readiness classification remain protected.
+Remote COPY uses request-owned query transport without controller callbacks.
+Native cancellation, completion, error handling and restart checks pass.
 All affected targets compile
 and native owner tests pass. Independent review is resolved. Exclusive cleanup
 based on deployment age or local inventory is also removed. Its old retry interval
@@ -71,6 +73,8 @@ before workflow dispatch. Its probe timed out during pulls, without starting
 services. Newly pulled unused image tags were removed.
 
 Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
+- `query-copy-verification.md` links native HTTP COPY, query transport, restart
+  and WAL checks, with the independent review and resolved test-only findings.
 - `private-migration-verification.md` links passing native startup/readiness,
   infrastructure and WAL/protection checks, source review and cache cleanup.
 - `adapter-serving-mode-verification.md` links source review and passing native
@@ -99,7 +103,8 @@ Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
 - `controller-alternatives.md`, `frontier-review.md`, `harness-decision.md`,
   `native-frontiers.log`, and `work-notes.md` for implementation/evidence pointers.
 
-All owned verification services and disk monitors are stopped. Superseded native benchmark binaries
+All owned verification services and disk monitors are stopped.
+Superseded native benchmark binaries
 were removed, with checksums retained in `archived-binary-cleanup.log`. Baseline
 artifacts, measurement reports and current binaries remain. Recreate isolated
 prerequisites before runtime checks. Pre/post-cleanup builtin schemas are incompatible, so use

@@ -21,10 +21,6 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::connections::aws::AwsConnection;
 
-/// Callback type used to send the result of a oneshot source.
-pub type OneshotResultCallback<Batch> =
-    Box<dyn FnOnce(Vec<Result<Batch, String>>) -> () + Send + 'static>;
-
 pub struct OneshotIngestionDescription<Batch> {
     /// Tokens for the running dataflows.
     pub tokens: Vec<PressOnDropButton>,

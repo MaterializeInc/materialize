@@ -41,7 +41,6 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
-use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
@@ -52,8 +51,8 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
 use mz_storage_client::client::{
-    AppendOnlyUpdate, RunIngestionCommand, RunOneshotIngestion, RunSinkCommand, Status,
-    StatusUpdate, StorageCommand, StorageResponse,
+    AppendOnlyUpdate, RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageCommand,
+    StorageResponse,
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
@@ -73,7 +72,6 @@ use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
-use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -101,25 +99,6 @@ mod history;
 mod instance;
 pub mod rtr;
 mod statistics;
-
-#[derive(Derivative)]
-#[derivative(Debug)]
-struct PendingOneshotIngestion {
-    /// Callback used to provide results of the ingestion.
-    #[derivative(Debug = "ignore")]
-    result_tx: OneshotResultCallback<ProtoBatch>,
-    /// Cluster currently running this ingestion
-    cluster_id: StorageInstanceId,
-}
-
-impl PendingOneshotIngestion {
-    /// Consume the pending ingestion, responding with a cancelation message.
-    ///
-    /// TODO(cf2): Refine these error messages so they're not stringly typed.
-    pub(crate) fn cancel(self) {
-        (self.result_tx)(vec![Err("canceled".to_string())])
-    }
-}
 
 /// A storage controller for a storage instance.
 #[derive(Derivative)]
@@ -159,9 +138,6 @@ pub struct Controller {
     txns_read: TxnsRead<Timestamp>,
     txns_metrics: Arc<TxnMetrics>,
     stashed_responses: Vec<(Option<ReplicaId>, StorageResponse)>,
-    /// Closures that can be used to send responses from oneshot ingestions.
-    #[derivative(Debug = "ignore")]
-    pending_oneshot_ingestions: BTreeMap<uuid::Uuid, PendingOneshotIngestion>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager,
@@ -1547,98 +1523,6 @@ impl StorageController for Controller {
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    /// Create a oneshot ingestion.
-    async fn create_oneshot_ingestion(
-        &mut self,
-        ingestion_id: uuid::Uuid,
-        collection_id: GlobalId,
-        instance_id: StorageInstanceId,
-        request: OneshotIngestionRequest,
-        result_tx: OneshotResultCallback<ProtoBatch>,
-    ) -> Result<(), StorageError> {
-        if self.replica_owned {
-            return Err(StorageError::Generic(anyhow::anyhow!(
-                "native COPY must use the query client"
-            )));
-        }
-        let collection_meta = self
-            .collections
-            .get(&collection_id)
-            .ok_or_else(|| StorageError::IdentifierMissing(collection_id))?
-            .collection_metadata
-            .clone();
-        let instance = self.instances.get_mut(&instance_id).ok_or_else(|| {
-            // TODO(cf2): Refine this error.
-            StorageError::Generic(anyhow::anyhow!("missing cluster {instance_id}"))
-        })?;
-        let oneshot_cmd = RunOneshotIngestion {
-            catalog_position: None,
-            ingestion_id,
-            collection_id,
-            collection_meta,
-            request,
-        };
-
-        if !self.read_only {
-            instance
-                .legacy
-                .as_mut()
-                .expect("legacy execution required")
-                .send(StorageCommand::RunOneshotIngestion(Box::new(oneshot_cmd)));
-            let pending = PendingOneshotIngestion {
-                result_tx,
-                cluster_id: instance_id,
-            };
-            let novel = self
-                .pending_oneshot_ingestions
-                .insert(ingestion_id, pending);
-            assert_none!(novel);
-            Ok(())
-        } else {
-            Err(StorageError::ReadOnly)
-        }
-    }
-
-    fn cancel_oneshot_ingestion(&mut self, ingestion_id: uuid::Uuid) -> Result<(), StorageError> {
-        if self.replica_owned {
-            return Err(StorageError::Generic(anyhow::anyhow!(
-                "native COPY must use the query client"
-            )));
-        }
-        if self.read_only {
-            return Err(StorageError::ReadOnly);
-        }
-
-        let pending = self
-            .pending_oneshot_ingestions
-            .remove(&ingestion_id)
-            .ok_or_else(|| {
-                // TODO(cf2): Refine this error.
-                StorageError::Generic(anyhow::anyhow!("missing oneshot ingestion {ingestion_id}"))
-            })?;
-
-        match self.instances.get_mut(&pending.cluster_id) {
-            Some(instance) => {
-                instance
-                    .legacy
-                    .as_mut()
-                    .expect("legacy execution required")
-                    .send(StorageCommand::CancelOneshotIngestion(ingestion_id));
-            }
-            None => {
-                mz_ore::soft_panic_or_log!(
-                    "canceling oneshot ingestion on non-existent cluster, ingestion {:?}, instance {}",
-                    ingestion_id,
-                    pending.cluster_id,
-                );
-            }
-        }
-        // Respond to the user that the request has been canceled.
-        pending.cancel();
-
-        Ok(())
-    }
-
     async fn alter_export(
         &mut self,
         id: GlobalId,
@@ -2459,30 +2343,9 @@ impl StorageController for Controller {
                 (_, StorageResponse::CatalogCatchup(_)) => {
                     panic!("replica catalog catchup on controller connection")
                 }
-                (_replica_id, StorageResponse::StagedBatches(batches)) => {
-                    for (ingestion_id, batches) in batches {
-                        match self.pending_oneshot_ingestions.remove(&ingestion_id) {
-                            Some(pending) => {
-                                // Send a cancel command so our command history is correct. And to
-                                // avoid duplicate work once we have active replication.
-                                if let Some(instance) = self.instances.get_mut(&pending.cluster_id)
-                                {
-                                    instance
-                                        .legacy
-                                        .as_mut()
-                                        .expect("legacy execution required")
-                                        .send(StorageCommand::CancelOneshotIngestion(ingestion_id));
-                                }
-                                // Send the results down our channel.
-                                (pending.result_tx)(batches)
-                            }
-                            None => {
-                                // We might not be tracking this oneshot ingestion anymore because
-                                // it was canceled.
-                            }
-                        }
-                    }
-                }
+                // COPY results belong to the request-owned query connection.
+                // Observation streams have no pending request to complete.
+                (_, StorageResponse::StagedBatches(_)) => {}
             }
         }
 
@@ -2675,7 +2538,6 @@ impl StorageController for Controller {
             txns_read: _,
             txns_metrics: _,
             stashed_responses,
-            pending_oneshot_ingestions,
             collection_manager: _,
             introspection_ids,
             introspection_tokens: _,
@@ -2709,10 +2571,6 @@ impl StorageController for Controller {
             .collect();
         let stashed_responses: Vec<_> =
             stashed_responses.iter().map(|r| format!("{r:?}")).collect();
-        let pending_oneshot_ingestions: BTreeMap<_, _> = pending_oneshot_ingestions
-            .iter()
-            .map(|(uuid, i)| (uuid.to_string(), format!("{i:?}")))
-            .collect();
         let introspection_ids: BTreeMap<_, _> = introspection_ids
             .iter()
             .map(|(typ, id)| (format!("{typ:?}"), id.to_string()))
@@ -2732,7 +2590,6 @@ impl StorageController for Controller {
             "collections": collections,
             "dropped_objects": dropped_objects,
             "stashed_responses": stashed_responses,
-            "pending_oneshot_ingestions": pending_oneshot_ingestions,
             "introspection_ids": introspection_ids,
             "instances": instances,
             "initialized": initialized,
@@ -2823,7 +2680,6 @@ where
             txns_read,
             txns_metrics,
             stashed_responses: vec![],
-            pending_oneshot_ingestions: BTreeMap::default(),
             collection_manager,
             introspection_ids,
             introspection_tokens,

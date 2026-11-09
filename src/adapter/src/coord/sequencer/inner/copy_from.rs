@@ -23,9 +23,7 @@ use mz_sql::plan::{self, CopyFromFilter, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_storage_types::StorageDiff;
-use mz_storage_types::oneshot_sources::{
-    ContentShape, OneshotIngestionRequest, OneshotResultCallback,
-};
+use mz_storage_types::oneshot_sources::{ContentShape, OneshotIngestionRequest};
 use mz_storage_types::sources::SourceData;
 use smallvec::SmallVec;
 use timely::progress::Antichain;
@@ -265,73 +263,55 @@ impl Coordinator {
             }
         };
         let cluster_id = target_cluster.id;
-        let query_execution = if let Some(client) = self.query_client.clone() {
-            let metadata = return_if_err!(client.collection_metadata(&catalog, collection_id), ctx);
-            let position = return_if_err!(
-                catalog
-                    .planning_position()
-                    .ok_or_else(|| AdapterError::Unstructured(anyhow::anyhow!(
-                        "native COPY FROM requires a validated catalog position"
-                    ))),
-                ctx
-            );
-            Some((client, metadata, position))
-        } else {
-            None
+        let client = self
+            .query_client
+            .clone()
+            .expect("query client initialized before serving COPY");
+        let collection_meta =
+            return_if_err!(client.collection_metadata(&catalog, collection_id), ctx);
+        let position = return_if_err!(
+            catalog
+                .planning_position()
+                .ok_or_else(|| AdapterError::Unstructured(anyhow::anyhow!(
+                    "native COPY FROM requires a validated catalog position"
+                ))),
+            ctx
+        );
+        let command = mz_storage_client::client::RunOneshotIngestion {
+            catalog_position: None,
+            ingestion_id,
+            collection_id,
+            collection_meta,
+            request,
         };
-
-        // When we finish staging the Batches in Persist, we'll send a command
-        // to the Coordinator.
         let command_tx = self.internal_cmd_tx.clone();
         let conn_id = ctx.session().conn_id().clone();
-        let closure: OneshotResultCallback<ProtoBatch> = Box::new(move |batches| {
-            let _ = command_tx.send(crate::coord::Message::StagedBatches {
-                conn_id,
-                ingestion_id,
-                table_id: target_id,
-                batches,
-            });
-        });
-        // Stash the execute context so we can cancel the COPY.
-        let conn_id = ctx.session().conn_id().clone();
+        let response_conn_id = conn_id.clone();
+        let task = mz_ore::task::spawn(
+            || "query COPY FROM",
+            async move {
+                let result = client.stage_oneshot(cluster_id, command, position).await;
+                let _ = command_tx.send(crate::coord::Message::StagedBatches {
+                    conn_id: response_conn_id,
+                    ingestion_id,
+                    table_id: target_id,
+                    batches: result.unwrap_or_else(|error| vec![Err(error.to_string())]),
+                });
+            }
+            .instrument(tracing::Span::current()),
+        );
+        // Do not yield between spawning and registering: completion and cancellation
+        // must find this request when the coordinator next handles a message.
         self.active_copies.insert(
-            conn_id.clone(),
+            conn_id,
             ActiveCopyFrom {
                 ingestion_id,
                 cluster_id,
                 table_id: target_id,
-                query_execution: None,
+                query_execution: task.abort_on_drop(),
                 ctx,
             },
         );
-
-        if let Some((client, collection_meta, position)) = query_execution {
-            let command = mz_storage_client::client::RunOneshotIngestion {
-                catalog_position: None,
-                ingestion_id,
-                collection_id,
-                collection_meta,
-                request,
-            };
-            let task = mz_ore::task::spawn(
-                || "query COPY FROM",
-                async move {
-                    let result = client.stage_oneshot(cluster_id, command, position).await;
-                    closure(result.unwrap_or_else(|error| vec![Err(error.to_string())]));
-                }
-                .instrument(tracing::Span::current()),
-            );
-            self.active_copies
-                .get_mut(&conn_id)
-                .expect("registered COPY")
-                .query_execution = Some(task.abort_on_drop());
-        } else {
-            let _result = self
-                .controller
-                .storage
-                .create_oneshot_ingestion(ingestion_id, collection_id, cluster_id, request, closure)
-                .await;
-        }
     }
 
     /// Sets up a streaming COPY FROM STDIN operation.
@@ -786,24 +766,14 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn cancel_pending_copy(&mut self, conn_id: &ConnectionId) {
         if let Some(ActiveCopyFrom {
-            ingestion_id,
+            ingestion_id: _,
             cluster_id: _,
             table_id: _,
             query_execution,
             ctx,
         }) = self.active_copies.remove(conn_id)
         {
-            if let Some(execution) = query_execution {
-                drop(execution);
-            } else {
-                let cancel_result = self
-                    .controller
-                    .storage
-                    .cancel_oneshot_ingestion(ingestion_id);
-                if let Err(err) = cancel_result {
-                    tracing::error!(?err, "failed to cancel OneshotIngestion");
-                }
-            }
+            drop(query_execution);
 
             ctx.retire(Err(AdapterError::Canceled));
         }

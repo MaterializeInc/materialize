@@ -474,6 +474,95 @@ impl MockHttpServer {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[allow(clippy::disallowed_methods)]
+async fn test_remote_copy_request_lifecycle() {
+    let test_case = async {
+        let server = test_util::TestHarness::default().start().await;
+        let client = server.connect().await.unwrap();
+        client
+            .batch_execute("CREATE TABLE copy_target (a INT)")
+            .await
+            .unwrap();
+        let mut source = MockHttpServer::new().await;
+        let sql = format!(
+            "COPY INTO copy_target FROM 'http://{}/input.csv' (FORMAT CSV)",
+            source.addr
+        );
+
+        // Wait for actual replica execution before canceling. Keep its HTTP
+        // response withheld until SQL acknowledges cancellation.
+        let cancel = client.cancel_token();
+        let (late_response, result) = tokio::join!(
+            async {
+                let response = source.accept().await;
+                cancel.cancel_query(postgres::NoTls).await.unwrap();
+                response
+            },
+            client.execute(&sql, &[]),
+        );
+        assert_eq!(result.unwrap_err().code(), Some(&SqlState::QUERY_CANCELED));
+        let _ = late_response.send("9\n".into_response());
+
+        // Keep the old server separate so an HTTP request racing cancellation
+        // cannot consume a response intended for the next COPY.
+        let _canceled_source = source;
+        let mut source = MockHttpServer::new().await;
+        let sql = format!(
+            "COPY INTO copy_target FROM 'http://{}/input.csv' (FORMAT CSV)",
+            source.addr
+        );
+        // Reuse the canceled session and commit only the new request's batches.
+        let ((), result) = tokio::join!(
+            async {
+                source
+                    .accept()
+                    .await
+                    .send("1\n2\n".into_response())
+                    .unwrap();
+                source
+                    .accept()
+                    .await
+                    .send("1\n2\n".into_response())
+                    .unwrap();
+            },
+            client.execute(&sql, &[]),
+        );
+        assert_eq!(result.unwrap(), 2);
+
+        let ((), result) = tokio::join!(
+            async {
+                source
+                    .accept()
+                    .await
+                    .send("not-a-number\n".into_response())
+                    .unwrap();
+                source
+                    .accept()
+                    .await
+                    .send("not-a-number\n".into_response())
+                    .unwrap();
+            },
+            client.execute(&sql, &[]),
+        );
+        let error = result.unwrap_db_error();
+        assert_contains!(error.message(), "not-a-number");
+        let rows = client
+            .query("SELECT a FROM copy_target ORDER BY a", &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.get::<_, i32>(0))
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+    };
+    tokio::time::timeout(Duration::from_secs(180), test_case)
+        .await
+        .expect("remote COPY lifecycle test timed out");
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_no_block() {
     // We manually time out the test because it's better than relying on CI to time out, because
     // an actual failure (as opposed to a CI timeout) causes `services.log` to be uploaded.
