@@ -36,4 +36,5 @@ pub mod reclock;
 pub mod rendezvous;
 pub mod replay;
 pub mod scope_label;
+pub mod shared_trace;
 pub mod temporal;
