@@ -15,10 +15,11 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::antichain_join;
-use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
+use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{Span, TraceReader};
 use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_timely_util::arrange_agent::TraceAgent;
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;

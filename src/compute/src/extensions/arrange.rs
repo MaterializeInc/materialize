@@ -14,8 +14,7 @@ use std::sync::{Arc, Weak};
 use differential_dataflow::batcher::Batcher;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::arrangement::arrange_core;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::spine_fueled::{Spine, SpineBatch};
 use differential_dataflow::trace::{Trace, TraceReader};
@@ -23,6 +22,7 @@ use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollect
 use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MERGE_BATCHER};
 use mz_dyncfg::ConfigSet;
 use mz_row_spine::ArcBatch;
+use mz_timely_util::arrange_agent::{TraceAgent, arrange_core_with};
 use mz_timely_util::containers::HeapSize;
 use mz_timely_util::operator::BatcherNew;
 use timely::Container;
@@ -126,9 +126,16 @@ where
         Tr: Trace<Time = T> + 'static,
         Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
-        // Allow access to `arrange_named` because we're within Mz's wrapper.
+        // Allow access to `arrange_core_with` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        arrange_core::<_, _, Ba, _>(self, pact, name, Ba::new_batcher).log_arrangement_size()
+        arrange_core_with(
+            self,
+            pact,
+            name,
+            Ba::new_batcher,
+            TraceAgent::<Tr>::factory(),
+        )
+        .log_arrangement_size()
     }
 }
 
