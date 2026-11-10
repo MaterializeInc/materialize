@@ -81,10 +81,13 @@ export MZ_PROFILE_STAGING_PASSWORD="my-secret"
 ## Profile suffixes
 
 Set `profile_suffix` in `project.toml` to rename databases and clusters when
-deploying with a particular profile:
+deploying with a particular profile. Per-profile settings in `project.toml` go
+in a top-level table named after the profile, such as `[staging]`.
+`mz-deploy` ignores unrecognized tables and keys, so a section such as
+`[profiles.staging]` has no effect:
 
 ```toml
-[profiles.staging]
+[staging]
 profile_suffix = "_staging"
 ```
 
@@ -104,10 +107,10 @@ Variables parameterize values that differ across profiles. Define them in
 `project.toml`:
 
 ```toml
-[profiles.staging.variables]
+[staging.variables]
 compute_cluster = "staging_compute"
 
-[profiles.production.variables]
+[production.variables]
 compute_cluster = "production_compute"
 ```
 
@@ -133,11 +136,11 @@ not defined for the active profile, compilation fails with an error.
 
 For objects that differ structurally across environments (for example, connections
 pointing to different hosts), use file overrides. Name the variant file with a
-double-underscore suffix: `name__<profile>.sql`.
+`#` and the profile name: `name#<profile>.sql`.
 
 ```nofmt
 models/materialize/public/pg_conn.sql
-models/materialize/public/pg_conn__staging.sql
+models/materialize/public/pg_conn#staging.sql
 ```
 
 ```sql
@@ -152,7 +155,7 @@ CREATE CONNECTION pg_conn TO POSTGRES (
 ```
 
 ```sql
--- models/materialize/public/pg_conn__staging.sql
+-- models/materialize/public/pg_conn#staging.sql
 CREATE CONNECTION pg_conn TO POSTGRES (
     HOST 'staging-replica.internal',
     DATABASE 'app',
@@ -178,10 +181,10 @@ You can configure which AWS profile is used when resolving `aws_secret()`
 providers:
 
 ```toml
-[profiles.production.security]
+[production.security]
 aws_profile = "prod-account"
 
-[profiles.staging.security]
+[staging.security]
 aws_profile = "staging-account"
 ```
 
