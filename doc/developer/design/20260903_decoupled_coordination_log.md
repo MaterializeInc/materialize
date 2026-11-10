@@ -16,12 +16,16 @@ session and candidate execution, explicit retirement, rejected retired-generatio
 restart, surviving writes and relay continuity. Evidence and earlier failures:
 `native-lifecycle-slice-verification.md` under the directory below.
 
-Next convert the remaining 0dt promotion/cleanup sites to identity-bound
-retirement, keeping retirement outside hydration timing windows. Preserve the
-stopped/in-place predecessor cases and the existing compatible-image lane.
-`native-lifecycle-harness-seams.md` maps callers and contracts. The old promotion
-cleanup parameter remains until those callers migrate. Do not treat the converted
-same-build workflow as distinct-version proof or broad CI.
+Six source-prewarming callers now use explicit retirement outside promotion and
+first-query timing windows. Their workloads and timing assertions are unchanged.
+The actual Kafka source-failpoint workflow passed with its original multi-process
+cluster sizes. The five high-volume source-prewarming lanes were not executed.
+Evidence: `native-source-lifecycle-verification.md`.
+
+Next convert the remaining 0dt sites, preserving stopped/in-place predecessors,
+full-writer behavior and the compatible-image lane. `native-lifecycle-harness-seams.md`
+maps callers and contracts. The old promotion cleanup parameter remains until
+callers migrate. Same-build evidence is not distinct-version proof or broad CI.
 
 Replica-side execution cleanup is a separate unit. Its inspected boundary is in
 `native-replica-execution-boundary.md`. A user decision is pending on preserving
@@ -76,6 +80,10 @@ matching post-cleanup schemas for native version demonstrations.
 Pre-native-to-native conversion is out of scope. Arbitrary-version compatibility
 and external-sink handover remain unverified.
 
+The source-failpoint run's final successful status-query attempt reported 673
+seconds. Its cause is untraced. Do not treat that passing scenario as responsive
+SQL evidence or assume CPU caps explain the delay.
+
 Catalog catch-up can start introspection for a peer-created replica before
 QueryClient activation. This startup race predates the compute-owner removal.
 The call chain is source-reviewed, not reproduced or fixed. The birth-ordering
@@ -103,9 +111,9 @@ Current cleanup evidence: `~/.local/share/aj/m3-evidence/native-only/`.
   `pg-upgrade-boundary.md`, `platform-boundary-followup.md` and
   `exclusive-cleanup-review.md` preserve harness, reporting and ownership evidence.
 
-All owned verification services are stopped. The lifecycle, Rust-test and Kafka
-fixtures, including the one-off retired-generation restart, were removed. About
-45 GiB is free. Current
+All owned verification services are stopped. Lifecycle, source-failpoint,
+Rust-test and Kafka fixtures, including the retired-generation restart, were
+removed. About 45 GiB is free. Current
 services, baseline artifacts and measurement reports remain. Superseded build
 outputs and inactive incremental caches were reclaimed. Cleanup records are in
 `native-compute-*-cleanup.log` and `native-compute-reserve-reclaim.log`.

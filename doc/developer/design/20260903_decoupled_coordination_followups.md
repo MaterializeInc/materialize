@@ -75,6 +75,15 @@ expression caching alone does not remove the raw store because fallback opens
 remain. Preserve admin validation, committed selection, cross-cluster producer
 schemas and catalog-authorized retirement. No measured saving is claimed yet.
 
+## Native source-status latency
+
+The native source-failpoint lifecycle passed, but its final successful status-query
+attempt reported 673 seconds in a capped debug fixture. The explicit multi-process
+cluster sizes were retained. This does not establish responsive SQL, and the delay
+has not been attributed to resource limits or any code path. Trace prepare and
+execution before changing deadlines or publication settings. Evidence:
+`~/.local/share/aj/m3-evidence/native-only/native-source-lifecycle-verification.md`.
+
 ## Duplicate progress observation
 
 Fresh scan tracing at 60s identifies additional authority/placement imports and

@@ -1511,7 +1511,6 @@ def workflow_kafka_source_rehydration(
         elapsed = time.monotonic() - start_time
         print(f"promotion took {elapsed} seconds (through SQL readiness)")
         assert elapsed < promotion_timeout, f"Promotion exceeded {promotion_timeout}s"
-        c.kill_fenced_mz("mz_old")
 
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
@@ -1523,6 +1522,9 @@ def workflow_kafka_source_rehydration(
         assert (
             elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
+        # Keep cleanup outside both promotion and first-query timing windows.
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
 
         new_version = c.query_mz_version(service="mz_new")
         print(f"mz_new SQL binary version: {new_version}")
@@ -1627,7 +1629,6 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
-        c.kill_fenced_mz("mz_old")
 
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
@@ -1639,6 +1640,9 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         assert (
             elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
+        # Keep cleanup outside both promotion and first-query timing windows.
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
 
         start_time = time.time()
         result = c.sql_query("SELECT 1", service="mz_new")
@@ -1752,7 +1756,6 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
-        c.kill_fenced_mz("mz_old")
         start_time = time.time()
         result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1761,6 +1764,9 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         assert (
             elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
+        # Keep cleanup outside both promotion and first-query timing windows.
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
 
         result = c.sql_query(
             "SELECT count(*) FROM postgres_source_table", service="mz_new"
@@ -1877,7 +1883,6 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
-        c.kill_fenced_mz("mz_old")
         start_time = time.time()
         result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1886,6 +1891,9 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         assert (
             elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
+        # Keep cleanup outside both promotion and first-query timing windows.
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
 
         result = c.sql_query(
             "SELECT count(*) FROM mysql_source_table", service="mz_new"
@@ -2009,7 +2017,6 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
-        c.kill_fenced_mz("mz_old")
         start_time = time.time()
         result = c.sql_query("SELECT * FROM sql_server_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -2018,6 +2025,9 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         assert (
             elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on SQL Server source after 0dt upgrade, is it hydrated?"
+        # Keep cleanup outside both promotion and first-query timing windows.
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
 
         result = c.sql_query(
             "SELECT count(*) FROM sql_server_source_table", service="mz_new"
@@ -2121,11 +2131,13 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
     ):
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        c.promote_mz("mz_new", retire_mz_service="mz_old")
+        c.promote_mz("mz_new", retire_mz_service=None)
 
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
 
         # Verify that the Kafka source's status is marked as "running" in mz_source_statuses.
         c.testdrive(dedent("""
