@@ -3334,9 +3334,21 @@ impl Coordinator {
                     let mut primary = mv
                         .replacement_target
                         .map(|target_id| catalog.get_entry(&target_id).latest_global_id());
+                    // Storage joins the shard's since with this `since` when opening the
+                    // critical handle, which initializes the since of a new shard. After an
+                    // applied replacement, `initial_as_of` is the replacement's as-of, and the
+                    // join would advance the since past the uppers of stalled dependents,
+                    // whose read holds do not exist yet during bootstrap. The shard's since was
+                    // initialized when the oldest version was created, so skip the join.
+                    let has_applied_replacement = mv.collections.len() > 1;
+                    let since = if has_applied_replacement {
+                        None
+                    } else {
+                        mv.initial_as_of.clone()
+                    };
                     let collection_descs = mv.collection_descs().map(|(gid, _version, desc)| {
                         let mut collection_desc =
-                            CollectionDescription::for_other(desc, mv.initial_as_of.clone());
+                            CollectionDescription::for_other(desc, since.clone());
                         collection_desc.primary = primary;
                         primary = Some(gid);
                         (gid, collection_desc)

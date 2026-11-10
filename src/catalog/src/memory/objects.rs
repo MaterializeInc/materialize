@@ -1510,6 +1510,8 @@ pub struct MaterializedView {
     ///
     /// Note: This doesn't change upon restarts.
     /// (The dataflow's initial `as_of` can be different.)
+    /// Applying a replacement sets it to the replacement's `as_of`, so it no longer bounds the
+    /// since of the shard, which the oldest version created.
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
     // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
     // consistency checks do two dumps and compare them. One of these states comes from the durable
