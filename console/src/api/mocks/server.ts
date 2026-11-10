@@ -7,16 +7,40 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { setupServer } from "msw/node";
+import type { HttpRequestEventMap, Interceptor } from "@mswjs/interceptors";
+import { ClientRequestInterceptor } from "@mswjs/interceptors/ClientRequest";
+import { FetchInterceptor } from "@mswjs/interceptors/fetch/web";
+import { WebSocketInterceptor } from "@mswjs/interceptors/WebSocket";
+import { XMLHttpRequestInterceptor } from "@mswjs/interceptors/XMLHttpRequest";
+import { defineNetwork, InterceptorSource } from "msw/experimental";
+import { defaultNetworkOptions } from "msw/node";
 
 import cloudGlobalApiHandlers from "./cloudGlobalApiHandlers";
 import cloudRegionApiHandlers from "./cloudRegionApiHandlers";
 import incidentIOHandlers from "./incidentIOHandlers";
 import materializeHandlers from "./materializeHandlers";
 
-export default setupServer(
-  ...cloudGlobalApiHandlers,
-  ...cloudRegionApiHandlers,
-  ...materializeHandlers,
-  ...incidentIOHandlers,
-);
+// NOTE: `setupServer` intercepts Node's fetch at the undici socket, so a mocked
+// response arrives only after real event-loop I/O, measured at about 40 ms.
+// Tests that advance fake timers then race the response and see no request.
+// The web fetch interceptor patches `globalThis.fetch` and answers without I/O.
+export default defineNetwork({
+  ...defaultNetworkOptions,
+  sources: [
+    new InterceptorSource({
+      interceptors: [
+        new ClientRequestInterceptor(),
+        new XMLHttpRequestInterceptor(),
+        // The browser build declares its own, nominally distinct Interceptor.
+        new FetchInterceptor() as unknown as Interceptor<HttpRequestEventMap>,
+        new WebSocketInterceptor(),
+      ],
+    }),
+  ],
+  handlers: [
+    ...cloudGlobalApiHandlers,
+    ...cloudRegionApiHandlers,
+    ...materializeHandlers,
+    ...incidentIOHandlers,
+  ],
+});

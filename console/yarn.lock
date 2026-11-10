@@ -1826,7 +1826,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mswjs/interceptors@npm:^0.45.6":
+"@mswjs/interceptors@npm:^0.45.11, @mswjs/interceptors@npm:^0.45.6":
   version: 0.45.11
   resolution: "@mswjs/interceptors@npm:0.45.11"
   dependencies:
@@ -9172,6 +9172,7 @@ __metadata:
     "@lezer/highlight": "npm:^1.2.4"
     "@materializeinc/sql-lexer": "npm:^26.48.2"
     "@materializeinc/sql-pretty": "npm:^26.48.2"
+    "@mswjs/interceptors": "npm:^0.45.11"
     "@playwright/test": "npm:^1.64.1"
     "@rehookify/datepicker": "npm:^6.6.8"
     "@rolldown/plugin-babel": "npm:^0.2.4"
