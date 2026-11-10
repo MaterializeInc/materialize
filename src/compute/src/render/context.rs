@@ -20,7 +20,7 @@ use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::TEMPORAL_BUCKETING_SUMMARY;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
@@ -50,7 +50,7 @@ use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
-use crate::sharing::CreationNumber;
+use crate::sharing::{CreationNumber, SlotCheck};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrSpine, ImportedErrEnter, ImportedRowRowEnter, RowRowAgent,
     RowRowChunkedBatcher, RowRowColumnarBatcher, RowRowColumnationBatcher, RowRowSpine,
@@ -139,6 +139,27 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             dataflow_expiration,
             config_set: Rc::clone(&compute_state.worker_config),
             creation,
+        }
+    }
+}
+
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
+    /// The creation number of the incarnations this dataflow publishes.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a runtime that does not derive creation numbers. Only the maintenance runtime
+    /// publishes, and it derives them.
+    pub(crate) fn publication_creation(&self) -> CreationNumber {
+        self.creation
+            .expect("a runtime that publishes derives creation numbers")
+    }
+
+    /// What a reader of index `idx`, which this dataflow exports, compares against its slot.
+    pub(crate) fn slot_check(&self, idx: &IndexDesc<LirScalarExpr>) -> SlotCheck {
+        SlotCheck {
+            as_of: self.as_of_frontier.clone(),
+            index: Some(idx.clone()),
         }
     }
 }

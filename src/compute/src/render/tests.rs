@@ -22,9 +22,8 @@ use timely::progress::Antichain;
 
 use crate::arrangement::manager::{ErrsTrace, OksTrace};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::shared_trace::adopt_trace;
 use crate::shared_trace::tests::{SharedReaderExt, drop_dataflows};
-use crate::sharing::{ArrangementSharingRegistry, SharedIndexArrangement};
+use crate::sharing::{ArrangementSharingRegistry, PublishToken, SlotCheck};
 use crate::typedefs::{ErrBatcher, ErrSpine, RowRowAgent, RowRowSpine};
 
 fn test_rows() -> Vec<(Row, Row)> {
@@ -40,8 +39,9 @@ fn test_rows() -> Vec<(Row, Row)> {
     ]
 }
 
-/// Publishes `rows` as a `(RowRow oks, Err errs)` index into `registry` under `id` on worker 0
-/// of `scope`. The updates are written at time 0 and sealed by advancing the inputs to 1.
+/// Publishes `rows` as a `(RowRow oks, Err errs)` index into `registry` under `id`, as
+/// incarnation 0 at the minimum, on worker 0 of `scope`. The updates are written at time 0 and
+/// sealed by advancing the inputs to 1.
 ///
 /// The `InputSession` handles drop at the end of this call, buffering the sealed updates for the
 /// worker to process on later steps, mirroring `sharing.rs`'s `publish_index_into`. Returns the
@@ -54,10 +54,7 @@ fn publish_index(
     rows: Vec<(Row, Row)>,
 ) -> (
     RowRowAgent<Timestamp, Diff>,
-    (
-        crate::typedefs::ErrAgent<Timestamp, Diff>,
-        std::sync::Arc<SharedIndexArrangement>,
-    ),
+    (crate::typedefs::ErrAgent<Timestamp, Diff>, PublishToken),
 ) {
     let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
     let oks = oks_collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("test oks");
@@ -67,10 +64,7 @@ fn publish_index(
     let errs = KeyCollection::from(errs_collection)
         .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("test errs");
 
-    let slot = registry.get_or_create(id, &Antichain::from_elem(Timestamp::MIN));
-    adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
-    adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-    registry.notify();
+    let token = registry.publish(id, 0, SlotCheck::logging(), scope, &oks.trace, &errs.trace);
 
     for (k, v) in rows {
         oks_input.update((k, v), Diff::ONE);
@@ -79,12 +73,12 @@ fn publish_index(
     oks_input.flush();
     errs_input.advance_to(Timestamp::from(1_u64));
     errs_input.flush();
-    // The slot is returned with the traces, because the publication lasts only while it is held.
-    (oks.trace.clone(), (errs.trace.clone(), slot))
+    // The token is returned with the traces, because the publication lasts only while it is held.
+    (oks.trace.clone(), (errs.trace.clone(), token))
 }
 
-/// Imports index `id`'s publication into `scope` the way the interactive runtime does, through
-/// peer readers at `as_of`. Returns the slot, which the caller keeps for the life of the import.
+/// Imports incarnation 0 of index `id` into `scope` the way the interactive runtime does, through
+/// peer readers at `as_of`.
 fn import_shared<'scope>(
     registry: &ArrangementSharingRegistry,
     scope: Scope<'scope, Timestamp>,
@@ -94,10 +88,8 @@ fn import_shared<'scope>(
 ) -> (
     Arranged<'scope, TraceFrontier<OksTrace>>,
     Arranged<'scope, TraceFrontier<ErrsTrace>>,
-    std::sync::Arc<SharedIndexArrangement>,
 ) {
-    let slot = registry.get_or_create(id, &Antichain::from_elem(Timestamp::MIN));
-    let (oks_reader, errs_reader) = slot.peer_readers(as_of);
+    let (oks_reader, errs_reader) = registry.peer_readers_at(id, 0, as_of);
     let (oks, _) = OksTrace::Shared(oks_reader.into()).import_frontier_core(
         scope.clone(),
         "Index",
@@ -110,7 +102,7 @@ fn import_shared<'scope>(
         as_of.clone(),
         until.clone(),
     );
-    (oks, errs, slot)
+    (oks, errs)
 }
 
 /// The interactive import path imports a maintenance-published arrangement into a second
@@ -143,7 +135,7 @@ fn interactive_import_replays_rows_and_holds_at_as_of() {
         let probe = ProbeHandle::new();
         let (mut oks_trace, mut errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
             // `until` empty: no upper suppression, so the whole snapshot at `as_of` flows.
-            let (oks_arranged, errs_arranged, _slot) = import_shared(
+            let (oks_arranged, errs_arranged) = import_shared(
                 &registry_in,
                 scope.clone(),
                 id,
@@ -218,13 +210,7 @@ fn publish_index_with_writer(
         .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("test errs");
 
     // Through the registry, so the readers' holds reach the trace over the slot's hold link.
-    let token = registry.publish(
-        id,
-        &Antichain::from_elem(Timestamp::MIN),
-        scope,
-        &oks.trace,
-        &errs.trace,
-    );
+    let token = registry.publish(id, 0, SlotCheck::logging(), scope, &oks.trace, &errs.trace);
 
     for (k, v) in rows {
         oks_input.update((k, v), Diff::ONE);
@@ -311,7 +297,7 @@ fn interactive_import_hold_releases_on_drop() {
         // into, which is what lets a consumer downgrade the hold as its frontier advances. The
         // `stream`s are dropped, as a consumer that only needs the trace would.
         let (oks_trace, errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, errs_arranged, _slot) =
+            let (oks_arranged, errs_arranged) =
                 import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
             (oks_arranged.trace, errs_arranged.trace)
         });
@@ -396,7 +382,7 @@ fn interactive_import_holds_after_construction() {
         // handle it produced go out of scope with the builder, exactly as production does.
         let probe = ProbeHandle::new();
         worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, _errs_arranged, _slot) =
+            let (oks_arranged, _errs_arranged) =
                 import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
             let collected = Arranged::<TraceFrontier<OksTrace>>::flat_map_batches(
                 oks_arranged.stream,
@@ -460,8 +446,7 @@ fn published_since_does_not_chase_reader_holds() {
         // A reader at the higher as_of. Its handles go out of scope with the builder; the
         // import operator's own hold remains.
         worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (_o, _e, _slot) =
-                import_shared(&registry, scope.clone(), id, &high, &Antichain::new());
+            let (_o, _e) = import_shared(&registry, scope.clone(), id, &high, &Antichain::new());
         });
         for t in 1..4 {
             tick(
@@ -520,7 +505,7 @@ fn import_reports_physical_within_chain_coverage() {
         );
 
         let mut trace = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, _e, _slot) =
+            let (oks_arranged, _e) =
                 import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
             oks_arranged.trace
         });
@@ -566,7 +551,7 @@ fn interactive_import_hold_downgrades_while_live() {
         seal_errs(&mut errs_input, Timestamp::from(20_u64));
 
         let (mut oks_trace, mut errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, errs_arranged, _slot) =
+            let (oks_arranged, errs_arranged) =
                 import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
             (oks_arranged.trace, errs_arranged.trace)
         });
@@ -649,7 +634,7 @@ fn a_peer_bundle_pins_until_the_importing_runtime_applies() {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
         seal_errs(&mut errs_input, Timestamp::from(20_u64));
-        let mut peer = registry.peer_bundle(id, &Antichain::from_elem(Timestamp::MIN));
+        let mut peer = registry.peer_bundle_at(id, 0, &Antichain::from_elem(Timestamp::MIN));
 
         // The maintenance runtime applies `AllowCompaction(10)` in full: the writer floor moves and
         // its own trace handle compacts. The importing runtime has not applied its copy of that
@@ -734,7 +719,8 @@ fn publish_through_registry(
         .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("test errs");
     let token = registry.publish(
         id,
-        &Antichain::from_elem(Timestamp::MIN),
+        0,
+        SlotCheck::logging(),
         oks.stream.scope(),
         &oks.trace,
         &errs.trace,
@@ -760,7 +746,7 @@ fn a_padded_peer_bundle_reports_the_minimum_time() {
     timely::execute_directly(move |worker| {
         let (mut oks_input, mut oks_writer, _keep) = worker
             .dataflow::<Timestamp, _, _>(|scope| publish_through_registry(scope, &registry, id));
-        let mut peer = registry.peer_bundle(id, &as_of);
+        let mut peer = registry.peer_bundle_at(id, 0, &as_of);
         let target = Antichain::from_elem(Timestamp::from(10_u64));
         oks_writer.set_logical_compaction(target.borrow());
         peer.oks_mut().set_logical_compaction(target.borrow());
@@ -798,7 +784,7 @@ fn a_peer_bundle_holds_logically_and_its_import_reads_the_rows() {
             publish_index(scope, &registry_in, id, rows.clone())
         });
 
-        let mut bundle = registry_in.peer_bundle(id, &as_of);
+        let mut bundle = registry_in.peer_bundle_at(id, 0, &as_of);
         assert_eq!(
             bundle.oks_mut().get_physical_compaction(),
             Antichain::new().borrow(),

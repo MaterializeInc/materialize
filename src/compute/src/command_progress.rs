@@ -74,14 +74,12 @@ impl MaintenanceProgress {
     }
 
     /// Whether the maintenance runtime applied command `number`.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn passed(&self, number: CommandNumber) -> bool {
         self.probe
             .with_frontier(|frontier| !frontier.less_equal(&number))
     }
 
     /// The first command the maintenance runtime has not applied.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn frontier(&self) -> Antichain<CommandNumber> {
         self.probe.with_frontier(|frontier| frontier.to_owned())
     }

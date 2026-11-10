@@ -25,11 +25,12 @@ use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
-use mz_compute_types::dataflows::{DataflowClass, RenderDataflowDescription};
+use mz_compute_types::dataflows::{DataflowClass, IndexDesc, RenderDataflowDescription};
 use mz_compute_types::dyncfgs::{
     ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_RESPONSE_STASH_BATCH_BYTES,
     PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_ROW_ITERATION_LIMIT,
 };
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
@@ -81,7 +82,7 @@ use crate::placement::Placement;
 use crate::process_globals::ProcessGlobals;
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
-use crate::sharing::{ArrangementSharingRegistry, CreationNumber};
+use crate::sharing::{ArrangementSharingRegistry, CreationNumber, PeerIndex, SlotCheck};
 
 mod error_scan;
 mod peek_budget;
@@ -224,7 +225,6 @@ pub struct ComputeState {
     /// Publishes this runtime's indexes for its peer runtime, if that runtime reads them.
     pub(crate) publisher: Option<ArrangementSharingRegistry>,
     /// How far the process's maintenance runtime applied its commands, on the interactive runtime.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) maintenance_progress: Option<MaintenanceProgress>,
     /// When the hold-gap metrics were last reported, `None` before the first report.
     hold_gaps_reported_at: Option<Instant>,
@@ -243,8 +243,14 @@ pub struct ComputeState {
     /// reads its peer's indexes, a peer index also has a shared trace in `traces`, whose logical
     /// compaction is this runtime's hold on it.
     ///
-    /// Each peer maps to the creation number of its incarnation.
-    pub(crate) peers: BTreeMap<GlobalId, CreationNumber>,
+    /// Each peer carries the creation number of its incarnation.
+    pub(crate) peers: BTreeMap<GlobalId, Peer>,
+    /// The peer indexes awaiting their bind, by the number of the command that created their
+    /// incarnation. See [`ComputeState::bind_peers`].
+    ///
+    /// An entry may name a peer that was dropped since, or replaced by a later incarnation, which
+    /// the bind skips.
+    unbound_peers: BTreeMap<CreationNumber, BTreeSet<GlobalId>>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -333,6 +339,48 @@ impl ComputeState {
             .then(|| number.expect("the sequencer numbers every command but peeks"))
     }
 
+    /// Binds every recorded peer index whose creating command the maintenance runtime applied to
+    /// the slot of exactly its incarnation, if that slot exists. Each peer is tried once.
+    ///
+    /// A missing slot means maintenance dropped the incarnation again before this runtime bound
+    /// it, so the peer is about to be dropped here too. A slot that does not match the peer is
+    /// reported, see [`PeerIndex::bind`]. Either way the peer stays unbound, and its reads wait.
+    pub(crate) fn bind_peers(&mut self) {
+        let (Some(progress), Some(registry)) = (&self.maintenance_progress, &self.peer_traces)
+        else {
+            return;
+        };
+        // Cheap enough for every pass of the worker loop. Peers recorded after maintenance passed
+        // their number bind on the next pass, without the frontier moving again.
+        let Some((&first, _)) = self.unbound_peers.first_key_value() else {
+            return;
+        };
+        if !progress.passed(first) {
+            return;
+        }
+        let passed = match progress.frontier().as_option() {
+            Some(frontier) => {
+                let later = self.unbound_peers.split_off(frontier);
+                std::mem::replace(&mut self.unbound_peers, later)
+            }
+            None => std::mem::take(&mut self.unbound_peers),
+        };
+        for (creation, ids) in passed {
+            for id in ids {
+                let Some(slot) = registry.slot(id, creation) else {
+                    debug!(%id, creation, "no slot for an applied peer index");
+                    continue;
+                };
+                match self.peers.get_mut(&id) {
+                    Some(Peer::Index(peer)) if peer.creation() == creation => peer.bind(id, slot),
+                    // Dropped, or dropped and recreated, before maintenance applied the create. No
+                    // reader of this runtime holds the incarnation.
+                    _ => slot.release_hold_link(),
+                }
+            }
+        }
+    }
+
     /// Whether a peek is waiting on nothing but its next turn in the sweep.
     ///
     /// Read by the worker loop before it parks. The sweep that serves such a peek runs on the same
@@ -381,6 +429,7 @@ impl ComputeState {
                 sharing_registry.clone()
             }),
             peers: Default::default(),
+            unbound_peers: Default::default(),
             publisher: role.publishes_indexes().then(|| {
                 sharing_registry.attach_publisher();
                 sharing_registry.clone()
@@ -603,8 +652,14 @@ impl<'a> ActiveComputeState<'a> {
             self.initialize_logging(config.logging, creation);
         } else {
             let index_ids: Vec<_> = config.logging.index_logs.values().copied().collect();
-            let minimum = Antichain::from_elem(Timestamp::MIN);
-            self.record_peers(index_ids.clone().into_iter(), index_ids, &minimum, creation);
+            let logging = SlotCheck::logging();
+            let index_exports = index_ids.iter().map(|id| (*id, logging.index.clone()));
+            self.record_peers(
+                index_ids.iter().copied(),
+                index_exports.collect(),
+                &logging.as_of,
+                creation,
+            );
         }
 
         self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
@@ -656,30 +711,56 @@ impl<'a> ActiveComputeState<'a> {
             self.render_dataflow(dataflow, creation);
         } else {
             let as_of = dataflow.as_of.clone().expect("dataflow has an as_of");
-            let index_ids: Vec<_> = dataflow.index_exports.keys().copied().collect();
-            self.record_peers(dataflow.export_ids(), index_ids, &as_of, creation);
+            // Lowered as `render` lowers the exports it publishes, so both runtimes compare equal
+            // descriptions.
+            let index_exports = dataflow
+                .index_exports
+                .iter()
+                .map(|(id, (index, _typ))| (*id, Some(index.as_lir())))
+                .collect();
+            self.record_peers(dataflow.export_ids(), index_exports, &as_of, creation);
         }
     }
 
-    /// Records collections the process's other runtime exports, holding each index among them at
-    /// `as_of` where this runtime reads that runtime's indexes.
+    /// Records collections the process's other runtime exports, holding each index among them, as
+    /// described by `index_exports`, at `as_of` where this runtime reads that runtime's indexes.
+    /// `None` describes a logging index.
     fn record_peers(
         &mut self,
         export_ids: impl Iterator<Item = GlobalId>,
-        index_ids: impl IntoIterator<Item = GlobalId>,
+        mut index_exports: BTreeMap<GlobalId, Option<IndexDesc<LirScalarExpr>>>,
         as_of: &Antichain<Timestamp>,
         creation: Option<CreationNumber>,
     ) {
         let creation = creation.expect("a runtime with peers derives creation numbers");
+        let compute_state = &mut *self.compute_state;
         for id in export_ids {
-            let fresh = self.compute_state.peers.insert(id, creation).is_none();
+            // Checked before inserting, so a second record keeps the first incarnation's number.
+            let fresh = !compute_state.peers.contains_key(&id);
             mz_ore::soft_assert_or_log!(fresh, "peer collection {id} recorded twice");
-        }
-        if let Some(registry) = &self.compute_state.peer_traces {
-            for id in index_ids {
-                let bundle = registry.peer_bundle(id, as_of);
-                self.compute_state.traces.set(id, bundle);
+            if !fresh {
+                continue;
             }
+            let index = index_exports.remove(&id);
+            let peer = match (index, &compute_state.peer_traces) {
+                (Some(index), Some(_)) => {
+                    let check = SlotCheck {
+                        as_of: as_of.clone(),
+                        index,
+                    };
+                    let peer = PeerIndex::new(creation, check);
+                    // Before the bind, so the bind connects the bundle's hold.
+                    compute_state.traces.set(id, peer.bundle());
+                    compute_state
+                        .unbound_peers
+                        .entry(creation)
+                        .or_default()
+                        .insert(id);
+                    Peer::Index(peer)
+                }
+                _ => Peer::Export(creation),
+            };
+            compute_state.peers.insert(id, peer);
         }
     }
 
@@ -2025,6 +2106,25 @@ impl ReportedFrontier {
         match self {
             Self::Reported(frontier) => PartialOrder::less_than(frontier, other),
             Self::NotReported { lower } => PartialOrder::less_equal(lower, other),
+        }
+    }
+}
+
+/// A collection the process's other runtime exports, see [`ComputeState::peers`].
+pub(crate) enum Peer {
+    /// An index this runtime reads through the other runtime's publication.
+    Index(PeerIndex),
+    /// Any other export, or an index on a runtime that does not read the other's indexes.
+    Export(#[cfg_attr(not(test), expect(dead_code))] CreationNumber),
+}
+
+impl Peer {
+    /// The number of the command that created the peer's incarnation.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn creation(&self) -> CreationNumber {
+        match self {
+            Peer::Index(index) => index.creation(),
+            Peer::Export(creation) => *creation,
         }
     }
 }

@@ -35,11 +35,12 @@ where
     /// Creates a publication point. It starts unattached: an empty chain with `since` and `upper`
     /// at the minimum time and no writer, until one attaches via [`adopt_trace`].
     ///
-    /// A reader may mint handles and build imports over it before that happens, but they produce
-    /// nothing (the import frontier stays at the minimum) until attachment seeds them. Attachment
-    /// fills the same `Arc`, so a handle captured by value at construction (as a differential join
-    /// captures its input trace) observes the filled chain: the handle is a live proxy into the
-    /// shared state, not a snapshot.
+    /// The writer creates the point and attaches its trace to it, see
+    /// [`crate::sharing::ArrangementSharingRegistry::publish`]. A handle minted before the
+    /// attachment produces nothing (an import's frontier stays at the minimum) until attachment
+    /// seeds it. Attachment fills the same `Arc`, so a handle captured by value at construction (as
+    /// a differential join captures its input trace) observes the filled chain: the handle is a
+    /// live proxy into the shared state, not a snapshot.
     pub(crate) fn new() -> Self {
         Published {
             shared: Arc::new(Shared::new()),

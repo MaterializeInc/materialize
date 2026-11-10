@@ -162,22 +162,22 @@ where
     /// Binds `point`, registers the physical hold of every live reader on it, and activates every
     /// [`Self::on_bind`] waiter.
     ///
+    /// Returns `Err` with the published `since` if it is beyond the meet of the live readers'
+    /// logical holds. The binding then stays unbound and unchanged.
+    ///
     /// # Panics
     ///
-    /// Panics if the binding is already bound, or if the published `since` is beyond the logical
-    /// hold of a live reader, which the hold stream rules out.
-    pub fn bind(&self, point: Arc<Shared<T, B>>) {
-        let (waiters, unbound) = {
-            let mut inner = self.inner.borrow_mut();
+    /// Panics if the binding is already bound.
+    pub fn bind(&self, point: Arc<Shared<T, B>>) -> Result<(), Antichain<T>> {
+        let unbound: Vec<_> = {
+            let inner = self.inner.borrow();
             assert!(inner.point.is_none(), "a binding binds one point");
-            inner.point = Some(Arc::clone(&point));
-            (
-                std::mem::take(&mut inner.waiters),
-                std::mem::take(&mut inner.unbound),
-            )
+            inner.unbound.iter().filter_map(Weak::upgrade).collect()
         };
-        let unbound: Vec<_> = unbound.iter().filter_map(Weak::upgrade).collect();
-        if !unbound.is_empty() {
+        // Read before anything changes, so a refused point leaves the binding as it was.
+        let base = if unbound.is_empty() {
+            None
+        } else {
             // One read of the point serves every reader, so all hold at the same coverage, which
             // is at or below anything their consumers read once `bind` returns. A consumer that
             // read the coverage before its reader registered could cut at a boundary the writer
@@ -186,7 +186,15 @@ where
             for state in &unbound {
                 meet.extend(state.borrow().logical.iter().cloned());
             }
-            let base = Self::mint(&point, &meet);
+            Some(point.reader_physical_at(&meet)?)
+        };
+        let waiters = {
+            let mut inner = self.inner.borrow_mut();
+            inner.point = Some(point);
+            inner.unbound.clear();
+            std::mem::take(&mut inner.waiters)
+        };
+        if let Some(base) = base {
             for state in &unbound {
                 let mut state = state.borrow_mut();
                 // Only readers minted while unbound are tracked, and only the bind registers them.
@@ -201,6 +209,7 @@ where
         for waiter in waiters {
             waiter.activate();
         }
+        Ok(())
     }
 
     /// Whether a point is bound.
@@ -437,7 +446,8 @@ where
     ///
     /// # Panics
     ///
-    /// Panics, here or at the bind, if the bound point's `since` is beyond that joined hold.
+    /// Panics if the binding is bound and its point's `since` is beyond that joined hold. A later
+    /// bind to such a point is refused, see [`Binding::bind`].
     pub fn import_frontier_core<'scope>(
         &self,
         scope: Scope<'scope, T>,
@@ -481,5 +491,59 @@ where
         });
 
         Arranged { stream, trace }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared_trace::TraceFrontiers;
+
+    fn at(t: u64) -> Antichain<u64> {
+        Antichain::from_elem(t)
+    }
+
+    /// An unattached point whose `since` is `since`.
+    fn point_at(since: u64) -> Arc<Shared<u64, ()>> {
+        Arc::new(Shared::with_meta(TraceFrontiers {
+            logical: at(since),
+            requested_logical: at(since),
+            physical: at(since),
+        }))
+    }
+
+    #[mz_ore::test]
+    fn a_refused_bind_leaves_the_binding_unbound_and_its_readers_tracked() {
+        let holds = HoldAccumulation::new();
+        let binding = Binding::<u64, ()>::new(holds.clone());
+        let mut reader = binding.reader(at(3));
+
+        let compacted = point_at(5);
+        assert_eq!(
+            binding.bind(Arc::clone(&compacted)),
+            Err(at(5)),
+            "a point compacted past a reader's hold is refused"
+        );
+        assert!(!binding.is_bound());
+        assert_eq!(
+            compacted.physical_holds(),
+            Antichain::new(),
+            "a refused point gets no hold"
+        );
+        let mut upper = Antichain::new();
+        reader.read_upper(&mut upper);
+        assert_eq!(upper, at(0), "the reader still reads as unbound");
+        assert_eq!(holds.frontier(), at(3), "the logical hold is unchanged");
+
+        let fresh = point_at(0);
+        binding
+            .bind(Arc::clone(&fresh))
+            .expect("the fresh point's since is below the hold");
+        assert!(binding.is_bound());
+        assert_eq!(
+            fresh.physical_holds(),
+            at(0),
+            "the reader stayed tracked through the refusal and registers on the bound point"
+        );
     }
 }
