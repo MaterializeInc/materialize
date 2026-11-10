@@ -1004,8 +1004,7 @@ pub(crate) fn pack_statement_prepared_update(record: &StatementPreparedRecord) -
         Datum::Bytes(sql_hash.as_slice()),
         Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
         kind.map(statement_kind_label_value).into(),
-        // throttled_count used to be recorded per prepared statement, but because
-        // of (sql-227), we record it per execution and record it here as Null.
+        // throttled_count: retired, see `MZ_PREPARED_STATEMENT_HISTORY_DESC`.
         Datum::Null,
     ])
 }
