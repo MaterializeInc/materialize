@@ -403,6 +403,32 @@
       "matchPackageNames": ["@chakra-ui/*"],
       "matchUpdateTypes": ["major"],
       "enabled": false
+    },
+    {
+      // The console imports `framer-motion`, and Chakra 2 declares it as a
+      // peer, so it has to stay a direct dependency.
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["framer-motion"],
+      "matchUpdateTypes": ["replacement"],
+      "enabled": false
+    },
+    {
+      // Redocly, which `yarn gen:api` loads through openapi-typescript, reads
+      // js-yaml 4's `types` export when it loads. js-yaml 5 removed it.
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["js-yaml"],
+      "allowedVersions": "<5"
+    },
+    {
+      // `@emotion/babel-plugin` 11 and jotai's Babel preset (jotai is held at
+      // ~2.9.3) depend on Babel 7 packages, and the Babel 8 update failed the
+      // console build.
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["@babel/core"],
+      "allowedVersions": "<8"
     }
   ]
 }
