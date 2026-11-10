@@ -21,7 +21,8 @@ import incidentIOHandlers from "./incidentIOHandlers";
 import materializeHandlers from "./materializeHandlers";
 
 // msw's socket-level fetch interception leaks undici's post-abort reconnects
-// to the real network. TODO: Use setupServer once mswjs/interceptors#863 ships.
+// to the real network. TODO: Try setupServer once our Node bundles undici
+// 8.12.3, where msw's maintainer expects nodejs/undici#5982 to fix this.
 export default defineNetwork({
   ...defaultNetworkOptions,
   sources: [
