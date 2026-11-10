@@ -46,6 +46,7 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
+from materialize.mzcompose.services.pubsub import Pubsub
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
@@ -99,6 +100,7 @@ def create_mzs(
 
 
 SERVICES = [
+    Pubsub(),
     TestCerts(),
     PostgresMetadata(
         # Workaround for database-issues#5899

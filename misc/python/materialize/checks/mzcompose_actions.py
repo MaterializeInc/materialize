@@ -16,6 +16,7 @@ from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.listener_config import (
@@ -55,6 +56,7 @@ class StartMz(MzcomposeAction):
         restart: str | None = None,
         force_migrations: str | None = None,
         publish: bool | None = None,
+        external_pubsub: bool = False,
     ) -> None:
         if healthcheck is None:
             healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
@@ -77,6 +79,7 @@ class StartMz(MzcomposeAction):
         self.restart = restart
         self.force_migrations = force_migrations
         self.publish = publish
+        self.external_pubsub = external_pubsub
         self.scenario = scenario
 
     def execute(self, e: Executor) -> None:
@@ -110,6 +113,15 @@ class StartMz(MzcomposeAction):
         mz = Materialized(
             name=self.mz_service,
             image=image,
+            depends_on=["pubsub"] if self.external_pubsub else [],
+            options=(
+                [
+                    "--persist-pubsub-external",
+                    "--persist-pubsub-url=http://pubsub:6879",
+                ]
+                if self.external_pubsub
+                else []
+            ),
             # TODO: Switch to default (CockroachOrPostgresMetadata) when
             # https://linear.app/materializeinc/issue/SS-284 is solved
             metadata_store="postgres-metadata",
@@ -471,6 +483,25 @@ class PromoteMz(MzcomposeAction):
 
         mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
         e.current_mz_version = mz_version
+
+
+class RetireMzDeployment(MzcomposeAction):
+    """Revoke a deployment's authority, then clean up its test container."""
+
+    def __init__(
+        self, mz_service: str, deploy_generation: int, *, retired_service: str
+    ) -> None:
+        self.mz_service = mz_service
+        self.deploy_generation = deploy_generation
+        self.retired_service = retired_service
+
+    def execute(self, e: Executor) -> None:
+        e.mzcompose_composition().retire_mz_deployment(
+            self.mz_service,
+            self.deploy_generation,
+            environment_id=DEFAULT_MZ_ENVIRONMENT_ID,
+        )
+        e.mzcompose_composition().kill_fenced_mz(self.retired_service)
 
 
 class SystemVarChange(MzcomposeAction):

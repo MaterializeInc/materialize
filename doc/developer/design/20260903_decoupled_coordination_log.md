@@ -27,6 +27,11 @@ Parallel-workload's coexistence wiring is committed with helper checks but no
 stress rerun. Zippy's native actions passed with continuing ingestion in both
 storage topologies. Full randomized zippy and runtime restore remain unrun.
 
+The same-build platform restart scenario now shares its relay and explicitly
+retires each predecessor before cleanup. Helper checks preserve all check phases
+and historical-image behavior. Runtime acceptance is still unverified. See
+`native-platform-verification.md`. Other platform scenarios remain to be converted.
+
 Remaining 0dt work includes
 read-only/fencing expectations, forced-migration cases and temporary-item cleanup.
 Preserve the source/sink workloads, in-place predecessors and compatible-image

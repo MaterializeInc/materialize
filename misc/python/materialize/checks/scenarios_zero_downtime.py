@@ -25,6 +25,7 @@ from materialize.checks.features import Features
 from materialize.checks.mzcompose_actions import (
     MzcomposeAction,
     PromoteMz,
+    RetireMzDeployment,
     StartMz,
     WaitReadyMz,
 )
@@ -40,8 +41,21 @@ from materialize.mzcompose import get_default_system_parameters
 
 
 def wait_ready_and_promote(
-    mz_service: str, previous_mz_service: str
+    mz_service: str,
+    previous_mz_service: str,
+    *,
+    previous_generation: int | None = None,
 ) -> list[MzcomposeAction]:
+    # Native promotion preserves the predecessor's authority. Historical images
+    # instead fence it during promotion and have no controller retirement API.
+    if previous_generation is not None:
+        return [
+            WaitReadyMz(mz_service),
+            PromoteMz(mz_service, retire_mz_service=None),
+            RetireMzDeployment(
+                mz_service, previous_generation, retired_service=previous_mz_service
+            ),
+        ]
     return [
         WaitReadyMz(mz_service),
         PromoteMz(mz_service, retire_mz_service=previous_mz_service),
@@ -55,33 +69,38 @@ class ZeroDowntimeRestartEntireMz(Scenario):
             StartMz(
                 self,
                 mz_service="mz_1",
+                deploy_generation=0,
+                external_pubsub=True,
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Initialize(self, mz_service="mz_1"),
             start_mz_read_only(
                 self,
                 deploy_generation=1,
+                external_pubsub=True,
                 mz_service="mz_2",
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2", "mz_1"),
+            *wait_ready_and_promote("mz_2", "mz_1", previous_generation=0),
             start_mz_read_only(
                 self,
                 deploy_generation=2,
+                external_pubsub=True,
                 mz_service="mz_3",
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3", "mz_2"),
+            *wait_ready_and_promote("mz_3", "mz_2", previous_generation=1),
             start_mz_read_only(
                 self,
                 deploy_generation=3,
+                external_pubsub=True,
                 mz_service="mz_4",
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Validate(self, mz_service="mz_3"),
-            *wait_ready_and_promote("mz_4", "mz_3"),
+            *wait_ready_and_promote("mz_4", "mz_3", previous_generation=2),
             Validate(self, mz_service="mz_4"),
         ]
 

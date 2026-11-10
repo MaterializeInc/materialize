@@ -78,6 +78,7 @@ def start_mz_read_only(
     system_parameter_version: MzVersion | None = None,
     force_migrations: str | None = None,
     publish: bool | None = None,
+    external_pubsub: bool = False,
 ) -> StartMz:
     return StartMz(
         scenario,
@@ -90,6 +91,7 @@ def start_mz_read_only(
         system_parameter_version=system_parameter_version,
         force_migrations=force_migrations,
         publish=publish,
+        external_pubsub=external_pubsub,
     )
 
 
