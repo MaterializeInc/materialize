@@ -38,7 +38,6 @@ import { TooltipColorSwatch } from "~/components/graphComponents";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import TextLink from "~/components/TextLink";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
-import { useFlags } from "~/hooks/useFlags";
 import { useTimePeriodMinutes } from "~/hooks/useTimePeriodSelect";
 import {
   absoluteClusterPath,
@@ -106,9 +105,6 @@ const ClusterFreshnessTable = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const regionSlug = useRegionSlug();
-  const flags = useFlags();
-  // Without the page to link to, the value stays plain text.
-  const linkToFreshnessPage = flags["freshness-page-CNS164"];
 
   if (data.length === 0) {
     return null;
@@ -171,18 +167,14 @@ const ClusterFreshnessTable = ({
                 </Td>
 
                 <Td>
-                  {linkToFreshnessPage ? (
-                    <TextLink
-                      as={Link}
-                      to={absoluteFreshnessPath(regionSlug, clusterId)}
-                      title={`Freshness details for ${clusterName}`}
-                      aria-label={`Freshness details for ${clusterName}`}
-                    >
-                      {tableText}
-                    </TextLink>
-                  ) : (
-                    tableText
-                  )}
+                  <TextLink
+                    as={Link}
+                    to={absoluteFreshnessPath(regionSlug, clusterId)}
+                    title={`Freshness details for ${clusterName}`}
+                    aria-label={`Freshness details for ${clusterName}`}
+                  >
+                    {tableText}
+                  </TextLink>
                 </Td>
               </Tr>
             );
