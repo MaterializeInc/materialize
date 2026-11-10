@@ -9,6 +9,7 @@
 
 import argparse
 import importlib.util
+import json
 import threading
 import xml.etree.ElementTree as ET
 from contextlib import nullcontext
@@ -25,7 +26,7 @@ from materialize.cli.mzcompose import RunCommand
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.test_result import FailedTestExecutionError
-from materialize.ui import UIError
+from materialize.ui import CommandFailureCausedUIError, UIError
 
 
 @pytest.fixture
@@ -56,6 +57,120 @@ def run_workflow(c, monkeypatch, body, name="default", composition_name="results
         ),
         c,
     )
+
+
+def test_native_promotion_does_not_retire_or_kill(composition, monkeypatch):
+    execute = Mock(return_value=SimpleNamespace(stdout='{"result":"Success"}'))
+    cleanup = Mock()
+    monkeypatch.setattr(composition, "exec", execute)
+    monkeypatch.setattr(composition, "kill_fenced_mz", cleanup)
+
+    composition.promote_mz("candidate", retire_mz_service=None)
+
+    assert execute.call_count == 1
+    assert "localhost:6878/api/leader/promote" in execute.call_args.args
+    cleanup.assert_not_called()
+
+
+@pytest.mark.parametrize("image", [None, "known-compatible-native-image"])
+def test_native_deployment_overrides_keep_the_external_relay(image):
+    path = MZ_ROOT / "test/0dt/mzcompose.py"
+    spec = importlib.util.spec_from_file_location("native_deployment_workflow", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    service = module.native_mz(
+        name="candidate", image=image, options=["--unsafe-mode"], depends_on=["other"]
+    )
+    assert "--persist-pubsub-external" in service.config["command"]
+    assert "--persist-pubsub-url=http://pubsub:6879" in service.config["command"]
+    assert "--unsafe-mode" in service.config["command"]
+    assert {"pubsub", "other"} <= service.config["depends_on"].keys()
+    relay = module.Pubsub(image=image).config
+    assert ("mzbuild" in relay) == (image is None)
+    assert ("image" in relay) == (image is not None)
+    assert relay["entrypoint"] == ["tini", "--", "pubsubd"]
+    assert "ports" not in relay
+    assert "volumes" not in relay
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {"retired": 7, "environment_id": "expected-environment"},
+        {"retired": 8, "environment_id": "expected-environment"},
+        {"retired": 7, "environment_id": "other-environment"},
+        {},
+        None,
+    ],
+)
+def test_native_retirement_checks_identity_without_cleanup(
+    composition, monkeypatch, receipt
+):
+    execute = Mock(return_value=SimpleNamespace(stdout=json.dumps(receipt)))
+    if receipt is None:
+        execute.side_effect = UIError("HTTP 409")
+    cleanup = Mock()
+    monkeypatch.setattr(composition, "exec", execute)
+    monkeypatch.setattr(composition, "kill_fenced_mz", cleanup)
+
+    def retire():
+        composition.retire_mz_deployment(
+            "survivor", 7, environment_id="expected-environment"
+        )
+
+    if receipt is None:
+        with pytest.raises(UIError, match="HTTP 409"):
+            retire()
+    elif receipt == {"retired": 7, "environment_id": "expected-environment"}:
+        retire()
+    else:
+        with pytest.raises(AssertionError, match="Unexpected retirement receipt"):
+            retire()
+
+    args = execute.call_args.args
+    assert args[0] == "survivor"
+    assert args[-1] == "http://localhost:6882/api/deployments/7/retire"
+    assert "--fail-with-body" in args
+    assert json.loads(args[args.index("--data") + 1]) == {
+        "environment_id": "expected-environment"
+    }
+    cleanup.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "outcome", ["retry_then_success", "exhausted", "wrong_identity"]
+)
+def test_native_retirement_retries_only_explicit_contention(
+    composition, monkeypatch, outcome
+):
+    message = (
+        "environment identity does not match this controller"
+        if outcome == "wrong_identity"
+        else "catalog changed; retry the request"
+    )
+    failure = CommandFailureCausedUIError(
+        "HTTP 409", cmd=["curl"], stdout=json.dumps({"error": message})
+    )
+    replies = [failure] * (3 if outcome == "exhausted" else 1)
+    if outcome == "retry_then_success":
+        replies.append(
+            SimpleNamespace(stdout='{"retired":7,"environment_id":"expected"}')
+        )
+    execute = Mock(side_effect=replies)
+    cleanup = Mock()
+    monkeypatch.setattr(composition, "exec", execute)
+    monkeypatch.setattr(composition, "kill_fenced_mz", cleanup)
+    monkeypatch.setattr("materialize.mzcompose.composition.time.sleep", lambda _: None)
+
+    if outcome == "retry_then_success":
+        composition.retire_mz_deployment("survivor", 7, environment_id="expected")
+    else:
+        with pytest.raises(CommandFailureCausedUIError, match="HTTP 409"):
+            composition.retire_mz_deployment("survivor", 7, environment_id="expected")
+
+    assert execute.call_count == len(replies)
+    assert all(call == execute.call_args_list[0] for call in execute.call_args_list)
+    cleanup.assert_not_called()
 
 
 @pytest.mark.parametrize(

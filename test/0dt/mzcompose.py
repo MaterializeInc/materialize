@@ -20,6 +20,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
 from threading import Thread
+from typing import Any
 
 import psycopg
 import pymysql
@@ -28,7 +29,11 @@ from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
-from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
+from materialize.mzcompose import (
+    DEFAULT_MZ_ENVIRONMENT_ID,
+    get_default_system_parameters,
+    sanitizer_enabled,
+)
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -43,6 +48,7 @@ from materialize.mzcompose.services.materialized import (
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.pubsub import Pubsub
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
     SqlServer,
@@ -62,14 +68,35 @@ HYDRATED_SELECT_FACTOR = 10 if sanitizer_enabled() else 1
 
 SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
+
+def native_mz(
+    *,
+    options: list[str] | None = None,
+    depends_on: list[str] | None = None,
+    **kwargs: Any,
+) -> Materialized:
+    # Every override replaces the whole service definition. Keep all generations
+    # on the same relay, including compatible-version image overrides.
+    return Materialized(
+        options=[
+            "--persist-pubsub-external",
+            "--persist-pubsub-url=http://pubsub:6879",
+            *(options or []),
+        ],
+        depends_on=["pubsub", *(depends_on or [])],
+        **kwargs,
+    )
+
+
 SERVICES = [
+    Pubsub(),
     MySql(),
     Postgres(),
     SqlServer(),
     Kafka(),
     SchemaRegistry(),
     Mz(app_password=""),
-    Materialized(
+    native_mz(
         name="mz_old",
         sanity_restart=False,
         deploy_generation=0,
@@ -77,7 +104,7 @@ SERVICES = [
         external_metadata_store=True,
         default_replication_factor=2,
     ),
-    Materialized(
+    native_mz(
         name="mz_new",
         sanity_restart=False,
         deploy_generation=1,
@@ -334,7 +361,7 @@ def workflow_read_only(c: Composition) -> None:
     # Restart in a new deploy generation, which will cause Materialize to
     # boot in read-only mode.
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_old",
             deploy_generation=1,
             external_metadata_store=True,
@@ -415,7 +442,7 @@ def workflow_read_only(c: Composition) -> None:
 
     # After promotion, the deployment should boot with writes allowed.
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_old",
             healthcheck=[
                 "CMD-SHELL",
@@ -1413,7 +1440,7 @@ def workflow_kafka_source_rehydration(
     print(f"initial ingestion took {elapsed} seconds")
 
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_new",
             image=new_image,
             sanity_restart=False,
@@ -1568,7 +1595,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
     print(f"initial ingestion took {elapsed} seconds")
 
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_new",
             sanity_restart=False,
             deploy_generation=1,
@@ -1693,7 +1720,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
     )
 
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_new",
             sanity_restart=False,
             deploy_generation=1,
@@ -1818,7 +1845,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
     )
 
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_new",
             sanity_restart=False,
             deploy_generation=1,
@@ -1950,7 +1977,7 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
     )
 
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_new",
             sanity_restart=False,
             deploy_generation=1,
@@ -2037,7 +2064,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
 
     # Start the original Materialized instance with the failpoint enabled.
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_old",
             sanity_restart=False,
             deploy_generation=0,
@@ -2073,7 +2100,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
                 """))
 
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_new",
             sanity_restart=False,
             deploy_generation=1,
@@ -2181,7 +2208,7 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
     mv_shard_id = get_persist_shard_id(mv_gid, "mz_old")
 
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_new",
             sanity_restart=False,
             deploy_generation=1,
@@ -2283,7 +2310,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
     mv_shard_id = get_persist_shard_id(mv_gid, "mz_old")
 
     with c.override(
-        Materialized(
+        native_mz(
             name="mz_new",
             sanity_restart=False,
             deploy_generation=1,
@@ -2672,7 +2699,7 @@ def workflow_upsert_sources(c: Composition) -> None:
     i = 1
     while datetime.now(UTC) < end_time:
         with c.override(
-            Materialized(
+            native_mz(
                 name=mz2,
                 sanity_restart=False,
                 deploy_generation=i,
@@ -3286,7 +3313,9 @@ def workflow_caught_up_stability(c: Composition) -> None:
 
     With a non-trivial stability period, a healthy deployment must still reach
     ReadyToPromote (the gate does not deadlock healthy clusters) and can be
-    promoted to leader. The gate's reset-on-unhealthy behavior is hard to
+    promoted without revoking the previous deployment's write authority.
+    Retirement is explicit and leaves the warmed candidate and relay intact.
+    The gate's reset-on-unhealthy behavior is hard to
     reproduce deterministically here, so it is covered by adapter unit tests
     that drive synthetic replica-health transitions directly.
     """
@@ -3316,8 +3345,143 @@ def workflow_caught_up_stability(c: Composition) -> None:
 
     c.up("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    c.promote_mz("mz_new", retire_mz_service="mz_old")
-    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    def warmed_processes() -> str:
+        processes = c.exec(
+            "mz_new", "ps", "-C", "clusterd", "-o", "pid=,lstart=", capture=True
+        ).stdout.strip()
+        assert processes, "candidate has no warmed replicas"
+        return processes
+
+    def index_dataflows() -> list[tuple[str, int]]:
+        with c.sql_connection(service="mz_new", port=6877, user="mz_system") as conn:
+            conn.execute("SET auto_route_catalog_queries = false")
+            conn.execute("SET cluster = quickstart")
+            conn.execute("SET cluster_replica = r1")
+            conn.execute("SET statement_timeout = '30s'")
+            deadline = time.monotonic() + 60
+            while True:
+                rows = conn.execute("""
+                    SELECT e.export_id, e.dataflow_id
+                    FROM mz_introspection.mz_compute_exports e
+                    JOIN mz_internal.mz_object_global_ids g ON g.global_id = e.export_id
+                    JOIN mz_catalog.mz_indexes i ON i.id = g.id
+                    WHERE i.name = 'mv_idx'
+                    ORDER BY e.export_id, e.dataflow_id
+                    """).fetchall()
+                if rows:
+                    return rows
+                assert time.monotonic() < deadline, "candidate index is not observed"
+                time.sleep(1)
+
+    relay = c.container_id("pubsub")
+    assert relay is not None
+
+    def relay_process() -> str:
+        # Composition.exec prefixes the service entrypoint. Diagnostics must
+        # execute directly, not become arguments to pubsubd.
+        process = c.invoke(
+            "exec",
+            "-T",
+            "pubsub",
+            "ps",
+            "-C",
+            "pubsubd",
+            "-o",
+            "pid=,lstart=",
+            capture=True,
+        ).stdout.strip()
+        assert process, "shared relay is not running"
+        return process
+
+    relay_start = relay_process()
+    processes = warmed_processes()
+    dataflows = index_dataflows()
+
+    # Keep the incumbent session open across promotion. Candidate sessions may
+    # restart at promotion, so use separate candidate connections on each side.
+    with c.sql_connection(service="mz_old") as incumbent:
+        incumbent.execute("CREATE TEMP TABLE session_state (a int)")
+        incumbent.execute("INSERT INTO session_state VALUES (42)")
+        incumbent.execute("CREATE TABLE incumbent_before (a int)")
+        incumbent.execute("INSERT INTO t VALUES (4)")
+        with c.sql_connection(service="mz_new") as candidate:
+            candidate.execute("CREATE TABLE candidate_before (a int)")
+            candidate.execute("INSERT INTO t VALUES (5)")
+            assert candidate.execute("SELECT * FROM mv ORDER BY a").fetchall() == [
+                (i,) for i in range(1, 6)
+            ]
+
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        c.promote_mz("mz_new", retire_mz_service=None)
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+        assert warmed_processes() == processes
+        assert index_dataflows() == dataflows
+
+        assert incumbent.execute("SELECT * FROM session_state").fetchall() == [(42,)]
+        incumbent.execute("CREATE TABLE incumbent_after (a int)")
+        incumbent.execute("INSERT INTO t VALUES (6)")
+        with c.sql_connection(service="mz_new") as candidate:
+            candidate.execute("CREATE TABLE candidate_after (a int)")
+            candidate.execute("INSERT INTO t VALUES (7)")
+            assert candidate.execute("SELECT * FROM mv ORDER BY a").fetchall() == [
+                (i,) for i in range(1, 8)
+            ]
+        assert incumbent.execute("SELECT * FROM mv ORDER BY a").fetchall() == [
+            (i,) for i in range(1, 8)
+        ]
+
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        try:
+            incumbent.execute("INSERT INTO t VALUES (99)")
+        except psycopg.Error as error:
+            assert isinstance(error, OperationalError) or "has been retired" in str(
+                error
+            ), f"Unexpected rejection from retired deployment: {error}"
+        else:
+            raise AssertionError("retired deployment accepted a new table write")
+
+    c.kill_fenced_mz("mz_old")
+    # A disconnected session alone does not prove durable exclusion. Reopen the
+    # same deployment identity and require retirement-specific admission failure.
+    restart = c.run(
+        "mz_old",
+        "--foreground",
+        "--kill-after=10s",
+        DEFAULT_TIMEOUT,
+        "tini",
+        "-s",
+        "--",
+        "/usr/local/bin/entrypoint.sh",
+        *c.compose["services"]["mz_old"]["command"],
+        entrypoint="timeout",
+        rm=True,
+        capture=True,
+        capture_stderr=True,
+        check=False,
+        env_extra={"MZ_RESTART_ON_FAILURE": "0"},
+    )
+    output = (restart.stdout or "") + (restart.stderr or "")
+    assert restart.returncode != 0, "retired deployment restarted successfully"
+    assert any(
+        message in output
+        for message in (
+            "catalog deployment generation 0 has been retired",
+            "deployment 0 has been retired",
+        )
+    ), f"Restart failed for a reason other than retirement: {output}"
+    c.sql("INSERT INTO t VALUES (8)", service="mz_new")
+    assert c.sql_query("SELECT * FROM mv ORDER BY a", service="mz_new") == [
+        (i,) for i in range(1, 9)
+    ]
+    assert warmed_processes() == processes
+    assert index_dataflows() == dataflows
+    assert c.container_id("pubsub") == relay
+    assert relay_process() == relay_start
+    c.invoke(
+        "exec", "-T", "pubsub", "curl", "--fail", "--silent", "localhost:6880/api/livez"
+    )
+    assert c.is_running("pubsub")
 
 
 def _leader_status(c: Composition, mz_service: str) -> str:

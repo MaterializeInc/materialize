@@ -1825,14 +1825,12 @@ class Composition:
     def promote_mz(
         self, mz_service: str = "materialized", *, retire_mz_service: str | None
     ) -> None:
-        """Promote `mz_service` to leader and retire the generation it replaces.
+        """Promote `mz_service` to leader.
 
-        `retire_mz_service` names the service running the previous generation.
-        Once `mz_service` is leader, `retire_mz_service` is killed with
-        `kill_fenced_mz`, as the orchestrator removes an old generation after a
-        promotion. Pass `None` only when no other generation runs, or when the
-        caller handles the fenced generation itself, for example by observing
-        it stop on its own or by calling `kill_fenced_mz` later.
+        Native deployments pass `retire_mz_service=None`: promotion preserves
+        peer writers. Use `retire_mz_deployment` before explicit process cleanup.
+        The cleanup argument is only for older images whose promotion fences
+        their predecessor. It does not establish durable native retirement.
         """
         assert (
             retire_mz_service != mz_service
@@ -1855,10 +1853,59 @@ class Composition:
             self.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
             self.kill_fenced_mz(retire_mz_service)
 
-    def kill_fenced_mz(self, mz_service: str) -> None:
-        """Kill a Materialize service that a newer generation has fenced out.
+    def retire_mz_deployment(
+        self, mz_service: str, deploy_generation: int, *, environment_id: str
+    ) -> None:
+        """Durably retire a deployment through the surviving active controller.
 
-        `mz_service` must be defined in the composition. A container that has
+        Pass the environment and generation from the target's launch, not from
+        a service definition that may already have been reused. Success permits
+        process cleanup but neither performs it nor waits for process death.
+        """
+        for attempt in range(3):
+            try:
+                result = json.loads(
+                    self.exec(
+                        mz_service,
+                        "curl",
+                        "--fail-with-body",
+                        "--silent",
+                        "--show-error",
+                        "--request",
+                        "POST",
+                        "--header",
+                        "Content-Type: application/json",
+                        "--data",
+                        json.dumps({"environment_id": environment_id}),
+                        f"http://localhost:6882/api/deployments/{deploy_generation}/retire",
+                        capture=True,
+                    ).stdout
+                )
+                break
+            except CommandFailureCausedUIError as error:
+                # Retry only the API's explicit CAS-contention response, with
+                # the same identity. Fencing and identity mismatches must fail.
+                try:
+                    body = json.loads(error.stdout or "")
+                except json.JSONDecodeError:
+                    raise error
+                if (
+                    body != {"error": "catalog changed; retry the request"}
+                    or attempt == 2
+                ):
+                    raise
+                time.sleep(1)
+        assert (
+            result.get("retired") == deploy_generation
+            and result.get("environment_id") == environment_id
+        ), f"Unexpected retirement receipt: {result}"
+
+    def kill_fenced_mz(self, mz_service: str) -> None:
+        """Stop a service whose authority has already been revoked.
+
+        This does not retire or fence the deployment. Native callers must first
+        acknowledge explicit retirement. `mz_service` must be defined in the
+        composition. A container that has
         already stopped and any exit code are accepted. The killed container
         keeps its logs, and the next `down` or the CI hook collects them.
         """

@@ -9,12 +9,19 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Convert native multi-generation launch/test harnesses to a shared relay and
-explicit retirement. Start with the promotion/retirement helper split and one
-working native lifecycle. Verify compatible writers before and after promotion,
-warmed replicas and surviving deployments. Preserve current-source script
-coverage. The caller inventory and exact API/topology contracts are in
-`native-lifecycle-harness-seams.md` under the evidence directory below.
+Continue converting native lifecycle callers and legacy assertions. The first
+slice is verified: every 0dt deployment override shares one external relay, and
+`caught-up-stability` now checks both writers across promotion, retained incumbent
+session and candidate execution, explicit retirement, rejected retired-generation
+restart, surviving writes and relay continuity. Evidence and earlier failures:
+`native-lifecycle-slice-verification.md` under the directory below.
+
+Next convert the remaining 0dt promotion/cleanup sites to identity-bound
+retirement, keeping retirement outside hydration timing windows. Preserve the
+stopped/in-place predecessor cases and the existing compatible-image lane.
+`native-lifecycle-harness-seams.md` maps callers and contracts. The old promotion
+cleanup parameter remains until those callers migrate. Do not treat the converted
+same-build workflow as distinct-version proof or broad CI.
 
 Replica-side execution cleanup is a separate unit. Its inspected boundary is in
 `native-replica-execution-boundary.md`. A user decision is pending on preserving
@@ -81,6 +88,9 @@ other architectural opportunities remain in the
 
 Current cleanup evidence: `~/.local/share/aj/m3-evidence/native-only/`.
 
+- `native-lifecycle-slice-verification.md` links helper tests, independent review,
+  the actual workflow, candidate provenance and cleanup. This used current debug
+  binaries in cached images, not rebuilt images or CI.
 - `native-compute-owner-verification.md` links source review, exact commands,
   passing native checks, binary hashes and the standalone Kafka run. The four
   compute introspection inputs remain deliberately. Publisher/consumer evidence:
@@ -93,8 +103,9 @@ Current cleanup evidence: `~/.local/share/aj/m3-evidence/native-only/`.
   `pg-upgrade-boundary.md`, `platform-boundary-followup.md` and
   `exclusive-cleanup-review.md` preserve harness, reporting and ownership evidence.
 
-All owned verification services are stopped. Test metadata, Kafka fixture
-containers, network and volume were removed. About 45 GiB is free. Current
+All owned verification services are stopped. The lifecycle, Rust-test and Kafka
+fixtures, including the one-off retired-generation restart, were removed. About
+45 GiB is free. Current
 services, baseline artifacts and measurement reports remain. Superseded build
 outputs and inactive incremental caches were reclaimed. Cleanup records are in
 `native-compute-*-cleanup.log` and `native-compute-reserve-reclaim.log`.
