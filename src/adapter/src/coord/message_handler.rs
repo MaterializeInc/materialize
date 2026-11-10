@@ -859,16 +859,14 @@ impl Coordinator {
         };
 
         let plan = match purified_statement {
-            PurifiedStatement::PurifiedCreateSource { .. } => Err(AdapterError::Unsupported(
-                "CREATE SOURCE requires submitted intent",
-            )),
-            PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
-            | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. } => Err(
-                AdapterError::Unsupported("ALTER SOURCE requires submitted intent"),
-            ),
-            PurifiedStatement::PurifiedCreateTableFromSource { .. } => Err(
-                AdapterError::Unsupported("CREATE TABLE FROM SOURCE requires submitted intent"),
-            ),
+            PurifiedStatement::PurifiedCreateSource { .. }
+            | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
+            | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. }
+            | PurifiedStatement::PurifiedCreateTableFromSource { .. } => {
+                let msg = "source preparation must execute as a catalog command";
+                soft_panic_or_log!("{msg}");
+                Err(AdapterError::Internal(msg.into()))
+            }
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
             | PurifiedStatement::PurifiedCreateSink(..)) => {
                 // Unify these into a `Statement`.

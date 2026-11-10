@@ -345,13 +345,6 @@ pub async fn purify_statement(
     storage_configuration: &StorageConfiguration,
 ) -> (Result<PurifiedStatement, PlanError>, Option<ClusterId>) {
     match stmt {
-        Statement::CreateSource(stmt) => {
-            let cluster_id = stmt.in_cluster.as_ref().map(|cluster| cluster.id.clone());
-            (
-                purify_create_source(catalog, now, stmt, storage_configuration).await,
-                cluster_id,
-            )
-        }
         Statement::AlterSource(stmt) => (
             source_preparation::purify(
                 &catalog,
@@ -369,10 +362,6 @@ pub async fn purify_statement(
                 cluster_id,
             )
         }
-        Statement::CreateTableFromSource(stmt) => (
-            purify_create_table_from_source(catalog, now, stmt, storage_configuration).await,
-            None,
-        ),
         o => (
             Err(internal_err!(
                 "unexpected statement type in purification: {:?}",
@@ -1458,21 +1447,6 @@ async fn execute_create_source_preparation(
     })
 }
 
-async fn purify_create_source(
-    catalog: impl SessionCatalog,
-    now: u64,
-    statement: CreateSourceStatement<Aug>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<PurifiedStatement, PlanError> {
-    source_preparation::purify(
-        &catalog,
-        now,
-        Statement::CreateSource(statement),
-        storage_configuration,
-    )
-    .await
-}
-
 /// On success, returns the details on new subsources and updated
 /// 'options' that sequencing expects for handling `ALTER SOURCE` statements.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1589,7 +1563,7 @@ async fn execute_alter_source_preparation(
 }
 
 // TODO(database-issues#8620): Remove once subsources are removed
-/// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
+/// Prepares upstream reads for `ALTER SOURCE`.
 async fn purify_alter_source_add_subsources(
     external_references: Vec<ExternalReferenceExport>,
     mut options: Vec<AlterSourceAddSubsourceOption<Aug>>,
@@ -2487,21 +2461,6 @@ fn finish_table_from_source(
     // available references table in the catalog, so plumb this through.
     // available_source_references: retrieved_source_references.available_source_references(),
     Ok(PurifiedStatement::PurifiedCreateTableFromSource { stmt })
-}
-
-async fn purify_create_table_from_source(
-    catalog: impl SessionCatalog,
-    now: u64,
-    statement: CreateTableFromSourceStatement<Aug>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<PurifiedStatement, PlanError> {
-    source_preparation::purify(
-        &catalog,
-        now,
-        Statement::CreateTableFromSource(statement),
-        storage_configuration,
-    )
-    .await
 }
 
 #[derive(Clone, Debug)]

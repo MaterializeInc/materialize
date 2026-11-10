@@ -207,9 +207,9 @@ impl Coordinator {
                         plan.source.data_source,
                         plan::DataSourceDesc::Webhook { .. }
                     ) {
-                        ctx.retire(Err(AdapterError::Unsupported(
-                            "CREATE SOURCE requires submitted intent",
-                        )));
+                        let msg = "CREATE SOURCE must execute as a catalog command";
+                        soft_panic_or_log!("{msg}");
+                        ctx.retire(Err(AdapterError::Internal(msg.into())));
                         return;
                     }
                     let (item_id, global_id) = return_if_err!(self.allocate_user_id().await, ctx);
@@ -228,9 +228,9 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateSources(_) => {
-                    ctx.retire(Err(AdapterError::Unsupported(
-                        "CREATE SOURCE requires submitted intent",
-                    )));
+                    let msg = "CREATE SOURCE must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::CreateConnection(plan) => {
                     self.sequence_create_connection(ctx, plan, resolved_ids)
@@ -271,9 +271,9 @@ impl Coordinator {
                             ..
                         }
                     ) {
-                        ctx.retire(Err(AdapterError::Unsupported(
-                            "CREATE TABLE FROM SOURCE requires submitted intent",
-                        )));
+                        let msg = "CREATE TABLE FROM SOURCE must execute as a catalog command";
+                        soft_panic_or_log!("{msg}");
+                        ctx.retire(Err(AdapterError::Internal(msg.into())));
                         return;
                     }
                     let result = self
@@ -470,9 +470,9 @@ impl Coordinator {
                 | Plan::AlterItemRename(_)
                 | Plan::AlterSchemaRename(_)
                 | Plan::AlterSchemaSwap(_) => {
-                    ctx.retire(Err(AdapterError::Internal(
-                        "rename/swap must execute as a catalog command".into(),
-                    )));
+                    let msg = "rename/swap must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::AlterConnection(plan) => {
                     self.sequence_alter_connection(ctx, plan).await;
@@ -502,9 +502,9 @@ impl Coordinator {
                     self.sequence_alter_sink_prepare(ctx, plan).await;
                 }
                 Plan::AlterSource(_) => {
-                    ctx.retire(Err(AdapterError::Unsupported(
-                        "ALTER SOURCE requires submitted intent",
-                    )));
+                    let msg = "ALTER SOURCE must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::AlterSystemSet(plan) => {
                     let result = self.sequence_alter_system_set(ctx.session(), plan).await;
