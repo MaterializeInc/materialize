@@ -385,33 +385,7 @@ struct Config {
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
-/// Initiates a timely dataflow computation, processing storage commands.
-pub async fn serve(
-    timely_config: TimelyConfig,
-    metrics_registry: &MetricsRegistry,
-    persist_clients: Arc<PersistClientCache>,
-    txns_ctx: TxnsContext,
-    tracing_handle: Arc<TracingHandle>,
-    now: NowFn,
-    connection_context: ConnectionContext,
-    instance_context: StorageInstanceContext,
-) -> Result<impl Fn() -> Box<dyn StorageClient> + use<>, anyhow::Error> {
-    Ok(serve_with_replica(
-        timely_config,
-        false,
-        metrics_registry,
-        persist_clients,
-        txns_ctx,
-        tracing_handle,
-        now,
-        connection_context,
-        instance_context,
-    )
-    .await?
-    .client_builder())
-}
-
-/// Starts the same storage runtime with optional native maintained control.
+/// Starts the storage runtime with optional native maintained control.
 /// Native ownership must agree across all processes. It disables lifecycle
 /// transport and exposes the maintained endpoint only on process zero.
 pub async fn serve_with_replica(

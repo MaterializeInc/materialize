@@ -43,5 +43,3 @@ pub mod fuzz_exports {
 }
 
 pub(crate) mod healthcheck;
-
-pub use server::serve;
