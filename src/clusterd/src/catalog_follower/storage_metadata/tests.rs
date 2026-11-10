@@ -435,6 +435,7 @@ async fn mv_alias_uses_selected_cross_cluster_writer_not_persist_schema() {
             &Default::default(),
             BTreeMap::from([(version, writer)]),
             None,
+            None,
         ).expect("durable MV");
         tx.insert_collection_metadata(BTreeMap::from([(alias, shard), (writer, writer_shard)])).expect("MV shards");
     }).await;
