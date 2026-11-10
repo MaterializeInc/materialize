@@ -53,7 +53,7 @@ use serde_json::json;
 use timely::order::PartialOrder;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
-use tokio_postgres::error::SqlState;
+use tokio_postgres::error::{DbError, SqlState};
 use tracing::{debug, info};
 
 /// An HTTP server whose responses can be controlled from another thread.
@@ -1970,22 +1970,28 @@ async fn test_timestamp_notice_after_concurrent_index_drop() {
         .expect("environmentd is still up");
 }
 
-// An EXPLAIN TIMESTAMP whose dependency is dropped after its timestamp was determined fails with a
-// "was dropped" error, instead of aborting environmentd.
-//
-// The EXPLAIN parks at the `explain_timestamp_before_dispatch` failpoint, after it determined its
-// timestamp and before the coordinator looks up the index's frontiers. The failpoint is
-// process-global, so the test relies on running in its own process, as nextest runs it.
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
-#[cfg_attr(miri, ignore)] // too slow
+/// Runs `drop_stmt` while an `EXPLAIN TIMESTAMP FOR SELECT * FROM t` on a session prepared by
+/// `explainer_setup` sits between its timestamp determination and the coordinator's lookup of the
+/// frontiers it reads, and returns the error the EXPLAIN fails with. Panics if environmentd does
+/// not survive.
+///
+/// The EXPLAIN parks at the `explain_timestamp_before_dispatch` failpoint. The failpoint is
+/// process-global, so callers rely on running in their own process, as nextest runs them.
 #[allow(clippy::disallowed_methods)]
-async fn test_explain_timestamp_after_concurrent_index_drop() {
+async fn explain_timestamp_after_concurrent_drop(
+    setup: &[&str],
+    explainer_setup: &[&str],
+    drop_stmt: &str,
+) -> DbError {
     let server = test_util::TestHarness::default().start().await;
     let ddl_client = server.connect().await.unwrap();
-    for stmt in ["CREATE TABLE t (a int)", "CREATE DEFAULT INDEX t_idx ON t"] {
+    for stmt in setup {
         ddl_client.batch_execute(stmt).await.unwrap();
     }
     let explainer = server.connect().await.unwrap();
+    for stmt in explainer_setup {
+        explainer.batch_execute(stmt).await.unwrap();
+    }
 
     // Arm only once setup is done, so it's the EXPLAIN below that parks.
     let parked = Arc::new(Barrier::new(2));
@@ -1994,7 +2000,7 @@ async fn test_explain_timestamp_after_concurrent_index_drop() {
         let parked = Arc::clone(&parked);
         let resume = Arc::clone(&resume);
         move || {
-            // This runs on a worker of the runtime that also has to run the `DROP INDEX` below.
+            // This runs on a worker of the runtime that also has to run `drop_stmt`.
             // `block_in_place` hands this worker's queue to another thread before parking.
             tokio::task::block_in_place(|| {
                 parked.wait();
@@ -2011,7 +2017,7 @@ async fn test_explain_timestamp_after_concurrent_index_drop() {
     });
     task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
 
-    ddl_client.batch_execute("DROP INDEX t_idx").await.unwrap();
+    ddl_client.batch_execute(drop_stmt).await.unwrap();
 
     // Disarm before handing the EXPLAIN back, so that no later statement parks.
     fail::remove("explain_timestamp_before_dispatch");
@@ -2019,13 +2025,45 @@ async fn test_explain_timestamp_after_concurrent_index_drop() {
 
     let err = explain
         .await
-        .expect_err("EXPLAIN TIMESTAMP must fail on the dropped index")
+        .expect_err("EXPLAIN TIMESTAMP must fail on the dropped dependency")
         .unwrap_db_error();
-    assert_contains!(err.message(), "was dropped");
     ddl_client
         .batch_execute("SELECT 1")
         .await
         .expect("environmentd is still up");
+    err
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_explain_timestamp_after_concurrent_index_drop() {
+    let err = explain_timestamp_after_concurrent_drop(
+        &["CREATE TABLE t (a int)", "CREATE DEFAULT INDEX t_idx ON t"],
+        &[],
+        "DROP INDEX t_idx",
+    )
+    .await;
+    assert_contains!(err.message(), "was dropped");
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_explain_timestamp_after_concurrent_cluster_drop() {
+    let err = explain_timestamp_after_concurrent_drop(
+        &[
+            "CREATE CLUSTER c REPLICAS (r1 (size 'scale=1,workers=1'))",
+            "CREATE TABLE t (a int)",
+            "CREATE DEFAULT INDEX IN CLUSTER c ON t",
+        ],
+        &["SET cluster = c"],
+        "DROP CLUSTER c CASCADE",
+    )
+    .await;
+    let message = err.message();
+    assert!(
+        message.starts_with("cluster '") && message.ends_with("' was dropped"),
+        "expected the dropped cluster in the error, got: {message}"
+    );
 }
 
 #[mz_ore::test]
