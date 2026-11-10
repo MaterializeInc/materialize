@@ -208,6 +208,9 @@ contains:cluster "burst" cannot host index "burst_idx" because its replica sizes
 
 # `cluster_family_allowed_workloads` restricts every size of a family.
 
+> CREATE CLUSTER grandfathered SIZE 'scale=1,workers=1,legacy'
+> CREATE DEFAULT INDEX IN CLUSTER grandfathered ON t
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET cluster_family_allowed_workloads = '{"legacy": ["ingest", "compute_introspection"]}'
 
@@ -221,6 +224,16 @@ ALTER SYSTEM SET cluster_family_allowed_workloads = '{"legacy": ["ingest", "comp
 
 ! CREATE MATERIALIZED VIEW mv_legacy IN CLUSTER legacy AS SELECT * FROM t
 contains:cluster "legacy" cannot host materialized view "mv_legacy" because its replica sizes do not allow compute_maintained workloads
+
+# The family restriction leaves the index running. Suspending its cluster
+# creates no replicas, so it succeeds, but resuming is rejected.
+
+> ALTER CLUSTER grandfathered SET (REPLICATION FACTOR 0)
+
+! ALTER CLUSTER grandfathered SET (REPLICATION FACTOR 1)
+contains:compute_maintained
+
+> DROP CLUSTER grandfathered CASCADE
 
 > SET cluster = legacy
 
