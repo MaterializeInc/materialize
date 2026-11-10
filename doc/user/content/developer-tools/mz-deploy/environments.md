@@ -131,9 +131,11 @@ dependencies = [
 ]
 ```
 
-`profile_suffix` renames only databases that the project owns. References to
-external dependencies stay unchanged, so every environment reads
-`raw.public.orders`. Run `mz-deploy lock` after adding dependencies to record
+`profile_suffix` renames only databases that the project owns, that is,
+directories under `models/`. References to external dependencies stay
+unchanged, so every environment reads `raw.public.orders`. The environment
+project must not also contain `models/raw/`, or the suffix renames those
+references too. Run `mz-deploy lock` after adding dependencies to record
 their column types in `types.lock`.
 
 ## Deploy from CI/CD
@@ -151,9 +153,11 @@ Keep the following in mind:
   `MZ_DEPLOY_PROFILES_DIR` at its directory, and pass each password with
   `MZ_PROFILE_<NAME>_PASSWORD`. Secrets created with `env_var()` read their
   values from the pipeline's environment when `apply` runs.
-- **Deploy IDs**: Deploy IDs must be unique per instance. The default is the
-  git commit SHA, so environments that share an instance and deploy the same
-  commit collide. Pass `--deploy-id` with the environment name included.
+- **Deploy IDs**: A deploy ID can be used only once per instance, including
+  after it is promoted. The default is the git commit SHA prefix, so
+  environments that share an instance collide, and so does a pipeline re-run
+  for the same commit. Pass a `--deploy-id` that includes the environment name
+  and a per-run value.
 - **Timeouts**: `wait` blocks until hydration completes and has no timeout by
   default. Set `--timeout` so a stuck deployment fails the pipeline. Run
   `mz-deploy abort <deploy-id>` to clean up a failed deployment.
@@ -245,7 +249,7 @@ steps:
   - template: install-mz-deploy.yml
   - script: |
       set -euo pipefail
-      DEPLOY_ID="${{ parameters.profile }}_${BUILD_SOURCEVERSION:0:7}"
+      DEPLOY_ID="${{ parameters.profile }}_${BUILD_BUILDID}"
       mz-deploy apply
       mz-deploy stage --deploy-id "$DEPLOY_ID"
       mz-deploy wait "$DEPLOY_ID" --timeout 3600
