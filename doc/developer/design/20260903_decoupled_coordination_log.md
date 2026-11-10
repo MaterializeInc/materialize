@@ -22,6 +22,13 @@ The actual Kafka source-failpoint workflow passed with its original multi-proces
 cluster sizes. The five high-volume source-prewarming lanes were not executed.
 Evidence: `native-source-lifecycle-verification.md`.
 
+Four readiness callers now separate promotion, retirement and cleanup. The actual
+adapter-only restart check passed after establishing warm readiness before the
+restart, retaining its 120s bound. Controller and replica processes survived.
+Two earlier fixed-sleep runs failed before hydration was established. Independent
+review and source investigation found no production repair necessary. Evidence
+and coverage limits: `native-readiness-verification.md`.
+
 Next convert the remaining 0dt sites, preserving stopped/in-place predecessors,
 full-writer behavior and the compatible-image lane. `native-lifecycle-harness-seams.md`
 maps callers and contracts. The old promotion cleanup parameter remains until
@@ -111,7 +118,7 @@ Current cleanup evidence: `~/.local/share/aj/m3-evidence/native-only/`.
   `pg-upgrade-boundary.md`, `platform-boundary-followup.md` and
   `exclusive-cleanup-review.md` preserve harness, reporting and ownership evidence.
 
-All owned verification services are stopped. Lifecycle, source-failpoint,
+All owned verification services are stopped. Readiness, lifecycle, source-failpoint,
 Rust-test and Kafka fixtures, including the retired-generation restart, were
 removed. About 45 GiB is free. Current
 services, baseline artifacts and measurement reports remain. Superseded build

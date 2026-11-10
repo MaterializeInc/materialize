@@ -3316,8 +3316,11 @@ def workflow_stuck_collection(c: Composition) -> None:
 
     c.up("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.promote_mz("mz_new", retire_mz_service=None)
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+    c.kill_fenced_mz("mz_old")
 
 
 def workflow_caught_up_stability(c: Composition) -> None:
@@ -3595,8 +3598,11 @@ def workflow_caught_up_stability_crash_loop(c: Composition) -> None:
 
     # The replica recovers. After the stability period mz_new becomes ready.
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.promote_mz("mz_new", retire_mz_service=None)
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+    c.kill_fenced_mz("mz_old")
 
 
 def _pids(c: Composition, mz_service: str, command: str) -> set[str]:
@@ -3614,15 +3620,13 @@ def _pids(c: Composition, mz_service: str, command: str) -> set[str]:
 
 
 def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
-    """Verify an environmentd-only restart preserves replica hydration age.
+    """Verify an adapterd-only restart preserves replica hydration age.
 
-    mz_new's replicas outlive the restart, and the stability gate reads their
-    hydration times from the replicas, so the period keeps counting from the
-    original hydration. Restarting the period would make mz_new ready no
-    earlier than the restart plus a full period.
+    Establish readiness before restarting the adapter. The replicas keep their
+    hydration timestamps, so recovery must not require another full stability
+    period. Initial warmup has no fixed duration, especially in debug builds.
     """
     period = 120
-    restart_after = 60
 
     c.down(destroy_volumes=True)
     c.up("mz_old")
@@ -3644,25 +3648,31 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
         service="mz_old",
     )
 
+    started = time.monotonic()
     c.up("mz_new")
-    time.sleep(restart_after)
-    environmentd = _pids(c, "mz_new", "environmentd")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    assert (
+        time.monotonic() - started >= period
+    ), "mz_new became ready before its initial stability period elapsed"
+    controllerd = _pids(c, "mz_new", "controllerd")
+    adapterd = _pids(c, "mz_new", "adapterd")
     replicas = _pids(c, "mz_new", "clusterd")
-    assert environmentd, "mz_new has no environmentd process before restart"
+    assert controllerd, "mz_new has no controllerd process before restart"
+    assert adapterd, "mz_new has no adapterd process before restart"
     assert replicas, "mz_new has no clusterd processes before restart"
 
-    # mz_new's on-failure entrypoint loop restarts environmentd after SIGKILL.
-    # Keep the container and clusterd alive so replica hydration age is retained.
-    c.exec("mz_new", "bash", "-c", f"kill -9 {' '.join(sorted(environmentd))}")
+    # Controllerd restarts the adapter independently of the container entrypoint.
+    # Keep controllerd and clusterd alive so replica hydration age is retained.
+    c.exec("mz_new", "bash", "-c", f"kill -9 {' '.join(sorted(adapterd))}")
 
-    deadline = time.time() + 60
+    deadline = time.monotonic() + 60
     while True:
-        pids = _pids(c, "mz_new", "environmentd")
-        if pids and pids != environmentd:
+        pids = _pids(c, "mz_new", "adapterd")
+        if pids and pids != adapterd:
             break
-        assert time.time() < deadline, "mz_new's environmentd did not restart"
+        assert time.monotonic() < deadline, "mz_new's adapterd did not restart"
         time.sleep(0.5)
-    restarted = time.time()
+    restarted = time.monotonic()
 
     try:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
@@ -3692,17 +3702,23 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
         except Exception as error:
             print(f"Could not capture system replica hydration counts: {error}")
         raise
-    ready_after = time.time() - restarted
+    ready_after = time.monotonic() - restarted
 
+    assert (
+        _pids(c, "mz_new", "controllerd") == controllerd
+    ), "mz_new's controller restarted with its adapter"
     assert (
         _pids(c, "mz_new", "clusterd") == replicas
     ), "mz_new's replicas did not survive its restart"
     assert (
         ready_after < period
-    ), f"mz_new became ready {ready_after:.0f}s after its restart, so the restart reset the stability period"
+    ), f"mz_new became ready {ready_after:.0f}s after its restart, exceeding a full {period}s stability period"
 
-    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.promote_mz("mz_new", retire_mz_service=None)
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+    c.kill_fenced_mz("mz_old")
 
 
 def workflow_caught_up_stability_without_dataflows(c: Composition) -> None:
@@ -3762,8 +3778,11 @@ def workflow_caught_up_stability_without_dataflows(c: Composition) -> None:
     c.await_mz_deployment_status(
         DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=300
     )
-    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.promote_mz("mz_new", retire_mz_service=None)
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+    c.kill_fenced_mz("mz_old")
 
 
 def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
