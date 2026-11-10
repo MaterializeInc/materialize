@@ -986,10 +986,11 @@ impl Coordinator {
             Some(&shape.availability_zones.0)
         };
         // DDL authorizes sizes before committing the configuration. Reconcile
-        // must still realize it if the owner's size allow-list later shrinks.
+        // must still realize it if the owner's size allow-list later shrinks or
+        // the size is disabled since.
         let location = self
             .catalog()
-            .concretize_replica_location(location, &vec![], azs, false)?;
+            .concretize_replica_location(location, &vec![], azs, true)?;
 
         let config = mz_controller::clusters::ReplicaConfig {
             location,

@@ -17,6 +17,7 @@ use mz_controller_types::ReplicaId;
 use mz_persist_types::ShardId;
 use mz_proto::TryFromProtoError;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::cluster_replica_size_id::ClusterReplicaSizeId;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
@@ -199,6 +200,23 @@ impl RustType<proto::NetworkPolicyId> for NetworkPolicyId {
         let id = match proto {
             proto::NetworkPolicyId::User(id) => NetworkPolicyId::User(id),
             proto::NetworkPolicyId::System(id) => NetworkPolicyId::System(id),
+        };
+        Ok(id)
+    }
+}
+
+impl RustType<proto::ClusterReplicaSizeId> for ClusterReplicaSizeId {
+    fn into_proto(&self) -> proto::ClusterReplicaSizeId {
+        match self {
+            ClusterReplicaSizeId::User(id) => proto::ClusterReplicaSizeId::User(*id),
+            ClusterReplicaSizeId::System(id) => proto::ClusterReplicaSizeId::System(*id),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaSizeId) -> Result<Self, TryFromProtoError> {
+        let id = match proto {
+            proto::ClusterReplicaSizeId::User(id) => ClusterReplicaSizeId::User(id),
+            proto::ClusterReplicaSizeId::System(id) => ClusterReplicaSizeId::System(id),
         };
         Ok(id)
     }
