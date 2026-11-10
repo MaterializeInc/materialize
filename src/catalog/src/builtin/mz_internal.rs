@@ -1512,7 +1512,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: LazyLock<BuiltinSource> = LazyLock::ne
         desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
         column_comments: BTreeMap::from_iter([(
             "throttled_count",
-            "Always `NULL`. Throttled executions are counted in `mz_internal.mz_statement_execution_history.throttled_count`.",
+            "No longer written. `NULL` for prepared statements logged by this version or later, older rows keep the count recorded when they were logged. Throttled executions are counted in `mz_internal.mz_statement_execution_history.throttled_count`.",
         )]),
         is_retained_metrics_object: false,
         access: vec![

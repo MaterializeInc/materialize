@@ -21,9 +21,11 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
         .with_column("statement_type", SqlScalarType::String.nullable(true))
-        // NOTE: Retired, always NULL. The count is recorded per execution in
-        // `mz_statement_execution_history` instead. The column stays because persist schema
-        // evolution cannot drop a column, and replacing the shard would lose the history.
+        // NOTE: No longer written. NULL for prepared statements logged by this version or
+        // later, older rows keep the count recorded when they were logged. The count is
+        // recorded per execution in `mz_statement_execution_history`. The column stays because
+        // persist schema evolution cannot drop a column, and replacing the shard would lose
+        // the history.
         .with_column("throttled_count", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
