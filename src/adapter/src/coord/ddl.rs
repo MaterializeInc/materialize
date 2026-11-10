@@ -319,7 +319,7 @@ impl Coordinator {
         Box::pin(self.complete_catalog_transaction(ctx, committed, start)).await
     }
 
-    /// Attempts a protection metadata write once and finishes every committed effect.
+    /// Attempts a resampled maintenance write once and finishes every committed effect.
     /// A definitive conflict refreshes the catalog and returns to the maintenance
     /// owner, which must resample its proposal before retrying. This must not be
     /// used for DDL whose prepared plans and holds need a retained continuation.
@@ -333,6 +333,7 @@ impl Coordinator {
                 | Op::UpdateClientReadRequirements { .. }
                 | Op::GrantClientReadRequirements { .. }
                 | Op::SetReadProtection { .. }
+                | Op::ReclaimRetiredTemporaryItems { .. }
         )));
         let start = Instant::now();
         let committed = self.catalog_transact_attempt(None, ops, false).await?;
@@ -644,12 +645,20 @@ impl Coordinator {
         // must refresh before retrying, without merging a structural DDL race.
         let (new_state, new_snapshot) = loop {
             let conn = self.active_conns.get(ctx.session().conn_id());
+            let session = conn.map(|conn| {
+                catalog::transaction_context(
+                    conn,
+                    self.query_client
+                        .as_ref()
+                        .map(|client| client.protection.incarnation()),
+                )
+            });
             let result = self
                 .catalog()
                 .transact_incremental_dry_run(
                     &txn_state_clone,
                     ops.clone(),
-                    conn,
+                    session,
                     prev_snapshot.take(),
                     oracle_write_ts,
                 )
@@ -870,12 +879,20 @@ impl Coordinator {
             .cloned()
             .collect();
         let conn = conn_id.map(|id| self.active_conns.get(id).expect("connection exists"));
+        let session = conn.map(|conn| {
+            catalog::transaction_context(
+                conn,
+                self.query_client
+                    .as_ref()
+                    .map(|client| client.protection.incarnation()),
+            )
+        });
         let (candidate, _) = self
             .catalog()
             .transact_incremental_dry_run(
                 self.catalog().state(),
                 candidate_ops,
-                conn,
+                session,
                 None,
                 write_ts,
             )
@@ -1679,10 +1696,11 @@ impl Coordinator {
                         .unwrap_or_default(),
                 });
             }
-            let mut catch_up = self
+            let incarnation = self
                 .query_client
                 .as_ref()
-                .map(|client| catalog::TransactionCatchUp::new(client.protection.incarnation()));
+                .map(|client| client.protection.incarnation());
+            let mut catch_up = incarnation.map(catalog::TransactionCatchUp::new);
             let result = {
                 let Coordinator {
                     catalog,
@@ -1700,7 +1718,7 @@ impl Coordinator {
                             catch_up.as_mut(),
                             Some(&mut controller.storage_collections),
                             oracle_write_ts,
-                            conn,
+                            conn.map(|conn| catalog::transaction_context(conn, incarnation)),
                             ops.clone(),
                         )
                         .wall_time()
@@ -2117,6 +2135,24 @@ impl Coordinator {
         );
     }
 
+    /// Reclaims a bounded number of retired executions per maintenance turn.
+    /// Whole owners preserve temporary dependency closures. Candidate selection
+    /// remains pending until committed diffs, including a peer's cleanup, remove it.
+    pub(super) async fn reclaim_retired_temporary_items(&mut self) -> Result<(), AdapterError> {
+        // Serving adapters, including admitted candidates, are ordinary writers.
+        // Replica-only prewarming handles do not run this coordinator path.
+        if self.query_client.is_none() {
+            return Ok(());
+        }
+        let owners = self.catalog().state().temporary_item_cleanup_batch(16);
+        if owners.is_empty() || self.catalog().storage().await.is_read_only() {
+            return Ok(());
+        }
+        self.catalog_transact_once(vec![Op::ReclaimRetiredTemporaryItems { owners }])
+            .await?;
+        Ok(())
+    }
+
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
     pub(crate) async fn drop_temp_items(&mut self, conn_id: &ConnectionId) {
@@ -2446,6 +2482,7 @@ impl Coordinator {
                 | Op::UpdateClientReadRequirements { .. }
                 | Op::GrantClientReadRequirements { .. }
                 | Op::PublishCreatorReadRequirements { .. }
+                | Op::ReclaimRetiredTemporaryItems { .. }
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
                 | Op::CheckClusterDeclarations { .. }

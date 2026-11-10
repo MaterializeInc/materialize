@@ -501,6 +501,8 @@ impl Catalog {
             entry_by_id: imbl::OrdMap::new(),
             entry_by_global_id: imbl::OrdMap::new(),
             durable_item_ids: Default::default(),
+            ephemeral_items_by_incarnation: Default::default(),
+            temporary_item_cleanup_candidates: Default::default(),
             nonlocal_ephemeral_items: Default::default(),
             notices_by_dep_id: imbl::OrdMap::new(),
             ambient_schemas_by_name: imbl::OrdMap::new(),
@@ -1403,6 +1405,7 @@ fn add_new_remove_old_builtin_items_migration(
                     *c.owner_id,
                     acl_items,
                     versions,
+                    None,
                     None,
                 )?;
                 true

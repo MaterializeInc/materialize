@@ -681,6 +681,8 @@ pub struct CatalogEntry {
     pub name: QualifiedItemName,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
+    /// Original execution owner for temporary Items, retained across definition updates.
+    pub ephemeral_owner_incarnation: Option<u64>,
 }
 
 /// A [`CatalogEntry`] that is associated with a specific "collection" of data.

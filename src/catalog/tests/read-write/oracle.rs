@@ -84,7 +84,7 @@ async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
     use mz_storage_client::controller::StorageTxn;
     use uuid::Uuid;
 
-    fn insert(txn: &mut Transaction<'_>, id: u64, owner: Uuid, shard: ShardId) {
+    fn insert(txn: &mut Transaction<'_>, id: u64, owner: Uuid, incarnation: u64, shard: ShardId) {
         txn.insert_item(
             CatalogItemId::User(id),
             u32::try_from(20_000 + id).unwrap(),
@@ -96,6 +96,7 @@ async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
             vec![],
             BTreeMap::from([(RelationVersion::root().bump(), GlobalId::User(id + 1))]),
             Some(owner),
+            Some(incarnation),
         )
         .unwrap();
         txn.insert_collection_metadata(BTreeMap::from([
@@ -137,12 +138,12 @@ async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
     let mut txn = active.transaction().await.unwrap();
     txn.set_config("catalog_read_protection_enabled".into(), Some(1))
         .unwrap();
-    insert(&mut txn, 1000, old_owner, old_shard);
     txn.set_collection_compaction_bound(GlobalId::User(1000), Some(10.into()))
         .unwrap();
     let old_client = txn
         .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
         .unwrap();
+    insert(&mut txn, 1000, old_owner, old_client, old_shard);
     txn.grant_client_read_requirements(
         old_client,
         BTreeMap::from([(GlobalId::User(1000), 10.into())]),
@@ -179,10 +180,10 @@ async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
     let fresh_owner = Uuid::new_v4();
     let fresh_shard = ShardId::new();
     let mut txn = peer.transaction().await.unwrap();
-    insert(&mut txn, 2000, fresh_owner, fresh_shard);
     let fresh_client = txn
         .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
         .unwrap();
+    insert(&mut txn, 2000, fresh_owner, fresh_client, fresh_shard);
     txn.grant_client_read_requirements(
         fresh_client,
         BTreeMap::from([(GlobalId::User(1000), 20.into())]),
@@ -203,7 +204,7 @@ async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
     let later_owner = Uuid::new_v4();
     let later_shard = ShardId::new();
     let mut txn = peer.transaction().await.unwrap();
-    insert(&mut txn, 3000, later_owner, later_shard);
+    insert(&mut txn, 3000, later_owner, fresh_client, later_shard);
     commit(txn).await;
     cleanup_gate.notify_one();
     let (mut promoted, retired) = tokio::time::timeout(Duration::from_secs(5), retiring)
@@ -668,5 +669,317 @@ async fn catalog_rejects_new_future_jumps_before_publication() {
         assert_eq!(oracle.read_ts().await, read);
         assert!(oracle.peek_write_ts().await < timestamp);
     }
+    catalog.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported OpenSSL calls
+async fn retired_temporary_cleanup_rebuilds_after_peer_publication() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use mz_catalog::catalog::{Catalog, CatalogError as CoreCatalogError, Op};
+    use mz_catalog::durable::objects::{Comment, DurableType, Item};
+    use mz_catalog::durable::{
+        AdapterDeclaration, ClientRealization, DEFAULT_ADAPTER_ID, Transaction,
+    };
+    use mz_catalog::memory::error::ErrorKind;
+    use mz_persist_client::ShardId;
+    use mz_pgrepr::oid::FIRST_USER_OID;
+    use mz_repr::{CatalogItemId, GlobalId};
+    use mz_sql::names::{CommentObjectId, SchemaSpecifier};
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_storage_client::controller::StorageTxn;
+    use uuid::Uuid;
+
+    async fn commit(mut txn: Transaction<'_>) {
+        let ts = txn.upper();
+        let _ = txn.get_and_commit_op_updates();
+        txn.commit(ts).await.unwrap();
+    }
+
+    let persist = PersistClient::new_for_tests().await;
+    let organization = Uuid::new_v4();
+    let oracle = Arc::new(TestOracle::default());
+    let now = NowFn::from(|| 1_000);
+    let builder = TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .with_timestamp_oracle(CatalogTimestampOracle::new(
+            Arc::<TestOracle>::clone(&oracle),
+            now.clone(),
+        ));
+    let bootstrap = test_bootstrap_args();
+    let storage = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(1_000.into(), &bootstrap)
+        .await
+        .unwrap();
+    let mut catalog = Catalog::open_debug_catalog_inner(
+        persist,
+        storage,
+        now,
+        Some(format!("local-az1-{organization}-0").parse().unwrap()),
+        &mz_build_info::DUMMY_BUILD_INFO,
+        BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+        &bootstrap,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(catalog.state().catalog_read_protection_enabled());
+    let mut peer = builder.unwrap_build().await.join().await.unwrap();
+    peer.sync_to_current_updates().await.unwrap();
+
+    let global_id = GlobalId::User(100_000);
+    let old_item = CatalogItemId::User(100_000);
+    let alias_item = CatalogItemId::User(100_001);
+    let shard = ShardId::new();
+    // Durable aliases deliberately model shared storage membership, including
+    // temporary definitions that this adapter cannot resolve in its SQL catalog.
+    let insert = |txn: &mut Transaction<'_>, item, name: &str, incarnation, oid| {
+        txn.insert_item(
+            item,
+            oid,
+            global_id,
+            SchemaSpecifier::Temporary.into(),
+            name,
+            format!("CREATE TEMPORARY TABLE mz_temp.{name} (a pg_catalog.int4)"),
+            MZ_SYSTEM_ROLE_ID,
+            vec![],
+            BTreeMap::new(),
+            Some(Uuid::new_v4()),
+            Some(incarnation),
+        )
+        .unwrap();
+        for column in [None, Some(0)] {
+            txn.update_comment(CommentObjectId::Table(item), column, Some(name.to_owned()))
+                .unwrap();
+        }
+    };
+
+    let mut txn = peer.transaction().await.unwrap();
+    let old_adapter = txn.allocate_adapter_id().unwrap();
+    txn.set_adapter_declaration(AdapterDeclaration {
+        id: old_adapter,
+        name: "retiring_adapter".into(),
+        size: txn
+            .get_adapter_declaration(DEFAULT_ADAPTER_ID)
+            .unwrap()
+            .size,
+    })
+    .unwrap();
+    let old_execution = txn
+        .create_client_incarnation(ClientRealization::Adapter(old_adapter))
+        .unwrap();
+    let live_execution = txn
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
+    insert(&mut txn, old_item, "retired", old_execution, FIRST_USER_OID);
+    txn.insert_collection_metadata(BTreeMap::from([(global_id, shard)]))
+        .unwrap();
+    txn.set_collection_compaction_bound(global_id, Some(Timestamp::MIN))
+        .unwrap();
+    txn.grant_client_read_requirements(
+        old_execution,
+        BTreeMap::from([(global_id, Timestamp::MIN)]),
+    )
+    .unwrap();
+    commit(txn).await;
+
+    // The Item is committed while its creator is live. Removing that adapter
+    // retires its execution and grants, but leaves the other adapter alive.
+    let mut txn = peer.transaction().await.unwrap();
+    assert!(txn.remove_adapter_declaration(old_adapter).is_some());
+    commit(txn).await;
+    catalog.sync_to_current_updates().await.unwrap();
+    assert!(
+        !catalog
+            .state()
+            .client_incarnations()
+            .contains_key(&old_execution)
+    );
+    assert!(
+        catalog
+            .state()
+            .client_incarnations()
+            .contains_key(&live_execution)
+    );
+    assert!(
+        !catalog
+            .state()
+            .client_read_requirements()
+            .contains_key(&(old_execution, global_id))
+    );
+    let owners = BTreeSet::from([old_execution]);
+    assert_eq!(catalog.state().temporary_item_cleanup_batch(16), owners);
+    let cleanup = Op::ReclaimRetiredTemporaryItems {
+        owners: owners.clone(),
+    };
+    let ts = catalog.current_upper().await;
+    let (candidate, _) = catalog
+        .transact_incremental_dry_run(catalog.state(), vec![cleanup.clone()], None, None, ts)
+        .await
+        .unwrap();
+    assert!(
+        !candidate
+            .storage_metadata()
+            .collection_metadata
+            .contains_key(&global_id)
+    );
+    assert!(
+        !candidate
+            .collection_compaction_bounds()
+            .contains_key(&global_id)
+    );
+    // Dry runs model collection deletion, but deliberately do not publish to
+    // the finalization WAL. The committing candidate supplies that effect.
+    assert!(candidate.client_read_frontier(global_id).is_none());
+    assert!(
+        !candidate
+            .storage_metadata()
+            .retained_collections
+            .contains(&global_id)
+    );
+    drop(candidate);
+
+    let before = catalog.state().storage_metadata().clone();
+    let cleanup_gate = Arc::new(Notify::new());
+    *oracle.allocation_gate.lock().unwrap() = Some(Arc::clone(&cleanup_gate));
+    let peer_snapshot = {
+        // A plain Timestamp forces allocation after candidate preparation, at
+        // durable append. No catch-up context may retry the stale candidate.
+        let pending = catalog.transact(None, None, ts, None, vec![cleanup.clone()]);
+        tokio::pin!(pending);
+        tokio::select! {
+            result = &mut pending => panic!("cleanup finished before allocation gate: {:?}", result.err()),
+            result = tokio::time::timeout(
+                Duration::from_secs(5), oracle.allocation_started.notified(),
+            ) => result.expect("cleanup did not reach its commit allocation"),
+        }
+
+        let mut txn = peer.transaction().await.unwrap();
+        insert(
+            &mut txn,
+            alias_item,
+            "alias",
+            live_execution,
+            FIRST_USER_OID + 1,
+        );
+        txn.grant_client_read_requirements(
+            live_execution,
+            BTreeMap::from([(global_id, Timestamp::MIN)]),
+        )
+        .unwrap();
+        commit(txn).await;
+        let snapshot = peer.snapshot().await.unwrap();
+        cleanup_gate.notify_one();
+        let error = tokio::time::timeout(Duration::from_secs(5), pending)
+            .await
+            .expect("cleanup did not finish after gate release")
+            .err()
+            .expect("stale cleanup must conflict with peer publication");
+        assert!(matches!(
+            error,
+            CoreCatalogError::Catalog(error)
+                if matches!(error.kind, ErrorKind::Durable(DurableCatalogError::CatalogOutOfSync { .. }))
+        ));
+        snapshot
+    };
+
+    // Both the durable publication and the in-memory candidate are atomic.
+    peer.sync_to_current_updates().await.unwrap();
+    assert_eq!(peer.snapshot().await.unwrap(), peer_snapshot);
+    assert_eq!(
+        catalog.state().storage_metadata().collection_metadata,
+        before.collection_metadata
+    );
+    assert_eq!(
+        catalog.state().storage_metadata().unfinalized_shards,
+        before.unfinalized_shards
+    );
+    assert_eq!(
+        catalog.state().storage_metadata().compaction_bounds,
+        before.compaction_bounds
+    );
+    assert_eq!(catalog.state().temporary_item_cleanup_batch(16), owners);
+
+    catalog.sync_to_current_updates().await.unwrap();
+    assert_eq!(
+        catalog.storage().await.snapshot().await.unwrap(),
+        peer_snapshot
+    );
+    let ts = catalog.current_upper().await;
+    catalog
+        .transact(None, None, ts, None, vec![cleanup])
+        .await
+        .unwrap();
+    assert!(catalog.state().temporary_item_cleanup_batch(16).is_empty());
+    peer.sync_to_current_updates().await.unwrap();
+    let after = peer.snapshot().await.unwrap();
+    let expected_items: imbl::OrdMap<_, _> = peer_snapshot
+        .items
+        .clone()
+        .into_iter()
+        .filter(|(key, value)| Item::from_key_value(key.clone(), value.clone()).id != old_item)
+        .collect();
+    assert_eq!(after.items, expected_items);
+    let expected_comments: imbl::OrdMap<_, _> = peer_snapshot
+        .comments
+        .clone()
+        .into_iter()
+        .filter(|(key, value)| {
+            Comment::from_key_value(key.clone(), value.clone()).object_id
+                != CommentObjectId::Table(old_item)
+        })
+        .collect();
+    assert_eq!(after.comments, expected_comments);
+    assert_eq!(after.items.len() + 1, peer_snapshot.items.len());
+    assert_eq!(after.comments.len() + 2, peer_snapshot.comments.len());
+    assert_eq!(
+        after.storage_collection_metadata,
+        peer_snapshot.storage_collection_metadata
+    );
+    assert_eq!(
+        after.collection_compaction_bounds,
+        peer_snapshot.collection_compaction_bounds
+    );
+    assert_eq!(
+        after.client_read_requirements,
+        peer_snapshot.client_read_requirements
+    );
+    assert_eq!(after.unfinalized_shards, peer_snapshot.unfinalized_shards);
+    assert_eq!(
+        catalog
+            .state()
+            .storage_metadata()
+            .collection_metadata
+            .get(&global_id),
+        Some(&shard)
+    );
+    assert_eq!(
+        catalog
+            .state()
+            .client_read_requirements()
+            .get(&(live_execution, global_id)),
+        Some(&Timestamp::MIN)
+    );
+    assert!(
+        !catalog
+            .state()
+            .storage_metadata()
+            .unfinalized_shards
+            .contains(&shard)
+    );
+    assert!(
+        !catalog
+            .state()
+            .storage_metadata()
+            .retained_collections
+            .contains(&global_id)
+    );
+    peer.expire().await;
     catalog.expire().await;
 }

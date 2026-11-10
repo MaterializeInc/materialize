@@ -15,6 +15,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_catalog::catalog::Catalog as CoreCatalog;
+use mz_catalog::catalog::transaction_context::TransactionContext;
 use mz_catalog::config::{Config, StateConfig};
 use mz_catalog::durable::{BootstrapArgs, DurableCatalogState, Snapshot};
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
@@ -82,13 +83,16 @@ pub struct OpenCatalogResult {
     pub uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
 }
 
-fn transaction_context(
+/// Supplies the invoking adapter's execution for temporary-item creation.
+pub fn transaction_context(
     session: &ConnMeta,
-) -> mz_catalog::catalog::transaction_context::TransactionContext<'_> {
-    mz_catalog::catalog::transaction_context::TransactionContext {
+    adapter_incarnation: Option<u64>,
+) -> TransactionContext<'_> {
+    TransactionContext {
         user: session.user(),
         conn_id: session.conn_id(),
         uuid: session.uuid(),
+        adapter_incarnation,
         authenticated_role_id: session.authenticated_role_id(),
     }
 }
@@ -217,10 +221,9 @@ impl Catalog {
         catch_up: Option<&mut TransactionCatchUp>,
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: impl Into<mz_catalog::durable::CatalogCommitTimestamp> + std::fmt::Debug,
-        session: Option<&ConnMeta>,
+        session: Option<TransactionContext<'_>>,
         ops: Vec<Op>,
     ) -> Result<TransactionResult, AdapterError> {
-        let session = session.map(transaction_context);
         Ok(self
             .0
             .transact(
@@ -236,11 +239,10 @@ impl Catalog {
         &self,
         base_state: &CatalogState,
         ops: Vec<Op>,
-        session: Option<&ConnMeta>,
+        session: Option<TransactionContext<'_>>,
         prev_snapshot: Option<Snapshot>,
         oracle_write_ts: Timestamp,
     ) -> Result<(CatalogState, Snapshot), AdapterError> {
-        let session = session.map(transaction_context);
         Ok(self
             .0
             .transact_incremental_dry_run(

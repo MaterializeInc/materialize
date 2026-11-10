@@ -243,7 +243,8 @@ macro_rules! objects {
 objects!(
     [v74, v75, v76, v77, v78],
     [
-        v79, v80, v81, v82, v83, v84, v85, v86, v87, v88, v89, v90, v91, v92, v93, v94, v95, v96
+        v79, v80, v81, v82, v83, v84, v85, v86, v87, v88, v89, v90, v91, v92, v93, v94, v95, v96,
+        v97
     ]
 );
 
@@ -334,9 +335,8 @@ pub(crate) async fn upgrade(
         .get_user_version()
         .await?
         .expect("initialized catalog must have a version");
-    // Named adapters require explicit declaration and execution ownership.
-    // There is no conversion from singleton adapter catalogs. Reject before
-    // running any migration rather than inventing a declaration or dropping holds.
+    // Earlier temporary Items have no trustworthy execution owner. Reject before
+    // migrating rather than inventing ownership or dropping protected state.
     if version < MIN_INITIALIZATION_VERSION {
         return Err(DurableCatalogError::IncompatibleDataVersion {
             found_version: version,
@@ -353,8 +353,8 @@ pub(crate) async fn upgrade(
     Ok(commit_ts)
 }
 
-/// Named adapter ownership has no conversion from singleton adapter catalogs.
-pub(super) const MIN_INITIALIZATION_VERSION: u64 = 96;
+/// Temporary execution ownership requires a fresh experimental catalog.
+pub(super) const MIN_INITIALIZATION_VERSION: u64 = 97;
 
 /// Determines which upgrade to run for the `version` and executes it.
 ///
@@ -550,7 +550,7 @@ async fn run_upgrade(
             )
             .await
         }
-        95 => Err(incompatible),
+        95 | 96 => Err(incompatible),
         // Up-to-date, no migration needed!
         CATALOG_VERSION => Ok((CATALOG_VERSION, commit_ts)),
         FUTURE_VERSION.. => Err(incompatible),

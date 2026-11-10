@@ -955,6 +955,7 @@ impl<'a> Transaction<'a> {
         temporary_oids: &HashSet<u32>,
         versions: BTreeMap<RelationVersion, GlobalId>,
         ephemeral_owner_session: Option<Uuid>,
+        ephemeral_owner_incarnation: Option<u64>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
@@ -968,6 +969,7 @@ impl<'a> Transaction<'a> {
             privileges,
             versions,
             ephemeral_owner_session,
+            ephemeral_owner_incarnation,
         )?;
         Ok(oid)
     }
@@ -984,6 +986,7 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         extra_versions: BTreeMap<RelationVersion, GlobalId>,
         ephemeral_owner_session: Option<Uuid>,
+        ephemeral_owner_incarnation: Option<u64>,
     ) -> Result<(), CatalogError> {
         let value = ItemValue {
             schema_id,
@@ -995,6 +998,7 @@ impl<'a> Transaction<'a> {
             global_id,
             extra_versions,
             ephemeral_owner_session,
+            ephemeral_owner_incarnation,
         };
         self.items
             .insert(ItemKey { id }, value, self.op_id)
@@ -1068,8 +1072,15 @@ impl<'a> Transaction<'a> {
             "inserting unfinalized shards only fails on duplicate values, which it ignores",
         );
 
-        // Comments on ephemeral items would otherwise dangle and, because
-        // item ids are reused, could later re-attach to an unrelated object.
+        self.remove_item_auxiliary_metadata(&item_ids);
+    }
+
+    /// Removes comments and source references for logically dropped items.
+    /// Storage lifetime is separate and must still go through collection preparation.
+    pub(crate) fn remove_item_auxiliary_metadata(&mut self, item_ids: &BTreeSet<CatalogItemId>) {
+        if item_ids.is_empty() {
+            return;
+        }
         self.comments.delete(
             |key, _value| match key.object_id {
                 CommentObjectId::Table(item_id)
@@ -1095,8 +1106,12 @@ impl<'a> Transaction<'a> {
 
         // Only sources hold source references and sources cannot be temporary
         // today, so this is defensive.
-        self.source_references
-            .delete(|key, _value| item_ids.contains(&key.source_id), self.op_id);
+        self.source_references.delete_by_keys(
+            item_ids.iter().map(|source_id| SourceReferencesKey {
+                source_id: *source_id,
+            }),
+            self.op_id,
+        );
     }
 
     pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, CatalogError> {
@@ -3224,6 +3239,20 @@ impl<'a> Transaction<'a> {
         self.replace_client_incarnation(realization, None)
     }
 
+    /// Certifies retirement at this transaction's prefix, using the same rule as
+    /// `ClientIncarnationRetirement`. Mere absence is not sufficient.
+    pub(crate) fn is_client_incarnation_retired(&self, incarnation: u64) -> bool {
+        self.id_allocator
+            .get(&IdAllocKey {
+                name: crate::durable::CLIENT_INCARNATION_ALLOC_KEY.to_owned(),
+            })
+            .is_some_and(|allocator| incarnation < allocator.next_id)
+            && self
+                .client_incarnations
+                .get(&ClientIncarnationKey { id: incarnation })
+                .is_none()
+    }
+
     fn allocate_client_incarnation(
         &mut self,
         realization: ClientRealization,
@@ -3687,6 +3716,57 @@ impl<'a> Transaction<'a> {
             .collect::<Vec<_>>();
         self.collection_compaction_bounds
             .delete_by_keys(retired, self.op_id);
+    }
+
+    /// Validates ownership only for changed items. Retired executions may leave
+    /// existing items behind until background reclamation, but cannot create new
+    /// ones. Ownership cannot move when a definition or its privileges change.
+    pub fn validate_ephemeral_item_ownership(&self) -> Result<(), CatalogError> {
+        for key in self.items.changed_keys() {
+            let Some(item) = self.items.get(key) else {
+                continue;
+            };
+            let invalid = |reason| {
+                CatalogError::from(DurableCatalogError::NotWritable(format!(
+                    "invalid temporary ownership for {}: {reason}",
+                    key.id
+                )))
+            };
+            let ownership = (
+                item.ephemeral_owner_session,
+                item.ephemeral_owner_incarnation,
+            );
+            if ownership.0.is_some() != ownership.1.is_some() {
+                return Err(invalid("session and execution must be present together"));
+            }
+            if let Some(initial) = self.items.initial.get(key) {
+                if ownership
+                    != (
+                        initial.ephemeral_owner_session,
+                        initial.ephemeral_owner_incarnation,
+                    )
+                {
+                    return Err(invalid("ownership is immutable"));
+                }
+                continue;
+            }
+            if let Some(incarnation) = item.ephemeral_owner_incarnation {
+                let Some(owner) = self
+                    .client_incarnations
+                    .get(&ClientIncarnationKey { id: incarnation })
+                else {
+                    return Err(invalid("creating execution is not live"));
+                };
+                if owner.deployment_generation != self.deployment_generation
+                    || !matches!(owner.realization, ClientRealization::Adapter(_))
+                {
+                    return Err(invalid(
+                        "creating execution must be an adapter in this deployment",
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Validates changed protection records and affected unchanged consumers.
@@ -4198,6 +4278,7 @@ impl<'a> Transaction<'a> {
             }
         }
         self.finalize_index_compaction_bounds();
+        self.validate_ephemeral_item_ownership()?;
         self.validate_read_protection()?;
         self.validate_prewarming_writes()?;
         let commit_capability = self
@@ -5862,6 +5943,7 @@ mod tests {
                     schema_id: SchemaId::User(1),
                     name: "item".into(),
                     ephemeral_owner_session: Some(Uuid::new_v4()),
+                    ephemeral_owner_incarnation: Some(1),
                     create_sql: "CREATE TABLE item".into(),
                     owner_id: RoleId::User(1),
                     privileges: Vec::new(),
@@ -5924,6 +6006,7 @@ mod tests {
             schema_id: SchemaId::User(schema),
             name: "shared".into(),
             ephemeral_owner_session: session,
+            ephemeral_owner_incarnation: session.map(|_| 1),
             create_sql: sql.into(),
             owner_id: RoleId::User(1),
             privileges: Vec::new(),

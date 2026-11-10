@@ -689,6 +689,7 @@ impl RustType<proto::ItemValue> for ItemValue {
                 })
                 .collect(),
             ephemeral_owner_session: self.ephemeral_owner_session,
+            ephemeral_owner_incarnation: self.ephemeral_owner_incarnation,
         }
     }
 
@@ -715,6 +716,7 @@ impl RustType<proto::ItemValue> for ItemValue {
             global_id: proto.global_id.into_rust()?,
             extra_versions,
             ephemeral_owner_session: proto.ephemeral_owner_session,
+            ephemeral_owner_incarnation: proto.ephemeral_owner_incarnation,
         })
     }
 }

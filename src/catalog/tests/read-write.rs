@@ -524,6 +524,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             privileges: vec![],
             extra_versions: BTreeMap::new(),
             ephemeral_owner_session: None,
+            ephemeral_owner_incarnation: None,
         },
         Item {
             id: CatalogItemId::User(200),
@@ -536,6 +537,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             privileges: vec![],
             extra_versions: BTreeMap::new(),
             ephemeral_owner_session: None,
+            ephemeral_owner_incarnation: None,
         },
     ];
 
@@ -563,6 +565,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             item.privileges.clone(),
             item.extra_versions.clone(),
             item.ephemeral_owner_session,
+            item.ephemeral_owner_incarnation,
         )
         .unwrap();
     }
@@ -623,6 +626,11 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
 
     let mut txn = state.transaction().await.unwrap();
 
+    let incarnation = txn
+        .create_client_incarnation(mz_catalog::durable::ClientRealization::Adapter(
+            mz_catalog::durable::DEFAULT_ADAPTER_ID,
+        ))
+        .expect("register temporary items' adapter");
     let insert = |txn: &mut mz_catalog::durable::Transaction,
                   id: u64,
                   schema_id: SchemaId,
@@ -639,6 +647,7 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
             vec![],
             BTreeMap::new(),
             owner_session,
+            owner_session.map(|_| incarnation),
         )
     };
 
@@ -659,6 +668,7 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
         vec![],
         BTreeMap::from([(RelationVersion::root().bump(), GlobalId::User(501))]),
         Some(session_a),
+        Some(incarnation),
     )
     .unwrap();
 
@@ -1024,6 +1034,11 @@ async fn test_persist_exact_prefix() {
         .unwrap();
     txn.set_maintained_read_requirement(output, BTreeSet::from([input]), Some(10.into()))
         .unwrap();
+    let incarnation = txn
+        .create_client_incarnation(mz_catalog::durable::ClientRealization::Adapter(
+            mz_catalog::durable::DEFAULT_ADAPTER_ID,
+        ))
+        .expect("register temporary view's adapter");
     txn.insert_item(
         CatalogItemId::User(2000),
         22_000,
@@ -1035,6 +1050,7 @@ async fn test_persist_exact_prefix() {
         vec![],
         BTreeMap::new(),
         Some(Uuid::new_v4()),
+        Some(incarnation),
     )
     .unwrap();
     let expected = txn.current_snapshot();
@@ -1189,6 +1205,7 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
             RoleId::User(1),
             vec![],
             BTreeMap::new(),
+            None,
             None,
         )
         .unwrap();

@@ -611,6 +611,26 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
     use mz_sql::names::CommentObjectId;
     use mz_storage_client::controller::StorageTxn;
 
+    async fn open(
+        persist: PersistClient,
+        organization: Uuid,
+        storage: Box<dyn crate::durable::DurableCatalogState>,
+    ) -> Catalog {
+        Catalog::open_debug_catalog_inner(
+            persist,
+            storage,
+            SYSTEM_TIME.clone(),
+            Some(format!("local-az1-{organization}-0").parse().unwrap()),
+            &mz_build_info::DUMMY_BUILD_INFO,
+            BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+            &test_bootstrap_args(),
+            None,
+            None,
+        )
+        .await
+        .expect("open protected catalog")
+    }
+
     async fn check(catalog: &Catalog) {
         let reader = catalog
             .open_diagnostic_reader()
@@ -630,31 +650,17 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
     let persist = PersistClient::new_for_tests().await;
     let organization = Uuid::new_v4();
     let bootstrap = test_bootstrap_args();
-    let storage = TestCatalogStateBuilder::new(persist.clone())
+    let builder = TestCatalogStateBuilder::new(persist.clone())
         .with_organization_id(organization)
-        .with_default_deploy_generation()
+        .with_default_deploy_generation();
+    let storage = builder
+        .clone()
         .unwrap_build()
         .await
         .open(SYSTEM_TIME().into(), &bootstrap)
         .await
         .expect("can open durable catalog storage");
-    let mut catalog = Catalog::open_debug_catalog_inner(
-        persist,
-        storage,
-        SYSTEM_TIME.clone(),
-        Some(
-            format!("local-az1-{organization}-0")
-                .parse()
-                .expect("valid test environment ID"),
-        ),
-        &mz_build_info::DUMMY_BUILD_INFO,
-        BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
-        &bootstrap,
-        None,
-        None,
-    )
-    .await
-    .expect("can open debug catalog");
+    let mut catalog = open(persist.clone(), organization, storage).await;
     assert!(catalog.state().catalog_read_protection_enabled());
 
     let local_owner = Uuid::new_v4();
@@ -669,30 +675,66 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
     let local_item = CatalogItemId::User(100_000);
     let foreign_item = CatalogItemId::User(100_001);
     let alias_item = CatalogItemId::User(100_002);
+    let plan_namespace = catalog.state().written_plan_namespace();
+    let version_plan = Uuid::new_v4();
     let ordinary_comment = catalog
         .entries()
         .find(|entry| entry.conn_id().is_none())
         .expect("bootstrap contains ordinary catalog items")
         .comment_object_id();
     let ids = [local, foreign, version];
-    let (updates, incarnation) = {
+    let (updates, incarnation, foreign_execution, alias_execution) = {
         let mut storage = catalog.storage().await;
         let mut tx = storage
             .transaction()
             .await
             .expect("can start temporary table creation transaction");
+        let incarnation = tx
+            .create_client_incarnation(crate::durable::ClientRealization::Adapter(
+                crate::durable::DEFAULT_ADAPTER_ID,
+            ))
+            .expect("can create client incarnation");
+        let [foreign_execution, alias_execution] = ["foreign_owner", "alias_owner"].map(|name| {
+            let id = tx.allocate_adapter_id().unwrap();
+            tx.set_adapter_declaration(crate::durable::AdapterDeclaration {
+                id,
+                name: name.into(),
+                size: tx
+                    .get_adapter_declaration(crate::durable::DEFAULT_ADAPTER_ID)
+                    .unwrap()
+                    .size,
+            })
+            .unwrap();
+            tx.create_client_incarnation(crate::durable::ClientRealization::Adapter(id))
+                .unwrap()
+        });
         // Same SQL name in distinct sessions must not collide or become visible
         // locally. The foreign table's extra version also has a live alias.
-        for (offset, (item, id, name, owner, versions)) in [
-            (local_item, local, "t", local_owner, BTreeMap::new()),
+        for (offset, (item, id, name, owner, execution, versions)) in [
+            (
+                local_item,
+                local,
+                "t",
+                local_owner,
+                incarnation,
+                BTreeMap::new(),
+            ),
             (
                 foreign_item,
                 foreign,
                 "t",
                 foreign_owner,
+                foreign_execution,
                 BTreeMap::from([(RelationVersion::root().bump(), version)]),
             ),
-            (alias_item, version, "alias", foreign_owner, BTreeMap::new()),
+            (
+                alias_item,
+                version,
+                "alias",
+                Uuid::new_v4(),
+                alias_execution,
+                BTreeMap::new(),
+            ),
         ]
         .into_iter()
         .enumerate()
@@ -708,6 +750,7 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
                 vec![],
                 versions,
                 Some(owner),
+                Some(execution),
             )
             .expect("can insert temporary catalog item");
             for column in [None, Some(0)] {
@@ -721,6 +764,8 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
         }
         tx.update_comment(ordinary_comment, None, Some("ordinary".into()))
             .expect("can comment on ordinary item");
+        tx.set_written_plan(version, &plan_namespace, Some(version_plan))
+            .expect("can select an aliased version's plan");
         // The native catalog harness has no storage controller. Allocate the
         // metadata and initial permission together, as storage preparation does.
         let foreign_shard = ShardId::new();
@@ -734,11 +779,6 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
             tx.set_collection_compaction_bound(id, Some(Timestamp::MIN))
                 .expect("can set initial collection compaction bound");
         }
-        let incarnation = tx
-            .create_client_incarnation(crate::durable::ClientRealization::Adapter(
-                crate::durable::DEFAULT_ADAPTER_ID,
-            ))
-            .expect("can create client incarnation");
         tx.grant_client_read_requirements(
             incarnation,
             ids.into_iter().map(|id| (id, Timestamp::MIN)).collect(),
@@ -749,7 +789,7 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
         tx.commit(ts)
             .await
             .expect("can commit temporary table creation");
-        (updates, incarnation)
+        (updates, incarnation, foreign_execution, alias_execution)
     };
     let _ = catalog
         .state
@@ -866,31 +906,116 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
         assert!(released.collection_compaction_bounds().contains_key(&id));
     }
 
+    // Silence and an unknown execution are not retirement authority.
+    let before = catalog.storage().await.snapshot().await.unwrap();
+    let ts = catalog.current_upper().await;
+    catalog
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![Op::ReclaimRetiredTemporaryItems {
+                owners: BTreeSet::from([incarnation, foreign_execution, alias_execution, u64::MAX]),
+            }],
+        )
+        .await
+        .expect("live and unknown owners remain untouched");
+    assert_eq!(catalog.storage().await.snapshot().await.unwrap(), before);
+    assert!(catalog.state().temporary_item_cleanup_batch(16).is_empty());
+
     // Dropping one alias must not retire the extra version. Only the durable
     // removal of its final SQL owner makes final release eligible for cleanup.
-    for item in [alias_item, foreign_item] {
-        let updates = {
-            let mut storage = catalog.storage().await;
-            let mut tx = storage
+    for (item, owner) in [
+        (alias_item, alias_execution),
+        (foreign_item, foreign_execution),
+    ] {
+        let realization = catalog.state().client_incarnations()[&owner].realization;
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                None,
+                ts,
+                None,
+                vec![Op::CreateClientIncarnation {
+                    realization,
+                    expected: Some(owner),
+                }],
+            )
+            .await
+            .expect("replace the owning execution");
+        assert_eq!(
+            catalog.state().temporary_item_cleanup_batch(16),
+            BTreeSet::from([owner])
+        );
+        if item == alias_item {
+            // A new adapter reconstructs eligible work from the ordinary catalog
+            // snapshot. No session registry or periodic scan supplies the queue.
+            catalog.expire().await;
+            let storage = builder.clone().unwrap_build().await.join().await.unwrap();
+            catalog = open(persist.clone(), organization, storage).await;
+            assert_eq!(
+                catalog.state().temporary_item_cleanup_batch(16),
+                BTreeSet::from([owner])
+            );
+        }
+        let mut follower =
+            Catalog::open_debug_read_only_catalog(persist.clone(), organization, &bootstrap)
+                .await
+                .expect("open foreign cleanup follower");
+        assert_eq!(
+            follower.state().temporary_item_cleanup_batch(16),
+            BTreeSet::from([owner])
+        );
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                None,
+                ts,
+                None,
+                vec![Op::ReclaimRetiredTemporaryItems {
+                    owners: BTreeSet::from([owner]),
+                }],
+            )
+            .await
+            .expect("reclaim retired execution's foreign temporary items");
+        assert!(catalog.state().temporary_item_cleanup_batch(16).is_empty());
+        assert!(
+            catalog
+                .storage()
+                .await
                 .transaction()
                 .await
-                .expect("can start temporary item removal transaction");
-            tx.remove_item(item)
-                .expect("can remove temporary catalog item");
-            tx.drop_comments(&BTreeSet::from([CommentObjectId::Table(item)]))
-                .expect("can remove temporary item comments");
-            let updates = tx.get_and_commit_op_updates();
-            let ts = tx.upper();
-            tx.commit(ts)
-                .await
-                .expect("can commit temporary item removal");
-            updates
-        };
-        let _ = catalog
-            .state
-            .apply_updates(updates, &mut LocalExpressionCache::Closed)
-            .await;
+                .unwrap()
+                .get_item(&item)
+                .is_none()
+        );
+        follower
+            .sync_to_current_updates()
+            .await
+            .expect("follow peer cleanup");
+        assert!(follower.state().temporary_item_cleanup_batch(16).is_empty());
+        assert!(
+            !follower
+                .state()
+                .ephemeral_items_by_incarnation
+                .contains_key(&owner)
+        );
+        follower.expire().await;
         let dropped = item == foreign_item;
+        assert_eq!(
+            catalog
+                .storage()
+                .await
+                .transaction()
+                .await
+                .unwrap()
+                .get_written_plan(version, &plan_namespace),
+            (!dropped).then_some(version_plan),
+            "selected plans survive until the final durable alias is removed"
+        );
         for id in [foreign, version] {
             assert!(
                 catalog
@@ -934,6 +1059,109 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
             );
         }
     }
+    // Replacing the remaining owner transfers its grants, not its temporary
+    // definitions. Reclamation cannot release the successor's inherited holds.
+    let local_shard = catalog.state().storage_metadata().collection_metadata[&local];
+    let ts = catalog.current_upper().await;
+    let successor = catalog
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![Op::CreateClientIncarnation {
+                realization: crate::durable::ClientRealization::Adapter(
+                    crate::durable::DEFAULT_ADAPTER_ID,
+                ),
+                expected: Some(incarnation),
+            }],
+        )
+        .await
+        .expect("replace protected adapter")
+        .created_client_incarnations[0];
+    assert_eq!(
+        catalog
+            .state()
+            .client_read_requirements()
+            .get(&(successor, local)),
+        Some(&Timestamp::MIN)
+    );
+    let ts = catalog.current_upper().await;
+    catalog
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![Op::ReclaimRetiredTemporaryItems {
+                owners: BTreeSet::from([incarnation]),
+            }],
+        )
+        .await
+        .expect("reclaim definitions but retain inherited protection");
+    assert_eq!(
+        catalog
+            .state()
+            .storage_metadata()
+            .collection_metadata
+            .get(&local),
+        Some(&local_shard)
+    );
+    assert!(
+        catalog
+            .state()
+            .storage_metadata()
+            .retained_collections
+            .contains(&local)
+    );
+    assert!(
+        !catalog
+            .state()
+            .storage_metadata()
+            .unfinalized_shards
+            .contains(&local_shard)
+    );
+    check(&catalog).await;
+
+    let ts = catalog.current_upper().await;
+    catalog
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![Op::UpdateClientReadRequirements {
+                incarnation: successor,
+                requirements: ids.into_iter().map(|id| (id, None)).collect(),
+            }],
+        )
+        .await
+        .expect("release successor's final inherited grants");
+    for id in ids {
+        assert!(
+            !catalog
+                .state()
+                .storage_metadata()
+                .collection_metadata
+                .contains_key(&id)
+        );
+        assert!(
+            !catalog
+                .state()
+                .collection_compaction_bounds()
+                .contains_key(&id)
+        );
+    }
+    assert!(
+        catalog
+            .state()
+            .storage_metadata()
+            .unfinalized_shards
+            .contains(&local_shard)
+    );
+    assert!(catalog.state().temporary_item_cleanup_batch(16).is_empty());
+    check(&catalog).await;
+
     // A dropped foreign item is no longer a valid reason to hide a comment.
     // Apply a malformed update without persisting it and retain the diagnostic.
     use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
@@ -2251,6 +2479,7 @@ async fn test_unapplicable_foreign_catalog_changes_halt_writer() {
         global_id: proto::GlobalId::User(1),
         extra_versions: vec![],
         ephemeral_owner_session: None,
+        ephemeral_owner_incarnation: None,
     };
     // A debug handle's pending generation must not promote the live writer.
     let mut admin = builder

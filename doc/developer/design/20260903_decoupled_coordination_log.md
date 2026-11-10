@@ -9,22 +9,22 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Implement the approved temporary-Item execution ownership and catalog-authorized
-reclamation, using the fresh-state format boundary. Preserve original ownership
-on updates and existing protected storage lifetimes. See
-`native-temporary-owner-implementation-map.md` and `native-temporary-format-decision.md`.
+Run a fresh distinct-compatible-version lifecycle on format 97. Both versions
+must serve SQL, DDL and table writes before and after promotion. Then explicitly
+retire one deployment and verify surviving sessions, warmed replicas and singleton
+external-sink authority. Earlier distinct-version evidence predates this cleanup.
+Do not attempt conversion from pre-native or earlier experimental catalog formats.
 
-A focused scheduling investigation found that general sessionless staged DDL
-would need an admission extension. Oracle239/task16 is checking whether the
-smaller existing one-attempt maintenance boundary suffices for this specific
-resampled cleanup operation. Do not add a general scheduler or periodic scans
-without a concrete requirement. No temporary ownership code has been changed.
+Temporary execution ownership and reclamation are implemented and verified.
+The existing maintenance turn follows incremental ownership state and commits
+catalog-validated whole-owner cleanup. The full same-build debug SQL lifecycle
+passes at the unchanged publication cadence. Rust boundary checks, negative
+controls and independent production review also passed. Evidence and limits:
+`native-temporary-owner-verification.md`, with runtime receipts in
+`aj-native-temporary-0d28dffc/`.
 
-The retirement repair is published in `854d883cb8`. Durable/read-write checks,
-negative controls, independent review and full debug DDL reruns passed. The trace
-shows genuine content forcing fresh preparation and empty progress rebasing the
-same raw candidate. Evidence and limits: `native-retirement-verification.md`.
-All owned runtime fixtures are stopped and removed.
+All owned runtime fixtures are stopped and removed. Builds/tests remain sequential
+and resource-guarded. No Persist or production publication defaults changed.
 
 ## Verified outcome
 
@@ -40,26 +40,21 @@ continuity. Same-build platform lifecycle, MV pruning and default/larger index
 protection cohorts passed. PG, MySQL and SQL Server bounded CDC cases passed prewarming,
 reader handover, forced reconnect with both deployments alive, and ingestion after
 retirement. The full DDL workflow also passed with first-request retirement while peers
-continued publishing. These are selected local outcomes, not broad CI or fresh
-distinct-version acceptance.
+continued publishing. Temporary objects retain session visibility and execution
+ownership through ALTER, rename, privileges and promotion. Disconnect, confirmed
+replacement and explicit retirement reclaim their metadata while preserving
+survivors. Format 97 requires fresh experimental state, with no ownership backfill.
+These are selected local outcomes, not broad CI or fresh distinct-version acceptance.
 
 ## Live blockers and decisions
 
-- Temporary-item ownership is approved: retain the session UUID, commit the
-  creating adapter incarnation with each Item, preserve disconnect cleanup and
-  reclaim only catalog-confirmed replaced/retired executions. Promotion preserves
-  Items. No correctness dependency on `mz_sessions`. The user approved a format
-  bump with fresh experimental environments, without migration or ownership
-  backfill. Use existing fail-closed admission and preserve compatible full
-  writers sharing the new format. See `native-temporary-format-decision.md`
-  and `native-temporary-owner-implementation-map.md`.
 - Catalog-free replica ingress remains. Replacing headless programmable coverage
   with a test-only native runtime needs scope approval. Preserve shared query
   transport, native nonleader workers and both Timely topologies. The dormant
   final-preflight hook's old-to-old coverage also remains pending a decision.
   See `native-replica-execution-boundary.md` and `final-preflight-boundary-research.md`.
 - Remaining native lifecycle callers include read-only/fencing expectations,
-  forced-migration cases, temporary cleanup and platform/stress workflows.
+  forced-migration cases and platform/stress workflows.
   Preserve source/sink workloads, predecessors and compatible-image coverage.
   Pre-native-to-native upgrades are explicitly unsupported, not reset/converted.
 - Current-source preservation, upsert/data-ingest/parallel stress,
@@ -83,6 +78,14 @@ formatting and scoped all-target Rust checks pass. The PR stays draft.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
+- Temporary ownership: `native-temporary-owner-verification.md`, including the
+  ordinary alias/protection path, restart replay, conflicting-prefix rejection,
+  negative controls and full SQL lifecycle receipts. The existing dependent-temp
+  rename restriction remains in the follow-up inventory.
+- Retirement: `native-retirement-verification.md`. The published repair in
+  `854d883cb8` preserves raw candidates across empty progress and rebuilds after
+  genuine content. Full debug DDL and controlled negative cases passed.
+
 - CDC: `native-cdc-admission-review.md`, `native-cdc-shutdown-audit.md`,
   `native-pg-handover-review.md`, `native-cdc-runtime-verification.md` and
   `native-*-handover-latest`. Candidate/source
@@ -104,8 +107,9 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   and `../logical-component-load/` remain the performance baseline, not a cleanup
   performance claim. Further history is in the [archive](20260903_decoupled_coordination_log_archive.md).
 
-All owned runtime fixtures were removed. Unused executables were reclaimed
-along with orphaned debug objects to restore 50 GiB free before the current checks. Keep measuring available space. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB available-memory
+All owned runtime fixtures were removed. Unused images and first-party build caches
+were reclaimed. Keep measuring available space. Keep heavy work sequential,
+enforce 30 GiB disk and 2 GiB available-memory
 reserves, and use one low-priority Cargo job. Scratch SSO was expired on the last
 checks. Local verification does not depend on it.
 

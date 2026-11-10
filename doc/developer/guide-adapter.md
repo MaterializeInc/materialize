@@ -139,6 +139,15 @@ A confirmed supersession or deployment fence terminates the adapter, rather than
 registering again or continuing to serve with a closed client. An object DROP or
 ordinary acquisition rejection is not evidence of supersession.
 
+Temporary Items retain their session UUID for visibility and their creating adapter
+incarnation for lifetime. Ownership commits with creation and survives definition
+and privilege updates. Normal disconnect drops the session's objects. Background
+reclamation requires catalog-confirmed execution retirement, not silence or
+promotion. Follow Item and incarnation diffs even for SQL-invisible foreign objects.
+Cleanup uses a fresh, validated maintenance transaction and ordinary collection
+preparation, preserving surviving aliases and transferred client grants. With no
+serving adapters, reclamation waits. No durable per-session inventory is required.
+
 A joining adapter reconstructs the committed catalog without rerunning shared
 initialization or migrations. Durable join admission forbids migrations regardless
 of whether the adapter serves read-only SQL. Serving adapters must not apply
@@ -714,19 +723,21 @@ materialized view over `mz_catalog_raw` and cleanup logic has a durable
 session inventory.
 
 **Why it was rejected:** Connection lifecycle events are far more frequent
-than DDL, and the catalog shard has a single writer. Every connect became a
-timestamp oracle round-trip plus a compare-and-append against the catalog
-shard, serialized on the coordinator loop. Startup could not respond before
+than DDL, and the catalog shard serializes commits through compare-and-append.
+Every connect required an oracle round trip and a catalog commit on the
+coordinator loop. Startup could not respond before
 the record was durable (otherwise temp DDL could race its own session
 record), so connect latency was coupled to catalog commit latency, and
 connection churn queued real DDL behind session commits. Batching session ops
 into shared catalog transactions and bounding the flush rate reduced the
 commit count but kept both couplings.
 
-The durable records also bought nothing for garbage collection in the
-single-envd world. Cleanup at promotion deletes all ephemeral rows, justified
-by the deploy-generation fence alone, and graceful session close knows the
-session UUID from in-memory connection metadata.
+Durable session records are unnecessary for temporary-object reclamation.
+Graceful disconnect knows the session UUID from in-memory connection metadata.
+After a crash, each temporary Item's creating adapter incarnation provides the
+ownership proof. Catalog-confirmed execution retirement permits cleanup without
+making observational session rows authoritative. Promotion alone preserves both
+deployments' sessions and temporary objects.
 
 **The general lesson:** high-frequency per-connection state belongs in builtin
 tables written through group commit, which is fire-and-forget from the

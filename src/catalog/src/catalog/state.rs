@@ -173,6 +173,12 @@ pub struct CatalogState {
     /// omitted from the session-visible entries. Multiple items can alias an ID.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) durable_item_ids: imbl::OrdMap<GlobalId, imbl::OrdSet<CatalogItemId>>,
+    /// All temporary definitions, independent of this adapter's SQL visibility.
+    #[serde(skip)]
+    pub(super) ephemeral_items_by_incarnation: imbl::OrdMap<u64, imbl::OrdSet<CatalogItemId>>,
+    /// Possible retired owners. The cleanup transaction must certify retirement.
+    #[serde(skip)]
+    pub(super) temporary_item_cleanup_candidates: imbl::OrdSet<u64>,
     /// Items whose additions were omitted from this process's SQL projection.
     /// Their comments follow the same visibility, including later retractions.
     #[serde(skip)]
@@ -537,6 +543,8 @@ impl CatalogState {
             entry_by_id: Default::default(),
             entry_by_global_id: Default::default(),
             durable_item_ids: Default::default(),
+            ephemeral_items_by_incarnation: Default::default(),
+            temporary_item_cleanup_candidates: Default::default(),
             nonlocal_ephemeral_items: Default::default(),
             notices_by_dep_id: Default::default(),
             ambient_schemas_by_name: Default::default(),
@@ -1262,9 +1270,8 @@ impl CatalogState {
 
     /// Converts an in-memory catalog entry into its durable representation.
     ///
-    /// The durable owner of a temporary entry is the session whose connection
-    /// currently holds it, resolved from the temporary namespace
-    /// registered at the session's first temporary-item creation.
+    /// The session UUID comes from the temporary namespace. Execution ownership
+    /// comes from the committed entry, never from the adapter performing an update.
     pub(super) fn durable_item(
         &self,
         entry: CatalogEntry,
@@ -1293,6 +1300,7 @@ impl CatalogState {
             privileges: entry.privileges.into_all_values().collect(),
             extra_versions,
             ephemeral_owner_session,
+            ephemeral_owner_incarnation: entry.ephemeral_owner_incarnation,
         })
     }
 
@@ -3202,6 +3210,16 @@ impl CatalogState {
         &self,
     ) -> &imbl::OrdMap<u64, crate::durable::objects::ClientIncarnationValue> {
         &self.client_incarnations
+    }
+
+    /// Selects whole retired-owner candidates without consuming them. Committed
+    /// item retractions remove completed work, including cleanup by another adapter.
+    pub fn temporary_item_cleanup_batch(&self, limit: usize) -> BTreeSet<u64> {
+        self.temporary_item_cleanup_candidates
+            .iter()
+            .take(limit)
+            .copied()
+            .collect()
     }
 
     /// Returns durable client requirements, keyed by incarnation and collection.

@@ -20,6 +20,8 @@ pub struct TransactionContext<'a> {
     pub user: &'a User,
     pub conn_id: &'a ConnectionId,
     pub uuid: Uuid,
+    /// The invoking adapter execution, required when creating temporary items.
+    pub adapter_incarnation: Option<u64>,
     /// The role that initiated the connection, which may since have been dropped.
     pub authenticated_role_id: &'a RoleId,
 }

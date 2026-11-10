@@ -574,6 +574,12 @@ fn insert_view(
     let CatalogItemId::User(raw_id) = id else {
         panic!("tests only insert user items");
     };
+    let incarnation = ephemeral_owner_session.map(|_| {
+        txn.create_client_incarnation(mz_catalog::durable::ClientRealization::Adapter(
+            mz_catalog::durable::DEFAULT_ADAPTER_ID,
+        ))
+        .expect("register temporary view's adapter")
+    });
     txn.insert_item(
         id,
         u32::try_from(20_000 + raw_id).expect("small"),
@@ -585,6 +591,7 @@ fn insert_view(
         vec![],
         BTreeMap::new(),
         ephemeral_owner_session,
+        incarnation,
     )
     .unwrap();
 }
@@ -599,7 +606,8 @@ async fn test_persist_open_reclaims_ephemeral_items() {
         .await;
 }
 
-/// Protected same-generation opens preserve owners. Exclusive opens reclaim them.
+/// Protected opens and deployment transitions preserve temporary items for core
+/// maintenance. Exclusive opens reclaim them.
 async fn test_open_reclaims_ephemeral_items(
     state_builder: TestCatalogStateBuilder,
     protected: bool,
@@ -649,8 +657,7 @@ async fn test_open_reclaims_ephemeral_items(
         snapshot
     };
 
-    // A read-only open leaves it alone. Checked before the writable open below,
-    // which is what removes it.
+    // A read-only open leaves it alone, even without read protection.
     {
         let mut read_only_state = state_builder
             .clone()
@@ -692,12 +699,33 @@ async fn test_open_reclaims_ephemeral_items(
             .unwrap();
         assert!(item_ids(&same_generation.snapshot().await.unwrap()).contains(&ephemeral_id));
         same_generation.expire().await;
-    }
 
-    // Promotion reclaims only the outgoing ephemeral item.
-    {
+        let next = state_builder.with_deploy_generation(1);
+        let pending = next.clone().unwrap_build().await.admit().await.unwrap();
+        let mut promoted = next
+            .unwrap_build()
+            .await
+            .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        // Promotion retains the old owner and both kinds of item unchanged.
+        assert_eq!(
+            promoted.snapshot().await.unwrap().items,
+            initial_snapshot.items
+        );
+        assert!(promoted.retire_deployment(0).await.unwrap());
+        // Retirement permits core maintenance to reclaim temporary items, but
+        // does not remove them at the durable layer.
+        assert_eq!(
+            promoted.snapshot().await.unwrap().items,
+            initial_snapshot.items
+        );
+        pending.expire().await;
+        promoted.expire().await;
+    } else {
+        // An exclusive writable open reclaims only the ephemeral item.
         let mut state = state_builder
-            .with_deploy_generation(if protected { 1 } else { 0 })
+            .with_deploy_generation(0)
             .unwrap_build()
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
@@ -1329,26 +1357,49 @@ async fn test_same_generation_coexistence(state_builder: TestCatalogStateBuilder
         .with_deploy_generation(99)
         .unwrap_build()
         .await;
-    let promoted = state_builder
-        .with_deploy_generation(1)
+    let next = state_builder.with_deploy_generation(1);
+    let pending = next.clone().unwrap_build().await.admit().await.unwrap();
+    let mut promoted = next
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
-    for mut old in [state, joined, _state] {
-        assert!(matches!(
-            old.snapshot().await.unwrap_err(),
-            CatalogError::Durable(DurableCatalogError::Fence(
-                FenceError::DeployGeneration { .. }
-            ))
-        ));
-        old.expire().await;
+
+    // Promotion preserves full write authority for old and new members.
+    let mut old_states = [state, joined, _state];
+    for (i, writer) in old_states
+        .iter_mut()
+        .chain(std::iter::once(&mut promoted))
+        .enumerate()
+    {
+        writer.snapshot().await.unwrap();
+        writer.sync_to_current_updates().await.unwrap();
+        let mut txn = writer.transaction().await.unwrap();
+        txn.set_config("coexisting_writer".into(), Some(usize_to_u64(i)))
+            .unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts).await.unwrap();
     }
+
     // Discovery uses active state at admission, not the build-time snapshot.
     let mut joined = stale_join.join_active().await.unwrap();
     assert_eq!(joined.get_deployment_generation().await.unwrap(), 1);
     joined.expire().await;
+
+    // Only explicit retirement fences the old deployment.
+    assert!(promoted.retire_deployment(0).await.unwrap());
+    for mut old in old_states {
+        assert!(matches!(
+            old.snapshot().await.unwrap_err(),
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::DeploymentRetired {
+                generation: 0
+            }))
+        ));
+        old.expire().await;
+    }
+    pending.expire().await;
     promoted.expire().await;
 }
 
@@ -1651,7 +1702,7 @@ async fn test_join_requires_initialized_current_version() {
             .unwrap_err(),
         CatalogError::Durable(DurableCatalogError::IncompatibleDataVersion {
             found_version,
-            min_catalog_version: 96,
+            min_catalog_version: CATALOG_VERSION,
             catalog_version: CATALOG_VERSION,
         }) if found_version == CATALOG_VERSION - 1
     ));

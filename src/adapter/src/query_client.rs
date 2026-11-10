@@ -1824,6 +1824,7 @@ mod tests {
                 vec![],
                 BTreeMap::new(),
                 None,
+                None,
             ).expect("can insert test MV");
             if uninstalled_index {
                 let n = 100_001;
@@ -1837,6 +1838,7 @@ mod tests {
                     MZ_SYSTEM_ROLE_ID,
                     vec![],
                     BTreeMap::new(),
+                    None,
                     None,
                 ).expect("can insert index");
                 // Both the logical input and the selected import are the MV.

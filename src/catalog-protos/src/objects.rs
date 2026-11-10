@@ -298,6 +298,8 @@ pub struct ItemValue {
         proptest(strategy = "proptest::option::of(any_uuid())")
     )]
     pub ephemeral_owner_session: Option<Uuid>,
+    /// The creating adapter execution. Present exactly when the session UUID is present.
+    pub ephemeral_owner_incarnation: Option<u64>,
 }
 
 #[derive(

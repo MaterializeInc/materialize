@@ -60,7 +60,7 @@ fn namespace(state: &CatalogState) -> BTreeMap<String, CatalogItemId> {
         .clone()
 }
 
-fn assert_replacement(state: &CatalogState, original: &Op, replacement: &Op) {
+fn assert_replacement(state: &CatalogState, original: &Op, replacement: &Op, incarnation: u64) {
     let Op::CreateItem {
         id: old_id,
         item: old_item,
@@ -76,6 +76,7 @@ fn assert_replacement(state: &CatalogState, original: &Op, replacement: &Op) {
     assert!(state.try_get_entry(old_id).is_none());
     let entry = state.get_entry(id);
     assert_eq!(entry.conn_id(), Some(&SYSTEM_CONN_ID));
+    assert_eq!(entry.ephemeral_owner_incarnation, Some(incarnation));
     assert_eq!(entry.uses(), item.uses());
     assert_eq!(entry.references(), item.references());
     for dependency in old_item.uses().union(&item.uses()) {
@@ -95,123 +96,162 @@ fn assert_replacement(state: &CatalogState, original: &Op, replacement: &Op) {
 
 #[mz_ore::test(tokio::test)]
 async fn temporary_view_replacement_dry_run() {
-    Catalog::with_debug(|mut catalog| async move {
-        let session = TransactionContext {
-            user: &SYSTEM_USER,
-            conn_id: &SYSTEM_CONN_ID,
-            uuid: Uuid::new_v4(),
-            authenticated_role_id: &MZ_SYSTEM_ROLE_ID,
-        };
-        catalog.register_temporary_namespace(session.conn_id, session.uuid);
+    let persist = mz_persist_client::PersistClient::new_for_tests().await;
+    let organization = Uuid::new_v4();
+    let bootstrap = crate::catalog::test_bootstrap_args();
+    let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("open durable catalog");
+    let mut catalog = Catalog::open_debug_catalog_inner(
+        persist,
+        storage,
+        mz_ore::now::SYSTEM_TIME.clone(),
+        Some(format!("local-az1-{organization}-0").parse().unwrap()),
+        &mz_build_info::DUMMY_BUILD_INFO,
+        BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+        &bootstrap,
+        None,
+        None,
+    )
+    .await
+    .expect("open protected catalog");
+    let ts = catalog.current_upper().await;
+    let incarnation = catalog
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![Op::CreateClientIncarnation {
+                realization: crate::durable::ClientRealization::Adapter(
+                    crate::durable::DEFAULT_ADAPTER_ID,
+                ),
+                expected: None,
+            }],
+        )
+        .await
+        .expect("register creating adapter")
+        .created_client_incarnations[0];
+    let session = TransactionContext {
+        user: &SYSTEM_USER,
+        conn_id: &SYSTEM_CONN_ID,
+        uuid: Uuid::new_v4(),
+        adapter_incarnation: Some(incarnation),
+        authenticated_role_id: &MZ_SYSTEM_ROLE_ID,
+    };
+    catalog.register_temporary_namespace(session.conn_id, session.uuid);
 
-        // Both cases use the same operations and assertions. Only the location
-        // of the original differs: committed catalog or accumulated dry run.
-        for (offset, committed, name) in
-            [(0, true, "committed_temp"), (10, false, "provisional_temp")]
-        {
-            let old_id = CatalogItemId::User(1_000_000 + offset);
-            let new_id = CatalogItemId::User(1_000_001 + offset);
-            let mut fixture = catalog.state().clone();
-            let original = create_view(&mut fixture, 1_000_000 + offset, name, "mz_tables");
-            let replacement = create_view(&mut fixture, 1_000_001 + offset, name, "mz_columns");
-            let (base, snapshot) = if committed {
-                catalog
-                    .transact(
-                        None,
-                        None,
-                        mz_repr::Timestamp::from(1_u64),
-                        Some(&session),
-                        vec![original.clone()],
-                    )
-                    .await
-                    .expect("commit original temporary view");
-                (catalog.state().clone(), None)
-            } else {
-                let (base, snapshot) = catalog
-                    .transact_incremental_dry_run(
-                        catalog.state(),
-                        vec![original.clone()],
-                        Some(&session),
-                        None,
-                        1.into(),
-                    )
-                    .await
-                    .expect("create provisional temporary view");
-                assert!(catalog.state().try_get_entry(&old_id).is_none());
-                assert!(!namespace(catalog.state()).contains_key(name));
-                (base, Some(snapshot))
-            };
-            let committed_namespace = namespace(catalog.state());
-
-            let ops = vec![
-                Op::DropObjects(vec![DropObjectInfo::Item(old_id)]),
-                replacement.clone(),
-            ];
-            let (candidate, _) = catalog
-                .transact_incremental_dry_run(
-                    &base,
-                    ops.clone(),
-                    Some(&session),
-                    snapshot.clone(),
-                    1.into(),
-                )
-                .await
-                .expect("drop-plus-create must replace the temporary view in a dry run");
-            assert_replacement(&candidate, &original, &replacement);
-            assert_eq!(namespace(&base).get(name), Some(&old_id));
-            assert_eq!(namespace(catalog.state()), committed_namespace);
-            assert!(catalog.state().try_get_entry(&new_id).is_none());
-            if committed {
-                assert_eq!(
-                    catalog.state().get_entry(&old_id).uses(),
-                    base.get_entry(&old_id).uses()
-                );
-            }
-
-            // Omitting the drop is a collision even when the original exists
-            // only in the accumulated state, not in the committed catalog.
-            let duplicate = catalog
-                .transact_incremental_dry_run(
-                    &base,
-                    vec![replacement.clone()],
-                    Some(&session),
-                    snapshot,
-                    1.into(),
-                )
-                .await;
-            assert!(matches!(
-                duplicate,
-                Err(CatalogError::Catalog(Error {
-                    kind: ErrorKind::Sql(SqlCatalogError::ItemAlreadyExists(id, ref item_name)),
-                })) if id == new_id && item_name == name
-            ));
-
-            // Replay the same statement boundaries through the commit path.
-            if !committed {
-                catalog
-                    .transact(
-                        None,
-                        None,
-                        mz_repr::Timestamp::from(1_u64),
-                        Some(&session),
-                        vec![original.clone()],
-                    )
-                    .await
-                    .expect("commit provisional creation");
-            }
+    // Both cases use the same operations and assertions. Only the location
+    // of the original differs: committed catalog or accumulated dry run.
+    for (offset, committed, name) in [(0, true, "committed_temp"), (10, false, "provisional_temp")]
+    {
+        let old_id = CatalogItemId::User(1_000_000 + offset);
+        let new_id = CatalogItemId::User(1_000_001 + offset);
+        let mut fixture = catalog.state().clone();
+        let original = create_view(&mut fixture, 1_000_000 + offset, name, "mz_tables");
+        let replacement = create_view(&mut fixture, 1_000_001 + offset, name, "mz_columns");
+        let (base, snapshot) = if committed {
             catalog
                 .transact(
                     None,
                     None,
                     mz_repr::Timestamp::from(1_u64),
                     Some(&session),
-                    ops,
+                    vec![original.clone()],
                 )
                 .await
-                .expect("commit temporary replacement");
-            assert_eq!(namespace(catalog.state()), namespace(&candidate));
-            assert_replacement(catalog.state(), &original, &replacement);
+                .expect("commit original temporary view");
+            (catalog.state().clone(), None)
+        } else {
+            let (base, snapshot) = catalog
+                .transact_incremental_dry_run(
+                    catalog.state(),
+                    vec![original.clone()],
+                    Some(&session),
+                    None,
+                    1.into(),
+                )
+                .await
+                .expect("create provisional temporary view");
+            assert!(catalog.state().try_get_entry(&old_id).is_none());
+            assert!(!namespace(catalog.state()).contains_key(name));
+            (base, Some(snapshot))
+        };
+        let committed_namespace = namespace(catalog.state());
+
+        let ops = vec![
+            Op::DropObjects(vec![DropObjectInfo::Item(old_id)]),
+            replacement.clone(),
+        ];
+        let (candidate, _) = catalog
+            .transact_incremental_dry_run(
+                &base,
+                ops.clone(),
+                Some(&session),
+                snapshot.clone(),
+                1.into(),
+            )
+            .await
+            .expect("drop-plus-create must replace the temporary view in a dry run");
+        assert_replacement(&candidate, &original, &replacement, incarnation);
+        assert_eq!(namespace(&base).get(name), Some(&old_id));
+        assert_eq!(namespace(catalog.state()), committed_namespace);
+        assert!(catalog.state().try_get_entry(&new_id).is_none());
+        if committed {
+            assert_eq!(
+                catalog.state().get_entry(&old_id).uses(),
+                base.get_entry(&old_id).uses()
+            );
         }
-    })
-    .await;
+
+        // Omitting the drop is a collision even when the original exists
+        // only in the accumulated state, not in the committed catalog.
+        let duplicate = catalog
+            .transact_incremental_dry_run(
+                &base,
+                vec![replacement.clone()],
+                Some(&session),
+                snapshot,
+                1.into(),
+            )
+            .await;
+        assert!(matches!(
+            duplicate,
+            Err(CatalogError::Catalog(Error {
+                kind: ErrorKind::Sql(SqlCatalogError::ItemAlreadyExists(id, ref item_name)),
+            })) if id == new_id && item_name == name
+        ));
+
+        // Replay the same statement boundaries through the commit path.
+        if !committed {
+            catalog
+                .transact(
+                    None,
+                    None,
+                    mz_repr::Timestamp::from(1_u64),
+                    Some(&session),
+                    vec![original.clone()],
+                )
+                .await
+                .expect("commit provisional creation");
+        }
+        catalog
+            .transact(
+                None,
+                None,
+                mz_repr::Timestamp::from(1_u64),
+                Some(&session),
+                ops,
+            )
+            .await
+            .expect("commit temporary replacement");
+        assert_eq!(namespace(catalog.state()), namespace(&candidate));
+        assert_replacement(catalog.state(), &original, &replacement, incarnation);
+    }
+    catalog.expire().await;
 }

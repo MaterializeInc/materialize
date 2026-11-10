@@ -60,6 +60,273 @@ async fn commit(mut tx: Transaction<'_>) {
     tx.commit(ts).await.unwrap();
 }
 
+fn insert_owned_view(
+    tx: &mut Transaction<'_>,
+    id: u64,
+    session: Option<Uuid>,
+    incarnation: Option<u64>,
+) -> (ItemKey, ItemValue) {
+    let item = Item {
+        id: CatalogItemId::User(id),
+        oid: 20000 + u32::try_from(id).unwrap(),
+        global_id: GlobalId::User(id),
+        schema_id: SchemaId::User(1),
+        name: format!("owned_view_{id}"),
+        create_sql: format!("CREATE VIEW owned_view_{id} AS SELECT 1"),
+        owner_id: RoleId::User(1),
+        privileges: Vec::new(),
+        extra_versions: BTreeMap::new(),
+        ephemeral_owner_session: session,
+        ephemeral_owner_incarnation: incarnation,
+    };
+    tx.insert_item(
+        item.id,
+        item.oid,
+        item.global_id,
+        item.schema_id,
+        &item.name,
+        item.create_sql.clone(),
+        item.owner_id,
+        item.privileges.clone(),
+        item.extra_versions.clone(),
+        item.ephemeral_owner_session,
+        item.ephemeral_owner_incarnation,
+    )
+    .unwrap();
+    item.into_key_value()
+}
+
+async fn assert_ownership_commit_rejected(mut tx: Transaction<'_>, reason: &str) {
+    tx.finalize_index_compaction_bounds();
+    let _ = tx.get_and_commit_op_updates();
+    let ts = tx.upper();
+    let error = tx.commit(ts).await.unwrap_err();
+    assert!(
+        matches!(&error, CatalogError::Durable(DurableCatalogError::NotWritable(message))
+            if message.contains("invalid temporary ownership") && message.contains(reason)),
+        "expected ownership rejection ({reason}), got {error:?}",
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn temporary_item_creation_requires_live_adapter_execution() {
+    let mut state = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    state.sync_to_current_updates().await.unwrap();
+    let mut tx = state.transaction().await.unwrap();
+    tx.insert_user_cluster(
+        CLUSTER,
+        "replica_owner",
+        Vec::new(),
+        RoleId::User(1),
+        Vec::new(),
+        ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    insert_replica(&mut tx, CLUSTER, REPLICA);
+    let replica = tx
+        .create_client_incarnation(ClientRealization::Replica(REPLICA))
+        .unwrap();
+    let retired = tx
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
+    commit(tx).await;
+    let mut tx = state.transaction().await.unwrap();
+    let live = tx
+        .replace_client_incarnation(
+            ClientRealization::Adapter(DEFAULT_ADAPTER_ID),
+            Some(retired),
+        )
+        .unwrap();
+    commit(tx).await;
+    let before = state.snapshot().await.unwrap();
+    let retirement = state.client_incarnation_retirement().unwrap();
+    assert!(retirement.is_retired(retired));
+    assert!(!retirement.is_retired(u64::MAX));
+    let session = Uuid::new_v4();
+
+    for (session, incarnation, reason) in [
+        (
+            Some(session),
+            None,
+            "session and execution must be present together",
+        ),
+        (
+            None,
+            Some(live),
+            "session and execution must be present together",
+        ),
+        (
+            Some(session),
+            Some(u64::MAX),
+            "creating execution is not live",
+        ),
+        (
+            Some(session),
+            Some(retired),
+            "creating execution is not live",
+        ),
+        (
+            Some(session),
+            Some(replica),
+            "creating execution must be an adapter in this deployment",
+        ),
+    ] {
+        let mut tx = state.transaction().await.unwrap();
+        insert_owned_view(&mut tx, 1000, session, incarnation);
+        // A rejected item must also roll back otherwise valid writes.
+        insert_owned_view(&mut tx, 1001, None, None);
+        assert_ownership_commit_rejected(tx, reason).await;
+        assert_eq!(
+            state.snapshot().await.unwrap(),
+            before,
+            "{session:?}/{incarnation:?}"
+        );
+    }
+
+    let mut tx = state.transaction().await.unwrap();
+    let temporary = insert_owned_view(&mut tx, 1000, Some(session), Some(live));
+    let permanent = insert_owned_view(&mut tx, 1001, None, None);
+    commit(tx).await;
+    let mut expected = before;
+    for (key, value) in [temporary, permanent] {
+        assert!(expected.items.insert(key, value).is_none());
+    }
+    expected.rebuild_name_indexes();
+    expected.rebuild_oid_index();
+    assert_eq!(state.snapshot().await.unwrap(), expected);
+    state.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn temporary_item_ownership_is_immutable_and_orphans_allow_commits() {
+    let mut state = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    state.sync_to_current_updates().await.unwrap();
+    let session = Uuid::new_v4();
+    let other_session = Uuid::new_v4();
+    let mut tx = state.transaction().await.unwrap();
+    let original = tx
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
+    let other_adapter = tx.allocate_adapter_id().unwrap();
+    tx.set_adapter_declaration(AdapterDeclaration {
+        id: other_adapter,
+        name: "other_owner".into(),
+        size: tx.get_adapter_declaration(DEFAULT_ADAPTER_ID).unwrap().size,
+    })
+    .unwrap();
+    let other = tx
+        .create_client_incarnation(ClientRealization::Adapter(other_adapter))
+        .unwrap();
+    let (temporary_key, temporary_value) =
+        insert_owned_view(&mut tx, 1000, Some(session), Some(original));
+    let (permanent_key, permanent_value) = insert_owned_view(&mut tx, 1001, None, None);
+    commit(tx).await;
+    let before = state.snapshot().await.unwrap();
+    assert_eq!(before.items.get(&temporary_key), Some(&temporary_value));
+    assert_eq!(before.items.get(&permanent_key), Some(&permanent_value));
+
+    for (id, session, incarnation) in [
+        (temporary_key.id, Some(other_session), Some(original)),
+        (temporary_key.id, Some(session), Some(other)),
+        (temporary_key.id, Some(other_session), Some(other)),
+        (temporary_key.id, None, None),
+        (permanent_key.id, Some(session), Some(original)),
+    ] {
+        let mut tx = state.transaction().await.unwrap();
+        let mut item = tx.get_item(&id).unwrap();
+        item.ephemeral_owner_session = session;
+        item.ephemeral_owner_incarnation = incarnation;
+        tx.update_item(id, item).unwrap();
+        insert_owned_view(&mut tx, 1002, None, None);
+        assert_ownership_commit_rejected(tx, "ownership is immutable").await;
+        assert_eq!(
+            state.snapshot().await.unwrap(),
+            before,
+            "{id}/{session:?}/{incarnation:?}"
+        );
+    }
+
+    // Definition updates preserve the original pair both before and after its
+    // execution retires. Replacement must not rewrite the orphan's ownership.
+    for retire in [false, true] {
+        if retire {
+            let before_replacement = state.snapshot().await.unwrap();
+            let mut tx = state.transaction().await.unwrap();
+            let successor = tx
+                .replace_client_incarnation(
+                    ClientRealization::Adapter(DEFAULT_ADAPTER_ID),
+                    Some(original),
+                )
+                .unwrap();
+            commit(tx).await;
+            let replaced = state.snapshot().await.unwrap();
+            assert_eq!(replaced.items, before_replacement.items);
+            let mut expected_clients = before_replacement.client_incarnations;
+            let owner = expected_clients
+                .remove(&ClientIncarnationKey { id: original })
+                .unwrap();
+            assert!(
+                expected_clients
+                    .insert(ClientIncarnationKey { id: successor }, owner)
+                    .is_none()
+            );
+            assert_eq!(replaced.client_incarnations, expected_clients);
+            assert!(
+                state
+                    .client_incarnation_retirement()
+                    .unwrap()
+                    .is_retired(original)
+            );
+
+            // An unrelated, nonempty commit must not revalidate the orphan as
+            // though it were a newly created temporary item.
+            let mut tx = state.transaction().await.unwrap();
+            let (key, value) =
+                insert_owned_view(&mut tx, 1002, Some(other_session), Some(successor));
+            commit(tx).await;
+            let mut expected = replaced;
+            assert!(expected.items.insert(key, value).is_none());
+            expected.rebuild_name_indexes();
+            expected.rebuild_oid_index();
+            assert_eq!(state.snapshot().await.unwrap(), expected);
+        }
+
+        let mut expected = state.snapshot().await.unwrap();
+        let mut tx = state.transaction().await.unwrap();
+        let mut item = tx.get_item(&temporary_key.id).unwrap();
+        let sql = format!(
+            "CREATE VIEW owned_view_1000 AS SELECT {}",
+            if retire { 3 } else { 2 }
+        );
+        item.create_sql = sql.clone();
+        tx.update_item(temporary_key.id, item).unwrap();
+        commit(tx).await;
+        let mut value = expected.items.get(&temporary_key).unwrap().clone();
+        value.create_sql = sql;
+        expected.items.insert(temporary_key.clone(), value);
+        assert_eq!(state.snapshot().await.unwrap(), expected);
+    }
+    state.expire().await;
+}
+
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
 async fn adapter_replacement_and_drop_preserve_other_adapter() {
@@ -487,6 +754,7 @@ async fn replacement_retains_index_history_without_granting_earlier_reads() {
             RoleId::User(1),
             Vec::new(),
             BTreeMap::new(),
+            None,
             None,
         )
         .expect("insert durable index definition");

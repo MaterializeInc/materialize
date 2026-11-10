@@ -64,9 +64,23 @@ impl Coordinator {
         }
         let revision = self.catalog().transient_revision();
         let conn = conn_id.map(|id| self.active_conns.get(id).expect("connection exists"));
+        let session = conn.map(|conn| {
+            crate::catalog::transaction_context(
+                conn,
+                self.query_client
+                    .as_ref()
+                    .map(|client| client.protection.incarnation()),
+            )
+        });
         let (candidate, _) = self
             .catalog()
-            .transact_incremental_dry_run(self.catalog().state(), ops.clone(), conn, None, write_ts)
+            .transact_incremental_dry_run(
+                self.catalog().state(),
+                ops.clone(),
+                session,
+                None,
+                write_ts,
+            )
             .await?;
         let selections = prepare_selections(
             self.catalog(),

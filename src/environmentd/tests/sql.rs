@@ -275,6 +275,7 @@ async fn test_peer_index_pending_installation() {
                     template.privileges.clone(),
                     BTreeMap::new(),
                     None,
+                    None,
                 )
                 .unwrap();
                 txn.set_written_plan_with_owner(

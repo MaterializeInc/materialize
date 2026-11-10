@@ -384,6 +384,11 @@ pub enum Op {
         realization: crate::durable::objects::ClientRealization,
         expected: Option<u64>,
     },
+    /// Reclaims whole temporary namespaces only after catalog-confirmed execution
+    /// retirement. Selection and ownership are revalidated in the committing candidate.
+    ReclaimRetiredTemporaryItems {
+        owners: BTreeSet<u64>,
+    },
     /// Advances or releases changed grants, leaving unmentioned grants intact.
     /// The execution routes token changes through its retained logical inputs.
     UpdateClientReadRequirements {
@@ -1792,6 +1797,7 @@ impl Catalog {
             .await?;
         }
         super::retention::constrain_plan_inputs(tx, &state, &preliminary_state, &admitted_plans)?;
+        tx.validate_ephemeral_item_ownership()?;
         tx.validate_read_protection()?;
         tx.validate_prewarming_writes()?;
         debug!(target: "mz_adapter::frontend_read_then_write",
@@ -2775,8 +2781,8 @@ impl Catalog {
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
-                    let owner_session =
-                        temporary_item_owner_session(state, session, &item, &name.item)?;
+                    let (owner_session, owner_incarnation) =
+                        temporary_item_owner(state, session, &item, &name.item)?;
 
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
@@ -2792,6 +2798,7 @@ impl Catalog {
                         &additional_oids,
                         versions,
                         Some(owner_session),
+                        Some(owner_incarnation),
                     )?;
 
                     info!(
@@ -2837,6 +2844,7 @@ impl Catalog {
                         privileges.clone(),
                         &additional_oids,
                         versions,
+                        None,
                         None,
                     )?;
                     info!(
@@ -3078,6 +3086,51 @@ impl Catalog {
                         .collect(),
                     references.updated_at,
                 )?;
+            }
+            Op::ReclaimRetiredTemporaryItems { owners } => {
+                let mut items = BTreeSet::new();
+                let mut global_ids = BTreeSet::new();
+                for owner in owners {
+                    if !tx.is_client_incarnation_retired(owner) {
+                        continue;
+                    }
+                    for id in state
+                        .ephemeral_items_by_incarnation
+                        .get(&owner)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(item) = tx.get_item(id)
+                            && item.ephemeral_owner_incarnation == Some(owner)
+                            && item.ephemeral_owner_session.is_some()
+                        {
+                            items.insert(*id);
+                            global_ids.insert(item.global_id);
+                            global_ids.extend(item.extra_versions.values().copied());
+                        }
+                    }
+                }
+                tx.remove_items(&items)?;
+                tx.remove_item_auxiliary_metadata(&items);
+                // Versions can have other durable aliases, including definitions
+                // this adapter cannot see through its session-local SQL catalog.
+                global_ids.retain(|id| {
+                    !state
+                        .durable_item_ids
+                        .get(id)
+                        .into_iter()
+                        .flatten()
+                        .any(|item| tx.get_item(item).is_some())
+                });
+                let build = state.written_plan_namespace();
+                for id in &global_ids {
+                    if tx.get_written_plan(*id, &build).is_some() {
+                        tx.set_written_plan(*id, &build, None)?;
+                    }
+                }
+                // Do not bypass the ordinary live-definition and client-consumer
+                // checks. Replacement may have transferred protection to a survivor.
+                storage_collections_to_drop.extend(global_ids);
             }
             Op::DropObjects(drop_object_infos) => {
                 // Generate all of the objects that need to get dropped.
@@ -4904,22 +4957,24 @@ fn dependency_compaction_bound(
         })
 }
 
-/// Resolves the session UUID that durably owns a temporary item being
-/// created. The durable owner is the session that created the item.
+/// Resolves the creating session's visibility scope and adapter execution.
 ///
 /// The connection -> session mapping is registered lazily in
 /// `catalog_transact_inner`, so we defensively verify that the registered
 /// mapping matches the creating session.
-fn temporary_item_owner_session(
+fn temporary_item_owner(
     state: &CatalogState,
     session: Option<&TransactionContext<'_>>,
     item: &CatalogItem,
     item_name: &str,
-) -> Result<Uuid, CatalogError> {
+) -> Result<(Uuid, u64), CatalogError> {
     let session = session.ok_or_else(|| {
         CatalogError::Internal("temporary items must have an owner session".to_string())
     })?;
     let owner_session = session.uuid();
+    let owner_incarnation = session.adapter_incarnation.ok_or_else(|| {
+        CatalogError::Internal("temporary items require an adapter execution".to_string())
+    })?;
     soft_assert_or_log!(
         Some(session.conn_id()) == item.conn_id(),
         "temporary item connection must match the creating session"
@@ -4931,7 +4986,7 @@ fn temporary_item_owner_session(
             item_name,
         )));
     }
-    Ok(owner_session)
+    Ok((owner_session, owner_incarnation))
 }
 
 /// Prepare the given transaction for replacing a catalog item with a new version.
@@ -4946,9 +5001,10 @@ fn tx_replace_item(
     tx: &mut Transaction<'_>,
     state: &CatalogState,
     id: CatalogItemId,
-    new_entry: CatalogEntry,
+    mut new_entry: CatalogEntry,
 ) -> Result<(), CatalogError> {
     let new_id = new_entry.id;
+    new_entry.ephemeral_owner_incarnation = state.get_entry(&id).ephemeral_owner_incarnation;
 
     // Rewrite dependent objects to point to the new ID.
     for use_id in new_entry.referenced_by() {
@@ -4985,6 +5041,7 @@ fn tx_replace_item(
         privileges,
         extra_versions,
         ephemeral_owner_session,
+        ephemeral_owner_incarnation,
     } = state.durable_item(new_entry)?;
 
     tx.remove_item(id)?;
@@ -4999,6 +5056,7 @@ fn tx_replace_item(
         privileges,
         extra_versions,
         ephemeral_owner_session,
+        ephemeral_owner_incarnation,
     )?;
 
     Ok(())

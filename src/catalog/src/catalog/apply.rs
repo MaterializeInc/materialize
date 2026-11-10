@@ -140,8 +140,12 @@ impl CatalogState {
             let mut apply_state = ApplyState::Updates(Vec::new());
             let mut retractions = InProgressRetractions::default();
             let mut retention_candidates = BTreeSet::new();
+            let mut temporary_owners = BTreeSet::new();
             for update in &updates {
                 match &update.kind {
+                    StateUpdateKind::ClientIncarnation(incarnation) => {
+                        temporary_owners.insert(incarnation.id);
+                    }
                     StateUpdateKind::ClientReadRequirement(requirement) => {
                         retention_candidates.insert(requirement.id);
                     }
@@ -149,6 +153,27 @@ impl CatalogState {
                         retention_candidates.insert(metadata.id);
                     }
                     StateUpdateKind::Item(item) => {
+                        if let Some(owner) = item.ephemeral_owner_incarnation {
+                            temporary_owners.insert(owner);
+                            match update.diff {
+                                StateDiff::Addition => {
+                                    self.ephemeral_items_by_incarnation
+                                        .entry(owner)
+                                        .or_default()
+                                        .insert(item.id);
+                                }
+                                StateDiff::Retraction => {
+                                    let items = self
+                                        .ephemeral_items_by_incarnation
+                                        .get_mut(&owner)
+                                        .expect("temporary item's execution must be indexed");
+                                    items.remove(&item.id);
+                                    if items.is_empty() {
+                                        self.ephemeral_items_by_incarnation.remove(&owner);
+                                    }
+                                }
+                            }
+                        }
                         retention_candidates.insert(item.global_id);
                         retention_candidates.extend(item.extra_versions.values().copied());
                         // Observe durable membership before filtering session-local
@@ -215,6 +240,15 @@ impl CatalogState {
 
             // SQL lifetime and protected storage lifetime need not end together.
             // Derive this projection only after the whole timestamp is applied.
+            for owner in temporary_owners {
+                if self.ephemeral_items_by_incarnation.contains_key(&owner)
+                    && !self.client_incarnations.contains_key(&owner)
+                {
+                    self.temporary_item_cleanup_candidates.insert(owner);
+                } else {
+                    self.temporary_item_cleanup_candidates.remove(&owner);
+                }
+            }
             for id in retention_candidates {
                 let retained = self.storage_metadata.collection_metadata.contains_key(&id)
                     && self.client_read_frontier(id).is_some()
@@ -1432,6 +1466,7 @@ impl CatalogState {
                     privileges,
                     extra_versions,
                     ephemeral_owner_session,
+                    ephemeral_owner_incarnation,
                 } = item;
 
                 // Temporary items live in the temporary schema of the owning
@@ -1517,6 +1552,7 @@ impl CatalogState {
                         retraction.name = name;
                         retraction.owner_id = owner_id;
                         retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+                        retraction.ephemeral_owner_incarnation = ephemeral_owner_incarnation;
                         retraction
                     }
                     None => {
@@ -1547,6 +1583,7 @@ impl CatalogState {
                             name,
                             owner_id,
                             privileges: PrivilegeMap::from_mz_acl_items(privileges),
+                            ephemeral_owner_incarnation,
                         }
                     }
                 };
@@ -2316,6 +2353,7 @@ impl CatalogState {
             referenced_by: Vec::new(),
             owner_id,
             privileges,
+            ephemeral_owner_incarnation: None,
         };
 
         self.insert_entry(entry);

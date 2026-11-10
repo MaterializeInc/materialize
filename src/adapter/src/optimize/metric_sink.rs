@@ -695,6 +695,7 @@ mod tests {
                 },
                 owner_id: RoleId::User(1),
                 privileges: PrivilegeMap::default(),
+                ephemeral_owner_incarnation: None,
             };
             Self { entry }
         }

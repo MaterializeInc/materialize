@@ -37,6 +37,7 @@ fn insert_item(txn: &mut Transaction<'_>) {
         Vec::new(),
         BTreeMap::new(),
         None,
+        None,
     )
     .unwrap();
 }

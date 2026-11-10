@@ -4710,6 +4710,11 @@ impl Coordinator {
                             warn!(%error, "unable to publish catalog read protection");
                         }
                         self.collect_retired_rows();
+                        if let Err(error) = trace_maintenance(
+                            "temporary_items", self.reclaim_retired_temporary_items()
+                        ).await {
+                            warn!(%error, "unable to reclaim retired temporary items");
+                        }
                         // Only definitive outcomes reach here. Rebuild proposals on
                         // the next turn, retaining committed protection meanwhile.
                         // Conflicts retain the publication cadence rather than

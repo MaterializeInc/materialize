@@ -645,7 +645,7 @@ async fn unsupported_legacy_open_preserves_catalog_and_admission() {
             Err(CatalogError::Durable(
                 DurableCatalogError::IncompatibleDataVersion {
                     found_version: 94,
-                    min_catalog_version: 96,
+                    min_catalog_version: crate::durable::upgrade::MIN_INITIALIZATION_VERSION,
                     ..
                 }
             ))

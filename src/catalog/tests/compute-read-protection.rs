@@ -84,6 +84,7 @@ impl Owner {
                 Vec::new(),
                 BTreeMap::new(),
                 None,
+                None,
             ),
             Self::Builtin => txn.set_system_object_mappings(vec![self.mapping(n)]),
             Self::Logging => txn.insert_introspection_source_indexes(
@@ -163,7 +164,7 @@ async fn warm_promotion_rejects_managed_replica_pins_before_fencing() {
         "pinned", format!(
             "CREATE MATERIALIZED VIEW materialize.public.pinned IN CLUSTER [{}] REPLICA r1 AS SELECT 1",
             cluster.id
-        ), RoleId::User(1), Vec::new(), BTreeMap::new(), None,
+        ), RoleId::User(1), Vec::new(), BTreeMap::new(), None, None,
     ).unwrap();
     commit(tx).await;
     let before = active.snapshot().await.unwrap();
@@ -1703,6 +1704,7 @@ async fn index_permission_is_not_a_recovery_boundary() {
             RoleId::User(1),
             Vec::new(),
             BTreeMap::new(),
+            None,
             None,
         )
         .unwrap();

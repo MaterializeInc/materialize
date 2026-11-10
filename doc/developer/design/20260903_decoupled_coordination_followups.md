@@ -38,6 +38,19 @@ does not establish the separate activation race above.
 Evidence: `~/.local/share/aj/m3-evidence/native-only/aj-native-ddl-074f5610/`
 and `aj-native-ddl-7422ebf9/`, including exact rerun logs and container inspections.
 
+## Renaming temporary objects referenced by views
+
+The temporary-object lifecycle run rejects `ALTER TABLE temp_t RENAME TO ...`
+when a temporary view references the table. The unchanged
+`QueryIdentAgg::visit_unresolved_item_name` requires three name components for an
+item reference, but temporary references use two (`mz_temp.temp_t`). It reports
+an ambiguous rename before committing any change.
+
+This is not repaired by execution ownership. Its lifecycle coverage renames a
+leaf temporary view instead, retaining nested dependency cleanup, table-version
+and privilege-update checks. A rename-rewriter repair needs separate scope.
+Evidence: `~/.local/share/aj/m3-evidence/native-only/native-temporary-runtime-alter-enabled.log`.
+
 ## Singleton CDC-reader ownership across deployments
 
 The full native DDL fixture proves that two admitted deployments repeatedly steal
