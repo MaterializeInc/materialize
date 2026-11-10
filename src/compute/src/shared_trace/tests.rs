@@ -505,110 +505,6 @@ fn a_point_nothing_references_is_detached() {
     });
 }
 
-/// A peer handle keeps the published `since` behind the writer until it advances.
-///
-/// The runtime that holds an index as a peer moves its hold only on the compactions it has applied,
-/// so the owning runtime's trace must not compact past it. Once the hold advances, the arrangement
-/// compacts to the frontier both runtimes have applied, and no further.
-#[mz_ore::test]
-fn peer_handle_holds_since_behind_the_writer() {
-    timely::execute_directly(move |worker| {
-        let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
-            let arranged =
-                collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("peer-hold oks");
-            let writer = arranged.trace.clone();
-            let published = adopt_fresh(&arranged);
-            (writer, published, input)
-        });
-
-        for t in 0..5 {
-            tick(
-                worker,
-                &mut input,
-                Timestamp::from(t),
-                Timestamp::from(t + 1),
-            );
-        }
-        let at_three = Antichain::from_elem(Timestamp::from(3_u64));
-        let mut peer = published.peer_handle(&at_three);
-        assert_eq!(
-            peer.get_physical_compaction(),
-            Antichain::new().borrow(),
-            "a peer handle holds nothing physically"
-        );
-
-        // The owning runtime applies `AllowCompaction(10)`. The peer has not, so its hold stays at
-        // 3 and a read at 5 is still admitted and accurate.
-        let target = Antichain::from_elem(Timestamp::from(10_u64));
-        writer.set_logical_compaction(target.borrow());
-        writer.set_physical_compaction(target.borrow());
-        tick(
-            worker,
-            &mut input,
-            Timestamp::from(10_u64),
-            Timestamp::from(11_u64),
-        );
-        assert!(
-            published
-                .handle()
-                .snapshot_at(&Timestamp::from(5_u64))
-                .is_some(),
-            "the published since advanced past the peer's hold"
-        );
-
-        // Once the peer applies the same command, the bound lifts and the arrangement compacts.
-        peer.set_logical_compaction(target.borrow());
-        tick(
-            worker,
-            &mut input,
-            Timestamp::from(11_u64),
-            Timestamp::from(12_u64),
-        );
-        assert!(
-            published
-                .handle()
-                .snapshot_at(&Timestamp::from(5_u64))
-                .is_none(),
-            "the peer's hold advanced but the arrangement did not compact"
-        );
-        assert!(
-            published
-                .handle()
-                .snapshot_at(&Timestamp::from(10_u64))
-                .is_some(),
-            "compaction overshot the frontier both runtimes have applied"
-        );
-    });
-}
-
-/// A peer handle minted below the published `since` holds at that `since` rather than refusing.
-#[mz_ore::test]
-fn peer_handle_below_the_since_joins_up_to_it() {
-    timely::execute_directly(move |worker| {
-        let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
-            let arranged =
-                collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("peer-join oks");
-            let writer = arranged.trace.clone();
-            let published = adopt_fresh(&arranged);
-            (writer, published, input)
-        });
-        let target = Antichain::from_elem(Timestamp::from(10_u64));
-        writer.set_logical_compaction(target.borrow());
-        writer.set_physical_compaction(target.borrow());
-        tick(
-            worker,
-            &mut input,
-            Timestamp::from(10_u64),
-            Timestamp::from(11_u64),
-        );
-
-        let mut peer = published.peer_handle(&Antichain::from_elem(Timestamp::from(3_u64)));
-        assert_eq!(peer.get_logical_compaction(), target.borrow());
-    });
-}
-
 /// A hold registered on a placeholder below the `since` of the trace that later attaches does not
 /// rewind that trace: a spine accepts a lower logical frontier without complaint, and would then
 /// admit reads at times it has already coalesced.
@@ -616,7 +512,9 @@ fn peer_handle_below_the_since_joins_up_to_it() {
 fn a_hold_below_the_attaching_since_does_not_rewind_it() {
     timely::execute_directly(move |worker| {
         let placeholder = Published::new();
-        let _peer = placeholder.peer_handle(&Antichain::from_elem(Timestamp::from(3_u64)));
+        let _peer = placeholder
+            .shared
+            .reader_at_least(&Antichain::from_elem(Timestamp::from(3_u64)));
 
         let (mut writer, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
@@ -648,35 +546,6 @@ fn a_hold_below_the_attaching_since_does_not_rewind_it() {
                 .is_none(),
             "the trace rewound its since to a hold registered below it"
         );
-    });
-}
-
-/// A peer hold registered on a placeholder below the `since` of the trace that later attaches cannot
-/// mint the reader an import reads through. Compute never registers one: see
-/// `SharedReader::fresh_reader`.
-#[mz_ore::test]
-#[should_panic(expected = "the publication's since is at or below this reader's logical hold")]
-fn fresh_reader_panics_below_the_attaching_since() {
-    timely::execute_directly(move |worker| {
-        let placeholder = Published::new();
-        let peer = placeholder.peer_handle(&Antichain::from_elem(Timestamp::from(3_u64)));
-
-        let (mut writer, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
-            let arranged =
-                collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("fresh oks");
-            (arranged.trace, input)
-        });
-        let target = Antichain::from_elem(Timestamp::from(10_u64));
-        writer.set_logical_compaction(target.borrow());
-        tick(
-            worker,
-            &mut input,
-            Timestamp::from(10_u64),
-            Timestamp::from(11_u64),
-        );
-        adopt_trace(&writer, worker, &placeholder, || {});
-        let _ = peer.fresh_reader();
     });
 }
 
@@ -789,7 +658,7 @@ fn logical_frontiers_report_what_the_holds_withhold() {
         // four and reports what the agents asked for.
         let held = Antichain::from_elem(Timestamp::from(4_u64));
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        let mut peer = published.peer_handle(&held);
+        let mut peer = published.shared.reader_at_least(&held);
         let first = Antichain::from_elem(Timestamp::from(8_u64));
         writer.set_logical_compaction(first.borrow());
         assert_eq!(
@@ -904,7 +773,9 @@ fn an_emptied_accumulation_does_not_release_the_trace() {
         // The controller drops the collection. The peer's hold becomes empty, and there is no
         // reader hold left.
         let empty = Antichain::new();
-        let mut peer = published.peer_handle(&Antichain::from_elem(Timestamp::MIN));
+        let mut peer = published
+            .shared
+            .reader_at_least(&Antichain::from_elem(Timestamp::MIN));
         peer.set_logical_compaction(empty.borrow());
         tick(
             worker,

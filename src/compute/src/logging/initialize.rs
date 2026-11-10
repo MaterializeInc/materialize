@@ -226,13 +226,7 @@ impl LoggingContext<'_> {
                             let publisher = self.publisher.as_ref()?;
                             // Logging dataflows read from the minimum time.
                             let as_of = Antichain::from_elem(Timestamp::MIN);
-                            Some(publisher.publish(
-                                id,
-                                &as_of,
-                                scope.worker(),
-                                &collection.trace,
-                                &errs,
-                            ))
+                            Some(publisher.publish(id, &as_of, scope, &collection.trace, &errs))
                         });
                         let bundle = TraceBundle::new(collection.trace, errs.clone())
                             .with_drop((collection.token, publication));

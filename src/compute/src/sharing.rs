@@ -20,19 +20,27 @@
 //! sound only because both runtimes run the same number of workers per process at the same process
 //! ordinal, so both sides shard keys by the same `key.hashed() % peers`.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::any::Any;
+use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{Thread, ThreadId};
 
+use differential_dataflow::trace::TraceReader;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_timely_util::capture::{ProgressPusher, ProgressSource, progress_link};
-use timely::progress::Antichain;
-use timely::worker::Worker;
+use mz_timely_util::shared_trace::{Binding, HoldAccumulation};
+use timely::dataflow::Scope;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::Operator;
+use timely::progress::{Antichain, Timestamp as _};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::command_channel::CommandNumber;
 use crate::reconcile_barrier::{ConnectionOrder, ReconcileBarrier};
-use crate::shared_trace::{Published, SharedErrsHandle, SharedOksHandle, adopt_trace};
+use crate::shared_trace::{
+    PeerErrsReader, PeerOksReader, Published, SharedErrsHandle, SharedOksHandle, adopt_trace,
+};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// The number of the command that created an incarnation of a collection.
@@ -54,22 +62,29 @@ pub struct SharedIndexArrangement {
     pub(crate) oks: Published<RowRowSpine<Timestamp, Diff>>,
     /// The published `errs` arrangement.
     pub(crate) errs: Published<ErrSpine<Timestamp, Diff>>,
-    /// Peer holds the publisher registered for the reading runtime to take over.
-    peer_holds: Mutex<PeerHolds>,
+    /// The link that carries the reading runtime's logical holds on both arrangements to the
+    /// publisher, as one frontier.
+    hold_link: HoldLink,
 }
 
-/// Pairs each publication of a slot with the reading runtime's peer of it.
+/// The two ends of a slot's hold link, each until its side takes it.
 ///
-/// Both runtimes see every `CreateDataflow`, so each publication has exactly one peer, and
-/// whichever side reaches it first leaves something for the other. A slot accepts one trace and the
-/// reading runtime records one peer per slot, so `reserved` holds at most one entry and
-/// `unpublished_peers` is at most one.
-#[derive(Default)]
-struct PeerHolds {
-    /// Holds a publication registered before the reading runtime recorded its peer.
-    reserved: VecDeque<(SharedOksHandle, SharedErrsHandle)>,
-    /// Peers recorded before their publication, which therefore reserves nothing.
-    unpublished_peers: usize,
+/// Each end is handed out once instead of cloned, as [`CommandProgressLink`]'s are. The link exists
+/// from the slot's creation, so the peer can push before the publisher replays, and the replay
+/// starts from the link's head.
+struct HoldLink {
+    pusher: Mutex<Option<ProgressPusher<Timestamp>>>,
+    source: Mutex<Option<ProgressSource<Timestamp>>>,
+}
+
+impl Default for HoldLink {
+    fn default() -> Self {
+        let (pusher, source) = progress_link();
+        Self {
+            pusher: Mutex::new(Some(pusher)),
+            source: Mutex::new(Some(source)),
+        }
+    }
 }
 
 /// The registry's state: the published slots and the two workers attached to them. One lock covers
@@ -139,6 +154,64 @@ impl SharedIndexArrangement {
     /// Whether the traces that published into this slot have closed or dropped.
     fn is_frozen(&self) -> bool {
         self.oks.is_frozen() || self.errs.is_frozen()
+    }
+
+    /// Readers of both points, bound to them at once, that hold logically at `as_of` and nothing
+    /// physically. They and every reader minted from them hold in one accumulation, which pushes
+    /// into the slot's hold link.
+    ///
+    /// A slot has one peer. For a second one, which a reconnect that diverged between the two
+    /// runtimes could ask for, this reports the bug and returns readers whose bindings stay
+    /// unbound: their holds reach no publisher, so they read nothing and their reads wait forever.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a published `since` is beyond `as_of`.
+    pub(crate) fn peer_readers(
+        &self,
+        as_of: &Antichain<Timestamp>,
+    ) -> (PeerOksReader, PeerErrsReader) {
+        let holds = HoldAccumulation::new();
+        let oks_binding = Binding::new(holds.clone());
+        let errs_binding = Binding::new(holds.clone());
+        let pusher = self.take_hold_pusher();
+        if pusher.is_some() {
+            oks_binding.bind(Arc::clone(&self.oks.shared));
+            errs_binding.bind(Arc::clone(&self.errs.shared));
+        } else {
+            mz_ore::soft_panic_or_log!("a second peer for a slot whose peer holds its hold link");
+        }
+        let mut oks = oks_binding.reader(as_of.clone());
+        oks.set_physical_compaction(Antichain::new().borrow());
+        let mut errs = errs_binding.reader(as_of.clone());
+        errs.set_physical_compaction(Antichain::new().borrow());
+        // After the readers, so the first frontier pushed is their hold. An empty one would end
+        // the replayed stream for good.
+        if let Some(pusher) = pusher {
+            holds.connect(pusher);
+        }
+        (oks, errs)
+    }
+
+    /// Takes the end of the hold link the reading runtime pushes its holds into, `None` if taken
+    /// before.
+    fn take_hold_pusher(&self) -> Option<ProgressPusher<Timestamp>> {
+        self.hold_link
+            .pusher
+            .lock()
+            .expect("hold link poisoned")
+            .take()
+    }
+
+    /// Takes the end of the hold link the publisher replays, `None` if taken before, which only a
+    /// second publication of the slot does. That one is reported by the soft assert on re-attaching
+    /// in `TraceBox::attach` (`mz_timely_util::shared_trace`).
+    fn take_hold_source(&self) -> Option<ProgressSource<Timestamp>> {
+        self.hold_link
+            .source
+            .lock()
+            .expect("hold link poisoned")
+            .take()
     }
 }
 
@@ -239,7 +312,7 @@ impl ArrangementSharingRegistry {
             as_of: as_of.clone(),
             oks: Published::new(),
             errs: Published::new(),
-            peer_holds: Default::default(),
+            hold_link: Default::default(),
         });
         inner.map.retain(|_, slot| slot.strong_count() > 0);
         inner.map.insert(id, Arc::downgrade(&slot));
@@ -253,8 +326,8 @@ impl ArrangementSharingRegistry {
     }
 
     /// Publishes index `id`'s `oks` and `errs` traces and wakes readers waiting on `id`. `as_of` is
-    /// the `as_of` of the dataflow that exports the index, and `worker` must be the worker that
-    /// maintains the traces.
+    /// the `as_of` of the dataflow that exports the index, and `scope` must belong to the worker
+    /// that maintains the traces.
     ///
     /// Adopts the slot for `id` at `as_of`, see [`Self::get_or_create`]. Each half signals its own
     /// seal. A peek whose result is an error carries its data on the errs arrangement, whose
@@ -272,7 +345,10 @@ impl ArrangementSharingRegistry {
     /// every dataflow and peer holding the old slot before either runtime creates the new
     /// incarnation, so the slot is gone by then.
     ///
-    /// The publication lasts as long as the returned token.
+    /// Builds in `scope` the replay of the slot's hold link, through which the reading runtime's
+    /// holds keep the traces from compacting past them, see [`replay_reader_holds`].
+    ///
+    /// The publication lasts as long as the returned token, and so does the replay.
     ///
     /// # Panics
     ///
@@ -283,56 +359,76 @@ impl ArrangementSharingRegistry {
         &self,
         id: GlobalId,
         as_of: &Antichain<Timestamp>,
-        worker: &Worker,
+        scope: Scope<'_, Timestamp>,
         oks: &RowRowAgent<Timestamp, Diff>,
         errs: &ErrAgent<Timestamp, Diff>,
     ) -> PublishToken {
         let slot = self.get_or_create(id, as_of);
         let registry = self.clone();
-        adopt_trace(oks, worker, &slot.oks, move || registry.notify());
+        adopt_trace(oks, scope.worker(), &slot.oks, move || registry.notify());
         let registry = self.clone();
-        adopt_trace(errs, worker, &slot.errs, move || registry.notify());
+        adopt_trace(errs, scope.worker(), &slot.errs, move || registry.notify());
         // The reading runtime holds the index from its own copy of this `CreateDataflow`, which it
         // can reach arbitrarily later. Until then nothing stops this runtime from applying a
         // compaction past a dataflow that runtime has yet to render: the controller drops its read
-        // hold for a cancelled read before the reader renders it. So the hold starts here, ahead
-        // of any `AllowCompaction` for the index on this runtime's stream, and the peer takes it
-        // over.
-        {
-            let mut holds = slot.peer_holds.lock().expect("peer holds poisoned");
-            if holds.unpublished_peers > 0 {
-                holds.unpublished_peers -= 1;
-            } else {
-                let reserved = (slot.oks.peer_handle(as_of), slot.errs.peer_handle(as_of));
-                holds.reserved.push_back(reserved);
-            }
-        }
+        // hold for a cancelled read before the reader renders it. So the replay holds from here,
+        // ahead of any `AllowCompaction` for the index on this runtime's stream, at the minimum
+        // until the reading runtime's holds arrive.
+        //
+        // A slot whose source is gone was published before, which `adopt_trace` reported, and
+        // the first publication's replay keeps holding it.
+        //
+        // NOTE: Dropping a re-export's token releases its replayed holds while the interactive
+        // runtime may still read the re-export. The shared trace stays protected by the base
+        // index's replayed hold: the trace compacts to the meet of the holds across every point
+        // it backs (`TraceBox::sync_holds` in `mz_timely_util::shared_trace`), the controller
+        // holds the base at or below the re-export's `since`, and the interactive runtime applies
+        // the base's compactions in command order.
+        let minimum = Antichain::from_elem(Timestamp::minimum());
+        let replay = slot.take_hold_source().map(|source| {
+            replay_reader_holds(
+                scope,
+                id,
+                source,
+                slot.oks.shared.reader_at_least(&minimum),
+                slot.errs.shared.reader_at_least(&minimum),
+            )
+        });
         self.notify();
         PublishToken {
             registry: self.clone(),
             slot: Some(slot),
+            _replay: replay,
         }
     }
 
     /// The bundle through which this runtime holds and reads index `id`, which its peer publishes.
     ///
     /// The bundle's logical compaction is this runtime's hold on the publication, from the index's
-    /// `as_of`, so an index's `since` never passes the `as_of` of a dataflow importing it. It holds
-    /// nothing physically, so the publisher keeps merging. Imports from the bundle mint readers that
-    /// do. The slot lives as long as the bundle.
+    /// `as_of`, so an index's `since` never passes the `as_of` of a dataflow importing it. Its
+    /// readers are [`SharedIndexArrangement::peer_readers`], so the bundle holds nothing
+    /// physically and the publisher keeps merging. Imports from the bundle mint readers that do.
+    /// The slot lives as long as the bundle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if its published `since` is beyond `as_of`.
     pub(crate) fn peer_bundle(&self, id: GlobalId, as_of: &Antichain<Timestamp>) -> TraceBundle {
         let slot = self.get_or_create(id, as_of);
-        let (oks, errs) = {
-            let mut holds = slot.peer_holds.lock().expect("peer holds poisoned");
-            match holds.reserved.pop_front() {
-                Some(reserved) => reserved,
-                None => {
-                    holds.unpublished_peers += 1;
-                    (slot.oks.peer_handle(as_of), slot.errs.peer_handle(as_of))
-                }
-            }
-        };
+        let (oks, errs) = slot.peer_readers(as_of);
         TraceBundle::shared(oks, errs).with_drop(slot)
+    }
+
+    /// The published `oks` `since` of `id`. Test-only.
+    ///
+    /// # Panics
+    ///
+    /// Panics if nobody holds a slot for `id`.
+    #[cfg(test)]
+    pub(crate) fn published_since(&self, id: &GlobalId) -> Antichain<Timestamp> {
+        let inner = self.lock();
+        let slot = Self::slot(&inner, id).expect("a slot for the id");
+        slot.oks.shared.since()
     }
 
     /// Mints reader handles for `id`, if published. Test-only.
@@ -460,6 +556,9 @@ pub(crate) struct PublishToken {
     registry: ArrangementSharingRegistry,
     /// `Some` until dropped.
     slot: Option<Arc<SharedIndexArrangement>>,
+    /// Shuts the replay of the slot's hold link down when dropped, which releases the holds it
+    /// keeps.
+    _replay: Option<Rc<dyn Any>>,
 }
 
 impl Drop for PublishToken {
@@ -469,6 +568,38 @@ impl Drop for PublishToken {
         drop(self.slot.take());
         self.registry.notify();
     }
+}
+
+/// Replays `source`, a slot's hold link, in `scope` into a sink that holds `oks` and `errs`
+/// logically at the replayed frontier, and drops them once it is empty. `id` names the operators.
+///
+/// The readers must hold nothing physically, or they pin merging. Returns the token that shuts the
+/// replay down, which ends the stream and so releases the readers.
+fn replay_reader_holds(
+    scope: Scope<'_, Timestamp>,
+    id: GlobalId,
+    source: ProgressSource<Timestamp>,
+    oks: SharedOksHandle,
+    errs: SharedErrsHandle,
+) -> Rc<dyn Any> {
+    let (stream, token) = source.replay(scope, &format!("ReplayReaderHolds({id})"));
+    let mut readers = Some((oks, errs));
+    stream.sink(
+        Pipeline,
+        &format!("ReaderHolds({id})"),
+        move |(input, frontier)| {
+            // The link carries progress only.
+            input.for_each(|_time, _data| {});
+            let frontier = frontier.frontier();
+            if frontier.is_empty() {
+                readers = None;
+            } else if let Some((oks, errs)) = &mut readers {
+                oks.set_logical_compaction(frontier);
+                errs.set_logical_compaction(frontier);
+            }
+        },
+    );
+    token
 }
 
 #[cfg(test)]

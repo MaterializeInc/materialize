@@ -831,7 +831,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                     publisher.publish(
                         idx_id,
                         &self.as_of_frontier,
-                        oks.stream.scope().worker(),
+                        oks.stream.scope(),
                         &oks.trace,
                         &errs.trace,
                     )
@@ -849,13 +849,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // Only a trace this runtime maintains can be published.
                 let publication = trace.local().and_then(|(oks, errs)| {
                     let publisher = compute_state.publisher.as_ref()?;
-                    Some(publisher.publish(
-                        idx_id,
-                        &self.as_of_frontier,
-                        self.scope.worker(),
-                        oks,
-                        errs,
-                    ))
+                    Some(publisher.publish(idx_id, &self.as_of_frontier, self.scope, oks, errs))
                 });
                 let to_drop = trace.to_drop().clone();
                 compute_state
@@ -948,7 +942,7 @@ where
                     publisher.publish(
                         idx_id,
                         &self.as_of_frontier,
-                        oks.stream.scope().worker(),
+                        oks.stream.scope(),
                         &oks.trace,
                         &errs.trace,
                     )
@@ -966,7 +960,7 @@ where
                 // Only a trace this runtime maintains can be published.
                 let publication = trace.local().and_then(|(oks, errs)| {
                     let publisher = compute_state.publisher.as_ref()?;
-                    Some(publisher.publish(idx_id, &self.as_of_frontier, outer.worker(), oks, errs))
+                    Some(publisher.publish(idx_id, &self.as_of_frontier, outer, oks, errs))
                 });
                 let to_drop = trace.to_drop().clone();
                 compute_state
