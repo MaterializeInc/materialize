@@ -2366,8 +2366,10 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
 
 def workflow_materialized_view_correction_pruning(c: Composition) -> None:
     """
-    Verify that the MV sink consolidates away the snapshot updates in read-only
-    mode.
+    Verify that a candidate MV sink prunes its snapshot before output is enabled.
+
+    Candidate adapters serve writes, but their maintained Persist outputs are
+    not enabled until promotion. This still exercises non-writing sink hydration.
     """
 
     c.down(destroy_volumes=True)
@@ -2390,6 +2392,9 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
     )
 
     c.up("mz_new")
+    # SQL listener readiness precedes replica provisioning. Observe the candidate's
+    # execution readiness before querying it or timing correction-buffer pruning.
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     c.sql("SELECT * FROM mv LIMIT 1", service="mz_new")
 
     def get_clusterd_internal_http_address():
@@ -2429,7 +2434,7 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
 
     # The correction buffer should stabilize in a state where it has seen at
     # least 1000 insertions (the size of the snapshot) and as many deletions:
-    # all snapshot updates are consolidated away on the read-only side, leaving
+    # all snapshot updates are consolidated away on the non-writing side, leaving
     # zero records in the correction buffer.
     #
     # Note: the metric counts net length deltas, not raw record insertions, so
