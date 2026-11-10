@@ -2187,15 +2187,27 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     -- source-global events ('<source>' is the sentinel for replica_id NULL)
     -- and 'paused' events. A per-replica 'paused' is only written when the
     -- replica is dropped, so it is a terminal drop marker, not a stale report.
-    latest_per_replica_events AS
+    --
+    -- The pick carries only key columns and the join fetches error and details
+    -- for the picked rows, since every TopK level stores the rows it carries.
+    latest_per_replica_status AS
     (
         SELECT DISTINCT ON (source_id, replica_id)
-            occurred_at, source_id, replica_id, status, error, details
+            source_id, replica_id, occurred_at, status
         FROM uniform_status_history
         WHERE replica_id = '<source>'
             OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
             OR status = 'paused'
+        -- One TopK level instead of the default eight. Startup trims history to
+        -- `keep_n_source_status_history_entries` rows per replica.
+        OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255)
         ORDER BY source_id, replica_id, occurred_at DESC
+    ),
+    latest_per_replica_events AS
+    (
+        SELECT occurred_at, source_id, replica_id, status, error, details
+        FROM latest_per_replica_status
+        JOIN uniform_status_history USING (source_id, replica_id, occurred_at, status)
     ),
     -- We have a precedence list that determines the overall status in case
     -- there is differing per-replica (including source-global) statuses. If
@@ -2212,6 +2224,7 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
             error,
             details
         FROM latest_per_replica_events
+        OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255)
         ORDER BY source_id, CASE status
                     WHEN 'dropped' THEN 1
                     WHEN 'running' THEN 2
@@ -2469,15 +2482,27 @@ uniform_status_history AS
 -- sink-global events ('<sink>' is the sentinel for replica_id NULL)
 -- and 'paused' events. A per-replica 'paused' is only written when the
 -- replica is dropped, so it is a terminal drop marker, not a stale report.
-latest_per_replica_events AS
+--
+-- The pick carries only key columns and the join fetches error and details
+-- for the picked rows, since every TopK level stores the rows it carries.
+latest_per_replica_status AS
 (
     SELECT DISTINCT ON (sink_id, replica_id)
-        occurred_at, sink_id, replica_id, status, error, details
+        sink_id, replica_id, occurred_at, status
     FROM uniform_status_history
     WHERE replica_id = '<sink>'
         OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
         OR status = 'paused'
+    -- One TopK level instead of the default eight. Startup trims history to
+    -- `keep_n_sink_status_history_entries` rows per replica.
+    OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255)
     ORDER BY sink_id, replica_id, occurred_at DESC
+),
+latest_per_replica_events AS
+(
+    SELECT occurred_at, sink_id, replica_id, status, error, details
+    FROM latest_per_replica_status
+    JOIN uniform_status_history USING (sink_id, replica_id, occurred_at, status)
 ),
 -- We have a precedence list that determines the overall status in case
 -- there is differing per-replica (including sink-global) statuses. If
@@ -2494,6 +2519,7 @@ latest_events AS
         error,
         details
     FROM latest_per_replica_events
+    OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255)
     ORDER BY sink_id, CASE status
                 WHEN 'dropped' THEN 1
                 WHEN 'running' THEN 2
