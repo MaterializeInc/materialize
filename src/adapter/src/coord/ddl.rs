@@ -124,6 +124,23 @@ impl DdlCommitContext {
 }
 
 impl Coordinator {
+    /// Sets allowed responses and checks read-only and execution-cluster restrictions.
+    fn prepare_command_execution(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: &mz_sql::plan::Plan,
+    ) -> Result<(), AdapterError> {
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(plan),
+            ));
+        if self.controller.read_only() && !plan.allowed_in_read_only() {
+            return Err(AdapterError::ReadOnly);
+        }
+        self.prepare_plan_execution(ctx, plan)?;
+        Ok(())
+    }
+
     pub(super) fn sequence_catalog_result_command(
         &mut self,
         mut ctx: ExecuteContext,
@@ -143,11 +160,7 @@ impl Coordinator {
             Ok(prepared) => prepared,
             Err(error) => return ctx.retire(Err(error)),
         };
-        ctx.tx_mut()
-            .set_allowed(crate::ExecuteResponse::generated_from(
-                &mz_sql::plan::PlanKind::from(&plan),
-            ));
-        if let Err(error) = self.prepare_plan_execution(&ctx, &plan) {
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &plan) {
             return ctx.retire(Err(error));
         }
         let row = match catalog::command::CatalogResultCommand::result(&plan) {
@@ -226,11 +239,7 @@ impl Coordinator {
             }
         };
         let mut ctx = pending.ctx;
-        ctx.tx_mut()
-            .set_allowed(crate::ExecuteResponse::generated_from(
-                &mz_sql::plan::PlanKind::from(&compiled.plan),
-            ));
-        if let Err(error) = self.prepare_plan_execution(&ctx, &compiled.plan) {
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &compiled.plan) {
             return ctx.retire(Err(error));
         }
         let response = match &compiled.plan {
@@ -351,14 +360,7 @@ impl Coordinator {
             Ok(prepared) => prepared,
             Err(error) => return ctx.retire(Err(error)),
         };
-        ctx.tx_mut()
-            .set_allowed(crate::ExecuteResponse::generated_from(
-                &mz_sql::plan::PlanKind::from(&plan),
-            ));
-        if self.controller.read_only() {
-            return ctx.retire(Err(AdapterError::ReadOnly));
-        }
-        if let Err(error) = self.prepare_plan_execution(&ctx, &plan) {
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &plan) {
             return ctx.retire(Err(error));
         }
         let command = Arc::new(command);
