@@ -721,13 +721,13 @@ fn adopt_join_input(
     }
 }
 
-/// A differential join whose input trace is a PLACEHOLDER at construction fills correctly once
-/// the point is adopted in place.
+/// A differential join whose input trace is an unattached point at construction fills correctly
+/// once the point is adopted in place.
 ///
-/// This reproduces the command-arrival-order hazard directly. `id_a` is imported and joined
-/// BEFORE any publisher for it exists: the interactive side mints a point, takes a handle,
-/// imports it, and builds `join_core` over the EMPTY point, capturing the trace by value at
-/// construction. `id_b` is published normally as an already-materialized co-input.
+/// This exercises late adoption at the `Published` level. `a` is imported and joined BEFORE any
+/// publisher for it exists: the test creates an unattached point, takes a handle, imports it, and
+/// builds `join_core` over the EMPTY point, capturing the trace by value at construction. `id_b`
+/// is published normally as an already-materialized co-input.
 ///
 /// The test asserts two things:
 /// * While `a` is unadopted, the join produces nothing and its frontier stays pinned at the
@@ -761,15 +761,15 @@ fn join_over_point_adopted_late_matches_direct() {
         let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
         let (oks_b, _errs_b) = registry.handles(&id_b).expect("B published");
 
-        // A: a PLACEHOLDER, created before any publisher exists. Mint its reader handle now.
+        // A: an unattached point, created before any publisher exists. Take its reader handle now.
         let point_a: Published<RowRowSpine<Timestamp, Diff>> = Published::new();
         let oks_a = point_a.handle();
 
-        // Interactive side: import both as arrangements and join them. A is imported over the
-        // EMPTY point. `join_core` captures `arr_a.trace` by value here, before A has any
-        // publisher. This is exactly the construction-time capture that late-binding import must
-        // survive. `as_of = 0` matches the earliest real time in either input, so no update
-        // coalesces, and `until = seal` keeps every distinct time in `[0, seal)` visible.
+        // Import both as arrangements and join them. A is imported over the EMPTY point.
+        // `join_core` captures `arr_a.trace` by value here, before A has any publisher. This is
+        // exactly the construction-time capture that late-binding import must survive. `as_of = 0`
+        // matches the earliest real time in either input, so no update coalesces, and
+        // `until = seal` keeps every distinct time in `[0, seal)` visible.
         let as_of = Antichain::from_elem(Timestamp::from(0_u64));
         let until = Antichain::from_elem(Timestamp::from(seal));
         let probe = ProbeHandle::new();
@@ -1578,53 +1578,39 @@ fn render_incarnation(
     (index, token, keep)
 }
 
-/// A reconnect recreates an index at the same `as_of`, which both runtimes reconcile. The barrier
-/// holds the interactive runtime back until maintenance dropped the old incarnation, after which
-/// the peer binds the slot that the new incarnation, numbered by its own command, publishes into,
-/// never the old incarnation's.
+/// A reconnect recreates an index at the same `as_of` while the old incarnation is still live, as
+/// when the reading runtime reconciles before the publishing runtime dropped it. The new
+/// incarnation publishes into a slot of its own, under its own creation number, and a peer of it
+/// binds that slot and leaves the old incarnation's alone.
 #[mz_ore::test]
-fn the_reconcile_barrier_keeps_a_new_peer_off_the_old_incarnation() {
-    use crate::reconcile_barrier::BarrierSide;
-
+fn a_new_peer_binds_its_own_slot_while_the_old_incarnation_is_live() {
     let registry = ArrangementSharingRegistry::new();
-    let position = 0;
     let id = GlobalId::User(1);
     timely::execute_directly(move |worker| {
         let as_of = as_of_min();
-        let barrier = registry.reconcile_barrier().clone();
-        let (old_dataflow, old_token, old_keep) =
+        let (_old_dataflow, _old_token, _old_keep) =
             render_incarnation(worker, &registry, id, 0, &as_of);
         let old = registry.slot(id, 0).expect("published");
 
-        // The interactive runtime has nothing to drop and arrives first.
-        barrier.arrive(BarrierSide::Interactive, position);
-        assert!(
-            !barrier.passable(BarrierSide::Interactive, position),
-            "the interactive runtime passes before maintenance dropped the old incarnation"
-        );
-        assert!(
-            registry.slot(id, 1).is_none(),
-            "before the drop, the new incarnation has no slot"
-        );
-
-        // Maintenance drops the old incarnation and arrives.
-        drop((old_token, old_keep));
-        worker.drop_dataflow(old_dataflow);
-        barrier.arrive(BarrierSide::Maintenance, position);
-        assert!(old.is_frozen());
-        assert!(barrier.passable(BarrierSide::Interactive, position));
-        assert!(barrier.passable(BarrierSide::Maintenance, position));
-
-        // Both create. The new incarnation publishes into a fresh slot, which the peer binds.
         let (_new_dataflow, _new_token, _new_keep) =
             render_incarnation(worker, &registry, id, 1, &as_of);
-        let _peer = registry.peer_bundle_at(id, 1, &as_of);
         let fresh = registry.slot(id, 1).expect("published");
+        assert!(!old.is_frozen(), "the old incarnation is still live");
         assert!(
             !Arc::ptr_eq(&fresh, &old),
             "the new incarnation published into the old slot"
         );
-        drop(old);
+
+        let _peer = registry.peer_bundle_at(id, 1, &as_of);
+        assert!(
+            fresh.take_hold_pusher().is_none(),
+            "the new peer took its own slot's hold link"
+        );
+        assert!(
+            old.take_hold_pusher().is_some(),
+            "the new peer took the old incarnation's hold link"
+        );
+        drop((old, fresh));
     });
 }
 

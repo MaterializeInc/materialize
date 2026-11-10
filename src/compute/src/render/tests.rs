@@ -475,8 +475,8 @@ fn published_since_does_not_chase_reader_holds() {
 ///
 /// `mz_join_core` asserts exactly this at start-up, against the coverage it derives from
 /// `map_spans`, and differential's own `join_core` carries the same assert. An `as_of` may
-/// legitimately lead the coverage: an import over a placeholder whose publisher has not adopted it
-/// yet sees an empty chain, and a read at a timestamp beyond the index's seal leads it too.
+/// legitimately lead the coverage: an import built before its peer binds the publication sees an
+/// empty chain, and a read at a timestamp beyond the index's seal leads it too.
 /// Reporting the `as_of` here therefore aborts the worker on a correct import, and under shared
 /// fate that takes the process with it.
 #[mz_ore::test]

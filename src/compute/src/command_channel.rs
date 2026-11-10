@@ -20,9 +20,7 @@
 //!
 //! Commands in the command channel are tagged with a nonce identifying the incarnation of the
 //! compute protocol the command belongs to, allowing workers to recognize client reconnects that
-//! require a reconciliation. On a runtime that shares a reconciliation barrier, worker 0 also tags
-//! them with the connection's position in the process's [`ConnectionOrder`], see
-//! [`crate::reconcile_barrier`].
+//! require a reconciliation.
 //!
 //! The channel optionally also carries storage-internal commands, for
 //! clusters that host storage objects alongside compute objects. Both command kinds are sequenced
@@ -58,8 +56,6 @@ use timely::scheduling::{Activator, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use uuid::Uuid;
 
-use crate::reconcile_barrier::ConnectionOrder;
-
 #[cfg(test)]
 mod tests;
 
@@ -68,9 +64,6 @@ mod tests;
 pub struct Connection {
     /// The nonce of the connection's `Hello`.
     pub nonce: Uuid,
-    /// The connection's position in the process's [`ConnectionOrder`], on a runtime rendered with
-    /// one.
-    pub position: Option<u64>,
 }
 
 /// The position of a compute command among the numbered compute commands of a command channel.
@@ -144,13 +137,9 @@ pub struct StorageLaneInput {
 }
 
 /// Render the command channel dataflow.
-///
-/// With an `order`, worker 0 tags each compute command with its connection's position in it. Every
-/// connection worker 0 receives a command of must be recorded in worker 0's `order` by then.
 pub fn render(
     timely_worker: &mut TimelyWorker,
     storage_input: Option<StorageLaneInput>,
-    order: Option<ConnectionOrder>,
 ) -> (Sender, Receiver) {
     let (input_tx, input_rx) = mpsc::channel();
     let (output_tx, output_rx) = mpsc::channel();
@@ -179,8 +168,6 @@ pub fn render(
                 let worker_id = scope.index();
                 let mut cmd_index = 0_u64;
                 let mut capability = Some(cap);
-                // The connection of the last compute command, to look up each position once.
-                let mut last_connection: Option<Connection> = None;
 
                 move |output| {
                     let Some(cap) = &capability else {
@@ -193,20 +180,7 @@ pub fn render(
                     loop {
                         match input_rx.try_recv() {
                             Ok((cmd, nonce)) if worker_id == 0 => {
-                                let connection = match last_connection {
-                                    Some(connection) if connection.nonce == nonce => connection,
-                                    _ => *last_connection.insert(Connection {
-                                        nonce,
-                                        position: order.as_ref().map(|order| {
-                                            order.position(nonce).unwrap_or_else(|| {
-                                                panic!(
-                                                    "connection {nonce} reached the command \
-                                                     channel before its process recorded it"
-                                                )
-                                            })
-                                        }),
-                                    }),
-                                };
+                                let connection = Connection { nonce };
                                 session.give((
                                     worker_id,
                                     cmd_index,

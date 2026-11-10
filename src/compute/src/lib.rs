@@ -23,7 +23,6 @@ mod logging;
 mod metrics;
 mod placement;
 mod process_globals;
-pub mod reconcile_barrier;
 mod render;
 pub(crate) mod shared_trace;
 pub mod sharing;

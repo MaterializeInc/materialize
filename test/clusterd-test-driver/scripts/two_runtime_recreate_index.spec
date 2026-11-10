@@ -11,9 +11,10 @@
 # same `as_of`.
 #
 # The second connection replays the index with another key, so neither runtime
-# keeps the first incarnation, and both incarnations map to the same registry
-# key. The reconciliation barrier keeps the interactive runtime from binding the
-# new incarnation's peer before the maintenance runtime dropped the old one. The
+# keeps the first incarnation. Both incarnations have the same id and `as_of`
+# but different creation numbers, and the interactive runtime binds the new
+# incarnation's peer only to the slot of exactly its id and creation number,
+# whether or not the maintenance runtime has dropped the old one yet. The
 # first incarnation's view froze at upper 1 when it dropped, so the peek at 1,
 # after a write only the second incarnation sees, answers only from the second
 # incarnation, and times out on the first.

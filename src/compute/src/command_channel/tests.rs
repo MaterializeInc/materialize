@@ -86,7 +86,7 @@ fn drop_dataflows(worker: &mut TimelyWorker) {
 /// The digests a single-worker command channel delivers for `commands`.
 fn sequence(commands: Vec<(ComputeCommand, Uuid)>) -> Vec<(String, Option<CommandNumber>)> {
     timely::execute_directly(move |worker| {
-        let (tx, rx) = render(worker, None, None);
+        let (tx, rx) = render(worker, None);
         let count = commands.len();
         for command in commands {
             tx.send(command);
@@ -122,7 +122,7 @@ fn sequencer_all_workers_observe_one_order() {
             rx: storage_rx,
             activator_slot: Rc::clone(&activator_slot),
         };
-        let (compute_tx, rx) = render(worker, Some(lane_input), None);
+        let (compute_tx, rx) = render(worker, Some(lane_input));
 
         // Worker 0 broadcasts compute commands, as the sole connection to the compute
         // controller. Every worker injects its own uniquely tagged storage-internal commands.
@@ -205,7 +205,7 @@ fn every_worker_receives_worker_0s_command_numbers() {
 
     let results_handle = Arc::clone(&results);
     timely::execute(timely::Config::process(WORKERS), move |worker| {
-        let (tx, rx) = render(worker, None, None);
+        let (tx, rx) = render(worker, None);
         if worker.index() == 0 {
             for id in 0..COMMANDS {
                 tx.send((compaction(id), Uuid::from_u128(1)));
@@ -270,7 +270,7 @@ fn storage_commands_carry_no_number_between_numbered_compute_commands() {
             rx: storage_rx,
             activator_slot: Rc::clone(&activator_slot),
         };
-        let (tx, rx) = render(worker, Some(lane_input), None);
+        let (tx, rx) = render(worker, Some(lane_input));
 
         // Each compute command follows a growing number of storage commands, every batch
         // sequenced before the next is sent, so the lane interleaves them in send order.

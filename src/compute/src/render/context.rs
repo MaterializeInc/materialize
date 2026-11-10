@@ -93,8 +93,8 @@ pub struct Context<'scope, T: RenderTimestamp> {
     pub dataflow_expiration: Antichain<mz_repr::Timestamp>,
     /// The config set for this context.
     pub config_set: Rc<ConfigSet>,
-    /// The creation number of the incarnations of the dataflow's exports, `None` on a runtime that
-    /// does not derive creation numbers.
+    /// The creation number of the incarnations of the dataflow's exports, see
+    /// [`ComputeRuntimeRole::derives_creation_numbers`](crate::server::ComputeRuntimeRole::derives_creation_numbers).
     pub(crate) creation: Option<CreationNumber>,
 }
 

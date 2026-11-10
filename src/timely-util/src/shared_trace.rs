@@ -362,8 +362,9 @@ impl<Tr: TraceReader> TraceBox<Tr> {
         let logical = locked.meet(LOGICAL);
         let physical = locked.meet(PHYSICAL);
         // The join keeps the spine from rewinding, which differential's spine would accept without
-        // complaint: a hold below the spine's `since`, as a reader registered on a placeholder may
-        // place, cannot be honoured, so it constrains nothing.
+        // complaint: a hold below the spine's `since`, as a reader registered on an unattached
+        // point may place, cannot be honoured, so it constrains nothing. Compute never registers a
+        // reader on an unattached point, the guard covers other users of this module.
         let logical = logical.join(&current_logical);
         locked.update_open(|frontiers| frontiers.logical = logical.clone());
         drop(locked);
@@ -373,7 +374,8 @@ impl<Tr: TraceReader> TraceBox<Tr> {
         }
         // The spine refuses to rewind its physical frontier. A reader registers its physical hold
         // at the chain coverage it was seeded with, which is at or beyond the spine's frontier, so
-        // the meet regresses only for a reader registered on a placeholder. The guard checks it.
+        // the meet regresses only for a reader registered on an unattached point, which compute
+        // never registers. The guard checks it.
         if self.trace.get_physical_compaction() != physical.borrow()
             && PartialOrder::less_equal(&self.trace.get_physical_compaction(), &physical.borrow())
         {
