@@ -80,7 +80,11 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 
 from materialize.antithesis import ddl_hold, schema_model, sql, state
 from materialize.antithesis.drivers import configure, history
-from materialize.antithesis.drivers.session_mix import classify_read, quote_literal
+from materialize.antithesis.drivers.session_mix import (
+    CANCEL_TIMEOUT_S,
+    classify_read,
+    quote_literal,
+)
 from materialize.antithesis.drivers.sources_common import (
     bag_diff,
     is_since_race,
@@ -673,6 +677,7 @@ class Race:
             self.run_follower(kind, conn, db, res)
         finally:
             db.close()
+            close(conn)
 
     def run_follower(
         self,
@@ -829,8 +834,16 @@ class Race:
         deadline = time.monotonic() + STATEMENT_TIMEOUT_MS / 1000 * 2 + JOIN_GRACE_S
         for t in [*threads, writer]:
             t.join(max(0.0, deadline - time.monotonic()))
-        for _, conn, _ in prepared:
-            close(conn)
+        # Each follower closes its own session. `Connection.close` frees the
+        # libpq connection without taking the connection lock, so closing a
+        # session here while its follower is still inside a query frees the
+        # connection under that query. A cancel is safe from another thread.
+        for t, (_, conn, _) in zip(threads, prepared):
+            if t.is_alive():
+                try:
+                    conn.cancel_safe(timeout=CANCEL_TIMEOUT_S)
+                except Exception as e:
+                    log(f"cancelling a stuck follower failed: {e}")
         self.report(delay)
 
     def report(self, delay: float | None) -> None:

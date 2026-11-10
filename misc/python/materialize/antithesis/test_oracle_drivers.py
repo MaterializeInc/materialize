@@ -408,3 +408,46 @@ def test_schema_evolution_prune_moves_past_a_rejected_drop(
     schema_evolution.prune("host", db, SimpleNamespace(name="t1"))  # type: ignore[arg-type]
     excess = len(deps) - schema_evolution.MAX_DEPENDENTS + 1
     assert dropped == [d.drop_statement() for d in deps[1 : 1 + excess]]
+
+
+def test_schema_evolution_cancels_a_stuck_follower_and_leaves_it_its_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Session:
+        def __init__(self) -> None:
+            self.cancelled = threading.Event()
+            self.closed_by: list[str] = []
+
+        def cancel_safe(self, timeout: float) -> None:
+            self.cancelled.set()
+
+        def close(self) -> None:
+            self.closed_by.append(threading.current_thread().name)
+
+    session = Session()
+    monkeypatch.setattr(schema_evolution, "FOLLOWERS", ("peek",))
+    monkeypatch.setattr(schema_evolution, "FOLLOWERS_MENU", (1,))
+    monkeypatch.setattr(schema_evolution, "DELAY_MENU_S", (None,))
+    monkeypatch.setattr(schema_evolution, "STATEMENT_TIMEOUT_MS", 0)
+    monkeypatch.setattr(schema_evolution, "JOIN_GRACE_S", 0.05)
+    monkeypatch.setattr(schema_evolution, "connect", lambda *args: session)
+    monkeypatch.setattr(schema_evolution, "open_state", MagicMock)
+    race = object.__new__(schema_evolution.Race)
+    race.host = "host"
+    race.targets = []
+    race.results = []
+    monkeypatch.setattr(race, "run_alter", lambda db: None)
+    monkeypatch.setattr(race, "old_writer", lambda ops: None)
+    monkeypatch.setattr(race, "report", lambda delay: None)
+    monkeypatch.setattr(
+        race, "run_follower", lambda kind, conn, db, res: conn.cancelled.wait(5)
+    )
+    race.run(MagicMock())
+    assert session.cancelled.is_set(), "a follower past the join deadline is cancelled"
+    for _ in range(100):
+        if session.closed_by:
+            break
+        threading.Event().wait(0.05)
+    assert (
+        session.closed_by and "MainThread" not in session.closed_by
+    ), "only the follower closes the session it may still be using"

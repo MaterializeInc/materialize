@@ -55,3 +55,19 @@ def test_other_dependent_objects_errors_stay_violations():
         )
     )
     assert c.outcome is sql.Outcome.VIOLATION
+
+
+@pytest.mark.parametrize(
+    "message,rtr_outcome",
+    [
+        ("storage error: error communicating with the server", sql.Outcome.REJECTED),
+        ("storage error: error connecting to server", sql.Outcome.REJECTED),
+        ("storage error: db error", sql.Outcome.VIOLATION),
+    ],
+)
+def test_upstream_transport_errors_are_rejections_only_for_rtr_reads(
+    message, rtr_outcome
+):
+    error = psycopg.errors.InternalError_(message)
+    assert sql.classify_rtr_read(error).outcome is rtr_outcome
+    assert sql.classify(error).outcome is sql.Outcome.VIOLATION

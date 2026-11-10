@@ -255,6 +255,10 @@ PROBE_FNS: dict[str, Callable[[psycopg.Connection], dict[str, Any]]] = {
     "P7": _p7,
 }
 
+PROBE_CLASSIFIERS: dict[str, Callable[[BaseException], sql.Classified]] = {
+    "P7": sql.classify_rtr_read,
+}
+
 
 def _attempt(
     host: str, name: str, start: float, end: float, result: ProbeResult
@@ -296,7 +300,7 @@ def _attempt(
             result.status = "skipped"
             return
         except Exception as e:
-            c = sql.classify(e)
+            c = PROBE_CLASSIFIERS.get(name, sql.classify)(e)
             details.update({"sqlstate": c.sqlstate, "template": c.template})
             result.details = dict(details)
             if c.outcome == sql.Outcome.VIOLATION:
