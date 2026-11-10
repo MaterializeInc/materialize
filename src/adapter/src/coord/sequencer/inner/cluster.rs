@@ -264,9 +264,16 @@ impl Coordinator {
         }
 
         // These options create replicas, so every size they can create one of
-        // must allow the workloads already on the cluster.
+        // must allow the workloads already on the cluster. Lowering the
+        // replication factor creates none, and checking it would stop owners
+        // from suspending a cluster whose grandfathered objects the size no
+        // longer allows.
+        let grows_replication = match (&config.variant, &new_config.variant) {
+            (Managed(old), Managed(new)) => new.replication_factor > old.replication_factor,
+            _ => !matches!(options.replication_factor, Unchanged),
+        };
         let adds_replicas = !matches!(options.size, Unchanged)
-            || !matches!(options.replication_factor, Unchanged)
+            || grows_replication
             || !matches!(options.managed, Unchanged)
             || !matches!(options.auto_scaling_strategy, Unchanged);
         if let (Managed(managed), true) = (&new_config.variant, adds_replicas) {
