@@ -30,7 +30,7 @@ namespace csharp
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                Assert.AreEqual(42, reader.GetValue(0));
+                Assert.That(reader.GetValue(0), Is.EqualTo(42));
             }
         }
 
@@ -47,11 +47,11 @@ namespace csharp
             using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
             using (var reader  = cmd.ExecuteReader())
             {
-                Assert.IsTrue(reader.Read());
-                Assert.AreEqual(1, reader[1]); // diff
-                Assert.AreEqual(1, reader[2]); // a
-                Assert.AreEqual("a", reader[3]); // b
-                Assert.IsFalse(reader.Read());
+                Assert.That(reader.Read(), Is.True);
+                Assert.That(reader[1], Is.EqualTo(1)); // diff
+                Assert.That(reader[2], Is.EqualTo(1)); // a
+                Assert.That(reader[3], Is.EqualTo("a")); // b
+                Assert.That(reader.Read(), Is.False);
             }
 
             // Insert another row from another connection to simulate an update
@@ -63,11 +63,11 @@ namespace csharp
             using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
             using (var reader  = cmd.ExecuteReader())
             {
-                Assert.IsTrue(reader.Read());
-                Assert.AreEqual(1, reader[1]); // diff
-                Assert.AreEqual(2, reader[2]); // a
-                Assert.AreEqual("b", reader[3]); // b
-                Assert.IsFalse(reader.Read());
+                Assert.That(reader.Read(), Is.True);
+                Assert.That(reader[1], Is.EqualTo(1)); // diff
+                Assert.That(reader[2], Is.EqualTo(2)); // a
+                Assert.That(reader[3], Is.EqualTo("b")); // b
+                Assert.That(reader.Read(), Is.False);
             }
             txn.Commit();
 
@@ -85,11 +85,11 @@ namespace csharp
             // Start a subscribe using the binary copy protocol.
             var reader = conn.BeginBinaryExport("COPY (SUBSCRIBE t) TO STDOUT (FORMAT BINARY)");
             // Validate the first row.
-            Assert.AreEqual(4, reader.StartRow());
+            Assert.That(reader.StartRow(), Is.EqualTo(4));
             reader.Read<decimal>(); // ignore timestamp column
-            Assert.AreEqual(1, reader.Read<long>()); // diff column
-            Assert.AreEqual(1, reader.Read<int>()); // a column
-            Assert.AreEqual("a", reader.Read<string>()); // b column
+            Assert.That(reader.Read<long>(), Is.EqualTo(1)); // diff column
+            Assert.That(reader.Read<int>(), Is.EqualTo(1)); // a column
+            Assert.That(reader.Read<string>(), Is.EqualTo("a")); // b column
 
             // Wait 2s so that the 1s NoticeResponse "test that the connection is still
             // alive" check triggers. This verifies Npgsql can successfully ignore the
@@ -103,11 +103,11 @@ namespace csharp
             }
 
             // Validate the new row.
-            Assert.AreEqual(4, reader.StartRow());
+            Assert.That(reader.StartRow(), Is.EqualTo(4));
             reader.Read<decimal>(); // ignore timestamp column
-            Assert.AreEqual(1, reader.Read<long>()); // diff column
-            Assert.AreEqual(2, reader.Read<int>()); // a column
-            Assert.AreEqual("b", reader.Read<string>()); // b column
+            Assert.That(reader.Read<long>(), Is.EqualTo(1)); // diff column
+            Assert.That(reader.Read<int>(), Is.EqualTo(2)); // a column
+            Assert.That(reader.Read<string>(), Is.EqualTo("b")); // b column
 
             // The subscribe won't end until we send a cancel request.
             reader.Cancel();
