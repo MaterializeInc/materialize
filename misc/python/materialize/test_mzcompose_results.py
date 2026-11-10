@@ -197,6 +197,65 @@ def test_native_retirement_checks_identity_without_cleanup(
     cleanup.assert_not_called()
 
 
+@pytest.mark.parametrize("outcome", ["retired", "still_writable", "retire_error"])
+def test_native_ddl_checks_retired_writer_before_cleanup(monkeypatch, outcome):
+    import psycopg
+
+    spec = importlib.util.spec_from_file_location(
+        "native_ddl_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "setup", Mock())
+    monkeypatch.setattr(module, "setup_sql_server_testing", Mock())
+    c = MagicMock(spec=Composition)
+    old_session = MagicMock()
+    c.sql_connection.return_value.__enter__.return_value = old_session
+    c.attach_mock(old_session, "old_session")
+
+    def execute(sql):
+        if sql == "INSERT INTO t VALUES (17, 18)" and outcome == "retired":
+            raise psycopg.OperationalError("server closed the connection unexpectedly")
+        return SimpleNamespace(fetchall=lambda: [(1,)])
+
+    old_session.execute.side_effect = execute
+    if outcome == "retire_error":
+        c.retire_mz_deployment.side_effect = UIError("retirement failed")
+        with pytest.raises(UIError, match="retirement failed"):
+            module.workflow_ddl(c)
+    elif outcome == "still_writable":
+        with pytest.raises(AssertionError, match="retired deployment accepted"):
+            module.workflow_ddl(c)
+    else:
+        module.workflow_ddl(c)
+        c.kill_fenced_mz.assert_called_once_with("mz_old")
+
+    c.sql_connection.assert_called_once_with(service="mz_old")
+    c.promote_mz.assert_called_once_with("mz_new", retire_mz_service=None)
+    c.retire_mz_deployment.assert_called_once_with(
+        "mz_new", 0, environment_id=module.DEFAULT_MZ_ENVIRONMENT_ID
+    )
+    events = c.method_calls
+    promotion = events.index(call.promote_mz("mz_new", retire_mz_service=None))
+    promoted = events.index(
+        call.await_mz_deployment_status(module.DeploymentStatus.IS_LEADER, "mz_new")
+    )
+    recovered = events.index(call.sql("SELECT 1", service="mz_new"))
+    peer_write = events.index(call.old_session.execute("INSERT INTO t VALUES (13, 14)"))
+    retirement = next(
+        i for i, event in enumerate(events) if event[0] == "retire_mz_deployment"
+    )
+    assert promotion < promoted < recovered < peer_write < retirement
+    if outcome == "retired":
+        rejected_write = events.index(
+            call.old_session.execute("INSERT INTO t VALUES (17, 18)")
+        )
+        assert retirement < rejected_write < events.index(call.kill_fenced_mz("mz_old"))
+    else:
+        c.kill_fenced_mz.assert_not_called()
+    assert c.testdrive.call_count == (5 if outcome == "retired" else 4)
+
+
 @pytest.mark.parametrize(
     "outcome", ["retry_then_success", "exhausted", "wrong_identity"]
 )

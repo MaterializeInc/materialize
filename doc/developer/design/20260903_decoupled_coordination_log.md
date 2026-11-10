@@ -11,12 +11,25 @@ load separately. Do not change Persist or the 60s publication default.
 
 CDC admission/readiness and bounded PG, MySQL and SQL Server lifecycle coverage
 are verified. `native-cdc-runtime-verification.md` records source/binary receipts,
-review fixes, successful fixtures and limits. No runtime is currently running.
+review fixes, successful fixtures and limits. Published in `18888155b6`.
 
-Repeat the full native `workflow_ddl` lifecycle with the repaired CDC admission.
-Its conversion preserves sources, sinks, DDL, subscriptions and peer sessions.
-Partial checks passed, but full acceptance remains unverified. See
-`native-ddl-runtime-findings.md` and `native-ddl-preserved-workload.txt`.
+The current full native `workflow_ddl` passed in `aj-native-ddl-569f7b9d`, including
+the corrected post-restart recovery probe, sources/sinks, subscriptions, retained
+peer writes and explicit retirement. Formatting, preservation comparison and
+helper tests pass. The recovery-order helper has negative/positive evidence.
+
+Retirement exhausted three explicit contention409 responses in two earlier
+runs. The successful diagnostic measured3.537s and1.491s conflict responses, then
+1.826s success. Its failure-only extra retry window did not run. Oracle task2
+examines whether a caller retry budget or retirement progress repair is needed.
+Do not treat this passing retry as resolving contention or broaden into a raw
+catalog cache/follower without justification. No retry policy was changed.
+
+The host restart interrupted the previous diagnostic. Its labelled resources
+were removed after saving logs/inspections in
+`aj-native-ddl-6cc880ed/interrupted-cleanup.json`. No runtime remains active.
+Detailed evidence: `native-ddl-runtime-findings.md`,
+`native-ddl-preserved-workload.txt`, `native-ddl-recovery-order-*.log`.
 
 ## Verified outcome
 
@@ -95,7 +108,8 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   and `../logical-component-load/` remain the performance baseline, not a cleanup
   performance claim. Further history is in the [archive](20260903_decoupled_coordination_log_archive.md).
 
-All owned runtime fixtures were removed. About 35 GiB is free. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB available-memory
+All owned runtime fixtures were removed. About 35 GiB is
+free. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB available-memory
 reserves, and use one low-priority Cargo job. Scratch SSO was expired on the last
 checks. Local verification does not depend on it.
 

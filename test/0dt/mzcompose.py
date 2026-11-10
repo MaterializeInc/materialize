@@ -3105,7 +3105,7 @@ def workflow_upsert_sources(c: Composition) -> None:
 
 
 def workflow_ddl(c: Composition) -> None:
-    """Verify basic 0dt deployment flow with DDLs running during the 0dt deployment."""
+    """Keep both deployments writable through DDL and promotion, then retire one."""
     c.down(destroy_volumes=True)
     c.up(
         "kafka",
@@ -3120,7 +3120,7 @@ def workflow_ddl(c: Composition) -> None:
     setup(c)
     setup_sql_server_testing(c)
 
-    # Inserts should be reflected when writes are allowed.
+    # Establish sources, a sink and table-backed views before the peer joins.
     c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
@@ -3258,11 +3258,13 @@ def workflow_ddl(c: Composition) -> None:
         > COMMIT
         """))
 
-    # Start new Materialize in a new deploy generation, which will cause
-    # Materialize to boot in read-only mode.
+    # A compatible candidate serves writes before promotion.
     c.up("mz_new")
+    # SQL listeners can be ready before policy provisions deployment-local
+    # replicas. Testdrive's initial catalog queries require those replicas.
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
 
-    # Verify against new Materialize that it is in read-only mode
+    # Exercise candidate writes and DDL against the same shared objects.
     with c.override(
         Testdrive(
             materialize_url="postgres://materialize@mz_new:6875",
@@ -3276,7 +3278,7 @@ def workflow_ddl(c: Composition) -> None:
     ):
         c.up(Service("testdrive", idle=True))
         c.testdrive(dedent(f"""
-            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            $ webhook-append database=materialize schema=public name=webhook_source
             BBB
 
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
@@ -3300,26 +3302,20 @@ def workflow_ddl(c: Composition) -> None:
             > SET CLUSTER = cluster;
             > SELECT 1
             1
-            ! INSERT INTO t VALUES (3, 4);
-            contains: cannot write in read-only mode
+            > INSERT INTO t VALUES (3, 4);
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;
-            1
-            # TODO: Currently hangs
-            # > SELECT max(b) FROM t;
-            # 2
+            4
+            > SELECT max(b) FROM t;
+            4
             > SELECT mz_unsafe.mz_sleep(5)
             <null>
-            ! INSERT INTO t VALUES (5, 6);
-            contains: cannot write in read-only mode
+            > INSERT INTO t VALUES (5, 6);
             > SELECT * FROM mv;
-            1
-            ! DROP INDEX t_idx
-            contains: cannot write in read-only mode
-            ! CREATE INDEX t_idx2 ON t (a, b)
-            contains: cannot write in read-only mode
-            ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
-            contains: cannot write in read-only mode
+            9
+            > DROP INDEX t_idx
+            > CREATE INDEX t_idx2 ON t (a, b)
+            > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 
             $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
@@ -3340,23 +3336,29 @@ def workflow_ddl(c: Composition) -> None:
             B 1
             > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
+            <null> <null> 3 4
+            <null> <null> 5 6
 
             > SELECT * FROM webhook_source
             AAA
+            BBB
 
             $ set-max-tries max-tries=1
             $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
             > BEGIN
-            ! DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
-            contains: cannot write in read-only mode
-            > ROLLBACK
-            # Actual subscribes without a declare still work though
+            > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            > FETCH ALL c WITH (timeout='5s');
+            <TIMESTAMP> 1 1
+            <TIMESTAMP> 1 3
+            <TIMESTAMP> 1 5
+            > COMMIT
+            # Also exercise a direct finite subscription.
             > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
             <TIMESTAMP> 1 1 a
             <TIMESTAMP> 1 2 a
             """))
 
-    # Run DDLs against the old Materialize, which should restart the new one
+    # Verify the candidate sees committed peer DDL as well as its own writes.
     c.up(Service("testdrive", idle=True))
     c.testdrive(dedent(f"""
         > CREATE TABLE t1 (a INT);
@@ -3387,20 +3389,20 @@ def workflow_ddl(c: Composition) -> None:
         > SET CLUSTER = cluster;
         > SELECT 1
         1
-        > INSERT INTO t VALUES (3, 4);
+        > INSERT INTO t VALUES (7, 8);
         > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
         > SELECT * FROM mv;
-        4
+        16
         > SELECT max(b) FROM t;
-        4
+        8
         > SELECT mz_unsafe.mz_sleep(5)
         <null>
-        > INSERT INTO t VALUES (5, 6);
+        > INSERT INTO t VALUES (9, 10);
         > SELECT * FROM mv;
-        9
-        > DROP INDEX t_idx
-        > CREATE INDEX t_idx2 ON t (a, b)
-        > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
+        25
+        > DROP INDEX t_idx2
+        > CREATE INDEX t_idx_peer ON t (a, b)
+        > CREATE MATERIALIZED VIEW mv_peer AS SELECT sum(a) FROM t;
 
         $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
@@ -3427,8 +3429,11 @@ def workflow_ddl(c: Composition) -> None:
         <null> <null> 1 2
         <null> <null> 3 4
         <null> <null> 5 6
+        <null> <null> 7 8
+        <null> <null> 9 10
         > SELECT * FROM webhook_source
         AAA
+        BBB
         CCC
 
         > CREATE TABLE t3 (a INT);
@@ -3441,6 +3446,8 @@ def workflow_ddl(c: Composition) -> None:
         <TIMESTAMP> 1 1
         <TIMESTAMP> 1 3
         <TIMESTAMP> 1 5
+        <TIMESTAMP> 1 7
+        <TIMESTAMP> 1 9
         > COMMIT
 
         > CREATE TABLE t4 (a INT);
@@ -3459,21 +3466,24 @@ def workflow_ddl(c: Composition) -> None:
     ):
         c.up(Service("testdrive", idle=True))
         c.testdrive(dedent("""
-            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            $ webhook-append database=materialize schema=public name=webhook_source
             DDD
 
+            > SELECT count(*) FROM t1;
+            0
+            > SELECT count(*) FROM t4;
+            0
             > SET CLUSTER = cluster;
             > SELECT 1
             1
-            ! INSERT INTO t VALUES (3, 4);
-            contains: cannot write in read-only mode
+            > INSERT INTO t VALUES (11, 12);
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;
-            9
+            36
             > SELECT max(b) FROM t;
-            6
+            12
             > SELECT * FROM mv;
-            9
+            36
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
@@ -3494,83 +3504,95 @@ def workflow_ddl(c: Composition) -> None:
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6
+            <null> <null> 7 8
+            <null> <null> 9 10
+            <null> <null> 11 12
             > SELECT * FROM webhook_source
             AAA
+            BBB
             CCC
+            DDD
 
             $ set-max-tries max-tries=1
             $ set-regex match=\\d{13,20} replacement=<TIMESTAMP>
             > BEGIN
-            ! DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
-            contains: cannot write in read-only mode
-            > ROLLBACK
-            # Actual subscribes without a declare still work though
+            > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            > FETCH ALL c WITH (timeout='5s');
+            <TIMESTAMP> 1 1
+            <TIMESTAMP> 1 3
+            <TIMESTAMP> 1 5
+            <TIMESTAMP> 1 7
+            <TIMESTAMP> 1 9
+            <TIMESTAMP> 1 11
+            > COMMIT
+            # Also exercise a direct finite subscription.
             > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
             <TIMESTAMP> 1 1 a
             <TIMESTAMP> 1 2 a
             """))
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        # mz_old runs without a restart policy, so its container exits once
-        # the fence stops environmentd. The loop below asserts exactly that.
-        c.promote_mz("mz_new", retire_mz_service=None)
+        with c.sql_connection(service="mz_old") as old_conn:
+            assert old_conn.execute("SELECT 1").fetchall() == [(1,)]
+            c.promote_mz("mz_new", retire_mz_service=None)
+            c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+            # Preserve the candidate SQL recovery check independently of the
+            # predecessor. A query before IsLeader could still hit the candidate
+            # adapter that is about to restart rather than its replacement.
+            for i in range(10):
+                try:
+                    c.sql("SELECT 1", service="mz_new")
+                    break
+                except CommandFailureCausedUIError:
+                    pass
+                except OperationalError:
+                    pass
+                time.sleep(1)
+            else:
+                raise RuntimeError("mz_new didn't come up within 10 seconds")
 
-        # Give some time for Mz to restart after promotion
-        for i in range(10):
+            old_conn.execute("INSERT INTO t VALUES (13, 14)")
+            old_conn.execute("CREATE TABLE promoted_peer (a int)")
+
+            c.retire_mz_deployment(
+                "mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID
+            )
             try:
-                c.sql("SELECT 1", service="mz_old")
-            except OperationalError as e:
-                assert (
-                    "server closed the connection unexpectedly" in str(e)
-                    or "Can't create a connection to host" in str(e)
-                    or "Connection refused" in str(e)
-                    or "the connection is closed" in str(e)
-                ), f"Unexpected error: {e}"
-            except CommandFailureCausedUIError as e:
-                # service "mz_old" is not running
-                assert "running docker compose failed" in str(
-                    e
-                ), f"Unexpected error: {e}"
-                break
-            time.sleep(1)
-        else:
-            raise RuntimeError("mz_old didn't stop running within 10 seconds")
+                old_conn.execute("INSERT INTO t VALUES (17, 18)")
+            except psycopg.Error as error:
+                assert isinstance(error, OperationalError) or "has been retired" in str(
+                    error
+                ), f"Unexpected rejection from retired deployment: {error}"
+            else:
+                raise AssertionError("retired deployment accepted a new table write")
 
-        for i in range(10):
-            try:
-                c.sql("SELECT 1", service="mz_new")
-                break
-            except CommandFailureCausedUIError:
-                pass
-            except OperationalError:
-                pass
-            time.sleep(1)
-        else:
-            raise RuntimeError("mz_new didn't come up within 10 seconds")
-
-        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+        c.kill_fenced_mz("mz_old")
 
         c.testdrive(dedent(f"""
             $ webhook-append database=materialize schema=public name=webhook_source
             EEE
+            > SELECT count(*) FROM promoted_peer;
+            0
             > SET CLUSTER = cluster;
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > CREATE MATERIALIZED VIEW mv3 AS SELECT sum(a) FROM t;
             > SELECT * FROM mv;
-            9
+            49
             > SELECT * FROM mv2;
-            9
+            49
             > SELECT * FROM mv3;
-            9
+            49
+            > SELECT * FROM mv_peer;
+            49
             > SELECT max(b) FROM t;
-            6
-            > INSERT INTO t VALUES (7, 8);
+            14
+            > INSERT INTO t VALUES (15, 16);
             > SELECT * FROM mv;
-            16
+            64
             > SELECT * FROM mv2;
-            16
+            64
             > SELECT max(b) FROM t;
-            8
+            16
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
@@ -3631,9 +3653,15 @@ def workflow_ddl(c: Composition) -> None:
             <null> <null> 3 4
             <null> <null> 5 6
             <null> <null> 7 8
+            <null> <null> 9 10
+            <null> <null> 11 12
+            <null> <null> 13 14
+            <null> <null> 15 16
             > SELECT * FROM webhook_source
             AAA
+            BBB
             CCC
+            DDD
             EEE
 
             $ set-max-tries max-tries=1
@@ -3645,6 +3673,10 @@ def workflow_ddl(c: Composition) -> None:
             <TIMESTAMP> 1 3
             <TIMESTAMP> 1 5
             <TIMESTAMP> 1 7
+            <TIMESTAMP> 1 9
+            <TIMESTAMP> 1 11
+            <TIMESTAMP> 1 13
+            <TIMESTAMP> 1 15
             > COMMIT
             """))
 
