@@ -176,6 +176,16 @@
       "additionalBranchPrefix": "python-tools-"
     },
     {
+      // kubernetes 37.0.2 requires python-dateutil>=3.0.0, while botocore (up
+      // to at least 1.43.127) requires python-dateutil<3.0.0, so the
+      // ci-builder image's `uv pip install` fails to resolve. Lift once either
+      // side relaxes its bound.
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": ["ci/builder/requirements.txt"],
+      "matchPackageNames": ["kubernetes"],
+      "allowedVersions": "<37.0.2"
+    },
+    {
       // Test tooling in the driver projects. The driver rules below take the
       // drivers themselves.
       "matchFileNames": ["test/lang/**"],
