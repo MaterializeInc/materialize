@@ -19,17 +19,20 @@ use mz_ore::cast::CastLossy;
 /// Staleness of at most 1 ms is bucket 0.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct BucketScheme {
-    per_octave: u32,
+    /// The base-2 logarithm `s` of the buckets per octave `b = 2^s`.
+    log2_per_octave: u8,
 }
 
 impl BucketScheme {
     /// `None` unless `per_octave` is a power of two in `1..=256`.
     pub fn new(per_octave: u32) -> Option<Self> {
-        (per_octave.is_power_of_two() && per_octave <= 256).then_some(BucketScheme { per_octave })
+        (per_octave.is_power_of_two() && per_octave <= 256).then(|| BucketScheme {
+            log2_per_octave: u8::try_from(per_octave.trailing_zeros()).expect("at most 8"),
+        })
     }
 
     pub fn per_octave(&self) -> u32 {
-        self.per_octave
+        1 << self.log2_per_octave
     }
 
     /// The bucket of a staleness, rounded up to whole milliseconds.
@@ -48,8 +51,8 @@ impl BucketScheme {
         // The octave `e` with `2^(e-1) < staleness <= 2^e` is exact in integers, and bounds the
         // bucket to `((e-1) * b, e * b]`.
         let e = i32::try_from(u64::BITS - (staleness_ms - 1).leading_zeros()).expect("at most 64");
-        let b = i32::try_from(self.per_octave).expect("at most 256");
-        let (mut lo, mut hi) = ((e - 1) * b + 1, e * b);
+        let s = self.log2_per_octave;
+        let (mut lo, mut hi) = (((e - 1) << s) + 1, e << s);
         // Binary search for the first bucket whose largest staleness reaches `staleness_ms`.
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
@@ -64,7 +67,7 @@ impl BucketScheme {
 
     /// The upper bound `2^(k/b)` ms of bucket `k`, inclusive.
     pub fn upper_bound_ms(&self, k: i32) -> f64 {
-        (f64::from(k) / f64::from(self.per_octave)).exp2()
+        (f64::from(k) / f64::from(self.per_octave())).exp2()
     }
 
     /// The largest integer staleness in ms in bucket `k`, 0 for buckets below 0.
@@ -72,11 +75,11 @@ impl BucketScheme {
         if k < 0 {
             return 0;
         }
-        let b = i32::try_from(self.per_octave).expect("at most 256");
+        let s = self.log2_per_octave;
         // NOTE: A float `exp2` can land a hair off at exact powers of two, which are the
         // bucket bounds that integers actually hit, so those take the integer path.
-        if k % b == 0 {
-            let e = u32::try_from(k / b).expect("non-negative");
+        if k & ((1 << s) - 1) == 0 {
+            let e = u32::try_from(k >> s).expect("non-negative");
             return 1u64.checked_shl(e).unwrap_or(u64::MAX);
         }
         // Saturates at `u64::MAX` for bounds beyond the integer range.
