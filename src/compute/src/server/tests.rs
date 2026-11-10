@@ -14,29 +14,22 @@ use std::pin::Pin;
 use std::sync::mpsc as std_mpsc;
 use std::task::Waker;
 
-use differential_dataflow::trace::TraceReader;
 use itertools::Itertools;
-use mz_compute_types::dataflows::RenderDataflowDescription;
-use mz_expr::MirScalarExpr;
 use mz_repr::{GlobalId, Row, Timestamp};
-use mz_storage_types::controller::CollectionMetadata;
 
 use super::*;
-use crate::command_progress::CommandProgress;
 use crate::compute_state::Peer;
 use crate::compute_state::tests::{
-    LivePublisher, constant_index_dataflow, expect_peek_response, index_check,
-    maintained_index_dataflow, make_peek, peek_row, response_rows, row,
-    test_compute_instance_context, test_persist_clients,
+    constant_index_dataflow, make_peek, peek_row, response_rows, test_compute_instance_context,
+    test_persist_clients,
 };
-use crate::reconcile_barrier::{BarrierSide, ConnectionOrder, ReconcileBarrier};
 use crate::sharing::{CreationNumber, PeerIndex};
 
 /// A worker of `role` on `timely_worker` with a compute state already created, as after a
 /// `CreateInstance`, and the senders of its commands and receiver of its responses.
 ///
-/// Renders the command channel the way `run_worker` does, with `registry`'s connection order, and
-/// takes `registry`'s end of the command progress link that `role` takes.
+/// Renders the command channel the way `run_worker` does, and takes `registry`'s end of the command
+/// progress link that `role` takes.
 fn test_worker<'w>(
     timely_worker: &'w mut TimelyWorker,
     role: ComputeRuntimeRole,
@@ -50,10 +43,7 @@ fn test_worker<'w>(
     let worker_id = timely_worker.index();
     let metrics_registry = MetricsRegistry::new();
     let metrics = ComputeMetrics::register_with(&metrics_registry, role).for_worker(worker_id);
-    let order = role
-        .barrier_side()
-        .map(|_| registry.connection_order().clone());
-    let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, None, order);
+    let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, None);
     let (command_progress, maintenance_progress) =
         command_progress_ends(timely_worker, role, &registry);
     let (resp_tx, resp_rx) = mpsc::unbounded_channel();
@@ -121,327 +111,6 @@ fn drop_dataflows(worker: &mut TimelyWorker) {
     }
 }
 
-/// A reconnect recreates an index at the same `as_of`, and the maintenance runtime is held before
-/// its drop phase while the interactive runtime reconciles. The interactive worker must wait at the
-/// barrier, so its new peer binds the slot the new incarnation publishes into, and a read at a time
-/// only the new incarnation reaches is served. Bound to the old incarnation's slot, the read would
-/// wait on that incarnation's frozen view forever.
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)]
-fn the_interactive_runtime_creates_only_after_maintenance_dropped_the_old_incarnation() {
-    let id = GlobalId::User(1);
-    let on_id = GlobalId::User(2);
-    let order = ConnectionOrder::default();
-    let nonces = [Uuid::new_v4(), Uuid::new_v4()];
-    for nonce in nonces {
-        order.record(nonce);
-    }
-    let registry = ArrangementSharingRegistry::per_worker(1, &order)
-        .pop()
-        .expect("one registry");
-    let barrier = registry.reconcile_barrier().clone();
-    let (_rt, persist_clients) = test_persist_clients();
-
-    // Signals that the interactive worker finished reconciling the second connection. The
-    // receivers are behind a `Mutex` because a timely worker closure must be `Sync`.
-    let (reconciled_tx, reconciled_rx) = std_mpsc::channel();
-    let reconciled_rx = Mutex::new(reconciled_rx);
-    // Signals that the new incarnation sealed through 2.
-    let (sealed_tx, sealed_rx) = std_mpsc::channel();
-    let sealed_rx = Mutex::new(sealed_rx);
-    // Signals that the interactive worker read. A channel of its own, because the wait for the
-    // reconciliation may time out and leave that signal for a later receive.
-    let (read_tx, read_rx) = std_mpsc::channel();
-    let read_rx = Mutex::new(read_rx);
-
-    // The maintenance runtime's worker, reduced to its publication, its barrier arrivals, and its
-    // report of the commands it applied.
-    let maintenance = std::thread::spawn({
-        let registry = registry.clone();
-        let barrier = barrier.clone();
-        move || {
-            timely::execute_directly(move |worker| {
-                let mut progress = CommandProgress::new(registry.take_command_progress_pusher());
-                let mut old = LivePublisher::new(worker, &registry, id);
-                old.insert(vec![(row(1), row(10))]);
-                old.seal_to(worker, Timestamp::new(1));
-                barrier.arrive(BarrierSide::Maintenance, 0);
-
-                // Held before the second connection's drop phase until the interactive worker
-                // finished its drops. Waiting a little longer gives an interactive worker that
-                // does not wait at the barrier the time to create.
-                while barrier.arrived(BarrierSide::Interactive) < Some(1) {
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                let reconciled_rx = reconciled_rx.lock().expect("poisoned");
-                let created_early = reconciled_rx
-                    .recv_timeout(Duration::from_millis(200))
-                    .is_ok();
-
-                drop(old);
-                worker.step();
-                barrier.arrive(BarrierSide::Maintenance, 1);
-
-                // The new incarnation, which the second connection's `CreateDataflow` numbered 2
-                // creates, holds the old row and one only it reaches, at time 1.
-                let check = index_check(on_id, Timestamp::MIN, 1);
-                let mut new = LivePublisher::new_at(worker, &registry, id, 2, check);
-                new.insert(vec![(row(1), row(10))]);
-                new.seal_to(worker, Timestamp::new(1));
-                new.insert(vec![(row(2), row(20))]);
-                new.seal_to(worker, Timestamp::new(2));
-                progress.applied(3);
-                sealed_tx.send(()).expect("interactive worker alive");
-                // Keeps the new incarnation published until the interactive worker read it.
-                let _ = read_rx.lock().expect("poisoned").recv();
-                created_early
-            })
-        }
-    });
-
-    let (created_early, rows) = timely::execute_directly(move |timely_worker| {
-        let (mut worker, cmd_tx, mut resp_rx) = test_worker(
-            timely_worker,
-            ComputeRuntimeRole::Interactive,
-            registry,
-            persist_clients,
-        );
-
-        let first = maintained_index_dataflow(id, on_id, Timestamp::MIN);
-        cmd_tx.send((ComputeCommand::CreateDataflow(Box::new(first)), nonces[0]));
-        cmd_tx.send((ComputeCommand::InitializationComplete, nonces[0]));
-        assert_eq!(reconcile_next_connection(&mut worker), nonces[0]);
-
-        // Same id and `as_of`, another key: the first incarnation's peer is dropped.
-        let mut second = maintained_index_dataflow(id, on_id, Timestamp::MIN);
-        second.index_exports.get_mut(&id).expect("exported").0.key = vec![MirScalarExpr::column(1)];
-        cmd_tx.send((ComputeCommand::CreateDataflow(Box::new(second)), nonces[1]));
-        cmd_tx.send((ComputeCommand::InitializationComplete, nonces[1]));
-        assert_eq!(reconcile_next_connection(&mut worker), nonces[1]);
-        let _ = reconciled_tx.send(());
-
-        sealed_rx
-            .lock()
-            .expect("poisoned")
-            .recv()
-            .expect("maintenance worker alive");
-        let rows = serve_peek(&mut worker, &mut resp_rx, 3, make_peek(Timestamp::new(1)));
-        // Releases the maintenance worker.
-        let _ = read_tx.send(());
-
-        drop(worker);
-        drop(cmd_tx);
-        drop_dataflows(timely_worker);
-        (
-            maintenance.join().expect("maintenance worker panicked"),
-            rows,
-        )
-    });
-
-    assert!(
-        !created_early,
-        "the interactive worker created before maintenance dropped the old incarnation"
-    );
-    assert_eq!(
-        rows,
-        Some(vec![(peek_row(1, 10), 1), (peek_row(2, 20), 1)]),
-        "the read at 1 is served from the new incarnation"
-    );
-}
-
-/// The controller sends a connection's `Hello` to every process but the commands workers reconcile
-/// to process 0 only, so a worker's own process may not have recorded the connection when the
-/// worker reconciles it. Worker 1 stands for a worker of such a process: its registry's order is
-/// empty, and it reconciles with the position its commands carry from worker 0.
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)]
-fn a_worker_whose_process_never_recorded_the_connection_reconciles() {
-    const WORKERS: usize = 2;
-    let nonce = Uuid::new_v4();
-    // A connection the process accepted before this one, so the position is not the default 0.
-    let earlier = Uuid::new_v4();
-    let recorded = ConnectionOrder::default();
-    recorded.record(earlier);
-    recorded.record(nonce);
-    let registries: Vec<_> = (0..WORKERS)
-        .map(|worker| {
-            let order = if worker == 0 {
-                recorded.clone()
-            } else {
-                ConnectionOrder::default()
-            };
-            ArrangementSharingRegistry::per_worker(1, &order)
-                .pop()
-                .expect("one registry")
-        })
-        .collect();
-    // The maintenance runtime finished the connection's drops on both pairs.
-    for registry in &registries {
-        registry
-            .reconcile_barrier()
-            .arrive(BarrierSide::Maintenance, 1);
-    }
-    let (_rt, persist_clients) = test_persist_clients();
-
-    let arrivals = Arc::new(Mutex::new(BTreeMap::new()));
-    timely::execute(timely::Config::process(WORKERS), {
-        let arrivals = Arc::clone(&arrivals);
-        move |timely_worker| {
-            let index = timely_worker.index();
-            let registry = registries[index].clone();
-            let (mut worker, cmd_tx, _resp_rx) = test_worker(
-                timely_worker,
-                ComputeRuntimeRole::Interactive,
-                registry.clone(),
-                Arc::clone(&persist_clients),
-            );
-            if index == 0 {
-                cmd_tx.send((ComputeCommand::InitializationComplete, nonce));
-            }
-            assert_eq!(reconcile_next_connection(&mut worker), nonce);
-            arrivals.lock().expect("poisoned").insert(
-                index,
-                registry
-                    .reconcile_barrier()
-                    .arrived(BarrierSide::Interactive),
-            );
-            drop(worker);
-            drop(cmd_tx);
-            drop_dataflows(timely_worker);
-        }
-    })
-    .expect("timely computation succeeds");
-
-    assert_eq!(
-        *arrivals.lock().expect("poisoned"),
-        BTreeMap::from([(0, Some(1)), (1, Some(1))]),
-        "both workers arrive at the position worker 0's order assigns"
-    );
-}
-
-/// A maintained dataflow exporting index `User(1)` on `User(2)`, keyed by column `key`, with
-/// `as_of`.
-fn index_dataflow(key: usize, as_of: u64) -> RenderDataflowDescription<CollectionMetadata> {
-    let id = GlobalId::User(1);
-    let mut dataflow = maintained_index_dataflow(id, GlobalId::User(2), Timestamp::new(as_of));
-    dataflow.index_exports.get_mut(&id).expect("exported").0.key = vec![MirScalarExpr::column(key)];
-    dataflow
-}
-
-/// Arrives at the barrier as the maintenance runtime after the drops of the connection at
-/// `position`, and waits until it may create.
-fn maintenance_passes(barrier: &ReconcileBarrier, position: u64) {
-    barrier.arrive(BarrierSide::Maintenance, position);
-    while !barrier.passable(BarrierSide::Maintenance, position) {
-        std::thread::sleep(Duration::from_millis(1));
-    }
-}
-
-/// Runs the two runtimes of a process over the connections `nonces`.
-///
-/// `maintenance` stands for the maintenance runtime's reconciliations and returns the incarnation
-/// of index `User(1)` it publishes after the last one, which then reports every command through
-/// `applied` applied. That incarnation then holds `(1, 10)` and `(2, 20)` at times before 3 and is
-/// sealed through 4. `interactive` drives the interactive worker, whose commands it sends through
-/// the command channel sender it receives.
-///
-/// Returns the upper of the interactive runtime's trace of the index once maintenance sealed and
-/// the interactive runtime bound it, and the rows of a read at 3, if it was served.
-fn read_after_the_runtimes_reconciled<M, I>(
-    nonces: &[Uuid],
-    applied: CommandNumber,
-    maintenance: M,
-    interactive: I,
-) -> (Antichain<Timestamp>, Option<Vec<(Row, usize)>>)
-where
-    M: FnOnce(&mut TimelyWorker, &ArrangementSharingRegistry) -> LivePublisher
-        + Send
-        + Sync
-        + 'static,
-    I: FnOnce(&mut Worker<'_>, command_channel::Sender) + Send + Sync + 'static,
-{
-    let id = GlobalId::User(1);
-    let order = ConnectionOrder::default();
-    for nonce in nonces {
-        order.record(*nonce);
-    }
-    let registry = ArrangementSharingRegistry::per_worker(1, &order)
-        .pop()
-        .expect("one registry");
-    let (_rt, persist_clients) = test_persist_clients();
-
-    // Signals that the maintenance worker sealed its incarnation through 4. The receivers are
-    // behind a `Mutex` because a timely worker closure must be `Sync`.
-    let (sealed_tx, sealed_rx) = std_mpsc::channel();
-    let sealed_rx = Mutex::new(sealed_rx);
-    // Signals that the interactive worker read.
-    let (read_tx, read_rx) = std_mpsc::channel();
-    let read_rx = Mutex::new(read_rx);
-
-    let maintenance = std::thread::spawn({
-        let registry = registry.clone();
-        move || {
-            timely::execute_directly(move |worker| {
-                let mut progress = CommandProgress::new(registry.take_command_progress_pusher());
-                let mut last = maintenance(worker, &registry);
-                last.seal_to(worker, Timestamp::new(2));
-                last.insert(vec![(row(2), row(20))]);
-                last.seal_to(worker, Timestamp::new(4));
-                progress.applied(applied);
-                sealed_tx.send(()).expect("interactive worker alive");
-                // Keeps the incarnation published until the interactive worker read it.
-                let _ = read_rx.lock().expect("poisoned").recv();
-            })
-        }
-    });
-
-    let result = timely::execute_directly(move |timely_worker| {
-        let (mut worker, cmd_tx, mut resp_rx) = test_worker(
-            timely_worker,
-            ComputeRuntimeRole::Interactive,
-            registry,
-            persist_clients,
-        );
-        interactive(&mut worker, cmd_tx);
-
-        sealed_rx
-            .lock()
-            .expect("poisoned")
-            .recv()
-            .expect("maintenance worker alive");
-        assert!(
-            await_maintenance_passed(&mut worker, applied),
-            "maintenance applied the last connection"
-        );
-        let active = worker.activate_compute().expect("compute state");
-        active.compute_state.bind_peers();
-        let mut upper = Antichain::new();
-        active
-            .compute_state
-            .traces
-            .get_mut(&id)
-            .expect("the interactive runtime holds the index")
-            .oks_mut()
-            .read_upper(&mut upper);
-        worker.handle_command(
-            ComputeCommand::Peek(Box::new(make_peek(Timestamp::new(3)))),
-            None,
-        );
-        let mut active = worker.activate_compute().expect("compute state");
-        active.process_peeks();
-        let served = active.compute_state.queued_peeks.is_empty();
-        let rows = served.then(|| response_rows(&expect_peek_response(&mut resp_rx)));
-        // Releases the maintenance worker.
-        let _ = read_tx.send(());
-
-        drop(worker);
-        drop_dataflows(timely_worker);
-        (upper, rows)
-    });
-    maintenance.join().expect("maintenance worker panicked");
-    result
-}
-
 /// Runs `worker` through the commands of its current connection and the reconciliation of the
 /// next one, and returns the next connection's nonce.
 fn serve_until_next_connection(worker: &mut Worker<'_>) -> Uuid {
@@ -505,78 +174,138 @@ fn pending_response(nonce: Uuid) -> (ComputeResponse, Uuid) {
     )
 }
 
+/// Hands a channel adapter over `cmd_tx` the controller's two connections `nonces`, and runs
+/// `worker` through them. The first connection initializes, and the controller then drops it and
+/// creates index `User(1)` on it, which the second connection carries at a later `as_of`, so a
+/// worker that received the first connection's `CreateDataflow` retains it. With `response_pending`
+/// the worker has a response for the first connection pending when the controller drops it, which
+/// the adapter fails to send before it reads the `CreateDataflow`.
+///
+/// Returns the adapter, which keeps the command channel's input open while it lives.
+fn reconcile_through_adapter(
+    worker: &mut Worker<'_>,
+    cmd_tx: command_channel::Sender,
+    nonces: [Uuid; 2],
+    response_pending: bool,
+) -> Pin<Box<impl Future<Output = ()> + use<>>> {
+    let create = |as_of| {
+        ComputeCommand::CreateDataflow(Box::new(constant_index_dataflow(
+            GlobalId::User(1),
+            GlobalId::User(2),
+            &[(1, 10), (2, 20)],
+            Timestamp::new(as_of),
+            0,
+        )))
+    };
+    let (client_tx, client_rx) = mpsc::unbounded_channel();
+    let (worker_resp_tx, worker_resp_rx) = mpsc::unbounded_channel();
+    let mut adapter = Box::pin(channel_adapter(client_rx, cmd_tx, worker_resp_rx));
+
+    let (first_tx, first_rx) = connect(&client_tx, nonces[0]);
+    first_tx
+        .send(ComputeCommand::InitializationComplete)
+        .expect("adapter alive");
+    poll_adapter(adapter.as_mut());
+    assert_eq!(reconcile_next_connection(worker), nonces[0]);
+
+    // The controller dropped the connection, and the adapter reads the worker's response, if one
+    // is pending, before the `CreateDataflow` the controller sent before it dropped the connection.
+    drop(first_rx);
+    if response_pending {
+        worker_resp_tx
+            .send(pending_response(nonces[0]))
+            .expect("adapter alive");
+    }
+    poll_adapter(adapter.as_mut());
+    first_tx
+        .send(create(1))
+        .expect("the adapter still reads the connection's commands");
+    drop(first_tx);
+
+    let (last_tx, _last_rx) = connect(&client_tx, nonces[1]);
+    last_tx.send(create(3)).expect("adapter alive");
+    last_tx
+        .send(ComputeCommand::InitializationComplete)
+        .expect("adapter alive");
+    poll_adapter(adapter.as_mut());
+    assert_eq!(serve_until_next_connection(worker), nonces[1]);
+    adapter
+}
+
 /// The controller created the index in normal operation on the first connection and then dropped
 /// the connection while the interactive worker had a response for it pending. The interactive
 /// runtime's channel adapter fails to send the response before it reads the `CreateDataflow`, and
-/// must still forward it, or the interactive runtime reconciles the last connection without the
-/// incarnation the maintenance runtime retains, and its peer binds a slot nobody publishes into.
+/// must still forward it, as the maintenance runtime's adapter does, or the interactive runtime
+/// reconciles the last connection without the incarnation the maintenance runtime retains, and its
+/// peer waits on a slot nobody publishes into.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 fn after_a_dropped_connection_the_interactive_runtime_reads_the_incarnation_maintenance_retained() {
     let nonces = [Uuid::new_v4(), Uuid::new_v4()];
-    // The first connection's `InitializationComplete` is numbered 0 and its `CreateDataflow` 1.
-    // The last connection's two commands are numbered 2 and 3.
-    assert_served(read_after_the_runtimes_reconciled(
-        &nonces,
-        3,
-        |worker, registry| {
-            maintenance_passes(registry.reconcile_barrier(), 0);
-            // Created in normal operation on the first connection.
-            let check = index_check(GlobalId::User(2), Timestamp::new(1), 0);
-            let mut created = LivePublisher::new_at(worker, registry, GlobalId::User(1), 1, check);
-            created.seal_to(worker, Timestamp::new(1));
-            created.insert(vec![(row(1), row(10))]);
-            // The last connection carries the index at a later `as_of`, which is compatible, so
-            // maintenance retains it.
-            maintenance_passes(registry.reconcile_barrier(), 1);
-            created
-        },
-        move |worker, cmd_tx| {
-            let create = |as_of| ComputeCommand::CreateDataflow(Box::new(index_dataflow(0, as_of)));
-            let (client_tx, client_rx) = mpsc::unbounded_channel();
-            let (worker_resp_tx, worker_resp_rx) = mpsc::unbounded_channel();
-            let mut adapter = Box::pin(channel_adapter(client_rx, cmd_tx, worker_resp_rx));
+    let registry = ArrangementSharingRegistry::new();
+    let (_rt, persist_clients) = test_persist_clients();
+    // Signals that the interactive worker is done. The receiver is behind a `Mutex` because a
+    // timely worker closure must be `Sync`.
+    let (done_tx, done_rx) = std_mpsc::channel();
+    let done_rx = Mutex::new(done_rx);
 
-            let (first_tx, first_rx) = connect(&client_tx, nonces[0]);
-            first_tx
-                .send(ComputeCommand::InitializationComplete)
-                .expect("adapter alive");
-            poll_adapter(adapter.as_mut());
-            assert_eq!(reconcile_next_connection(worker), nonces[0]);
+    let maintenance = std::thread::spawn({
+        let registry = registry.clone();
+        let persist_clients = Arc::clone(&persist_clients);
+        move || {
+            timely::execute_directly(move |timely_worker| {
+                let (mut worker, cmd_tx, _resp_rx) = test_worker(
+                    timely_worker,
+                    ComputeRuntimeRole::Maintenance,
+                    registry,
+                    persist_clients,
+                );
+                let adapter = reconcile_through_adapter(&mut worker, cmd_tx, nonces, false);
+                let done_rx = done_rx.lock().expect("poisoned");
+                while done_rx.try_recv().is_err() {
+                    worker
+                        .timely_worker
+                        .step_or_park(Some(Duration::from_millis(1)));
+                    assert!(
+                        worker.handle_pending_commands().is_ok(),
+                        "the connection does not change"
+                    );
+                }
+                drop(worker);
+                drop(adapter);
+                drop_dataflows(timely_worker);
+            })
+        }
+    });
 
-            // The controller dropped the connection, and the adapter reads the worker's response
-            // before the `CreateDataflow` the controller sent before it dropped the connection.
-            drop(first_rx);
-            worker_resp_tx
-                .send(pending_response(nonces[0]))
-                .expect("adapter alive");
-            poll_adapter(adapter.as_mut());
-            first_tx
-                .send(create(1))
-                .expect("the adapter still reads the connection's commands");
-            drop(first_tx);
+    let (rows, creation) = timely::execute_directly(move |timely_worker| {
+        let (mut worker, cmd_tx, mut resp_rx) = test_worker(
+            timely_worker,
+            ComputeRuntimeRole::Interactive,
+            registry,
+            persist_clients,
+        );
+        let adapter = reconcile_through_adapter(&mut worker, cmd_tx, nonces, true);
+        // The first connection's `InitializationComplete` is numbered 0 and its `CreateDataflow`
+        // 1. The last connection's two commands are numbered 2 and 3.
+        let rows = serve_peek(&mut worker, &mut resp_rx, 3, make_peek(Timestamp::new(3)));
+        let creation = peer_index(&worker, &GlobalId::User(1)).creation();
+        let _ = done_tx.send(());
+        drop(worker);
+        drop(adapter);
+        drop_dataflows(timely_worker);
+        (rows, creation)
+    });
+    maintenance.join().expect("maintenance worker panicked");
 
-            let (last_tx, _last_rx) = connect(&client_tx, nonces[1]);
-            last_tx.send(create(3)).expect("adapter alive");
-            last_tx
-                .send(ComputeCommand::InitializationComplete)
-                .expect("adapter alive");
-            poll_adapter(adapter.as_mut());
-            assert_eq!(serve_until_next_connection(worker), nonces[1]);
-        },
-    ));
-}
-
-/// Asserts the interactive runtime's view of the index after the runtimes reconciled: its trace
-/// has maintenance's upper, and a read at 3 is served from it.
-fn assert_served(result: (Antichain<Timestamp>, Option<Vec<(Row, usize)>>)) {
     assert_eq!(
-        result,
-        (
-            Antichain::from_elem(Timestamp::new(4)),
-            Some(vec![(peek_row(1, 10), 1), (peek_row(2, 20), 1)]),
-        ),
-        "the interactive peer has maintenance's upper and a read at 3 is served from it"
+        creation, 1,
+        "the interactive runtime retains the incarnation the first connection created"
+    );
+    assert_eq!(
+        rows,
+        Some(vec![(peek_row(1, 10), 1), (peek_row(2, 20), 1)]),
+        "the read is served from the retained incarnation"
     );
 }
 
@@ -633,7 +362,7 @@ fn after_a_failed_response_send_an_adapter_forwards_the_connection_except_its_pe
         move |timely_worker| {
             let mut forwarded = Vec::new();
             for failed_send in [true, false] {
-                let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, None, None);
+                let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, None);
                 let (worker_resp_tx, worker_resp_rx) = mpsc::unbounded_channel();
                 let (client_tx, client_rx) = mpsc::unbounded_channel();
                 let mut adapter = Box::pin(channel_adapter(client_rx, cmd_tx, worker_resp_rx));
@@ -702,15 +431,6 @@ fn await_maintenance_passed(worker: &mut Worker<'_>, number: CommandNumber) -> b
     maintenance_progress(worker).passed(number)
 }
 
-/// A registry pairing one maintenance and one interactive worker over the connection `nonce`.
-fn paired_registry(nonce: Uuid) -> ArrangementSharingRegistry {
-    let order = ConnectionOrder::default();
-    order.record(nonce);
-    ArrangementSharingRegistry::per_worker(1, &order)
-        .pop()
-        .expect("one registry")
-}
-
 /// A numbered command every worker applies without any state to apply it to.
 fn update_configuration() -> ComputeCommand {
     ComputeCommand::UpdateConfiguration(Box::default())
@@ -724,7 +444,7 @@ fn update_configuration() -> ComputeCommand {
 #[cfg_attr(miri, ignore)]
 fn maintenance_progress_passes_a_connection_only_after_its_create_phase() {
     let nonce = Uuid::new_v4();
-    let registry = paired_registry(nonce);
+    let registry = ArrangementSharingRegistry::new();
     let (_rt, persist_clients) = test_persist_clients();
     let commands = || {
         vec![
@@ -832,7 +552,7 @@ fn maintenance_progress_passes_a_connection_only_after_its_create_phase() {
 fn maintenance_progress_follows_commands_in_normal_operation() {
     let nonce = Uuid::new_v4();
     let id = GlobalId::User(1);
-    let registry = paired_registry(nonce);
+    let registry = ArrangementSharingRegistry::new();
     let (_rt, persist_clients) = test_persist_clients();
 
     // Signals that the interactive worker observed the reconciled connection. The receivers are
@@ -869,7 +589,7 @@ fn maintenance_progress_follows_commands_in_normal_operation() {
                     .as_mut()
                     .expect("compute state")
                     .peers
-                    .insert(id, Peer::Export(0));
+                    .insert(id, Peer::Export);
                 cmd_tx.send((
                     ComputeCommand::AllowCompaction {
                         id,
@@ -937,21 +657,15 @@ type CreationsPerConnection = Vec<(Option<CreationNumber>, Option<CreationNumber
 /// Index `X` is created on the first connection and resent unchanged on every later one, so both
 /// runtimes retain it. Index `Y` is resent with another key on the second connection, which
 /// recreates it, and unchanged on the third, which retains the recreated incarnation. After every
-/// reconciliation, the maintenance runtime's collection and the interactive runtime's peer of
+/// reconciliation, the maintenance runtime's publication and the interactive runtime's peer of
 /// each index must carry the number of the `CreateDataflow` that created its live incarnation.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 fn creation_numbers_agree_across_retaining_and_recreating_reconnects() {
     let x = GlobalId::User(1);
     let y = GlobalId::User(3);
-    let order = ConnectionOrder::default();
     let nonces = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
-    for nonce in nonces {
-        order.record(nonce);
-    }
-    let registry = ArrangementSharingRegistry::per_worker(1, &order)
-        .pop()
-        .expect("one registry");
+    let registry = ArrangementSharingRegistry::new();
     let (_rt, persist_clients) = test_persist_clients();
 
     // Each connection sends `X`, `Y` and `InitializationComplete`, and the sequencer numbers
@@ -984,7 +698,7 @@ fn creation_numbers_agree_across_retaining_and_recreating_reconnects() {
                     persist_clients: Arc<PersistClientCache>|
           -> CreationsPerConnection {
         let (mut worker, cmd_tx, _resp_rx) =
-            test_worker(timely_worker, role, registry, persist_clients);
+            test_worker(timely_worker, role, registry.clone(), persist_clients);
         let mut creations = Vec::new();
         for (nonce, commands) in nonces.into_iter().zip_eq(connections()) {
             for command in commands {
@@ -992,9 +706,18 @@ fn creation_numbers_agree_across_retaining_and_recreating_reconnects() {
             }
             assert_eq!(reconcile_next_connection(&mut worker), nonce);
             let compute_state = worker.compute_state.as_ref().expect("compute state");
+            // The interactive runtime binds by its peer's number, and the maintenance runtime
+            // publishes under its collection's number.
             let creation = |id| match role {
-                ComputeRuntimeRole::Interactive => compute_state.peers.get(&id).map(Peer::creation),
-                _ => compute_state.collections.get(&id).and_then(|c| c.creation),
+                ComputeRuntimeRole::Interactive => match compute_state.peers.get(&id) {
+                    Some(Peer::Index(peer)) => Some(peer.creation()),
+                    _ => None,
+                },
+                _ => compute_state
+                    .collections
+                    .contains_key(&id)
+                    .then(|| registry.newest_creation(&id))
+                    .flatten(),
             };
             creations.push((creation(x), creation(y)));
         }
@@ -1031,7 +754,7 @@ fn creation_numbers_agree_across_retaining_and_recreating_reconnects() {
     let expected = vec![(Some(0), Some(1)), (Some(0), Some(4)), (Some(0), Some(4))];
     assert_eq!(
         maintenance, expected,
-        "the maintenance runtime's collections carry the numbers of their live incarnations"
+        "the maintenance runtime publishes its live incarnations under their numbers"
     );
     assert_eq!(
         interactive, expected,
@@ -1094,7 +817,7 @@ fn reconcile_connection(
 }
 
 /// Runs a real maintenance worker and a real interactive worker of one process, sharing one
-/// registry, over the connections `commands`, which the process records in order.
+/// registry, over the connections `commands`.
 ///
 /// `maintenance` drives the maintenance worker through the connections, after which it serves until
 /// `interactive`, which drives the interactive worker, returns.
@@ -1115,13 +838,7 @@ where
         .into_iter()
         .map(|commands| (Uuid::new_v4(), commands))
         .collect();
-    let order = ConnectionOrder::default();
-    for (nonce, _) in &connections {
-        order.record(*nonce);
-    }
-    let registry = ArrangementSharingRegistry::per_worker(1, &order)
-        .pop()
-        .expect("one registry");
+    let registry = ArrangementSharingRegistry::new();
     let (_rt, persist_clients) = test_persist_clients();
     // Signals that the interactive worker is done. The receiver is behind a `Mutex` because a
     // timely worker closure must be `Sync`.
@@ -1230,6 +947,205 @@ fn a_read_of_an_index_recreated_at_the_same_as_of_binds_the_new_incarnation() {
         rows,
         Some(vec![(peek_row(3, 3), 1), (peek_row(4, 4), 1)]),
         "the read is served from the new incarnation"
+    );
+}
+
+/// A `CreateDataflow` of index `User(3)` on `User(4)` over the constant `rows`, keyed by column 0,
+/// at the minimum.
+fn create_z(rows: &[(i64, i64)]) -> ComputeCommand {
+    ComputeCommand::CreateDataflow(Box::new(constant_index_dataflow(
+        GlobalId::User(3),
+        GlobalId::User(4),
+        rows,
+        Timestamp::MIN,
+        0,
+    )))
+}
+
+/// A peek of index `id` at `timestamp`, like [`make_peek`].
+fn make_peek_of(id: GlobalId, timestamp: Timestamp) -> mz_compute_client::protocol::command::Peek {
+    let mut peek = make_peek(timestamp);
+    peek.target = mz_compute_client::protocol::command::PeekTarget::Index { id };
+    peek
+}
+
+/// The second connection retains `Z` and recreates `X` with other rows at the same `as_of` and
+/// key, so both incarnations of `X` have the same check. The maintenance worker is held before it
+/// reconciles the second connection and keeps serving the first incarnation of `X`. The
+/// interactive worker reconciles the second connection without waiting for maintenance and serves
+/// a read of `Z`. Its new peer of `X` stays off the first incarnation's live slot, binds the second
+/// incarnation's once maintenance reconciled, and reads that incarnation's rows.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn an_interactive_peek_is_served_before_maintenance_reconciles() {
+    let x = GlobalId::User(1);
+    let z = GlobalId::User(3);
+    let z_rows = [(5, 50)];
+    let new_x_rows = [(3, 30), (4, 40)];
+    // Numbered 0, 1 and 2, then 3, 4 and 5.
+    let commands = vec![
+        vec![
+            create_z(&z_rows),
+            create_x(&[(1, 10), (2, 20)], 0),
+            ComputeCommand::InitializationComplete,
+        ],
+        vec![
+            create_z(&z_rows),
+            create_x(&new_x_rows, 0),
+            ComputeCommand::InitializationComplete,
+        ],
+    ];
+    // Releases the maintenance worker into the second connection's reconciliation. The receiver
+    // is behind a `Mutex` because the maintenance closure must be `Sync`.
+    let (release_tx, release_rx) = std_mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    // Carries the interactive worker's read of `Z` on the second connection.
+    let (z_read_tx, z_read_rx) = std_mpsc::channel();
+
+    let runtimes = std::thread::spawn(move || {
+        with_both_runtimes(
+            commands,
+            move |worker, cmd_tx, connections| {
+                reconcile_connection(worker, cmd_tx, &connections[0]);
+                // Keeps computing the first connection's incarnations while held.
+                let release_rx = release_rx.lock().expect("poisoned");
+                while release_rx.try_recv().is_err() {
+                    worker
+                        .timely_worker
+                        .step_or_park(Some(Duration::from_millis(1)));
+                }
+                reconcile_connection(worker, cmd_tx, &connections[1]);
+            },
+            move |worker, cmd_tx, resp_rx, connections| {
+                reconcile_connection(worker, cmd_tx, &connections[0]);
+                // Binds both peers of the first connection.
+                let first = serve_peek(worker, resp_rx, 2, make_peek_of(z, Timestamp::MIN));
+                assert_eq!(first, Some(vec![(peek_row(5, 50), 1)]));
+                assert!(
+                    peer_index(worker, &x).is_bound(),
+                    "the first peer of X bound"
+                );
+
+                reconcile_connection(worker, cmd_tx, &connections[1]);
+                let z_read = serve_peek(worker, resp_rx, 2, make_peek_of(z, Timestamp::MIN));
+                assert!(
+                    !peer_index(worker, &x).is_bound(),
+                    "the new peer of X bound before maintenance reconciled"
+                );
+                z_read_tx.send(z_read).expect("test alive");
+                serve_peek(worker, resp_rx, 5, make_peek_of(x, Timestamp::MIN))
+            },
+        )
+    });
+
+    let z_read = z_read_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the read of Z is served while maintenance has not reconciled");
+    release_tx.send(()).expect("maintenance worker alive");
+    let x_read = runtimes.join().expect("a runtime panicked");
+    assert_eq!(
+        z_read,
+        Some(vec![(peek_row(5, 50), 1)]),
+        "the retained Z serves the read"
+    );
+    assert_eq!(
+        x_read,
+        Some(vec![(peek_row(3, 30), 1), (peek_row(4, 40), 1)]),
+        "the read of X is served from the second incarnation"
+    );
+}
+
+/// Each connection recreates `X` with other rows at the same `as_of` and key, so all three
+/// incarnations have the same check. The maintenance worker reconciles the second and third
+/// connections before the interactive worker reconciles the second, while the interactive peer of
+/// the first incarnation keeps that incarnation's slot alive. The second incarnation's slot is then
+/// gone and the third's is live, and the peer of the second incarnation binds neither. The peer of
+/// the third binds the third's slot and reads its rows.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn a_peer_of_an_incarnation_maintenance_already_replaced_binds_no_other_incarnation() {
+    let x = GlobalId::User(1);
+    let first_rows = [(1, 10), (2, 20)];
+    let third_rows = [(5, 50), (6, 60)];
+    // Numbered 0 and 1, then 2 and 3, then 4 and 5.
+    let commands = vec![
+        vec![
+            create_x(&first_rows, 0),
+            ComputeCommand::InitializationComplete,
+        ],
+        vec![
+            create_x(&[(3, 30), (4, 40)], 0),
+            ComputeCommand::InitializationComplete,
+        ],
+        vec![
+            create_x(&third_rows, 0),
+            ComputeCommand::InitializationComplete,
+        ],
+    ];
+    // Signals that the interactive worker bound and read the first incarnation. The receiver is
+    // behind a `Mutex` because the maintenance closure must be `Sync`.
+    let (bound_tx, bound_rx) = std_mpsc::channel();
+    let bound_rx = Mutex::new(bound_rx);
+    let (first, second_bound, third, creation) = with_both_runtimes(
+        commands,
+        move |worker, cmd_tx, connections| {
+            reconcile_connection(worker, cmd_tx, &connections[0]);
+            let bound_rx = bound_rx.lock().expect("poisoned");
+            while bound_rx.try_recv().is_err() {
+                worker
+                    .timely_worker
+                    .step_or_park(Some(Duration::from_millis(1)));
+            }
+            reconcile_all(worker, cmd_tx, &connections[1..]);
+        },
+        move |worker, cmd_tx, resp_rx, connections| {
+            reconcile_connection(worker, cmd_tx, &connections[0]);
+            let first = serve_peek(worker, resp_rx, 1, make_peek(Timestamp::MIN));
+            assert!(peer_index(worker, &x).is_bound(), "the first peer bound");
+            bound_tx.send(()).expect("maintenance worker alive");
+            assert!(
+                await_maintenance_passed(worker, 5),
+                "maintenance reconciled every connection"
+            );
+
+            reconcile_connection(worker, cmd_tx, &connections[1]);
+            for _ in 0..10 {
+                worker
+                    .compute_state
+                    .as_mut()
+                    .expect("compute state")
+                    .bind_peers();
+                worker.timely_worker.step();
+            }
+            let second_bound = peer_index(worker, &x).is_bound();
+
+            reconcile_connection(worker, cmd_tx, &connections[2]);
+            let third = serve_peek(worker, resp_rx, 5, make_peek(Timestamp::MIN));
+            (
+                first,
+                second_bound,
+                third,
+                peer_index(worker, &x).creation(),
+            )
+        },
+    );
+    assert_eq!(
+        first,
+        Some(vec![(peek_row(1, 10), 1), (peek_row(2, 20), 1)]),
+        "the first incarnation serves the first read"
+    );
+    assert!(
+        !second_bound,
+        "the peer of the second incarnation bound the slot of another incarnation"
+    );
+    assert_eq!(
+        creation, 4,
+        "the last peer carries the third creation number"
+    );
+    assert_eq!(
+        third,
+        Some(vec![(peek_row(5, 50), 1), (peek_row(6, 60), 1)]),
+        "the read is served from the third incarnation"
     );
 }
 
@@ -1375,9 +1291,7 @@ fn binding_waits_until_every_maintenance_worker_applied_the_creating_command() {
     const WORKERS: usize = 2;
     let x = GlobalId::User(1);
     let nonce = Uuid::new_v4();
-    let order = ConnectionOrder::default();
-    order.record(nonce);
-    let registries = ArrangementSharingRegistry::per_worker(WORKERS, &order);
+    let registries = ArrangementSharingRegistry::per_worker(WORKERS);
     let (_rt, persist_clients) = test_persist_clients();
     // Numbered 0 and 1.
     let commands = vec![

@@ -235,10 +235,11 @@ impl ActivatorTrait for SharedSyncActivator {
     }
 
     fn ack(&self) {
-        // NOTE: A swap, not a store. When `activate` finds the flag set and skips waking the
-        // worker, this swap reads its write, which orders the activating thread's earlier push
-        // before the operator's subsequent read. A plain store would allow the operator to miss
-        // that push with no further wakeup coming.
+        // NOTE: A read-modify-write with `AcqRel`. When `activate` found the flag set and skipped
+        // waking the worker, its swap is earlier in the flag's modification order, so this swap
+        // reads it and synchronizes with it. What the activating thread wrote before `activate`
+        // then happens before the operator's subsequent reads. A store reads nothing and
+        // establishes no such edge.
         self.inner.pending.swap(false, Ordering::AcqRel);
     }
 

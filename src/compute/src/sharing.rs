@@ -44,7 +44,6 @@ use timely::progress::{Antichain, Timestamp as _};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::command_channel::CommandNumber;
-use crate::reconcile_barrier::{ConnectionOrder, ReconcileBarrier};
 use crate::shared_trace::{
     PeerErrsBinding, PeerErrsReader, PeerOksBinding, PeerOksReader, Published, SharedErrsHandle,
     SharedOksHandle, adopt_trace,
@@ -146,11 +145,6 @@ struct Inner {
 #[derive(Clone, Default)]
 pub struct ArrangementSharingRegistry {
     inner: Arc<Mutex<Inner>>,
-    /// The order of the process's controller connections, from which the command channel
-    /// sequencer assigns the barrier positions.
-    order: ConnectionOrder,
-    /// The barrier between the reconciliations of the two workers attached here.
-    barrier: ReconcileBarrier,
     /// The link over which the maintenance worker attached here reports the commands it applied
     /// to its interactive peer.
     command_progress: Arc<CommandProgressLink>,
@@ -184,8 +178,8 @@ impl SharedIndexArrangement {
     /// Releases the reading runtime's hold on this slot for good, unless a peer took the hold link
     /// before, for an incarnation that peer will never read.
     ///
-    /// Until a peer connects, the publisher holds the slot at the minimum, so a slot no peer binds
-    /// would otherwise keep its traces from compacting for as long as it is published.
+    /// A slot no peer binds would otherwise keep its traces from compacting for as long as it is
+    /// published, see the hold in [`ArrangementSharingRegistry::publish`].
     pub(crate) fn release_hold_link(&self) {
         if let Some(mut pusher) = self.take_hold_pusher() {
             pusher.advance_to(Antichain::new().borrow());
@@ -224,27 +218,9 @@ impl ArrangementSharingRegistry {
     }
 
     /// Creates one registry per local worker ordinal, for a process running `workers_per_process`
-    /// workers per runtime. Their reconciliation barriers order connections by `order`, which the
-    /// process's command multiplexer records in.
-    pub fn per_worker(workers_per_process: usize, order: &ConnectionOrder) -> Vec<Self> {
-        (0..workers_per_process)
-            .map(|_| ArrangementSharingRegistry {
-                inner: Default::default(),
-                order: order.clone(),
-                barrier: Default::default(),
-                command_progress: Default::default(),
-            })
-            .collect()
-    }
-
-    /// The order of the process's controller connections.
-    pub(crate) fn connection_order(&self) -> &ConnectionOrder {
-        &self.order
-    }
-
-    /// The barrier between the reconciliations of the two workers attached here.
-    pub(crate) fn reconcile_barrier(&self) -> &ReconcileBarrier {
-        &self.barrier
+    /// workers per runtime.
+    pub fn per_worker(workers_per_process: usize) -> Vec<Self> {
+        (0..workers_per_process).map(|_| Self::new()).collect()
     }
 
     /// Takes the end of the command progress link the maintenance worker reports through.
@@ -296,6 +272,16 @@ impl ArrangementSharingRegistry {
             .range((*id, CreationNumber::MIN)..=(*id, CreationNumber::MAX))
             .rev()
             .find_map(|(_, slot)| slot.upgrade())
+    }
+
+    /// The largest creation number of a live slot of `id`. Test-only.
+    #[cfg(test)]
+    pub(crate) fn newest_creation(&self, id: &GlobalId) -> Option<CreationNumber> {
+        self.lock()
+            .map
+            .range((*id, CreationNumber::MIN)..=(*id, CreationNumber::MAX))
+            .rev()
+            .find_map(|(&(_, creation), slot)| (slot.strong_count() > 0).then_some(creation))
     }
 
     /// Publishes index `id`'s `oks` and `errs` traces as the incarnation created by command
@@ -424,6 +410,21 @@ impl ArrangementSharingRegistry {
     pub(crate) fn published_since(&self, id: &GlobalId) -> Antichain<Timestamp> {
         let inner = self.lock();
         let slot = Self::newest_slot(&inner, id).expect("a slot for the id");
+        slot.oks.shared.since()
+    }
+
+    /// The published `oks` `since` of the incarnation of `id` created by `creation`. Test-only.
+    ///
+    /// # Panics
+    ///
+    /// Panics if nobody holds that slot.
+    #[cfg(test)]
+    pub(crate) fn published_since_at(
+        &self,
+        id: GlobalId,
+        creation: CreationNumber,
+    ) -> Antichain<Timestamp> {
+        let slot = self.slot(id, creation).expect("a published slot");
         slot.oks.shared.since()
     }
 
@@ -571,7 +572,8 @@ impl Drop for PublishToken {
 /// runtime created it.
 ///
 /// Every reader of both bindings holds in one accumulation, which the bind connects to the slot's
-/// hold link. Until then the publisher holds the index at the minimum on the readers' behalf.
+/// hold link. Until then the publisher holds on the readers' behalf, see
+/// [`ArrangementSharingRegistry::publish`].
 pub(crate) struct PeerIndex {
     /// The number of the command that created the incarnation.
     creation: CreationNumber,
@@ -666,8 +668,8 @@ impl PeerIndex {
             );
             return;
         };
-        // Before the holds are connected, so the publisher still holds at the minimum and the
-        // points' `since` is at or below every reader's hold.
+        // Before the holds are connected, so the publisher's initial hold still keeps the points'
+        // `since` at or below every reader's hold.
         let bound = self
             .oks
             .bind(Arc::clone(&slot.oks.shared))

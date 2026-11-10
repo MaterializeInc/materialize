@@ -52,7 +52,8 @@ fn a_replayed_frontier_follows_the_pusher_across_threads() {
             let (stream, token) = source.replay(scope, "progress_link");
             (stream.probe().0, token)
         });
-        // Let the replay run its first scheduling and settle at the minimum.
+        // A probe handle starts at the empty frontier, and reports the minimum once the
+        // dataflow's initial progress reached it.
         park_until(worker, &probe, &[0]);
 
         let (step_tx, step_rx) = mpsc::channel();

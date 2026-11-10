@@ -55,7 +55,6 @@ use crate::compute_state::{
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 use crate::placement::Placement;
 use crate::process_globals::ProcessGlobals;
-use crate::reconcile_barrier::BarrierSide;
 use crate::sharing::ArrangementSharingRegistry;
 
 /// Caller-provided configuration for compute.
@@ -160,16 +159,6 @@ impl ComputeRuntimeRole {
     /// `Solo` has no peer runtime to name an incarnation to, so its numbers stay unread.
     pub(crate) fn derives_creation_numbers(self) -> bool {
         !matches!(self, ComputeRuntimeRole::Solo)
-    }
-
-    /// The side this role takes in the reconciliation barrier, or `None` for a runtime alone in
-    /// its process.
-    pub(crate) fn barrier_side(self) -> Option<BarrierSide> {
-        match self {
-            ComputeRuntimeRole::Solo => None,
-            ComputeRuntimeRole::Maintenance => Some(BarrierSide::Maintenance),
-            ComputeRuntimeRole::Interactive => Some(BarrierSide::Interactive),
-        }
     }
 }
 
@@ -407,11 +396,6 @@ impl CommandReceiver {
             connection: None,
             stashed_command: None,
         }
-    }
-
-    /// The connection whose commands this receiver returns, `None` before the first.
-    fn connection(&self) -> Option<Connection> {
-        self.connection
     }
 
     /// Receive the next pending command, if any.
@@ -675,12 +659,7 @@ impl ClusterSpec for Config {
         // reuse this channel between client connections, to avoid bugs where different workers end
         // up creating incompatible sides of the channel dataflow after reconnects.
         // See database-issues#8964.
-        // Only a runtime that shares a reconciliation barrier tags commands with positions.
-        let order = self
-            .role
-            .barrier_side()
-            .map(|_| sharing_registry.connection_order().clone());
-        let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, storage_lane_input, order);
+        let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, storage_lane_input);
         let (command_progress, maintenance_progress) =
             command_progress_ends(timely_worker, self.role, &sharing_registry);
         let (resp_tx, resp_rx) = mpsc::unbounded_channel();
@@ -1157,53 +1136,22 @@ impl<'w> Worker<'w> {
                 }
             }
 
-            self.step_while_blocked();
-        }
-    }
+            // Keep serving the storage guest while blocked on compute
+            // commands, and avoid unbounded parks that would stall its periodic duties.
+            self.process_storage_guest();
+            let park_cap = self.storage.as_ref().and_then(StorageGuest::park_cap);
 
-    /// Steps the Timely worker once, parking it when it has nothing to do, while the worker waits
-    /// for something outside its dataflows.
-    fn step_while_blocked(&mut self) {
-        // Keep serving the storage guest while blocked on compute
-        // commands, and avoid unbounded parks that would stall its periodic duties.
-        self.process_storage_guest();
-        let park_cap = self.storage.as_ref().and_then(StorageGuest::park_cap);
-
-        let start = Instant::now();
-        if self.storage_guest_busy() {
-            self.timely_worker.step();
-        } else if let Some(cap) = park_cap {
-            self.timely_worker.step_or_park(Some(cap));
-        } else {
-            self.timely_worker.step_or_park(None);
-        }
-        self.metrics
-            .timely_step_duration_seconds
-            .observe(start.elapsed().as_secs_f64());
-    }
-
-    /// Waits until the process's other compute runtime finished the drops of its reconciliation
-    /// of the current connection or of a later one. See [`crate::reconcile_barrier`].
-    ///
-    /// Steps the worker meanwhile, so the workers of this runtime that already passed are not held
-    /// up, and reads no command, so every worker of this runtime still executes the same commands.
-    fn await_reconcile_barrier(&mut self) {
-        let Some(side) = self.role.barrier_side() else {
-            return;
-        };
-        // The position comes with the commands, from the sequencer, see `crate::reconcile_barrier`.
-        let position = self
-            .command_rx
-            .connection()
-            .expect("a worker reconciles only after its first connection")
-            .position
-            .expect("a runtime with a barrier side receives connection positions");
-        let barrier = self.sharing_registry.reconcile_barrier().clone();
-        barrier.arrive(side, position);
-        // `passable` registers this thread before it returns `false`, and the other side's arrival
-        // unparks it, which ends a park in `step_while_blocked`.
-        while !barrier.passable(side, position) {
-            self.step_while_blocked();
+            let start = Instant::now();
+            if self.storage_guest_busy() {
+                self.timely_worker.step();
+            } else if let Some(cap) = park_cap {
+                self.timely_worker.step_or_park(Some(cap));
+            } else {
+                self.timely_worker.step_or_park(None);
+            }
+            self.metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
         }
     }
 
@@ -1241,8 +1189,8 @@ impl<'w> Worker<'w> {
         // and creating new dataflows, in addition to standard peek and compaction commands.
         // The result should be the same as if dropping all dataflows and running `new_commands`.
         //
-        // The compactions and drops of existing dataflows run first, as `drop_commands`, then the
-        // reconciliation barrier, then `todo_commands`. A command of `todo_commands` keeps its
+        // The compactions and drops of existing dataflows run first, as `drop_commands`, then
+        // `todo_commands`. A command of `todo_commands` keeps its
         // number from `new_commands`, which a `CreateDataflow` turns into the creation number of the
         // incarnations it creates. `drop_commands` are synthesized here and carry no number.
         let mut drop_commands = Vec::new();
@@ -1500,16 +1448,9 @@ impl<'w> Worker<'w> {
         }
 
         // Execute the commands to bring us to `new_commands`.
-        //
-        // NOTE: The drop phase must not wait on another worker, or a worker waiting at the barrier
-        // could hold up a peer that never arrives. It does not: an `AllowCompaction` moves this
-        // worker's trace holds or drops a collection, and `drop_collection` removes the dataflow
-        // from this worker alone, through `drop_dataflow`, which releases its capabilities and
-        // channels into worker-local state without exchanging anything.
         for command in drop_commands {
             self.handle_command(command, None);
         }
-        self.await_reconcile_barrier();
         for (command, number) in todo_commands {
             self.handle_command(command, number);
         }
