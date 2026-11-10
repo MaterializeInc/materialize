@@ -597,7 +597,7 @@ where
         let lower = mz_repr::Timestamp::MIN;
         let upper = Antichain::from_elem(lower.step_forward());
 
-        let mut batch_builder = write_handle.builder(Antichain::from_elem(lower));
+        let mut batch_builder = write_handle.rewritable_builder(Antichain::from_elem(lower));
 
         while let Some(event) = rows_handle.next().await {
             let AsyncEvent::Data(_, row_batch) = event else {

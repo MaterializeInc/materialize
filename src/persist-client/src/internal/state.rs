@@ -1194,17 +1194,23 @@ impl<T: Timestamp + TotalOrder> HollowBatch<T> {
                 [T::minimum()],
             ));
         }
-        for part in self.parts.iter() {
-            let Some(ts_rewrite) = part.ts_rewrite() else {
-                continue;
+        let mut parts = Vec::with_capacity(self.parts.len());
+        for part in self.parts.iter_mut() {
+            // A hollow run's parts live in a separate blob this rewrite can't edit.
+            // `WriteHandle::rewritable_builder` never makes one.
+            let RunPart::Single(part) = &mut *part else {
+                return Err(format!("unexpected rewrite of a hollow run: {part:?}"));
             };
-            if PartialOrder::less_than(frontier, ts_rewrite) {
+            if let Some(ts_rewrite) = part.ts_rewrite()
+                && PartialOrder::less_than(frontier, ts_rewrite)
+            {
                 return Err(format!(
                     "rewrite frontier {:?} < batch rewrite {:?}",
                     frontier.elements(),
                     ts_rewrite.elements(),
                 ));
             }
+            parts.push(part);
         }
 
         self.desc = Description::new(
@@ -1212,19 +1218,10 @@ impl<T: Timestamp + TotalOrder> HollowBatch<T> {
             new_upper,
             self.desc.since().clone(),
         );
-        for part in &mut self.parts {
+        for part in parts {
             match part {
-                RunPart::Single(BatchPart::Hollow(part)) => {
-                    part.ts_rewrite = Some(frontier.clone())
-                }
-                RunPart::Single(BatchPart::Inline { ts_rewrite, .. }) => {
-                    *ts_rewrite = Some(frontier.clone())
-                }
-                RunPart::Many(runs) => {
-                    // Currently unreachable: we only apply rewrites to user batches, and we don't
-                    // ever generate runs of >1 part for those.
-                    panic!("unexpected rewrite of a hollow runs ref: {runs:?}");
-                }
+                BatchPart::Hollow(part) => part.ts_rewrite = Some(frontier.clone()),
+                BatchPart::Inline { ts_rewrite, .. } => *ts_rewrite = Some(frontier.clone()),
             }
         }
         Ok(())
@@ -2934,7 +2931,7 @@ pub(crate) mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::now::SYSTEM_TIME;
-    use mz_ore::{assert_none, assert_ok};
+    use mz_ore::{assert_err, assert_none, assert_ok};
     use mz_proto::RustType;
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
@@ -3294,6 +3291,25 @@ pub(crate) mod tests {
                 .collect(),
             len,
         )
+    }
+
+    #[mz_ore::test]
+    fn rewrite_ts_hollow_run() {
+        let mut batch = hollow(0u64, 1, &["a"], 2);
+        batch.parts.push(RunPart::Many(HollowRunRef {
+            key: PartialBatchKey("b".to_owned()),
+            hollow_bytes: 0,
+            max_part_bytes: 0,
+            key_lower: vec![],
+            structured_key_lower: None,
+            diffs_sum: None,
+            _phantom_data: PhantomData,
+        }));
+        let before = batch.clone();
+
+        let res = batch.rewrite_ts(&Antichain::from_elem(2), Antichain::from_elem(3));
+        assert_err!(res);
+        assert_eq!(batch, before);
     }
 
     #[mz_ore::test]
