@@ -1147,6 +1147,72 @@ fn a_peer_dropped_before_its_binding_is_never_bound() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
+fn a_duplicate_peer_record_releases_its_slot_and_keeps_the_first() {
+    let id = GlobalId::User(1);
+    let on_id = GlobalId::User(2);
+    let (_rt, persist_clients) = test_persist_clients();
+
+    timely::execute_directly(move |worker| {
+        let registry = ArrangementSharingRegistry::new();
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
+        let mut first = LivePublisher::new(worker, &registry, id);
+        let mut duplicate = LivePublisher::new_at(
+            worker,
+            &registry,
+            id,
+            3,
+            index_check(on_id, Timestamp::MIN, 0),
+        );
+        interactive.active(worker).handle_create_dataflow(
+            maintained_index_dataflow(id, on_id, Timestamp::MIN),
+            Some(0),
+        );
+        let record_duplicate = |interactive: &mut Interactive, worker: &mut TimelyWorker| {
+            interactive.active(worker).handle_create_dataflow(
+                maintained_index_dataflow(id, on_id, Timestamp::MIN),
+                Some(3),
+            )
+        };
+        if mz_ore::assert::soft_assertions_enabled() {
+            let record = mz_ore::panic::catch_unwind_str(std::panic::AssertUnwindSafe(|| {
+                record_duplicate(&mut interactive, worker)
+            }));
+            let message = record.expect_err("a duplicate record is a soft panic");
+            assert!(
+                message.contains("recorded twice"),
+                "unexpected panic: {message}"
+            );
+        } else {
+            record_duplicate(&mut interactive, worker);
+        }
+
+        first.seal_to(worker, Timestamp::new(11));
+        duplicate.seal_to(worker, Timestamp::new(11));
+        interactive.apply(worker, 4);
+        let peer = peer_index(&interactive.compute_state, &id);
+        assert_eq!(peer.creation(), 0, "the duplicate replaced the first peer");
+        assert!(peer.is_bound(), "the first peer did not bind its slot");
+
+        first.allow_compaction(Antichain::from_elem(Timestamp::new(10)));
+        first.seal_to(worker, Timestamp::new(12));
+        duplicate.allow_compaction(Antichain::from_elem(Timestamp::new(10)));
+        duplicate.seal_to(worker, Timestamp::new(12));
+        assert_eq!(
+            registry.published_since_at(id, 0),
+            Antichain::from_elem(Timestamp::MIN),
+            "the first peer's slot stopped holding at the peer's as_of"
+        );
+        assert_eq!(
+            registry.published_since_at(id, 3),
+            Antichain::from_elem(Timestamp::new(10)),
+            "the duplicate's slot keeps holding the trace"
+        );
+        interactive.drop_collection(worker, id);
+    });
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
 fn an_error_result_on_a_late_bound_peer_is_served() {
     let id = GlobalId::User(1);
     let on_id = GlobalId::User(2);

@@ -242,8 +242,6 @@ pub struct ComputeState {
     /// collection reports its frontiers, and a second report would race it. On a runtime that
     /// reads its peer's indexes, a peer index also has a shared trace in `traces`, whose logical
     /// compaction is this runtime's hold on it.
-    ///
-    /// Each peer carries the creation number of its incarnation.
     pub(crate) peers: BTreeMap<GlobalId, Peer>,
     /// The peer indexes awaiting their bind, by the number of the command that created their
     /// incarnation. See [`ComputeState::bind_peers`].
@@ -332,8 +330,8 @@ pub struct ComputeState {
 }
 
 impl ComputeState {
-    /// The creation number of the incarnations a command numbered `number` creates, `None` on a
-    /// runtime that does not derive them.
+    /// The creation number of the incarnations a command numbered `number` creates, see
+    /// [`ComputeRuntimeRole::derives_creation_numbers`].
     fn creation(&self, number: Option<CommandNumber>) -> Option<CreationNumber> {
         self.derives_creation_numbers
             .then(|| number.expect("the sequencer numbers every command but peeks"))
@@ -342,9 +340,12 @@ impl ComputeState {
     /// Binds every recorded peer index whose creating command the maintenance runtime applied to
     /// the slot of exactly its incarnation, if that slot exists. Each peer is tried once.
     ///
-    /// A missing slot means maintenance dropped the incarnation again before this runtime bound
-    /// it, so the peer is about to be dropped here too. A slot that does not match the peer is
-    /// reported, see [`PeerIndex::bind`]. Either way the peer stays unbound, and its reads wait.
+    /// A peer with no slot under its `(id, creation)` once maintenance passed the creating number
+    /// is logged at `warn` and stays unbound. The expected cause is that maintenance dropped the
+    /// incarnation again before this runtime bound it, so the peer is about to be dropped here too.
+    /// A numbering divergence between the runtimes or a publish bug shows the same way. A slot that
+    /// does not match the peer is reported, see [`PeerIndex::bind`]. Either way the peer's reads
+    /// wait.
     pub(crate) fn bind_peers(&mut self) {
         let (Some(progress), Some(registry)) = (&self.maintenance_progress, &self.peer_traces)
         else {
@@ -368,7 +369,7 @@ impl ComputeState {
         for (creation, ids) in passed {
             for id in ids {
                 let Some(slot) = registry.slot(id, creation) else {
-                    debug!(%id, creation, "no slot for an applied peer index");
+                    warn!(%id, creation, "no slot for an applied peer index");
                     continue;
                 };
                 match self.peers.get_mut(&id) {
@@ -736,12 +737,30 @@ impl<'a> ActiveComputeState<'a> {
         let compute_state = &mut *self.compute_state;
         for id in export_ids {
             // Checked before inserting, so a second record keeps the first incarnation's number.
-            let fresh = !compute_state.peers.contains_key(&id);
+            let recorded = compute_state.peers.get(&id);
+            let fresh = recorded.is_none();
+            let index = index_exports.remove(&id);
+            // Maintenance publishes a slot for a duplicate index too, which no peer here binds, so
+            // it would hold at the minimum forever. Listed under the duplicate's number, the bind
+            // finds that the recorded peer's number differs and releases the slot. Under the
+            // recorded peer's own number the slot is that peer's, which binds it itself.
+            let releases = match recorded {
+                Some(Peer::Index(peer)) => peer.creation() != creation,
+                Some(Peer::Export) => true,
+                None => false,
+            };
+            if releases && index.is_some() && compute_state.peer_traces.is_some() {
+                compute_state
+                    .unbound_peers
+                    .entry(creation)
+                    .or_default()
+                    .insert(id);
+            }
+            // After the listing, so a soft panic here leaves the duplicate's slot to the bind.
             mz_ore::soft_assert_or_log!(fresh, "peer collection {id} recorded twice");
             if !fresh {
                 continue;
             }
-            let index = index_exports.remove(&id);
             let peer = match (index, &compute_state.peer_traces) {
                 (Some(index), Some(_)) => {
                     let check = SlotCheck {
@@ -758,7 +777,7 @@ impl<'a> ActiveComputeState<'a> {
                         .insert(id);
                     Peer::Index(peer)
                 }
-                _ => Peer::Export(creation),
+                _ => Peer::Export,
             };
             compute_state.peers.insert(id, peer);
         }
@@ -838,7 +857,6 @@ impl<'a> ActiveComputeState<'a> {
                 Rc::clone(&dataflow_index),
                 is_subscribe_or_copy,
                 as_of.clone(),
-                creation,
                 metrics,
             );
 
@@ -1084,7 +1102,6 @@ impl<'a> ActiveComputeState<'a> {
                 Rc::clone(&dataflow_index),
                 is_subscribe_or_copy,
                 as_of,
-                creation,
                 metrics,
             );
 
@@ -2115,18 +2132,7 @@ pub(crate) enum Peer {
     /// An index this runtime reads through the other runtime's publication.
     Index(PeerIndex),
     /// Any other export, or an index on a runtime that does not read the other's indexes.
-    Export(#[cfg_attr(not(test), expect(dead_code))] CreationNumber),
-}
-
-impl Peer {
-    /// The number of the command that created the peer's incarnation.
-    #[cfg_attr(not(test), expect(dead_code))]
-    pub(crate) fn creation(&self) -> CreationNumber {
-        match self {
-            Peer::Index(index) => index.creation(),
-            Peer::Export(creation) => *creation,
-        }
-    }
+    Export,
 }
 
 /// State maintained for a compute collection.
@@ -2149,9 +2155,6 @@ pub struct CollectionState {
     ///
     /// Used to determine hydration status.
     as_of: Antichain<Timestamp>,
-    /// The creation number of the collection's incarnation, `None` on a `Solo` runtime.
-    #[cfg_attr(not(test), expect(dead_code))]
-    pub(crate) creation: Option<CreationNumber>,
 
     /// A token that should be dropped when this collection is dropped to clean up associated
     /// sink state.
@@ -2194,7 +2197,6 @@ impl CollectionState {
         dataflow_index: Rc<usize>,
         is_subscribe_or_copy: bool,
         as_of: Antichain<Timestamp>,
-        creation: Option<CreationNumber>,
         metrics: CollectionMetrics,
     ) -> Self {
         // We always initialize as read_only=true. Only when we're explicitly
@@ -2206,7 +2208,6 @@ impl CollectionState {
             dataflow_index,
             is_subscribe_or_copy,
             as_of,
-            creation,
             sink_token: None,
             sink_write_frontier: None,
             input_probes: Default::default(),

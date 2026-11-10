@@ -208,8 +208,8 @@ impl<T> Drop for PressOnDrop<T> {
 /// dataflow using "compute-local" assets like shared arrangements, and producing
 /// both arrangements and sinks.
 ///
-/// `creation` is the creation number of the incarnations of the dataflow's exports, `None` on a
-/// runtime that does not derive creation numbers.
+/// `creation` is the creation number of the incarnations of the dataflow's exports, see
+/// [`ComputeRuntimeRole::derives_creation_numbers`](crate::server::ComputeRuntimeRole::derives_creation_numbers).
 pub fn build_compute_dataflow(
     timely_worker: &mut TimelyWorker,
     compute_state: &mut ComputeState,

@@ -44,8 +44,8 @@ use crate::typedefs::ErrBatcher;
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
 ///
-/// `creation` is the creation number of the logging indexes' incarnations, `None` on a runtime that
-/// does not derive creation numbers.
+/// `creation` is the creation number of the logging indexes' incarnations, see
+/// [`ComputeRuntimeRole::derives_creation_numbers`](crate::server::ComputeRuntimeRole::derives_creation_numbers).
 pub fn initialize(
     worker: &mut timely::worker::Worker,
     config: &LoggingConfig,
