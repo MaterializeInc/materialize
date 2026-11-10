@@ -8613,6 +8613,41 @@ def workflow_test_mv_apply_replacement_stalled_downstream_mv(c: Composition) -> 
     ), f"mv's since {mv_since} advanced past mv2's upper {mv2_upper}"
 
 
+def workflow_test_refresh_mv_apply_replacement_restart(c: Composition) -> None:
+    """
+    Restart environmentd after applying a replacement with a different refresh
+    schedule to a REFRESH MV whose first refresh has not happened yet.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # The first refresh of `mv` is an hour out. The offset of 1 ms keeps it
+    # off the replacement's refresh grid.
+    c.sql("""
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1);
+        CREATE MATERIALIZED VIEW mv
+          WITH (REFRESH AT mz_now()::text::int8 + 3600001)
+          AS SELECT a FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv
+          WITH (REFRESH EVERY '7 seconds')
+          AS SELECT a + 1 AS a FROM t;
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp;
+        """)
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(input=dedent("""
+        > SELECT r.last_completed_refresh IS NULL, r.next_refresh IS NOT NULL
+          FROM mz_internal.mz_materialized_view_refreshes r
+          JOIN mz_materialized_views m ON m.id = r.materialized_view_id
+          WHERE m.name = 'mv'
+        true true
+        """))
+
+
 def workflow_test_github_10102(c: Composition) -> None:
     """
     Regression test for database-issues#10102:

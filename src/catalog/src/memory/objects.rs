@@ -1508,10 +1508,8 @@ pub struct MaterializedView {
     pub refresh_schedule: Option<RefreshSchedule>,
     /// The initial `as_of` of the storage collection associated with the materialized view.
     ///
-    /// Note: This doesn't change upon restarts.
+    /// Note: This doesn't change upon restarts or when applying a replacement.
     /// (The dataflow's initial `as_of` can be different.)
-    /// Applying a replacement sets it to the replacement's `as_of`, so it no longer bounds the
-    /// since of the shard, which the oldest version created.
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
     // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
     // consistency checks do two dumps and compare them. One of these states comes from the durable
@@ -1594,7 +1592,10 @@ impl MaterializedView {
             in_cluster: rpl_stmt.in_cluster,
             in_cluster_replica: rpl_stmt.in_cluster_replica,
             query: rpl_stmt.query,
-            as_of: rpl_stmt.as_of,
+            // The storage collection keeps its shard, so it keeps the shard's initial `as_of`.
+            // Storage joins the shard's since with it at bootstrap, so taking the replacement's
+            // `as_of` would advance the since past the uppers of stalled dependents.
+            as_of: old_stmt.as_of,
             with_options: rpl_stmt.with_options,
         };
         let create_sql = new_stmt.to_ast_string_stable();
@@ -1626,7 +1627,7 @@ impl MaterializedView {
             non_null_assertions: replacement.non_null_assertions,
             custom_logical_compaction_window: replacement.custom_logical_compaction_window,
             refresh_schedule: replacement.refresh_schedule,
-            initial_as_of: replacement.initial_as_of,
+            initial_as_of: self.initial_as_of.take(),
             optimized_plan: replacement.optimized_plan,
             physical_plan: replacement.physical_plan,
             dataflow_metainfo: replacement.dataflow_metainfo,
