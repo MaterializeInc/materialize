@@ -20,6 +20,11 @@
   It named a `create_deployment_environment` operation that does not exist
   instead of `deploy_init`.
 
+* Fix `deploy_promote` when `git` is not installed. Looking up the commit SHA
+  for the schema tag raised `FileNotFoundError`, so the operation stopped
+  after the swap committed, before tagging the schemas and cutting over
+  sinks. The tag now leaves out the SHA instead.
+
 ## 1.9.12 - 2026-11-03
 
 * Fix the deployment timestamp in the schema comment `deploy_promote` leaves
