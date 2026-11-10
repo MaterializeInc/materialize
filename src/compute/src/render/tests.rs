@@ -15,7 +15,6 @@ use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher};
-use timely::PartialOrder;
 use timely::dataflow::operators::capture::Extract;
 use timely::dataflow::operators::{Capture, Probe};
 use timely::dataflow::{ProbeHandle, Scope};
@@ -84,8 +83,8 @@ fn publish_index(
     (oks.trace.clone(), (errs.trace.clone(), slot))
 }
 
-/// Imports index `id`'s publication into `scope` the way the interactive runtime does, through a
-/// peer handle at `as_of`. Returns the slot, which the caller keeps for the life of the import.
+/// Imports index `id`'s publication into `scope` the way the interactive runtime does, through
+/// peer readers at `as_of`. Returns the slot, which the caller keeps for the life of the import.
 fn import_shared<'scope>(
     registry: &ArrangementSharingRegistry,
     scope: Scope<'scope, Timestamp>,
@@ -98,13 +97,14 @@ fn import_shared<'scope>(
     std::sync::Arc<SharedIndexArrangement>,
 ) {
     let slot = registry.get_or_create(id, &Antichain::from_elem(Timestamp::MIN));
-    let (oks, _) = OksTrace::Shared(slot.oks.peer_handle(as_of).into()).import_frontier_core(
+    let (oks_reader, errs_reader) = slot.peer_readers(as_of);
+    let (oks, _) = OksTrace::Shared(oks_reader.into()).import_frontier_core(
         scope.clone(),
         "Index",
         as_of.clone(),
         until.clone(),
     );
-    let (errs, _) = ErrsTrace::Shared(slot.errs.peer_handle(as_of).into()).import_frontier_core(
+    let (errs, _) = ErrsTrace::Shared(errs_reader.into()).import_frontier_core(
         scope,
         "ErrIndex",
         as_of.clone(),
@@ -205,7 +205,7 @@ fn publish_index_with_writer(
     RowRowAgent<Timestamp, Diff>,
     (
         crate::typedefs::ErrAgent<Timestamp, Diff>,
-        std::sync::Arc<SharedIndexArrangement>,
+        crate::sharing::PublishToken,
     ),
 ) {
     let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
@@ -217,10 +217,14 @@ fn publish_index_with_writer(
     let errs = KeyCollection::from(errs_collection)
         .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("test errs");
 
-    let slot = registry.get_or_create(id, &Antichain::from_elem(Timestamp::MIN));
-    adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
-    adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-    registry.notify();
+    // Through the registry, so the readers' holds reach the trace over the slot's hold link.
+    let token = registry.publish(
+        id,
+        &Antichain::from_elem(Timestamp::MIN),
+        scope,
+        &oks.trace,
+        &errs.trace,
+    );
 
     for (k, v) in rows {
         oks_input.update((k, v), Diff::ONE);
@@ -230,12 +234,12 @@ fn publish_index_with_writer(
     errs_input.advance_to(Timestamp::from(1_u64));
     errs_input.flush();
 
-    // The slot is returned with the traces, because the publication lasts only while it is held.
+    // The token is returned with the traces, because the publication lasts only while it is held.
     (
         oks_input,
         errs_input,
         oks_writer,
-        (errs.trace.clone(), slot),
+        (errs.trace.clone(), token),
     )
 }
 
@@ -264,6 +268,18 @@ fn tick(
     }
 }
 
+/// Advances `errs_input` to `upper`, past every time the test ticks the `oks` to.
+///
+/// An import holds both halves of an index in one accumulation, so the `errs` import's hold, which
+/// follows the `errs` upper, would hold the `oks` back too.
+fn seal_errs(
+    errs_input: &mut InputSession<Timestamp, crate::render::errors::DataflowErrorSer, Diff>,
+    upper: Timestamp,
+) {
+    errs_input.advance_to(upper);
+    errs_input.flush();
+}
+
 /// The interactive import's read hold pins the maintenance trace at `as_of` only while it is
 /// alive: once the importing dataflow drops, and with it every registration the import made, the
 /// trace is free to compact past `as_of`, which it could not do before the drop.
@@ -283,10 +299,11 @@ fn interactive_import_hold_releases_on_drop() {
         // Maintenance runtime: publish the index, keeping the `oks` `InputSession` (so we can
         // tick the dataflow afterward) and a plain writer trace handle (so we can request
         // compaction on it directly, as a controller would) alive across the whole closure.
-        let (mut oks_input, _errs_input, mut oks_writer, _errs_keep) = worker
+        let (mut oks_input, mut errs_input, mut oks_writer, _errs_keep) = worker
             .dataflow::<Timestamp, _, _>(|scope| {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
+        seal_errs(&mut errs_input, Timestamp::from(20_u64));
 
         // Interactive runtime: import at `as_of`, exactly as `import_index` does over a peer
         // bundle. The read hold is each `Arranged`'s own `trace`, so those are what is kept here.
@@ -542,10 +559,11 @@ fn interactive_import_hold_downgrades_while_live() {
     let registry = ArrangementSharingRegistry::new();
 
     timely::execute_directly(move |worker| {
-        let (mut oks_input, _errs_input, mut oks_writer, _errs_keep) = worker
+        let (mut oks_input, mut errs_input, mut oks_writer, _errs_keep) = worker
             .dataflow::<Timestamp, _, _>(|scope| {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
+        seal_errs(&mut errs_input, Timestamp::from(20_u64));
 
         let (mut oks_trace, mut errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (oks_arranged, errs_arranged, _slot) =
@@ -610,43 +628,6 @@ fn interactive_import_hold_downgrades_while_live() {
     });
 }
 
-/// A peer handle minted below the published `since` holds at that `since` and does not refuse.
-///
-/// The runtime that only holds the index as a peer must not abort over a dataflow it does not
-/// render. The `since <= as_of` protocol check belongs to the dataflow that imports the index.
-#[mz_ore::test]
-fn a_peer_handle_below_the_since_joins_up_to_it() {
-    let id = GlobalId::User(1);
-    let rows = test_rows();
-    let as_of = Antichain::from_elem(Timestamp::MIN);
-    let registry = ArrangementSharingRegistry::new();
-
-    timely::execute_directly(move |worker| {
-        let (mut oks_input, _errs_input, mut oks_writer, _errs_keep) = worker
-            .dataflow::<Timestamp, _, _>(|scope| {
-                publish_index_with_writer(scope, &registry, id, rows.clone())
-            });
-
-        let target = Antichain::from_elem(Timestamp::from(10_u64));
-        oks_writer.set_logical_compaction(target.borrow());
-        oks_writer.set_physical_compaction(target.borrow());
-        tick(
-            worker,
-            &mut oks_input,
-            Timestamp::from(5_u64),
-            Timestamp::from(6_u64),
-        );
-
-        let mut bundle = registry.peer_bundle(id, &as_of);
-        assert!(
-            PartialOrder::less_than(&as_of.borrow(), &bundle.oks_mut().get_logical_compaction()),
-            "the hold sits at the published since, above the requested as_of"
-        );
-        drop(bundle);
-        drop_dataflows(worker);
-    });
-}
-
 /// A peer bundle keeps `as_of` importable while the importing runtime is behind.
 ///
 /// That runtime records the index as a peer from the index's own create, holding at its `as_of`.
@@ -663,10 +644,11 @@ fn a_peer_bundle_pins_until_the_importing_runtime_applies() {
     let registry = ArrangementSharingRegistry::new();
 
     timely::execute_directly(move |worker| {
-        let (mut oks_input, _errs_input, mut oks_writer, _errs_keep) = worker
+        let (mut oks_input, mut errs_input, mut oks_writer, _errs_keep) = worker
             .dataflow::<Timestamp, _, _>(|scope| {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
+        seal_errs(&mut errs_input, Timestamp::from(20_u64));
         let mut peer = registry.peer_bundle(id, &Antichain::from_elem(Timestamp::MIN));
 
         // The maintenance runtime applies `AllowCompaction(10)` in full: the writer floor moves and
@@ -683,10 +665,21 @@ fn a_peer_bundle_pins_until_the_importing_runtime_applies() {
         );
 
         // The queued create is now applied. It must import, and the rows it reads at `as_of` must
-        // be the ones a read at `as_of` should see rather than a coalesced history.
+        // be the ones a read at `as_of` should see rather than a coalesced history. It imports
+        // from the peer bundle, as `import_index` does, so its holds join the bundle's hold stream.
         let (oks_trace, errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, errs_arranged, _slot) =
-                import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
+            let (oks_arranged, _) = peer.oks_mut().import_frontier_core(
+                scope.clone(),
+                "Index",
+                as_of.clone(),
+                Antichain::new(),
+            );
+            let (errs_arranged, _) = peer.errs_mut().import_frontier_core(
+                scope,
+                "ErrIndex",
+                as_of.clone(),
+                Antichain::new(),
+            );
             (oks_arranged.trace, errs_arranged.trace)
         });
 
@@ -720,9 +713,7 @@ fn a_peer_bundle_pins_until_the_importing_runtime_applies() {
     });
 }
 
-/// Like [`publish_index_with_writer`], but publishes through
-/// [`ArrangementSharingRegistry::publish`] with an `as_of` of the minimum time, as the maintenance
-/// runtime does.
+/// Like [`publish_index_with_writer`], but keeps only the `oks` input.
 fn publish_through_registry(
     scope: Scope<'_, Timestamp>,
     registry: &ArrangementSharingRegistry,
@@ -744,7 +735,7 @@ fn publish_through_registry(
     let token = registry.publish(
         id,
         &Antichain::from_elem(Timestamp::MIN),
-        oks.stream.scope().worker(),
+        oks.stream.scope(),
         &oks.trace,
         &errs.trace,
     );
@@ -756,89 +747,6 @@ fn publish_through_registry(
     errs_input.advance_to(Timestamp::from(1_u64));
     errs_input.flush();
     (oks_input, oks.trace, (errs.trace, token))
-}
-
-/// A publication holds its index at the `as_of` until the reading runtime's peer takes the hold
-/// over, however far behind that runtime is.
-///
-/// The controller can create a read over the index, drop it, and allow the index to compact past
-/// the read's `as_of`, all before the reading runtime has applied the index's own create. That
-/// runtime then renders the read, which must still find the index at its `as_of`.
-#[mz_ore::test]
-fn a_publication_holds_its_as_of_until_the_peer_takes_it_over() {
-    let id = GlobalId::User(1);
-    let as_of = Antichain::from_elem(Timestamp::MIN);
-    let registry = ArrangementSharingRegistry::new();
-
-    timely::execute_directly(move |worker| {
-        let (mut oks_input, mut oks_writer, _keep) = worker
-            .dataflow::<Timestamp, _, _>(|scope| publish_through_registry(scope, &registry, id));
-        let target = Antichain::from_elem(Timestamp::from(10_u64));
-        oks_writer.set_logical_compaction(target.borrow());
-        oks_writer.set_physical_compaction(target.borrow());
-        tick(
-            worker,
-            &mut oks_input,
-            Timestamp::from(5_u64),
-            Timestamp::from(6_u64),
-        );
-
-        let mut peer = registry.peer_bundle(id, &as_of);
-        assert_eq!(
-            peer.oks_mut().get_logical_compaction(),
-            as_of.borrow(),
-            "the peer must hold the index at its `as_of`, not where it compacted to meanwhile"
-        );
-
-        peer.oks_mut().set_logical_compaction(target.borrow());
-        peer.errs_mut().set_logical_compaction(target.borrow());
-        tick(
-            worker,
-            &mut oks_input,
-            Timestamp::from(11_u64),
-            Timestamp::from(12_u64),
-        );
-        let (oks, _errs) = registry.handles(&id).expect("still published");
-        assert!(
-            oks.snapshot_at(&Timestamp::from(1_u64)).is_none(),
-            "a hold the peer took over is released with the peer's"
-        );
-        drop(peer);
-        drop_dataflows(worker);
-    });
-}
-
-/// A peer recorded before its publication leaves the publication nothing to reserve, so once the
-/// peer advances nothing else holds the index back.
-#[mz_ore::test]
-fn a_peer_recorded_first_leaves_no_reserved_hold() {
-    let id = GlobalId::User(1);
-    let as_of = Antichain::from_elem(Timestamp::MIN);
-    let registry = ArrangementSharingRegistry::new();
-
-    timely::execute_directly(move |worker| {
-        let mut peer = registry.peer_bundle(id, &as_of);
-        let (mut oks_input, mut oks_writer, _keep) = worker
-            .dataflow::<Timestamp, _, _>(|scope| publish_through_registry(scope, &registry, id));
-        let target = Antichain::from_elem(Timestamp::from(10_u64));
-        oks_writer.set_logical_compaction(target.borrow());
-        oks_writer.set_physical_compaction(target.borrow());
-        peer.oks_mut().set_logical_compaction(target.borrow());
-        peer.errs_mut().set_logical_compaction(target.borrow());
-        tick(
-            worker,
-            &mut oks_input,
-            Timestamp::from(5_u64),
-            Timestamp::from(6_u64),
-        );
-        let (oks, _errs) = registry.handles(&id).expect("still published");
-        assert!(
-            oks.snapshot_at(&Timestamp::from(1_u64)).is_none(),
-            "the publication reserved a hold although its peer already existed"
-        );
-        drop(peer);
-        drop_dataflows(worker);
-    });
 }
 
 /// Padding a peer bundle reports the minimum time as its compaction frontier, as padding a local

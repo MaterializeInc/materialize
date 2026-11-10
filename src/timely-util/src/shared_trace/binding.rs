@@ -416,17 +416,28 @@ where
     T: Timestamp + Lattice + TotalOrder,
     B: Clone + 'static,
 {
-    /// Imports the bound point restricted to `[as_of, until)`, presented at `as_of`, as
-    /// [`SharedReader::import_frontier_core`] does.
-    ///
-    /// The import holds `as_of` logically in the accumulation from this call on, and physically
-    /// in the point from the bind on, both following the frontiers it acknowledges. Until the
-    /// binding binds, it produces nothing and holds its capability at the minimum. At its first
-    /// activation after the bind it subscribes.
+    /// A reader of this reader's binding at the join of `logical` and this reader's logical
+    /// hold, holding physically as [`Binding::reader`] mints it.
     ///
     /// # Panics
     ///
-    /// Panics, here or at the bind, if the bound point's `since` is beyond `as_of`.
+    /// Panics if the binding is bound and the published `since` is beyond the joined hold.
+    pub fn reader_at_least(&self, logical: &Antichain<T>) -> Self {
+        let logical = self.state.borrow().logical.join(logical);
+        self.binding.reader(logical)
+    }
+
+    /// Imports the bound point restricted to `[as_of, until)`, presented at `as_of`, as
+    /// [`SharedReader::import_frontier_core`] does.
+    ///
+    /// The import holds `as_of` joined with this reader's logical hold, logically in the
+    /// accumulation from this call on, and physically in the point from the bind on, both
+    /// following the frontiers it acknowledges. Until the binding binds, it produces nothing and
+    /// holds its capability at the minimum. At its first activation after the bind it subscribes.
+    ///
+    /// # Panics
+    ///
+    /// Panics, here or at the bind, if the bound point's `since` is beyond that joined hold.
     pub fn import_frontier_core<'scope>(
         &self,
         scope: Scope<'scope, T>,
@@ -436,7 +447,10 @@ where
     ) -> Arranged<'scope, TraceFrontier<BindingReader<T, B>>> {
         let trace = TraceFrontier::make_from(self.clone(), as_of.borrow(), until.borrow());
         let binding = self.binding.clone();
-        let hold = binding.reader(as_of.clone());
+        // Joined, because `as_of` can sit below this reader's hold, for example the minimum a
+        // padded handle reports. The accumulation already pushed that hold, so a hold below it
+        // would regress the replayed frontier, and the point may have compacted up to it.
+        let hold = self.reader_at_least(&as_of);
 
         let stream = source(scope, name, move |capability, info| {
             binding.on_bind(scope.worker().activator_for(Rc::clone(&info.address)));

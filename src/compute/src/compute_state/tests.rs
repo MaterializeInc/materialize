@@ -42,6 +42,7 @@ use crate::arrangement::manager::PaddedTrace;
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::DataflowErrorSer;
+use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
 use crate::sharing::PublishToken;
 use crate::typedefs::{ErrAgent, ErrBatcher, ErrSpine, RowRowAgent, RowRowSpine};
 
@@ -222,17 +223,22 @@ fn walk(peek: Peek, bundle: TraceBundle, stash: StashBounds, metrics: &TestMetri
 
 /// Publishes `rows` (at time 0, sealed to 1) as a real index arrangement into `registry` under
 /// `id` on worker 0 of 1, as a maintained index publishes on the maintenance runtime. The
-/// publication lasts as long as the returned token.
+/// publication lasts as long as someone holds the slot.
 ///
 /// The publishing dataflow runs to completion and drops its traces, after which the published
-/// `since` follows the writer to the empty frontier. A caller that reads afterwards must hold the
-/// slot at the minimum before this call, for example through
-/// [`ArrangementSharingRegistry::peer_bundle`].
+/// `since` follows the writer to the empty frontier, and the replayed holds of a peer end with the
+/// dataflow. Returns readers that hold both points at the minimum from before the publication.
 fn publish_kv_index(
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
     rows: Vec<(Row, Row)>,
-) -> PublishToken {
+) -> (SharedOksHandle, SharedErrsHandle) {
+    let slot = registry.get_or_create(id, &Antichain::from_elem(Timestamp::MIN));
+    let minimum = Antichain::from_elem(Timestamp::MIN);
+    let holds = (
+        slot.oks.shared.reader_at_least(&minimum),
+        slot.errs.shared.reader_at_least(&minimum),
+    );
     let registry_in = registry.clone();
     timely::execute_directly(move |worker| {
         // The trace lives as long as an agent does, and the point closes when it drops, so the
@@ -250,7 +256,7 @@ fn publish_kv_index(
             let token = registry_in.publish(
                 id,
                 &Antichain::from_elem(Timestamp::MIN),
-                oks.stream.scope().worker(),
+                oks.stream.scope(),
                 &oks.trace,
                 &errs.trace,
             );
@@ -264,19 +270,24 @@ fn publish_kv_index(
             errs_input.flush();
             ((oks.trace.clone(), errs.trace.clone()), token)
         });
+        // The token's replay of the hold link would keep the dataflow running.
+        drop(token);
         while worker.step() {}
         drop(keep);
-        token
-    })
+    });
+    holds
 }
 
 /// Publishes `kv` under `id` into a fresh registry and returns the bundle through which the
-/// interactive runtime reads it, held at the minimum from before the publication.
-fn published_kv_bundle(id: GlobalId, kv: Vec<(Row, Row)>) -> (TraceBundle, PublishToken) {
+/// interactive runtime reads it, with readers that hold it at the minimum.
+fn published_kv_bundle(
+    id: GlobalId,
+    kv: Vec<(Row, Row)>,
+) -> (TraceBundle, (SharedOksHandle, SharedErrsHandle)) {
     let registry = ArrangementSharingRegistry::new();
     let bundle = registry.peer_bundle(id, &Antichain::from_elem(Timestamp::MIN));
-    let token = publish_kv_index(&registry, id, kv);
-    (bundle, token)
+    let holds = publish_kv_index(&registry, id, kv);
+    (bundle, holds)
 }
 
 #[mz_ore::test]
@@ -419,7 +430,7 @@ pub(crate) fn test_persist_clients() -> (tokio::runtime::Runtime, Arc<PersistCli
 
 /// Builds an interactive-runtime `ComputeState` over `registry`, with a fresh, isolated metrics
 /// registry. Must be called on the worker thread, which it registers as the registry's waker.
-fn interactive_compute_state(
+pub(crate) fn interactive_compute_state(
     persist_clients: Arc<PersistClientCache>,
     registry: ArrangementSharingRegistry,
 ) -> ComputeState {
@@ -457,13 +468,35 @@ fn activate<'a>(
     }
 }
 
+/// Applies a `CreateDataflow` of `dataflow`, numbered `creation`, to `compute_state`.
+pub(crate) fn create_dataflow(
+    timely_worker: &mut TimelyWorker,
+    compute_state: &mut ComputeState,
+    response_tx: &mut ResponseSender,
+    dataflow: RenderDataflowDescription<CollectionMetadata>,
+    creation: Option<CreationNumber>,
+) {
+    activate(timely_worker, compute_state, response_tx).handle_create_dataflow(dataflow, creation);
+}
+
+/// Applies an `AllowCompaction` of `id` to `frontier` to `compute_state`.
+pub(crate) fn allow_compaction(
+    timely_worker: &mut TimelyWorker,
+    compute_state: &mut ComputeState,
+    response_tx: &mut ResponseSender,
+    id: GlobalId,
+    frontier: Antichain<Timestamp>,
+) {
+    activate(timely_worker, compute_state, response_tx).handle_allow_compaction(id, frontier);
+}
+
 /// A maintenance publisher of a `(k, v)` index on the current worker, whose upper the test
 /// advances.
 pub(crate) struct LivePublisher {
     oks_input: InputSession<Timestamp, (Row, Row), Diff>,
     errs_input: InputSession<Timestamp, DataflowErrorSer, Diff>,
     /// The trace lives as long as an agent does, and the point closes when it drops.
-    _traces: (RowRowAgent<Timestamp, Diff>, ErrAgent<Timestamp, Diff>),
+    traces: (RowRowAgent<Timestamp, Diff>, ErrAgent<Timestamp, Diff>),
     _token: PublishToken,
 }
 
@@ -496,14 +529,14 @@ impl LivePublisher {
             let token = registry_in.publish(
                 id,
                 &Antichain::from_elem(as_of),
-                oks.stream.scope().worker(),
+                oks.stream.scope(),
                 &oks.trace,
                 &errs.trace,
             );
             LivePublisher {
                 oks_input,
                 errs_input,
-                _traces: (oks.trace.clone(), errs.trace.clone()),
+                traces: (oks.trace.clone(), errs.trace.clone()),
                 _token: token,
             }
         })
@@ -514,6 +547,21 @@ impl LivePublisher {
         for (k, v) in rows {
             self.oks_input.update((k, v), Diff::ONE);
         }
+    }
+
+    /// Allows both traces to compact logically to `frontier`, as an `AllowCompaction` does.
+    pub(crate) fn allow_compaction(&mut self, frontier: Antichain<Timestamp>) {
+        self.traces.0.set_logical_compaction(frontier.borrow());
+        self.traces.1.set_logical_compaction(frontier.borrow());
+    }
+
+    /// Moves both traces' physical compaction to their upper, as `TraceManager::maintenance` does.
+    pub(crate) fn maintain(&mut self) {
+        let mut upper = Antichain::new();
+        self.traces.0.read_upper(&mut upper);
+        self.traces.0.set_physical_compaction(upper.borrow());
+        self.traces.1.read_upper(&mut upper);
+        self.traces.1.set_physical_compaction(upper.borrow());
     }
 
     /// Seals both halves up to `upper` and steps the worker until the published point has it.

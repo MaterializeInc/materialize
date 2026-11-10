@@ -208,9 +208,8 @@ impl<T: Timestamp + Lattice, B> Shared<T, B> {
     /// A reader holding logical compaction at the join of `as_of` and the published `since`, and
     /// nothing physically.
     ///
-    /// Never refuses. It is the hold a runtime keeps on a collection its peer publishes, whose
-    /// `as_of` can sit below the published `since`, and which reads only through readers it mints
-    /// with [`SharedReader::fresh_reader`].
+    /// Never refuses. It is the hold a publisher keeps on behalf of the readers whose holds reach
+    /// it as a replayed stream, starting below the published `since` and following that stream.
     pub fn reader_at_least(self: &Arc<Self>, as_of: &Antichain<T>) -> SharedReader<T, B> {
         let reader = self
             .reader_with(|published| {
@@ -634,23 +633,6 @@ impl<T: Timestamp + Lattice, B> SharedReader<T, B> {
     /// The publication point.
     pub fn shared(&self) -> &Arc<Shared<T, B>> {
         self.reader.point()
-    }
-
-    /// A reader at this reader's logical hold that also holds the chain physically at the chain's
-    /// coverage when minted, as an import must.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the published `since` is beyond this reader's logical hold. That happens only for a
-    /// hold registered on an unattached point below the `since` of the trace that later attaches,
-    /// see [`Shared::reader_at_least`]. Compute registers a peer's hold at its index's `as_of`, and
-    /// the publishing trace's `since` is at or below that `as_of` when it attaches, because the
-    /// controller selects a dataflow's `as_of` at or beyond the `since` of its inputs and allows no
-    /// compaction past a read hold.
-    pub fn fresh_reader(&self) -> SharedReader<T, B> {
-        self.shared()
-            .reader_at(&self.reader.hold(LOGICAL).to_owned())
-            .expect("the publication's since is at or below this reader's logical hold")
     }
 }
 
