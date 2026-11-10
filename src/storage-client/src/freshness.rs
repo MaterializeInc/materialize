@@ -313,7 +313,7 @@ impl FreshnessState {
 ///
 /// The background task of [`StorageCollections`] observes their advances when it learns them,
 /// with [`UnreportedFreshness::observe`]. The storage controller creates, ticks, and finishes
-/// the states under [`UnreportedFreshness::lock`], and it alone writes the rows they close.
+/// the states under [`UnreportedFreshness::lock_synced`], and it alone writes the rows they close.
 ///
 /// [`StorageCollections`]: crate::storage_collections::StorageCollections
 #[derive(Debug, Default)]
