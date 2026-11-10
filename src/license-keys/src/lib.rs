@@ -14,17 +14,24 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "signing")]
 mod signing;
 #[cfg(feature = "signing")]
-pub use signing::{get_pubkey_pem, make_intermediate_key, make_license_key};
+pub use signing::{get_pubkey_pem, make_intermediate_jwt, make_license_key};
 
 const ISSUER: &str = "Materialize, Inc.";
 // list of public keys which are allowed to validate license keys. this is a
 // list to allow for key rotation if necessary.
-const PUBLIC_KEYS: &[&str] = &[include_str!("license_keys/production.pub")];
+const PUBLIC_KEYS: &[&str] = &[
+    include_str!("license_keys/production.pub"),
+    // Signs the intermediate JWTs whose keys sign BYOC license keys.
+    include_str!("license_keys/intermediate_root.pub"),
+];
 // keys which we have issued but need to be revoked before their expiration
 // (due to being accidentally exposed or similar). holds both license key and
-// intermediate certificate ids.
+// intermediate JWT ids.
 const REVOKED_KEYS: &[&str] = &["eddaf004-dc1e-48cf-9cc1-41d1543d940a"];
 const INTERMEDIATE_TYP: &str = "mz-intermediate+jwt";
+// License key header field carrying the intermediate JWT that certifies the
+// key the license key was signed with.
+const INTERMEDIATE_HEADER: &str = "mz_intermediate";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -124,24 +131,20 @@ impl Default for ValidatedLicenseKey {
     }
 }
 
-/// Validates `license_key` against the root public keys, falling back to
-/// `intermediate_certs`.
+/// Validates `license_key` against the root public keys, falling back to the
+/// intermediate JWT embedded in its header.
 ///
-/// Each intermediate certificate is a JWT signed by a root key whose payload
-/// carries another public key (see `make_intermediate_key`). A license key
-/// signed by that public key is accepted while the certificate is unexpired
-/// and not revoked. Certificates are re-verified on every call.
-pub fn validate(
-    license_key: &str,
-    intermediate_certs: &[String],
-) -> anyhow::Result<ValidatedLicenseKey> {
-    validate_with_roots(license_key, PUBLIC_KEYS, intermediate_certs)
+/// An intermediate JWT is signed by a root key and carries another public key
+/// (see `make_intermediate_jwt`). A license key signed by that public key is
+/// accepted while the intermediate JWT is not revoked. The result expires at
+/// the earlier of the license key's and the intermediate JWT's expiration.
+pub fn validate(license_key: &str) -> anyhow::Result<ValidatedLicenseKey> {
+    validate_with_roots(license_key, PUBLIC_KEYS)
 }
 
 fn validate_with_roots(
     license_key: &str,
     root_pubkeys: &[&str],
-    intermediate_certs: &[String],
 ) -> anyhow::Result<ValidatedLicenseKey> {
     let mut errs = Vec::new();
     for (i, pubkey) in root_pubkeys.iter().enumerate() {
@@ -151,14 +154,34 @@ fn validate_with_roots(
         }
     }
 
-    for (i, cert) in intermediate_certs.iter().enumerate() {
-        let res = validate_intermediate(cert, root_pubkeys)
-            .context("invalid certificate")
-            .and_then(|pubkey| validate_with_pubkey(license_key, &pubkey));
-        match res {
-            Ok(key) => return Ok(key),
-            Err(e) => errs.push(format!("intermediate certificate {i}: {e:#}")),
+    // The header is read before any signature is checked. That is safe
+    // because the intermediate JWT is verified against the root keys before
+    // its public key is used.
+    let intermediate = jsonwebtoken::decode_header(license_key)
+        .map_err(anyhow::Error::from)
+        .and_then(|header| Ok(header.extras.get::<String>(INTERMEDIATE_HEADER)?));
+    match intermediate {
+        Ok(Some(intermediate_jwt)) => {
+            let res = validate_intermediate(&intermediate_jwt, root_pubkeys)
+                .context("invalid intermediate JWT")
+                .and_then(|intermediate| {
+                    let mut key = validate_with_pubkey(license_key, &intermediate.public_key)?;
+                    // NOTE: An expired intermediate JWT does not fail
+                    // validation, so the license key's `expiration_behavior`
+                    // decides what happens. This means its expiration does not
+                    // bound a leaked intermediate private key, which can mint
+                    // `Warn` keys. Only `REVOKED_KEYS` stops that.
+                    key.expired |= intermediate.expired;
+                    key.expiration = key.expiration.min(intermediate.expiration);
+                    Ok(key)
+                });
+            match res {
+                Ok(key) => return Ok(key),
+                Err(e) => errs.push(format!("intermediate JWT: {e:#}")),
+            }
         }
+        Ok(None) => {}
+        Err(e) => errs.push(format!("intermediate JWT: {e:#}")),
     }
 
     if errs.is_empty() {
@@ -167,8 +190,18 @@ fn validate_with_roots(
     bail!("license key validation failed:\n  {}", errs.join("\n  "))
 }
 
-/// Returns the public key PEM carried by `cert` if a root key signed it.
-fn validate_intermediate(cert: &str, root_pubkeys: &[&str]) -> anyhow::Result<String> {
+struct ValidatedIntermediate {
+    /// PEM of the public key that signs license keys.
+    public_key: String,
+    expiration: u64,
+    expired: bool,
+}
+
+/// Returns the claims of `intermediate_jwt` if a root key signed it.
+fn validate_intermediate(
+    intermediate_jwt: &str,
+    root_pubkeys: &[&str],
+) -> anyhow::Result<ValidatedIntermediate> {
     let mut validation = Validation::new(Algorithm::PS256);
     validation.set_required_spec_claims(&["exp", "nbf", "iss", "sub"]);
     validation.set_issuer(&[ISSUER]);
@@ -178,23 +211,42 @@ fn validate_intermediate(cert: &str, root_pubkeys: &[&str]) -> anyhow::Result<St
     let mut err = None;
     for root in root_pubkeys {
         let key = DecodingKey::from_rsa_pem(root.as_bytes())?;
-        match jsonwebtoken::decode::<IntermediatePayload>(cert, &key, &validation) {
-            Ok(jwt) => {
+        let res = match jsonwebtoken::decode::<IntermediatePayload>(
+            intermediate_jwt,
+            &key,
+            &validation,
+        ) {
+            Err(e) if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) => {
+                let mut validation = validation.clone();
+                validation.validate_exp = false;
+                jsonwebtoken::decode(intermediate_jwt, &key, &validation).map(|d| (d, true))
+            }
+            res => res.map(|d| (d, false)),
+        };
+        match res {
+            Ok((decoded, expired)) => {
                 // The typ check keeps a root-signed license key from being
-                // accepted as an intermediate certificate, and vice versa.
-                if jwt.header.typ.as_deref() != Some(INTERMEDIATE_TYP) {
-                    bail!("invalid intermediate certificate header type");
+                // accepted as an intermediate JWT, and vice versa.
+                if decoded.header.typ.as_deref() != Some(INTERMEDIATE_TYP) {
+                    bail!("invalid intermediate JWT header type");
                 }
-                if jwt.claims.version != 1 {
-                    bail!("invalid intermediate certificate version");
+                if decoded.claims.version != 1 {
+                    bail!("invalid intermediate JWT version");
                 }
-                if !(jwt.claims.nbf..=jwt.claims.exp).contains(&jwt.claims.iat) {
-                    bail!("invalid intermediate certificate issuance time");
+                if decoded.claims.iat < decoded.claims.nbf {
+                    bail!("intermediate JWT issued before it is valid");
                 }
-                if REVOKED_KEYS.contains(&jwt.claims.jti.as_str()) {
-                    bail!("revoked intermediate certificate");
+                if decoded.claims.iat > decoded.claims.exp {
+                    bail!("intermediate JWT issued after it expired");
                 }
-                return Ok(jwt.claims.public_key);
+                if REVOKED_KEYS.contains(&decoded.claims.jti.as_str()) {
+                    bail!("revoked intermediate JWT");
+                }
+                return Ok(ValidatedIntermediate {
+                    public_key: decoded.claims.public_key,
+                    expiration: decoded.claims.exp,
+                    expired,
+                });
             }
             Err(e) => err = Some(e.into()),
         }
@@ -350,9 +402,17 @@ mod tests {
         )
     }
 
-    fn sign(private_pem: &str, typ: &str, claims: &impl Serialize) -> String {
+    fn sign(
+        private_pem: &str,
+        typ: &str,
+        intermediate_jwt: Option<&str>,
+        claims: &impl Serialize,
+    ) -> String {
         let mut header = Header::new(Algorithm::PS256);
         header.typ = Some(typ.to_string());
+        if let Some(intermediate_jwt) = intermediate_jwt {
+            header.extras.insert(INTERMEDIATE_HEADER, intermediate_jwt);
+        }
         let key = EncodingKey::from_rsa_pem(private_pem.as_bytes()).unwrap();
         jsonwebtoken::encode(&header, claims, &key).unwrap()
     }
@@ -395,73 +455,96 @@ mod tests {
         let (int_priv, int_pub) = keypair();
         let (other_priv, _) = keypair();
         let roots = &[root_pub.as_str()];
+        let int_key = |intermediate_jwt: &str| {
+            sign(&int_priv, "JWT", Some(intermediate_jwt), &license_payload())
+        };
 
-        let cert = sign(
+        let int_jwt = sign(
             &root_priv,
             INTERMEDIATE_TYP,
+            None,
             &intermediate_payload(int_pub.clone(), now() + 3600),
         );
-        let root_key = sign(&root_priv, "JWT", &license_payload());
-        let int_key = sign(&int_priv, "JWT", &license_payload());
+        let root_key = sign(&root_priv, "JWT", None, &license_payload());
 
-        let root_validated = validate_with_roots(&root_key, roots, &[]).unwrap();
+        let root_validated = validate_with_roots(&root_key, roots).unwrap();
         assert_eq!(root_validated.id, "jti-1");
-        validate_with_roots(&int_key, roots, std::slice::from_ref(&cert)).unwrap();
+        validate_with_roots(&int_key(&int_jwt), roots).unwrap();
         assert!(
-            validate_with_roots(&int_key, roots, &[]).is_err(),
-            "intermediate-signed key needs its certificate"
+            validate_with_roots(&sign(&int_priv, "JWT", None, &license_payload()), roots).is_err(),
+            "intermediate-signed key needs its intermediate JWT"
         );
 
-        let untrusted_cert = sign(
+        let untrusted_jwt = sign(
             &other_priv,
             INTERMEDIATE_TYP,
+            None,
             &intermediate_payload(int_pub.clone(), now() + 3600),
         );
         assert!(
-            validate_with_roots(&int_key, roots, &[untrusted_cert]).is_err(),
-            "certificate must be signed by a root key"
+            validate_with_roots(&int_key(&untrusted_jwt), roots).is_err(),
+            "intermediate JWT must be signed by a root key"
         );
 
         let mut revoked = license_payload();
         revoked.jti = REVOKED_KEYS[0].to_string();
-        let revoked_key = sign(&root_priv, "JWT", &revoked);
-        let err = validate_with_roots(&revoked_key, roots, std::slice::from_ref(&cert))
+        let revoked_key = sign(&root_priv, "JWT", Some(&int_jwt), &revoked);
+        let err = validate_with_roots(&revoked_key, roots)
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("root key 0: revoked license key")
-                && err.contains("intermediate certificate 0: "),
+            err.contains("root key 0: revoked license key") && err.contains("intermediate JWT: "),
             "error must report every attempt: {err}"
         );
 
-        let expired_cert = sign(
+        let expired_exp = now() - 3600;
+        let expired_jwt = sign(
             &root_priv,
             INTERMEDIATE_TYP,
-            &intermediate_payload(int_pub.clone(), now() - 3600),
+            None,
+            &intermediate_payload(int_pub.clone(), expired_exp),
         );
+        let validated = validate_with_roots(&int_key(&expired_jwt), roots).unwrap();
         assert!(
-            validate_with_roots(&int_key, roots, &[expired_cert]).is_err(),
-            "expired certificate must be rejected"
+            validated.expired,
+            "expired intermediate JWT must expire the key"
         );
+        assert_eq!(validated.expiration, expired_exp);
 
-        let wrong_typ_cert = sign(
+        let wrong_typ_jwt = sign(
             &root_priv,
             "JWT",
+            None,
             &intermediate_payload(int_pub, now() + 3600),
         );
         assert!(
-            validate_with_roots(&int_key, roots, &[wrong_typ_cert]).is_err(),
-            "certificate must have the intermediate typ"
+            validate_with_roots(&int_key(&wrong_typ_jwt), roots).is_err(),
+            "intermediate JWT must have the intermediate typ"
         );
 
         assert!(
-            validate_with_roots(&int_key, roots, &[root_key]).is_err(),
-            "license key must not be usable as a certificate"
+            validate_with_roots(&int_key(&root_key), roots).is_err(),
+            "license key must not be usable as an intermediate JWT"
+        );
+        let self_embedded = sign(
+            &int_priv,
+            INTERMEDIATE_TYP,
+            Some(&int_jwt),
+            &intermediate_payload(String::new(), now() + 3600),
         );
         assert!(
-            validate_with_roots(&cert, roots, std::slice::from_ref(&cert)).is_err(),
-            "certificate must not be usable as a license key"
+            validate_with_roots(&self_embedded, roots).is_err(),
+            "intermediate JWT must not be usable as a license key"
         );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    fn public_keys_parse() {
+        for (i, pem) in PUBLIC_KEYS.iter().enumerate() {
+            DecodingKey::from_rsa_pem(pem.as_bytes())
+                .unwrap_or_else(|e| panic!("PUBLIC_KEYS[{i}] is not an RSA public key: {e}"));
+        }
     }
 
     fn sample_payload(entitlements: Vec<String>) -> Payload {

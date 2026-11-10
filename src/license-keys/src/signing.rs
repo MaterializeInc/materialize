@@ -21,7 +21,9 @@ use pem::Pem;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::{ExpirationBehavior, INTERMEDIATE_TYP, ISSUER, IntermediatePayload, Payload};
+use crate::{
+    ExpirationBehavior, INTERMEDIATE_HEADER, INTERMEDIATE_TYP, ISSUER, IntermediatePayload, Payload,
+};
 
 const VERSION: u64 = 1;
 
@@ -31,10 +33,15 @@ pub async fn get_pubkey_pem(client: &aws_sdk_kms::Client, key_id: &str) -> anyho
     Ok(pem.to_string())
 }
 
+/// Signs a license key with `key_id`.
+///
+/// When `key_id` is an intermediate key, `intermediate_jwt` must be the
+/// intermediate JWT for it, which is embedded in the license key's header.
 #[allow(clippy::too_many_arguments)]
 pub async fn make_license_key(
     client: &aws_sdk_kms::Client,
     key_id: &str,
+    intermediate_jwt: Option<String>,
     validity: Duration,
     organization_id: String,
     environment_id: String,
@@ -59,12 +66,17 @@ pub async fn make_license_key(
         expiration_behavior,
         entitlements,
     };
-    sign_jwt(client, key_id, "JWT", &payload).await
+    let mut header = Header::new(Algorithm::PS256);
+    header.typ = Some("JWT".to_string());
+    if let Some(intermediate_jwt) = intermediate_jwt {
+        header.extras.insert(INTERMEDIATE_HEADER, intermediate_jwt);
+    }
+    sign_jwt(client, key_id, &header, &payload).await
 }
 
-/// Signs a certificate with the root key `root_key_id` that allows license
+/// Signs an intermediate JWT with the root key `root_key_id` that allows license
 /// keys signed by the private half of `public_key_pem` to validate.
-pub async fn make_intermediate_key(
+pub async fn make_intermediate_jwt(
     client: &aws_sdk_kms::Client,
     root_key_id: &str,
     validity: Duration,
@@ -83,18 +95,18 @@ pub async fn make_intermediate_key(
         version: VERSION,
         public_key: public_key_pem,
     };
-    sign_jwt(client, root_key_id, INTERMEDIATE_TYP, &payload).await
+    let mut header = Header::new(Algorithm::PS256);
+    header.typ = Some(INTERMEDIATE_TYP.to_string());
+    sign_jwt(client, root_key_id, &header, &payload).await
 }
 
 async fn sign_jwt(
     client: &aws_sdk_kms::Client,
     key_id: &str,
-    typ: &str,
+    header: &Header,
     payload: &impl Serialize,
 ) -> anyhow::Result<String> {
-    let mut headers = Header::new(Algorithm::PS256);
-    headers.typ = Some(typ.to_string());
-    let headers = URL_SAFE_NO_PAD.encode(serde_json::to_string(&headers).unwrap().as_bytes());
+    let headers = URL_SAFE_NO_PAD.encode(serde_json::to_string(header).unwrap().as_bytes());
     let payload = URL_SAFE_NO_PAD.encode(serde_json::to_string(payload).unwrap().as_bytes());
 
     let signing_string = format!("{}.{}", headers, payload);
