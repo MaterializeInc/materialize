@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Code, CodeProps, useTheme } from "@chakra-ui/react";
+import { Code, CodeProps, useLatestRef, useTheme } from "@chakra-ui/react";
 import {
+  EditorView,
   lineNumbers as codeMirrorLineNumbers,
   placeholder as codeMirrorPlaceholder,
 } from "@codemirror/view";
@@ -32,7 +33,7 @@ import { MaterializeTheme } from "~/theme";
 import { FocusableElement } from "~/utils/focusableElement";
 
 import { EditorCommand, EditorEvent, keymapHandler } from "./keymaps";
-import { useContainerRef, useView, useViewEffect } from "./provider";
+import { useCodeMirror, useView, useViewEffect } from "./provider";
 import safariCopyPasteHackExtension, {
   enableSafariCopyPasteHackExtension,
 } from "./safariHackExt";
@@ -137,14 +138,20 @@ const Editor = forwardRef<FocusableElement, EditorProps>(
     ref,
   ) => {
     const currentView = useView();
-    const containerRef = useContainerRef();
-    useViewEffect((view) => {
-      return addUpdateListener(view, (update) => {
-        if (onChange && update.docChanged) {
-          onChange(update.state.doc.toString());
-        }
-      });
-    });
+    const { setContainer } = useCodeMirror();
+    // Re-registering the listener dispatches a transaction, so keep it
+    // registered once per view and read the latest `onChange` through a ref.
+    const onChangeRef = useLatestRef(onChange);
+    const registerUpdateListener = useCallback(
+      (view: EditorView) =>
+        addUpdateListener(view, (update) => {
+          if (onChangeRef.current && update.docChanged) {
+            onChangeRef.current(update.state.doc.toString());
+          }
+        }),
+      [onChangeRef],
+    );
+    useViewEffect(registerUpdateListener);
     useInitializePromptOnMount();
     useAdditionalExtensions({ lineNumbers, placeholder, onCommand, onKeyDown });
 
@@ -170,7 +177,7 @@ const Editor = forwardRef<FocusableElement, EditorProps>(
 
     return (
       <Code {...(containerProps ?? {})} cursor="text" tabIndex={0}>
-        <div ref={containerRef} />
+        <div ref={setContainer} />
       </Code>
     );
   },
